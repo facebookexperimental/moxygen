@@ -11,7 +11,7 @@ namespace moxygen {
 folly::Expected<std::string, ErrorCode> parseFixedString(
     folly::io::Cursor& cursor) {
   auto strLength = quic::decodeQuicInteger(cursor);
-  if (!strLength) {
+  if (!strLength || !cursor.canAdvance(strLength->first)) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   auto res = cursor.readFixedString(strLength->first);

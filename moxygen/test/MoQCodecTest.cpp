@@ -28,3 +28,18 @@ TEST(MoQCodec, EmptyObjectPayload) {
   codec.onIngress(writeBuf.move(), false);
   codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
 }
+
+/** Test cases to add:
+ *
+ * set a callback
+ * underflow on frame header type
+ * invalid frame
+ * error parsing obj header
+ * error parsing stream header
+ * error parsing control frame
+ * error parsing stream header
+ * non empty objects (length, no length)
+ * truncated length-termed object (eom=true)
+ * underflow errors with no eom
+ * all other frame parse errors
+ */

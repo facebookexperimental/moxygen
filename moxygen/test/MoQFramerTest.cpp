@@ -10,41 +10,116 @@
 
 using namespace moxygen;
 
+namespace {
+class TestUnderflow : public std::exception {};
+
+void skip(folly::io::Cursor& cursor, size_t i) {
+  if (!cursor.canAdvance(i)) {
+    throw TestUnderflow();
+  }
+  cursor.skip(i);
+}
+
+void parseAll(folly::io::Cursor& cursor, bool eom) {
+  skip(cursor, 2);
+  auto r1 = parseClientSetup(cursor);
+  EXPECT_TRUE(r1 || (!eom && r1.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 2);
+  auto r2 = parseServerSetup(cursor);
+  EXPECT_TRUE(r2 || (!eom && r2.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r3 = parseSubscribeRequest(cursor);
+  EXPECT_TRUE(r3 || (!eom && r3.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r4 = parseSubscribeOk(cursor);
+  EXPECT_TRUE(r4 || (!eom && r4.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r5 = parseSubscribeError(cursor);
+  EXPECT_TRUE(r5 || (!eom && r5.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r6 = parseUnsubscribe(cursor);
+  EXPECT_TRUE(r6 || (!eom && r6.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r7 = parseSubscribeDone(cursor);
+  EXPECT_TRUE(r1 || (!eom && r7.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r8 = parseSubscribeDone(cursor);
+  EXPECT_TRUE(r1 || (!eom && r8.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r9 = parseAnnounce(cursor);
+  EXPECT_TRUE(r9 || (!eom && r9.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r10 = parseAnnounceOk(cursor);
+  EXPECT_TRUE(r10 || (!eom && r10.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r11 = parseAnnounceError(cursor);
+  EXPECT_TRUE(r11 || (!eom && r11.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r12 = parseAnnounceCancel(cursor);
+  EXPECT_TRUE(r12 || (!eom && r12.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r13 = parseUnannounce(cursor);
+  EXPECT_TRUE(r13 || (!eom && r13.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r14 = parseGoaway(cursor);
+  EXPECT_TRUE(r14 || (!eom && r14.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  auto res = parseStreamHeader(cursor, FrameType::STREAM_HEADER_TRACK);
+  EXPECT_TRUE(res || (!eom && res.error() == ErrorCode::PARSE_UNDERFLOW));
+  if (!res) {
+    throw TestUnderflow();
+  }
+  auto r15 = parseMultiObjectHeader(
+      cursor, FrameType::STREAM_HEADER_TRACK, res.value());
+  EXPECT_TRUE(r15 || (!eom && r15.error() == ErrorCode::PARSE_UNDERFLOW));
+  skip(cursor, 1);
+}
+} // namespace
+
 TEST(SerializeAndParse, All) {
   auto allMsgs = moxygen::test::writeAllMessages();
   folly::io::Cursor cursor(allMsgs.get());
-  cursor.skip(2);
-  EXPECT_TRUE(parseClientSetup(cursor));
-  cursor.skip(2);
-  EXPECT_TRUE(parseServerSetup(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseSubscribeRequest(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseSubscribeOk(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseSubscribeError(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseUnsubscribe(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseSubscribeDone(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseSubscribeDone(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseAnnounce(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseAnnounceOk(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseAnnounceError(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseAnnounceCancel(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseUnannounce(cursor));
-  cursor.skip(1);
-  EXPECT_TRUE(parseGoaway(cursor));
-  auto res = parseStreamHeader(cursor, FrameType::STREAM_HEADER_TRACK);
-  EXPECT_TRUE(res);
-  // cursor.skip(1);
-  EXPECT_TRUE(parseMultiObjectHeader(
-      cursor, FrameType::STREAM_HEADER_TRACK, res.value()));
-  cursor.skip(1);
+  parseAll(cursor, true);
 }
+
+TEST(Underflows, All) {
+  auto allMsgs = moxygen::test::writeAllMessages();
+  allMsgs->coalesce();
+  auto len = allMsgs->computeChainDataLength();
+  for (size_t i = 0; i < len; i++) {
+    auto toParse = allMsgs->clone();
+    toParse->trimEnd(len - 1 - i);
+    folly::io::Cursor cursor(toParse.get());
+    try {
+      parseAll(cursor, i == len - 1);
+    } catch (const TestUnderflow& ex) {
+      // expected
+    }
+  }
+}
+
+/* Test cases to add
+ *
+ * parseObjectHeader
+ * parseStreamHeader (group)
+ * parseMultiObjectHeader (group)
+ * Location relativeNext -- removed in draft-04
+ * content-exists = true
+ * retry track alias
+ * write errors
+ * write datagram
+ * string ify and operator <<
+ */
