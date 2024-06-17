@@ -207,6 +207,7 @@ class MoQDateServer : MoQServer {
            0,
            0,
            ForwardPreference::Object,
+           ObjectStatus::NORMAL,
            folly::none});
       if (session) {
         publishObjectToSession(
@@ -228,6 +229,7 @@ class MoQDateServer : MoQServer {
          uint64_t(lt->tm_sec + 1),
          0,
          ForwardPreference::Object,
+         ObjectStatus::NORMAL,
          folly::none});
     if (session) {
       publishObjectToSession(

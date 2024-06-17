@@ -161,6 +161,15 @@ folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.sendOrder = sendOrder->first;
+  auto objectStatus = quic::decodeQuicInteger(cursor);
+  if (!objectStatus) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (objectStatus->first >
+      folly::to_underlying(ObjectStatus::END_OF_TRACK_AND_GROUP)) {
+    return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+  }
+  objectHeader.status = ObjectStatus(objectStatus->first);
   if (frameType == FrameType::OBJECT_STREAM) {
     objectHeader.forwardPreference = ForwardPreference::Object;
     // length is not present and runs to the end of the stream
@@ -234,6 +243,18 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.length = payloadLength->first;
+
+  if (objectHeader.length == 0) {
+    auto objectStatus = quic::decodeQuicInteger(cursor);
+    if (!objectStatus) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    if (objectStatus->first >
+        folly::to_underlying(ObjectStatus::END_OF_TRACK_AND_GROUP)) {
+      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+    }
+    objectHeader.status = ObjectStatus(objectStatus->first);
+  }
 
   return objectHeader;
 }
@@ -697,9 +718,15 @@ WriteResult writeObject(
   writeVarint(writeBuf, objectHeader.id, size, error);
   if (!multiObject) {
     writeVarint(writeBuf, objectHeader.sendOrder, size, error);
+    writeVarint(
+        writeBuf, folly::to_underlying(objectHeader.status), size, error);
   } else {
     CHECK(objectHeader.length) << "Multi-object streams require known length";
     writeVarint(writeBuf, *objectHeader.length, size, error);
+    if (*objectHeader.length == 0) {
+      writeVarint(
+          writeBuf, folly::to_underlying(objectHeader.status), size, error);
+    }
   }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

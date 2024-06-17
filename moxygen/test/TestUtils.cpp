@@ -90,15 +90,18 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
           3,
           4,
           ForwardPreference::Track,
+          ObjectStatus::NORMAL,
           folly::none,
       }));
   res = writeObject(
       writeBuf,
-      ObjectHeader({0, 1, 2, 3, 4, ForwardPreference::Track, 11}),
+      ObjectHeader(
+          {0, 1, 2, 3, 4, ForwardPreference::Track, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello world"));
   res = writeObject(
       writeBuf,
-      ObjectHeader({0, 1, 2, 3, 4, ForwardPreference::Track, 0}),
+      ObjectHeader(
+          {0, 1, 2, 3, 4, ForwardPreference::Track, ObjectStatus::NORMAL, 0}),
       nullptr);
 
   return writeBuf.move();

@@ -13,6 +13,14 @@ using namespace moxygen;
 namespace {
 class TestUnderflow : public std::exception {};
 
+FrameType parseFrameType(folly::io::Cursor& cursor) {
+  auto frameType = quic::decodeQuicInteger(cursor);
+  if (!frameType) {
+    throw std::runtime_error("Failed to decode frame type");
+  }
+  return FrameType(frameType->first);
+}
+
 void skip(folly::io::Cursor& cursor, size_t i) {
   if (!cursor.canAdvance(i)) {
     throw TestUnderflow();
@@ -95,6 +103,120 @@ TEST(SerializeAndParse, All) {
   parseAll(cursor, true);
 }
 
+TEST(SerializeAndParse, ParseObjectHeader) {
+  // Test OBJECT_STREAM with random payload
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeObject(
+      writeBuf,
+      {11, // subscribeID
+       22, // trackAlias
+       33, // group
+       44, // id
+       55, // sendOrder
+       ForwardPreference::Object,
+       ObjectStatus::NORMAL,
+       4},
+      folly::IOBuf::copyBuffer("EFGH"));
+  EXPECT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(parseFrameType(cursor), FrameType::OBJECT_STREAM);
+  auto parseResult = parseObjectHeader(cursor, FrameType::OBJECT_STREAM);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->subscribeID, 11);
+  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+
+  // Test OBJECT_DATAGRAM with ObjectStatus::OBJECT_NOT_EXIST
+  writeBuf = folly::IOBufQueue(folly::IOBufQueue::cacheChainLength());
+  result = writeObject(
+      writeBuf,
+      {11, // subscribeID
+       22, // trackAlias
+       33, // group
+       44, // id
+       55, // sendOrder
+       ForwardPreference::Datagram,
+       ObjectStatus::OBJECT_NOT_EXIST,
+       0},
+      nullptr);
+  EXPECT_TRUE(result.hasValue());
+  serialized = writeBuf.move();
+  cursor = folly::io::Cursor(serialized.get());
+
+  EXPECT_EQ(parseFrameType(cursor), FrameType::OBJECT_DATAGRAM);
+  parseResult = parseObjectHeader(cursor, FrameType::OBJECT_DATAGRAM);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->subscribeID, 11);
+  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
+}
+
+TEST(SerializeAndParse, ParseStreamHeader) {
+  ObjectHeader expectedObjectHeader = {
+      11, // subscribeID
+      22, // trackAlias
+      33, // group
+      44, // id
+      55, // sendOrder
+      ForwardPreference::Track,
+      ObjectStatus::NORMAL,
+      4};
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeStreamHeader(writeBuf, expectedObjectHeader);
+  EXPECT_TRUE(result.hasValue());
+  result = writeObject(
+      writeBuf, expectedObjectHeader, folly::IOBuf::copyBuffer("EFGH"));
+  EXPECT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(parseFrameType(cursor), FrameType::STREAM_HEADER_TRACK);
+  auto parseStreamHeaderResult =
+      parseStreamHeader(cursor, FrameType::STREAM_HEADER_TRACK);
+  EXPECT_TRUE(parseStreamHeaderResult.hasValue());
+  auto parseResult = parseMultiObjectHeader(
+      cursor, FrameType::STREAM_HEADER_TRACK, *parseStreamHeaderResult);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->subscribeID, 11);
+  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+
+  // Test ObjectStatus::OBJECT_NOT_EXIST
+  expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
+  writeBuf = folly::IOBufQueue(folly::IOBufQueue::cacheChainLength());
+  result = writeStreamHeader(writeBuf, expectedObjectHeader);
+  EXPECT_TRUE(result.hasValue());
+  result = writeObject(writeBuf, expectedObjectHeader, nullptr);
+  EXPECT_TRUE(result.hasValue());
+  serialized = writeBuf.move();
+  cursor = folly::io::Cursor(serialized.get());
+
+  EXPECT_EQ(parseFrameType(cursor), FrameType::STREAM_HEADER_TRACK);
+  parseStreamHeaderResult =
+      parseStreamHeader(cursor, FrameType::STREAM_HEADER_TRACK);
+  EXPECT_TRUE(parseStreamHeaderResult.hasValue());
+  parseResult = parseMultiObjectHeader(
+      cursor, FrameType::STREAM_HEADER_TRACK, *parseStreamHeaderResult);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->subscribeID, 11);
+  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+}
+
 TEST(Underflows, All) {
   auto allMsgs = moxygen::test::writeAllMessages();
   allMsgs->coalesce();
@@ -113,7 +235,6 @@ TEST(Underflows, All) {
 
 /* Test cases to add
  *
- * parseObjectHeader
  * parseStreamHeader (group)
  * parseMultiObjectHeader (group)
  * Location relativeNext -- removed in draft-04

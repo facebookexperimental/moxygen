@@ -93,7 +93,8 @@ struct SetupParameter {
 constexpr uint64_t kVersionDraft01 = 0xff000001;
 constexpr uint64_t kVersionDraft02 = 0xff000002;
 constexpr uint64_t kVersionDraft03 = 0xff000003;
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft03;
+constexpr uint64_t kVersionDraft04 = 0xff000004;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft04;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -113,6 +114,14 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
 
 enum class ForwardPreference : uint8_t { Track, Group, Object, Datagram };
 
+enum class ObjectStatus : uint64_t {
+  NORMAL = 0,
+  OBJECT_NOT_EXIST = 1,
+  GROUP_NOT_EXIST = 2,
+  END_OF_GROUP = 3,
+  END_OF_TRACK_AND_GROUP = 4
+};
+
 struct ObjectHeader {
   uint64_t subscribeID;
   uint64_t trackAlias;
@@ -120,6 +129,7 @@ struct ObjectHeader {
   uint64_t id;
   uint64_t sendOrder;
   ForwardPreference forwardPreference;
+  ObjectStatus status{ObjectStatus::NORMAL};
   folly::Optional<uint64_t> length{folly::none};
 };
 

@@ -128,6 +128,7 @@ class MoQChatServer : MoQServer {
            0,
            0,
            ForwardPreference::Object,
+           ObjectStatus::NORMAL,
            folly::none},
           0,
           catalogBuf->clone(),
