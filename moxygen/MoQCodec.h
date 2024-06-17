@@ -51,8 +51,29 @@ class MoQCodec {
   void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom);
 
  private:
-  bool checkFrameAllowed(FrameType) {
-    return true;
+  bool checkFrameAllowed(FrameType f) {
+    switch (f) {
+      case FrameType::OBJECT_STREAM:
+      case FrameType::OBJECT_DATAGRAM:
+      case FrameType::SUBSCRIBE:
+      case FrameType::SUBSCRIBE_OK:
+      case FrameType::SUBSCRIBE_ERROR:
+      case FrameType::ANNOUNCE:
+      case FrameType::ANNOUNCE_OK:
+      case FrameType::ANNOUNCE_ERROR:
+      case FrameType::UNANNOUNCE:
+      case FrameType::UNSUBSCRIBE:
+      case FrameType::SUBSCRIBE_DONE:
+      case FrameType::ANNOUNCE_CANCEL:
+      case FrameType::GOAWAY:
+      case FrameType::CLIENT_SETUP:
+      case FrameType::SERVER_SETUP:
+      case FrameType::STREAM_HEADER_TRACK:
+      case FrameType::STREAM_HEADER_GROUP:
+        return true;
+      default:
+        return false;
+    }
   }
 
   folly::Expected<folly::Unit, ErrorCode> parseFrame(folly::io::Cursor& cursor);

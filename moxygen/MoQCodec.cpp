@@ -20,11 +20,13 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
           (eom && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH))) {
     switch (parseState_) {
       case ParseState::FRAME_HEADER_TYPE: {
-        auto type = quic::decodeQuicInteger(cursor);
+        auto newCursor = cursor;
+        auto type = quic::decodeQuicInteger(newCursor);
         if (!type) {
           connError_ = ErrorCode::PARSE_UNDERFLOW;
           break;
         }
+        cursor = newCursor;
         curFrameType_ = FrameType(type->first);
         auto res = checkFrameAllowed(curFrameType_);
         if (!res) {
@@ -41,9 +43,10 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         [[fallthrough]];
       }
       case ParseState::FRAME_PAYLOAD: {
+        auto newCursor = cursor;
         if (curFrameType_ == FrameType::OBJECT_STREAM ||
             curFrameType_ == FrameType::OBJECT_DATAGRAM) {
-          auto res = parseObjectHeader(cursor, curFrameType_);
+          auto res = parseObjectHeader(newCursor, curFrameType_);
           if (res.hasError()) {
             connError_ = res.error();
             break;
@@ -56,7 +59,7 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         } else if (
             curFrameType_ == FrameType::STREAM_HEADER_TRACK ||
             curFrameType_ == FrameType::STREAM_HEADER_GROUP) {
-          auto res = parseStreamHeader(cursor, curFrameType_);
+          auto res = parseStreamHeader(newCursor, curFrameType_);
           if (res.hasError()) {
             connError_ = res.error();
             break;
@@ -64,18 +67,20 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
           curObjectHeader_ = res.value();
           parseState_ = ParseState::MULTI_OBJECT_HEADER;
         } else {
-          auto res = parseFrame(cursor);
+          auto res = parseFrame(newCursor);
           if (res.hasError()) {
             connError_ = res.error();
             break;
           }
           parseState_ = ParseState::FRAME_HEADER_TYPE;
         }
+        cursor = newCursor;
         break;
       }
       case ParseState::MULTI_OBJECT_HEADER: {
+        auto newCursor = cursor;
         auto res =
-            parseMultiObjectHeader(cursor, curFrameType_, curObjectHeader_);
+            parseMultiObjectHeader(newCursor, curFrameType_, curObjectHeader_);
         if (res.hasError()) {
           connError_ = res.error();
           break;
@@ -85,9 +90,11 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         if (callback_) {
           callback_->onObjectHeader(std::move(res.value()));
         }
+        cursor = newCursor;
         [[fallthrough]];
       }
       case ParseState::OBJECT_PAYLOAD: {
+        auto newCursor = cursor;
         // need to check for bufLen == 0?
         std::unique_ptr<folly::IOBuf> payload;
         // TODO: skip clone and do split
@@ -95,37 +102,40 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         XCHECK(curObjectHeader_.length);
         XLOG(DBG2) << "Parsing object with length, need="
                    << *curObjectHeader_.length;
-        if (ingress_.chainLength() > 0 && cursor.canAdvance(1)) {
-          chunkLen = cursor.cloneAtMost(payload, *curObjectHeader_.length);
+        if (ingress_.chainLength() > 0 && newCursor.canAdvance(1)) {
+          chunkLen = newCursor.cloneAtMost(payload, *curObjectHeader_.length);
         }
         *curObjectHeader_.length -= chunkLen;
         if (eom && *curObjectHeader_.length != 0) {
           connError_ = ErrorCode::PARSE_ERROR;
           break;
         }
-        if (callback_) {
+        bool endOfObject = (*curObjectHeader_.length == 0);
+        if (callback_ && (payload || endOfObject)) {
           callback_->onObjectPayload(
               curObjectHeader_.subscribeID,
               curObjectHeader_.trackAlias,
               curObjectHeader_.group,
               curObjectHeader_.id,
               std::move(payload),
-              (*curObjectHeader_.length == 0));
+              endOfObject);
         }
-        if (*curObjectHeader_.length == 0) {
+        if (endOfObject) {
           parseState_ = ParseState::MULTI_OBJECT_HEADER;
         }
+        cursor = newCursor;
         break;
       }
       case ParseState::OBJECT_PAYLOAD_NO_LENGTH: {
+        auto newCursor = cursor;
         // need to check for bufLen == 0?
         std::unique_ptr<folly::IOBuf> payload;
         // TODO: skip clone and do split
-        if (ingress_.chainLength() > 0 && cursor.canAdvance(1)) {
-          cursor.cloneAtMost(payload, std::numeric_limits<uint64_t>::max());
+        if (ingress_.chainLength() > 0 && newCursor.canAdvance(1)) {
+          newCursor.cloneAtMost(payload, std::numeric_limits<uint64_t>::max());
         }
         XCHECK(!curObjectHeader_.length);
-        if (callback_) {
+        if (callback_ && (payload || eom)) {
           callback_->onObjectPayload(
               curObjectHeader_.subscribeID,
               curObjectHeader_.trackAlias,
@@ -137,6 +147,7 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         if (eom) {
           parseState_ = ParseState::FRAME_HEADER_TYPE;
         }
+        cursor = newCursor;
       }
     }
   }
@@ -147,6 +158,7 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
       connError_.reset();
       return;
     } else if (callback_) {
+      XLOG(ERR) << "Conn error=" << uint32_t(*connError_);
       callback_->onConnectionError(*connError_);
     }
   }
