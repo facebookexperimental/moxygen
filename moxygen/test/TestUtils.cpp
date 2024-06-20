@@ -79,6 +79,14 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
       Unannounce({
           "hello",
       }));
+  res = writeTrackStatusRequest(
+      writeBuf, TrackStatusRequest({FullTrackName({"hello", "world"})}));
+  res = writeTrackStatus(
+      writeBuf,
+      TrackStatus(
+          {FullTrackName({"hello", "world"}),
+           TrackStatusCode::IN_PROGRESS,
+           {19, 77}}));
   res = writeGoaway(writeBuf, Goaway({"new uri"}));
 
   res = writeStreamHeader(

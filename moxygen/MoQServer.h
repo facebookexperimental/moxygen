@@ -39,6 +39,8 @@ class MoQServer {
     void operator()(AnnounceCancel announceCancel) const override;
     void operator()(SubscribeDone subscribeDone) const override;
     void operator()(Unsubscribe unsubscribe) const override;
+    void operator()(TrackStatusRequest trackStatusRequest) const override;
+    void operator()(TrackStatus trackStatus) const override;
     void operator()(Goaway goaway) const override;
 
    protected:

@@ -37,6 +37,9 @@ class MoQCodec {
     virtual void onAnnounceError(AnnounceError announceError) = 0;
     virtual void onUnannounce(Unannounce unannounce) = 0;
     virtual void onAnnounceCancel(AnnounceCancel announceCancel) = 0;
+    virtual void onTrackStatusRequest(
+        TrackStatusRequest trackStatusRequest) = 0;
+    virtual void onTrackStatus(TrackStatus trackStatus) = 0;
     virtual void onGoaway(Goaway goaway) = 0;
     virtual void onConnectionError(ErrorCode error) = 0;
   };
@@ -65,15 +68,16 @@ class MoQCodec {
       case FrameType::UNSUBSCRIBE:
       case FrameType::SUBSCRIBE_DONE:
       case FrameType::ANNOUNCE_CANCEL:
+      case FrameType::TRACK_STATUS_REQUEST:
+      case FrameType::TRACK_STATUS:
       case FrameType::GOAWAY:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
       case FrameType::STREAM_HEADER_TRACK:
       case FrameType::STREAM_HEADER_GROUP:
         return true;
-      default:
-        return false;
     }
+    return false;
   }
 
   folly::Expected<folly::Unit, ErrorCode> parseFrame(folly::io::Cursor& cursor);

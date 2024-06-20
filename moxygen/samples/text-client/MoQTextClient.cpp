@@ -112,7 +112,9 @@ class MoQTextClient {
     // TODO: check track.value()->getCancelToken()
     while (auto obj = co_await track->objects().next()) {
       auto payload = co_await obj.value()->payload();
-      std::cout << payload->moveToFbString() << std::endl;
+      if (payload) {
+        std::cout << payload->moveToFbString() << std::endl;
+      }
     }
   }
   MoQClient moqClient_;

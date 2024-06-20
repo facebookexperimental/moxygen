@@ -56,6 +56,14 @@ enum class SubscribeDoneStatusCode : uint32_t {
   EXPIRED = 0x6
 };
 
+enum class TrackStatusCode : uint32_t {
+  IN_PROGRESS = 0x0,
+  TRACK_NOT_EXIST = 0x1,
+  TRACK_NOT_STARTED = 0x2,
+  TRACK_ENDED = 0x3,
+  UNKNOWN = 0x4
+};
+
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
 
 enum class FrameType : uint64_t {
@@ -71,6 +79,8 @@ enum class FrameType : uint64_t {
   UNSUBSCRIBE = 0xA,
   SUBSCRIBE_DONE = 0xB,
   ANNOUNCE_CANCEL = 0xC,
+  TRACK_STATUS = 0xD,
+  TRACK_STATUS_REQUEST = 0xE,
   GOAWAY = 0x10,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
@@ -279,6 +289,22 @@ struct AnnounceCancel {
 folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
     folly::io::Cursor& cursor) noexcept;
 
+struct TrackStatusRequest {
+  FullTrackName fullTrackName;
+};
+
+folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
+    folly::io::Cursor& cursor) noexcept;
+
+struct TrackStatus {
+  FullTrackName fullTrackName;
+  TrackStatusCode statusCode;
+  GroupAndObject latestGroupAndObject;
+};
+
+folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
+    folly::io::Cursor& cursor) noexcept;
+
 struct Goaway {
   std::string newSessionUri;
 };
@@ -344,6 +370,14 @@ WriteResult writeUnannounce(
 WriteResult writeAnnounceCancel(
     folly::IOBufQueue& writeBuf,
     const AnnounceCancel& announceCancel) noexcept;
+
+WriteResult writeTrackStatusRequest(
+    folly::IOBufQueue& writeBuf,
+    const TrackStatusRequest& trackStatusRequest) noexcept;
+
+WriteResult writeTrackStatus(
+    folly::IOBufQueue& writeBuf,
+    const TrackStatus& trackStatus) noexcept;
 
 WriteResult writeGoaway(
     folly::IOBufQueue& writeBuf,

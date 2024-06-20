@@ -132,7 +132,7 @@ folly::coro::Task<void> MoQChatClient::readCatalogUpdates(
     // the stream it's on?
     auto catalogBuf = co_await obj.value()->payload();
     // ok have the full object
-    if (obj.value()->header.id == 0) {
+    if (obj.value()->header.id == 0 && catalogBuf) {
       XLOG(INFO) << "new catalog";
       // parse catalog into list of usernames
       catalogBuf->coalesce();
@@ -185,7 +185,8 @@ void MoQChatClient::publishLoop() {
              group,
              0,
              0,
-             ForwardPreference::Object},
+             ForwardPreference::Object,
+             ObjectStatus::NORMAL},
             0,
             folly::IOBuf::copyBuffer(input),
             true);
@@ -225,10 +226,12 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(std::string username) {
   subscriptions_.insert(username);
   while (auto obj = co_await track->value()->objects().next()) {
     // how to cancel this loop
-    std::cout << username << ": ";
     auto payload = co_await obj.value()->payload();
-    payload->coalesce();
-    std::cout << payload->moveToFbString() << std::endl;
+    if (payload) {
+      std::cout << username << ": ";
+      payload->coalesce();
+      std::cout << payload->moveToFbString() << std::endl;
+    }
   }
 }
 } // namespace moxygen

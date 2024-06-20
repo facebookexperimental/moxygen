@@ -535,6 +535,40 @@ folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
   return announceCancel;
 }
 
+folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
+    folly::io::Cursor& cursor) noexcept {
+  TrackStatusRequest trackStatusRequest;
+  auto res = parseFullTrackName(cursor);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  trackStatusRequest.fullTrackName = std::move(res.value());
+  return trackStatusRequest;
+}
+
+folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
+    folly::io::Cursor& cursor) noexcept {
+  TrackStatus trackStatus;
+  auto res = parseFullTrackName(cursor);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  auto statusCode = quic::decodeQuicInteger(cursor);
+  if (!statusCode) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (statusCode->first > folly::to_underlying(TrackStatusCode::UNKNOWN)) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  }
+  trackStatus.statusCode = TrackStatusCode(statusCode->first);
+  auto groupAndObject = parseGroupAndObject(cursor);
+  if (!groupAndObject) {
+    return folly::makeUnexpected(groupAndObject.error());
+  }
+  trackStatus.latestGroupAndObject = *groupAndObject;
+  return trackStatus;
+}
+
 folly::Expected<Goaway, ErrorCode> parseGoaway(
     folly::io::Cursor& cursor) noexcept {
   Goaway goaway;
@@ -909,6 +943,48 @@ WriteResult writeAnnounceCancel(
   writeVarint(
       writeBuf, folly::to_underlying(FrameType::ANNOUNCE_CANCEL), size, error);
   writeFixedString(writeBuf, announceCancel.trackNamespace, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeTrackStatusRequest(
+    folly::IOBufQueue& writeBuf,
+    const TrackStatusRequest& trackStatusRequest) noexcept {
+  size_t size = 0;
+  bool error = false;
+  writeVarint(
+      writeBuf,
+      folly::to_underlying(FrameType::TRACK_STATUS_REQUEST),
+      size,
+      error);
+  writeFullTrackName(writeBuf, trackStatusRequest.fullTrackName, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeTrackStatus(
+    folly::IOBufQueue& writeBuf,
+    const TrackStatus& trackStatus) noexcept {
+  size_t size = 0;
+  bool error = false;
+  writeVarint(
+      writeBuf, folly::to_underlying(FrameType::TRACK_STATUS), size, error);
+  writeFullTrackName(writeBuf, trackStatus.fullTrackName, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(trackStatus.statusCode), size, error);
+  if (trackStatus.statusCode == TrackStatusCode::IN_PROGRESS) {
+    writeVarint(
+        writeBuf, trackStatus.latestGroupAndObject.groupID, size, error);
+    writeVarint(
+        writeBuf, trackStatus.latestGroupAndObject.objectID, size, error);
+  } else {
+    writeVarint(writeBuf, 0, size, error);
+    writeVarint(writeBuf, 0, size, error);
+  }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }

@@ -79,6 +79,18 @@ void MoQServer::ControlVisitor::operator()(Unsubscribe unsubscribe) const {
   XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
 }
 
+void MoQServer::ControlVisitor::operator()(
+    TrackStatusRequest trackStatusRequest) const {
+  XLOG(INFO) << "TrackStatusRequest track="
+             << trackStatusRequest.fullTrackName.trackNamespace
+             << trackStatusRequest.fullTrackName.trackName;
+}
+
+void MoQServer::ControlVisitor::operator()(TrackStatus trackStatus) const {
+  XLOG(INFO) << "TrackStatus track=" << trackStatus.fullTrackName.trackNamespace
+             << trackStatus.fullTrackName.trackName;
+}
+
 void MoQServer::ControlVisitor::operator()(Goaway goaway) const {
   XLOG(INFO) << "Goaway nsuri=" << goaway.newSessionUri;
 }

@@ -32,6 +32,11 @@ class MockMoQCodecCallback : public MoQCodec::Callback {
   MOCK_METHOD(void, onAnnounceError, (AnnounceError announceError));
   MOCK_METHOD(void, onUnannounce, (Unannounce unannounce));
   MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel announceCancel));
+  MOCK_METHOD(
+      void,
+      onTrackStatusRequest,
+      (TrackStatusRequest trackStatusRequest));
+  MOCK_METHOD(void, onTrackStatus, (TrackStatus trackStatus));
   MOCK_METHOD(void, onGoaway, (Goaway goaway));
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));
 };

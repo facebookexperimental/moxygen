@@ -50,6 +50,8 @@ class MoQSession : public MoQCodec::Callback {
       SubscribeRequest,
       Unsubscribe,
       SubscribeDone,
+      TrackStatusRequest,
+      TrackStatus,
       Goaway>;
 
   class ControlVisitor : public boost::static_visitor<> {
@@ -94,6 +96,15 @@ class MoQSession : public MoQCodec::Callback {
       XLOG(INFO) << "Unsubscribe subID=" << unsubscribe.subscribeID;
     }
 
+    virtual void operator()(TrackStatusRequest trackStatusRequest) const {
+      XLOG(INFO) << "Subscribe ftn="
+                 << trackStatusRequest.fullTrackName.trackNamespace
+                 << trackStatusRequest.fullTrackName.trackName;
+    }
+    virtual void operator()(TrackStatus trackStatus) const {
+      XLOG(INFO) << "Subscribe ftn=" << trackStatus.fullTrackName.trackNamespace
+                 << trackStatus.fullTrackName.trackName;
+    }
     virtual void operator()(Goaway goaway) const {
       XLOG(INFO) << "Goaway, newURI=" << goaway.newSessionUri;
     }
@@ -167,6 +178,9 @@ class MoQSession : public MoQCodec::Callback {
           payloadQueue;
 
       folly::coro::Task<std::unique_ptr<folly::IOBuf>> payload() {
+        if (header.status != ObjectStatus::NORMAL) {
+          co_return nullptr;
+        }
         folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
         while (true) {
           auto buf = co_await folly::coro::co_withCancellation(
@@ -253,6 +267,8 @@ class MoQSession : public MoQCodec::Callback {
   void onAnnounceError(AnnounceError announceError) override;
   void onUnannounce(Unannounce unannounce) override;
   void onAnnounceCancel(AnnounceCancel announceCancel) override;
+  void onTrackStatusRequest(TrackStatusRequest trackStatusRequest) override;
+  void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
 

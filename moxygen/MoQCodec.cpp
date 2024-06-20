@@ -309,6 +309,28 @@ folly::Expected<folly::Unit, ErrorCode> MoQCodec::parseFrame(
       }
       break;
     }
+    case FrameType::TRACK_STATUS_REQUEST: {
+      auto res = parseTrackStatusRequest(cursor);
+      if (res) {
+        if (callback_) {
+          callback_->onTrackStatusRequest(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::TRACK_STATUS: {
+      auto res = parseTrackStatus(cursor);
+      if (res) {
+        if (callback_) {
+          callback_->onTrackStatus(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::GOAWAY: {
       auto res = parseGoaway(cursor);
       if (res) {
@@ -320,9 +342,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQCodec::parseFrame(
       }
       break;
     }
-    default:
-      XLOG(DBG3) << "Unknown frame (type=" << (uint64_t)curFrameType_ << ")";
-      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
   }
   return folly::unit;
 }

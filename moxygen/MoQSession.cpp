@@ -356,6 +356,16 @@ void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
   controlMessages_.enqueue(std::move(announceCancel));
 }
 
+void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
+  XLOG(DBG1) << __func__;
+  controlMessages_.enqueue(std::move(trackStatusRequest));
+}
+
+void MoQSession::onTrackStatus(TrackStatus trackStatus) {
+  XLOG(DBG1) << __func__;
+  controlMessages_.enqueue(std::move(trackStatus));
+}
+
 void MoQSession::onGoaway(Goaway goaway) {
   XLOG(DBG1) << __func__;
   controlMessages_.enqueue(std::move(goaway));

@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQFramer.h"
+#include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
 #include "moxygen/test/TestUtils.h"
 
@@ -80,6 +81,14 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   skip(cursor, 1);
   auto r13 = parseUnannounce(cursor);
   EXPECT_TRUE(r13 || (!eom && r13.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r14a = parseTrackStatusRequest(cursor);
+  EXPECT_TRUE(r14a || (!eom && r14a.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
+  auto r14b = parseTrackStatus(cursor);
+  EXPECT_TRUE(r14b || (!eom && r14b.error() == ErrorCode::PARSE_UNDERFLOW));
 
   skip(cursor, 1);
   auto r14 = parseGoaway(cursor);

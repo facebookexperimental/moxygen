@@ -28,6 +28,8 @@ TEST(MoQCodec, All) {
   EXPECT_CALL(callback, onAnnounceOk(testing::_));
   EXPECT_CALL(callback, onAnnounceError(testing::_));
   EXPECT_CALL(callback, onUnannounce(testing::_));
+  EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
+  EXPECT_CALL(callback, onTrackStatus(testing::_));
   EXPECT_CALL(callback, onGoaway(testing::_));
   EXPECT_CALL(callback, onObjectHeader(testing::_)).Times(2);
   EXPECT_CALL(
@@ -40,7 +42,7 @@ TEST(MoQCodec, All) {
           testing::_,
           testing::_))
       .Times(2);
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(15);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
 
   codec.onIngress(std::move(allMsgs), true);
 }
@@ -64,6 +66,8 @@ TEST(MoQCodec, Underflow) {
   EXPECT_CALL(callback, onAnnounceOk(testing::_));
   EXPECT_CALL(callback, onAnnounceError(testing::_));
   EXPECT_CALL(callback, onUnannounce(testing::_));
+  EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
+  EXPECT_CALL(callback, onTrackStatus(testing::_));
   EXPECT_CALL(callback, onGoaway(testing::_));
   EXPECT_CALL(callback, onObjectHeader(testing::_)).Times(2);
   EXPECT_CALL(
@@ -76,7 +80,7 @@ TEST(MoQCodec, Underflow) {
           testing::_,
           testing::_))
       .Times(strlen("hello world") + 1);
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(15);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }
