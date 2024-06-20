@@ -227,7 +227,7 @@ TEST(Underflows, All) {
     folly::io::Cursor cursor(toParse.get());
     try {
       parseAll(cursor, i == len - 1);
-    } catch (const TestUnderflow& ex) {
+    } catch (const TestUnderflow&) {
       // expected
     }
   }
