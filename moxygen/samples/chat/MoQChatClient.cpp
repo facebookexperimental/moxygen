@@ -45,10 +45,9 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         {0,
          0,
          catalogTrackName(),
-         Location({LocationType::RelativePrevious, 0}),
-         Location({LocationType::Absolute, 0}),
-         Location({LocationType::None, 0}),
-         Location({LocationType::None, 0}),
+         LocationType::LatestGroup,
+         folly::none,
+         folly::none,
          {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
            username_}}});
     if (catalogTrack.hasValue()) {
@@ -207,10 +206,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(std::string username) {
       {0,
        0,
        FullTrackName({participantTrackName(username), ""}),
-       Location({LocationType::RelativePrevious, 0}),
-       Location({LocationType::Absolute, 0}),
-       Location({LocationType::None, 0}),
-       Location({LocationType::None, 0}),
+       LocationType::LatestGroup,
+       folly::none,
+       folly::none,
        {}}));
   if (track.hasException()) {
     // subscribe failed

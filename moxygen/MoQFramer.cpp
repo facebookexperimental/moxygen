@@ -278,26 +278,6 @@ folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
   return folly::unit;
 }
 
-folly::Expected<Location, ErrorCode> parseLocation(folly::io::Cursor& cursor) {
-  Location loc;
-  auto locType = quic::decodeQuicInteger(cursor);
-  if (!locType) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  if (locType->first > folly::to_underlying(LocationType::RelativeNext)) {
-    return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
-  }
-  loc.locType = LocationType(locType->first);
-  if (loc.locType != LocationType::None) {
-    auto value = quic::decodeQuicInteger(cursor);
-    if (!value) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    loc.value = value->first;
-  }
-  return loc;
-}
-
 folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
     folly::io::Cursor& cursor) noexcept {
   SubscribeRequest subscribeRequest;
@@ -316,26 +296,29 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
     return folly::makeUnexpected(res.error());
   }
   subscribeRequest.fullTrackName = std::move(res.value());
-  auto loc = parseLocation(cursor);
-  if (!loc) {
-    return folly::makeUnexpected(loc.error());
+  auto locType = quic::decodeQuicInteger(cursor);
+  if (!locType) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  subscribeRequest.startGroup = *loc;
-  loc = parseLocation(cursor);
-  if (!loc) {
-    return folly::makeUnexpected(loc.error());
+  if (locType->first > folly::to_underlying(LocationType::AbsoluteRange)) {
+    return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
   }
-  subscribeRequest.startObject = *loc;
-  loc = parseLocation(cursor);
-  if (!loc) {
-    return folly::makeUnexpected(loc.error());
+  subscribeRequest.locType = LocationType(locType->first);
+  if (subscribeRequest.locType == LocationType::AbsoluteStart ||
+      subscribeRequest.locType == LocationType::AbsoluteRange) {
+    auto groupAndObj = parseGroupAndObject(cursor);
+    if (!groupAndObj) {
+      return folly::makeUnexpected(groupAndObj.error());
+    }
+    subscribeRequest.start = *groupAndObj;
   }
-  subscribeRequest.endGroup = *loc;
-  loc = parseLocation(cursor);
-  if (!loc) {
-    return folly::makeUnexpected(loc.error());
+  if (subscribeRequest.locType == LocationType::AbsoluteRange) {
+    auto groupAndObj = parseGroupAndObject(cursor);
+    if (!groupAndObj) {
+      return folly::makeUnexpected(groupAndObj.error());
+    }
+    subscribeRequest.end = *groupAndObj;
   }
-  subscribeRequest.endObject = *loc;
   auto numParams = quic::decodeQuicInteger(cursor);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -663,17 +646,6 @@ void writeFullTrackName(
   writeFixedString(writeBuf, fullTrackName.trackName, size, error);
 }
 
-void writeLocation(
-    folly::IOBufQueue& buf,
-    const Location& loc,
-    size_t& size,
-    bool& error) noexcept {
-  writeVarint(buf, folly::to_underlying(loc.locType), size, error);
-  if (loc.locType != LocationType::None) {
-    writeVarint(buf, loc.value, size, error);
-  }
-}
-
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
     const ClientSetup& clientSetup) noexcept {
@@ -821,10 +793,17 @@ WriteResult writeSubscribeRequest(
   writeVarint(writeBuf, subscribeRequest.subscribeID, size, error);
   writeVarint(writeBuf, subscribeRequest.trackAlias, size, error);
   writeFullTrackName(writeBuf, subscribeRequest.fullTrackName, size, error);
-  writeLocation(writeBuf, subscribeRequest.startGroup, size, error);
-  writeLocation(writeBuf, subscribeRequest.startObject, size, error);
-  writeLocation(writeBuf, subscribeRequest.endGroup, size, error);
-  writeLocation(writeBuf, subscribeRequest.endObject, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(subscribeRequest.locType), size, error);
+  if (subscribeRequest.locType == LocationType::AbsoluteStart ||
+      subscribeRequest.locType == LocationType::AbsoluteRange) {
+    writeVarint(writeBuf, subscribeRequest.start->groupID, size, error);
+    writeVarint(writeBuf, subscribeRequest.start->objectID, size, error);
+  }
+  if (subscribeRequest.locType == LocationType::AbsoluteRange) {
+    writeVarint(writeBuf, subscribeRequest.end->groupID, size, error);
+    writeVarint(writeBuf, subscribeRequest.end->objectID, size, error);
+  }
   writeVarint(writeBuf, subscribeRequest.params.size(), size, error);
   for (auto& param : subscribeRequest.params) {
     writeVarint(writeBuf, param.key, size, error);

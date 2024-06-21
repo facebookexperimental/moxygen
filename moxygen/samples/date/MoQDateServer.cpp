@@ -112,23 +112,13 @@ class MoQDateServer : MoQServer {
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    if (subReq.startGroup.locType == LocationType::None) {
-      clientSession->subscribeError(
-          {subReq.subscribeID, 400, "Invalid start group"});
-      return;
+    auto start =
+        toAbsolulte(subReq.locType, subReq.start, nowLoc.group, nowLoc.object);
+    AbsoluteLocation end = kLocationMax;
+    if (subReq.end) {
+      end =
+          toAbsolulte(subReq.locType, subReq.end, nowLoc.group, nowLoc.object);
     }
-    auto start = toAbsolulte(
-        subReq.startGroup,
-        subReq.startObject,
-        nowLoc.group,
-        nowLoc.object,
-        [](uint64_t) { return 61; });
-    auto end = toAbsolulte(
-        subReq.endGroup,
-        subReq.endObject,
-        nowLoc.group,
-        nowLoc.object,
-        [](uint64_t) { return 61; });
     clientSession->subscribeOk(
         {subReq.subscribeID,
          std::chrono::milliseconds(0),

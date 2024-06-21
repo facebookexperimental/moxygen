@@ -125,22 +125,36 @@ class MoQTextClient {
 
 using namespace moxygen;
 namespace {
-folly::Optional<Location> string2loc(const std::string& str) {
-  if (str.empty()) {
-    return folly::none;
+
+struct SubParams {
+  LocationType locType;
+  folly::Optional<GroupAndObject> start;
+  folly::Optional<GroupAndObject> end;
+};
+
+SubParams flags2params() {
+  SubParams result;
+  if (FLAGS_sg.empty()) {
+    result.locType = LocationType::LatestObject;
+    return result;
   }
-  XLOG(DBG1) << str;
-  if (str[0] == 'a') {
-    return Location(
-        {LocationType::Absolute, folly::to<uint64_t>(str.substr(1))});
+  if (FLAGS_so.empty()) {
+    result.locType = LocationType::LatestGroup;
+    return result;
+  }
+  result.start.emplace(GroupAndObject(
+      {folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(FLAGS_so)}));
+  if (FLAGS_eg.empty()) {
+    result.locType = LocationType::AbsoluteStart;
+    return result;
   } else {
-    auto value = folly::to<int64_t>(str);
-    if (value <= 0) {
-      return Location({LocationType::RelativePrevious, uint64_t(-value)});
-    } else {
-      return Location({LocationType::RelativeNext, uint64_t(value - 1)});
-    }
+    result.locType = LocationType::AbsoluteRange;
+    result.start.emplace(GroupAndObject(
+        {folly::to<uint64_t>(FLAGS_eg),
+         (FLAGS_eo.empty() ? folly::to<uint64_t>(FLAGS_eo) : 0)}));
+    return result;
   }
+  return result;
 }
 } // namespace
 
@@ -177,16 +191,15 @@ int main(int argc, char* argv[]) {
   };
   SigHandler handler(
       &eventBase, [&textClient](int) mutable { textClient.stop(); });
+  auto subParams = flags2params();
   textClient
       .run(
           {0,
            0,
            moxygen::FullTrackName({FLAGS_track_namespace, FLAGS_track_name}),
-           string2loc(FLAGS_sg).value_or(
-               Location({LocationType::RelativePrevious, 0})),
-           string2loc(FLAGS_so).value_or(Location({LocationType::Absolute, 0})),
-           string2loc(FLAGS_eg).value_or(Location({LocationType::None, 0})),
-           string2loc(FLAGS_eo).value_or(Location({LocationType::None, 0})),
+           subParams.locType,
+           subParams.start,
+           subParams.end,
            {}})
       .scheduleOn(&eventBase)
       .start()

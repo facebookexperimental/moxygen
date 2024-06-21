@@ -38,10 +38,9 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
           {0,
            0,
            FullTrackName({"hello", "world"}),
-           Location({LocationType::RelativePrevious, 0}),
-           Location({LocationType::Absolute, 0}),
-           Location({LocationType::RelativeNext, 0}),
-           Location({LocationType::None, 0}),
+           LocationType::LatestObject,
+           folly::none,
+           folly::none,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky"}}}));
   res = writeSubscribeOk(

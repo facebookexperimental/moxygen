@@ -167,15 +167,15 @@ struct TrackRequestParameter {
 };
 
 enum class LocationType : uint8_t {
-  None = 0,
-  Absolute = 1,
-  RelativePrevious = 2,
-  RelativeNext = 3
+  LatestGroup = 1,
+  LatestObject = 2,
+  AbsoluteStart = 3,
+  AbsoluteRange = 4
 };
 
-struct Location {
-  LocationType locType = LocationType::None;
-  uint64_t value = std::numeric_limits<uint64_t>::max();
+struct GroupAndObject {
+  uint64_t groupID;
+  uint64_t objectID;
 };
 
 struct FullTrackName {
@@ -200,10 +200,9 @@ struct SubscribeRequest {
   uint64_t subscribeID;
   uint64_t trackAlias;
   FullTrackName fullTrackName;
-  Location startGroup;
-  Location startObject;
-  Location endGroup;
-  Location endObject;
+  LocationType locType;
+  folly::Optional<GroupAndObject> start;
+  folly::Optional<GroupAndObject> end;
   std::vector<TrackRequestParameter> params;
 };
 
@@ -221,11 +220,6 @@ struct SubscribeUpdateRequest {
 
 folly::Expected<SubscribeUpdateRequest, ErrorCode> parseSubscribeUpdateRequest(
     folly::io::Cursor& cursor) noexcept;
-
-struct GroupAndObject {
-  uint64_t groupID;
-  uint64_t objectID;
-};
 
 struct SubscribeOk {
   uint64_t subscribeID;

@@ -32,62 +32,37 @@ struct AbsoluteLocation {
   }
 };
 
+constexpr AbsoluteLocation kLocationMax{
+    std::numeric_limits<uint64_t>::max(),
+    std::numeric_limits<uint64_t>::max()};
+
 inline AbsoluteLocation toAbsolulte(
-    const Location& group,
-    const Location& object,
+    LocationType locType,
+    folly::Optional<GroupAndObject> groupAndObject,
     const uint64_t curGroup,
-    const uint64_t curObj,
-    std::function<uint64_t(uint64_t)> largestObjectForGroup = [](uint64_t) {
-      return 0;
-    }) {
-  XLOG(DBG1) << "gm=" << uint64_t(group.locType) << " g=" << group.value
-             << " om=" << uint64_t(object.locType) << " o=" << object.value;
+    const uint64_t curObj) {
+  XLOG(DBG1) << "m=" << uint64_t(locType)
+             << (groupAndObject ? folly::to<std::string>(
+                                      "g=",
+                                      groupAndObject->groupID,
+                                      " o=",
+                                      groupAndObject->objectID)
+                                : std::string());
   AbsoluteLocation result;
-  switch (group.locType) {
-    case LocationType::None:
-      result.group = std::numeric_limits<uint64_t>::max();
+  switch (locType) {
+    case LocationType::LatestGroup:
+      result.group = curGroup;
+      result.object = 0;
       break;
-    case LocationType::Absolute:
-      result.group = group.value;
+    case LocationType::LatestObject:
+      result.group = curGroup;
+      result.object = curObj;
       break;
-    case LocationType::RelativePrevious:
-      if (group.value > curGroup) {
-        result.group = 0;
-      } else {
-        result.group = curGroup - group.value;
-      }
+    case LocationType::AbsoluteStart:
+    case LocationType::AbsoluteRange:
+      result.group = groupAndObject->groupID;
+      result.object = groupAndObject->objectID;
       break;
-    case LocationType::RelativeNext:
-      result.group = curGroup + group.value + 1;
-      break;
-  }
-  switch (object.locType) {
-    case LocationType::None:
-      result.object = std::numeric_limits<uint64_t>::max();
-      break;
-    case LocationType::Absolute:
-      result.object = object.value;
-      break;
-    case LocationType::RelativePrevious: {
-      auto tailObj = curObj;
-      if (result.group != curGroup) {
-        tailObj = largestObjectForGroup(result.group);
-      }
-      if (object.value < tailObj) {
-        result.object = 0;
-      } else {
-        result.object = tailObj - object.value;
-      }
-      break;
-    }
-    case LocationType::RelativeNext: {
-      auto tailObj = 0;
-      if (result.object == curGroup) {
-        tailObj = curObj;
-      }
-      result.object = tailObj + object.value;
-      break;
-    }
   }
   XLOG(DBG1) << "g=" << result.group << " o=" << result.object;
   return result;
