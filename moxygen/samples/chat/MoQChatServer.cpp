@@ -137,6 +137,10 @@ class MoQChatServer : MoQServer {
   }
 
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
+    if (!session) {
+      XLOG(ERR) << "what";
+      return;
+    }
     relay_.removeSession(session);
     bool catalogChange = false;
     for (auto it = subscribers_.begin(); it != subscribers_.end(); it++) {
