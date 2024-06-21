@@ -23,6 +23,10 @@ class MockMoQCodecCallback : public MoQCodec::Callback {
        std::unique_ptr<folly::IOBuf> payload,
        bool eom));
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest subscribeRequest));
+  MOCK_METHOD(
+      void,
+      onSubscribeUpdate,
+      (SubscribeUpdateRequest subscribeUpdate));
   MOCK_METHOD(void, onSubscribeOk, (SubscribeOk subscribeOk));
   MOCK_METHOD(void, onSubscribeError, (SubscribeError subscribeError));
   MOCK_METHOD(void, onSubscribeDone, (SubscribeDone subscribeDone));

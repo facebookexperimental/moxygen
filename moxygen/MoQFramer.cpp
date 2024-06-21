@@ -348,6 +348,46 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
   return subscribeRequest;
 }
 
+folly::Expected<SubscribeUpdateRequest, ErrorCode> parseSubscribeUpdateRequest(
+    folly::io::Cursor& cursor) noexcept {
+  SubscribeUpdateRequest subscribeUpdateRequest;
+  auto subscribeID = quic::decodeQuicInteger(cursor);
+  if (!subscribeID) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  subscribeUpdateRequest.subscribeID = subscribeID->first;
+  auto startGroup = quic::decodeQuicInteger(cursor);
+  if (!startGroup) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  subscribeUpdateRequest.startGroup = startGroup->first;
+  auto startObject = quic::decodeQuicInteger(cursor);
+  if (!startObject) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  subscribeUpdateRequest.startObject = startObject->first;
+  auto endGroup = quic::decodeQuicInteger(cursor);
+  if (!endGroup) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  subscribeUpdateRequest.endGroup = endGroup->first;
+  auto endObject = quic::decodeQuicInteger(cursor);
+  if (!endObject) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  subscribeUpdateRequest.endObject = endObject->first;
+  auto numParams = quic::decodeQuicInteger(cursor);
+  if (!numParams) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  auto res2 = parseTrackRequestParams(
+      cursor, numParams->first, subscribeUpdateRequest.params);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
+  return subscribeUpdateRequest;
+}
+
 folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
     folly::io::Cursor& cursor) noexcept {
   SubscribeOk subscribeOk;

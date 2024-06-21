@@ -60,6 +60,11 @@ void MoQServer::ControlVisitor::operator()(
       {subscribeReq.subscribeID, 500, "not implemented"});
 }
 
+void MoQServer::ControlVisitor::operator()(
+    SubscribeUpdateRequest subscribeUpdate) const {
+  XLOG(INFO) << "SubscribeRequest id=" << subscribeUpdate.subscribeID;
+}
+
 void MoQServer::ControlVisitor::operator()(Unannounce unannounce) const {
   XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
 }

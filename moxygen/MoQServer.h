@@ -35,6 +35,7 @@ class MoQServer {
     void operator()(ServerSetup) const override;
     void operator()(Announce announce) const override;
     void operator()(SubscribeRequest subscribeReq) const override;
+    void operator()(SubscribeUpdateRequest subscribeUpdate) const override;
     void operator()(Unannounce unannounce) const override;
     void operator()(AnnounceCancel announceCancel) const override;
     void operator()(SubscribeDone subscribeDone) const override;

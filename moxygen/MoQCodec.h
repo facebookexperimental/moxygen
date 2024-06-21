@@ -28,6 +28,8 @@ class MoQCodec {
         std::unique_ptr<folly::IOBuf> payload,
         bool eom) = 0;
     virtual void onSubscribe(SubscribeRequest subscribeRequest) = 0;
+    virtual void onSubscribeUpdate(
+        SubscribeUpdateRequest subscribeUpdateRequest) = 0;
     virtual void onSubscribeOk(SubscribeOk subscribeOk) = 0;
     virtual void onSubscribeError(SubscribeError subscribeError) = 0;
     virtual void onSubscribeDone(SubscribeDone subscribeDone) = 0;
@@ -59,6 +61,7 @@ class MoQCodec {
       case FrameType::OBJECT_STREAM:
       case FrameType::OBJECT_DATAGRAM:
       case FrameType::SUBSCRIBE:
+      case FrameType::SUBSCRIBE_UPDATE:
       case FrameType::SUBSCRIBE_OK:
       case FrameType::SUBSCRIBE_ERROR:
       case FrameType::ANNOUNCE:

@@ -48,6 +48,7 @@ class MoQSession : public MoQCodec::Callback {
       Unannounce,
       AnnounceCancel,
       SubscribeRequest,
+      SubscribeUpdateRequest,
       Unsubscribe,
       SubscribeDone,
       TrackStatusRequest,
@@ -86,6 +87,10 @@ class MoQSession : public MoQCodec::Callback {
     virtual void operator()(SubscribeRequest subscribe) const {
       XLOG(INFO) << "Subscribe ftn=" << subscribe.fullTrackName.trackNamespace
                  << subscribe.fullTrackName.trackName;
+    }
+
+    virtual void operator()(SubscribeUpdateRequest subscribeUpdate) const {
+      XLOG(INFO) << "SubscribeUpdate subID=" << subscribeUpdate.subscribeID;
     }
 
     virtual void operator()(SubscribeDone subscribeDone) const {
@@ -258,6 +263,8 @@ class MoQSession : public MoQCodec::Callback {
       std::unique_ptr<folly::IOBuf> payload,
       bool eom) override;
   void onSubscribe(SubscribeRequest subscribeRequest) override;
+  void onSubscribeUpdate(
+      SubscribeUpdateRequest subscribeUpdateRequest) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
   void onSubscribeError(SubscribeError subscribeError) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;

@@ -69,6 +69,7 @@ using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
 enum class FrameType : uint64_t {
   OBJECT_STREAM = 0,
   OBJECT_DATAGRAM = 1,
+  SUBSCRIBE_UPDATE = 2,
   SUBSCRIBE = 3,
   SUBSCRIBE_OK = 4,
   SUBSCRIBE_ERROR = 5,
@@ -79,8 +80,8 @@ enum class FrameType : uint64_t {
   UNSUBSCRIBE = 0xA,
   SUBSCRIBE_DONE = 0xB,
   ANNOUNCE_CANCEL = 0xC,
-  TRACK_STATUS = 0xD,
-  TRACK_STATUS_REQUEST = 0xE,
+  TRACK_STATUS_REQUEST = 0xD,
+  TRACK_STATUS = 0xE,
   GOAWAY = 0x10,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
@@ -207,6 +208,18 @@ struct SubscribeRequest {
 };
 
 folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
+    folly::io::Cursor& cursor) noexcept;
+
+struct SubscribeUpdateRequest {
+  uint64_t subscribeID;
+  uint64_t startGroup;
+  uint64_t startObject;
+  uint64_t endGroup;
+  uint64_t endObject;
+  std::vector<TrackRequestParameter> params;
+};
+
+folly::Expected<SubscribeUpdateRequest, ErrorCode> parseSubscribeUpdateRequest(
     folly::io::Cursor& cursor) noexcept;
 
 struct GroupAndObject {

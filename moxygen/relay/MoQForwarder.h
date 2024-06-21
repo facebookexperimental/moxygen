@@ -71,6 +71,29 @@ class MoQForwarder {
         Subscriber({std::move(session), subscribeID, trackAlias, start, end}));
   }
 
+  bool updateSubscriber(const SubscribeUpdateRequest& subscribeUpdate) {
+    folly::F14NodeSet<Subscriber, Subscriber::hash>::iterator it =
+        subscribers_.begin();
+    for (; it != subscribers_.end();) {
+      if (subscribeUpdate.subscribeID == it->subscribeID) {
+        break;
+      }
+    }
+    if (it == subscribers_.end()) {
+      // subscribeID not found
+      return false;
+    }
+    // Not implemented: Validation about subscriptions
+    Subscriber subscriber = *it;
+    subscribers_.erase(it);
+    subscriber.start.group = subscribeUpdate.startGroup;
+    subscriber.start.object = subscribeUpdate.startObject;
+    subscriber.end.group = subscribeUpdate.endGroup;
+    subscriber.end.object = subscribeUpdate.endObject;
+    subscribers_.emplace(std::move(subscriber));
+    return true;
+  }
+
   void removeSession(
       const std::shared_ptr<MoQSession>& session,
       folly::Optional<uint64_t> subID = folly::none) {

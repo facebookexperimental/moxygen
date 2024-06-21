@@ -273,6 +273,12 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   controlMessages_.enqueue(std::move(subscribeRequest));
 }
 
+void MoQSession::onSubscribeUpdate(
+    SubscribeUpdateRequest subscribeUpdateRequest) {
+  XLOG(DBG1) << __func__;
+  controlMessages_.enqueue(std::move(subscribeUpdateRequest));
+}
+
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__;
   // How does this impact pending subscribes?

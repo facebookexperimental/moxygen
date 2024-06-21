@@ -78,10 +78,19 @@ class MoQDateServer : MoQServer {
       }
     }
 
+    void operator()(SubscribeUpdateRequest subscribeUpdate) const override {
+      XLOG(INFO) << "SubscribeUpdate id=" << subscribeUpdate.subscribeID;
+      if (!server_.onSubscribeUpdate(subscribeUpdate)) {
+        clientSession_->subscribeError(
+            {subscribeUpdate.subscribeID, 403, "unexpected subscribe update"});
+      }
+    }
+
     void operator()(Unsubscribe unsubscribe) const override {
       XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
       server_.unsubscribe(clientSession_, std::move(unsubscribe));
     }
+
     void operator()(Goaway) const override {
       XLOG(INFO) << "Goaway";
     }
@@ -140,6 +149,10 @@ class MoQDateServer : MoQServer {
            start,
            end});
     }
+  }
+
+  bool onSubscribeUpdate(const SubscribeUpdateRequest& subscribeUpdate) {
+    return forwarder_.updateSubscriber(subscribeUpdate);
   }
 
   bool catchup(
