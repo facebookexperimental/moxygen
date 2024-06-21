@@ -98,6 +98,9 @@ class MoQServer {
         proxygen::WebTransport::StreamReadHandle* handle) noexcept override {
       clientSession_->onNewUniStream(handle);
     }
+    void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override {
+      clientSession_->onDatagram(std::move(datagram));
+    }
 
    private:
     MoQServer& server_;

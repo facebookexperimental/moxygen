@@ -40,6 +40,7 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   ConnectCallback connectCb;
   proxygen::HQConnector hqConnector(&connectCb, transaction_timeout);
   quic::TransportSettings ts;
+  ts.datagramConfig.enabled = true;
   // ts.idleTimeout = std::chrono::seconds(10);
   hqConnector.setTransportSettings(ts);
   hqConnector.setSupportedQuicVersions({quic::QuicVersion::QUIC_V1});
@@ -147,6 +148,10 @@ void MoQClient::onWebTransportUniStream(
     proxygen::WebTransport::StreamReadHandle* stream) {
   XLOG(INFO) << __func__;
   moqSession_->onNewUniStream(stream);
+}
+
+void MoQClient::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
+  moqSession_->onDatagram(std::move(datagram));
 }
 
 } // namespace moxygen

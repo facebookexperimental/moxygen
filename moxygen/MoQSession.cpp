@@ -660,4 +660,10 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
         .start();
   }
 }
+
+void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
+  XLOG(DBG1) << __func__;
+  MoQCodec codec(dir_, this);
+  codec.onIngress(std::move(datagram), true);
+}
 } // namespace moxygen

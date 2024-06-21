@@ -241,6 +241,7 @@ class MoQSession : public MoQCodec::Callback {
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh);
   void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh);
+  void onDatagram(std::unique_ptr<folly::IOBuf> datagram);
 
   folly::coro::Task<void> setupComplete();
 

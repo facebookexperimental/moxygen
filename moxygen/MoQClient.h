@@ -54,6 +54,10 @@ class MoQClient {
         proxygen::WebTransport::StreamReadHandle* handle) noexcept override {
       client_.onWebTransportUniStream(handle);
     }
+    void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override {
+      client_.onDatagram(std::move(datagram));
+    }
+
     MoQClient& client_;
     proxygen::HTTPTransaction* txn_{nullptr};
     std::pair<
@@ -75,6 +79,7 @@ class MoQClient {
       proxygen::WebTransport::BidiStreamHandle handle);
   void onWebTransportUniStream(
       proxygen::WebTransport::StreamReadHandle* handle);
+  void onDatagram(std::unique_ptr<folly::IOBuf> datagram);
 
   folly::EventBase* evb_{nullptr};
   proxygen::URL url_;
