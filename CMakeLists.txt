@@ -90,6 +90,8 @@ if (COMPILER_HAS_W_UNUSED_VALUE)
     list(APPEND _MOXYGEN_COMMON_COMPILE_OPTIONS -Wno-unused-value)
 endif()
 
+include(MoxygenTest)
+
 add_subdirectory(moxygen)
 
 if (NOT DEFINED LIB_INSTALL_DIR)
