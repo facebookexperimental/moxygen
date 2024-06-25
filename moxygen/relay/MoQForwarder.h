@@ -64,10 +64,10 @@ class MoQForwarder {
       uint64_t trackAlias,
       const SubscribeRequest& sub) {
     auto start =
-        toAbsolulte(sub.locType, sub.start, current_.group, current_.object);
+        toAbsolute(sub.locType, sub.start, current_.group, current_.object);
     AbsoluteLocation end{kLocationMax};
     if (sub.end) {
-      end = toAbsolulte(sub.locType, sub.end, current_.group, current_.object);
+      end = toAbsolute(sub.locType, sub.end, current_.group, current_.object);
     }
     subscribers_.emplace(
         Subscriber({std::move(session), subscribeID, trackAlias, start, end}));

@@ -36,7 +36,7 @@ constexpr AbsoluteLocation kLocationMax{
     std::numeric_limits<uint64_t>::max(),
     std::numeric_limits<uint64_t>::max()};
 
-inline AbsoluteLocation toAbsolulte(
+inline AbsoluteLocation toAbsolute(
     LocationType locType,
     folly::Optional<GroupAndObject> groupAndObject,
     const uint64_t curGroup,

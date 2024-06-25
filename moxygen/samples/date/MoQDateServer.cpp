@@ -113,11 +113,10 @@ class MoQDateServer : MoQServer {
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
     auto start =
-        toAbsolulte(subReq.locType, subReq.start, nowLoc.group, nowLoc.object);
+        toAbsolute(subReq.locType, subReq.start, nowLoc.group, nowLoc.object);
     AbsoluteLocation end = kLocationMax;
     if (subReq.end) {
-      end =
-          toAbsolulte(subReq.locType, subReq.end, nowLoc.group, nowLoc.object);
+      end = toAbsolute(subReq.locType, subReq.end, nowLoc.group, nowLoc.object);
     }
     clientSession->subscribeOk(
         {subReq.subscribeID,

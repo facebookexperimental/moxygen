@@ -11,27 +11,27 @@
 using namespace moxygen;
 
 TEST(Location, LatestObject) {
-  auto abs = toAbsolulte(LocationType::LatestObject, folly::none, 19, 77);
+  auto abs = toAbsolute(LocationType::LatestObject, folly::none, 19, 77);
   EXPECT_EQ(abs.group, 19);
   EXPECT_EQ(abs.object, 77);
 }
 
 TEST(Location, LatestGroup) {
-  auto abs = toAbsolulte(LocationType::LatestGroup, folly::none, 19, 77);
+  auto abs = toAbsolute(LocationType::LatestGroup, folly::none, 19, 77);
   EXPECT_EQ(abs.group, 19);
   EXPECT_EQ(abs.object, 0);
 }
 
 TEST(Location, AbsoluteStart) {
   auto abs =
-      toAbsolulte(LocationType::AbsoluteStart, GroupAndObject({1, 2}), 19, 77);
+      toAbsolute(LocationType::AbsoluteStart, GroupAndObject({1, 2}), 19, 77);
   EXPECT_EQ(abs.group, 1);
   EXPECT_EQ(abs.object, 2);
 }
 
 TEST(Location, AbsoluteRange) {
   auto abs =
-      toAbsolulte(LocationType::AbsoluteRange, GroupAndObject({1, 2}), 19, 77);
+      toAbsolute(LocationType::AbsoluteRange, GroupAndObject({1, 2}), 19, 77);
   EXPECT_EQ(abs.group, 1);
   EXPECT_EQ(abs.object, 2);
 }
