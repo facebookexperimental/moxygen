@@ -107,6 +107,10 @@ class MoQTextClient {
   folly::coro::Task<void> readTrack(
       std::shared_ptr<MoQSession::TrackHandle> track) {
     XLOG(INFO) << __func__;
+    if (auto latest = track->latest()) {
+      XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
+                 << "}";
+    }
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     // TODO: check track.value()->getCancelToken()
@@ -134,16 +138,23 @@ struct SubParams {
 
 SubParams flags2params() {
   SubParams result;
+  std::string soStr(FLAGS_so);
   if (FLAGS_sg.empty()) {
-    result.locType = LocationType::LatestObject;
-    return result;
-  }
-  if (FLAGS_so.empty()) {
-    result.locType = LocationType::LatestGroup;
-    return result;
+    if (soStr.empty()) {
+      result.locType = LocationType::LatestObject;
+      return result;
+    } else if (auto so = folly::to<uint64_t>(soStr) > 0) {
+      XLOG(ERR) << "Invalid: sg blank, so=" << so;
+      exit(1);
+    } else {
+      result.locType = LocationType::LatestGroup;
+      return result;
+    }
+  } else if (soStr.empty()) {
+    soStr = std::string("0");
   }
   result.start.emplace(
-      folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(FLAGS_so));
+      folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(soStr));
   if (FLAGS_eg.empty()) {
     result.locType = LocationType::AbsoluteStart;
     return result;
@@ -151,7 +162,7 @@ SubParams flags2params() {
     result.locType = LocationType::AbsoluteRange;
     result.end.emplace(
         folly::to<uint64_t>(FLAGS_eg),
-        (FLAGS_eo.empty() ? folly::to<uint64_t>(FLAGS_eo) + 1 : 0));
+        (FLAGS_eo.empty() ? 0 : folly::to<uint64_t>(FLAGS_eo) + 1));
     return result;
   }
   return result;
