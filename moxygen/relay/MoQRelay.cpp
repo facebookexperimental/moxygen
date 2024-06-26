@@ -49,7 +49,8 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
       session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
       co_return;
     }
-    forwarder = std::make_shared<MoQForwarder>(subReq.fullTrackName);
+    forwarder = std::make_shared<MoQForwarder>(
+        subReq.fullTrackName, subRes.value()->latest());
     RelaySubscription rsub(
         {forwarder,
          upstreamSessionIt->second,

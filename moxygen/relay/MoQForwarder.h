@@ -17,7 +17,14 @@ namespace moxygen {
 
 class MoQForwarder {
  public:
-  explicit MoQForwarder(FullTrackName ftn) : fullTrackName_(std::move(ftn)) {}
+  explicit MoQForwarder(
+      FullTrackName ftn,
+      folly::Optional<AbsoluteLocation> latest = folly::none)
+      : fullTrackName_(std::move(ftn)), latest_(std::move(latest)) {}
+
+  void setLatest(AbsoluteLocation latest) {
+    latest_ = latest;
+  }
 
   void setFinAfterEnd(bool finAfterEnd) {
     finAfterEnd_ = finAfterEnd;
@@ -63,12 +70,17 @@ class MoQForwarder {
       uint64_t subscribeID,
       uint64_t trackAlias,
       const SubscribeRequest& sub) {
-    auto start =
-        toAbsolute(sub.locType, sub.start, latest_.group, latest_.object);
-    AbsoluteLocation end{kLocationMax};
-    if (sub.end) {
-      end = toAbsolute(sub.locType, sub.end, latest_.group, latest_.object);
+    AbsoluteLocation start;
+    if (latest_) {
+      start =
+          toAbsolute(sub.locType, sub.start, latest_->group, latest_->object);
+    } else {
+      XCHECK(
+          sub.locType == LocationType::AbsoluteStart ||
+          sub.locType == LocationType::AbsoluteRange);
+      start = *sub.start;
     }
+    AbsoluteLocation end{sub.end.value_or(kLocationMax)};
     subscribers_.emplace(
         Subscriber({std::move(session), subscribeID, trackAlias, start, end}));
   }
@@ -124,7 +136,7 @@ class MoQForwarder {
       uint64_t payloadOffset = 0,
       bool eom = true) {
     AbsoluteLocation now{objHeader.group, objHeader.id};
-    if (now > latest_) {
+    if (!latest_ || now > *latest_) {
       latest_ = now;
     }
     for (auto it = subscribers_.begin(); it != subscribers_.end();) {
@@ -177,7 +189,7 @@ class MoQForwarder {
  private:
   FullTrackName fullTrackName_;
   folly::F14NodeSet<Subscriber, Subscriber::hash> subscribers_;
-  AbsoluteLocation latest_{0, 0};
+  folly::Optional<AbsoluteLocation> latest_;
   bool finAfterEnd_{true};
 };
 

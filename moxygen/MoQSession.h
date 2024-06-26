@@ -164,8 +164,11 @@ class MoQSession : public MoQCodec::Callback {
       co_return co_await std::move(future_);
     }
 
-    void subscribeOK(std::shared_ptr<TrackHandle> self) {
+    void subscribeOK(
+        std::shared_ptr<TrackHandle> self,
+        folly::Optional<AbsoluteLocation> latest) {
       XCHECK_EQ(self.get(), this);
+      latest_ = std::move(latest);
       promise_.setValue(std::move(self));
     }
     void subscribeError(SubscribeError subErr) {
@@ -207,6 +210,10 @@ class MoQSession : public MoQCodec::Callback {
 
     folly::coro::AsyncGenerator<std::shared_ptr<ObjectSource>> objects();
 
+    folly::Optional<AbsoluteLocation> latest() {
+      return latest_;
+    }
+
    private:
     FullTrackName fullTrackName_;
     uint64_t subscribeID_;
@@ -221,6 +228,7 @@ class MoQSession : public MoQCodec::Callback {
             objects_;
     folly::coro::UnboundedQueue<std::shared_ptr<ObjectSource>, true, true>
         newObjects_;
+    folly::Optional<AbsoluteLocation> latest_;
     folly::CancellationToken cancelToken_;
   };
 

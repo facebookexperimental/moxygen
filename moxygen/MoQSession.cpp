@@ -294,7 +294,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     XLOG(ERR) << "No matching subscribe ID=" << subOk.subscribeID;
     return;
   }
-  subIt->second->subscribeOK(subIt->second);
+  subIt->second->subscribeOK(subIt->second, subOk.latest);
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
