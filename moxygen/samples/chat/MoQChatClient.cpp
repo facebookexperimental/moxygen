@@ -40,7 +40,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     // the announce and subscribe should be in parallel
     auto announceRes = co_await moqClient_.moqSession_->announce(
         {participantTrackName(username_), {}});
-    // subscribe to the catalog track from the beginning of the current group
+    // subscribe to the catalog track from the beginning of the latest group
     auto catalogTrack = co_await moqClient_.moqSession_->subscribe(
         {0,
          0,

@@ -119,9 +119,7 @@ class MoQDateServer : MoQServer {
       end = toAbsolute(subReq.locType, subReq.end, nowLoc.group, nowLoc.object);
     }
     clientSession->subscribeOk(
-        {subReq.subscribeID,
-         std::chrono::milliseconds(0),
-         GroupAndObject({nowLoc.group, nowLoc.object})});
+        {subReq.subscribeID, std::chrono::milliseconds(0), nowLoc});
 
     bool done = catchup(
         clientSession,
@@ -169,7 +167,7 @@ class MoQDateServer : MoQServer {
           {subscribeID,
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
            "",
-           GroupAndObject({start.group, start.object})});
+           start});
       return true;
     }
     return false;

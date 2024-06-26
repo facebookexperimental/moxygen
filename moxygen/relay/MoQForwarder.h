@@ -64,10 +64,10 @@ class MoQForwarder {
       uint64_t trackAlias,
       const SubscribeRequest& sub) {
     auto start =
-        toAbsolute(sub.locType, sub.start, current_.group, current_.object);
+        toAbsolute(sub.locType, sub.start, latest_.group, latest_.object);
     AbsoluteLocation end{kLocationMax};
     if (sub.end) {
-      end = toAbsolute(sub.locType, sub.end, current_.group, current_.object);
+      end = toAbsolute(sub.locType, sub.end, latest_.group, latest_.object);
     }
     subscribers_.emplace(
         Subscriber({std::move(session), subscribeID, trackAlias, start, end}));
@@ -108,7 +108,7 @@ class MoQForwarder {
               {*subID,
                SubscribeDoneStatusCode::UNSUBSCRIBED,
                "byebyebye",
-               GroupAndObject({current_.group, current_.object})});
+               latest_});
         } // else assume the session went away ungracefully
         it = subscribers_.erase(it);
       } else {
@@ -124,8 +124,8 @@ class MoQForwarder {
       uint64_t payloadOffset = 0,
       bool eom = true) {
     AbsoluteLocation now{objHeader.group, objHeader.id};
-    if (now > current_) {
-      current_ = now;
+    if (now > latest_) {
+      latest_ = now;
     }
     for (auto it = subscribers_.begin(); it != subscribers_.end();) {
       auto& sub = *it;
@@ -138,17 +138,14 @@ class MoQForwarder {
       if (sub.end < now) {
         // subscription over
         if (finAfterEnd_) {
-          evb->runImmediatelyOrRunInEventBaseThread(
-              [session = sub.session,
-               subId = sub.subscribeID,
-               now,
-               trackName = fullTrackName_] {
-                session->subscribeDone(
-                    {subId,
-                     SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
-                     "",
-                     GroupAndObject({now.group, now.object})});
-              });
+          evb->runImmediatelyOrRunInEventBaseThread([session = sub.session,
+                                                     subId = sub.subscribeID,
+                                                     now,
+                                                     trackName =
+                                                         fullTrackName_] {
+            session->subscribeDone(
+                {subId, SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, "", now});
+          });
         }
         it = subscribers_.erase(it);
       } else {
@@ -172,10 +169,7 @@ class MoQForwarder {
   void error(SubscribeDoneStatusCode errorCode, std::string reasonPhrase) {
     for (auto sub : subscribers_) {
       sub.session->subscribeDone(
-          {sub.subscribeID,
-           errorCode,
-           reasonPhrase,
-           GroupAndObject({current_.group, current_.object})});
+          {sub.subscribeID, errorCode, reasonPhrase, latest_});
     }
     subscribers_.clear();
   }
@@ -183,7 +177,7 @@ class MoQForwarder {
  private:
   FullTrackName fullTrackName_;
   folly::F14NodeSet<Subscriber, Subscriber::hash> subscribers_;
-  AbsoluteLocation current_{0, 0};
+  AbsoluteLocation latest_{0, 0};
   bool finAfterEnd_{true};
 };
 

@@ -11,57 +11,31 @@
 
 namespace moxygen {
 
-struct AbsoluteLocation {
-  uint64_t group;
-  uint64_t object;
-
-  std::strong_ordering operator<=>(const AbsoluteLocation& other) const {
-    if (group < other.group) {
-      return std::strong_ordering::less;
-    } else if (group == other.group) {
-      if (object < other.object) {
-        return std::strong_ordering::less;
-      } else if (object == other.object) {
-        return std::strong_ordering::equivalent;
-      } else {
-        return std::strong_ordering::greater;
-      }
-    } else {
-      return std::strong_ordering::greater;
-    }
-  }
-};
-
-constexpr AbsoluteLocation kLocationMax{
-    std::numeric_limits<uint64_t>::max(),
-    std::numeric_limits<uint64_t>::max()};
-
 inline AbsoluteLocation toAbsolute(
     LocationType locType,
-    folly::Optional<GroupAndObject> groupAndObject,
-    const uint64_t curGroup,
-    const uint64_t curObj) {
-  XLOG(DBG1) << "m=" << uint64_t(locType)
-             << (groupAndObject ? folly::to<std::string>(
-                                      "g=",
-                                      groupAndObject->groupID,
-                                      " o=",
-                                      groupAndObject->objectID)
-                                : std::string());
+    folly::Optional<AbsoluteLocation> groupAndObject,
+    const uint64_t latestGroup,
+    const uint64_t latestObj) {
+  XLOG(DBG1)
+      << "m=" << uint64_t(locType)
+      << (groupAndObject
+              ? folly::to<std::string>(
+                    "g=", groupAndObject->group, " o=", groupAndObject->object)
+              : std::string());
   AbsoluteLocation result;
   switch (locType) {
     case LocationType::LatestGroup:
-      result.group = curGroup;
+      result.group = latestGroup;
       result.object = 0;
       break;
     case LocationType::LatestObject:
-      result.group = curGroup;
-      result.object = curObj;
+      result.group = latestGroup;
+      result.object = latestObj;
       break;
     case LocationType::AbsoluteStart:
     case LocationType::AbsoluteRange:
-      result.group = groupAndObject->groupID;
-      result.object = groupAndObject->objectID;
+      result.group = groupAndObject->group;
+      result.object = groupAndObject->object;
       break;
   }
   XLOG(DBG1) << "g=" << result.group << " o=" << result.object;

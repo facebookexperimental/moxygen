@@ -14,10 +14,10 @@
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
 DEFINE_string(track_name, "", "Track Name");
-DEFINE_string(sg, "", "Start group, relative to current (+-) or a<abs>");
-DEFINE_string(so, "", "Start object, relative to current (+-) or a<abs>");
-DEFINE_string(eg, "", "End group, relative to current (+-) or a<abs>");
-DEFINE_string(eo, "", "End object, relative to current (+-) or a<abs>");
+DEFINE_string(sg, "", "Start group, defaults to latest");
+DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or latest");
+DEFINE_string(eg, "", "End group");
+DEFINE_string(eo, "", "End object, leave blank for entire group");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 
@@ -128,8 +128,8 @@ namespace {
 
 struct SubParams {
   LocationType locType;
-  folly::Optional<GroupAndObject> start;
-  folly::Optional<GroupAndObject> end;
+  folly::Optional<AbsoluteLocation> start;
+  folly::Optional<AbsoluteLocation> end;
 };
 
 SubParams flags2params() {
@@ -142,16 +142,16 @@ SubParams flags2params() {
     result.locType = LocationType::LatestGroup;
     return result;
   }
-  result.start.emplace(GroupAndObject(
-      {folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(FLAGS_so)}));
+  result.start.emplace(
+      folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(FLAGS_so));
   if (FLAGS_eg.empty()) {
     result.locType = LocationType::AbsoluteStart;
     return result;
   } else {
     result.locType = LocationType::AbsoluteRange;
-    result.start.emplace(GroupAndObject(
-        {folly::to<uint64_t>(FLAGS_eg),
-         (FLAGS_eo.empty() ? folly::to<uint64_t>(FLAGS_eo) : 0)}));
+    result.end.emplace(
+        folly::to<uint64_t>(FLAGS_eg),
+        (FLAGS_eo.empty() ? folly::to<uint64_t>(FLAGS_eo) + 1 : 0));
     return result;
   }
   return result;

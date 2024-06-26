@@ -67,22 +67,22 @@ folly::Expected<FullTrackName, ErrorCode> parseFullTrackName(
   return fullTrackName;
 }
 
-folly::Expected<GroupAndObject, ErrorCode> parseGroupAndObject(
+folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
     folly::io::Cursor& cursor) {
-  GroupAndObject groupAndObject;
+  AbsoluteLocation location;
   auto group = quic::decodeQuicInteger(cursor);
   if (!group) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  groupAndObject.groupID = group->first;
+  location.group = group->first;
 
   auto object = quic::decodeQuicInteger(cursor);
   if (!object) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  groupAndObject.objectID = object->first;
+  location.object = object->first;
 
-  return groupAndObject;
+  return location;
 }
 
 folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
@@ -306,18 +306,18 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
   subscribeRequest.locType = LocationType(locType->first);
   if (subscribeRequest.locType == LocationType::AbsoluteStart ||
       subscribeRequest.locType == LocationType::AbsoluteRange) {
-    auto groupAndObj = parseGroupAndObject(cursor);
-    if (!groupAndObj) {
-      return folly::makeUnexpected(groupAndObj.error());
+    auto location = parseAbsoluteLocation(cursor);
+    if (!location) {
+      return folly::makeUnexpected(location.error());
     }
-    subscribeRequest.start = *groupAndObj;
+    subscribeRequest.start = *location;
   }
   if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    auto groupAndObj = parseGroupAndObject(cursor);
-    if (!groupAndObj) {
-      return folly::makeUnexpected(groupAndObj.error());
+    auto location = parseAbsoluteLocation(cursor);
+    if (!location) {
+      return folly::makeUnexpected(location.error());
     }
-    subscribeRequest.end = *groupAndObj;
+    subscribeRequest.end = *location;
   }
   auto numParams = quic::decodeQuicInteger(cursor);
   if (!numParams) {
@@ -390,11 +390,11 @@ folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
   }
   auto contentExists = cursor.readBE<uint8_t>();
   if (contentExists) {
-    auto res = parseGroupAndObject(cursor);
+    auto res = parseAbsoluteLocation(cursor);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
-    subscribeOk.largest = *res;
+    subscribeOk.latest = *res;
   }
 
   return subscribeOk;
@@ -471,7 +471,7 @@ folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
   }
   auto contentExists = cursor.readBE<uint8_t>();
   if (contentExists) {
-    auto res = parseGroupAndObject(cursor);
+    auto res = parseAbsoluteLocation(cursor);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -584,11 +584,11 @@ folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   trackStatus.statusCode = TrackStatusCode(statusCode->first);
-  auto groupAndObject = parseGroupAndObject(cursor);
-  if (!groupAndObject) {
-    return folly::makeUnexpected(groupAndObject.error());
+  auto location = parseAbsoluteLocation(cursor);
+  if (!location) {
+    return folly::makeUnexpected(location.error());
   }
-  trackStatus.latestGroupAndObject = *groupAndObject;
+  trackStatus.latestGroupAndObject = *location;
   return trackStatus;
 }
 
@@ -797,12 +797,12 @@ WriteResult writeSubscribeRequest(
       writeBuf, folly::to_underlying(subscribeRequest.locType), size, error);
   if (subscribeRequest.locType == LocationType::AbsoluteStart ||
       subscribeRequest.locType == LocationType::AbsoluteRange) {
-    writeVarint(writeBuf, subscribeRequest.start->groupID, size, error);
-    writeVarint(writeBuf, subscribeRequest.start->objectID, size, error);
+    writeVarint(writeBuf, subscribeRequest.start->group, size, error);
+    writeVarint(writeBuf, subscribeRequest.start->object, size, error);
   }
   if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    writeVarint(writeBuf, subscribeRequest.end->groupID, size, error);
-    writeVarint(writeBuf, subscribeRequest.end->objectID, size, error);
+    writeVarint(writeBuf, subscribeRequest.end->group, size, error);
+    writeVarint(writeBuf, subscribeRequest.end->object, size, error);
   }
   writeVarint(writeBuf, subscribeRequest.params.size(), size, error);
   for (auto& param : subscribeRequest.params) {
@@ -824,10 +824,10 @@ WriteResult writeSubscribeOk(
       writeBuf, folly::to_underlying(FrameType::SUBSCRIBE_OK), size, error);
   writeVarint(writeBuf, subscribeOk.subscribeID, size, error);
   writeVarint(writeBuf, subscribeOk.expires.count(), size, error);
-  if (subscribeOk.largest) {
+  if (subscribeOk.latest) {
     writeVarint(writeBuf, 1, size, error); // content exists
-    writeVarint(writeBuf, subscribeOk.largest->groupID, size, error);
-    writeVarint(writeBuf, subscribeOk.largest->objectID, size, error);
+    writeVarint(writeBuf, subscribeOk.latest->group, size, error);
+    writeVarint(writeBuf, subscribeOk.latest->object, size, error);
   } else {
     writeVarint(writeBuf, 0, size, error); // content exists
   }
@@ -881,8 +881,8 @@ WriteResult writeSubscribeDone(
   writeFixedString(writeBuf, subscribeDone.reasonPhrase, size, error);
   if (subscribeDone.finalObject) {
     writeVarint(writeBuf, 1, size, error);
-    writeVarint(writeBuf, subscribeDone.finalObject->groupID, size, error);
-    writeVarint(writeBuf, subscribeDone.finalObject->objectID, size, error);
+    writeVarint(writeBuf, subscribeDone.finalObject->group, size, error);
+    writeVarint(writeBuf, subscribeDone.finalObject->object, size, error);
   } else {
     writeVarint(writeBuf, 0, size, error);
   }
@@ -996,10 +996,9 @@ WriteResult writeTrackStatus(
   writeVarint(
       writeBuf, folly::to_underlying(trackStatus.statusCode), size, error);
   if (trackStatus.statusCode == TrackStatusCode::IN_PROGRESS) {
+    writeVarint(writeBuf, trackStatus.latestGroupAndObject->group, size, error);
     writeVarint(
-        writeBuf, trackStatus.latestGroupAndObject.groupID, size, error);
-    writeVarint(
-        writeBuf, trackStatus.latestGroupAndObject.objectID, size, error);
+        writeBuf, trackStatus.latestGroupAndObject->object, size, error);
   } else {
     writeVarint(writeBuf, 0, size, error);
     writeVarint(writeBuf, 0, size, error);

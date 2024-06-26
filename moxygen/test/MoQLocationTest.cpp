@@ -24,14 +24,14 @@ TEST(Location, LatestGroup) {
 
 TEST(Location, AbsoluteStart) {
   auto abs =
-      toAbsolute(LocationType::AbsoluteStart, GroupAndObject({1, 2}), 19, 77);
+      toAbsolute(LocationType::AbsoluteStart, AbsoluteLocation({1, 2}), 19, 77);
   EXPECT_EQ(abs.group, 1);
   EXPECT_EQ(abs.object, 2);
 }
 
 TEST(Location, AbsoluteRange) {
   auto abs =
-      toAbsolute(LocationType::AbsoluteRange, GroupAndObject({1, 2}), 19, 77);
+      toAbsolute(LocationType::AbsoluteRange, AbsoluteLocation({1, 2}), 19, 77);
   EXPECT_EQ(abs.group, 1);
   EXPECT_EQ(abs.object, 2);
 }

@@ -103,12 +103,12 @@ class MoQChatServer : MoQServer {
       XLOG(INFO) << username << " joined the chat";
     }
     subscribers_[username] = std::make_pair(clientSession, subReq.subscribeID);
-    folly::Optional<GroupAndObject> current;
+    folly::Optional<AbsoluteLocation> latest;
     if (catGroup_ > 0) {
-      current = GroupAndObject({catGroup_ - 1, 0});
+      latest.emplace(catGroup_ - 1, 0);
     }
     clientSession->subscribeOk(
-        {subReq.subscribeID, std::chrono::milliseconds(0), std::move(current)});
+        {subReq.subscribeID, std::chrono::milliseconds(0), std::move(latest)});
     publishCatalog();
   }
 

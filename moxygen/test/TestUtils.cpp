@@ -62,7 +62,7 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
           {0,
            SubscribeDoneStatusCode::INTERNAL_ERROR,
            "not found",
-           GroupAndObject({0, 0})}));
+           AbsoluteLocation({0, 0})}));
   res = writeAnnounce(
       writeBuf,
       Announce(
@@ -85,7 +85,7 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
       TrackStatus(
           {FullTrackName({"hello", "world"}),
            TrackStatusCode::IN_PROGRESS,
-           {19, 77}}));
+           AbsoluteLocation({19, 77})}));
   res = writeGoaway(writeBuf, Goaway({"new uri"}));
 
   res = writeStreamHeader(

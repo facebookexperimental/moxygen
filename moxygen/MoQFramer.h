@@ -173,10 +173,34 @@ enum class LocationType : uint8_t {
   AbsoluteRange = 4
 };
 
-struct GroupAndObject {
-  uint64_t groupID;
-  uint64_t objectID;
+struct AbsoluteLocation {
+  uint64_t group{0};
+  uint64_t object{0};
+
+  AbsoluteLocation() = default;
+  constexpr AbsoluteLocation(uint64_t g, uint64_t o) : group(g), object(o) {}
+
+  std::strong_ordering operator<=>(const AbsoluteLocation& other) const {
+    if (group < other.group) {
+      return std::strong_ordering::less;
+    } else if (group == other.group) {
+      if (object < other.object) {
+        return std::strong_ordering::less;
+      } else if (object == other.object) {
+        return std::strong_ordering::equivalent;
+      } else {
+        return std::strong_ordering::greater;
+      }
+    } else {
+      return std::strong_ordering::greater;
+    }
+  }
 };
+
+constexpr AbsoluteLocation kLocationMin;
+constexpr AbsoluteLocation kLocationMax{
+    std::numeric_limits<uint64_t>::max(),
+    std::numeric_limits<uint64_t>::max()};
 
 struct FullTrackName {
   std::string trackNamespace;
@@ -201,8 +225,8 @@ struct SubscribeRequest {
   uint64_t trackAlias;
   FullTrackName fullTrackName;
   LocationType locType;
-  folly::Optional<GroupAndObject> start;
-  folly::Optional<GroupAndObject> end;
+  folly::Optional<AbsoluteLocation> start;
+  folly::Optional<AbsoluteLocation> end;
   std::vector<TrackRequestParameter> params;
 };
 
@@ -224,8 +248,8 @@ folly::Expected<SubscribeUpdateRequest, ErrorCode> parseSubscribeUpdateRequest(
 struct SubscribeOk {
   uint64_t subscribeID;
   std::chrono::milliseconds expires;
-  // context exists is inferred from presence of largest
-  folly::Optional<GroupAndObject> largest;
+  // context exists is inferred from presence of latest
+  folly::Optional<AbsoluteLocation> latest;
 };
 
 folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
@@ -252,7 +276,7 @@ struct SubscribeDone {
   uint64_t subscribeID;
   SubscribeDoneStatusCode statusCode;
   std::string reasonPhrase;
-  folly::Optional<GroupAndObject> finalObject;
+  folly::Optional<AbsoluteLocation> finalObject;
 };
 
 folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
@@ -306,7 +330,7 @@ folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
 struct TrackStatus {
   FullTrackName fullTrackName;
   TrackStatusCode statusCode;
-  GroupAndObject latestGroupAndObject;
+  folly::Optional<AbsoluteLocation> latestGroupAndObject;
 };
 
 folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
