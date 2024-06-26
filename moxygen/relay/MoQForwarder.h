@@ -34,8 +34,7 @@ class MoQForwarder {
     std::shared_ptr<MoQSession> session;
     uint64_t subscribeID;
     uint64_t trackAlias;
-    AbsoluteLocation start;
-    AbsoluteLocation end;
+    SubscribeRange range;
 
     struct hash {
       std::uint64_t operator()(const Subscriber& subscriber) const {
@@ -43,17 +42,18 @@ class MoQForwarder {
             subscriber.session.get(),
             subscriber.subscribeID,
             subscriber.trackAlias,
-            subscriber.start.group,
-            subscriber.start.object,
-            subscriber.end.group,
-            subscriber.end.object);
+            subscriber.range.start.group,
+            subscriber.range.start.object,
+            subscriber.range.end.group,
+            subscriber.range.end.object);
       }
     };
     bool operator==(const Subscriber& other) const {
       return session == other.session && subscribeID == other.subscribeID &&
           trackAlias == other.trackAlias &&
-          (start <=> other.start) == std::strong_ordering::equivalent &&
-          (end <=> other.end) == std::strong_ordering::equivalent;
+          (range.start <=> other.range.start) ==
+          std::strong_ordering::equivalent &&
+          (range.end <=> other.range.end) == std::strong_ordering::equivalent;
     }
   };
 
@@ -70,19 +70,11 @@ class MoQForwarder {
       uint64_t subscribeID,
       uint64_t trackAlias,
       const SubscribeRequest& sub) {
-    AbsoluteLocation start;
-    if (latest_) {
-      start =
-          toAbsolute(sub.locType, sub.start, latest_->group, latest_->object);
-    } else {
-      XCHECK(
-          sub.locType == LocationType::AbsoluteStart ||
-          sub.locType == LocationType::AbsoluteRange);
-      start = *sub.start;
-    }
-    AbsoluteLocation end{sub.end.value_or(kLocationMax)};
-    subscribers_.emplace(
-        Subscriber({std::move(session), subscribeID, trackAlias, start, end}));
+    subscribers_.emplace(Subscriber(
+        {std::move(session),
+         subscribeID,
+         trackAlias,
+         toSubscribeRange(sub, latest_)}));
   }
 
   bool updateSubscriber(const SubscribeUpdateRequest& subscribeUpdate) {
@@ -100,10 +92,10 @@ class MoQForwarder {
     // Not implemented: Validation about subscriptions
     Subscriber subscriber = *it;
     subscribers_.erase(it);
-    subscriber.start.group = subscribeUpdate.startGroup;
-    subscriber.start.object = subscribeUpdate.startObject;
-    subscriber.end.group = subscribeUpdate.endGroup;
-    subscriber.end.object = subscribeUpdate.endObject;
+    subscriber.range.start.group = subscribeUpdate.startGroup;
+    subscriber.range.start.object = subscribeUpdate.startObject;
+    subscriber.range.end.group = subscribeUpdate.endGroup;
+    subscriber.range.end.object = subscribeUpdate.endObject;
     subscribers_.emplace(std::move(subscriber));
     return true;
   }
@@ -141,13 +133,13 @@ class MoQForwarder {
     }
     for (auto it = subscribers_.begin(); it != subscribers_.end();) {
       auto& sub = *it;
-      if (sub.start > now) {
+      if (sub.range.start > now) {
         // future subscriber
         it++;
         continue;
       }
       auto evb = sub.session->getEventBase();
-      if (sub.end < now) {
+      if (sub.range.end < now) {
         // subscription over
         if (finAfterEnd_) {
           evb->runImmediatelyOrRunInEventBaseThread([session = sub.session,

@@ -11,34 +11,49 @@
 
 namespace moxygen {
 
-inline AbsoluteLocation toAbsolute(
-    LocationType locType,
-    folly::Optional<AbsoluteLocation> groupAndObject,
-    const uint64_t latestGroup,
-    const uint64_t latestObj) {
-  XLOG(DBG1)
-      << "m=" << uint64_t(locType)
-      << (groupAndObject
-              ? folly::to<std::string>(
-                    "g=", groupAndObject->group, " o=", groupAndObject->object)
-              : std::string());
-  AbsoluteLocation result;
-  switch (locType) {
+struct SubscribeRange {
+  AbsoluteLocation start;
+  AbsoluteLocation end;
+};
+
+inline SubscribeRange toSubscribeRange(
+    const SubscribeRequest& sub,
+    folly::Optional<AbsoluteLocation> latest) {
+  XLOG(DBG1) << "m=" << uint64_t(sub.locType)
+             << (sub.start
+                     ? folly::to<std::string>(
+                           "g=", sub.start->group, " o=", sub.start->object)
+                     : std::string());
+  SubscribeRange result;
+  result.end = kLocationMax;
+  switch (sub.locType) {
     case LocationType::LatestGroup:
-      result.group = latestGroup;
-      result.object = 0;
+      result.start.group = latest.value_or(kLocationMin).group;
+      result.start.object = 0;
       break;
     case LocationType::LatestObject:
-      result.group = latestGroup;
-      result.object = latestObj;
+      result.start.group = latest.value_or(kLocationMin).group;
+      result.start.object = latest.value_or(kLocationMin).object;
       break;
-    case LocationType::AbsoluteStart:
     case LocationType::AbsoluteRange:
-      result.group = groupAndObject->group;
-      result.object = groupAndObject->object;
+      XCHECK(sub.end);
+      if (sub.end->object == 0) {
+        result.end.group = sub.end->group + 1;
+        result.end.object = 0;
+      } else {
+        // moxygen uses exclusive end objects, so no need to subtract 1 here
+        result.end = *sub.end;
+      }
+      FMT_FALLTHROUGH;
+    case LocationType::AbsoluteStart:
+      XCHECK(sub.start);
+      result.start.group = sub.start->group;
+      result.start.object = sub.start->object;
       break;
   }
-  XLOG(DBG1) << "g=" << result.group << " o=" << result.object;
+  XLOG(DBG1) << "g=" << result.start.group << " o=" << result.start.object
+             << "g=" << result.end.group << " o=" << result.end.object;
   return result;
 }
+
 } // namespace moxygen

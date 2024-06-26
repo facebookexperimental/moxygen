@@ -10,30 +10,51 @@
 
 using namespace moxygen;
 
+namespace {
+SubscribeRequest getRequest(
+    LocationType locType,
+    folly::Optional<AbsoluteLocation> start = folly::none,
+    folly::Optional<AbsoluteLocation> end = folly::none) {
+  return SubscribeRequest{0, 0, FullTrackName(), locType, start, end, {}};
+}
+} // namespace
+
 TEST(Location, LatestObject) {
-  auto abs = toAbsolute(LocationType::LatestObject, folly::none, 19, 77);
-  EXPECT_EQ(abs.group, 19);
-  EXPECT_EQ(abs.object, 77);
+  auto range = toSubscribeRange(
+      getRequest(LocationType::LatestObject), AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 19);
+  EXPECT_EQ(range.start.object, 77);
+  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
 }
 
 TEST(Location, LatestGroup) {
-  auto abs = toAbsolute(LocationType::LatestGroup, folly::none, 19, 77);
-  EXPECT_EQ(abs.group, 19);
-  EXPECT_EQ(abs.object, 0);
+  auto range = toSubscribeRange(
+      getRequest(LocationType::LatestGroup), AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 19);
+  EXPECT_EQ(range.start.object, 0);
+  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
 }
 
 TEST(Location, AbsoluteStart) {
-  auto abs =
-      toAbsolute(LocationType::AbsoluteStart, AbsoluteLocation({1, 2}), 19, 77);
-  EXPECT_EQ(abs.group, 1);
-  EXPECT_EQ(abs.object, 2);
+  auto range = toSubscribeRange(
+      getRequest(LocationType::AbsoluteStart, AbsoluteLocation({1, 2})),
+      AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 1);
+  EXPECT_EQ(range.start.object, 2);
+  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
 }
 
 TEST(Location, AbsoluteRange) {
-  auto abs =
-      toAbsolute(LocationType::AbsoluteRange, AbsoluteLocation({1, 2}), 19, 77);
-  EXPECT_EQ(abs.group, 1);
-  EXPECT_EQ(abs.object, 2);
+  auto range = toSubscribeRange(
+      getRequest(
+          LocationType::AbsoluteRange,
+          AbsoluteLocation({1, 2}),
+          AbsoluteLocation({3, 4})),
+      AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 1);
+  EXPECT_EQ(range.start.object, 2);
+  EXPECT_EQ(range.end.group, 3);
+  EXPECT_EQ(range.end.object, 4);
 }
 
 TEST(Location, Compare) {

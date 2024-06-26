@@ -112,29 +112,18 @@ class MoQDateServer : MoQServer {
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    auto start =
-        toAbsolute(subReq.locType, subReq.start, nowLoc.group, nowLoc.object);
-    AbsoluteLocation end = kLocationMax;
-    if (subReq.end) {
-      end = toAbsolute(subReq.locType, subReq.end, nowLoc.group, nowLoc.object);
-    }
+    auto range = toSubscribeRange(subReq, nowLoc);
     clientSession->subscribeOk(
         {subReq.subscribeID, std::chrono::milliseconds(0), nowLoc});
 
     bool done = catchup(
-        clientSession,
-        subReq.subscribeID,
-        subReq.trackAlias,
-        start,
-        end,
-        nowLoc);
+        clientSession, subReq.subscribeID, subReq.trackAlias, range, nowLoc);
     if (!done) {
       forwarder_.addSubscriber(
           {std::move(clientSession),
            subReq.subscribeID,
            subReq.trackAlias,
-           start,
-           end});
+           range});
     }
   }
 
@@ -146,28 +135,28 @@ class MoQDateServer : MoQServer {
       std::shared_ptr<MoQSession> clientSession,
       uint64_t subscribeID,
       uint64_t trackAlias,
-      AbsoluteLocation start,
-      AbsoluteLocation end,
+      SubscribeRange range,
       AbsoluteLocation now) {
-    if (start >= now) {
+    if (range.start >= now) {
       return false;
     }
-    time_t t = start.group * 60 + std::max(start.object, (uint64_t)1) - 1;
-    while (start < now && start < end) {
+    time_t t =
+        range.start.group * 60 + std::max(range.start.object, (uint64_t)1) - 1;
+    while (range.start < now && range.start < range.end) {
       publishDate(t, false, clientSession, subscribeID, trackAlias);
       t++;
-      start.object++;
-      if (start.object > 61) {
-        start.group++;
-        start.object = 0;
+      range.start.object++;
+      if (range.start.object > 61) {
+        range.start.group++;
+        range.start.object = 0;
       }
     }
-    if (end <= now) {
+    if (range.end <= now) {
       clientSession->subscribeDone(
           {subscribeID,
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
            "",
-           start});
+           range.start});
       return true;
     }
     return false;
