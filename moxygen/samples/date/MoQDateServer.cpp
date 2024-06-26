@@ -119,6 +119,7 @@ class MoQDateServer : MoQServer {
     bool done = catchup(
         clientSession, subReq.subscribeID, subReq.trackAlias, range, nowLoc);
     if (!done) {
+      forwarder_.setLatest(nowLoc);
       forwarder_.addSubscriber(
           {std::move(clientSession),
            subReq.subscribeID,
@@ -143,10 +144,12 @@ class MoQDateServer : MoQServer {
     time_t t =
         range.start.group * 60 + std::max(range.start.object, (uint64_t)1) - 1;
     while (range.start < now && range.start < range.end) {
-      publishDate(t, false, clientSession, subscribeID, trackAlias);
+      auto n = publishDate(
+          t, false, clientSession, subscribeID, trackAlias, range.end);
       t++;
-      range.start.object++;
-      if (range.start.object > 61) {
+      // publishDate publishes two objects for obj = 0
+      range.start.object += n;
+      if (range.start.object > 60) {
         range.start.group++;
         range.start.object = 0;
       }
@@ -170,29 +173,33 @@ class MoQDateServer : MoQServer {
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
 
-        publishDate(in_time_t, first, nullptr, 0, 0);
+        publishDate(in_time_t, first, nullptr, 0, 0, folly::none);
         first = false;
       }
       co_await folly::coro::sleep(std::chrono::seconds(1));
     }
   }
 
-  void publishDate(
+  size_t publishDate(
       time_t in_time_t,
       bool forceGroup,
       const std::shared_ptr<MoQSession>& session,
       uint64_t subscribeID,
-      uint64_t trackAlias) {
+      uint64_t trackAlias,
+      folly::Optional<AbsoluteLocation> end) {
+    size_t objectsPublished = 0;
     struct tm local_tm;
     auto lt = ::localtime_r(&in_time_t, &local_tm);
     std::stringstream ss;
     ss << std::put_time(lt, "%Y-%m-%d %H:%M:");
     XLOG(DBG1) << ss.str() << lt->tm_sec;
+    AbsoluteLocation nowLoc(
+        {uint64_t(in_time_t / 60), uint64_t(lt->tm_sec + 1)});
     if (lt->tm_sec == 0 || forceGroup) {
       ObjectHeader objHeader(
           {0,
            0,
-           uint64_t(in_time_t / 60),
+           nowLoc.group,
            0,
            0,
            ForwardPreference::Object,
@@ -209,28 +216,33 @@ class MoQDateServer : MoQServer {
         forwarder_.publish(
             std::move(objHeader), folly::IOBuf::copyBuffer(ss.str()));
       }
+      objectsPublished++;
     }
-    auto secBuf = folly::to<std::string>(lt->tm_sec);
-    ObjectHeader objHeader(
-        {0,
-         0,
-         uint64_t(in_time_t / 60),
-         uint64_t(lt->tm_sec + 1),
-         0,
-         ForwardPreference::Object,
-         ObjectStatus::NORMAL,
-         folly::none});
-    if (session) {
-      publishObjectToSession(
-          session,
-          subscribeID,
-          trackAlias,
-          std::move(objHeader),
-          folly::IOBuf::copyBuffer(secBuf));
-    } else {
-      forwarder_.publish(
-          std::move(objHeader), folly::IOBuf::copyBuffer(secBuf));
+    if (!end || nowLoc < *end) {
+      auto secBuf = folly::to<std::string>(lt->tm_sec);
+      ObjectHeader objHeader(
+          {0,
+           0,
+           nowLoc.group,
+           nowLoc.object,
+           0,
+           ForwardPreference::Object,
+           ObjectStatus::NORMAL,
+           folly::none});
+      if (session) {
+        publishObjectToSession(
+            session,
+            subscribeID,
+            trackAlias,
+            std::move(objHeader),
+            folly::IOBuf::copyBuffer(secBuf));
+      } else {
+        forwarder_.publish(
+            std::move(objHeader), folly::IOBuf::copyBuffer(secBuf));
+      }
+      objectsPublished++;
     }
+    return objectsPublished;
   }
 
   void publishObjectToSession(
