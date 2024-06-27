@@ -26,6 +26,10 @@ class MoQForwarder {
     latest_ = latest;
   }
 
+  folly::Optional<AbsoluteLocation> latest() {
+    return latest_;
+  }
+
   void setFinAfterEnd(bool finAfterEnd) {
     finAfterEnd_ = finAfterEnd;
   }

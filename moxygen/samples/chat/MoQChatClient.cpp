@@ -87,8 +87,12 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
       }
       client_.chatSubscribeID_.emplace(subscribeReq.subscribeID);
       client_.chatTrackAlias_.emplace(subscribeReq.trackAlias);
+      folly::Optional<AbsoluteLocation> latest;
+      if (client_.nextGroup_ > 0) {
+        latest.emplace(client_.nextGroup_ - 1, 0);
+      }
       client_.moqClient_.moqSession_->subscribeOk(
-          {subscribeReq.subscribeID, std::chrono::milliseconds(0)});
+          {subscribeReq.subscribeID, std::chrono::milliseconds(0), latest});
     }
 
     void operator()(SubscribeDone) const override {
@@ -164,7 +168,6 @@ void MoQChatClient::publishLoop() {
   XLOG(INFO) << __func__;
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-  uint64_t group = 0;
   std::string input;
   folly::Executor::KeepAlive keepAlive(moqClient_.getEventBase());
   while (moqClient_.moqSession_ && std::cin.good() && !std::cin.eof()) {
@@ -172,7 +175,7 @@ void MoQChatClient::publishLoop() {
     if (!moqClient_.moqSession_) {
       break;
     }
-    moqClient_.getEventBase()->runInEventBaseThread([this, input, group] {
+    moqClient_.getEventBase()->runInEventBaseThread([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
         moqClient_.moqSession_->close();
@@ -181,7 +184,7 @@ void MoQChatClient::publishLoop() {
         moqClient_.moqSession_->publish(
             {*chatSubscribeID_,
              *chatTrackAlias_,
-             group,
+             nextGroup_++,
              0,
              0,
              ForwardPreference::Object,
@@ -191,7 +194,6 @@ void MoQChatClient::publishLoop() {
             true);
       }
     });
-    group++;
     if (input == "/leave") {
       break;
     }

@@ -68,8 +68,8 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
   // Add to subscribers list
   forwarder->addSubscriber(
       session, subReq.subscribeID, subReq.trackAlias, subReq);
-  // TODO: populate contentExists if known
-  session->subscribeOk({subReq.subscribeID, std::chrono::milliseconds(0)});
+  session->subscribeOk(
+      {subReq.subscribeID, std::chrono::milliseconds(0), forwarder->latest()});
 }
 
 folly::coro::Task<void> MoQRelay::forwardTrack(

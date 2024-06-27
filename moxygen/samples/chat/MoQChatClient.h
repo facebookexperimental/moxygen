@@ -53,6 +53,7 @@ class MoQChatClient {
   MoQClient moqClient_;
   folly::Optional<uint64_t> chatSubscribeID_;
   folly::Optional<uint64_t> chatTrackAlias_;
+  uint64_t nextGroup_{0};
   std::set<std::string> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>
       peerSetup_{folly::coro::makePromiseContract<ServerSetup>()};
