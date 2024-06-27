@@ -155,7 +155,16 @@ folly::coro::Task<void> MoQChatClient::readCatalogUpdates(
           continue;
         }
         if (subscriptions_.find(username) == subscriptions_.end()) {
+          XLOG(INFO) << "Subscribing to new user " << username;
           subscribeToUser(username).scheduleOn(exec).start();
+        }
+      }
+      for (auto& username : subscriptions_) {
+        if (std::find(usernames.begin(), usernames.end(), username) ==
+            usernames.end()) {
+          XLOG(INFO) << username << " left the chat";
+          subscriptions_.erase(username);
+          break;
         }
       }
     }
