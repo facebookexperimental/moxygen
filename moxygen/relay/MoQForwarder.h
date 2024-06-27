@@ -108,6 +108,7 @@ class MoQForwarder {
       const std::shared_ptr<MoQSession>& session,
       folly::Optional<uint64_t> subID = folly::none) {
     // The same session could have multiple subscriptions, remove all of them
+    // TODO: This shouldn't need to be a linear search
     for (auto it = subscribers_.begin(); it != subscribers_.end();) {
       if (it->session.get() == session.get() &&
           (!subID || *subID == it->subscribeID)) {
@@ -118,6 +119,7 @@ class MoQForwarder {
                "byebyebye",
                latest_});
         } // else assume the session went away ungracefully
+        XLOG(DBG1) << "Removing session from forwarder";
         it = subscribers_.erase(it);
       } else {
         it++;

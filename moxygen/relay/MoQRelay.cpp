@@ -113,27 +113,27 @@ folly::coro::Task<void> MoQRelay::forwardTrack(
 void MoQRelay::onUnsubscribe(
     Unsubscribe unsub,
     std::shared_ptr<MoQSession> session) {
+  // TODO: session+subscribe ID should uniquely identify this subscription,
+  // we shouldn't need a linear search to find where to remove it.
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
-    if (subscriptionIt->second.upstream.get() == session.get()) {
-      subscriptionIt->second.forwarder->removeSession(
-          session, unsub.subscribeID);
-      subscriptionIt->second.cancellationSource.requestCancellation();
-      if (subscriptionIt->second.forwarder->empty()) {
-        XLOG(INFO) << "Removed last subscriber for "
-                   << subscriptionIt->first.trackNamespace
-                   << subscriptionIt->first.trackName;
-        subscriptionIt->second.upstream->unsubscribe(
-            {subscriptionIt->second.subscribeID});
-        subscriptionIt = subscriptions_.erase(subscriptionIt);
-      } else {
-        subscriptionIt++;
-      }
+    auto& subscription = subscriptionIt->second;
+    subscription.forwarder->removeSession(session, unsub.subscribeID);
+    if (subscription.forwarder->empty()) {
+      XLOG(INFO) << "Removed last subscriber for "
+                 << subscriptionIt->first.trackNamespace
+                 << subscriptionIt->first.trackName;
+      subscription.cancellationSource.requestCancellation();
+      subscription.upstream->unsubscribe({subscription.subscribeID});
+      subscriptionIt = subscriptions_.erase(subscriptionIt);
+    } else {
+      subscriptionIt++;
     }
   }
 }
 
 void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
+  // TODO: remove linear search
   for (auto it = announces_.begin(); it != announces_.end();) {
     if (it->second.get() == session.get()) {
       it = announces_.erase(it);
@@ -141,21 +141,23 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
       it++;
     }
   }
+  // TODO: we should keep a map from this session to all its subscriptions
+  // and remove this linear search also
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
-    if (subscriptionIt->second.upstream.get() == session.get()) {
-      subscriptionIt->second.forwarder->error(
+    auto& subscription = subscriptionIt->second;
+    if (subscription.upstream.get() == session.get()) {
+      subscription.forwarder->error(
           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, "upstream disconnect");
-      subscriptionIt->second.cancellationSource.requestCancellation();
+      subscription.cancellationSource.requestCancellation();
     } else {
-      subscriptionIt->second.forwarder->removeSession(session);
+      subscription.forwarder->removeSession(session);
     }
-    if (subscriptionIt->second.forwarder->empty()) {
+    if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for "
                  << subscriptionIt->first.trackNamespace
                  << subscriptionIt->first.trackName;
-      subscriptionIt->second.upstream->unsubscribe(
-          {subscriptionIt->second.subscribeID});
+      subscription.upstream->unsubscribe({subscription.subscribeID});
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     } else {
       subscriptionIt++;
