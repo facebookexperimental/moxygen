@@ -26,7 +26,7 @@ cd scripts
 
 ### Test with date server
 
-- Execute relay (from project root dir)
+- Execute date server (from project root dir)
 ```
 ./_build/bin/moqdateserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key --logging DBG
 ```

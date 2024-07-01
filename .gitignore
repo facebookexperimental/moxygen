@@ -14,8 +14,13 @@ CTestTestfile.cmake
 *.dylib
 .DS_Store
 TARGETS
-MoqRelayServer
-MoqChatClient
-MoqChatServer
-MoQDateServer
+moqrelayserver
+moqchatclient
+moqchatserver
+moqtextclient
+moqdateserver
+*.cmake
 certs/
+node_modules/
+package.json
+package-lock.json
