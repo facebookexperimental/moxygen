@@ -17,8 +17,8 @@ Fig2: Relay architecture overview
 ./build.sh
 ```
 
-## Test relay
-- Generate self signed certificate
+## Test preconditions
+- Generate self signed certificate for the server applications
 ```
 cd scripts
 ./create-server-certs.sh
@@ -72,6 +72,17 @@ I0520 13:08:10.346489 7064889 MoQClient.cpp:137] onWebTransportUniStream
 10
 I0520 13:08:11.351163 7064889 MoQClient.cpp:137] onWebTransportUniStream
 11
+```
+
+## Test with media client
+- You can use [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) as encoder (publisher), and also as player (consumer)
+
+- You need to install that website ([moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)) in a https server (apache2 recommended)
+   - It will requiere to enable cross origin isolation (see [link](https://stackoverflow.com/questions/76077439/enabling-cross-origin-isolation-on-the-apache2-web-server)) on the player side
+
+- To start the relay you can do (from project root dir)
+```
+./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG
 ```
 
 ## Test with media client (from MACOS)
