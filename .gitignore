@@ -24,3 +24,5 @@ certs/
 node_modules/
 package.json
 package-lock.json
+DartConfiguration.tcl
+moxygen/test/
