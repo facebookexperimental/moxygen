@@ -174,8 +174,9 @@ folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     objectHeader.forwardPreference = ForwardPreference::Object;
     // length is not present and runs to the end of the stream
   } else {
+    // This is for datagrams
     objectHeader.forwardPreference = ForwardPreference::Datagram;
-    objectHeader.length = cursor.totalLength();
+    // length is not present and runs to the end of the stream
   }
   return objectHeader;
 }
