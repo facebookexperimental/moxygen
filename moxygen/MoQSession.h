@@ -246,6 +246,7 @@ class MoQSession : public MoQCodec::Callback {
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom);
+  void publishStatus(const ObjectHeader& objHeader);
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh);
   void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh);
@@ -287,6 +288,12 @@ class MoQSession : public MoQCodec::Callback {
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
+
+  void publishImpl(
+      const ObjectHeader& objHeader,
+      uint64_t payloadOffset,
+      std::unique_ptr<folly::IOBuf> payload,
+      bool eom);
 
   struct PublishKey {
     uint64_t subscribeID;

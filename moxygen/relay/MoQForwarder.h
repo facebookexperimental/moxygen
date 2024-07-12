@@ -169,7 +169,11 @@ class MoQForwarder {
              eom]() mutable {
               objHeader.subscribeID = subId;
               objHeader.trackAlias = trackAlias;
-              session->publish(objHeader, payloadOffset, std::move(buf), eom);
+              if (objHeader.status != ObjectStatus::NORMAL) {
+                session->publishStatus(objHeader);
+              } else {
+                session->publish(objHeader, payloadOffset, std::move(buf), eom);
+              }
             });
         it++;
       }

@@ -161,6 +161,7 @@ folly::coro::Task<void> MoQSession::readLoop(
         codec.onIngress(std::move(streamData->data), streamData->fin);
       }
       fin = streamData->fin;
+      XLOG_IF(DBG3, fin) << "End of stream";
     }
   }
 }
@@ -507,6 +508,20 @@ void MoQSession::publish(
     uint64_t payloadOffset,
     std::unique_ptr<folly::IOBuf> payload,
     bool eom) {
+  XCHECK_EQ(objHeader.status, ObjectStatus::NORMAL);
+  publishImpl(objHeader, payloadOffset, std::move(payload), eom);
+}
+
+void MoQSession::publishStatus(const ObjectHeader& objHeader) {
+  XCHECK_NE(objHeader.status, ObjectStatus::NORMAL);
+  publishImpl(objHeader, 0, nullptr, true);
+}
+
+void MoQSession::publishImpl(
+    const ObjectHeader& objHeader,
+    uint64_t payloadOffset,
+    std::unique_ptr<folly::IOBuf> payload,
+    bool eom) {
   XLOG(DBG1) << __func__ << " sid=" << objHeader.subscribeID
              << " t=" << objHeader.trackAlias << " g=" << objHeader.group
              << " o=" << objHeader.id;
@@ -625,7 +640,11 @@ void MoQSession::publish(
     publishDataMap_.erase(pubDataIt);
   } else {
     bool streamEOM =
-        eom && objHeader.forwardPreference == ForwardPreference::Object;
+        (eom && objHeader.forwardPreference == ForwardPreference::Object) ||
+        (objHeader.status == ObjectStatus::END_OF_GROUP ||
+         objHeader.status == ObjectStatus::END_OF_TRACK_AND_GROUP);
+    XLOG_IF(DBG1, streamEOM) << "End of stream";
+    // TODO: verify that pubDataIt->second.objectLength is empty or 0
     wt_->writeStreamData(
         pubDataIt->second.streamID, writeBuf.move(), streamEOM);
     if (streamEOM) {
@@ -634,7 +653,6 @@ void MoQSession::publish(
       if (eom) {
         pubDataIt->second.offset = 0;
         pubDataIt->second.objectLength.reset();
-        // TODO: we never close multi-object streams
       } else {
         pubDataIt->second.offset += payloadLength;
         if (pubDataIt->second.objectLength) {
