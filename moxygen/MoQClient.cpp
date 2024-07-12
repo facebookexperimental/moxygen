@@ -19,11 +19,11 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
    public:
     ~ConnectCallback() override = default;
     void connectSuccess(proxygen::HQUpstreamSession* session) override {
-      XLOG(INFO) << __func__;
+      XLOG(DBG1) << __func__;
       sessionContract.first.setValue(session);
     }
     void connectError(const quic::QuicErrorCode& ex) override {
-      XLOG(INFO) << __func__;
+      XLOG(DBG1) << __func__;
       sessionContract.first.setException(
           std::runtime_error(quic::toString(ex)));
     }
@@ -34,9 +34,9 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
         sessionContract{
             folly::coro::makePromiseContract<proxygen::HQUpstreamSession*>()};
   };
-  XLOG(INFO) << __func__;
+  XLOG(DBG1) << __func__;
   auto g =
-      folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
+      folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   ConnectCallback connectCb;
   proxygen::HQConnector hqConnector(&connectCb, transaction_timeout);
   quic::TransportSettings ts;
@@ -120,7 +120,7 @@ void MoQClient::HTTPHandler::onHeadersComplete(
 
 void MoQClient::HTTPHandler::onError(
     const proxygen::HTTPException& ex) noexcept {
-  XLOG(INFO) << __func__;
+  XLOG(DBG1) << __func__;
   if (!sessionContract.first.isFulfilled()) {
     sessionContract.first.setException(std::runtime_error(
         fmt::format("Error setting up WebTransport: {0}", ex.what())));
@@ -133,20 +133,20 @@ void MoQClient::HTTPHandler::onError(
 
 void MoQClient::onSessionEnd(folly::Optional<proxygen::HTTPException>) {
   // TODO: cleanup?
-  XLOG(INFO) << "resetting moqSession_";
+  XLOG(DBG1) << "resetting moqSession_";
   moqSession_.reset();
   CHECK(!moqSession_);
 }
 
 void MoQClient::onWebTransportBidiStream(
     proxygen::WebTransport::BidiStreamHandle bidi) {
-  XLOG(INFO) << __func__;
+  XLOG(DBG1) << __func__;
   moqSession_->onNewBidiStream(std::move(bidi));
 }
 
 void MoQClient::onWebTransportUniStream(
     proxygen::WebTransport::StreamReadHandle* stream) {
-  XLOG(INFO) << __func__;
+  XLOG(DBG1) << __func__;
   moqSession_->onNewUniStream(stream);
 }
 
