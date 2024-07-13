@@ -28,6 +28,7 @@ function detect_platform() {
 function install_dependencies_linux() {
   apt update -yq
   apt install -yq \
+    build-essential \
     git \
     python3 \
     cmake \
@@ -43,7 +44,11 @@ function install_dependencies_linux() {
     libsodium-dev \
     libunwind-dev \
     libgflags-dev \
-    libevent-dev
+    libevent-dev  \
+    libgoogle-glog-dev \
+    libdouble-conversion-dev \
+    libboost-all-dev \
+    gperf
 }
 
 function install_dependencies_mac() {
