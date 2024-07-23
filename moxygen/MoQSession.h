@@ -326,10 +326,9 @@ class MoQSession : public MoQCodec::Callback {
               ook.subscribeID, ook.group, ook.sendOrder, ook.object);
         } else if (ook.pref == ForwardPreference::Group) {
           return folly::hash::hash_combine(
-              ook.subscribeID, ook.group, ook.sendOrder, ook.group);
+              ook.subscribeID, ook.group, ook.sendOrder);
         } // else if (ook.pref == ForwardPreference::Track) {
-        return folly::hash::hash_combine(
-            ook.subscribeID, ook.group, ook.sendOrder);
+        return folly::hash::hash_combine(ook.subscribeID, ook.sendOrder);
       }
     };
   };

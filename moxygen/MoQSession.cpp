@@ -549,7 +549,7 @@ void MoQSession::publishImpl(
     // - Next portion of the object calls this function again with payloadOffset
     // > 0
     if (payloadOffset != 0) {
-      XLOG(DBG1)
+      XLOG(WARN)
           << __func__
           << " Can't start publishing in the middle. Disgregard data for this new obj with payloadOffset = "
           << payloadOffset;
@@ -566,6 +566,7 @@ void MoQSession::publishImpl(
         return;
       }
       stream = *res;
+      XLOG(DBG4) << "New stream created, id: " << stream->getID();
     }
 
     // Add publishing key
