@@ -80,7 +80,7 @@ class MoQDateServer : MoQServer {
       }
     }
 
-    void operator()(SubscribeUpdateRequest subscribeUpdate) const override {
+    void operator()(SubscribeUpdate subscribeUpdate) const override {
       XLOG(INFO) << "SubscribeUpdate id=" << subscribeUpdate.subscribeID;
       if (!server_.onSubscribeUpdate(subscribeUpdate)) {
         clientSession_->subscribeError(
@@ -116,7 +116,11 @@ class MoQDateServer : MoQServer {
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
     auto range = toSubscribeRange(subReq, nowLoc);
     clientSession->subscribeOk(
-        {subReq.subscribeID, std::chrono::milliseconds(0), nowLoc});
+        {subReq.subscribeID,
+         std::chrono::milliseconds(0),
+         MoQSession::resolveGroupOrder(
+             GroupOrder::OldestFirst, subReq.groupOrder),
+         nowLoc});
 
     bool done = catchup(
         clientSession, subReq.subscribeID, subReq.trackAlias, range, nowLoc);
@@ -130,7 +134,7 @@ class MoQDateServer : MoQServer {
     }
   }
 
-  bool onSubscribeUpdate(const SubscribeUpdateRequest& subscribeUpdate) {
+  bool onSubscribeUpdate(const SubscribeUpdate& subscribeUpdate) {
     return forwarder_.updateSubscriber(subscribeUpdate);
   }
 
@@ -215,7 +219,7 @@ class MoQDateServer : MoQServer {
            pref_,
            ObjectStatus::NORMAL,
            folly::none});
-      forwarder.publish(std::move(objHeader), folly::IOBuf::copyBuffer(secBuf));
+      forwarder.publish(objHeader, folly::IOBuf::copyBuffer(secBuf));
       objectsPublished++;
       if (nowLoc.object == 60) {
         objHeader.status = ObjectStatus::END_OF_GROUP;

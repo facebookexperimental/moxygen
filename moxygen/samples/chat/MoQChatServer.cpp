@@ -108,7 +108,11 @@ class MoQChatServer : MoQServer {
       latest.emplace(catGroup_ - 1, 0);
     }
     clientSession->subscribeOk(
-        {subReq.subscribeID, std::chrono::milliseconds(0), std::move(latest)});
+        {subReq.subscribeID,
+         std::chrono::milliseconds(0),
+         MoQSession::resolveGroupOrder(
+             GroupOrder::OldestFirst, subReq.groupOrder),
+         std::move(latest)});
     publishCatalog();
   }
 

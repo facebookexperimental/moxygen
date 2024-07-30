@@ -15,7 +15,16 @@ SubscribeRequest getRequest(
     LocationType locType,
     folly::Optional<AbsoluteLocation> start = folly::none,
     folly::Optional<AbsoluteLocation> end = folly::none) {
-  return SubscribeRequest{0, 0, FullTrackName(), locType, start, end, {}};
+  return SubscribeRequest{
+      0,
+      0,
+      FullTrackName(),
+      0,
+      GroupOrder::OldestFirst,
+      locType,
+      start,
+      end,
+      {}};
 }
 } // namespace
 

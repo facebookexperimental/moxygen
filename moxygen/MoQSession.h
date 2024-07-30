@@ -48,7 +48,7 @@ class MoQSession : public MoQCodec::Callback {
       Unannounce,
       AnnounceCancel,
       SubscribeRequest,
-      SubscribeUpdateRequest,
+      SubscribeUpdate,
       Unsubscribe,
       SubscribeDone,
       TrackStatusRequest,
@@ -89,7 +89,7 @@ class MoQSession : public MoQCodec::Callback {
                  << subscribe.fullTrackName.trackName;
     }
 
-    virtual void operator()(SubscribeUpdateRequest subscribeUpdate) const {
+    virtual void operator()(SubscribeUpdate subscribeUpdate) const {
       XLOG(INFO) << "SubscribeUpdate subID=" << subscribeUpdate.subscribeID;
     }
 
@@ -124,6 +124,12 @@ class MoQSession : public MoQCodec::Callback {
   void announceOk(AnnounceOk annOk);
   void announceError(AnnounceError announceError);
   void unannounce(Unannounce unannounce);
+
+  static GroupOrder resolveGroupOrder(
+      GroupOrder pubOrder,
+      GroupOrder subOrder) {
+    return subOrder == GroupOrder::Default ? pubOrder : subOrder;
+  }
 
   class TrackHandle {
    public:
@@ -166,8 +172,10 @@ class MoQSession : public MoQCodec::Callback {
 
     void subscribeOK(
         std::shared_ptr<TrackHandle> self,
+        GroupOrder order,
         folly::Optional<AbsoluteLocation> latest) {
       XCHECK_EQ(self.get(), this);
+      groupOrder_ = order;
       latest_ = std::move(latest);
       promise_.setValue(std::move(self));
     }
@@ -210,6 +218,10 @@ class MoQSession : public MoQCodec::Callback {
 
     folly::coro::AsyncGenerator<std::shared_ptr<ObjectSource>> objects();
 
+    GroupOrder groupOrder() const {
+      return groupOrder_;
+    }
+
     folly::Optional<AbsoluteLocation> latest() {
       return latest_;
     }
@@ -228,6 +240,7 @@ class MoQSession : public MoQCodec::Callback {
             objects_;
     folly::coro::UnboundedQueue<std::shared_ptr<ObjectSource>, true, true>
         newObjects_;
+    GroupOrder groupOrder_;
     folly::Optional<AbsoluteLocation> latest_;
     folly::CancellationToken cancelToken_;
   };
@@ -273,8 +286,7 @@ class MoQSession : public MoQCodec::Callback {
       std::unique_ptr<folly::IOBuf> payload,
       bool eom) override;
   void onSubscribe(SubscribeRequest subscribeRequest) override;
-  void onSubscribeUpdate(
-      SubscribeUpdateRequest subscribeUpdateRequest) override;
+  void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
   void onSubscribeError(SubscribeError subscribeError) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;
@@ -298,13 +310,11 @@ class MoQSession : public MoQCodec::Callback {
   struct PublishKey {
     uint64_t subscribeID;
     uint64_t group;
-    uint64_t sendOrder;
     ForwardPreference pref;
     uint64_t object;
 
     bool operator==(const PublishKey& other) const {
-      if (subscribeID != other.subscribeID || pref != other.pref ||
-          sendOrder != other.sendOrder) {
+      if (subscribeID != other.subscribeID || pref != other.pref) {
         return false;
       }
       if (pref == ForwardPreference::Object ||
@@ -323,12 +333,11 @@ class MoQSession : public MoQCodec::Callback {
         if (ook.pref == ForwardPreference::Object ||
             ook.pref == ForwardPreference::Datagram) {
           return folly::hash::hash_combine(
-              ook.subscribeID, ook.group, ook.sendOrder, ook.object);
+              ook.subscribeID, ook.group, ook.object);
         } else if (ook.pref == ForwardPreference::Group) {
-          return folly::hash::hash_combine(
-              ook.subscribeID, ook.group, ook.sendOrder);
+          return folly::hash::hash_combine(ook.subscribeID, ook.group);
         } // else if (ook.pref == ForwardPreference::Track) {
-        return folly::hash::hash_combine(ook.subscribeID, ook.sendOrder);
+        return folly::hash::hash_combine(ook.subscribeID);
       }
     };
   };

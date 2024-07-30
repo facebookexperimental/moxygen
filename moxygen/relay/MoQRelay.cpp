@@ -23,6 +23,7 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
     std::shared_ptr<MoQSession> session) {
   auto subscriptionIt = subscriptions_.find(subReq.fullTrackName);
   std::shared_ptr<MoQForwarder> forwarder;
+  auto subGroupOrder = subReq.groupOrder;
   if (subscriptionIt == subscriptions_.end()) {
     // first subscriber
 
@@ -44,6 +45,8 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
       co_return;
     }
     // TODO: we only subscribe with the downstream locations.
+    subReq.priority = 1;
+    subReq.groupOrder = GroupOrder::Default;
     auto subRes = co_await upstreamSessionIt->second->subscribe(subReq);
     if (subRes.hasError()) {
       session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
@@ -51,6 +54,7 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
     }
     forwarder = std::make_shared<MoQForwarder>(
         subReq.fullTrackName, subRes.value()->latest());
+    forwarder->setGroupOrder(subRes.value()->groupOrder());
     RelaySubscription rsub(
         {forwarder,
          upstreamSessionIt->second,
@@ -69,7 +73,10 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
   forwarder->addSubscriber(
       session, subReq.subscribeID, subReq.trackAlias, subReq);
   session->subscribeOk(
-      {subReq.subscribeID, std::chrono::milliseconds(0), forwarder->latest()});
+      {subReq.subscribeID,
+       std::chrono::milliseconds(0),
+       MoQSession::resolveGroupOrder(forwarder->groupOrder(), subGroupOrder),
+       forwarder->latest()});
 }
 
 folly::coro::Task<void> MoQRelay::forwardTrack(

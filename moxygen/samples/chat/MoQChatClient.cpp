@@ -45,6 +45,8 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         {0,
          0,
          catalogTrackName(),
+         0,
+         GroupOrder::OldestFirst,
          LocationType::LatestGroup,
          folly::none,
          folly::none,
@@ -92,7 +94,11 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
         latest.emplace(client_.nextGroup_ - 1, 0);
       }
       client_.moqClient_.moqSession_->subscribeOk(
-          {subscribeReq.subscribeID, std::chrono::milliseconds(0), latest});
+          {subscribeReq.subscribeID,
+           std::chrono::milliseconds(0),
+           MoQSession::resolveGroupOrder(
+               GroupOrder::OldestFirst, subscribeReq.groupOrder),
+           latest});
     }
 
     void operator()(SubscribeDone) const override {
@@ -217,6 +223,8 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(std::string username) {
       {0,
        0,
        FullTrackName({participantTrackName(username), ""}),
+       0,
+       GroupOrder::OldestFirst,
        LocationType::LatestGroup,
        folly::none,
        folly::none,

@@ -22,6 +22,14 @@ class MoQForwarder {
       folly::Optional<AbsoluteLocation> latest = folly::none)
       : fullTrackName_(std::move(ftn)), latest_(std::move(latest)) {}
 
+  void setGroupOrder(GroupOrder order) {
+    groupOrder_ = order;
+  }
+
+  GroupOrder groupOrder() const {
+    return groupOrder_;
+  }
+
   void setLatest(AbsoluteLocation latest) {
     latest_ = latest;
   }
@@ -81,7 +89,7 @@ class MoQForwarder {
          toSubscribeRange(sub, latest_)}));
   }
 
-  bool updateSubscriber(const SubscribeUpdateRequest& subscribeUpdate) {
+  bool updateSubscriber(const SubscribeUpdate& subscribeUpdate) {
     folly::F14NodeSet<Subscriber, Subscriber::hash>::iterator it =
         subscribers_.begin();
     for (; it != subscribers_.end();) {
@@ -96,10 +104,8 @@ class MoQForwarder {
     // Not implemented: Validation about subscriptions
     Subscriber subscriber = *it;
     subscribers_.erase(it);
-    subscriber.range.start.group = subscribeUpdate.startGroup;
-    subscriber.range.start.object = subscribeUpdate.startObject;
-    subscriber.range.end.group = subscribeUpdate.endGroup;
-    subscriber.range.end.object = subscribeUpdate.endObject;
+    subscriber.range.start = subscribeUpdate.start;
+    subscriber.range.end = subscribeUpdate.end;
     subscribers_.emplace(std::move(subscriber));
     return true;
   }
@@ -191,6 +197,7 @@ class MoQForwarder {
  private:
   FullTrackName fullTrackName_;
   folly::F14NodeSet<Subscriber, Subscriber::hash> subscribers_;
+  GroupOrder groupOrder_{GroupOrder::OldestFirst};
   folly::Optional<AbsoluteLocation> latest_;
   bool finAfterEnd_{true};
 };

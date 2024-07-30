@@ -38,13 +38,29 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
           {0,
            0,
            FullTrackName({"hello", "world"}),
+           255,
+           GroupOrder::Default,
            LocationType::LatestObject,
            folly::none,
            folly::none,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky"}}}));
+  res = writeSubscribeUpdate(
+      writeBuf,
+      SubscribeUpdate(
+          {0,
+           {1, 2},
+           {3, 4},
+           255,
+           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+             "binky"}}}));
   res = writeSubscribeOk(
-      writeBuf, SubscribeOk({0, std::chrono::milliseconds(0)}));
+      writeBuf,
+      SubscribeOk(
+          {0,
+           std::chrono::milliseconds(0),
+           GroupOrder::OldestFirst,
+           AbsoluteLocation{2, 5}}));
   res = writeSubscribeError(
       writeBuf, SubscribeError({0, 404, "not found", folly::none}));
   res = writeUnsubscribe(

@@ -105,7 +105,8 @@ constexpr uint64_t kVersionDraft01 = 0xff000001;
 constexpr uint64_t kVersionDraft02 = 0xff000002;
 constexpr uint64_t kVersionDraft03 = 0xff000003;
 constexpr uint64_t kVersionDraft04 = 0xff000004;
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft04;
+constexpr uint64_t kVersionDraft05 = 0xff000005;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft05;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -138,7 +139,7 @@ struct ObjectHeader {
   uint64_t trackAlias;
   uint64_t group;
   uint64_t id;
-  uint64_t sendOrder;
+  uint64_t priority;
   ForwardPreference forwardPreference;
   ObjectStatus status{ObjectStatus::NORMAL};
   folly::Optional<uint64_t> length{folly::none};
@@ -220,10 +221,18 @@ struct FullTrackName {
   };
 };
 
+enum class GroupOrder : uint8_t {
+  Default = 0x0,
+  OldestFirst = 0x1,
+  NewestFirst = 0x2
+};
+
 struct SubscribeRequest {
   uint64_t subscribeID;
   uint64_t trackAlias;
   FullTrackName fullTrackName;
+  uint8_t priority;
+  GroupOrder groupOrder;
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   folly::Optional<AbsoluteLocation> end;
@@ -233,21 +242,21 @@ struct SubscribeRequest {
 folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
     folly::io::Cursor& cursor) noexcept;
 
-struct SubscribeUpdateRequest {
+struct SubscribeUpdate {
   uint64_t subscribeID;
-  uint64_t startGroup;
-  uint64_t startObject;
-  uint64_t endGroup;
-  uint64_t endObject;
+  AbsoluteLocation start;
+  AbsoluteLocation end;
+  uint8_t priority;
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<SubscribeUpdateRequest, ErrorCode> parseSubscribeUpdateRequest(
+folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
     folly::io::Cursor& cursor) noexcept;
 
 struct SubscribeOk {
   uint64_t subscribeID;
   std::chrono::milliseconds expires;
+  GroupOrder groupOrder;
   // context exists is inferred from presence of latest
   folly::Optional<AbsoluteLocation> latest;
 };
@@ -365,6 +374,10 @@ WriteResult writeObject(
 WriteResult writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) noexcept;
+
+WriteResult writeSubscribeUpdate(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeUpdate& update) noexcept;
 
 WriteResult writeSubscribeOk(
     folly::IOBufQueue& writeBuf,

@@ -274,10 +274,9 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   controlMessages_.enqueue(std::move(subscribeRequest));
 }
 
-void MoQSession::onSubscribeUpdate(
-    SubscribeUpdateRequest subscribeUpdateRequest) {
+void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   XLOG(DBG1) << __func__;
-  controlMessages_.enqueue(std::move(subscribeUpdateRequest));
+  controlMessages_.enqueue(std::move(subscribeUpdate));
 }
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
@@ -295,7 +294,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     XLOG(ERR) << "No matching subscribe ID=" << subOk.subscribeID;
     return;
   }
-  subIt->second->subscribeOK(subIt->second, subOk.latest);
+  subIt->second->subscribeOK(subIt->second, subOk.groupOrder, subOk.latest);
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
@@ -534,7 +533,6 @@ void MoQSession::publishImpl(
   PublishKey publishKey(
       {objHeader.subscribeID,
        objHeader.group,
-       objHeader.sendOrder,
        objHeader.forwardPreference,
        objHeader.id});
   auto pubDataIt = publishDataMap_.find(publishKey);

@@ -20,6 +20,7 @@ TEST(MoQCodec, All) {
   EXPECT_CALL(callback, onClientSetup(testing::_));
   EXPECT_CALL(callback, onServerSetup(testing::_));
   EXPECT_CALL(callback, onSubscribe(testing::_));
+  EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
   EXPECT_CALL(callback, onSubscribeOk(testing::_));
   EXPECT_CALL(callback, onSubscribeError(testing::_));
   EXPECT_CALL(callback, onUnsubscribe(testing::_));
@@ -42,7 +43,7 @@ TEST(MoQCodec, All) {
           testing::_,
           testing::_))
       .Times(2);
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(18);
 
   codec.onIngress(std::move(allMsgs), true);
 }
@@ -58,6 +59,7 @@ TEST(MoQCodec, Underflow) {
   EXPECT_CALL(callback, onClientSetup(testing::_));
   EXPECT_CALL(callback, onServerSetup(testing::_));
   EXPECT_CALL(callback, onSubscribe(testing::_));
+  EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
   EXPECT_CALL(callback, onSubscribeOk(testing::_));
   EXPECT_CALL(callback, onSubscribeError(testing::_));
   EXPECT_CALL(callback, onUnsubscribe(testing::_));
@@ -80,7 +82,7 @@ TEST(MoQCodec, Underflow) {
           testing::_,
           testing::_))
       .Times(strlen("hello world") + 1);
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(18);
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }

@@ -61,7 +61,7 @@ void MoQServer::ControlVisitor::operator()(
 }
 
 void MoQServer::ControlVisitor::operator()(
-    SubscribeUpdateRequest subscribeUpdate) const {
+    SubscribeUpdate subscribeUpdate) const {
   XLOG(INFO) << "SubscribeRequest id=" << subscribeUpdate.subscribeID;
 }
 

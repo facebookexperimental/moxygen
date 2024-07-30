@@ -208,6 +208,8 @@ int main(int argc, char* argv[]) {
           {0,
            0,
            moxygen::FullTrackName({FLAGS_track_namespace, FLAGS_track_name}),
+           0,
+           GroupOrder::OldestFirst,
            subParams.locType,
            subParams.start,
            subParams.end,

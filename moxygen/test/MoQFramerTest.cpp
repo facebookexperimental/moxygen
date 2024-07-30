@@ -43,6 +43,10 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   EXPECT_TRUE(r3 || (!eom && r3.error() == ErrorCode::PARSE_UNDERFLOW));
 
   skip(cursor, 1);
+  auto r3a = parseSubscribeUpdate(cursor);
+  EXPECT_TRUE(r3a || (!eom && r3a.error() == ErrorCode::PARSE_UNDERFLOW));
+
+  skip(cursor, 1);
   auto r4 = parseSubscribeOk(cursor);
   EXPECT_TRUE(r4 || (!eom && r4.error() == ErrorCode::PARSE_UNDERFLOW));
 
@@ -121,7 +125,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
        22, // trackAlias
        33, // group
        44, // id
-       55, // sendOrder
+       55, // priority
        ForwardPreference::Object,
        ObjectStatus::NORMAL,
        4},
@@ -137,7 +141,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
 
   // Test OBJECT_DATAGRAM with ObjectStatus::OBJECT_NOT_EXIST
@@ -148,7 +152,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
        22, // trackAlias
        33, // group
        44, // id
-       55, // sendOrder
+       55, // priority
        ForwardPreference::Datagram,
        ObjectStatus::OBJECT_NOT_EXIST,
        0},
@@ -164,7 +168,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
@@ -174,7 +178,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
       22, // trackAlias
       33, // group
       44, // id
-      55, // sendOrder
+      55, // priority
       ForwardPreference::Track,
       ObjectStatus::NORMAL,
       4};
@@ -198,7 +202,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
 
   // Test ObjectStatus::OBJECT_NOT_EXIST
@@ -222,7 +226,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->sendOrder, 55);
+  EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
 }
 
