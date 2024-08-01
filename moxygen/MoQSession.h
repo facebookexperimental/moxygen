@@ -307,6 +307,8 @@ class MoQSession : public MoQCodec::Callback {
       std::unique_ptr<folly::IOBuf> payload,
       bool eom);
 
+  uint64_t order(const ObjectHeader& objHeader);
+
   struct PublishKey {
     uint64_t subscribeID;
     uint64_t group;
@@ -366,7 +368,11 @@ class MoQSession : public MoQCodec::Callback {
       std::string,
       folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>>>
       pendingAnnounce_;
-  folly::F14FastMap<uint64_t, FullTrackName> pubTracks_;
+  struct PubTrack {
+    uint8_t priority;
+    GroupOrder groupOrder;
+  };
+  folly::F14FastMap<uint64_t, PubTrack> pubTracks_;
   folly::F14FastMap<PublishKey, PublishData, PublishKey::hash> publishDataMap_;
   uint64_t nextTrackId_{0};
 
