@@ -21,7 +21,8 @@
 
 namespace moxygen {
 
-class MoQSession : public MoQCodec::Callback {
+class MoQSession : public MoQCodec::Callback,
+                   public proxygen::WebTransportHandler {
  public:
   explicit MoQSession(
       MoQCodec::Direction dir,
@@ -261,9 +262,13 @@ class MoQSession : public MoQCodec::Callback {
       bool eom);
   void publishStatus(const ObjectHeader& objHeader);
 
-  void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh);
-  void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh);
-  void onDatagram(std::unique_ptr<folly::IOBuf> datagram);
+  void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
+  void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) override;
+  void onDatagram(std::unique_ptr<folly::IOBuf> datagram) override;
+  void onSessionEnd(folly::Optional<uint32_t>) override {
+    XLOG(DBG1) << __func__ << " sess=" << this;
+    close();
+  }
 
   folly::coro::Task<void> setupComplete();
 

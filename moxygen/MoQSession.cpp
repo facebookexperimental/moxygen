@@ -57,8 +57,11 @@ void MoQSession::start() {
 
 void MoQSession::close() {
   if (wt_) {
-    wt_->closeSession();
+    auto wt = wt_;
     wt_ = nullptr;
+    wt->closeSession();
+    XLOG(DBG1) << "requestCancellation from close" << " sess=" << this;
+    cancellationSource_.requestCancellation();
   }
 }
 
