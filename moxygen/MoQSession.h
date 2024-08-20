@@ -254,13 +254,23 @@ class MoQSession : public MoQCodec::Callback,
   void unsubscribe(Unsubscribe unsubscribe);
   void subscribeDone(SubscribeDone subDone);
 
+  class WebTransportException : public std::runtime_error {
+   public:
+    explicit WebTransportException(
+        proxygen::WebTransport::ErrorCode error,
+        const std::string& msg)
+        : std::runtime_error(msg), errorCode(error) {}
+
+    proxygen::WebTransport::ErrorCode errorCode;
+  };
+
   // Publish this object.
-  void publish(
+  folly::SemiFuture<folly::Unit> publish(
       const ObjectHeader& objHeader,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom);
-  void publishStatus(const ObjectHeader& objHeader);
+  folly::SemiFuture<folly::Unit> publishStatus(const ObjectHeader& objHeader);
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
   void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) override;
@@ -306,7 +316,7 @@ class MoQSession : public MoQCodec::Callback,
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
 
-  void publishImpl(
+  folly::SemiFuture<folly::Unit> publishImpl(
       const ObjectHeader& objHeader,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
