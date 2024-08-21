@@ -85,19 +85,18 @@ I0520 13:08:11.351163 7064889 MoQClient.cpp:137] onWebTransportUniStream
 ./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG
 ```
 
-## Test with media client (from MACOS)
+## Local test with media client (server running in localhost)
 
 - Execute (from project root dir)
 ```
-./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG
+./_build/bin/moqrelayserver -port 4433 -cert [moq-encoder-player]/certs/certificate.pem -key [moq-encoder-player]/certs/certificate.key -endpoint "/moq" --logging DBG
 ```
+
+Note: [moq-encoder-player] indicate the root directory of that project. So you need to use those certs to enable connections from Chrome to localhost
+
 - Start client (MACOS)
-```
-cd scripts
-./macos-start-localhost-test-chrome.sh
-```
-- Run MOQ encoder locally
-   - From chrome started before, run this project [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)
+Run MOQ encoder / player locally
+   - Open a Chrome window and follow the instructions you will find in [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)
 
 
 ## License
