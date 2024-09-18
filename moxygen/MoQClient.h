@@ -8,7 +8,7 @@
 
 #include "moxygen/MoQSession.h"
 
-#include <folly/experimental/coro/Promise.h>
+#include <folly/coro/Promise.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 #include <proxygen/lib/utils/URL.h>
 

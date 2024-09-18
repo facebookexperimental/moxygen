@@ -10,10 +10,10 @@
 #include "moxygen/MoQCodec.h"
 
 #include <folly/container/F14Set.h>
-#include <folly/experimental/coro/AsyncGenerator.h>
-#include <folly/experimental/coro/Promise.h>
-#include <folly/experimental/coro/Task.h>
-#include <folly/experimental/coro/UnboundedQueue.h>
+#include <folly/coro/AsyncGenerator.h>
+#include <folly/coro/Promise.h>
+#include <folly/coro/Task.h>
+#include <folly/coro/UnboundedQueue.h>
 #include <folly/logging/xlog.h>
 #include "moxygen/util/TimedBaton.h"
 

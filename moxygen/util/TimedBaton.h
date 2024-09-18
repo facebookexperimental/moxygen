@@ -6,8 +6,8 @@
 
 #pragma once
 
-#include <folly/experimental/coro/Promise.h>
-#include <folly/experimental/coro/Timeout.h>
+#include <folly/coro/Promise.h>
+#include <folly/coro/Timeout.h>
 
 namespace moxygen {
 

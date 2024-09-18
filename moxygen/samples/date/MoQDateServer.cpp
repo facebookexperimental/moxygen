@@ -4,7 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <folly/experimental/coro/Sleep.h>
+#include <folly/coro/Sleep.h>
 #include <compare>
 #include <iomanip>
 #include "moxygen/MoQLocation.h"

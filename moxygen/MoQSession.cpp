@@ -5,7 +5,7 @@
  */
 
 #include "moxygen/MoQSession.h"
-#include <folly/experimental/coro/Collect.h>
+#include <folly/coro/Collect.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/EventBase.h>
 
