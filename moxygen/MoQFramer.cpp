@@ -404,6 +404,15 @@ folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
     }
     subscribeOk.latest = *res;
   }
+  auto numParams = quic::decodeQuicInteger(cursor);
+  if (!numParams) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  auto res2 =
+      parseTrackRequestParams(cursor, numParams->first, subscribeOk.params);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
 
   return subscribeOk;
 }
@@ -879,6 +888,11 @@ WriteResult writeSubscribeOk(
     writeVarint(writeBuf, subscribeOk.latest->object, size, error);
   } else {
     writeVarint(writeBuf, 0, size, error); // content exists
+  }
+  writeVarint(writeBuf, subscribeOk.params.size(), size, error);
+  for (auto& param : subscribeOk.params) {
+    writeVarint(writeBuf, param.key, size, error);
+    writeFixedString(writeBuf, param.value, size, error);
   }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

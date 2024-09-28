@@ -60,7 +60,10 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
           {0,
            std::chrono::milliseconds(0),
            GroupOrder::OldestFirst,
-           AbsoluteLocation{2, 5}}));
+           AbsoluteLocation{2, 5},
+           // AUTHORIZATION is not valid here, but MAX_CACHE_DURATION is pending
+           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+             "binky"}}}));
   res = writeSubscribeError(
       writeBuf, SubscribeError({0, 404, "not found", folly::none}));
   res = writeUnsubscribe(

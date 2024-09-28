@@ -263,6 +263,7 @@ struct SubscribeOk {
   GroupOrder groupOrder;
   // context exists is inferred from presence of latest
   folly::Optional<AbsoluteLocation> latest;
+  std::vector<TrackRequestParameter> params;
 };
 
 folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
