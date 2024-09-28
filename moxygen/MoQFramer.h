@@ -44,6 +44,9 @@ enum class SubscribeErrorCode : uint32_t {
   INTERNAL_ERROR = 0,
   INVALID_RANGE = 1,
   RETRY_TRACK_ALIAS = 2,
+  TRACK_NOT_EXIST = 3,
+  UNAUTHORIZED = 4,
+  TIMEOUT = 5,
 };
 
 enum class SubscribeDoneStatusCode : uint32_t {
