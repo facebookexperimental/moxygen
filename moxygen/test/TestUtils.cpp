@@ -88,7 +88,8 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
   res = writeAnnounceOk(writeBuf, AnnounceOk({"hello"}));
   res = writeAnnounceError(
       writeBuf, AnnounceError({"hello", 500, "server error"}));
-  res = writeAnnounceCancel(writeBuf, AnnounceCancel({"hello"}));
+  res = writeAnnounceCancel(
+      writeBuf, AnnounceCancel({"hello", 500, "internal error"}));
   res = writeUnannounce(
       writeBuf,
       Unannounce({

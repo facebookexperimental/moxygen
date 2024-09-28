@@ -328,6 +328,8 @@ folly::Expected<Unannounce, ErrorCode> parseUnannounce(
 
 struct AnnounceCancel {
   std::string trackNamespace;
+  uint64_t errorCode;
+  std::string reasonPhrase;
 };
 
 folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(

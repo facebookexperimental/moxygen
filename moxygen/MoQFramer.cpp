@@ -563,6 +563,18 @@ folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
     return folly::makeUnexpected(res.error());
   }
   announceCancel.trackNamespace = std::move(res.value());
+
+  auto errorCode = quic::decodeQuicInteger(cursor);
+  if (!errorCode) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  announceCancel.errorCode = errorCode->first;
+
+  res = parseFixedString(cursor);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  announceCancel.reasonPhrase = std::move(res.value());
   return announceCancel;
 }
 
@@ -999,6 +1011,8 @@ WriteResult writeAnnounceCancel(
   writeVarint(
       writeBuf, folly::to_underlying(FrameType::ANNOUNCE_CANCEL), size, error);
   writeFixedString(writeBuf, announceCancel.trackNamespace, size, error);
+  writeVarint(writeBuf, announceCancel.errorCode, size, error);
+  writeFixedString(writeBuf, announceCancel.reasonPhrase, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
