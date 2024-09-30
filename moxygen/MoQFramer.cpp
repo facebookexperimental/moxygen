@@ -152,11 +152,7 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
 }
 
 folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
-    folly::io::Cursor& cursor,
-    FrameType frameType) noexcept {
-  DCHECK(
-      frameType == FrameType::OBJECT_STREAM ||
-      frameType == FrameType::OBJECT_DATAGRAM);
+    folly::io::Cursor& cursor) noexcept {
   ObjectHeader objectHeader;
   auto subscribeID = quic::decodeQuicInteger(cursor);
   if (!subscribeID) {
@@ -182,32 +178,34 @@ folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
-  auto objectStatus = quic::decodeQuicInteger(cursor);
-  if (!objectStatus) {
+  auto payloadLength = quic::decodeQuicInteger(cursor);
+  if (!payloadLength) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  if (objectStatus->first >
-      folly::to_underlying(ObjectStatus::END_OF_TRACK_AND_GROUP)) {
-    return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
-  }
-  objectHeader.status = ObjectStatus(objectStatus->first);
-  if (frameType == FrameType::OBJECT_STREAM) {
-    objectHeader.forwardPreference = ForwardPreference::Object;
-    // length is not present and runs to the end of the stream
+  objectHeader.length = payloadLength->first;
+  if (objectHeader.length == 0) {
+    auto objectStatus = quic::decodeQuicInteger(cursor);
+    if (!objectStatus) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    if (objectStatus->first >
+        folly::to_underlying(ObjectStatus::END_OF_TRACK_AND_GROUP)) {
+      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+    }
+    objectHeader.status = ObjectStatus(objectStatus->first);
   } else {
-    // This is for datagrams
-    objectHeader.forwardPreference = ForwardPreference::Datagram;
-    // length is not present and runs to the end of the stream
+    objectHeader.status = ObjectStatus::NORMAL;
   }
+  objectHeader.forwardPreference = ForwardPreference::Datagram;
   return objectHeader;
 }
 
 folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     folly::io::Cursor& cursor,
-    FrameType frameType) noexcept {
+    StreamType streamType) noexcept {
   DCHECK(
-      frameType == FrameType::STREAM_HEADER_TRACK ||
-      frameType == FrameType::STREAM_HEADER_GROUP);
+      streamType == StreamType::STREAM_HEADER_TRACK ||
+      streamType == StreamType::STREAM_HEADER_SUBGROUP);
   ObjectHeader objectHeader;
   auto subscribeID = quic::decodeQuicInteger(cursor);
   if (!subscribeID) {
@@ -219,13 +217,18 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.trackAlias = trackAlias->first;
-  if (frameType == FrameType::STREAM_HEADER_GROUP) {
+  if (streamType == StreamType::STREAM_HEADER_SUBGROUP) {
     auto group = quic::decodeQuicInteger(cursor);
     if (!group) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     objectHeader.group = group->first;
-    objectHeader.forwardPreference = ForwardPreference::Group;
+    auto subgroup = quic::decodeQuicInteger(cursor);
+    if (!subgroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    objectHeader.subgroup = subgroup->first;
+    objectHeader.forwardPreference = ForwardPreference::Subgroup;
   } else {
     objectHeader.forwardPreference = ForwardPreference::Track;
   }
@@ -239,13 +242,13 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
 
 folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     folly::io::Cursor& cursor,
-    FrameType frameType,
+    StreamType streamType,
     const ObjectHeader& headerTemplate) noexcept {
   DCHECK(
-      frameType == FrameType::STREAM_HEADER_TRACK ||
-      frameType == FrameType::STREAM_HEADER_GROUP);
+      streamType == StreamType::STREAM_HEADER_TRACK ||
+      streamType == StreamType::STREAM_HEADER_SUBGROUP);
   ObjectHeader objectHeader = headerTemplate;
-  if (frameType == FrameType::STREAM_HEADER_TRACK) {
+  if (streamType == StreamType::STREAM_HEADER_TRACK) {
     auto group = quic::decodeQuicInteger(cursor);
     if (!group) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -253,7 +256,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     objectHeader.group = group->first;
     objectHeader.forwardPreference = ForwardPreference::Track;
   } else {
-    objectHeader.forwardPreference = ForwardPreference::Group;
+    objectHeader.forwardPreference = ForwardPreference::Subgroup;
   }
   auto id = quic::decodeQuicInteger(cursor);
   if (!id) {
@@ -272,7 +275,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     if (objectStatus->first >
-        folly::to_underlying(ObjectStatus::END_OF_TRACK_AND_GROUP)) {
+        folly::to_underlying(ObjectStatus::END_OF_SUBGROUP)) {
       return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
     }
     objectHeader.status = ObjectStatus(objectStatus->first);
@@ -782,13 +785,13 @@ WriteResult writeStreamHeader(
   if (objectHeader.forwardPreference == ForwardPreference::Track) {
     writeVarint(
         writeBuf,
-        folly::to_underlying(FrameType::STREAM_HEADER_TRACK),
+        folly::to_underlying(StreamType::STREAM_HEADER_TRACK),
         size,
         error);
-  } else if (objectHeader.forwardPreference == ForwardPreference::Group) {
+  } else if (objectHeader.forwardPreference == ForwardPreference::Subgroup) {
     writeVarint(
         writeBuf,
-        folly::to_underlying(FrameType::STREAM_HEADER_GROUP),
+        folly::to_underlying(StreamType::STREAM_HEADER_SUBGROUP),
         size,
         error);
   } else {
@@ -796,8 +799,9 @@ WriteResult writeStreamHeader(
   }
   writeVarint(writeBuf, objectHeader.subscribeID, size, error);
   writeVarint(writeBuf, objectHeader.trackAlias, size, error);
-  if (objectHeader.forwardPreference == ForwardPreference::Group) {
+  if (objectHeader.forwardPreference == ForwardPreference::Subgroup) {
     writeVarint(writeBuf, objectHeader.group, size, error);
+    writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
   writeVarint(writeBuf, objectHeader.priority, size, error);
   if (error) {
@@ -806,51 +810,59 @@ WriteResult writeStreamHeader(
   return size;
 }
 
+WriteResult writeSingleObjectStream(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
+  CHECK(objectHeader.forwardPreference != ForwardPreference::Datagram);
+  auto res = writeStreamHeader(writeBuf, objectHeader);
+  if (res) {
+    return writeObject(writeBuf, objectHeader, std::move(objectPayload));
+  } else {
+    return res;
+  }
+}
+
 WriteResult writeObject(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
   size_t size = 0;
   bool error = false;
-  bool multiObject = true;
-  if (objectHeader.forwardPreference == ForwardPreference::Object) {
-    writeVarint(
-        writeBuf, folly::to_underlying(FrameType::OBJECT_STREAM), size, error);
-    multiObject = false;
-
-  } else if (objectHeader.forwardPreference == ForwardPreference::Datagram) {
+  if (objectHeader.forwardPreference == ForwardPreference::Datagram) {
     writeVarint(
         writeBuf,
-        folly::to_underlying(FrameType::OBJECT_DATAGRAM),
+        folly::to_underlying(StreamType::OBJECT_DATAGRAM),
         size,
         error);
-    multiObject = false;
-  }
-  if (!multiObject) {
     writeVarint(writeBuf, objectHeader.subscribeID, size, error);
     writeVarint(writeBuf, objectHeader.trackAlias, size, error);
   }
-  if (objectHeader.forwardPreference != ForwardPreference::Group) {
+  if (objectHeader.forwardPreference != ForwardPreference::Subgroup) {
     writeVarint(writeBuf, objectHeader.group, size, error);
   }
   writeVarint(writeBuf, objectHeader.id, size, error);
-  if (!multiObject) {
+  CHECK(
+      objectHeader.status != ObjectStatus::NORMAL ||
+      objectHeader.length && *objectHeader.length > 0)
+      << "Normal objects require non-zero length";
+  if (objectHeader.forwardPreference == ForwardPreference::Datagram) {
     writeBuf.append(&objectHeader.priority, 1);
+  }
+  if (objectHeader.status == ObjectStatus::NORMAL) {
+    writeVarint(writeBuf, *objectHeader.length, size, error);
+    writeBuf.append(std::move(objectPayload));
+    // TODO: adjust size?
+  } else {
+    CHECK(!objectHeader.length || *objectHeader.length == 0)
+        << "Non-normal objects have zero length";
+    writeVarint(writeBuf, 0, size, error);
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
-  } else {
-    CHECK(objectHeader.length) << "Multi-object streams require known length";
-    writeVarint(writeBuf, *objectHeader.length, size, error);
-    if (*objectHeader.length == 0) {
-      writeVarint(
-          writeBuf, folly::to_underlying(objectHeader.status), size, error);
-    }
+    CHECK(!objectPayload);
   }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  if (objectPayload) {
-    writeBuf.append(std::move(objectPayload));
   }
   return size;
 }
@@ -1132,10 +1144,6 @@ WriteResult writeGoaway(
 
 const char* getFrameTypeString(FrameType type) {
   switch (type) {
-    case FrameType::OBJECT_STREAM:
-      return "OBJECT_STREAM";
-    case FrameType::OBJECT_DATAGRAM:
-      return "OBJECT_DATAGRAM";
     case FrameType::CLIENT_SETUP:
       return "CLIENT_SETUP";
     case FrameType::SERVER_SETUP:
@@ -1160,10 +1168,24 @@ const char* getFrameTypeString(FrameType type) {
       return "UNANNOUNCE";
     case FrameType::GOAWAY:
       return "GOAWAY";
-    case FrameType::STREAM_HEADER_TRACK:
+    default:
+      // can happen when type was cast from uint8_t
+      return "Unknown";
+  }
+  LOG(FATAL) << "Unreachable";
+  return "";
+}
+
+const char* getStreamTypeString(StreamType type) {
+  switch (type) {
+    case StreamType::OBJECT_DATAGRAM:
+      return "OBJECT_DATAGRAM";
+    case StreamType::STREAM_HEADER_TRACK:
       return "STREAM_HEADER_TRACK";
-    case FrameType::STREAM_HEADER_GROUP:
-      return "STREAM_HEADER_GROUP";
+    case StreamType::STREAM_HEADER_SUBGROUP:
+      return "STREAM_HEADER_SUBGROUP";
+    case StreamType::CONTROL:
+      return "CONTROL";
     default:
       // can happen when type was cast from uint8_t
       return "Unknown";
@@ -1174,6 +1196,11 @@ const char* getFrameTypeString(FrameType type) {
 
 std::ostream& operator<<(std::ostream& os, FrameType type) {
   os << getFrameTypeString(type);
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, StreamType type) {
+  os << getStreamTypeString(type);
   return os;
 }
 

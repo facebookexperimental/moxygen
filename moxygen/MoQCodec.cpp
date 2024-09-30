@@ -12,17 +12,20 @@
 
 namespace moxygen {
 
-void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
+void MoQCodec::onIngressStart(std::unique_ptr<folly::IOBuf> data) {
   ingress_.append(std::move(data));
+}
+
+void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
+  onIngressStart(std::move(data));
   folly::io::Cursor cursor(ingress_.front());
-  while (!connError_ &&
-         ((ingress_.chainLength() > 0 && !cursor.isAtEnd()) ||
-          (eom && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH))) {
+  while (!connError_ && (ingress_.chainLength() > 0 && !cursor.isAtEnd())) {
     switch (parseState_) {
       case ParseState::FRAME_HEADER_TYPE: {
         auto newCursor = cursor;
         auto type = quic::decodeQuicInteger(newCursor);
         if (!type) {
+          XLOG(DBG1) << __func__ << " underflow";
           connError_ = ErrorCode::PARSE_UNDERFLOW;
           break;
         }
@@ -44,53 +47,126 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
       }
       case ParseState::FRAME_PAYLOAD: {
         auto newCursor = cursor;
-        if (curFrameType_ == FrameType::OBJECT_STREAM ||
-            curFrameType_ == FrameType::OBJECT_DATAGRAM) {
-          auto res = parseObjectHeader(newCursor, curFrameType_);
-          if (res.hasError()) {
-            connError_ = res.error();
-            break;
-          }
-          curObjectHeader_ = res.value();
-          parseState_ = ParseState::OBJECT_PAYLOAD_NO_LENGTH;
-          if (callback_) {
-            callback_->onObjectHeader(std::move(res.value()));
-          }
-        } else if (
-            curFrameType_ == FrameType::STREAM_HEADER_TRACK ||
-            curFrameType_ == FrameType::STREAM_HEADER_GROUP) {
-          auto res = parseStreamHeader(newCursor, curFrameType_);
-          if (res.hasError()) {
-            connError_ = res.error();
-            break;
-          }
-          curObjectHeader_ = res.value();
-          parseState_ = ParseState::MULTI_OBJECT_HEADER;
-        } else {
-          auto res = parseFrame(newCursor);
-          if (res.hasError()) {
-            connError_ = res.error();
-            break;
-          }
-          parseState_ = ParseState::FRAME_HEADER_TYPE;
-        }
-        cursor = newCursor;
-        break;
-      }
-      case ParseState::MULTI_OBJECT_HEADER: {
-        auto newCursor = cursor;
-        auto res =
-            parseMultiObjectHeader(newCursor, curFrameType_, curObjectHeader_);
+        auto res = parseFrame(newCursor);
         if (res.hasError()) {
+          XLOG(DBG1) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
           break;
         }
+        parseState_ = ParseState::FRAME_HEADER_TYPE;
+        cursor = newCursor;
+        break;
+      }
+    }
+  }
+  onIngressEnd(cursor, eom, callback_);
+}
+
+void MoQCodec::onIngressEnd(
+    folly::io::Cursor& cursor,
+    bool eom,
+    Callback* callback) {
+  if (connError_) {
+    if (connError_.value() == ErrorCode::PARSE_UNDERFLOW && !eom) {
+      auto remainingLen = cursor.totalLength(); // must be less than 1 message
+      ingress_.trimStart(ingress_.chainLength() - remainingLen);
+      connError_.reset();
+      return;
+    } else if (callback) {
+      XLOG(ERR) << "Conn error=" << uint32_t(*connError_);
+      callback->onConnectionError(*connError_);
+    }
+  }
+  // we parsed everything, or connection error
+  ingress_.move();
+}
+
+void MoQObjectStreamCodec::onIngress(
+    std::unique_ptr<folly::IOBuf> data,
+    bool eom) {
+  onIngressStart(std::move(data));
+  folly::io::Cursor cursor(ingress_.front());
+  while (!connError_ &&
+         ((ingress_.chainLength() > 0 && !cursor.isAtEnd())/* ||
+          (eom && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH)*/)) {
+    switch (parseState_) {
+      case ParseState::STREAM_HEADER_TYPE: {
+        auto newCursor = cursor;
+        auto type = quic::decodeQuicInteger(newCursor);
+        if (!type) {
+          XLOG(DBG1) << __func__ << " underflow";
+          connError_ = ErrorCode::PARSE_UNDERFLOW;
+          break;
+        }
+        cursor = newCursor;
+        streamType_ = StreamType(type->first);
+        switch (streamType_) {
+          case StreamType::OBJECT_DATAGRAM:
+            parseState_ = ParseState::DATAGRAM;
+            break;
+          case StreamType::STREAM_HEADER_TRACK:
+          case StreamType::STREAM_HEADER_SUBGROUP:
+            parseState_ = ParseState::OBJECT_STREAM;
+            break;
+          //  CONTROL doesn't have a wire type yet.
+          default:
+            XLOG(DBG4) << "Stream not allowed: 0x" << std::setfill('0')
+                       << std::setw(sizeof(uint64_t) * 2) << std::hex
+                       << (uint64_t)streamType_ << " on streamID=" << streamId_;
+            connError_.emplace(ErrorCode::PARSE_ERROR);
+            break;
+        }
+        break;
+      }
+      case ParseState::DATAGRAM: {
+        auto newCursor = cursor;
+        auto res = parseObjectHeader(newCursor);
+        if (res.hasError()) {
+          XLOG(DBG1) << __func__ << " " << uint32_t(res.error());
+          connError_ = res.error();
+          break;
+        }
+        cursor = newCursor;
         curObjectHeader_ = res.value();
         parseState_ = ParseState::OBJECT_PAYLOAD;
         if (callback_) {
           callback_->onObjectHeader(std::move(res.value()));
         }
+        break;
+      }
+      case ParseState::OBJECT_STREAM: {
+        auto newCursor = cursor;
+        auto res = parseStreamHeader(newCursor, streamType_);
+        if (res.hasError()) {
+          XLOG(DBG1) << __func__ << " " << uint32_t(res.error());
+          connError_ = res.error();
+          break;
+        }
+        curObjectHeader_ = res.value();
+        parseState_ = ParseState::MULTI_OBJECT_HEADER;
         cursor = newCursor;
+        [[fallthrough]];
+      }
+      case ParseState::MULTI_OBJECT_HEADER: {
+        auto newCursor = cursor;
+        auto res =
+            parseMultiObjectHeader(newCursor, streamType_, curObjectHeader_);
+        if (res.hasError()) {
+          XLOG(DBG1) << __func__ << " " << uint32_t(res.error());
+          connError_ = res.error();
+          break;
+        }
+        curObjectHeader_ = res.value();
+        if (callback_) {
+          callback_->onObjectHeader(std::move(res.value()));
+        }
+        cursor = newCursor;
+        if (curObjectHeader_.status == ObjectStatus::NORMAL) {
+          parseState_ = ParseState::OBJECT_PAYLOAD;
+        } else {
+          parseState_ = ParseState::MULTI_OBJECT_HEADER;
+          break;
+        }
         [[fallthrough]];
       }
       case ParseState::OBJECT_PAYLOAD: {
@@ -108,6 +184,7 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         *curObjectHeader_.length -= chunkLen;
         if (eom && *curObjectHeader_.length != 0) {
           connError_ = ErrorCode::PARSE_ERROR;
+          XLOG(DBG1) << __func__ << " " << uint32_t(*connError_);
           break;
         }
         bool endOfObject = (*curObjectHeader_.length == 0);
@@ -126,6 +203,9 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         cursor = newCursor;
         break;
       }
+#if 0
+// This code is no longer reachable, but I'm leaving it here in case
+// the wire format changes back
       case ParseState::OBJECT_PAYLOAD_NO_LENGTH: {
         auto newCursor = cursor;
         // need to check for bufLen == 0?
@@ -149,24 +229,13 @@ void MoQCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         }
         cursor = newCursor;
       }
+#endif
     }
   }
-  if (connError_) {
-    if (connError_.value() == ErrorCode::PARSE_UNDERFLOW && !eom) {
-      auto remainingLen = cursor.totalLength(); // must be less than 1 message
-      ingress_.trimStart(ingress_.chainLength() - remainingLen);
-      connError_.reset();
-      return;
-    } else if (callback_) {
-      XLOG(ERR) << "Conn error=" << uint32_t(*connError_);
-      callback_->onConnectionError(*connError_);
-    }
-  }
-  // we parsed everything, or connection error
-  ingress_.move();
+  onIngressEnd(cursor, eom, callback_);
 }
 
-folly::Expected<folly::Unit, ErrorCode> MoQCodec::parseFrame(
+folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     folly::io::Cursor& cursor) {
   XLOG(DBG4) << "parsing frame type=" << folly::to_underlying(curFrameType_);
   switch (curFrameType_) {
@@ -190,13 +259,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQCodec::parseFrame(
       } else {
         return folly::makeUnexpected(res.error());
       }
-      break;
-    }
-    case FrameType::OBJECT_STREAM:
-    case FrameType::STREAM_HEADER_TRACK:
-    case FrameType::STREAM_HEADER_GROUP:
-    case FrameType::OBJECT_DATAGRAM: {
-      CHECK(false);
       break;
     }
     case FrameType::SUBSCRIBE: {

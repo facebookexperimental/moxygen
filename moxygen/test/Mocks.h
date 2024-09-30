@@ -5,7 +5,8 @@
 
 namespace moxygen {
 
-class MockMoQCodecCallback : public MoQCodec::Callback {
+class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
+                             public MoQObjectStreamCodec::ObjectCallback {
  public:
   ~MockMoQCodecCallback() override = default;
 

@@ -20,17 +20,17 @@ DEFINE_int32(relay_transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_int32(port, 9667, "Server Port");
-DEFINE_bool(stream_per_group, false, "Use one stream for each group");
+DEFINE_bool(stream_per_object, false, "Use one stream for each object");
 
 namespace {
 using namespace moxygen;
 
 class MoQDateServer : MoQServer {
  public:
-  explicit MoQDateServer(folly::EventBase* evb, ForwardPreference pref)
+  explicit MoQDateServer(folly::EventBase* evb, bool streamPerObject)
       : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, "/moq-date"),
         forwarder_(dateTrackName()),
-        pref_(pref) {
+        streamPerObject_(streamPerObject) {
     if (!FLAGS_relay_url.empty()) {
       proxygen::URL url(FLAGS_relay_url);
       if (!url.isValid() || !url.hasHost()) {
@@ -199,26 +199,39 @@ class MoQDateServer : MoQServer {
           {subscribeID,
            trackAlias,
            nowLoc.group,
-           0,
-           0,
-           pref_,
+           /*subgroup=*/0,
+           /*object=*/0,
+           /*priority*/ 0,
+           ForwardPreference::Subgroup,
            ObjectStatus::NORMAL,
            folly::none});
-      forwarder.publish(objHeader, folly::IOBuf::copyBuffer(ss.str()));
+      forwarder.publish(
+          objHeader,
+          folly::IOBuf::copyBuffer(ss.str()),
+          0,
+          true,
+          streamPerObject_);
       objectsPublished++;
     }
     if (!end || nowLoc < *end) {
       auto secBuf = folly::to<std::string>(lt->tm_sec);
+      uint64_t subgroup = streamPerObject_ ? nowLoc.object + 1 : 0;
       ObjectHeader objHeader(
           {subscribeID,
            trackAlias,
            nowLoc.group,
+           subgroup,
            nowLoc.object,
-           0,
-           pref_,
+           /*priority=*/0,
+           ForwardPreference::Subgroup,
            ObjectStatus::NORMAL,
            folly::none});
-      forwarder.publish(objHeader, folly::IOBuf::copyBuffer(secBuf));
+      forwarder.publish(
+          objHeader,
+          folly::IOBuf::copyBuffer(secBuf),
+          0,
+          true,
+          streamPerObject_ && nowLoc.object < 60);
       objectsPublished++;
       if (nowLoc.object == 60) {
         objHeader.status = ObjectStatus::END_OF_GROUP;
@@ -246,16 +259,13 @@ class MoQDateServer : MoQServer {
   }
   MoQForwarder forwarder_;
   std::unique_ptr<MoQRelayClient> relayClient_;
-  ForwardPreference pref_{ForwardPreference::Group};
+  bool streamPerObject_{false};
 };
 } // namespace
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
   folly::EventBase evb;
-  MoQDateServer moqDateServer(
-      &evb,
-      FLAGS_stream_per_group ? ForwardPreference::Group
-                             : ForwardPreference::Object);
+  MoQDateServer moqDateServer(&evb, FLAGS_stream_per_object);
   moqDateServer.publishDateLoop().scheduleOn(&evb).start();
   evb.loopForever();
   return 0;

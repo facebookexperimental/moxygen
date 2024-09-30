@@ -196,13 +196,14 @@ void MoQChatClient::publishLoop() {
         moqClient_.moqSession_->close();
         moqClient_.moqSession_.reset();
       } else if (chatSubscribeID_) {
-        moqClient_.moqSession_->publish(
+        moqClient_.moqSession_->publishStreamPerObject(
             {*chatSubscribeID_,
              *chatTrackAlias_,
              nextGroup_++,
-             0,
-             0,
-             ForwardPreference::Object,
+             /*subgroup=*/0,
+             /*id=*/0,
+             /*pri=*/0,
+             ForwardPreference::Subgroup,
              ObjectStatus::NORMAL},
             0,
             folly::IOBuf::copyBuffer(input),

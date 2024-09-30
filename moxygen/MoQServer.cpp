@@ -139,7 +139,7 @@ void MoQServer::Handler::onHeadersComplete(
   }
   auto evb = folly::EventBaseManager::get()->getEventBase();
   clientSession_ =
-      std::make_shared<MoQSession>(MoQCodec::Direction::SERVER, wt, evb);
+      std::make_shared<MoQSession>(MoQControlCodec::Direction::SERVER, wt, evb);
 
   server_.handleClientSession(clientSession_).scheduleOn(evb).start();
 }

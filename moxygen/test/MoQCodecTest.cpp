@@ -13,9 +13,9 @@
 using namespace moxygen;
 
 TEST(MoQCodec, All) {
-  auto allMsgs = moxygen::test::writeAllMessages();
+  auto allMsgs = moxygen::test::writeAllControlMessages();
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQCodec codec(MoQCodec::Direction::CLIENT, &callback);
+  MoQControlCodec codec(MoQControlCodec::Direction::CLIENT, &callback);
 
   EXPECT_CALL(callback, onClientSetup(testing::_));
   EXPECT_CALL(callback, onServerSetup(testing::_));
@@ -32,6 +32,16 @@ TEST(MoQCodec, All) {
   EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
   EXPECT_CALL(callback, onTrackStatus(testing::_));
   EXPECT_CALL(callback, onGoaway(testing::_));
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
+
+  codec.onIngress(std::move(allMsgs), true);
+}
+
+TEST(MoQCodec, AllObject) {
+  auto allMsgs = moxygen::test::writeAllObjectMessages();
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+
   EXPECT_CALL(callback, onObjectHeader(testing::_)).Times(2);
   EXPECT_CALL(
       callback,
@@ -42,16 +52,14 @@ TEST(MoQCodec, All) {
           testing::_,
           testing::_,
           testing::_))
-      .Times(2);
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(18);
-
+      .Times(1);
   codec.onIngress(std::move(allMsgs), true);
 }
 
 TEST(MoQCodec, Underflow) {
-  auto allMsgs = moxygen::test::writeAllMessages();
+  auto allMsgs = moxygen::test::writeAllControlMessages();
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQCodec codec(MoQCodec::Direction::CLIENT, &callback);
+  MoQControlCodec codec(MoQControlCodec::Direction::CLIENT, &callback);
 
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   readBuf.append(std::move(allMsgs));
@@ -71,6 +79,21 @@ TEST(MoQCodec, Underflow) {
   EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
   EXPECT_CALL(callback, onTrackStatus(testing::_));
   EXPECT_CALL(callback, onGoaway(testing::_));
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
+  while (!readBuf.empty()) {
+    codec.onIngress(readBuf.split(1), false);
+  }
+  codec.onIngress(nullptr, true);
+}
+
+TEST(MoQCodec, UnderflowObjects) {
+  auto allMsgs = moxygen::test::writeAllObjectMessages();
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  readBuf.append(std::move(allMsgs));
+
   EXPECT_CALL(callback, onObjectHeader(testing::_)).Times(2);
   EXPECT_CALL(
       callback,
@@ -81,8 +104,7 @@ TEST(MoQCodec, Underflow) {
           testing::_,
           testing::_,
           testing::_))
-      .Times(strlen("hello world") + 1);
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(18);
+      .Times(strlen("hello world"));
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }
@@ -91,44 +113,12 @@ TEST(MoQCodec, Underflow) {
 
 TEST(MoQCodec, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  writeObject(
+  writeSingleObjectStream(
       writeBuf,
-      {0, 1, 2, 3, 4, ForwardPreference::Object, ObjectStatus::NORMAL, 11},
+      {0, 1, 2, 3, 4, 5, ForwardPreference::Subgroup, ObjectStatus::NORMAL, 11},
       folly::IOBuf::copyBuffer("hello world"));
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQCodec codec(MoQCodec::Direction::CLIENT, &callback);
-
-  EXPECT_CALL(callback, onObjectHeader(testing::_));
-  EXPECT_CALL(
-      callback,
-      onObjectPayload(
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_))
-      .Times(2);
-
-  codec.onIngress(writeBuf.move(), false);
-  codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
-}
-
-TEST(MoQCodec, EmptyObjectPayload) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  writeObject(
-      writeBuf,
-      {0,
-       1,
-       2,
-       3,
-       4,
-       ForwardPreference::Object,
-       ObjectStatus::NORMAL,
-       folly::none},
-      nullptr);
-  testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQCodec codec(MoQCodec::Direction::CLIENT, &callback);
+  MoQObjectStreamCodec codec(&callback);
 
   EXPECT_CALL(callback, onObjectHeader(testing::_));
   EXPECT_CALL(
@@ -141,6 +131,29 @@ TEST(MoQCodec, EmptyObjectPayload) {
           testing::_,
           testing::_))
       .Times(1);
+
+  codec.onIngress(writeBuf.move(), false);
+  codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
+}
+
+TEST(MoQCodec, EmptyObjectPayload) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  writeSingleObjectStream(
+      writeBuf,
+      {0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       ForwardPreference::Subgroup,
+       ObjectStatus::OBJECT_NOT_EXIST,
+       folly::none},
+      nullptr);
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+
+  EXPECT_CALL(callback, onObjectHeader(testing::_));
 
   // extra coverage of underflow in header
   codec.onIngress(writeBuf.split(3), false);
@@ -158,6 +171,7 @@ TEST(MoQCodec, TruncatedObject) {
           2,
           3,
           4,
+          5,
           ForwardPreference::Track,
           ObjectStatus::NORMAL,
           folly::none,
@@ -165,10 +179,18 @@ TEST(MoQCodec, TruncatedObject) {
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {0, 1, 2, 3, 4, ForwardPreference::Track, ObjectStatus::NORMAL, 11}),
+          {0,
+           1,
+           2,
+           3,
+           4,
+           5,
+           ForwardPreference::Track,
+           ObjectStatus::NORMAL,
+           11}),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQCodec codec(MoQCodec::Direction::CLIENT, &callback);
+  MoQObjectStreamCodec codec(&callback);
 
   EXPECT_CALL(callback, onObjectHeader(testing::_));
 
@@ -179,7 +201,7 @@ TEST(MoQCodec, InvalidFrame) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeBuf.append(std::string(" "));
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQCodec codec(MoQCodec::Direction::CLIENT, &callback);
+  MoQControlCodec codec(MoQControlCodec::Direction::CLIENT, &callback);
 
   EXPECT_CALL(callback, onConnectionError(testing::_));
 

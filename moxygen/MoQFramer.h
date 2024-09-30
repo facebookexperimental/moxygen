@@ -71,8 +71,6 @@ enum class TrackStatusCode : uint32_t {
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
 
 enum class FrameType : uint64_t {
-  OBJECT_STREAM = 0,
-  OBJECT_DATAGRAM = 1,
   SUBSCRIBE_UPDATE = 2,
   SUBSCRIBE = 3,
   SUBSCRIBE_OK = 4,
@@ -89,11 +87,18 @@ enum class FrameType : uint64_t {
   GOAWAY = 0x10,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
-  STREAM_HEADER_TRACK = 0x50,
-  STREAM_HEADER_GROUP = 0x51,
+};
+
+enum class StreamType : uint64_t {
+  OBJECT_DATAGRAM = 1,
+  STREAM_HEADER_TRACK = 0x2,
+  STREAM_HEADER_SUBGROUP = 0x4,
+  CONTROL = 100000000
 };
 
 std::ostream& operator<<(std::ostream& os, FrameType type);
+
+std::ostream& operator<<(std::ostream& os, StreamType type);
 
 enum class SetupKey : uint64_t { ROLE = 0, PATH = 1 };
 
@@ -112,7 +117,7 @@ constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
 constexpr uint64_t kVersionDraft06_exp =
-    0xff060000; // Draft 6 in progress version
+    0xff060001; // Draft 6 in progress version
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft06_exp;
 
 struct ClientSetup {
@@ -131,20 +136,22 @@ folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
 folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
     folly::io::Cursor& cursor) noexcept;
 
-enum class ForwardPreference : uint8_t { Track, Group, Object, Datagram };
+enum class ForwardPreference : uint8_t { Track, Subgroup, Datagram };
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,
   OBJECT_NOT_EXIST = 1,
   GROUP_NOT_EXIST = 2,
   END_OF_GROUP = 3,
-  END_OF_TRACK_AND_GROUP = 4
+  END_OF_TRACK_AND_GROUP = 4,
+  END_OF_SUBGROUP = 5,
 };
 
 struct ObjectHeader {
   uint64_t subscribeID;
   uint64_t trackAlias;
   uint64_t group;
+  uint64_t subgroup{0}; // meaningless for Track and Datagram
   uint64_t id;
   uint64_t priority;
   ForwardPreference forwardPreference;
@@ -152,17 +159,17 @@ struct ObjectHeader {
   folly::Optional<uint64_t> length{folly::none};
 };
 
+// datagram only
 folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
-    folly::io::Cursor& cursor,
-    FrameType frameType) noexcept;
+    folly::io::Cursor& cursor) noexcept;
 
 folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     folly::io::Cursor& cursor,
-    FrameType frameType) noexcept;
+    StreamType streamType) noexcept;
 
 folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     folly::io::Cursor& cursor,
-    FrameType frameType,
+    StreamType streamType,
     const ObjectHeader& headerTemplate) noexcept;
 
 enum class TrackRequestParamKey : uint64_t {
@@ -426,6 +433,11 @@ WriteResult writeStreamHeader(
     const ObjectHeader& objectHeader) noexcept;
 
 WriteResult writeObject(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+
+WriteResult writeSingleObjectStream(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) noexcept;

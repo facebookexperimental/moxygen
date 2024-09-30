@@ -21,11 +21,12 @@
 
 namespace moxygen {
 
-class MoQSession : public MoQCodec::Callback,
+class MoQSession : public MoQControlCodec::ControlCallback,
+                   public MoQObjectStreamCodec::ObjectCallback,
                    public proxygen::WebTransportHandler {
  public:
   explicit MoQSession(
-      MoQCodec::Direction dir,
+      MoQControlCodec::Direction dir,
       proxygen::WebTransport* wt,
       folly::EventBase* evb)
       : dir_(dir), wt_(wt), evb_(evb) {}
@@ -270,6 +271,11 @@ class MoQSession : public MoQCodec::Callback,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom);
+  folly::SemiFuture<folly::Unit> publishStreamPerObject(
+      const ObjectHeader& objHeader,
+      uint64_t payloadOffset,
+      std::unique_ptr<folly::IOBuf> payload,
+      bool eom);
   folly::SemiFuture<folly::Unit> publishStatus(const ObjectHeader& objHeader);
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
@@ -285,7 +291,6 @@ class MoQSession : public MoQCodec::Callback,
  private:
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
-  enum class StreamType { CONTROL, DATA };
   folly::coro::Task<void> readLoop(
       StreamType streamType,
       proxygen::WebTransport::StreamReadHandle* readHandle);
@@ -320,13 +325,15 @@ class MoQSession : public MoQCodec::Callback,
       const ObjectHeader& objHeader,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
-      bool eom);
+      bool eom,
+      bool streamPerObject);
 
   uint64_t order(const ObjectHeader& objHeader);
 
   struct PublishKey {
     uint64_t subscribeID;
     uint64_t group;
+    uint64_t subgroup;
     ForwardPreference pref;
     uint64_t object;
 
@@ -334,11 +341,10 @@ class MoQSession : public MoQCodec::Callback,
       if (subscribeID != other.subscribeID || pref != other.pref) {
         return false;
       }
-      if (pref == ForwardPreference::Object ||
-          pref == ForwardPreference::Datagram) {
+      if (pref == ForwardPreference::Datagram) {
         return object == other.object;
-      } else if (pref == ForwardPreference::Group) {
-        return group == other.group;
+      } else if (pref == ForwardPreference::Subgroup) {
+        return group == other.group && subgroup == other.subgroup;
       } else if (pref == ForwardPreference::Track) {
         return true;
       }
@@ -347,12 +353,12 @@ class MoQSession : public MoQCodec::Callback,
 
     struct hash {
       size_t operator()(const PublishKey& ook) const {
-        if (ook.pref == ForwardPreference::Object ||
-            ook.pref == ForwardPreference::Datagram) {
+        if (ook.pref == ForwardPreference::Datagram) {
           return folly::hash::hash_combine(
               ook.subscribeID, ook.group, ook.object);
-        } else if (ook.pref == ForwardPreference::Group) {
-          return folly::hash::hash_combine(ook.subscribeID, ook.group);
+        } else if (ook.pref == ForwardPreference::Subgroup) {
+          return folly::hash::hash_combine(
+              ook.subscribeID, ook.group, ook.subgroup);
         } // else if (ook.pref == ForwardPreference::Track) {
         return folly::hash::hash_combine(ook.subscribeID);
       }
@@ -362,12 +368,14 @@ class MoQSession : public MoQCodec::Callback,
   struct PublishData {
     uint64_t streamID;
     uint64_t group;
+    uint64_t subgroup;
     uint64_t objectID;
     folly::Optional<uint64_t> objectLength;
     uint64_t offset;
+    bool streamPerObject;
   };
 
-  MoQCodec::Direction dir_;
+  MoQControlCodec::Direction dir_;
   proxygen::WebTransport* wt_{nullptr};
   folly::EventBase* evb_{nullptr}; // keepalive?
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};

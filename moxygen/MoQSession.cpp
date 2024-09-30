@@ -32,7 +32,7 @@ MoQSession::~MoQSession() {
 
 void MoQSession::start() {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (dir_ == MoQCodec::Direction::CLIENT) {
+  if (dir_ == MoQControlCodec::Direction::CLIENT) {
     auto cs = wt_->createBidiStream();
     if (!cs) {
       XLOG(ERR) << "Failed to get control stream" << " sess=" << this;
@@ -88,7 +88,7 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
 }
 
 void MoQSession::setup(ClientSetup setup) {
-  XCHECK(dir_ == MoQCodec::Direction::CLIENT);
+  XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto res = writeClientSetup(controlWriteBuf_, std::move(setup));
   if (!res) {
@@ -101,7 +101,7 @@ void MoQSession::setup(ClientSetup setup) {
 
 void MoQSession::setup(ServerSetup setup) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  XCHECK(dir_ == MoQCodec::Direction::SERVER);
+  XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
   auto res = writeServerSetup(controlWriteBuf_, std::move(setup));
   if (!res) {
     XLOG(ERR) << "writeServerSetup failed" << " sess=" << this;
@@ -149,10 +149,17 @@ MoQSession::controlMessages() {
 }
 
 folly::coro::Task<void> MoQSession::readLoop(
-    StreamType /*streamType*/,
+    StreamType streamType,
     proxygen::WebTransport::StreamReadHandle* readHandle) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  MoQCodec codec(dir_, this);
+  std::unique_ptr<MoQCodec> codec;
+  if (streamType == StreamType::CONTROL) {
+    codec = std::make_unique<MoQControlCodec>(dir_, this);
+  } else {
+    codec = std::make_unique<MoQObjectStreamCodec>(this);
+  }
+  codec->setStreamId(readHandle->getID());
+
   // TODO: disallow OBJECT on control streams and non-object on non-control
   bool fin = false;
   while (!fin) {
@@ -163,7 +170,7 @@ folly::coro::Task<void> MoQSession::readLoop(
       co_return;
     } else {
       if (streamData->data || streamData->fin) {
-        codec.onIngress(std::move(streamData->data), streamData->fin);
+        codec->onIngress(std::move(streamData->data), streamData->fin);
       }
       fin = streamData->fin;
       XLOG_IF(DBG3, fin) << "End of stream" << " sess=" << this;
@@ -233,13 +240,20 @@ void MoQSession::onObjectPayload(
 
 void MoQSession::TrackHandle::onObjectHeader(ObjectHeader objHeader) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  uint64_t objectIdKey = objHeader.id;
+  if (objHeader.status != ObjectStatus::NORMAL) {
+    objectIdKey |= (1ull << 63);
+  }
   auto res = objects_.emplace(
       std::piecewise_construct,
-      std::forward_as_tuple(std::make_pair(objHeader.group, objHeader.id)),
+      std::forward_as_tuple(std::make_pair(objHeader.group, objectIdKey)),
       std::forward_as_tuple(std::make_shared<ObjectSource>()));
   res.first->second->header = std::move(objHeader);
   res.first->second->fullTrackName = fullTrackName_;
   res.first->second->cancelToken = cancelToken_;
+  // TODO: objects_ accumulates the headers of all objects for the life of the
+  // track.  Remove an entry from objects when returning the end of the payload,
+  // or the object itself for non-normal.
   newObjects_.enqueue(res.first->second);
 }
 
@@ -554,20 +568,31 @@ folly::SemiFuture<folly::Unit> MoQSession::publish(
     std::unique_ptr<folly::IOBuf> payload,
     bool eom) {
   XCHECK_EQ(objHeader.status, ObjectStatus::NORMAL);
-  return publishImpl(objHeader, payloadOffset, std::move(payload), eom);
+  return publishImpl(objHeader, payloadOffset, std::move(payload), eom, false);
+}
+
+folly::SemiFuture<folly::Unit> MoQSession::publishStreamPerObject(
+    const ObjectHeader& objHeader,
+    uint64_t payloadOffset,
+    std::unique_ptr<folly::IOBuf> payload,
+    bool eom) {
+  XCHECK_EQ(objHeader.status, ObjectStatus::NORMAL);
+  XCHECK_EQ(objHeader.forwardPreference, ForwardPreference::Subgroup);
+  return publishImpl(objHeader, payloadOffset, std::move(payload), eom, true);
 }
 
 folly::SemiFuture<folly::Unit> MoQSession::publishStatus(
     const ObjectHeader& objHeader) {
   XCHECK_NE(objHeader.status, ObjectStatus::NORMAL);
-  return publishImpl(objHeader, 0, nullptr, true);
+  return publishImpl(objHeader, 0, nullptr, true, false);
 }
 
 folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     const ObjectHeader& objHeader,
     uint64_t payloadOffset,
     std::unique_ptr<folly::IOBuf> payload,
-    bool eom) {
+    bool eom,
+    bool streamPerObject) {
   XLOG(DBG1) << __func__ << " sid=" << objHeader.subscribeID
              << " t=" << objHeader.trackAlias << " g=" << objHeader.group
              << " o=" << objHeader.id;
@@ -580,6 +605,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
   PublishKey publishKey(
       {objHeader.subscribeID,
        objHeader.group,
+       objHeader.subgroup,
        objHeader.forwardPreference,
        objHeader.id});
   auto pubDataIt = publishDataMap_.find(publishKey);
@@ -626,13 +652,15 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
             {((stream) ? stream->getID()
                        : std::numeric_limits<uint64_t>::max()),
              objHeader.group,
+             objHeader.subgroup,
              objHeader.id,
              objHeader.length,
-             0})));
+             0,
+             streamPerObject})));
     pubDataIt = res.first;
     // Serialize multi-object stream header
     if (objHeader.forwardPreference == ForwardPreference::Track ||
-        objHeader.forwardPreference == ForwardPreference::Group) {
+        objHeader.forwardPreference == ForwardPreference::Subgroup) {
       writeStreamHeader(writeBuf, objHeader);
     }
   } else {
@@ -660,13 +688,14 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
         }
       }
       multiObject = true;
-    } else if (objHeader.forwardPreference == ForwardPreference::Group) {
-      if (objHeader.id < pubDataIt->second.objectID ||
-          (objHeader.id == pubDataIt->second.objectID &&
-           pubDataIt->second.offset != 0)) {
-        XLOG(ERR) << "obj id must increase within group" << " sess=" << this;
+    } else if (objHeader.forwardPreference == ForwardPreference::Subgroup) {
+      if (objHeader.status != ObjectStatus::END_OF_SUBGROUP &&
+          ((objHeader.id < pubDataIt->second.objectID ||
+            (objHeader.id == pubDataIt->second.objectID &&
+             pubDataIt->second.offset != 0)))) {
+        XLOG(ERR) << "obj id must increase within subgroup" << " sess=" << this;
         return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
-            std::runtime_error("obj id must increase within group.")));
+            std::runtime_error("obj id must increase within subgroup.")));
       }
       multiObject = true;
     }
@@ -695,11 +724,27 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     return folly::makeSemiFuture();
   } else {
     bool streamEOM =
-        (eom && objHeader.forwardPreference == ForwardPreference::Object) ||
         (objHeader.status == ObjectStatus::END_OF_GROUP ||
+         objHeader.status == ObjectStatus::END_OF_SUBGROUP ||
          objHeader.status == ObjectStatus::END_OF_TRACK_AND_GROUP);
-    XLOG_IF(DBG1, streamEOM) << "End of stream" << " sess=" << this;
     // TODO: verify that pubDataIt->second.objectLength is empty or 0
+    if (eom && pubDataIt->second.streamPerObject) {
+      writeObject(
+          writeBuf,
+          ObjectHeader(
+              {objHeader.subscribeID,
+               objHeader.trackAlias,
+               objHeader.group,
+               objHeader.subgroup,
+               objHeader.id,
+               objHeader.priority,
+               ForwardPreference::Subgroup,
+               ObjectStatus::END_OF_SUBGROUP,
+               0}),
+          nullptr);
+      streamEOM = true;
+    }
+    XLOG_IF(DBG1, streamEOM) << "End of stream" << " sess=" << this;
     auto writeRes = wt_->writeStreamData(
         pubDataIt->second.streamID, writeBuf.move(), streamEOM);
     if (!writeRes) {
@@ -733,13 +778,14 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
     close();
     return;
   }
-  readLoop(StreamType::DATA, rh).scheduleOn(evb_).start();
+  // maybe not STREAM_HEADER_SUBGROUP, but at least not control
+  readLoop(StreamType::STREAM_HEADER_SUBGROUP, rh).scheduleOn(evb_).start();
 }
 
 void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   // TODO: prevent second control stream?
-  if (dir_ == MoQCodec::Direction::CLIENT) {
+  if (dir_ == MoQControlCodec::Direction::CLIENT) {
     XLOG(ERR) << "Received bidi stream on client, kill it" << " sess=" << this;
     bh.writeHandle->resetStream(/*error=*/0);
     bh.readHandle->stopSending(/*error=*/0);
@@ -757,7 +803,7 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
 
 void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  MoQCodec codec(dir_, this);
+  MoQObjectStreamCodec codec(this);
   codec.onIngress(std::move(datagram), true);
 }
 } // namespace moxygen

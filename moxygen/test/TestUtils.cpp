@@ -10,7 +10,7 @@
 
 namespace moxygen::test {
 
-std::unique_ptr<folly::IOBuf> writeAllMessages() {
+std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = writeClientSetup(
       writeBuf,
@@ -112,7 +112,12 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
            AbsoluteLocation({19, 77})}));
   res = writeGoaway(writeBuf, Goaway({"new uri"}));
 
-  res = writeStreamHeader(
+  return writeBuf.move();
+}
+
+std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = writeStreamHeader(
       writeBuf,
       ObjectHeader({
           0,
@@ -120,6 +125,7 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
           2,
           3,
           4,
+          5,
           ForwardPreference::Track,
           ObjectStatus::NORMAL,
           folly::none,
@@ -127,14 +133,29 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {0, 1, 2, 3, 4, ForwardPreference::Track, ObjectStatus::NORMAL, 11}),
+          {0,
+           1,
+           2,
+           3,
+           4,
+           5,
+           ForwardPreference::Track,
+           ObjectStatus::NORMAL,
+           11}),
       folly::IOBuf::copyBuffer("hello world"));
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {0, 1, 2, 3, 4, ForwardPreference::Track, ObjectStatus::NORMAL, 0}),
+          {0,
+           1,
+           2,
+           3,
+           4,
+           5,
+           ForwardPreference::Track,
+           ObjectStatus::END_OF_TRACK_AND_GROUP,
+           0}),
       nullptr);
-
   return writeBuf.move();
 }
 

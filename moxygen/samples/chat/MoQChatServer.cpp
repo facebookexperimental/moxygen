@@ -125,13 +125,14 @@ class MoQChatServer : MoQServer {
     auto catalogBuf = folly::IOBuf::copyBuffer(catalogString);
     auto catGroup = catGroup_++;
     for (auto& sub : subscribers_) {
-      sub.second.first->publish(
+      sub.second.first->publishStreamPerObject(
           {sub.second.second,
            0 /* WRONG */,
            catGroup,
-           0,
-           0,
-           ForwardPreference::Object,
+           /*subgroup=*/0,
+           /*id=*/0,
+           /*pri=*/0,
+           ForwardPreference::Subgroup,
            ObjectStatus::NORMAL,
            folly::none},
           0,

@@ -138,7 +138,8 @@ class MoQForwarder {
       ObjectHeader objHeader,
       std::unique_ptr<folly::IOBuf> payload,
       uint64_t payloadOffset = 0,
-      bool eom = true) {
+      bool eom = true,
+      bool streamPerObject = false) {
     AbsoluteLocation now{objHeader.group, objHeader.id};
     if (!latest_ || now > *latest_) {
       latest_ = now;
@@ -172,11 +173,15 @@ class MoQForwarder {
              objHeader,
              payloadOffset,
              buf = (payload) ? payload->clone() : nullptr,
-             eom]() mutable {
+             eom,
+             streamPerObject]() mutable {
               objHeader.subscribeID = subId;
               objHeader.trackAlias = trackAlias;
               if (objHeader.status != ObjectStatus::NORMAL) {
                 session->publishStatus(objHeader);
+              } else if (streamPerObject) {
+                session->publishStreamPerObject(
+                    objHeader, payloadOffset, std::move(buf), eom);
               } else {
                 session->publish(objHeader, payloadOffset, std::move(buf), eom);
               }

@@ -115,7 +115,7 @@ void MoQClient::HTTPHandler::onHeadersComplete(
     return;
   }
   sessionContract.first.setValue(std::make_shared<MoQSession>(
-      MoQCodec::Direction::CLIENT, wt, client_.evb_));
+      MoQControlCodec::Direction::CLIENT, wt, client_.evb_));
 }
 
 void MoQClient::HTTPHandler::onError(

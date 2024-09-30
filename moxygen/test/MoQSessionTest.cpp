@@ -102,11 +102,11 @@ class MoQSessionTest : public testing::Test {
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
     clientSession_ = std::make_shared<MoQSession>(
-        MoQCodec::Direction::CLIENT, clientWt_.get(), &eventBase_);
+        MoQControlCodec::Direction::CLIENT, clientWt_.get(), &eventBase_);
     serverWt_->setPeerHandler(clientSession_.get());
 
     serverSession_ = std::make_shared<MoQSession>(
-        MoQCodec::Direction::SERVER, serverWt_.get(), &eventBase_);
+        MoQControlCodec::Direction::SERVER, serverWt_.get(), &eventBase_);
     clientWt_->setPeerHandler(serverSession_.get());
   }
 

@@ -10,6 +10,13 @@
 
 namespace moxygen::test {
 
-std::unique_ptr<folly::IOBuf> writeAllMessages();
+std::unique_ptr<folly::IOBuf> writeAllControlMessages();
+std::unique_ptr<folly::IOBuf> writeAllObjectMessages();
 
+inline std::unique_ptr<folly::IOBuf> writeAllMessages() {
+  auto buf = writeAllControlMessages();
+  buf->appendToChain(writeAllObjectMessages());
+  return buf;
 }
+
+} // namespace moxygen::test
