@@ -21,8 +21,11 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
 folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
     folly::io::Cursor& cursor) {
   auto itemCount = quic::decodeQuicInteger(cursor);
-  if (!itemCount || itemCount->first > kMaxNamespaceLength) {
+  if (!itemCount) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (itemCount->first > kMaxNamespaceLength) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   std::vector<std::string> items;
   items.reserve(itemCount->first);

@@ -29,83 +29,89 @@ void skip(folly::io::Cursor& cursor, size_t i) {
   cursor.skip(i);
 }
 
+template <class T>
+void testUnderflowResult(folly::Expected<T, ErrorCode> result) {
+  EXPECT_TRUE(result || result.error() == ErrorCode::PARSE_UNDERFLOW);
+  if (!result) {
+    throw TestUnderflow();
+  }
+}
+
 void parseAll(folly::io::Cursor& cursor, bool eom) {
   skip(cursor, 2);
   auto r1 = parseClientSetup(cursor);
-  EXPECT_TRUE(r1 || (!eom && r1.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r1);
 
   skip(cursor, 2);
   auto r2 = parseServerSetup(cursor);
-  EXPECT_TRUE(r2 || (!eom && r2.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r2);
 
   skip(cursor, 1);
   auto r3 = parseSubscribeRequest(cursor);
-  EXPECT_TRUE(r3 || (!eom && r3.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r3);
 
   skip(cursor, 1);
   auto r3a = parseSubscribeUpdate(cursor);
-  EXPECT_TRUE(r3a || (!eom && r3a.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r3a);
 
   skip(cursor, 1);
   auto r4 = parseSubscribeOk(cursor);
-  EXPECT_TRUE(r4 || (!eom && r4.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r4);
 
   skip(cursor, 1);
   auto r5 = parseSubscribeError(cursor);
-  EXPECT_TRUE(r5 || (!eom && r5.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r5);
 
   skip(cursor, 1);
   auto r6 = parseUnsubscribe(cursor);
-  EXPECT_TRUE(r6 || (!eom && r6.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r6);
 
   skip(cursor, 1);
   auto r7 = parseSubscribeDone(cursor);
-  EXPECT_TRUE(r1 || (!eom && r7.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r7);
 
   skip(cursor, 1);
   auto r8 = parseSubscribeDone(cursor);
-  EXPECT_TRUE(r1 || (!eom && r8.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r8);
 
   skip(cursor, 1);
   auto r9 = parseAnnounce(cursor);
-  EXPECT_TRUE(r9 || (!eom && r9.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r9);
 
   skip(cursor, 1);
   auto r10 = parseAnnounceOk(cursor);
-  EXPECT_TRUE(r10 || (!eom && r10.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r10);
 
   skip(cursor, 1);
   auto r11 = parseAnnounceError(cursor);
-  EXPECT_TRUE(r11 || (!eom && r11.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r11);
 
   skip(cursor, 1);
   auto r12 = parseAnnounceCancel(cursor);
-  EXPECT_TRUE(r12 || (!eom && r12.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r12);
 
   skip(cursor, 1);
   auto r13 = parseUnannounce(cursor);
-  EXPECT_TRUE(r13 || (!eom && r13.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r13);
 
   skip(cursor, 1);
   auto r14a = parseTrackStatusRequest(cursor);
-  EXPECT_TRUE(r14a || (!eom && r14a.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r14a);
 
   skip(cursor, 1);
   auto r14b = parseTrackStatus(cursor);
-  EXPECT_TRUE(r14b || (!eom && r14b.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r14b);
 
   skip(cursor, 1);
   auto r14 = parseGoaway(cursor);
-  EXPECT_TRUE(r14 || (!eom && r14.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r14);
 
   auto res = parseStreamHeader(cursor, FrameType::STREAM_HEADER_TRACK);
-  EXPECT_TRUE(res || (!eom && res.error() == ErrorCode::PARSE_UNDERFLOW));
-  if (!res) {
-    throw TestUnderflow();
-  }
+  testUnderflowResult(res);
+
   auto r15 = parseMultiObjectHeader(
       cursor, FrameType::STREAM_HEADER_TRACK, res.value());
-  EXPECT_TRUE(r15 || (!eom && r15.error() == ErrorCode::PARSE_UNDERFLOW));
+  testUnderflowResult(r15);
   skip(cursor, 1);
 }
 } // namespace
