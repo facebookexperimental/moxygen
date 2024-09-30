@@ -111,7 +111,9 @@ constexpr uint64_t kVersionDraft03 = 0xff000003;
 constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft06;
+constexpr uint64_t kVersionDraft06_exp =
+    0xff060000; // Draft 6 in progress version
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft06_exp;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
