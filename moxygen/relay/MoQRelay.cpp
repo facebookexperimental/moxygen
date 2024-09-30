@@ -10,12 +10,12 @@ namespace moxygen {
 
 void MoQRelay::onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session) {
   // check auth
-  if (ann.trackNamespace.starts_with(allowedNamespacePrefix_)) {
-    session->announceOk({ann.trackNamespace});
-    announces_.emplace(std::move(ann.trackNamespace), std::move(session));
-  } else {
+  if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     session->announceError({ann.trackNamespace, 403, "bad namespace"});
+    return;
   }
+  session->announceOk({ann.trackNamespace});
+  announces_.emplace(std::move(ann.trackNamespace), std::move(session));
 }
 
 folly::coro::Task<void> MoQRelay::onSubscribe(

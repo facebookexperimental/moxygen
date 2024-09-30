@@ -10,13 +10,12 @@
 #include "moxygen/relay/MoQForwarder.h"
 
 #include <folly/container/F14Set.h>
-#include <list>
 
 namespace moxygen {
 
 class MoQRelay {
  public:
-  void setAllowedNamespacePrefix(std::string allowed) {
+  void setAllowedNamespacePrefix(TrackNamespace allowed) {
     allowedNamespacePrefix_ = std::move(allowed);
   }
 
@@ -39,8 +38,12 @@ class MoQRelay {
       std::shared_ptr<MoQSession::TrackHandle> track,
       std::shared_ptr<MoQForwarder> forwarder);
 
-  std::string allowedNamespacePrefix_;
-  folly::F14FastMap<std::string, std::shared_ptr<MoQSession>> announces_;
+  TrackNamespace allowedNamespacePrefix_;
+  folly::F14FastMap<
+      TrackNamespace,
+      std::shared_ptr<MoQSession>,
+      TrackNamespace::hash>
+      announces_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>
       subscriptions_;
 };

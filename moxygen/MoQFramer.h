@@ -19,6 +19,7 @@ namespace moxygen {
 
 //////// Constants ////////
 const size_t kMaxFrameHeaderSize = 32;
+const size_t kMaxNamespaceLength = 32;
 
 //////// Types ////////
 
@@ -207,8 +208,56 @@ constexpr AbsoluteLocation kLocationMax{
     std::numeric_limits<uint64_t>::max(),
     std::numeric_limits<uint64_t>::max()};
 
+struct TrackNamespace {
+  std::vector<std::string> trackNamespace;
+
+  TrackNamespace() = default;
+  explicit TrackNamespace(std::vector<std::string> tns) {
+    trackNamespace = std::move(tns);
+  }
+  explicit TrackNamespace(std::string tns, std::string delimiter) {
+    folly::split(delimiter, tns, trackNamespace);
+  }
+
+  bool operator==(const TrackNamespace& other) const {
+    return trackNamespace == other.trackNamespace;
+  }
+  bool operator<(const TrackNamespace& other) const {
+    return trackNamespace < other.trackNamespace;
+  }
+  const std::string& operator[](size_t i) const {
+    return trackNamespace[i];
+  }
+  struct hash {
+    size_t operator()(const TrackNamespace& tn) const {
+      return folly::hash::hash_range(
+          tn.trackNamespace.begin(), tn.trackNamespace.end());
+    }
+  };
+  friend std::ostream& operator<<(
+      std::ostream& os,
+      const TrackNamespace& trackNs) {
+    return os << fmt::format("{}", fmt::join(trackNs.trackNamespace, "/"));
+  }
+  bool empty() const {
+    return trackNamespace.empty() ||
+        (trackNamespace.size() == 1 && trackNamespace[0].empty());
+  }
+  bool startsWith(const TrackNamespace& other) const {
+    if (other.trackNamespace.size() > trackNamespace.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < other.trackNamespace.size(); ++i) {
+      if (other.trackNamespace[i] != trackNamespace[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
 struct FullTrackName {
-  std::string trackNamespace;
+  TrackNamespace trackNamespace;
   std::string trackName;
   bool operator==(const FullTrackName& other) const {
     return trackNamespace == other.trackNamespace &&
@@ -220,7 +269,8 @@ struct FullTrackName {
   }
   struct hash {
     size_t operator()(const FullTrackName& ftn) const {
-      return folly::hash::hash_combine(ftn.trackNamespace, ftn.trackName);
+      return folly::hash::hash_combine(
+          TrackNamespace::hash()(ftn.trackNamespace), ftn.trackName);
     }
   };
 };
@@ -297,7 +347,7 @@ folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
     folly::io::Cursor& cursor) noexcept;
 
 struct Announce {
-  std::string trackNamespace;
+  TrackNamespace trackNamespace;
   std::vector<TrackRequestParameter> params;
 };
 
@@ -305,14 +355,14 @@ folly::Expected<Announce, ErrorCode> parseAnnounce(
     folly::io::Cursor& cursor) noexcept;
 
 struct AnnounceOk {
-  std::string trackNamespace;
+  TrackNamespace trackNamespace;
 };
 
 folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
     folly::io::Cursor& cursor) noexcept;
 
 struct AnnounceError {
-  std::string trackNamespace;
+  TrackNamespace trackNamespace;
   uint64_t errorCode;
   std::string reasonPhrase;
 };
@@ -321,14 +371,14 @@ folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
     folly::io::Cursor& cursor) noexcept;
 
 struct Unannounce {
-  std::string trackNamespace;
+  TrackNamespace trackNamespace;
 };
 
 folly::Expected<Unannounce, ErrorCode> parseUnannounce(
     folly::io::Cursor& cursor) noexcept;
 
 struct AnnounceCancel {
-  std::string trackNamespace;
+  TrackNamespace trackNamespace;
   uint64_t errorCode;
   std::string reasonPhrase;
 };

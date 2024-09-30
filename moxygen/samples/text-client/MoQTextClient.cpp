@@ -13,6 +13,7 @@
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
+DEFINE_string(track_namespace_delimiter, "/", "Track Namespace Delimiter");
 DEFINE_string(track_name, "", "Track Name");
 DEFINE_string(sg, "", "Start group, defaults to latest");
 DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or latest");
@@ -176,10 +177,12 @@ int main(int argc, char* argv[]) {
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
   }
+  TrackNamespace ns =
+      TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   MoQTextClient textClient(
       &eventBase,
       std::move(url),
-      moxygen::FullTrackName({FLAGS_track_namespace, FLAGS_track_name}));
+      moxygen::FullTrackName({ns, FLAGS_track_name}));
   class SigHandler : public folly::AsyncSignalHandler {
    public:
     explicit SigHandler(folly::EventBase* evb, std::function<void(int)> fn)
@@ -207,7 +210,7 @@ int main(int argc, char* argv[]) {
       .run(
           {0,
            0,
-           moxygen::FullTrackName({FLAGS_track_namespace, FLAGS_track_name}),
+           moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
            0,
            GroupOrder::OldestFirst,
            subParams.locType,

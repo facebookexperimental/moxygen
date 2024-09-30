@@ -25,7 +25,7 @@ class MoQChatServer : MoQServer {
   explicit MoQChatServer(std::string chatID)
       : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, "/moq-chat"),
         chatID_(chatID) {
-    relay_.setAllowedNamespacePrefix(participantPrefix());
+    relay_.setAllowedNamespacePrefix(TrackNamespace(participantPrefix()));
   }
 
   class ChatControlVisitor : public MoQServer::ControlVisitor {
@@ -168,16 +168,18 @@ class MoQChatServer : MoQServer {
   uint64_t catGroup_{0};
   MoQRelay relay_;
 
-  [[nodiscard]] std::string chatPrefix() const {
-    return fmt::format("moq-chat/{0}", chatID_);
+  [[nodiscard]] std::vector<std::string> chatPrefix() const {
+    return {"moq-chat", chatID_};
   }
 
   [[nodiscard]] FullTrackName catalogTrackName() const {
-    return FullTrackName({chatPrefix(), "/catalog"});
+    return FullTrackName({TrackNamespace(chatPrefix()), "/catalog"});
   }
 
-  [[nodiscard]] std::string participantPrefix() const {
-    return fmt::format("{0}/participant/", chatPrefix());
+  [[nodiscard]] std::vector<std::string> participantPrefix() const {
+    auto prefix = chatPrefix();
+    prefix.emplace_back("participant");
+    return prefix;
   }
 };
 } // namespace

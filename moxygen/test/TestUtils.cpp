@@ -37,7 +37,7 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
       SubscribeRequest(
           {0,
            0,
-           FullTrackName({"hello", "world"}),
+           FullTrackName({TrackNamespace({"hello"}), "world"}),
            255,
            GroupOrder::Default,
            LocationType::LatestObject,
@@ -85,25 +85,29 @@ std::unique_ptr<folly::IOBuf> writeAllMessages() {
   res = writeAnnounce(
       writeBuf,
       Announce(
-          {"hello",
+          {TrackNamespace({"hello"}),
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky"}}}));
-  res = writeAnnounceOk(writeBuf, AnnounceOk({"hello"}));
+  res = writeAnnounceOk(writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
   res = writeAnnounceError(
-      writeBuf, AnnounceError({"hello", 500, "server error"}));
+      writeBuf,
+      AnnounceError({TrackNamespace({"hello"}), 500, "server error"}));
   res = writeAnnounceCancel(
-      writeBuf, AnnounceCancel({"hello", 500, "internal error"}));
+      writeBuf,
+      AnnounceCancel({TrackNamespace({"hello"}), 500, "internal error"}));
   res = writeUnannounce(
       writeBuf,
       Unannounce({
-          "hello",
+          TrackNamespace({"hello"}),
       }));
   res = writeTrackStatusRequest(
-      writeBuf, TrackStatusRequest({FullTrackName({"hello", "world"})}));
+      writeBuf,
+      TrackStatusRequest(
+          {FullTrackName({TrackNamespace({"hello"}), "world"})}));
   res = writeTrackStatus(
       writeBuf,
       TrackStatus(
-          {FullTrackName({"hello", "world"}),
+          {FullTrackName({TrackNamespace({"hello"}), "world"}),
            TrackStatusCode::IN_PROGRESS,
            AbsoluteLocation({19, 77})}));
   res = writeGoaway(writeBuf, Goaway({"new uri"}));

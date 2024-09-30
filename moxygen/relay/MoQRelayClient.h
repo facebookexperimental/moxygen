@@ -22,7 +22,7 @@ class MoQRelayClient {
 
   folly::coro::Task<void> run(
       Role role,
-      std::vector<std::string> namespaces,
+      std::vector<TrackNamespace> namespaces,
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
       std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60)) {
     try {

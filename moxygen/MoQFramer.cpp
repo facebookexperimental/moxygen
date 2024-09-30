@@ -18,6 +18,24 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
   return res;
 }
 
+folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
+    folly::io::Cursor& cursor) {
+  auto itemCount = quic::decodeQuicInteger(cursor);
+  if (!itemCount || itemCount->first > kMaxNamespaceLength) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  std::vector<std::string> items;
+  items.reserve(itemCount->first);
+  for (auto i = 0u; i < itemCount->first; i++) {
+    auto res = parseFixedString(cursor);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    items.emplace_back(std::move(res.value()));
+  }
+  return items;
+}
+
 folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     folly::io::Cursor& cursor,
     size_t numParams,
@@ -54,16 +72,17 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
 folly::Expected<FullTrackName, ErrorCode> parseFullTrackName(
     folly::io::Cursor& cursor) {
   FullTrackName fullTrackName;
-  auto res = parseFixedString(cursor);
+  auto res = parseFixedTuple(cursor);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  fullTrackName.trackNamespace = std::move(res.value());
-  res = parseFixedString(cursor);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+  fullTrackName.trackNamespace = TrackNamespace(std::move(res.value()));
+
+  auto res2 = parseFixedString(cursor);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
   }
-  fullTrackName.trackName = std::move(res.value());
+  fullTrackName.trackName = std::move(res2.value());
   return fullTrackName;
 }
 
@@ -501,11 +520,11 @@ folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
 folly::Expected<Announce, ErrorCode> parseAnnounce(
     folly::io::Cursor& cursor) noexcept {
   Announce announce;
-  auto res = parseFixedString(cursor);
+  auto res = parseFixedTuple(cursor);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  announce.trackNamespace = std::move(res.value());
+  announce.trackNamespace = TrackNamespace(std::move(res.value()));
   auto numParams = quic::decodeQuicInteger(cursor);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -521,22 +540,22 @@ folly::Expected<Announce, ErrorCode> parseAnnounce(
 folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
     folly::io::Cursor& cursor) noexcept {
   AnnounceOk announceOk;
-  auto res = parseFixedString(cursor);
+  auto res = parseFixedTuple(cursor);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  announceOk.trackNamespace = std::move(res.value());
+  announceOk.trackNamespace = TrackNamespace(std::move(res.value()));
   return announceOk;
 }
 
 folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
     folly::io::Cursor& cursor) noexcept {
   AnnounceError announceError;
-  auto res = parseFixedString(cursor);
+  auto res = parseFixedTuple(cursor);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  announceError.trackNamespace = std::move(res.value());
+  announceError.trackNamespace = TrackNamespace(std::move(res.value()));
 
   auto errorCode = quic::decodeQuicInteger(cursor);
   if (!errorCode) {
@@ -544,11 +563,11 @@ folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
   }
   announceError.errorCode = errorCode->first;
 
-  res = parseFixedString(cursor);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+  auto res2 = parseFixedString(cursor);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
   }
-  announceError.reasonPhrase = std::move(res.value());
+  announceError.reasonPhrase = std::move(res2.value());
 
   return announceError;
 }
@@ -556,22 +575,22 @@ folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
 folly::Expected<Unannounce, ErrorCode> parseUnannounce(
     folly::io::Cursor& cursor) noexcept {
   Unannounce unannounce;
-  auto res = parseFixedString(cursor);
+  auto res = parseFixedTuple(cursor);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  unannounce.trackNamespace = std::move(res.value());
+  unannounce.trackNamespace = TrackNamespace(std::move(res.value()));
   return unannounce;
 }
 
 folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
     folly::io::Cursor& cursor) noexcept {
   AnnounceCancel announceCancel;
-  auto res = parseFixedString(cursor);
+  auto res = parseFixedTuple(cursor);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  announceCancel.trackNamespace = std::move(res.value());
+  announceCancel.trackNamespace = TrackNamespace(std::move(res.value()));
 
   auto errorCode = quic::decodeQuicInteger(cursor);
   if (!errorCode) {
@@ -579,11 +598,11 @@ folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
   }
   announceCancel.errorCode = errorCode->first;
 
-  res = parseFixedString(cursor);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+  auto res2 = parseFixedString(cursor);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
   }
-  announceCancel.reasonPhrase = std::move(res.value());
+  announceCancel.reasonPhrase = std::move(res2.value());
   return announceCancel;
 }
 
@@ -658,7 +677,7 @@ void writeFixedString(
     folly::IOBufQueue& writeBuf,
     const std::string& str,
     size_t& size,
-    bool error) {
+    bool& error) {
   writeVarint(writeBuf, str.size(), size, error);
   if (!error) {
     writeBuf.append(str);
@@ -666,12 +685,33 @@ void writeFixedString(
   }
 }
 
+void writeFixedTuple(
+    folly::IOBufQueue& writeBuf,
+    const std::vector<std::string>& tup,
+    size_t& size,
+    bool& error) {
+  writeVarint(writeBuf, tup.size(), size, error);
+  if (!error) {
+    for (auto& str : tup) {
+      writeFixedString(writeBuf, str, size, error);
+    }
+  }
+}
+
+void writeTrackNamespace(
+    folly::IOBufQueue& writeBuf,
+    const TrackNamespace& tn,
+    size_t& size,
+    bool& error) {
+  writeFixedTuple(writeBuf, tn.trackNamespace, size, error);
+}
+
 void writeFullTrackName(
     folly::IOBufQueue& writeBuf,
     const FullTrackName& fullTrackName,
     size_t& size,
     bool error) {
-  writeFixedString(writeBuf, fullTrackName.trackNamespace, size, error);
+  writeTrackNamespace(writeBuf, fullTrackName.trackNamespace, size, error);
   writeFixedString(writeBuf, fullTrackName.trackName, size, error);
 }
 
@@ -961,7 +1001,7 @@ WriteResult writeAnnounce(
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, folly::to_underlying(FrameType::ANNOUNCE), size, error);
-  writeFixedString(writeBuf, announce.trackNamespace, size, error);
+  writeTrackNamespace(writeBuf, announce.trackNamespace, size, error);
   writeVarint(writeBuf, announce.params.size(), size, error);
   for (auto& param : announce.params) {
     writeVarint(writeBuf, param.key, size, error);
@@ -980,7 +1020,7 @@ WriteResult writeAnnounceOk(
   bool error = false;
   writeVarint(
       writeBuf, folly::to_underlying(FrameType::ANNOUNCE_OK), size, error);
-  writeFixedString(writeBuf, announceOk.trackNamespace, size, error);
+  writeTrackNamespace(writeBuf, announceOk.trackNamespace, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -994,7 +1034,7 @@ WriteResult writeAnnounceError(
   bool error = false;
   writeVarint(
       writeBuf, folly::to_underlying(FrameType::ANNOUNCE_ERROR), size, error);
-  writeFixedString(writeBuf, announceError.trackNamespace, size, error);
+  writeTrackNamespace(writeBuf, announceError.trackNamespace, size, error);
   writeVarint(writeBuf, announceError.errorCode, size, error);
   writeFixedString(writeBuf, announceError.reasonPhrase, size, error);
   if (error) {
@@ -1010,7 +1050,7 @@ WriteResult writeUnannounce(
   bool error = false;
   writeVarint(
       writeBuf, folly::to_underlying(FrameType::UNANNOUNCE), size, error);
-  writeFixedString(writeBuf, unannounce.trackNamespace, size, error);
+  writeTrackNamespace(writeBuf, unannounce.trackNamespace, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1024,7 +1064,7 @@ WriteResult writeAnnounceCancel(
   bool error = false;
   writeVarint(
       writeBuf, folly::to_underlying(FrameType::ANNOUNCE_CANCEL), size, error);
-  writeFixedString(writeBuf, announceCancel.trackNamespace, size, error);
+  writeTrackNamespace(writeBuf, announceCancel.trackNamespace, size, error);
   writeVarint(writeBuf, announceCancel.errorCode, size, error);
   writeFixedString(writeBuf, announceCancel.reasonPhrase, size, error);
   if (error) {

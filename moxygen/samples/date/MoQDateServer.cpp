@@ -5,7 +5,6 @@
  */
 
 #include <folly/coro/Sleep.h>
-#include <compare>
 #include <iomanip>
 #include "moxygen/MoQLocation.h"
 #include "moxygen/MoQServer.h"
@@ -45,7 +44,7 @@ class MoQDateServer : MoQServer {
       relayClient_
           ->run(
               Role::PUBLISHER,
-              {"moq-date"},
+              {TrackNamespace({"moq-date"})},
               std::chrono::milliseconds(FLAGS_relay_connect_timeout),
               std::chrono::seconds(FLAGS_relay_transaction_timeout))
           .scheduleOn(evb)
@@ -243,7 +242,7 @@ class MoQDateServer : MoQServer {
 
  private:
   static FullTrackName dateTrackName() {
-    return FullTrackName({"moq-date", "/date"});
+    return FullTrackName({TrackNamespace({"moq-date"}), "/date"});
   }
   MoQForwarder forwarder_;
   std::unique_ptr<MoQRelayClient> relayClient_;

@@ -27,25 +27,29 @@ class MoQChatClient {
   void publishLoop();
   folly::coro::Task<void> subscribeToUser(std::string username);
 
-  [[nodiscard]] std::string chatPrefix() const {
-    return folly::to<std::string>("moq-chat/", chatID_);
+  [[nodiscard]] std::vector<std::string> chatPrefix() const {
+    return {"moq-chat/", chatID_};
   }
 
   [[nodiscard]] FullTrackName catalogTrackName() const {
-    return FullTrackName({chatPrefix(), "/catalog"});
+    return FullTrackName({TrackNamespace(chatPrefix()), "/catalog"});
   }
 
-  [[nodiscard]] std::string participantPrefix() const {
-    return folly::to<std::string>(chatPrefix(), "/participant/");
+  [[nodiscard]] std::vector<std::string> participantPrefix() const {
+    auto prefix = chatPrefix();
+    prefix.emplace_back("/participant/");
+    return prefix;
   }
 
-  [[nodiscard]] bool isParticipantNamespace(const std::string& ns) const {
-    return ns.starts_with(participantPrefix());
+  [[nodiscard]] bool isParticipantNamespace(const TrackNamespace& ns) const {
+    return ns.startsWith(TrackNamespace(participantPrefix()));
   }
 
-  [[nodiscard]] std::string participantTrackName(
+  [[nodiscard]] TrackNamespace participantTrackName(
       const std::string& username) const {
-    return folly::to<std::string>(participantPrefix(), username);
+    auto prefix = participantPrefix();
+    prefix.emplace_back(username);
+    return TrackNamespace(std::move(prefix));
   }
 
   std::string chatID_;

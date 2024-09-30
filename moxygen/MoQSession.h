@@ -380,8 +380,9 @@ class MoQSession : public MoQCodec::Callback,
   // Publisher State
   // Track Namespace -> Promise<AnnounceOK>
   folly::F14FastMap<
-      std::string,
-      folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>>>
+      TrackNamespace,
+      folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>>,
+      TrackNamespace::hash>
       pendingAnnounce_;
   struct PubTrack {
     uint8_t priority;
