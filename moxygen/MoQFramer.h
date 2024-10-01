@@ -249,7 +249,10 @@ struct TrackNamespace {
   friend std::ostream& operator<<(
       std::ostream& os,
       const TrackNamespace& trackNs) {
-    return os << fmt::format("{}", fmt::join(trackNs.trackNamespace, "/"));
+    for (const auto& s : trackNs.trackNamespace) {
+      os << s << "/";
+    }
+    return os;
   }
   bool empty() const {
     return trackNamespace.empty() ||
