@@ -85,7 +85,7 @@ class MoQChatServer : MoQServer {
     std::string username;
     for (const auto& p : subReq.params) {
       if (p.key == folly::to_underlying(TrackRequestParamKey::AUTHORIZATION)) {
-        username = p.value;
+        username = p.asString;
         break;
       }
     }

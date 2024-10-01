@@ -44,7 +44,14 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
            folly::none,
            folly::none,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             "binky"}}}));
+             "binky",
+             0},
+            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+             "",
+             1000},
+            {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+             "",
+             3600000}}}));
   res = writeSubscribeUpdate(
       writeBuf,
       SubscribeUpdate(
@@ -53,7 +60,14 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
            {3, 4},
            255,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             "binky"}}}));
+             "binky",
+             0},
+            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+             "",
+             1000},
+            {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+             "",
+             3600000}}}));
   res = writeSubscribeOk(
       writeBuf,
       SubscribeOk(
@@ -61,9 +75,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
            std::chrono::milliseconds(0),
            GroupOrder::OldestFirst,
            AbsoluteLocation{2, 5},
-           // AUTHORIZATION is not valid here, but MAX_CACHE_DURATION is pending
-           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             "binky"}}}));
+           {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+             "",
+             3600000}}}));
   res = writeSubscribeError(
       writeBuf, SubscribeError({0, 404, "not found", folly::none}));
   res = writeUnsubscribe(
@@ -87,7 +101,14 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
       Announce(
           {TrackNamespace({"hello"}),
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             "binky"}}}));
+             "binky",
+             0},
+            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+             "",
+             1000},
+            {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+             "",
+             3600000}}}));
   res = writeAnnounceOk(writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
   res = writeAnnounceError(
       writeBuf,

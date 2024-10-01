@@ -104,11 +104,14 @@ enum class SetupKey : uint64_t { ROLE = 0, PATH = 1 };
 
 enum class Role : uint8_t { PUBLISHER = 1, SUBSCRIBER = 2, PUB_AND_SUB = 3 };
 
-struct SetupParameter {
+struct Parameter {
   uint64_t key;
   std::string asString;
   uint64_t asUint64;
 };
+
+struct SetupParameter : public Parameter {};
+struct TrackRequestParameter : public Parameter {};
 
 constexpr uint64_t kVersionDraft01 = 0xff000001;
 constexpr uint64_t kVersionDraft02 = 0xff000002;
@@ -117,7 +120,7 @@ constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
 constexpr uint64_t kVersionDraft06_exp =
-    0xff060002; // Draft 6 in progress version
+    0xff060003; // Draft 6 in progress version
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft06_exp;
 
 struct ClientSetup {
@@ -177,11 +180,8 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
 
 enum class TrackRequestParamKey : uint64_t {
   AUTHORIZATION = 2,
-};
-
-struct TrackRequestParameter {
-  uint64_t key;
-  std::string value;
+  DELIVERY_TIMEOUT = 3,
+  MAX_CACHE_DURATION = 4,
 };
 
 enum class LocationType : uint8_t {

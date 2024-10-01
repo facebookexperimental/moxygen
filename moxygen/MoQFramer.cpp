@@ -335,17 +335,33 @@ folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
     size_t numParams,
     std::vector<TrackRequestParameter>& params) {
   for (auto i = 0u; i < numParams; i++) {
+    TrackRequestParameter p;
     auto key = quic::decodeQuicInteger(cursor, length);
     if (!key) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= key->second;
-    auto res = parseFixedString(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
+    p.key = key->first;
+    if (p.key == folly::to_underlying(TrackRequestParamKey::AUTHORIZATION)) {
+      auto res = parseFixedString(cursor, length);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
+      p.asString = std::move(res.value());
+    } else {
+      auto res = quic::decodeQuicInteger(cursor, length);
+      if (!res) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= res->second;
+      res = quic::decodeQuicInteger(cursor, res->first);
+      if (!res) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= res->second;
+      p.asUint64 = res->first;
     }
-    params.emplace_back(
-        TrackRequestParameter({key->first, std::move(res.value())}));
+    params.emplace_back(std::move(p));
   }
   return folly::unit;
 }
@@ -828,6 +844,32 @@ void writeFullTrackName(
   writeFixedString(writeBuf, fullTrackName.trackName, size, error);
 }
 
+void writeTrackRequestParams(
+    folly::IOBufQueue& writeBuf,
+    const std::vector<TrackRequestParameter>& params,
+    size_t& size,
+    bool& error) noexcept {
+  writeVarint(writeBuf, params.size(), size, error);
+  for (auto& param : params) {
+    writeVarint(writeBuf, param.key, size, error);
+    switch (param.key) {
+      case folly::to_underlying(TrackRequestParamKey::AUTHORIZATION):
+        writeFixedString(writeBuf, param.asString, size, error);
+        break;
+      case folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT):
+      case folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION):
+        auto res = quic::getQuicIntegerSize(param.asUint64);
+        if (!res) {
+          error = true;
+          return;
+        }
+        writeVarint(writeBuf, res.value(), size, error);
+        writeVarint(writeBuf, param.asUint64, size, error);
+        break;
+    }
+  }
+}
+
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
     const ClientSetup& clientSetup) noexcept {
@@ -1000,11 +1042,7 @@ WriteResult writeSubscribeRequest(
     writeVarint(writeBuf, subscribeRequest.end->group, size, error);
     writeVarint(writeBuf, subscribeRequest.end->object, size, error);
   }
-  writeVarint(writeBuf, subscribeRequest.params.size(), size, error);
-  for (auto& param : subscribeRequest.params) {
-    writeVarint(writeBuf, param.key, size, error);
-    writeFixedString(writeBuf, param.value, size, error);
-  }
+  writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1025,11 +1063,7 @@ WriteResult writeSubscribeUpdate(
   writeVarint(writeBuf, update.end.object, size, error);
   writeBuf.append(&update.priority, 1);
   size += 1;
-  writeVarint(writeBuf, update.params.size(), size, error);
-  for (auto& param : update.params) {
-    writeVarint(writeBuf, param.key, size, error);
-    writeFixedString(writeBuf, param.value, size, error);
-  }
+  writeTrackRequestParams(writeBuf, update.params, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1055,11 +1089,7 @@ WriteResult writeSubscribeOk(
   } else {
     writeVarint(writeBuf, 0, size, error); // content exists
   }
-  writeVarint(writeBuf, subscribeOk.params.size(), size, error);
-  for (auto& param : subscribeOk.params) {
-    writeVarint(writeBuf, param.key, size, error);
-    writeFixedString(writeBuf, param.value, size, error);
-  }
+  writeTrackRequestParams(writeBuf, subscribeOk.params, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1129,11 +1159,7 @@ WriteResult writeAnnounce(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE, error);
   writeTrackNamespace(writeBuf, announce.trackNamespace, size, error);
-  writeVarint(writeBuf, announce.params.size(), size, error);
-  for (auto& param : announce.params) {
-    writeVarint(writeBuf, param.key, size, error);
-    writeFixedString(writeBuf, param.value, size, error);
-  }
+  writeTrackRequestParams(writeBuf, announce.params, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
