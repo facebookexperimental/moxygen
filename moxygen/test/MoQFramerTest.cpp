@@ -45,73 +45,82 @@ void testUnderflowResult(folly::Expected<T, ErrorCode> result) {
   }
 }
 
+size_t frameLength(folly::io::Cursor& cursor) {
+  auto res = quic::decodeQuicInteger(cursor);
+  if (res && cursor.canAdvance(res->first)) {
+    return res->first;
+  } else {
+    throw TestUnderflow();
+  }
+}
+
 void parseAll(folly::io::Cursor& cursor, bool eom) {
   skip(cursor, 2);
-  auto r1 = parseClientSetup(cursor);
+  auto r1 = parseClientSetup(cursor, frameLength(cursor));
   testUnderflowResult(r1);
 
   skip(cursor, 2);
-  auto r2 = parseServerSetup(cursor);
+  auto r2 = parseServerSetup(cursor, frameLength(cursor));
   testUnderflowResult(r2);
 
   skip(cursor, 1);
-  auto r3 = parseSubscribeRequest(cursor);
+  auto r3 = parseSubscribeRequest(cursor, frameLength(cursor));
   testUnderflowResult(r3);
 
   skip(cursor, 1);
-  auto r3a = parseSubscribeUpdate(cursor);
+  auto r3a = parseSubscribeUpdate(cursor, frameLength(cursor));
   testUnderflowResult(r3a);
 
   skip(cursor, 1);
-  auto r4 = parseSubscribeOk(cursor);
+  auto r4 = parseSubscribeOk(cursor, frameLength(cursor));
   testUnderflowResult(r4);
 
   skip(cursor, 1);
-  auto r5 = parseSubscribeError(cursor);
+  auto r5 = parseSubscribeError(cursor, frameLength(cursor));
   testUnderflowResult(r5);
 
   skip(cursor, 1);
-  auto r6 = parseUnsubscribe(cursor);
+  auto r6 = parseUnsubscribe(cursor, frameLength(cursor));
   testUnderflowResult(r6);
 
   skip(cursor, 1);
-  auto r7 = parseSubscribeDone(cursor);
+  auto r7 = parseSubscribeDone(cursor, frameLength(cursor));
   testUnderflowResult(r7);
 
   skip(cursor, 1);
-  auto r8 = parseSubscribeDone(cursor);
+  auto r8 = parseSubscribeDone(cursor, frameLength(cursor));
   testUnderflowResult(r8);
 
   skip(cursor, 1);
-  auto r9 = parseAnnounce(cursor);
+  auto r9 = parseAnnounce(cursor, frameLength(cursor));
   testUnderflowResult(r9);
 
   skip(cursor, 1);
-  auto r10 = parseAnnounceOk(cursor);
+  auto r10 = parseAnnounceOk(cursor, frameLength(cursor));
   testUnderflowResult(r10);
 
   skip(cursor, 1);
-  auto r11 = parseAnnounceError(cursor);
+  auto r11 = parseAnnounceError(cursor, frameLength(cursor));
   testUnderflowResult(r11);
 
   skip(cursor, 1);
-  auto r12 = parseAnnounceCancel(cursor);
+  auto r12 = parseAnnounceCancel(cursor, frameLength(cursor));
   testUnderflowResult(r12);
 
   skip(cursor, 1);
-  auto r13 = parseUnannounce(cursor);
+  auto r13 = parseUnannounce(cursor, frameLength(cursor));
   testUnderflowResult(r13);
 
   skip(cursor, 1);
-  auto r14a = parseTrackStatusRequest(cursor);
+  auto r14a = parseTrackStatusRequest(cursor, frameLength(cursor));
   testUnderflowResult(r14a);
 
   skip(cursor, 1);
-  auto r14b = parseTrackStatus(cursor);
+  auto r14b = parseTrackStatus(cursor, frameLength(cursor));
   testUnderflowResult(r14b);
 
   skip(cursor, 1);
-  auto r14 = parseGoaway(cursor);
+  auto r14 = parseGoaway(cursor, frameLength(cursor));
   testUnderflowResult(r14);
 
   auto res = parseStreamHeader(cursor, StreamType::STREAM_HEADER_TRACK);
@@ -150,7 +159,8 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   folly::io::Cursor cursor(serialized.get());
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
-  auto parseResult = parseObjectHeader(cursor);
+  auto length = cursor.totalLength();
+  auto parseResult = parseObjectHeader(cursor, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(parseResult->subscribeID, 11);
   EXPECT_EQ(parseResult->trackAlias, 22);

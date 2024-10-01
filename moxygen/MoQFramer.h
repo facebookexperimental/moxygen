@@ -117,7 +117,7 @@ constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
 constexpr uint64_t kVersionDraft06_exp =
-    0xff060001; // Draft 6 in progress version
+    0xff060002; // Draft 6 in progress version
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft06_exp;
 
 struct ClientSetup {
@@ -131,10 +131,12 @@ struct ServerSetup {
 };
 
 folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 enum class ForwardPreference : uint8_t { Track, Subgroup, Datagram };
 
@@ -161,7 +163,8 @@ struct ObjectHeader {
 
 // datagram only
 folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     folly::io::Cursor& cursor,
@@ -303,7 +306,8 @@ struct SubscribeRequest {
 };
 
 folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct SubscribeUpdate {
   uint64_t subscribeID;
@@ -314,7 +318,8 @@ struct SubscribeUpdate {
 };
 
 folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct SubscribeOk {
   uint64_t subscribeID;
@@ -326,7 +331,8 @@ struct SubscribeOk {
 };
 
 folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct SubscribeError {
   uint64_t subscribeID;
@@ -336,14 +342,16 @@ struct SubscribeError {
 };
 
 folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct Unsubscribe {
   uint64_t subscribeID;
 };
 
 folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct SubscribeDone {
   uint64_t subscribeID;
@@ -353,7 +361,8 @@ struct SubscribeDone {
 };
 
 folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct Announce {
   TrackNamespace trackNamespace;
@@ -361,14 +370,16 @@ struct Announce {
 };
 
 folly::Expected<Announce, ErrorCode> parseAnnounce(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct AnnounceOk {
   TrackNamespace trackNamespace;
 };
 
 folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct AnnounceError {
   TrackNamespace trackNamespace;
@@ -377,14 +388,16 @@ struct AnnounceError {
 };
 
 folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct Unannounce {
   TrackNamespace trackNamespace;
 };
 
 folly::Expected<Unannounce, ErrorCode> parseUnannounce(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct AnnounceCancel {
   TrackNamespace trackNamespace;
@@ -393,14 +406,16 @@ struct AnnounceCancel {
 };
 
 folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct TrackStatusRequest {
   FullTrackName fullTrackName;
 };
 
 folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct TrackStatus {
   FullTrackName fullTrackName;
@@ -409,14 +424,16 @@ struct TrackStatus {
 };
 
 folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 struct Goaway {
   std::string newSessionUri;
 };
 
 folly::Expected<Goaway, ErrorCode> parseGoaway(
-    folly::io::Cursor& cursor) noexcept;
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
 
 //// Egress ////
 

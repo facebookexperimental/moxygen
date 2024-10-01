@@ -29,7 +29,7 @@ class MoQCodec {
 
  protected:
   void onIngressStart(std::unique_ptr<folly::IOBuf> data);
-  void onIngressEnd(folly::io::Cursor& cursor, bool eom, Callback* callback);
+  void onIngressEnd(size_t remainingLength, bool eom, Callback* callback);
 
   uint64_t streamId_{std::numeric_limits<uint64_t>::max()};
   folly::IOBufQueue ingress_{folly::IOBufQueue::cacheChainLength()};
@@ -103,8 +103,10 @@ class MoQControlCodec : public MoQCodec {
   Direction dir_;
   ControlCallback* callback_{nullptr};
   FrameType curFrameType_;
+  size_t curFrameLength_{0};
   enum class ParseState {
     FRAME_HEADER_TYPE,
+    FRAME_LENGTH,
     FRAME_PAYLOAD,
   };
   ParseState parseState_{ParseState::FRAME_HEADER_TYPE};
