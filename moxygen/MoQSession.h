@@ -38,7 +38,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   ~MoQSession() override;
 
   void start();
-  void close();
+  void close(folly::Optional<SessionCloseErrorCode> error = folly::none);
 
   void setup(ClientSetup setup);
   void setup(ServerSetup setup);
@@ -53,6 +53,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       SubscribeUpdate,
       Unsubscribe,
       SubscribeDone,
+      MaxSubscribeId,
       TrackStatusRequest,
       TrackStatus,
       Goaway>;
@@ -102,7 +103,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     virtual void operator()(Unsubscribe unsubscribe) const {
       XLOG(INFO) << "Unsubscribe subID=" << unsubscribe.subscribeID;
     }
-
+    virtual void operator()(MaxSubscribeId maxSubId) const {
+      XLOG(INFO) << fmt::format(
+          "MaxSubscribeId subID={}", maxSubId.subscribeID);
+    }
     virtual void operator()(TrackStatusRequest trackStatusRequest) const {
       XLOG(INFO) << "Subscribe ftn="
                  << trackStatusRequest.fullTrackName.trackNamespace
@@ -311,6 +315,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onSubscribeError(SubscribeError subscribeError) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
+  void onMaxSubscribeId(MaxSubscribeId maxSubId) override;
   void onAnnounce(Announce announce) override;
   void onAnnounceOk(AnnounceOk announceOk) override;
   void onAnnounceError(AnnounceError announceError) override;
@@ -375,6 +380,17 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     bool streamPerObject;
   };
 
+  // Get the max subscribe id from the setup params. If MAX_SUBSCRIBE_ID key is
+  // not present, we default to 0 as specified. 0 means that the peer MUST NOT
+  // create any subscriptions
+  static uint64_t getMaxSubscribeIdIfPresent(
+      const std::vector<SetupParameter>& params);
+
+  //  Closes the session if the subscribeID is invalid, that is,
+  //  subscribeID <= maxSubscribeID_;
+  //  TODO: Add this to all messages that have subscribeId
+  void closeSessionIfSubscribeIdInvalid(uint64_t subscribeID);
+
   MoQControlCodec::Direction dir_;
   proxygen::WebTransport* wt_{nullptr};
   folly::EventBase* evb_{nullptr}; // keepalive?
@@ -399,12 +415,20 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::F14FastMap<uint64_t, PubTrack> pubTracks_;
   folly::F14FastMap<PublishKey, PublishData, PublishKey::hash> publishDataMap_;
   uint64_t nextTrackId_{0};
+  uint64_t closedSubscribes_{0};
+  // TODO: Make this value configurable. kMaxConcurrentSubscribes_ represents
+  // the maximum number of concurrent subscriptions to a given sessions.
+  const uint64_t kMaxConcurrentSubscribes_{100};
+  uint64_t peerMaxSubscribeID_{0};
 
   moxygen::TimedBaton sentSetup_;
   moxygen::TimedBaton receivedSetup_;
   bool setupComplete_{false};
   folly::CancellationSource cancellationSource_;
 
+  // SubscribeID must be a unique monotonically increasing number that is
+  // less than maxSubscribeID.
   uint64_t nextSubscribeID_{0};
+  uint64_t maxSubscribeID_{0};
 };
 } // namespace moxygen

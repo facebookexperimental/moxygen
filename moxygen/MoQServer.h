@@ -36,6 +36,7 @@ class MoQServer {
     void operator()(Announce announce) const override;
     void operator()(SubscribeRequest subscribeReq) const override;
     void operator()(SubscribeUpdate subscribeUpdate) const override;
+    void operator()(MaxSubscribeId maxSubscribeId) const override;
     void operator()(Unannounce unannounce) const override;
     void operator()(AnnounceCancel announceCancel) const override;
     void operator()(SubscribeDone subscribeDone) const override;

@@ -21,6 +21,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
                 "",
                 folly::to_underlying(Role::SUBSCRIBER)},
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+               {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
            }}));
   res = writeServerSetup(
       writeBuf,
@@ -78,6 +79,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
            {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
              "",
              3600000}}}));
+  res = writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
   res = writeSubscribeError(
       writeBuf, SubscribeError({0, 404, "not found", folly::none}));
   res = writeUnsubscribe(

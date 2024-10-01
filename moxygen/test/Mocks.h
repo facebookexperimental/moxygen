@@ -29,6 +29,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onSubscribeError, (SubscribeError subscribeError));
   MOCK_METHOD(void, onSubscribeDone, (SubscribeDone subscribeDone));
   MOCK_METHOD(void, onUnsubscribe, (Unsubscribe unsubscribe));
+  MOCK_METHOD(void, onMaxSubscribeId, (MaxSubscribeId maxSubId));
   MOCK_METHOD(void, onAnnounce, (Announce announce));
   MOCK_METHOD(void, onAnnounceOk, (AnnounceOk announceOk));
   MOCK_METHOD(void, onAnnounceError, (AnnounceError announceError));

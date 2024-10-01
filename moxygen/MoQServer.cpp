@@ -31,11 +31,18 @@ MoQServer::MoQServer(
 
 void MoQServer::ControlVisitor::operator()(ClientSetup /*setup*/) const {
   XLOG(INFO) << "ClientSetup";
-  clientSession_->setup(
-      {kVersionDraftCurrent,
-       {{folly::to_underlying(SetupKey::ROLE),
-         "",
-         folly::to_underlying(Role::PUB_AND_SUB)}}});
+  // TODO: Make the default MAX_SUBSCRIBE_ID configurable and
+  // take in the value from ClientSetup
+  static constexpr size_t kDefaultMaxSubscribeId = 100;
+  clientSession_->setup({
+      kVersionDraftCurrent,
+      {{folly::to_underlying(SetupKey::ROLE),
+        "",
+        folly::to_underlying(Role::PUB_AND_SUB)},
+       {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+        "",
+        kDefaultMaxSubscribeId}},
+  });
 }
 
 void MoQServer::ControlVisitor::operator()(ServerSetup) const {
@@ -63,6 +70,11 @@ void MoQServer::ControlVisitor::operator()(
 void MoQServer::ControlVisitor::operator()(
     SubscribeUpdate subscribeUpdate) const {
   XLOG(INFO) << "SubscribeRequest id=" << subscribeUpdate.subscribeID;
+}
+
+void MoQServer::ControlVisitor::operator()(
+    MaxSubscribeId maxSubscribeId) const {
+  XLOG(INFO) << fmt::format("maxSubscribeId id={}", maxSubscribeId.subscribeID);
 }
 
 void MoQServer::ControlVisitor::operator()(Unannounce unannounce) const {

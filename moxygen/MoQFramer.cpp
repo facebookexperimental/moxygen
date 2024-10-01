@@ -6,6 +6,7 @@
 
 #include "moxygen/MoQFramer.h"
 #include <folly/lang/Bits.h>
+#include <folly/logging/xlog.h>
 
 namespace moxygen {
 
@@ -72,6 +73,16 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
       length -= res->second;
+      p.asUint64 = res->first;
+    } else if (p.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+      auto res = quic::decodeQuicInteger(cursor);
+      if (!res) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      res = quic::decodeQuicInteger(cursor, res->first);
+      if (!res) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
       p.asUint64 = res->first;
     } else {
       auto res = parseFixedString(cursor, length);
@@ -759,6 +770,18 @@ folly::Expected<Goaway, ErrorCode> parseGoaway(
   return goaway;
 }
 
+folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  MaxSubscribeId maxSubscribeId;
+  auto subscribeID = quic::decodeQuicInteger(cursor, length);
+  if (!subscribeID) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= subscribeID->second;
+  maxSubscribeId.subscribeID = subscribeID->first;
+  return maxSubscribeId;
+}
 //// Egress ////
 
 void writeVarint(
@@ -889,6 +912,14 @@ WriteResult writeClientSetup(
       CHECK_LE(param.asUint64, folly::to_underlying(Role::PUB_AND_SUB));
       writeVarint(writeBuf, 1, size, error);
       writeVarint(writeBuf, param.asUint64, size, error);
+    } else if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+      auto ret = quic::getQuicIntegerSize(param.asUint64);
+      if (ret.hasError()) {
+        XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
+        return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+      }
+      writeVarint(writeBuf, ret.value(), size, error);
+      writeVarint(writeBuf, param.asUint64, size, error);
     } else {
       writeFixedString(writeBuf, param.asString, size, error);
     }
@@ -913,6 +944,14 @@ WriteResult writeServerSetup(
     if (param.key == folly::to_underlying(SetupKey::ROLE)) {
       CHECK_LE(param.asUint64, folly::to_underlying(Role::PUB_AND_SUB));
       writeVarint(writeBuf, 1, size, error);
+      writeVarint(writeBuf, param.asUint64, size, error);
+    } else if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+      auto ret = quic::getQuicIntegerSize(param.asUint64);
+      if (ret.hasError()) {
+        XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
+        return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+      }
+      writeVarint(writeBuf, ret.value(), size, error);
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
       writeFixedString(writeBuf, param.asString, size, error);
@@ -1114,6 +1153,20 @@ WriteResult writeSubscribeError(
   return size;
 }
 
+WriteResult writeMaxSubscribeId(
+    folly::IOBufQueue& writeBuf,
+    const MaxSubscribeId& maxSubscribeId) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_SUBSCRIBE_ID, error);
+  writeVarint(writeBuf, maxSubscribeId.subscribeID, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
 WriteResult writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
     const Unsubscribe& unsubscribe) noexcept {
@@ -1294,6 +1347,8 @@ const char* getFrameTypeString(FrameType type) {
       return "SUBSCRIBE_ERROR";
     case FrameType::SUBSCRIBE_DONE:
       return "SUBSCRIBE_DONE";
+    case FrameType::MAX_SUBSCRIBE_ID:
+      return "MAX_SUBSCRIBE_ID";
     case FrameType::UNSUBSCRIBE:
       return "UNSUBSCRIBE";
     case FrameType::ANNOUNCE:

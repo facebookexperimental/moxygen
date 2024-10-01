@@ -32,7 +32,8 @@ TEST(MoQCodec, All) {
   EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
   EXPECT_CALL(callback, onTrackStatus(testing::_));
   EXPECT_CALL(callback, onGoaway(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
+  EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(18);
 
   codec.onIngress(std::move(allMsgs), true);
 }
@@ -79,7 +80,8 @@ TEST(MoQCodec, Underflow) {
   EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
   EXPECT_CALL(callback, onTrackStatus(testing::_));
   EXPECT_CALL(callback, onGoaway(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(17);
+  EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(18);
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }

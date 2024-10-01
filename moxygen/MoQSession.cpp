@@ -55,11 +55,17 @@ void MoQSession::start() {
   }
 }
 
-void MoQSession::close() {
+void MoQSession::close(folly::Optional<SessionCloseErrorCode> error) {
   if (wt_) {
+    // TODO: The error code should be propagated to
+    // whatever implemented proxygen::WebTransport.
+    // TxnWebTransport current just ignores the errorCode
     auto wt = wt_;
     wt_ = nullptr;
-    wt->closeSession();
+    wt->closeSession(
+        error.has_value()
+            ? folly::make_optional(folly::to_underlying(error.value()))
+            : folly::none);
     XLOG(DBG1) << "requestCancellation from close" << " sess=" << this;
     cancellationSource_.requestCancellation();
   }
@@ -90,11 +96,13 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
 void MoQSession::setup(ClientSetup setup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+  auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
   auto res = writeClientSetup(controlWriteBuf_, std::move(setup));
   if (!res) {
     XLOG(ERR) << "writeClientSetup failed" << " sess=" << this;
     return;
   }
+  maxSubscribeID_ = maxSubscribeId;
   sentSetup_.signal();
   controlWriteEvent_.signal();
 }
@@ -206,6 +214,7 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
     receivedSetup_.cancel();
     return;
   }
+  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(serverSetup.params);
   receivedSetup_.signal();
   controlMessages_.enqueue(std::move(serverSetup));
 }
@@ -288,17 +297,28 @@ void MoQSession::TrackHandle::onObjectPayload(
 
 void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  const auto subscribeID = subscribeRequest.subscribeID;
+  closeSessionIfSubscribeIdInvalid(subscribeID);
+
   // TODO: The publisher should maintain some state like
-  //   Subscribe ID -> Track Name, Locations [currently held in MoQForwarder]
-  //   Track Alias -> Track Name
-  // If ths session holds this state, it can check for duplicate subscriptions
-  pubTracks_[subscribeRequest.subscribeID].priority = subscribeRequest.priority;
+  //   Subscribe ID -> Track Name, Locations [currently held in
+  //   MoQForwarder] Track Alias -> Track Name
+  // If ths session holds this state, it can check for duplicate
+  // subscriptions
+  pubTracks_[subscribeID].priority = subscribeRequest.priority;
   controlMessages_.enqueue(std::move(subscribeRequest));
 }
 
 void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  pubTracks_[subscribeUpdate.subscribeID].priority = subscribeUpdate.priority;
+  const auto subscribeID = subscribeUpdate.subscribeID;
+  if (!pubTracks_.contains(subscribeID)) {
+    XLOG(ERR) << "No matching subscribe ID=" << subscribeID << " sess=" << this;
+    return;
+  }
+  closeSessionIfSubscribeIdInvalid(subscribeID);
+
+  pubTracks_[subscribeID].priority = subscribeUpdate.priority;
   // TODO: update priority of tracks in flight
   controlMessages_.enqueue(std::move(subscribeUpdate));
 }
@@ -347,6 +367,25 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   // TODO: handle final object and status code
   trackIt->second->fin();
   controlMessages_.enqueue(std::move(subscribeDone));
+}
+
+void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  if (maxSubscribeId.subscribeID > maxSubscribeID_) {
+    XLOG(DBG1) << fmt::format(
+        "Bumping the maxSubscribeId to: {} from: {}",
+        maxSubscribeId.subscribeID,
+        maxSubscribeID_);
+    maxSubscribeID_ = maxSubscribeId.subscribeID;
+    controlMessages_.enqueue(std::move(maxSubscribeId));
+    return;
+  }
+
+  XLOG(ERR) << fmt::format(
+      "Invalid MaxSubscribeId: {}. Current maxSubscribeId:{}",
+      maxSubscribeId.subscribeID,
+      maxSubscribeID_);
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
 void MoQSession::onAnnounce(Announce ann) {
@@ -529,6 +568,19 @@ void MoQSession::subscribeDone(SubscribeDone subDone) {
   if (!res) {
     XLOG(ERR) << "writeSubscribeDone failed" << " sess=" << this;
     return;
+  }
+
+  // If # of closed subscribes is greater than 1/2 of max subscribes, then
+  // let's bump the maxSubscribeID by the number of closed subscribes.
+  if (++closedSubscribes_ > kMaxConcurrentSubscribes_ / 2) {
+    maxSubscribeID_ += closedSubscribes_;
+    closedSubscribes_ = 0;
+    res =
+        writeMaxSubscribeId(controlWriteBuf_, {.subscribeID = maxSubscribeID_});
+    if (!res) {
+      XLOG(ERR) << "writeMaxSubscribeId failed" << " sess=" << this;
+      return;
+    }
   }
   controlWriteEvent_.signal();
 }
@@ -805,5 +857,23 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MoQObjectStreamCodec codec(this);
   codec.onIngress(std::move(datagram), true);
+}
+
+void MoQSession::closeSessionIfSubscribeIdInvalid(uint64_t subscribeID) {
+  if (maxSubscribeID_ <= subscribeID) {
+    XLOG(ERR) << "Invalid subscribeID: " << subscribeID << " sess=" << this;
+    close(SessionCloseErrorCode::TOO_MANY_SUBSCRIBES);
+  }
+}
+
+/*static*/
+uint64_t MoQSession::getMaxSubscribeIdIfPresent(
+    const std::vector<SetupParameter>& params) {
+  for (const auto& param : params) {
+    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+      return param.asUint64;
+    }
+  }
+  return 0;
 }
 } // namespace moxygen

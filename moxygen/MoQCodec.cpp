@@ -351,6 +351,17 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
+    case FrameType::MAX_SUBSCRIBE_ID: {
+      auto res = parseMaxSubscribeId(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onMaxSubscribeId(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::ANNOUNCE: {
       auto res = parseAnnounce(cursor, curFrameLength_);
       if (res) {

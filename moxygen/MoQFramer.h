@@ -38,6 +38,7 @@ enum class SessionCloseErrorCode : uint32_t {
   PROTOCOL_VIOLATION = 3,
   DUPLICATE_TRACK_ALIAS = 4,
   PARAMETER_LENGTH_MISMATCH = 5,
+  TOO_MANY_SUBSCRIBES = 0x6,
   GOAWAY_TIMEOUT = 0x10
 };
 
@@ -85,6 +86,7 @@ enum class FrameType : uint64_t {
   TRACK_STATUS_REQUEST = 0xD,
   TRACK_STATUS = 0xE,
   GOAWAY = 0x10,
+  MAX_SUBSCRIBE_ID = 0x15,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
 };
@@ -100,7 +102,11 @@ std::ostream& operator<<(std::ostream& os, FrameType type);
 
 std::ostream& operator<<(std::ostream& os, StreamType type);
 
-enum class SetupKey : uint64_t { ROLE = 0, PATH = 1 };
+enum class SetupKey : uint64_t {
+  ROLE = 0,
+  PATH = 1,
+  MAX_SUBSCRIBE_ID = 2,
+};
 
 enum class Role : uint8_t { PUBLISHER = 1, SUBSCRIBER = 2, PUB_AND_SUB = 3 };
 
@@ -438,6 +444,13 @@ folly::Expected<Goaway, ErrorCode> parseGoaway(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
+struct MaxSubscribeId {
+  uint64_t subscribeID;
+};
+folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
 //// Egress ////
 
 WriteResult writeClientSetup(
@@ -485,6 +498,10 @@ WriteResult writeSubscribeDone(
 WriteResult writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
     const Unsubscribe& unsubscribe) noexcept;
+
+WriteResult writeMaxSubscribeId(
+    folly::IOBufQueue& writeBuf,
+    const MaxSubscribeId& maxSubscribeId) noexcept;
 
 WriteResult writeAnnounce(
     folly::IOBufQueue& writeBuf,

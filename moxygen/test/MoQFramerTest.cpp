@@ -76,6 +76,10 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   testUnderflowResult(r4);
 
   skip(cursor, 1);
+  auto r4a = parseMaxSubscribeId(cursor, frameLength(cursor));
+  testUnderflowResult(r4a);
+
+  skip(cursor, 1);
   auto r5 = parseSubscribeError(cursor, frameLength(cursor));
   testUnderflowResult(r5);
 
@@ -222,6 +226,49 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(parseResult->id, 44);
   EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
+}
+
+TEST(SerializeAndParse, ParseClientSetupForMaxSubscribeId) {
+  // Test different values for MAX_SUBSCRIBE_ID
+  const std::vector<uint64_t> kTestMaxSubscribeIds = {
+      0,
+      quic::kOneByteLimit,
+      quic::kOneByteLimit + 1,
+      quic::kTwoByteLimit,
+      quic::kTwoByteLimit + 1,
+      quic::kFourByteLimit,
+      quic::kFourByteLimit + 1,
+      quic::kEightByteLimit};
+  for (auto maxSubscribeId : kTestMaxSubscribeIds) {
+    auto clientSetup = ClientSetup{
+        .supportedVersions = {kVersionDraftCurrent},
+        .params =
+            {{{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+               .asString = "",
+               .asUint64 = maxSubscribeId}}},
+    };
+
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    auto result = writeClientSetup(writeBuf, clientSetup);
+    EXPECT_TRUE(result.hasValue()) << fmt::format(
+        "Failed to write client setup for maxSubscribeId: {}", maxSubscribeId);
+    auto buffer = writeBuf.move();
+    auto cursor = folly::io::Cursor(buffer.get());
+    skip(cursor, 2);
+    auto parseClientSetupResult = parseClientSetup(cursor, frameLength(cursor));
+    EXPECT_TRUE(parseClientSetupResult.hasValue()) << fmt::format(
+        "Failed to parse client setup for maxSubscribeId: {} with error: {}",
+        maxSubscribeId,
+        parseClientSetupResult.error());
+    EXPECT_EQ(parseClientSetupResult->supportedVersions.size(), 1);
+    EXPECT_EQ(
+        parseClientSetupResult->supportedVersions[0], kVersionDraftCurrent);
+    EXPECT_EQ(parseClientSetupResult->params.size(), 1);
+    EXPECT_EQ(
+        parseClientSetupResult->params[0].key,
+        folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+    EXPECT_EQ(parseClientSetupResult->params[0].asUint64, maxSubscribeId);
+  }
 }
 
 TEST(Underflows, All) {

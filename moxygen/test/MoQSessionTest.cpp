@@ -22,6 +22,7 @@ class MockControlVisitorBase {
   virtual void onSubscribe(SubscribeRequest subscribeRequest) const = 0;
   virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) const = 0;
   virtual void onSubscribeDone(SubscribeDone subscribeDone) const = 0;
+  virtual void onMaxSubscribeId(MaxSubscribeId maxSubscribeId) const = 0;
   virtual void onUnsubscribe(Unsubscribe unsubscribe) const = 0;
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
@@ -80,6 +81,11 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
     onUnsubscribe(unsubscribe);
   }
 
+  MOCK_METHOD(void, onMaxSubscribeId, (MaxSubscribeId), (const));
+  void operator()(MaxSubscribeId maxSubscribeId) const override {
+    onMaxSubscribeId(maxSubscribeId);
+  }
+
   MOCK_METHOD(void, onTrackStatusRequest, (TrackStatusRequest), (const));
   void operator()(TrackStatusRequest trackStatusRequest) const override {
     onTrackStatusRequest(trackStatusRequest);
@@ -135,15 +141,36 @@ TEST_F(MoQSessionTest, Setup) {
   clientSession_->start();
   serverSession_->start();
   eventBase_.loopOnce();
-  clientSession_->setup(ClientSetup({{kVersionDraftCurrent}, {}}));
+  const size_t kTestMaxSubscribeId = 100;
+  clientSession_->setup(ClientSetup{
+      .supportedVersions = {kVersionDraftCurrent},
+      .params = {
+          {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+            .asUint64 = kTestMaxSubscribeId}}}});
+
   EXPECT_CALL(serverControl, onClientSetup(testing::_))
-      .WillOnce(testing::Invoke([this](ClientSetup setup) {
+      .WillOnce(testing::Invoke([kTestMaxSubscribeId, this](ClientSetup setup) {
         EXPECT_EQ(setup.supportedVersions[0], kVersionDraftCurrent);
-        serverSession_->setup(ServerSetup({kVersionDraftCurrent, {}}));
+        EXPECT_EQ(setup.params.size(), 1);
+        EXPECT_EQ(
+            setup.params.at(0).key,
+            folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+        EXPECT_EQ(setup.params.at(0).asUint64, kTestMaxSubscribeId);
+        serverSession_->setup(ServerSetup{
+            .selectedVersion = kVersionDraftCurrent,
+            .params = {
+                {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+                  .asUint64 = kTestMaxSubscribeId}}}});
       }));
   EXPECT_CALL(clientControl, onServerSetup(testing::_))
-      .WillOnce(
-          testing::Invoke([this](ServerSetup) { clientSession_->close(); }));
+      .WillOnce(testing::Invoke([kTestMaxSubscribeId, this](ServerSetup setup) {
+        EXPECT_EQ(setup.selectedVersion, kVersionDraftCurrent);
+        EXPECT_EQ(
+            setup.params.at(0).key,
+            folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+        EXPECT_EQ(setup.params.at(0).asUint64, kTestMaxSubscribeId);
+        clientSession_->close();
+      }));
   this->controlLoop(*serverSession_, serverControl)
       .scheduleOn(&eventBase_)
       .start();
