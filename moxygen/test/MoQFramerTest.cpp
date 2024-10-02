@@ -250,16 +250,14 @@ TEST(SerializeAndParse, ParseClientSetupForMaxSubscribeId) {
 
     folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
     auto result = writeClientSetup(writeBuf, clientSetup);
-    EXPECT_TRUE(result.hasValue()) << fmt::format(
-        "Failed to write client setup for maxSubscribeId: {}", maxSubscribeId);
+    EXPECT_TRUE(result.hasValue())
+        << "Failed to write client setup for maxSubscribeId:" << maxSubscribeId;
     auto buffer = writeBuf.move();
     auto cursor = folly::io::Cursor(buffer.get());
     skip(cursor, 2);
     auto parseClientSetupResult = parseClientSetup(cursor, frameLength(cursor));
-    EXPECT_TRUE(parseClientSetupResult.hasValue()) << fmt::format(
-        "Failed to parse client setup for maxSubscribeId: {} with error: {}",
-        maxSubscribeId,
-        parseClientSetupResult.error());
+    EXPECT_TRUE(parseClientSetupResult.hasValue())
+        << "Failed to parse client setup for maxSubscribeId:" << maxSubscribeId;
     EXPECT_EQ(parseClientSetupResult->supportedVersions.size(), 1);
     EXPECT_EQ(
         parseClientSetupResult->supportedVersions[0], kVersionDraftCurrent);
