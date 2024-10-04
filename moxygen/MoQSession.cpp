@@ -110,11 +110,13 @@ void MoQSession::setup(ClientSetup setup) {
 void MoQSession::setup(ServerSetup setup) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
+  auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
   auto res = writeServerSetup(controlWriteBuf_, std::move(setup));
   if (!res) {
     XLOG(ERR) << "writeServerSetup failed" << " sess=" << this;
     return;
   }
+  maxSubscribeID_ = maxSubscribeId;
   sentSetup_.signal();
   controlWriteEvent_.signal();
 }
