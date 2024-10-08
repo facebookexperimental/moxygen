@@ -202,6 +202,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     receivedSetup_.cancel();
     return;
   }
+  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
   receivedSetup_.signal();
   controlMessages_.enqueue(std::move(clientSetup));
   setupComplete().scheduleOn(evb_).start();
@@ -511,6 +512,12 @@ folly::coro::Task<
 MoQSession::subscribe(SubscribeRequest sub) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto fullTrackName = sub.fullTrackName;
+  if (nextSubscribeID_ >= peerMaxSubscribeID_) {
+    XLOG(WARN) << "Issuing subscribe that will fail; nextSubscribeID_="
+               << nextSubscribeID_
+               << " peerMaxSubscribeID_=" << peerMaxSubscribeID_
+               << " sess=" << this;
+  }
   auto subID = nextSubscribeID_++;
   sub.subscribeID = subID;
   sub.trackAlias = sub.subscribeID;

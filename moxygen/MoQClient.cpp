@@ -92,11 +92,15 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   // Setup MoQSession parameters
   moqSession_ = std::move(moqSession.value());
   moqSession_->start();
+  // TODO: maybe let the caller set max subscribes.  Any client that publishes
+  // via relay needs to support subscribes.
+  const uint32_t kDefaultMaxSubscribeId = 100;
   moqSession_->setup(ClientSetup(
       {{kVersionDraftCurrent},
-       {{folly::to_underlying(SetupKey::ROLE),
+       {{folly::to_underlying(SetupKey::ROLE), "", folly::to_underlying(role)},
+        {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
          "",
-         folly::to_underlying(role)}}}));
+         kDefaultMaxSubscribeId}}}));
   co_await moqSession_->setupComplete();
 }
 
