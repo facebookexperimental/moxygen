@@ -49,6 +49,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       Announce,
       Unannounce,
       AnnounceCancel,
+      SubscribeNamespace,
+      UnsubscribeNamespace,
       SubscribeRequest,
       SubscribeUpdate,
       Unsubscribe,
@@ -79,6 +81,16 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
     virtual void operator()(AnnounceCancel announceCancel) const {
       XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
+    }
+
+    virtual void operator()(SubscribeNamespace subscribeNamespace) const {
+      XLOG(INFO) << "SubscribeNamespace nsp="
+                 << subscribeNamespace.trackNamespacePrefix;
+    }
+
+    virtual void operator()(UnsubscribeNamespace unsubscribeNamespace) const {
+      XLOG(INFO) << "UnsubscribeNamespace nsp="
+                 << unsubscribeNamespace.trackNamespacePrefix;
     }
 
     virtual void operator()(AnnounceError announceError) const {
@@ -130,6 +142,13 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void announceOk(AnnounceOk annOk);
   void announceError(AnnounceError announceError);
   void unannounce(Unannounce unannounce);
+
+  folly::coro::Task<
+      folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>
+  subscribeNamespace(SubscribeNamespace ann);
+  void subscribeNamespaceOk(SubscribeNamespaceOk annOk);
+  void subscribeNamespaceError(SubscribeNamespaceError subscribeNamespaceError);
+  void unsubscribeNamespace(UnsubscribeNamespace unsubscribeNamespace);
 
   static GroupOrder resolveGroupOrder(
       GroupOrder pubOrder,
@@ -321,6 +340,13 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onAnnounceError(AnnounceError announceError) override;
   void onUnannounce(Unannounce unannounce) override;
   void onAnnounceCancel(AnnounceCancel announceCancel) override;
+  void onSubscribeNamespace(SubscribeNamespace subscribeNamspace) override;
+  void onSubscribeNamespaceOk(
+      SubscribeNamespaceOk subscribeNamspaceOk) override;
+  void onSubscribeNamespaceError(
+      SubscribeNamespaceError announceError) override;
+  void onUnsubscribeNamespace(
+      UnsubscribeNamespace unsubscribeNamespace) override;
   void onTrackStatusRequest(TrackStatusRequest trackStatusRequest) override;
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
@@ -408,6 +434,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>>,
       TrackNamespace::hash>
       pendingAnnounce_;
+
+  folly::F14FastMap<
+      TrackNamespace,
+      folly::coro::Promise<
+          folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>,
+      TrackNamespace::hash>
+      pendingSubscribeNamespace_;
+
   struct PubTrack {
     uint8_t priority;
     GroupOrder groupOrder;

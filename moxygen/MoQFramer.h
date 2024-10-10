@@ -86,6 +86,10 @@ enum class FrameType : uint64_t {
   TRACK_STATUS_REQUEST = 0xD,
   TRACK_STATUS = 0xE,
   GOAWAY = 0x10,
+  SUBSCRIBE_NAMESPACE = 0x11,
+  SUBSCRIBE_NAMESPACE_OK = 0x12,
+  SUBSCRIBE_NAMESPACE_ERROR = 0x13,
+  UNSUBSCRIBE_NAMESPACE = 0x14,
   MAX_SUBSCRIBE_ID = 0x15,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
@@ -126,7 +130,7 @@ constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
 constexpr uint64_t kVersionDraft06_exp =
-    0xff060003; // Draft 6 in progress version
+    0xff060004; // Draft 6 in progress version
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft06_exp;
 
 struct ClientSetup {
@@ -451,6 +455,40 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
+struct SubscribeNamespace {
+  TrackNamespace trackNamespacePrefix;
+  std::vector<TrackRequestParameter> params;
+};
+
+folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespace(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
+struct SubscribeNamespaceOk {
+  TrackNamespace trackNamespacePrefix;
+};
+
+folly::Expected<SubscribeNamespaceOk, ErrorCode> parseSubscribeNamespaceOk(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
+struct SubscribeNamespaceError {
+  TrackNamespace trackNamespacePrefix;
+  uint64_t errorCode;
+  std::string reasonPhrase;
+};
+
+folly::Expected<SubscribeNamespaceError, ErrorCode>
+parseSubscribeNamespaceError(folly::io::Cursor& cursor, size_t length) noexcept;
+
+struct UnsubscribeNamespace {
+  TrackNamespace trackNamespacePrefix;
+};
+
+folly::Expected<UnsubscribeNamespace, ErrorCode> parseUnsubscribeNamespace(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
 //// Egress ////
 
 WriteResult writeClientSetup(
@@ -534,5 +572,21 @@ WriteResult writeTrackStatus(
 WriteResult writeGoaway(
     folly::IOBufQueue& writeBuf,
     const Goaway& goaway) noexcept;
+
+WriteResult writeSubscribeNamespace(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeNamespace& subscribeNamespace) noexcept;
+
+WriteResult writeSubscribeNamespaceOk(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeNamespaceOk& subscribeNamespaceOk) noexcept;
+
+WriteResult writeSubscribeNamespaceError(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeNamespaceError& subscribeNamespaceError) noexcept;
+
+WriteResult writeUnsubscribeNamespace(
+    folly::IOBufQueue& writeBuf,
+    const UnsubscribeNamespace& unsubscribeNamespace) noexcept;
 
 } // namespace moxygen

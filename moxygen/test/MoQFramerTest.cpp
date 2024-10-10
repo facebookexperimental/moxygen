@@ -127,6 +127,22 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   auto r14 = parseGoaway(cursor, frameLength(cursor));
   testUnderflowResult(r14);
 
+  skip(cursor, 1);
+  auto r9a = parseSubscribeNamespace(cursor, frameLength(cursor));
+  testUnderflowResult(r9a);
+
+  skip(cursor, 1);
+  auto r10a = parseSubscribeNamespaceOk(cursor, frameLength(cursor));
+  testUnderflowResult(r10a);
+
+  skip(cursor, 1);
+  auto r11a = parseSubscribeNamespaceError(cursor, frameLength(cursor));
+  testUnderflowResult(r11a);
+
+  skip(cursor, 1);
+  auto r13a = parseUnsubscribeNamespace(cursor, frameLength(cursor));
+  testUnderflowResult(r13a);
+
   auto res = parseStreamHeader(cursor, StreamType::STREAM_HEADER_TRACK);
   testUnderflowResult(res);
 

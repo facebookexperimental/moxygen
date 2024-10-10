@@ -134,6 +134,20 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
            TrackStatusCode::IN_PROGRESS,
            AbsoluteLocation({19, 77})}));
   res = writeGoaway(writeBuf, Goaway({"new uri"}));
+  res = writeSubscribeNamespace(
+      writeBuf,
+      SubscribeNamespace(
+          {TrackNamespace({"hello"}),
+           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+             "binky"}}}));
+  res = writeSubscribeNamespaceOk(
+      writeBuf, SubscribeNamespaceOk({TrackNamespace({"hello"})}));
+  res = writeSubscribeNamespaceError(
+      writeBuf,
+      SubscribeNamespaceError(
+          {TrackNamespace({"hello"}), 500, "server error"}));
+  res = writeUnsubscribeNamespace(
+      writeBuf, UnsubscribeNamespace({TrackNamespace({"hello"})}));
 
   return writeBuf.move();
 }

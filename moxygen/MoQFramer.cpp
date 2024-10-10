@@ -782,6 +782,52 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
   maxSubscribeId.subscribeID = subscribeID->first;
   return maxSubscribeId;
 }
+
+folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespace(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  auto res = parseAnnounce(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  return SubscribeNamespace(
+      {std::move(res->trackNamespace), std::move(res->params)});
+}
+
+folly::Expected<SubscribeNamespaceOk, ErrorCode> parseSubscribeNamespaceOk(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  auto res = parseAnnounceOk(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  return SubscribeNamespaceOk({std::move(res->trackNamespace)});
+}
+
+folly::Expected<SubscribeNamespaceError, ErrorCode>
+parseSubscribeNamespaceError(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  auto res = parseAnnounceError(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  return SubscribeNamespaceError(
+      {std::move(res->trackNamespace),
+       res->errorCode,
+       std::move(res->reasonPhrase)});
+}
+
+folly::Expected<UnsubscribeNamespace, ErrorCode> parseUnsubscribeNamespace(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  auto res = parseAnnounceOk(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  return UnsubscribeNamespace({std::move(res->trackNamespace)});
+}
+
 //// Egress ////
 
 void writeVarint(
@@ -1326,6 +1372,73 @@ WriteResult writeGoaway(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
   writeFixedString(writeBuf, goaway.newSessionUri, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeSubscribeNamespace(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeNamespace& subscribeNamespace) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr =
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE, error);
+  writeTrackNamespace(
+      writeBuf, subscribeNamespace.trackNamespacePrefix, size, error);
+  writeTrackRequestParams(writeBuf, subscribeNamespace.params, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeSubscribeNamespaceOk(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeNamespaceOk& subscribeNamespaceOk) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr =
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE_OK, error);
+  writeTrackNamespace(
+      writeBuf, subscribeNamespaceOk.trackNamespacePrefix, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeSubscribeNamespaceError(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeNamespaceError& subscribeNamespaceError) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr =
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE_ERROR, error);
+  writeTrackNamespace(
+      writeBuf, subscribeNamespaceError.trackNamespacePrefix, size, error);
+  writeVarint(writeBuf, subscribeNamespaceError.errorCode, size, error);
+  writeFixedString(writeBuf, subscribeNamespaceError.reasonPhrase, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeUnsubscribeNamespace(
+    folly::IOBufQueue& writeBuf,
+    const UnsubscribeNamespace& unsubscribeNamespace) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr =
+      writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE_NAMESPACE, error);
+  writeTrackNamespace(
+      writeBuf, unsubscribeNamespace.trackNamespacePrefix, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

@@ -51,12 +51,6 @@ void MoQServer::ControlVisitor::operator()(ServerSetup) const {
   clientSession_->close();
 }
 
-void MoQServer::ControlVisitor::operator()(Announce announce) const {
-  XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-  clientSession_->announceError(
-      {announce.trackNamespace, 500, "not implemented"});
-}
-
 void MoQServer::ControlVisitor::operator()(
     SubscribeRequest subscribeReq) const {
   XLOG(INFO) << "SubscribeRequest track="
@@ -77,6 +71,22 @@ void MoQServer::ControlVisitor::operator()(
   XLOG(INFO) << fmt::format("maxSubscribeId id={}", maxSubscribeId.subscribeID);
 }
 
+void MoQServer::ControlVisitor::operator()(SubscribeDone subscribeDone) const {
+  XLOG(INFO) << "SubscribeDone id=" << subscribeDone.subscribeID
+             << " code=" << folly::to_underlying(subscribeDone.statusCode)
+             << " reason=" << subscribeDone.reasonPhrase;
+}
+
+void MoQServer::ControlVisitor::operator()(Unsubscribe unsubscribe) const {
+  XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
+}
+
+void MoQServer::ControlVisitor::operator()(Announce announce) const {
+  XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+  clientSession_->announceError(
+      {announce.trackNamespace, 500, "not implemented"});
+}
+
 void MoQServer::ControlVisitor::operator()(Unannounce unannounce) const {
   XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
 }
@@ -86,14 +96,18 @@ void MoQServer::ControlVisitor::operator()(
   XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
 }
 
-void MoQServer::ControlVisitor::operator()(SubscribeDone subscribeDone) const {
-  XLOG(INFO) << "SubscribeDone id=" << subscribeDone.subscribeID
-             << " code=" << folly::to_underlying(subscribeDone.statusCode)
-             << " reason=" << subscribeDone.reasonPhrase;
+void MoQServer::ControlVisitor::operator()(
+    SubscribeNamespace subscribeNamespace) const {
+  XLOG(INFO) << "SubscribeNamespace ns="
+             << subscribeNamespace.trackNamespacePrefix;
+  clientSession_->subscribeNamespaceError(
+      {subscribeNamespace.trackNamespacePrefix, 500, "not implemented"});
 }
 
-void MoQServer::ControlVisitor::operator()(Unsubscribe unsubscribe) const {
-  XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
+void MoQServer::ControlVisitor::operator()(
+    UnsubscribeNamespace unsubscribeNamespace) const {
+  XLOG(INFO) << "UnsubscribeNamespace ns="
+             << unsubscribeNamespace.trackNamespacePrefix;
 }
 
 void MoQServer::ControlVisitor::operator()(

@@ -35,6 +35,16 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onAnnounceError, (AnnounceError announceError));
   MOCK_METHOD(void, onUnannounce, (Unannounce unannounce));
   MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel announceCancel));
+  MOCK_METHOD(void, onSubscribeNamespace, (SubscribeNamespace announce));
+  MOCK_METHOD(void, onSubscribeNamespaceOk, (SubscribeNamespaceOk announceOk));
+  MOCK_METHOD(
+      void,
+      onSubscribeNamespaceError,
+      (SubscribeNamespaceError announceError));
+  MOCK_METHOD(
+      void,
+      onUnsubscribeNamespace,
+      (UnsubscribeNamespace unsubscribeNamespace));
   MOCK_METHOD(
       void,
       onTrackStatusRequest,

@@ -417,6 +417,50 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
+    case FrameType::SUBSCRIBE_NAMESPACE: {
+      auto res = parseSubscribeNamespace(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onSubscribeNamespace(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::SUBSCRIBE_NAMESPACE_OK: {
+      auto res = parseSubscribeNamespaceOk(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onSubscribeNamespaceOk(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::SUBSCRIBE_NAMESPACE_ERROR: {
+      auto res = parseSubscribeNamespaceError(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onSubscribeNamespaceError(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::UNSUBSCRIBE_NAMESPACE: {
+      auto res = parseUnsubscribeNamespace(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onUnsubscribeNamespace(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::TRACK_STATUS_REQUEST: {
       auto res = parseTrackStatusRequest(cursor, curFrameLength_);
       if (res) {

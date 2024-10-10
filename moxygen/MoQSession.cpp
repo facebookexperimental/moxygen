@@ -28,6 +28,10 @@ MoQSession::~MoQSession() {
     pendingAnn.second.setValue(folly::makeUnexpected(
         AnnounceError({pendingAnn.first, 500, "session closed"})));
   }
+  for (auto& pendingSn : pendingSubscribeNamespace_) {
+    pendingSn.second.setValue(folly::makeUnexpected(
+        SubscribeNamespaceError({pendingSn.first, 500, "session closed"})));
+  }
 }
 
 void MoQSession::start() {
@@ -432,6 +436,46 @@ void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
   controlMessages_.enqueue(std::move(announceCancel));
 }
 
+void MoQSession::onSubscribeNamespace(SubscribeNamespace sn) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  controlMessages_.enqueue(std::move(sn));
+}
+
+void MoQSession::onSubscribeNamespaceOk(SubscribeNamespaceOk snOk) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto snIt = pendingSubscribeNamespace_.find(snOk.trackNamespacePrefix);
+  if (snIt == pendingSubscribeNamespace_.end()) {
+    // unknown
+    XLOG(ERR) << "No matching subscribeNamespace trackNamespace="
+              << snOk.trackNamespacePrefix << " sess=" << this;
+    return;
+  }
+  snIt->second.setValue(std::move(snOk));
+  pendingSubscribeNamespace_.erase(snIt);
+}
+
+void MoQSession::onSubscribeNamespaceError(
+    SubscribeNamespaceError subscribeNamespaceError) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto snIt = pendingSubscribeNamespace_.find(
+      subscribeNamespaceError.trackNamespacePrefix);
+  if (snIt == pendingSubscribeNamespace_.end()) {
+    // unknown
+    XLOG(ERR) << "No matching subscribeNamespace trackNamespace="
+              << subscribeNamespaceError.trackNamespacePrefix
+              << " sess=" << this;
+    return;
+  }
+  snIt->second.setValue(
+      folly::makeUnexpected(std::move(subscribeNamespaceError)));
+  pendingSubscribeNamespace_.erase(snIt);
+}
+
+void MoQSession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  controlMessages_.enqueue(std::move(unsub));
+}
+
 void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   controlMessages_.enqueue(std::move(trackStatusRequest));
@@ -486,6 +530,47 @@ void MoQSession::announceError(AnnounceError announceError) {
   auto res = writeAnnounceError(controlWriteBuf_, std::move(announceError));
   if (!res) {
     XLOG(ERR) << "writeAnnounceError failed" << " sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
+folly::coro::Task<
+    folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>
+MoQSession::subscribeNamespace(SubscribeNamespace sn) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto trackNamespace = sn.trackNamespacePrefix;
+  auto res = writeSubscribeNamespace(controlWriteBuf_, std::move(sn));
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeNamespace failed" << " sess=" << this;
+    co_return folly::makeUnexpected(SubscribeNamespaceError(
+        {std::move(trackNamespace), 500, "local write failed"}));
+  }
+  controlWriteEvent_.signal();
+  auto contract = folly::coro::makePromiseContract<
+      folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>();
+  pendingSubscribeNamespace_.emplace(
+      std::move(trackNamespace), std::move(contract.first));
+  co_return co_await std::move(contract.second);
+}
+
+void MoQSession::subscribeNamespaceOk(SubscribeNamespaceOk snOk) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto res = writeSubscribeNamespaceOk(controlWriteBuf_, std::move(snOk));
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeNamespaceOk failed" << " sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
+void MoQSession::subscribeNamespaceError(
+    SubscribeNamespaceError subscribeNamespaceError) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto res = writeSubscribeNamespaceError(
+      controlWriteBuf_, std::move(subscribeNamespaceError));
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeNamespaceError failed" << " sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
