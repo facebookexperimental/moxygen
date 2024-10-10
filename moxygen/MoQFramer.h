@@ -268,6 +268,9 @@ struct TrackNamespace {
     return trackNamespace.empty() ||
         (trackNamespace.size() == 1 && trackNamespace[0].empty());
   }
+  size_t size() const {
+    return trackNamespace.size();
+  }
   bool startsWith(const TrackNamespace& other) const {
     if (other.trackNamespace.size() > trackNamespace.size()) {
       return false;

@@ -16,49 +16,48 @@ class MoQChatClient {
       folly::EventBase* evb,
       proxygen::URL url,
       std::string chatID,
-      std::string username);
+      std::string username,
+      std::string device);
 
   folly::coro::Task<void> run() noexcept;
 
  private:
   folly::coro::Task<void> controlReadLoop();
-  folly::coro::Task<void> readCatalogUpdates(
-      std::shared_ptr<MoQSession::TrackHandle> catalogTrack);
   void publishLoop();
-  folly::coro::Task<void> subscribeToUser(std::string username);
+  folly::coro::Task<void> subscribeToUser(TrackNamespace trackNamespace);
+  void subscribeDone(SubscribeDone subDone);
 
   [[nodiscard]] std::vector<std::string> chatPrefix() const {
-    return {"moq-chat/", chatID_};
-  }
-
-  [[nodiscard]] FullTrackName catalogTrackName() const {
-    return FullTrackName({TrackNamespace(chatPrefix()), "/catalog"});
-  }
-
-  [[nodiscard]] std::vector<std::string> participantPrefix() const {
-    auto prefix = chatPrefix();
-    prefix.emplace_back("/participant/");
-    return prefix;
+    return {"moq-chat", chatID_};
   }
 
   [[nodiscard]] bool isParticipantNamespace(const TrackNamespace& ns) const {
-    return ns.startsWith(TrackNamespace(participantPrefix()));
+    return ns.startsWith(TrackNamespace(chatPrefix()));
   }
 
   [[nodiscard]] TrackNamespace participantTrackName(
       const std::string& username) const {
-    auto prefix = participantPrefix();
+    auto prefix = chatPrefix();
     prefix.emplace_back(username);
+    prefix.emplace_back(deviceId_);
+    prefix.emplace_back(timestampString_);
     return TrackNamespace(std::move(prefix));
   }
 
   std::string chatID_;
   std::string username_;
+  std::string deviceId_;
+  std::string timestampString_;
   MoQClient moqClient_;
   folly::Optional<uint64_t> chatSubscribeID_;
   folly::Optional<uint64_t> chatTrackAlias_;
   uint64_t nextGroup_{0};
-  std::set<std::string> subscriptions_;
+  struct UserTrack {
+    std::string deviceId;
+    std::chrono::seconds timestamp;
+    uint64_t subscribeId;
+  };
+  std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>
       peerSetup_{folly::coro::makePromiseContract<ServerSetup>()};
 };

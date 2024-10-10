@@ -12,6 +12,7 @@
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(chat_id, "", "ID for the chat to join");
 DEFINE_string(username, "", "Username to join chat");
+DEFINE_string(device, "12345", "Device ID");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 
@@ -21,9 +22,15 @@ MoQChatClient::MoQChatClient(
     folly::EventBase* evb,
     proxygen::URL url,
     std::string chatID,
-    std::string username)
+    std::string username,
+    std::string deviceId)
     : chatID_(std::move(chatID)),
       username_(std::move(username)),
+      deviceId_(std::move(deviceId)),
+      timestampString_(
+          folly::to<std::string>(std::chrono::system_clock::to_time_t(
+              std::chrono::system_clock::now()))),
+
       moqClient_(evb, std::move(url)) {}
 
 folly::coro::Task<void> MoQChatClient::run() noexcept {
@@ -41,24 +48,17 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     auto announceRes = co_await moqClient_.moqSession_->announce(
         {participantTrackName(username_), {}});
     // subscribe to the catalog track from the beginning of the latest group
-    auto catalogTrack = co_await moqClient_.moqSession_->subscribe(
-        {0,
-         0,
-         catalogTrackName(),
-         0,
-         GroupOrder::OldestFirst,
-         LocationType::LatestGroup,
-         folly::none,
-         folly::none,
+    auto sn = co_await moqClient_.moqSession_->subscribeNamespace(
+        {TrackNamespace(chatPrefix()),
          {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
            username_}}});
-    if (catalogTrack.hasValue()) {
-      readCatalogUpdates(catalogTrack.value()).scheduleOn(exec).start();
+    if (sn.hasValue()) {
+      XLOG(INFO) << "subscribeNamespace success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
     } else {
-      XLOG(INFO) << "SubscribeError id=" << catalogTrack.error().subscribeID
-                 << " code=" << catalogTrack.error().errorCode
-                 << " reason=" << catalogTrack.error().reasonPhrase;
+      XLOG(INFO) << "SubscribeNamespace id=" << sn.error().trackNamespacePrefix
+                 << " code=" << sn.error().errorCode
+                 << " reason=" << sn.error().reasonPhrase;
     }
   } catch (const std::exception& ex) {
     XLOG(ERR) << ex.what();
@@ -73,10 +73,21 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
     explicit ControlVisitor(MoQChatClient& client) : client_(client) {}
 
     void operator()(Announce announce) const override {
-      XLOG(INFO) << "Announce";
-      // chat client doesn't expect server or relay to announce anything
-      client_.moqClient_.moqSession_->announceError(
-          {announce.trackNamespace, 404, "don't care"});
+      XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+      if (announce.trackNamespace.startsWith(
+              TrackNamespace(client_.chatPrefix()))) {
+        if (announce.trackNamespace.size() != 5) {
+          client_.moqClient_.moqSession_->announceError(
+              {announce.trackNamespace, 400, "Invalid announce"});
+        }
+        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
+        client_.subscribeToUser(std::move(announce.trackNamespace))
+            .scheduleOn(client_.moqClient_.moqSession_->getEventBase())
+            .start();
+      } else {
+        client_.moqClient_.moqSession_->announceError(
+            {announce.trackNamespace, 404, "don't care"});
+      }
     }
 
     void operator()(SubscribeRequest subscribeReq) const override {
@@ -101,8 +112,9 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
            latest});
     }
 
-    void operator()(SubscribeDone) const override {
-      XLOG(INFO) << "SubscribeDone";
+    void operator()(SubscribeDone subDone) const override {
+      XLOG(INFO) << "SubscribeDone is=" << subDone.subscribeID;
+      client_.subscribeDone(std::move(subDone));
       // TODO: should be handled in session
     }
 
@@ -126,57 +138,6 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
   while (auto msg = co_await moqClient_.moqSession_->controlMessages().next()) {
     boost::apply_visitor(*vptr, msg.value());
   }
-}
-
-folly::coro::Task<void> MoQChatClient::readCatalogUpdates(
-    std::shared_ptr<MoQSession::TrackHandle> catalogTrack) {
-  XLOG(INFO) << __func__;
-  auto g =
-      folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-  auto exec = co_await folly::coro::co_current_executor;
-  // TODO: check track.value()->getCancelToken()
-  while (auto obj = co_await catalogTrack->objects().next()) {
-    XLOG(INFO) << "catalog object";
-    // TODO: should there be a way to STOP_SENDING an object without breaking
-    // the stream it's on?
-    auto catalogBuf = co_await obj.value()->payload();
-    // ok have the full object
-    if (obj.value()->header.id == 0 && catalogBuf) {
-      XLOG(INFO) << "new catalog";
-      // parse catalog into list of usernames
-      catalogBuf->coalesce();
-      auto catalogString = catalogBuf->moveToFbString();
-      std::vector<std::string> usernames;
-      folly::split("\n", catalogString, usernames);
-      if (usernames.empty() || usernames[0] != "version=1") {
-        XLOG(ERR) << "Bad catalog version";
-        continue;
-      } else {
-        std::swap(usernames[0], usernames[usernames.size() - 1]);
-        usernames.resize(usernames.size() - 1);
-      }
-      for (auto& username : usernames) {
-        XLOG(INFO) << username;
-        if (username == username_) {
-          continue;
-        }
-        if (subscriptions_.find(username) == subscriptions_.end()) {
-          XLOG(INFO) << "Subscribing to new user " << username;
-          subscribeToUser(username).scheduleOn(exec).start();
-        }
-      }
-      for (auto& username : subscriptions_) {
-        if (std::find(usernames.begin(), usernames.end(), username) ==
-            usernames.end()) {
-          XLOG(INFO) << username << " left the chat";
-          subscriptions_.erase(username);
-          break;
-        }
-      }
-    }
-    // ignore delta updates for now
-  }
-  XLOG(INFO) << "Catalog track finished";
 }
 
 void MoQChatClient::publishLoop() {
@@ -216,14 +177,50 @@ void MoQChatClient::publishLoop() {
   }
 }
 
-folly::coro::Task<void> MoQChatClient::subscribeToUser(std::string username) {
-  XLOG(INFO) << __func__ << " user=" << username;
+folly::coro::Task<void> MoQChatClient::subscribeToUser(
+    TrackNamespace trackNamespace) {
+  CHECK_GE(trackNamespace.size(), 5);
+  std::string username = trackNamespace[2];
+  std::string deviceId = trackNamespace[3];
+  std::string timestampStr = trackNamespace[4];
+  XLOG(INFO) << __func__ << " user=" << username << " device=" << deviceId
+             << " ts=" << timestampStr;
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
+  if (username == username_) {
+    XLOG(INFO) << "Ignoring self";
+    co_return;
+  }
+  std::chrono::seconds timestamp(folly::to<uint32_t>(timestampStr));
+  // user -> list(device, ts)
+  auto& userTracks = subscriptions_[username];
+  UserTrack* userTrackPtr = nullptr;
+  for (auto& userTrack : userTracks) {
+    if (userTrack.deviceId == deviceId) {
+      if (userTrack.timestamp < timestamp) {
+        XLOG(INFO) << "Device has later track, unsubscribing";
+        moqClient_.moqSession_->unsubscribe({userTrack.subscribeId});
+        userTrackPtr = &userTrack;
+        break;
+      } else {
+        XLOG(INFO) << "Announce for old track, ignoring";
+        co_return;
+      }
+    } else {
+      // not the device we're looking for
+      continue;
+    }
+  }
+  if (!userTrackPtr) {
+    // no tracks for this device
+    userTrackPtr =
+        &userTracks.emplace_back(UserTrack({deviceId, timestamp, 0}));
+  }
+  // now subscribe and update timestamp.
   auto track = co_await co_awaitTry(moqClient_.moqSession_->subscribe(
       {0,
        0,
-       FullTrackName({participantTrackName(username), ""}),
+       FullTrackName({trackNamespace, "chat"}),
        0,
        GroupOrder::OldestFirst,
        LocationType::LatestGroup,
@@ -241,7 +238,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(std::string username) {
                << " reason=" << track->error().reasonPhrase;
     co_return;
   }
-  subscriptions_.insert(username);
+
+  userTrackPtr->subscribeId = track->value()->subscribeID();
+  userTrackPtr->timestamp = timestamp;
   while (auto obj = co_await track->value()->objects().next()) {
     // how to cancel this loop
     auto payload = co_await obj.value()->payload();
@@ -249,6 +248,19 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(std::string username) {
       std::cout << username << ": ";
       payload->coalesce();
       std::cout << payload->moveToFbString() << std::endl;
+    }
+  }
+}
+
+void MoQChatClient::subscribeDone(SubscribeDone subDone) {
+  for (auto& userTracks : subscriptions_) {
+    for (auto userTrackIt = userTracks.second.begin();
+         userTrackIt != userTracks.second.end();
+         ++userTrackIt) {
+      if (userTrackIt->subscribeId == subDone.subscribeID) {
+        userTracks.second.erase(userTrackIt);
+        break;
+      }
     }
   }
 }
@@ -262,7 +274,7 @@ int main(int argc, char* argv[]) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
   }
   moxygen::MoQChatClient chatClient(
-      &eventBase, std::move(url), FLAGS_chat_id, FLAGS_username);
+      &eventBase, std::move(url), FLAGS_chat_id, FLAGS_username, FLAGS_device);
   chatClient.run().scheduleOn(&eventBase).start();
   eventBase.loop();
 }
