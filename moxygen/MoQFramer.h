@@ -271,6 +271,9 @@ struct TrackNamespace {
   size_t size() const {
     return trackNamespace.size();
   }
+  void append(std::string token) {
+    trackNamespace.emplace_back(std::move(token));
+  }
   bool startsWith(const TrackNamespace& other) const {
     if (other.trackNamespace.size() > trackNamespace.size()) {
       return false;
@@ -281,6 +284,10 @@ struct TrackNamespace {
       }
     }
     return true;
+  }
+  void trimEnd() {
+    CHECK_GT(size(), 0);
+    trackNamespace.pop_back();
   }
 };
 

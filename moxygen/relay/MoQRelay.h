@@ -19,7 +19,17 @@ class MoQRelay {
     allowedNamespacePrefix_ = std::move(allowed);
   }
 
+  void onSubscribeNamespace(
+      SubscribeNamespace&& sn,
+      std::shared_ptr<MoQSession> session);
+  void onUnsubscribeNamespace(
+      UnsubscribeNamespace&& unsub,
+      const std::shared_ptr<MoQSession>& session);
   void onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session);
+  void onUnannounce(
+      Unannounce&& ann,
+      const std::shared_ptr<MoQSession>& session);
+
   folly::coro::Task<void> onSubscribe(
       SubscribeRequest subReq,
       std::shared_ptr<MoQSession> session);
@@ -28,6 +38,18 @@ class MoQRelay {
   void removeSession(const std::shared_ptr<MoQSession>& session);
 
  private:
+  struct AnnounceNode {
+    folly::F14NodeMap<std::string, AnnounceNode> children;
+    folly::F14FastSet<std::shared_ptr<MoQSession>> sessions;
+    std::shared_ptr<MoQSession> sourceSession;
+  };
+  AnnounceNode announceRoot_;
+  AnnounceNode* findNamespaceNode(
+      const TrackNamespace& ns,
+      bool createMissingNodes,
+      std::vector<std::shared_ptr<MoQSession>>* sessions = nullptr);
+  std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
+
   struct RelaySubscription {
     std::shared_ptr<MoQForwarder> forwarder;
     std::shared_ptr<MoQSession> upstream;
@@ -39,11 +61,6 @@ class MoQRelay {
       std::shared_ptr<MoQForwarder> forwarder);
 
   TrackNamespace allowedNamespacePrefix_;
-  folly::F14FastMap<
-      TrackNamespace,
-      std::shared_ptr<MoQSession>,
-      TrackNamespace::hash>
-      announces_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>
       subscriptions_;
 };

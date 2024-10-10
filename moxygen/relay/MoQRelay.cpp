@@ -8,14 +8,147 @@
 
 namespace moxygen {
 
+MoQRelay::AnnounceNode* MoQRelay::findNamespaceNode(
+    const TrackNamespace& ns,
+    bool createMissingNodes,
+    std::vector<std::shared_ptr<MoQSession>>* sessions) {
+  AnnounceNode* nodePtr = &announceRoot_;
+  for (auto i = 0; i < ns.size(); i++) {
+    if (sessions) {
+      sessions->insert(
+          sessions->end(), nodePtr->sessions.begin(), nodePtr->sessions.end());
+    }
+    auto& name = ns[i];
+    auto it = nodePtr->children.find(name);
+    if (it == nodePtr->children.end()) {
+      if (createMissingNodes) {
+        nodePtr =
+            &nodePtr->children.emplace(name, AnnounceNode()).first->second;
+      } else {
+        XLOG(ERR) << "prefix not found in announce tree";
+        return nullptr;
+      }
+    } else {
+      nodePtr = &it->second;
+    }
+  }
+  return nodePtr;
+}
+
 void MoQRelay::onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session) {
+  XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace;
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     session->announceError({ann.trackNamespace, 403, "bad namespace"});
     return;
   }
-  session->announceOk({ann.trackNamespace});
-  announces_.emplace(std::move(ann.trackNamespace), std::move(session));
+  std::vector<std::shared_ptr<MoQSession>> sessions;
+  auto nodePtr = findNamespaceNode(
+      ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
+
+  // TODO: store auth for forwarding on future SubscribeNamespace?
+  nodePtr->sourceSession = std::move(session);
+  nodePtr->sourceSession->announceOk({ann.trackNamespace});
+  for (auto& outSession : sessions) {
+    auto evb = outSession->getEventBase();
+    // We don't really care if we get announce error, I guess?
+    outSession->announce(ann).scheduleOn(evb).start();
+  }
+}
+
+void MoQRelay::onUnannounce(
+    Unannounce&& unann,
+    const std::shared_ptr<MoQSession>& session) {
+  XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace;
+  std::vector<std::shared_ptr<MoQSession>> sessions;
+  auto nodePtr = findNamespaceNode(
+      unann.trackNamespace, /*createMissingNodes=*/false, &sessions);
+  if (!nodePtr) {
+    // TODO: maybe error?
+    return;
+  }
+  if (nodePtr->sourceSession.get() == session.get()) {
+    nodePtr->sourceSession = nullptr;
+    for (auto& outSession : sessions) {
+      auto evb = outSession->getEventBase();
+      evb->runInEventBaseThread(
+          [outSession, unann] { outSession->unannounce(unann); });
+    }
+  } else {
+    if (nodePtr->sourceSession) {
+      XLOG(ERR) << "unannounce namespace announced by another session";
+    } else {
+      XLOG(DBG1) << "unannounce namespace that was not announced";
+    }
+  }
+
+  // TODO: prune Announce tree
+}
+
+void MoQRelay::onSubscribeNamespace(
+    SubscribeNamespace&& subNs,
+    std::shared_ptr<MoQSession> session) {
+  XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
+  // check auth
+  if (subNs.trackNamespacePrefix.empty()) {
+    session->subscribeNamespaceError(
+        {subNs.trackNamespacePrefix, 400, "empty"});
+    return;
+  }
+  auto nodePtr = findNamespaceNode(
+      subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
+  auto sessionPtr = session.get();
+  nodePtr->sessions.emplace(std::move(session));
+  sessionPtr->subscribeNamespaceOk({subNs.trackNamespacePrefix});
+
+  // Find all nested Announcements and forward
+  std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
+      {subNs.trackNamespacePrefix, nodePtr}};
+  auto evb = sessionPtr->getEventBase();
+  while (!nodes.empty()) {
+    auto [prefix, nodePtr] = std::move(*nodes.begin());
+    nodes.pop_front();
+    if (nodePtr->sourceSession) {
+      // We don't really care if we get announce error, I guess?
+      // TODO: Auth/params
+      sessionPtr->announce({prefix, {}}).scheduleOn(evb).start();
+    }
+    for (auto& nextNodeIt : nodePtr->children) {
+      TrackNamespace nodePrefix(prefix);
+      nodePrefix.append(nextNodeIt.first);
+      nodes.emplace_back(std::forward_as_tuple(nodePrefix, &nextNodeIt.second));
+    }
+  }
+}
+
+void MoQRelay::onUnsubscribeNamespace(
+    UnsubscribeNamespace&& unsubNs,
+    const std::shared_ptr<MoQSession>& session) {
+  XLOG(DBG1) << __func__ << " nsp=" << unsubNs.trackNamespacePrefix;
+  auto nodePtr = findNamespaceNode(
+      unsubNs.trackNamespacePrefix, /*createMissingNodes=*/false);
+  if (!nodePtr) {
+    // TODO: maybe error?
+    return;
+  }
+  auto it = nodePtr->sessions.find(session);
+  if (it != nodePtr->sessions.end()) {
+    nodePtr->sessions.erase(it);
+    return;
+  }
+  // TODO: error?
+  XLOG(DBG1) << "Namespace prefix was not subscribed by this session";
+
+  // TODO: prune Announce tree
+}
+
+std::shared_ptr<MoQSession> MoQRelay::findAnnounceSession(
+    const TrackNamespace& ns) {
+  auto nodePtr = findNamespaceNode(ns, /*createMissingNodes=*/false);
+  if (!nodePtr) {
+    return nullptr;
+  }
+  return nodePtr->sourceSession;
 }
 
 folly::coro::Task<void> MoQRelay::onSubscribe(
@@ -33,21 +166,21 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
       session->subscribeError({subReq.subscribeID, 400, "namespace required"});
       co_return;
     }
-    auto upstreamSessionIt =
-        announces_.find(subReq.fullTrackName.trackNamespace);
-    if (upstreamSessionIt == announces_.end()) {
+    auto upstreamSession =
+        findAnnounceSession(subReq.fullTrackName.trackNamespace);
+    if (!upstreamSession) {
       // no such namespace has been announced
       session->subscribeError({subReq.subscribeID, 404, "no such namespace"});
       co_return;
     }
-    if (session.get() == upstreamSessionIt->second.get()) {
+    if (session.get() == upstreamSession.get()) {
       session->subscribeError({subReq.subscribeID, 400, "self subscribe"});
       co_return;
     }
     // TODO: we only subscribe with the downstream locations.
     subReq.priority = 1;
     subReq.groupOrder = GroupOrder::Default;
-    auto subRes = co_await upstreamSessionIt->second->subscribe(subReq);
+    auto subRes = co_await upstreamSession->subscribe(subReq);
     if (subRes.hasError()) {
       session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
       co_return;
@@ -57,22 +190,23 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
     forwarder->setGroupOrder(subRes.value()->groupOrder());
     RelaySubscription rsub(
         {forwarder,
-         upstreamSessionIt->second,
+         upstreamSession,
          (*subRes)->subscribeID(),
          folly::CancellationSource()});
     auto token = rsub.cancellationSource.getToken();
     subscriptions_[subReq.fullTrackName] = std::move(rsub);
     folly::coro::co_withCancellation(
         token, forwardTrack(subRes.value(), forwarder))
-        .scheduleOn(upstreamSessionIt->second->getEventBase())
+        .scheduleOn(upstreamSession->getEventBase())
         .start();
   } else {
     forwarder = subscriptionIt->second.forwarder;
   }
   // Add to subscribers list
+  auto sessionPtr = session.get();
   forwarder->addSubscriber(
-      session, subReq.subscribeID, subReq.trackAlias, subReq);
-  session->subscribeOk(
+      std::move(session), subReq.subscribeID, subReq.trackAlias, subReq);
+  sessionPtr->subscribeOk(
       {subReq.subscribeID,
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(forwarder->groupOrder(), subGroupOrder),
@@ -140,14 +274,42 @@ void MoQRelay::onUnsubscribe(
 }
 
 void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
-  // TODO: remove linear search
-  for (auto it = announces_.begin(); it != announces_.end();) {
-    if (it->second.get() == session.get()) {
-      it = announces_.erase(it);
-    } else {
-      it++;
+  // TODO: remove linear search by having each session track it's active
+  // announcements, subscribes and subscribe namespaces
+  std::vector<std::shared_ptr<MoQSession>> notifySessions;
+  std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
+      {TrackNamespace(), &announceRoot_}};
+  TrackNamespace prefix;
+  while (!nodes.empty()) {
+    auto [prefix, nodePtr] = std::move(*nodes.begin());
+    nodes.pop_front();
+    // Implicit UnsubscribeNamespace
+    nodePtr->sessions.erase(session);
+
+    // Add sessions for future Unannounce
+    notifySessions.insert(
+        notifySessions.end(),
+        nodePtr->sessions.begin(),
+        nodePtr->sessions.end());
+
+    if (nodePtr->sourceSession == session) {
+      // This session is unannouncing
+      nodePtr->sourceSession = nullptr;
+      for (auto& outSession : notifySessions) {
+        auto evb = outSession->getEventBase();
+        Unannounce unann{prefix};
+        evb->runInEventBaseThread(
+            [outSession, unann] { outSession->unannounce(unann); });
+      }
+    }
+    for (auto& nextNode : nodePtr->children) {
+      TrackNamespace nodePrefix(prefix);
+      nodePrefix.append(nextNode.first);
+      nodes.emplace_back(
+          std::forward_as_tuple(std::move(nodePrefix), &nextNode.second));
     }
   }
+
   // TODO: we should keep a map from this session to all its subscriptions
   // and remove this linear search also
   for (auto subscriptionIt = subscriptions_.begin();

@@ -535,6 +535,16 @@ void MoQSession::announceError(AnnounceError announceError) {
   controlWriteEvent_.signal();
 }
 
+void MoQSession::unannounce(Unannounce unann) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto trackNamespace = unann.trackNamespace;
+  auto res = writeUnannounce(controlWriteBuf_, std::move(unann));
+  if (!res) {
+    XLOG(ERR) << "writeUnannounce failed" << " sess=" << this;
+  }
+  controlWriteEvent_.signal();
+}
+
 folly::coro::Task<
     folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>
 MoQSession::subscribeNamespace(SubscribeNamespace sn) {
