@@ -172,7 +172,8 @@ folly::coro::Task<void> MoQSession::readLoop(
   } else {
     codec = std::make_unique<MoQObjectStreamCodec>(this);
   }
-  codec->setStreamId(readHandle->getID());
+  auto id = readHandle->getID();
+  codec->setStreamId(id);
 
   // TODO: disallow OBJECT on control streams and non-object on non-control
   bool fin = false;
@@ -180,14 +181,15 @@ folly::coro::Task<void> MoQSession::readLoop(
     auto streamData = co_await folly::coro::co_awaitTry(
         readHandle->readStreamData().via(evb_));
     if (streamData.hasException()) {
-      XLOG(ERR) << streamData.exception().what() << " sess=" << this;
+      XLOG(ERR) << streamData.exception().what() << " id=" << id
+                << " sess=" << this;
       co_return;
     } else {
       if (streamData->data || streamData->fin) {
         codec->onIngress(std::move(streamData->data), streamData->fin);
       }
       fin = streamData->fin;
-      XLOG_IF(DBG3, fin) << "End of stream" << " sess=" << this;
+      XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
     }
   }
 }
@@ -227,7 +229,8 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 }
 
 void MoQSession::onObjectHeader(ObjectHeader objHeader) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << "MoQSession::" << __func__ << " " << objHeader
+             << " sess=" << this;
   auto trackIt = subTracks_.find(objHeader.subscribeID);
   if (trackIt == subTracks_.end()) {
     // received an object for unknown sub id
@@ -255,9 +258,9 @@ void MoQSession::onObjectPayload(
 }
 
 void MoQSession::TrackHandle::onObjectHeader(ObjectHeader objHeader) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
   uint64_t objectIdKey = objHeader.id;
-  if (objHeader.status != ObjectStatus::NORMAL) {
+  auto status = objHeader.status;
+  if (status != ObjectStatus::NORMAL) {
     objectIdKey |= (1ull << 63);
   }
   auto res = objects_.emplace(
@@ -267,6 +270,9 @@ void MoQSession::TrackHandle::onObjectHeader(ObjectHeader objHeader) {
   res.first->second->header = std::move(objHeader);
   res.first->second->fullTrackName = fullTrackName_;
   res.first->second->cancelToken = cancelToken_;
+  if (status != ObjectStatus::NORMAL) {
+    res.first->second->payloadQueue.enqueue(nullptr);
+  }
   // TODO: objects_ accumulates the headers of all objects for the life of the
   // track.  Remove an entry from objects when returning the end of the payload,
   // or the object itself for non-normal.
@@ -749,9 +755,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     std::unique_ptr<folly::IOBuf> payload,
     bool eom,
     bool streamPerObject) {
-  XLOG(DBG1) << __func__ << " sid=" << objHeader.subscribeID
-             << " t=" << objHeader.trackAlias << " g=" << objHeader.group
-             << " o=" << objHeader.id;
+  XLOG(DBG1) << __func__ << " " << objHeader << " sess=" << this;
   // TODO: Should there be verification that subscribeID / trackAlias are
   // valid, current subscriptions, or make the peer do that?
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};

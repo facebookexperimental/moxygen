@@ -1446,6 +1446,7 @@ WriteResult writeUnsubscribeNamespace(
   return size;
 }
 
+namespace {
 const char* getFrameTypeString(FrameType type) {
   switch (type) {
     case FrameType::CLIENT_SETUP:
@@ -1500,6 +1501,29 @@ const char* getStreamTypeString(StreamType type) {
   return "";
 }
 
+const char* getObjectStatusString(ObjectStatus objectStatus) {
+  switch (objectStatus) {
+    case ObjectStatus::NORMAL:
+      return "NORMAL";
+    case ObjectStatus::OBJECT_NOT_EXIST:
+      return "OBJECT_NOT_EXIST";
+    case ObjectStatus::GROUP_NOT_EXIST:
+      return "GROUP_NOT_EXIST";
+    case ObjectStatus::END_OF_GROUP:
+      return "END_OF_GROUP";
+    case ObjectStatus::END_OF_TRACK_AND_GROUP:
+      return "END_OF_TRACK_AND_GROUP";
+    case ObjectStatus::END_OF_SUBGROUP:
+      return "END_OF_SUBGROUP";
+    default:
+      // can happen when type was cast from uint8_t
+      return "Unknown";
+  }
+  LOG(FATAL) << "Unreachable";
+  return "";
+}
+} // namespace
+
 std::ostream& operator<<(std::ostream& os, FrameType type) {
   os << getFrameTypeString(type);
   return os;
@@ -1507,6 +1531,23 @@ std::ostream& operator<<(std::ostream& os, FrameType type) {
 
 std::ostream& operator<<(std::ostream& os, StreamType type) {
   os << getStreamTypeString(type);
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, ObjectStatus status) {
+  os << getObjectStatusString(status);
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
+  os << "subscribeID=" << header.subscribeID
+     << " trackAlias=" << header.trackAlias << " group=" << header.group
+     << " subgroup=" << header.subgroup << " id=" << header.id
+     << " priority=" << uint32_t(header.priority)
+     << " forwardPreference=" << uint32_t(header.forwardPreference)
+     << " status=" << getObjectStatusString(header.status) << " length="
+     << (header.length.hasValue() ? std::to_string(header.length.value())
+                                  : "none");
   return os;
 }
 

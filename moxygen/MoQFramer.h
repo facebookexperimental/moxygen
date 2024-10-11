@@ -162,6 +162,8 @@ enum class ObjectStatus : uint64_t {
   END_OF_SUBGROUP = 5,
 };
 
+std::ostream& operator<<(std::ostream& os, ObjectStatus type);
+
 struct ObjectHeader {
   uint64_t subscribeID;
   uint64_t trackAlias;
@@ -173,6 +175,8 @@ struct ObjectHeader {
   ObjectStatus status{ObjectStatus::NORMAL};
   folly::Optional<uint64_t> length{folly::none};
 };
+
+std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 
 // datagram only
 folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
