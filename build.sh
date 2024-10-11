@@ -48,7 +48,8 @@ function install_dependencies_linux() {
     libgoogle-glog-dev \
     libdouble-conversion-dev \
     libboost-all-dev \
-    gperf
+    gperf \
+    libfast-float-dev
 }
 
 function install_dependencies_mac() {
