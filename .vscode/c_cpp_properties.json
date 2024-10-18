@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "WSL2",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/_build/deps/**"
+            ],
+            "defines": [
+                "_DEBUG",
+                "__linux__",
+                "__x86_64__"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "${default}"
+        }
+    ],
+    "version": 4
+}

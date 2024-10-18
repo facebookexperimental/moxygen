@@ -1,0 +1,12 @@
+{
+    "cmake.configureOnOpen": false,
+    "cmake.configureOnEdit": false,
+    "cmake.automaticReconfigure": false,
+    "cmake.buildBeforeRun": false,
+    "cmake.buildTask": false,
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.compilerPath": "/usr/bin/g++-13",
+    "C_Cpp.intelliSenseEngine": "Tag Parser",
+    "cmake.deleteBuildDirOnCleanConfigure": false,
+    "testMate.cpp.test.executables": "{build,Build,BUILD,out,Out,OUT,moxygen}/**/*{test,Test,TEST}*"
+}
