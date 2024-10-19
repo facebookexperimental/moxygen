@@ -59,6 +59,7 @@ function install_dependencies_mac() {
     m4                       \
     boost                    \
     double-conversion        \
+    fast_float               \
     gflags                   \
     glog                     \
     gperf                    \
