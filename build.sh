@@ -113,6 +113,32 @@ function synch_dependency_to_commit() {
   popd
 }
 
+function setup_fast_float() {
+  FAST_FLOAT_DIR=$DEPS_DIR/fast_float
+  FAST_FLOAT_BUILD_DIR=$DEPS_DIR/fast_float/build/
+  FAST_FLOAT_TAG=$(grep "subdir = " ../build/fbcode_builder/manifests/fast_float | cut -d "-" -f 2,3)
+  if [ ! -d "$FAST_FLOAT_DIR" ] ; then
+    echo -e "${COLOR_GREEN}[ INFO ] Cloning fast_float repo ${COLOR_OFF}"
+    git clone https://github.com/fastfloat/fast_float.git  "$FAST_FLOAT_DIR"
+  fi
+  cd "$FAST_FLOAT_DIR"
+  git fetch --tags
+  git checkout "${FAST_FLOAT_TAG}"
+  echo -e "${COLOR_GREEN}Building fast_float ${COLOR_OFF}"
+  mkdir -p "$FAST_FLOAT_BUILD_DIR"
+  cd "$FAST_FLOAT_BUILD_DIR" || exit
+
+  cmake                                           \
+    -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
+    ..
+  make -j "$JOBS"
+  make install
+  echo -e "${COLOR_GREEN}fast_float is installed ${COLOR_OFF}"
+  cd "$BWD" || exit
+}
+
 function setup_fmt() {
   FMT_DIR=$DEPS_DIR/fmt
   FMT_BUILD_DIR=$DEPS_DIR/fmt/build/
@@ -458,6 +484,7 @@ mkdir -p "$DEPS_DIR"
 cd "$(dirname "$0")"
 
 if [ "$INSTALL_LIBRARIES" == true ] ; then
+  setup_fast_float
   setup_fmt
   setup_googletest
   setup_zstd
