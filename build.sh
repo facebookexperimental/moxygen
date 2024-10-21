@@ -48,8 +48,7 @@ function install_dependencies_linux() {
     libgoogle-glog-dev \
     libdouble-conversion-dev \
     libboost-all-dev \
-    gperf \
-    libfast-float-dev
+    gperf
 }
 
 function install_dependencies_mac() {
@@ -59,6 +58,7 @@ function install_dependencies_mac() {
     m4                       \
     boost                    \
     double-conversion        \
+    fast_float               \
     gflags                   \
     glog                     \
     gperf                    \
@@ -111,6 +111,34 @@ function synch_dependency_to_commit() {
   # Disable git warning about detached head when checking out a specific commit.
   git -c advice.detachedHead=false checkout "$DEP_REV"
   popd
+}
+
+function setup_fast_float() {
+  FASTFLOAT_DIR=$DEPS_DIR/fast_float
+  FASTFLOAT_BUILD_DIR=$DEPS_DIR/fast_float/build/
+  FASTFLOAT_TAG=$(grep "subdir = " ../build/fbcode_builder/manifests/fast_float | cut -d "-" -f 2,3)
+  if [ ! -d "$FASTFLOAT_DIR" ] ; then
+    echo -e "${COLOR_GREEN}[ INFO ] Cloning fast_float repo ${COLOR_OFF}"
+    git clone https://github.com/fastfloat/fast_float.git  "$FASTFLOAT_DIR"
+  fi
+  cd "$FASTFLOAT_DIR"
+  git fetch --tags
+  git checkout "v${FASTFLOAT_TAG}"
+  echo -e "${COLOR_GREEN}Building fast_float ${COLOR_OFF}"
+  mkdir -p "$FASTFLOAT_BUILD_DIR"
+  cd "$FASTFLOAT_BUILD_DIR" || exit
+
+  cmake                                           \
+    -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
+    -DFASTFLOAT_TEST=OFF                          \
+    -DFASTFLOAT_SANITIZE=OFF                      \
+    ..
+  make -j "$JOBS"
+  make install
+  echo -e "${COLOR_GREEN}fast_float is installed ${COLOR_OFF}"
+  cd "$BWD" || exit
 }
 
 function setup_fmt() {
@@ -458,6 +486,7 @@ mkdir -p "$DEPS_DIR"
 cd "$(dirname "$0")"
 
 if [ "$INSTALL_LIBRARIES" == true ] ; then
+  setup_fast_float
   setup_fmt
   setup_googletest
   setup_zstd
