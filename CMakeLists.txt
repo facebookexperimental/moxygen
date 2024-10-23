@@ -51,8 +51,7 @@ find_package(folly REQUIRED)
 find_package(wangle REQUIRED)
 find_package(mvfst REQUIRED)
 find_package(proxygen REQUIRED)
-# We can NOT use Glog latest version, is NOT compatible with moxygen
-find_package(glog REQUIRED)
+find_package(gflags REQUIRED)
 find_package(Zstd REQUIRED)
 
 list(APPEND
