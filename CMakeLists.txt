@@ -51,12 +51,7 @@ find_package(folly REQUIRED)
 find_package(wangle REQUIRED)
 find_package(mvfst REQUIRED)
 find_package(proxygen REQUIRED)
-# We can NOT use Glog latest version, is NOT compatible with moxygen - XXX is this comment still relevant
-# find_package(glog REQUIRED) - XXX this fails OSS build
-pkg_check_modules(glog REQUIRED libglog)
-
 find_package(gflags REQUIRED)
-
 find_package(Zstd REQUIRED)
 
 list(APPEND
