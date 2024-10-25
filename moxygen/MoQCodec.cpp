@@ -362,6 +362,50 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
+    case FrameType::FETCH: {
+      auto res = parseFetch(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetch(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::FETCH_CANCEL: {
+      auto res = parseFetchCancel(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetchCancel(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::FETCH_OK: {
+      auto res = parseFetchOk(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetchOk(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::FETCH_ERROR: {
+      auto res = parseFetchError(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetchError(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::ANNOUNCE: {
       auto res = parseAnnounce(cursor, curFrameLength_);
       if (res) {

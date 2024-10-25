@@ -783,6 +783,141 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
   return maxSubscribeId;
 }
 
+folly::Expected<Fetch, ErrorCode> parseFetch(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  Fetch fetch;
+  auto res = quic::decodeQuicInteger(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  fetch.subscribeID = res->first;
+  length -= res->second;
+
+  auto res2 = parseFullTrackName(cursor, length);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
+  fetch.fullTrackName = std::move(res2.value());
+
+  if (length < 2) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  fetch.priority = cursor.readBE<uint8_t>();
+  auto order = cursor.readBE<uint8_t>();
+  if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  }
+  fetch.groupOrder = static_cast<GroupOrder>(order);
+  length -= 2 * sizeof(uint8_t);
+
+  auto res3 = parseAbsoluteLocation(cursor, length);
+  if (!res3) {
+    return folly::makeUnexpected(res3.error());
+  }
+  fetch.start = std::move(res3.value());
+
+  auto res4 = parseAbsoluteLocation(cursor, length);
+  if (!res4) {
+    return folly::makeUnexpected(res4.error());
+  }
+  fetch.end = std::move(res4.value());
+
+  auto numParams = quic::decodeQuicInteger(cursor, length);
+  if (!numParams) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numParams->second;
+  auto res5 =
+      parseTrackRequestParams(cursor, length, numParams->first, fetch.params);
+  if (!res5) {
+    return folly::makeUnexpected(res5.error());
+  }
+  return fetch;
+}
+
+folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  FetchCancel fetchCancel;
+  auto res = quic::decodeQuicInteger(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  fetchCancel.subscribeID = res->first;
+  return fetchCancel;
+}
+
+folly::Expected<FetchOk, ErrorCode> parseFetchOk(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  FetchOk fetchOk;
+  auto res = quic::decodeQuicInteger(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  fetchOk.subscribeID = res->first;
+  length -= res->second;
+
+  // Check for next two bytes
+  if (length < 2) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  auto order = cursor.readBE<uint8_t>();
+  if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  }
+  fetchOk.groupOrder = static_cast<GroupOrder>(order);
+  fetchOk.endOfTrack = cursor.readBE<uint8_t>();
+  length -= 2 * sizeof(uint8_t);
+
+  auto res2 = parseAbsoluteLocation(cursor, length);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
+  fetchOk.latestGroupAndObject = std::move(res2.value());
+
+  auto numParams = quic::decodeQuicInteger(cursor, length);
+  if (!numParams) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numParams->second;
+  auto res3 =
+      parseTrackRequestParams(cursor, length, numParams->first, fetchOk.params);
+  if (!res3) {
+    return folly::makeUnexpected(res3.error());
+  }
+
+  return fetchOk;
+}
+
+folly::Expected<FetchError, ErrorCode> parseFetchError(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  FetchError fetchError;
+  auto res = quic::decodeQuicInteger(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  fetchError.subscribeID = res->first;
+  length -= res->second;
+
+  auto res2 = quic::decodeQuicInteger(cursor, length);
+  if (!res2) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  fetchError.errorCode = res2->first;
+  length -= res2->second;
+
+  auto res3 = parseFixedString(cursor, length);
+  if (!res3) {
+    return folly::makeUnexpected(res3.error());
+  }
+  fetchError.reasonPhrase = std::move(res3.value());
+
+  return fetchError;
+}
+
 folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespace(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
@@ -1439,6 +1574,87 @@ WriteResult writeUnsubscribeNamespace(
       writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE_NAMESPACE, error);
   writeTrackNamespace(
       writeBuf, unsubscribeNamespace.trackNamespacePrefix, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeFetch(
+    folly::IOBufQueue& writeBuf,
+    const Fetch& fetch) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
+  writeVarint(writeBuf, fetch.subscribeID, size, error);
+  writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
+
+  writeBuf.append(&fetch.priority, 1);
+  size += 1;
+  auto order = folly::to_underlying(fetch.groupOrder);
+  writeBuf.append(&order, 1);
+  size += 1;
+
+  writeVarint(writeBuf, fetch.start.group, size, error);
+  writeVarint(writeBuf, fetch.start.object, size, error);
+  writeVarint(writeBuf, fetch.end.group, size, error);
+  writeVarint(writeBuf, fetch.end.object, size, error);
+
+  writeTrackRequestParams(writeBuf, fetch.params, size, error);
+
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeFetchCancel(
+    folly::IOBufQueue& writeBuf,
+    const FetchCancel& fetchCancel) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_CANCEL, error);
+  writeVarint(writeBuf, fetchCancel.subscribeID, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeFetchOk(
+    folly::IOBufQueue& writeBuf,
+    const FetchOk& fetchOk) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
+  writeVarint(writeBuf, fetchOk.subscribeID, size, error);
+  auto order = folly::to_underlying(fetchOk.groupOrder);
+  writeBuf.append(&order, 1);
+  size += 1;
+  writeBuf.append(&fetchOk.endOfTrack, 1);
+  size += 1;
+  writeVarint(writeBuf, fetchOk.latestGroupAndObject.group, size, error);
+  writeVarint(writeBuf, fetchOk.latestGroupAndObject.object, size, error);
+  writeTrackRequestParams(writeBuf, fetchOk.params, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeFetchError(
+    folly::IOBufQueue& writeBuf,
+    const FetchError& fetchError) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
+  writeVarint(writeBuf, fetchError.subscribeID, size, error);
+  writeVarint(writeBuf, fetchError.errorCode, size, error);
+  writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

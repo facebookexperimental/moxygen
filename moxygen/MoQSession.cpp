@@ -401,6 +401,22 @@ void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
+void MoQSession::onFetch(Fetch fetch) {
+  XLOG(ERR) << "Not implemented yet";
+}
+
+void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
+  XLOG(ERR) << "Not implemented yet";
+}
+
+void MoQSession::onFetchOk(FetchOk fetchOk) {
+  XLOG(ERR) << "Not implemented yet";
+}
+
+void MoQSession::onFetchError(FetchError fetchError) {
+  XLOG(ERR) << "Not implemented yet";
+}
+
 void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   controlMessages_.enqueue(std::move(ann));

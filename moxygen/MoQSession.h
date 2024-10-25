@@ -119,6 +119,18 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       XLOG(INFO) << fmt::format(
           "MaxSubscribeId subID={}", maxSubId.subscribeID);
     }
+    virtual void operator()(Fetch fetch) const {
+      XLOG(INFO) << "Fetch subID=" << fetch.subscribeID;
+    }
+    virtual void operator()(FetchCancel fetchCancel) const {
+      XLOG(INFO) << "FetchCancel subID=" << fetchCancel.subscribeID;
+    }
+    virtual void operator()(FetchOk fetchOk) const {
+      XLOG(INFO) << "FetchOk subID=" << fetchOk.subscribeID;
+    }
+    virtual void operator()(FetchError fetchError) const {
+      XLOG(INFO) << "FetchError subID=" << fetchError.subscribeID;
+    }
     virtual void operator()(TrackStatusRequest trackStatusRequest) const {
       XLOG(INFO) << "Subscribe ftn="
                  << trackStatusRequest.fullTrackName.trackNamespace
@@ -335,6 +347,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
   void onMaxSubscribeId(MaxSubscribeId maxSubId) override;
+  void onFetch(Fetch fetch) override;
+  void onFetchCancel(FetchCancel fetchCancel) override;
+  void onFetchOk(FetchOk fetchOk) override;
+  void onFetchError(FetchError fetchError) override;
   void onAnnounce(Announce announce) override;
   void onAnnounceOk(AnnounceOk announceOk) override;
   void onAnnounceError(AnnounceError announceError) override;

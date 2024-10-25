@@ -69,6 +69,14 @@ enum class TrackStatusCode : uint32_t {
   UNKNOWN = 0x4
 };
 
+enum class FetchErrorCode : uint32_t {
+  INTERNAL_ERROR = 0,
+  INVALID_RANGE = 1,
+  TRACK_NOT_EXIST = 2,
+  UNAUTHORIZED = 3,
+  TIMEOUT = 4,
+};
+
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
 
 enum class FrameType : uint64_t {
@@ -91,6 +99,10 @@ enum class FrameType : uint64_t {
   SUBSCRIBE_NAMESPACE_ERROR = 0x13,
   UNSUBSCRIBE_NAMESPACE = 0x14,
   MAX_SUBSCRIBE_ID = 0x15,
+  FETCH = 0x16,
+  FETCH_CANCEL = 0x17,
+  FETCH_OK = 0x18,
+  FETCH_ERROR = 0x19,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
 };
@@ -129,9 +141,12 @@ constexpr uint64_t kVersionDraft03 = 0xff000003;
 constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
+constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft06_exp =
     0xff060004; // Draft 6 in progress version
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft06_exp;
+constexpr uint64_t kVersionDraft07_exp =
+    0xff070001; // Draft 7 in progress version
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft07_exp;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -465,7 +480,52 @@ folly::Expected<Goaway, ErrorCode> parseGoaway(
 struct MaxSubscribeId {
   uint64_t subscribeID;
 };
+
 folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
+struct Fetch {
+  uint64_t subscribeID;
+  FullTrackName fullTrackName;
+  uint8_t priority;
+  GroupOrder groupOrder;
+  AbsoluteLocation start;
+  AbsoluteLocation end;
+  std::vector<TrackRequestParameter> params;
+};
+
+folly::Expected<Fetch, ErrorCode> parseFetch(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
+struct FetchCancel {
+  uint64_t subscribeID;
+};
+
+folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
+struct FetchOk {
+  uint64_t subscribeID;
+  GroupOrder groupOrder;
+  uint8_t endOfTrack;
+  AbsoluteLocation latestGroupAndObject;
+  std::vector<TrackRequestParameter> params;
+};
+
+folly::Expected<FetchOk, ErrorCode> parseFetchOk(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
+struct FetchError {
+  uint64_t subscribeID;
+  uint64_t errorCode;
+  std::string reasonPhrase;
+};
+
+folly::Expected<FetchError, ErrorCode> parseFetchError(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
@@ -602,5 +662,21 @@ WriteResult writeSubscribeNamespaceError(
 WriteResult writeUnsubscribeNamespace(
     folly::IOBufQueue& writeBuf,
     const UnsubscribeNamespace& unsubscribeNamespace) noexcept;
+
+WriteResult writeFetch(
+    folly::IOBufQueue& writeBuf,
+    const Fetch& fetch) noexcept;
+
+WriteResult writeFetchCancel(
+    folly::IOBufQueue& writeBuf,
+    const FetchCancel& fetchCancel) noexcept;
+
+WriteResult writeFetchOk(
+    folly::IOBufQueue& writeBuf,
+    const FetchOk& fetchOk) noexcept;
+
+WriteResult writeFetchError(
+    folly::IOBufQueue& writeBuf,
+    const FetchError& fetchError) noexcept;
 
 } // namespace moxygen

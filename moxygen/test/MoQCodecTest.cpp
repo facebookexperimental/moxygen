@@ -37,7 +37,11 @@ TEST(MoQCodec, All) {
   EXPECT_CALL(callback, onSubscribeNamespaceOk(testing::_));
   EXPECT_CALL(callback, onSubscribeNamespaceError(testing::_));
   EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(22);
+  EXPECT_CALL(callback, onFetch(testing::_));
+  EXPECT_CALL(callback, onFetchCancel(testing::_));
+  EXPECT_CALL(callback, onFetchOk(testing::_));
+  EXPECT_CALL(callback, onFetchError(testing::_));
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
 
   codec.onIngress(std::move(allMsgs), true);
 }
@@ -89,7 +93,11 @@ TEST(MoQCodec, Underflow) {
   EXPECT_CALL(callback, onSubscribeNamespaceOk(testing::_));
   EXPECT_CALL(callback, onSubscribeNamespaceError(testing::_));
   EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(22);
+  EXPECT_CALL(callback, onFetch(testing::_));
+  EXPECT_CALL(callback, onFetchCancel(testing::_));
+  EXPECT_CALL(callback, onFetchOk(testing::_));
+  EXPECT_CALL(callback, onFetchError(testing::_));
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }

@@ -148,6 +148,37 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
           {TrackNamespace({"hello"}), 500, "server error"}));
   res = writeUnsubscribeNamespace(
       writeBuf, UnsubscribeNamespace({TrackNamespace({"hello"})}));
+  res = writeFetch(
+      writeBuf,
+      Fetch(
+          {0,
+           FullTrackName({TrackNamespace({"hello"}), "world"}),
+           255,
+           GroupOrder::NewestFirst,
+           AbsoluteLocation({0, 0}),
+           AbsoluteLocation({1, 1}),
+           {TrackRequestParameter(
+               {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+                "binky",
+                0})}}));
+  res = writeFetchCancel(writeBuf, FetchCancel({0}));
+  res = writeFetchOk(
+      writeBuf,
+      FetchOk(
+          {0,
+           GroupOrder::NewestFirst,
+           1,
+           AbsoluteLocation({0, 0}),
+           {TrackRequestParameter(
+               {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+                "binky",
+                0})}}));
+  res = writeFetchError(
+      writeBuf,
+      FetchError(
+          {0,
+           folly::to_underlying(FetchErrorCode::INVALID_RANGE),
+           "Invalid range"}));
 
   return writeBuf.move();
 }
