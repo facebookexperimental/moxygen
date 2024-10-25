@@ -918,49 +918,49 @@ folly::Expected<FetchError, ErrorCode> parseFetchError(
   return fetchError;
 }
 
-folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespace(
+folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounce(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  return SubscribeNamespace(
+  return SubscribeAnnounces(
       {std::move(res->trackNamespace), std::move(res->params)});
 }
 
-folly::Expected<SubscribeNamespaceOk, ErrorCode> parseSubscribeNamespaceOk(
+folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounceOk(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  return SubscribeNamespaceOk({std::move(res->trackNamespace)});
+  return SubscribeAnnouncesOk({std::move(res->trackNamespace)});
 }
 
-folly::Expected<SubscribeNamespaceError, ErrorCode>
-parseSubscribeNamespaceError(
+folly::Expected<SubscribeAnnouncesError, ErrorCode>
+parseSubscribeAnnouncesError(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounceError(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  return SubscribeNamespaceError(
+  return SubscribeAnnouncesError(
       {std::move(res->trackNamespace),
        res->errorCode,
        std::move(res->reasonPhrase)});
 }
 
-folly::Expected<UnsubscribeNamespace, ErrorCode> parseUnsubscribeNamespace(
+folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounceOk(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  return UnsubscribeNamespace({std::move(res->trackNamespace)});
+  return UnsubscribeAnnounces({std::move(res->trackNamespace)});
 }
 
 //// Egress ////
@@ -1514,16 +1514,16 @@ WriteResult writeGoaway(
   return size;
 }
 
-WriteResult writeSubscribeNamespace(
+WriteResult writeSubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
-    const SubscribeNamespace& subscribeNamespace) noexcept {
+    const SubscribeAnnounces& subscribeAnnounces) noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE, error);
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES, error);
   writeTrackNamespace(
-      writeBuf, subscribeNamespace.trackNamespacePrefix, size, error);
-  writeTrackRequestParams(writeBuf, subscribeNamespace.params, size, error);
+      writeBuf, subscribeAnnounces.trackNamespacePrefix, size, error);
+  writeTrackRequestParams(writeBuf, subscribeAnnounces.params, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1531,15 +1531,15 @@ WriteResult writeSubscribeNamespace(
   return size;
 }
 
-WriteResult writeSubscribeNamespaceOk(
+WriteResult writeSubscribeAnnouncesOk(
     folly::IOBufQueue& writeBuf,
-    const SubscribeNamespaceOk& subscribeNamespaceOk) noexcept {
+    const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE_OK, error);
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_OK, error);
   writeTrackNamespace(
-      writeBuf, subscribeNamespaceOk.trackNamespacePrefix, size, error);
+      writeBuf, subscribeAnnouncesOk.trackNamespacePrefix, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1547,17 +1547,17 @@ WriteResult writeSubscribeNamespaceOk(
   return size;
 }
 
-WriteResult writeSubscribeNamespaceError(
+WriteResult writeSubscribeAnnouncesError(
     folly::IOBufQueue& writeBuf,
-    const SubscribeNamespaceError& subscribeNamespaceError) noexcept {
+    const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE_ERROR, error);
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_ERROR, error);
   writeTrackNamespace(
-      writeBuf, subscribeNamespaceError.trackNamespacePrefix, size, error);
-  writeVarint(writeBuf, subscribeNamespaceError.errorCode, size, error);
-  writeFixedString(writeBuf, subscribeNamespaceError.reasonPhrase, size, error);
+      writeBuf, subscribeAnnouncesError.trackNamespacePrefix, size, error);
+  writeVarint(writeBuf, subscribeAnnouncesError.errorCode, size, error);
+  writeFixedString(writeBuf, subscribeAnnouncesError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1565,15 +1565,15 @@ WriteResult writeSubscribeNamespaceError(
   return size;
 }
 
-WriteResult writeUnsubscribeNamespace(
+WriteResult writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
-    const UnsubscribeNamespace& unsubscribeNamespace) noexcept {
+    const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE_NAMESPACE, error);
+      writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE_ANNOUNCES, error);
   writeTrackNamespace(
-      writeBuf, unsubscribeNamespace.trackNamespacePrefix, size, error);
+      writeBuf, unsubscribeAnnounces.trackNamespacePrefix, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

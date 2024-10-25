@@ -128,19 +128,19 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   testUnderflowResult(r14);
 
   skip(cursor, 1);
-  auto r9a = parseSubscribeNamespace(cursor, frameLength(cursor));
+  auto r9a = parseSubscribeAnnounces(cursor, frameLength(cursor));
   testUnderflowResult(r9a);
 
   skip(cursor, 1);
-  auto r10a = parseSubscribeNamespaceOk(cursor, frameLength(cursor));
+  auto r10a = parseSubscribeAnnouncesOk(cursor, frameLength(cursor));
   testUnderflowResult(r10a);
 
   skip(cursor, 1);
-  auto r11a = parseSubscribeNamespaceError(cursor, frameLength(cursor));
+  auto r11a = parseSubscribeAnnouncesError(cursor, frameLength(cursor));
   testUnderflowResult(r11a);
 
   skip(cursor, 1);
-  auto r13a = parseUnsubscribeNamespace(cursor, frameLength(cursor));
+  auto r13a = parseUnsubscribeAnnounces(cursor, frameLength(cursor));
   testUnderflowResult(r13a);
 
   skip(cursor, 1);

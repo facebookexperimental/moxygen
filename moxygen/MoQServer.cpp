@@ -114,17 +114,17 @@ void MoQServer::ControlVisitor::operator()(
 }
 
 void MoQServer::ControlVisitor::operator()(
-    SubscribeNamespace subscribeNamespace) const {
-  XLOG(INFO) << "SubscribeNamespace ns="
-             << subscribeNamespace.trackNamespacePrefix;
-  clientSession_->subscribeNamespaceError(
-      {subscribeNamespace.trackNamespacePrefix, 500, "not implemented"});
+    SubscribeAnnounces subscribeAnnounces) const {
+  XLOG(INFO) << "SubscribeAnnounces ns="
+             << subscribeAnnounces.trackNamespacePrefix;
+  clientSession_->subscribeAnnouncesError(
+      {subscribeAnnounces.trackNamespacePrefix, 500, "not implemented"});
 }
 
 void MoQServer::ControlVisitor::operator()(
-    UnsubscribeNamespace unsubscribeNamespace) const {
-  XLOG(INFO) << "UnsubscribeNamespace ns="
-             << unsubscribeNamespace.trackNamespacePrefix;
+    UnsubscribeAnnounces unsubscribeAnnounces) const {
+  XLOG(INFO) << "UnsubscribeAnnounces ns="
+             << unsubscribeAnnounces.trackNamespacePrefix;
 }
 
 void MoQServer::ControlVisitor::operator()(

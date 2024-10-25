@@ -94,10 +94,10 @@ enum class FrameType : uint64_t {
   TRACK_STATUS_REQUEST = 0xD,
   TRACK_STATUS = 0xE,
   GOAWAY = 0x10,
-  SUBSCRIBE_NAMESPACE = 0x11,
-  SUBSCRIBE_NAMESPACE_OK = 0x12,
-  SUBSCRIBE_NAMESPACE_ERROR = 0x13,
-  UNSUBSCRIBE_NAMESPACE = 0x14,
+  SUBSCRIBE_ANNOUNCES = 0x11,
+  SUBSCRIBE_ANNOUNCES_OK = 0x12,
+  SUBSCRIBE_ANNOUNCES_ERROR = 0x13,
+  UNSUBSCRIBE_ANNOUNCES = 0x14,
   MAX_SUBSCRIBE_ID = 0x15,
   FETCH = 0x16,
   FETCH_CANCEL = 0x17,
@@ -529,37 +529,37 @@ folly::Expected<FetchError, ErrorCode> parseFetchError(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
-struct SubscribeNamespace {
+struct SubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespace(
+folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
-struct SubscribeNamespaceOk {
+struct SubscribeAnnouncesOk {
   TrackNamespace trackNamespacePrefix;
 };
 
-folly::Expected<SubscribeNamespaceOk, ErrorCode> parseSubscribeNamespaceOk(
+folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
-struct SubscribeNamespaceError {
+struct SubscribeAnnouncesError {
   TrackNamespace trackNamespacePrefix;
   uint64_t errorCode;
   std::string reasonPhrase;
 };
 
-folly::Expected<SubscribeNamespaceError, ErrorCode>
-parseSubscribeNamespaceError(folly::io::Cursor& cursor, size_t length) noexcept;
+folly::Expected<SubscribeAnnouncesError, ErrorCode>
+parseSubscribeAnnouncesError(folly::io::Cursor& cursor, size_t length) noexcept;
 
-struct UnsubscribeNamespace {
+struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
 
-folly::Expected<UnsubscribeNamespace, ErrorCode> parseUnsubscribeNamespace(
+folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
@@ -647,21 +647,21 @@ WriteResult writeGoaway(
     folly::IOBufQueue& writeBuf,
     const Goaway& goaway) noexcept;
 
-WriteResult writeSubscribeNamespace(
+WriteResult writeSubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
-    const SubscribeNamespace& subscribeNamespace) noexcept;
+    const SubscribeAnnounces& subscribeAnnounces) noexcept;
 
-WriteResult writeSubscribeNamespaceOk(
+WriteResult writeSubscribeAnnouncesOk(
     folly::IOBufQueue& writeBuf,
-    const SubscribeNamespaceOk& subscribeNamespaceOk) noexcept;
+    const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept;
 
-WriteResult writeSubscribeNamespaceError(
+WriteResult writeSubscribeAnnouncesError(
     folly::IOBufQueue& writeBuf,
-    const SubscribeNamespaceError& subscribeNamespaceError) noexcept;
+    const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept;
 
-WriteResult writeUnsubscribeNamespace(
+WriteResult writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
-    const UnsubscribeNamespace& unsubscribeNamespace) noexcept;
+    const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept;
 
 WriteResult writeFetch(
     folly::IOBufQueue& writeBuf,

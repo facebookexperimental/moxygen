@@ -63,13 +63,14 @@ class MoQControlCodec : public MoQCodec {
     virtual void onAnnounceError(AnnounceError announceError) = 0;
     virtual void onUnannounce(Unannounce unannounce) = 0;
     virtual void onAnnounceCancel(AnnounceCancel announceCancel) = 0;
-    virtual void onSubscribeNamespace(SubscribeNamespace subscribeNamspace) = 0;
-    virtual void onSubscribeNamespaceOk(
-        SubscribeNamespaceOk subscribeNamspaceOk) = 0;
-    virtual void onSubscribeNamespaceError(
-        SubscribeNamespaceError announceError) = 0;
-    virtual void onUnsubscribeNamespace(
-        UnsubscribeNamespace unsubscribeNamespace) = 0;
+    virtual void onSubscribeAnnounces(
+        SubscribeAnnounces subscribeAnnounces) = 0;
+    virtual void onSubscribeAnnouncesOk(
+        SubscribeAnnouncesOk subscribeAnnouncesOk) = 0;
+    virtual void onSubscribeAnnouncesError(
+        SubscribeAnnouncesError announceError) = 0;
+    virtual void onUnsubscribeAnnounces(
+        UnsubscribeAnnounces unsubscribeAnnounces) = 0;
     virtual void onTrackStatusRequest(
         TrackStatusRequest trackStatusRequest) = 0;
     virtual void onTrackStatus(TrackStatus trackStatus) = 0;
@@ -103,10 +104,10 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::TRACK_STATUS_REQUEST:
       case FrameType::TRACK_STATUS:
       case FrameType::GOAWAY:
-      case FrameType::SUBSCRIBE_NAMESPACE:
-      case FrameType::SUBSCRIBE_NAMESPACE_OK:
-      case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
-      case FrameType::UNSUBSCRIBE_NAMESPACE:
+      case FrameType::SUBSCRIBE_ANNOUNCES:
+      case FrameType::SUBSCRIBE_ANNOUNCES_OK:
+      case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
+      case FrameType::UNSUBSCRIBE_ANNOUNCES:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
       case FrameType::MAX_SUBSCRIBE_ID:
