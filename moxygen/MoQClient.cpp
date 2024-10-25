@@ -6,14 +6,30 @@
 
 #include "moxygen/MoQClient.h"
 
+#include <moxygen/util/QuicConnector.h>
+
 #include <proxygen/httpserver/samples/hq/InsecureVerifierDangerousDoNotUseInProduction.h>
 #include <proxygen/lib/http/HQConnector.h>
+#include <quic/api/QuicSocket.h>
 
-namespace moxygen {
-folly::coro::Task<void> MoQClient::setupMoQSession(
+namespace {
+proxygen::HTTPMessage getWebTransportConnectRequest(const proxygen::URL& url) {
+  proxygen::HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setSecure(true);
+  req.getHeaders().set(proxygen::HTTP_HEADER_HOST, url.getHost());
+  req.getHeaders().add("Sec-Webtransport-Http3-Draft02", "1");
+  req.setURL(url.makeRelativeURL());
+  req.setMethod(proxygen::HTTPMethod::CONNECT);
+  req.setUpgradeProtocol("webtransport");
+  return req;
+}
+
+folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
+    folly::EventBase* evb,
+    const proxygen::URL& url,
     std::chrono::milliseconds connect_timeout,
-    std::chrono::milliseconds transaction_timeout,
-    Role role) noexcept {
+    std::chrono::milliseconds transaction_timeout) {
   // Establish an H3 connection
   class ConnectCallback : public proxygen::HQConnector::Callback {
    public:
@@ -53,62 +69,105 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
        {proxygen::SettingsId::_HQ_DATAGRAM_RFC, 1},
        {proxygen::SettingsId::ENABLE_WEBTRANSPORT, 1}});
   hqConnector.connect(
-      evb_,
+      evb,
       folly::none,
-      folly::SocketAddress(
-          url_.getHost(), url_.getPort(), true), // blocking DNS,
+      folly::SocketAddress(url.getHost(), url.getPort(), true), // blocking DNS,
       std::move(fizzContext),
       std::make_shared<
           proxygen::InsecureVerifierDangerousDoNotUseInProduction>(),
       connect_timeout,
       folly::emptySocketOptionMap,
-      url_.getHost());
+      url.getHost());
   auto session =
       co_await co_awaitTry(std::move(connectCb.sessionContract.second));
   if (session.hasException()) {
     XLOG(ERR) << session.exception().what();
     co_yield folly::coro::co_error(session.exception());
   }
+  co_return session.value();
+}
+} // namespace
 
-  // Establish WebTransport session and create MoQSession
-  auto txn = session.value()->newTransaction(&httpHandler_);
-  proxygen::HTTPMessage req;
-  req.setHTTPVersion(1, 1);
-  req.setSecure(true);
-  req.getHeaders().set(proxygen::HTTP_HEADER_HOST, url_.getHost());
-  req.getHeaders().add("Sec-Webtransport-Http3-Draft02", "1");
-  req.setURL(url_.makeRelativeURL());
-  req.setMethod(proxygen::HTTPMethod::CONNECT);
-  req.setUpgradeProtocol("webtransport");
-  txn->sendHeaders(req);
-  auto moqSession =
-      co_await co_awaitTry(std::move(httpHandler_.sessionContract.second));
-  if (moqSession.hasException()) {
-    XLOG(ERR) << moqSession.exception().what();
-    co_yield folly::coro::co_error(moqSession.exception());
+namespace moxygen {
+folly::coro::Task<void> MoQClient::setupMoQSession(
+    std::chrono::milliseconds connect_timeout,
+    std::chrono::milliseconds transaction_timeout,
+    Role role) noexcept {
+  proxygen::WebTransport* wt = nullptr;
+  folly::Optional<std::string> pathParam;
+  if (transportType_ == TransportType::QUIC) {
+    // Establish QUIC connection
+    auto quicClient = co_await QuicConnector::connectQuic(
+        evb_,
+        folly::SocketAddress(
+            url_.getHost(), url_.getPort(), true), // blocking DNS,
+        connect_timeout,
+        std::make_shared<
+            proxygen::InsecureVerifierDangerousDoNotUseInProduction>(),
+        "moq-00");
+
+    // Make WebTransport object
+    quicWebTransport_ =
+        std::make_shared<proxygen::QuicWebTransport>(std::move(quicClient));
+    quicWebTransport_->setHandler(this);
+    wt = quicWebTransport_.get();
+    pathParam = url_.getPath();
+  } else {
+    // Establish H3 connection
+    auto session = co_await connectH3WithWebtransport(
+        evb_, url_, connect_timeout, transaction_timeout);
+
+    // Establish WebTransport session
+    auto txn = session->newTransaction(&httpHandler_);
+    txn->sendHeaders(getWebTransportConnectRequest(url_));
+    auto wtTry =
+        co_await co_awaitTry(std::move(httpHandler_.wtContract.second));
+    if (wtTry.hasException()) {
+      XLOG(ERR) << wtTry.exception().what();
+      co_yield folly::coro::co_error(wtTry.exception());
+    }
+    session->drain();
+    wt = wtTry.value();
   }
-  session.value()->drain();
 
+  //  Create MoQSession and Setup MoQSession parameters
+  moqSession_ = setupMoQSessionImpl(wt, evb_, role, pathParam);
+  co_await moqSession_->setupComplete();
+}
+
+std::shared_ptr<MoQSession> MoQClient::setupMoQSessionImpl(
+    proxygen::WebTransport* wt,
+    folly::EventBase* evb,
+    Role role,
+    folly::Optional<std::string> path) {
+  auto moqSession =
+      std::make_shared<MoQSession>(MoQControlCodec::Direction::CLIENT, wt, evb);
+
+  moqSession->start();
   // Setup MoQSession parameters
-  moqSession_ = std::move(moqSession.value());
-  moqSession_->start();
+
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxSubscribeId = 100;
-  moqSession_->setup(ClientSetup(
-      {{kVersionDraftCurrent},
-       {{folly::to_underlying(SetupKey::ROLE), "", folly::to_underlying(role)},
-        {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-         "",
-         kDefaultMaxSubscribeId}}}));
-  co_await moqSession_->setupComplete();
+  ClientSetup clientSetup(
+      {kVersionDraftCurrent},
+      {{folly::to_underlying(SetupKey::ROLE), "", folly::to_underlying(role)},
+       {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+        "",
+        kDefaultMaxSubscribeId}});
+  if (path) {
+    clientSetup.params.emplace_back(
+        SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0}));
+  }
+  moqSession->setup(std::move(clientSetup));
+  return moqSession;
 }
 
 void MoQClient::HTTPHandler::onHeadersComplete(
     std::unique_ptr<proxygen::HTTPMessage> resp) noexcept {
   if (resp->getStatusCode() != 200) {
     txn_->sendAbort();
-    sessionContract.first.setException(std::runtime_error(
+    wtContract.first.setException(std::runtime_error(
         fmt::format("Non-200 response: {0}", resp->getStatusCode())));
     return;
   }
@@ -118,37 +177,35 @@ void MoQClient::HTTPHandler::onHeadersComplete(
     txn_->sendAbort();
     return;
   }
-  sessionContract.first.setValue(std::make_shared<MoQSession>(
-      MoQControlCodec::Direction::CLIENT, wt, client_.evb_));
+  wtContract.first.setValue(wt);
 }
 
 void MoQClient::HTTPHandler::onError(
     const proxygen::HTTPException& ex) noexcept {
   XLOG(DBG1) << __func__;
-  if (!sessionContract.first.isFulfilled()) {
-    sessionContract.first.setException(std::runtime_error(
+  if (!wtContract.first.isFulfilled()) {
+    wtContract.first.setException(std::runtime_error(
         fmt::format("Error setting up WebTransport: {0}", ex.what())));
     return;
   }
   // the moq session has been torn down...
   XLOG(ERR) << ex.what();
-  client_.onSessionEnd(ex);
+  client_.onSessionEnd(folly::none);
 }
 
-void MoQClient::onSessionEnd(folly::Optional<proxygen::HTTPException>) {
+void MoQClient::onSessionEnd(folly::Optional<uint32_t>) {
   // TODO: cleanup?
   XLOG(DBG1) << "resetting moqSession_";
   moqSession_.reset();
   CHECK(!moqSession_);
 }
 
-void MoQClient::onWebTransportBidiStream(
-    proxygen::WebTransport::BidiStreamHandle bidi) {
+void MoQClient::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bidi) {
   XLOG(DBG1) << __func__;
   moqSession_->onNewBidiStream(std::move(bidi));
 }
 
-void MoQClient::onWebTransportUniStream(
+void MoQClient::onNewUniStream(
     proxygen::WebTransport::StreamReadHandle* stream) {
   XLOG(DBG1) << __func__;
   moqSession_->onNewUniStream(stream);
