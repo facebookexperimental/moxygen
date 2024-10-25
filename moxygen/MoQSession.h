@@ -9,6 +9,7 @@
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include "moxygen/MoQCodec.h"
 
+#include <folly/MaybeManagedPtr.h>
 #include <folly/container/F14Set.h>
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Promise.h>
@@ -27,7 +28,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
  public:
   explicit MoQSession(
       MoQControlCodec::Direction dir,
-      proxygen::WebTransport* wt,
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       folly::EventBase* evb)
       : dir_(dir), wt_(wt), evb_(evb) {}
 
@@ -434,7 +435,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void closeSessionIfSubscribeIdInvalid(uint64_t subscribeID);
 
   MoQControlCodec::Direction dir_;
-  proxygen::WebTransport* wt_{nullptr};
+  folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
   folly::EventBase* evb_{nullptr}; // keepalive?
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;

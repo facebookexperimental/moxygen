@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQServer.h"
+#include <proxygen/lib/http/webtransport/QuicWebTransport.h>
 
 using namespace quic::samples;
 using namespace proxygen;
@@ -17,16 +18,43 @@ MoQServer::MoQServer(
     std::string key,
     std::string endpoint)
     : endpoint_(endpoint) {
-  HQServerParams params;
-  params.localAddress.emplace();
-  params.localAddress->setFromLocalPort(port);
-  params.serverThreads = 1;
-  params.certificateFilePath = cert;
-  params.keyFilePath = key;
-  params.txnTimeout = std::chrono::seconds(60);
-  hqServer_ = std::make_unique<HQServer>(
-      params, [this](HTTPMessage*) { return new Handler(*this); });
+  params_.localAddress.emplace();
+  params_.localAddress->setFromLocalPort(port);
+  params_.serverThreads = 1;
+  params_.certificateFilePath = cert;
+  params_.keyFilePath = key;
+  params_.txnTimeout = std::chrono::seconds(60);
+  params_.supportedAlpns = {"h3", "moq-00"};
+  auto factory = std::make_unique<HQServerTransportFactory>(
+      params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
+  factory->addAlpnHandler(
+      {"moq-00"},
+      [this](
+          std::shared_ptr<quic::QuicSocket> quicSocket,
+          wangle::ConnectionManager*) {
+        createMoQQuicSession(std::move(quicSocket));
+      });
+  hqServer_ = std::make_unique<HQServer>(params_, std::move(factory));
   hqServer_->start();
+}
+
+void MoQServer::createMoQQuicSession(
+    std::shared_ptr<quic::QuicSocket> quicSocket) {
+  auto qevb = quicSocket->getEventBase();
+  auto quicWebTransport =
+      std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
+  auto qWtPtr = quicWebTransport.get();
+  std::shared_ptr<proxygen::WebTransport> wt(std::move(quicWebTransport));
+  folly::EventBase* evb{nullptr};
+  if (qevb) {
+    evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
+              ->getBackingEventBase();
+  }
+  auto moqSession =
+      std::make_shared<MoQSession>(MoQControlCodec::Direction::SERVER, wt, evb);
+  qWtPtr->setHandler(moqSession.get());
+  // the handleClientSession coro this session moqSession
+  handleClientSession(std::move(moqSession)).scheduleOn(evb).start();
 }
 
 void MoQServer::ControlVisitor::operator()(ClientSetup /*setup*/) const {
@@ -151,6 +179,7 @@ folly::coro::Task<void> MoQServer::handleClientSession(
   while (auto msg = co_await clientSession->controlMessages().next()) {
     boost::apply_visitor(*control, msg.value());
   }
+  terminateClientSession(std::move(clientSession));
 }
 
 void MoQServer::Handler::onHeadersComplete(

@@ -120,6 +120,9 @@ class MoQServer {
   }
 
  private:
+  void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
+
+  quic::samples::HQServerParams params_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
 };
