@@ -27,10 +27,10 @@ class MockControlVisitorBase {
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
   virtual void onAnnounceCancel(AnnounceCancel announceCancel) const = 0;
-  virtual void onSubscribeNamespace(
-      SubscribeNamespace subscribeNamespace) const = 0;
-  virtual void onUnsubscribeNamespace(
-      UnsubscribeNamespace subscribeNamespace) const = 0;
+  virtual void onSubscribeAnnounces(
+      SubscribeAnnounces subscribeAnnounces) const = 0;
+  virtual void onUnsubscribeAnnounces(
+      UnsubscribeAnnounces subscribeAnnounces) const = 0;
   virtual void onTrackStatusRequest(
       TrackStatusRequest trackStatusRequest) const = 0;
   virtual void onTrackStatus(TrackStatus trackStatus) const = 0;
@@ -66,14 +66,14 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
     onAnnounceCancel(announceCancel);
   }
 
-  MOCK_METHOD(void, onSubscribeNamespace, (SubscribeNamespace), (const));
-  void operator()(SubscribeNamespace subscribeNamespace) const override {
-    onSubscribeNamespace(subscribeNamespace);
+  MOCK_METHOD(void, onSubscribeAnnounces, (SubscribeAnnounces), (const));
+  void operator()(SubscribeAnnounces subscribeAnnounces) const override {
+    onSubscribeAnnounces(subscribeAnnounces);
   }
 
-  MOCK_METHOD(void, onUnsubscribeNamespace, (UnsubscribeNamespace), (const));
-  void operator()(UnsubscribeNamespace unsubscribeNamespace) const override {
-    onUnsubscribeNamespace(unsubscribeNamespace);
+  MOCK_METHOD(void, onUnsubscribeAnnounces, (UnsubscribeAnnounces), (const));
+  void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override {
+    onUnsubscribeAnnounces(unsubscribeAnnounces);
   }
 
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest), (const));

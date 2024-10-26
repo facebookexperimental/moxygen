@@ -21,6 +21,7 @@ DEFINE_string(eg, "", "End group");
 DEFINE_string(eo, "", "End object, leave blank for entire group");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
+DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 
 namespace {
 using namespace moxygen;
@@ -28,7 +29,12 @@ using namespace moxygen;
 class MoQTextClient {
  public:
   MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
-      : moqClient_(evb, std::move(url)), fullTrackName_(std::move(ftn)) {}
+      : moqClient_(
+            evb,
+            std::move(url),
+            (FLAGS_quic_transport ? MoQClient::TransportType::QUIC
+                                  : MoQClient::TransportType::H3_WEBTRANSPORT)),
+        fullTrackName_(std::move(ftn)) {}
 
   folly::coro::Task<void> run(SubscribeRequest sub) noexcept {
     XLOG(INFO) << __func__;

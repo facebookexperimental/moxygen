@@ -9,6 +9,7 @@
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include "moxygen/MoQCodec.h"
 
+#include <folly/MaybeManagedPtr.h>
 #include <folly/container/F14Set.h>
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Promise.h>
@@ -27,7 +28,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
  public:
   explicit MoQSession(
       MoQControlCodec::Direction dir,
-      proxygen::WebTransport* wt,
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       folly::EventBase* evb)
       : dir_(dir), wt_(wt), evb_(evb) {}
 
@@ -49,8 +50,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       Announce,
       Unannounce,
       AnnounceCancel,
-      SubscribeNamespace,
-      UnsubscribeNamespace,
+      SubscribeAnnounces,
+      UnsubscribeAnnounces,
       SubscribeRequest,
       SubscribeUpdate,
       Unsubscribe,
@@ -83,14 +84,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
     }
 
-    virtual void operator()(SubscribeNamespace subscribeNamespace) const {
-      XLOG(INFO) << "SubscribeNamespace nsp="
-                 << subscribeNamespace.trackNamespacePrefix;
+    virtual void operator()(SubscribeAnnounces subscribeAnnounces) const {
+      XLOG(INFO) << "subscribeAnnounces nsp="
+                 << subscribeAnnounces.trackNamespacePrefix;
     }
 
-    virtual void operator()(UnsubscribeNamespace unsubscribeNamespace) const {
-      XLOG(INFO) << "UnsubscribeNamespace nsp="
-                 << unsubscribeNamespace.trackNamespacePrefix;
+    virtual void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const {
+      XLOG(INFO) << "UnsubscribeAnnounces nsp="
+                 << unsubscribeAnnounces.trackNamespacePrefix;
     }
 
     virtual void operator()(AnnounceError announceError) const {
@@ -119,6 +120,18 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       XLOG(INFO) << fmt::format(
           "MaxSubscribeId subID={}", maxSubId.subscribeID);
     }
+    virtual void operator()(Fetch fetch) const {
+      XLOG(INFO) << "Fetch subID=" << fetch.subscribeID;
+    }
+    virtual void operator()(FetchCancel fetchCancel) const {
+      XLOG(INFO) << "FetchCancel subID=" << fetchCancel.subscribeID;
+    }
+    virtual void operator()(FetchOk fetchOk) const {
+      XLOG(INFO) << "FetchOk subID=" << fetchOk.subscribeID;
+    }
+    virtual void operator()(FetchError fetchError) const {
+      XLOG(INFO) << "FetchError subID=" << fetchError.subscribeID;
+    }
     virtual void operator()(TrackStatusRequest trackStatusRequest) const {
       XLOG(INFO) << "Subscribe ftn="
                  << trackStatusRequest.fullTrackName.trackNamespace
@@ -144,11 +157,11 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void unannounce(Unannounce unannounce);
 
   folly::coro::Task<
-      folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>
-  subscribeNamespace(SubscribeNamespace ann);
-  void subscribeNamespaceOk(SubscribeNamespaceOk annOk);
-  void subscribeNamespaceError(SubscribeNamespaceError subscribeNamespaceError);
-  void unsubscribeNamespace(UnsubscribeNamespace unsubscribeNamespace);
+      folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
+  subscribeAnnounces(SubscribeAnnounces ann);
+  void subscribeAnnouncesOk(SubscribeAnnouncesOk annOk);
+  void subscribeAnnouncesError(SubscribeAnnouncesError subscribeAnnouncesError);
+  void unsubscribeAnnounces(UnsubscribeAnnounces unsubscribeAnnounces);
 
   static GroupOrder resolveGroupOrder(
       GroupOrder pubOrder,
@@ -335,18 +348,22 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
   void onMaxSubscribeId(MaxSubscribeId maxSubId) override;
+  void onFetch(Fetch fetch) override;
+  void onFetchCancel(FetchCancel fetchCancel) override;
+  void onFetchOk(FetchOk fetchOk) override;
+  void onFetchError(FetchError fetchError) override;
   void onAnnounce(Announce announce) override;
   void onAnnounceOk(AnnounceOk announceOk) override;
   void onAnnounceError(AnnounceError announceError) override;
   void onUnannounce(Unannounce unannounce) override;
   void onAnnounceCancel(AnnounceCancel announceCancel) override;
-  void onSubscribeNamespace(SubscribeNamespace subscribeNamspace) override;
-  void onSubscribeNamespaceOk(
-      SubscribeNamespaceOk subscribeNamspaceOk) override;
-  void onSubscribeNamespaceError(
-      SubscribeNamespaceError announceError) override;
-  void onUnsubscribeNamespace(
-      UnsubscribeNamespace unsubscribeNamespace) override;
+  void onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) override;
+  void onSubscribeAnnouncesOk(
+      SubscribeAnnouncesOk subscribeAnnouncesOk) override;
+  void onSubscribeAnnouncesError(
+      SubscribeAnnouncesError announceError) override;
+  void onUnsubscribeAnnounces(
+      UnsubscribeAnnounces unsubscribeAnnounces) override;
   void onTrackStatusRequest(TrackStatusRequest trackStatusRequest) override;
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
@@ -418,7 +435,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void closeSessionIfSubscribeIdInvalid(uint64_t subscribeID);
 
   MoQControlCodec::Direction dir_;
-  proxygen::WebTransport* wt_{nullptr};
+  folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
   folly::EventBase* evb_{nullptr}; // keepalive?
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
@@ -438,9 +455,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::F14FastMap<
       TrackNamespace,
       folly::coro::Promise<
-          folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>,
+          folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>,
       TrackNamespace::hash>
-      pendingSubscribeNamespace_;
+      pendingSubscribeAnnounces_;
 
   struct PubTrack {
     uint8_t priority;

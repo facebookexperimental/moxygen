@@ -362,6 +362,50 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
+    case FrameType::FETCH: {
+      auto res = parseFetch(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetch(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::FETCH_CANCEL: {
+      auto res = parseFetchCancel(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetchCancel(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::FETCH_OK: {
+      auto res = parseFetchOk(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetchOk(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::FETCH_ERROR: {
+      auto res = parseFetchError(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onFetchError(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::ANNOUNCE: {
       auto res = parseAnnounce(cursor, curFrameLength_);
       if (res) {
@@ -417,44 +461,44 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::SUBSCRIBE_NAMESPACE: {
-      auto res = parseSubscribeNamespace(cursor, curFrameLength_);
+    case FrameType::SUBSCRIBE_ANNOUNCES: {
+      auto res = parseSubscribeAnnounces(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribeNamespace(std::move(res.value()));
+          callback_->onSubscribeAnnounces(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::SUBSCRIBE_NAMESPACE_OK: {
-      auto res = parseSubscribeNamespaceOk(cursor, curFrameLength_);
+    case FrameType::SUBSCRIBE_ANNOUNCES_OK: {
+      auto res = parseSubscribeAnnouncesOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribeNamespaceOk(std::move(res.value()));
+          callback_->onSubscribeAnnouncesOk(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::SUBSCRIBE_NAMESPACE_ERROR: {
-      auto res = parseSubscribeNamespaceError(cursor, curFrameLength_);
+    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR: {
+      auto res = parseSubscribeAnnouncesError(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribeNamespaceError(std::move(res.value()));
+          callback_->onSubscribeAnnouncesError(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::UNSUBSCRIBE_NAMESPACE: {
-      auto res = parseUnsubscribeNamespace(cursor, curFrameLength_);
+    case FrameType::UNSUBSCRIBE_ANNOUNCES: {
+      auto res = parseUnsubscribeAnnounces(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onUnsubscribeNamespace(std::move(res.value()));
+          callback_->onUnsubscribeAnnounces(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());

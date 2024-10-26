@@ -48,17 +48,17 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     auto announceRes = co_await moqClient_.moqSession_->announce(
         {participantTrackName(username_), {}});
     // subscribe to the catalog track from the beginning of the latest group
-    auto sn = co_await moqClient_.moqSession_->subscribeNamespace(
+    auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
         {TrackNamespace(chatPrefix()),
          {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
            username_}}});
-    if (sn.hasValue()) {
-      XLOG(INFO) << "subscribeNamespace success";
+    if (sa.hasValue()) {
+      XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
     } else {
-      XLOG(INFO) << "SubscribeNamespace id=" << sn.error().trackNamespacePrefix
-                 << " code=" << sn.error().errorCode
-                 << " reason=" << sn.error().reasonPhrase;
+      XLOG(INFO) << "SubscribeAnnounces id=" << sa.error().trackNamespacePrefix
+                 << " code=" << sa.error().errorCode
+                 << " reason=" << sa.error().reasonPhrase;
     }
   } catch (const std::exception& ex) {
     XLOG(ERR) << ex.what();

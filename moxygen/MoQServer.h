@@ -37,10 +37,14 @@ class MoQServer {
     void operator()(SubscribeRequest subscribeReq) const override;
     void operator()(SubscribeUpdate subscribeUpdate) const override;
     void operator()(MaxSubscribeId maxSubscribeId) const override;
+    void operator()(Fetch fetch) const override;
+    void operator()(FetchCancel fetchCancel) const override;
+    void operator()(FetchOk fetchOk) const override;
+    void operator()(FetchError fetchError) const override;
     void operator()(Unannounce unannounce) const override;
     void operator()(AnnounceCancel announceCancel) const override;
-    void operator()(SubscribeNamespace subscribeNamespace) const override;
-    void operator()(UnsubscribeNamespace unsubscribeNamespace) const override;
+    void operator()(SubscribeAnnounces subscribeAnnounces) const override;
+    void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override;
     void operator()(SubscribeDone subscribeDone) const override;
     void operator()(Unsubscribe unsubscribe) const override;
     void operator()(TrackStatusRequest trackStatusRequest) const override;
@@ -116,6 +120,9 @@ class MoQServer {
   }
 
  private:
+  void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
+
+  quic::samples::HQServerParams params_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
 };

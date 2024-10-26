@@ -10,7 +10,8 @@ add_library(moxygen
     MoQCodec.cpp
     MoQSession.cpp
     MoQServer.cpp
-    MoQClient.cpp)
+    MoQClient.cpp
+    util/QuicConnector.cpp)
 
 target_include_directories(
     moxygen PUBLIC
@@ -26,6 +27,7 @@ target_link_libraries(
     wangle::wangle
     proxygen::proxygen
     proxygen::proxygenhqserver
+    proxygen::quicwebtransport
 )
 
 install(

@@ -128,20 +128,36 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   testUnderflowResult(r14);
 
   skip(cursor, 1);
-  auto r9a = parseSubscribeNamespace(cursor, frameLength(cursor));
+  auto r9a = parseSubscribeAnnounces(cursor, frameLength(cursor));
   testUnderflowResult(r9a);
 
   skip(cursor, 1);
-  auto r10a = parseSubscribeNamespaceOk(cursor, frameLength(cursor));
+  auto r10a = parseSubscribeAnnouncesOk(cursor, frameLength(cursor));
   testUnderflowResult(r10a);
 
   skip(cursor, 1);
-  auto r11a = parseSubscribeNamespaceError(cursor, frameLength(cursor));
+  auto r11a = parseSubscribeAnnouncesError(cursor, frameLength(cursor));
   testUnderflowResult(r11a);
 
   skip(cursor, 1);
-  auto r13a = parseUnsubscribeNamespace(cursor, frameLength(cursor));
+  auto r13a = parseUnsubscribeAnnounces(cursor, frameLength(cursor));
   testUnderflowResult(r13a);
+
+  skip(cursor, 1);
+  auto r16 = parseFetch(cursor, frameLength(cursor));
+  testUnderflowResult(r16);
+
+  skip(cursor, 1);
+  auto r17 = parseFetchCancel(cursor, frameLength(cursor));
+  testUnderflowResult(r17);
+
+  skip(cursor, 1);
+  auto r18 = parseFetchOk(cursor, frameLength(cursor));
+  testUnderflowResult(r18);
+
+  skip(cursor, 1);
+  auto r19 = parseFetchCancel(cursor, frameLength(cursor));
+  testUnderflowResult(r19);
 
   auto res = parseStreamHeader(cursor, StreamType::STREAM_HEADER_TRACK);
   testUnderflowResult(res);

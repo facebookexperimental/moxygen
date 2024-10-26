@@ -19,11 +19,11 @@ class MoQRelay {
     allowedNamespacePrefix_ = std::move(allowed);
   }
 
-  void onSubscribeNamespace(
-      SubscribeNamespace&& sn,
+  void onSubscribeAnnounces(
+      SubscribeAnnounces&& sn,
       std::shared_ptr<MoQSession> session);
-  void onUnsubscribeNamespace(
-      UnsubscribeNamespace&& unsub,
+  void onUnsubscribeAnnounces(
+      UnsubscribeAnnounces&& unsub,
       const std::shared_ptr<MoQSession>& session);
   void onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session);
   void onUnannounce(

@@ -30,21 +30,25 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onSubscribeDone, (SubscribeDone subscribeDone));
   MOCK_METHOD(void, onUnsubscribe, (Unsubscribe unsubscribe));
   MOCK_METHOD(void, onMaxSubscribeId, (MaxSubscribeId maxSubId));
+  MOCK_METHOD(void, onFetch, (Fetch fetch));
+  MOCK_METHOD(void, onFetchCancel, (FetchCancel fetchCancel));
+  MOCK_METHOD(void, onFetchOk, (FetchOk fetchOk));
+  MOCK_METHOD(void, onFetchError, (FetchError fetchError));
   MOCK_METHOD(void, onAnnounce, (Announce announce));
   MOCK_METHOD(void, onAnnounceOk, (AnnounceOk announceOk));
   MOCK_METHOD(void, onAnnounceError, (AnnounceError announceError));
   MOCK_METHOD(void, onUnannounce, (Unannounce unannounce));
   MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel announceCancel));
-  MOCK_METHOD(void, onSubscribeNamespace, (SubscribeNamespace announce));
-  MOCK_METHOD(void, onSubscribeNamespaceOk, (SubscribeNamespaceOk announceOk));
+  MOCK_METHOD(void, onSubscribeAnnounces, (SubscribeAnnounces announce));
+  MOCK_METHOD(void, onSubscribeAnnouncesOk, (SubscribeAnnouncesOk announceOk));
   MOCK_METHOD(
       void,
-      onSubscribeNamespaceError,
-      (SubscribeNamespaceError announceError));
+      onSubscribeAnnouncesError,
+      (SubscribeAnnouncesError announceError));
   MOCK_METHOD(
       void,
-      onUnsubscribeNamespace,
-      (UnsubscribeNamespace unsubscribeNamespace));
+      onUnsubscribeAnnounces,
+      (UnsubscribeAnnounces unsubscribeAnnounces));
   MOCK_METHOD(
       void,
       onTrackStatusRequest,

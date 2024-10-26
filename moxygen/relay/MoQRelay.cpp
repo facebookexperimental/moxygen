@@ -46,7 +46,7 @@ void MoQRelay::onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session) {
   auto nodePtr = findNamespaceNode(
       ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
 
-  // TODO: store auth for forwarding on future SubscribeNamespace?
+  // TODO: store auth for forwarding on future SubscribeAnnounces?
   nodePtr->sourceSession = std::move(session);
   nodePtr->sourceSession->announceOk({ann.trackNamespace});
   for (auto& outSession : sessions) {
@@ -85,13 +85,13 @@ void MoQRelay::onUnannounce(
   // TODO: prune Announce tree
 }
 
-void MoQRelay::onSubscribeNamespace(
-    SubscribeNamespace&& subNs,
+void MoQRelay::onSubscribeAnnounces(
+    SubscribeAnnounces&& subNs,
     std::shared_ptr<MoQSession> session) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
   // check auth
   if (subNs.trackNamespacePrefix.empty()) {
-    session->subscribeNamespaceError(
+    session->subscribeAnnouncesError(
         {subNs.trackNamespacePrefix, 400, "empty"});
     return;
   }
@@ -99,7 +99,7 @@ void MoQRelay::onSubscribeNamespace(
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
   auto sessionPtr = session.get();
   nodePtr->sessions.emplace(std::move(session));
-  sessionPtr->subscribeNamespaceOk({subNs.trackNamespacePrefix});
+  sessionPtr->subscribeAnnouncesOk({subNs.trackNamespacePrefix});
 
   // Find all nested Announcements and forward
   std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
@@ -121,8 +121,8 @@ void MoQRelay::onSubscribeNamespace(
   }
 }
 
-void MoQRelay::onUnsubscribeNamespace(
-    UnsubscribeNamespace&& unsubNs,
+void MoQRelay::onUnsubscribeAnnounces(
+    UnsubscribeAnnounces&& unsubNs,
     const std::shared_ptr<MoQSession>& session) {
   XLOG(DBG1) << __func__ << " nsp=" << unsubNs.trackNamespacePrefix;
   auto nodePtr = findNamespaceNode(
@@ -283,7 +283,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
   while (!nodes.empty()) {
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
-    // Implicit UnsubscribeNamespace
+    // Implicit UnsubscribeAnnounces
     nodePtr->sessions.erase(session);
 
     // Add sessions for future Unannounce

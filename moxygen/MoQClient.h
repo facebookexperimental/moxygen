@@ -10,14 +10,19 @@
 
 #include <folly/coro/Promise.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
+#include <proxygen/lib/http/webtransport/QuicWebTransport.h>
 #include <proxygen/lib/utils/URL.h>
 
 namespace moxygen {
 
-class MoQClient {
+class MoQClient : public proxygen::WebTransportHandler {
  public:
-  MoQClient(folly::EventBase* evb, proxygen::URL url)
-      : evb_(evb), url_(std::move(url)) {}
+  enum class TransportType { H3_WEBTRANSPORT, QUIC };
+  MoQClient(
+      folly::EventBase* evb,
+      proxygen::URL url,
+      TransportType ttype = TransportType::H3_WEBTRANSPORT)
+      : evb_(evb), url_(std::move(url)), transportType_(ttype) {}
 
   folly::EventBase* getEventBase() {
     return evb_;
@@ -47,12 +52,12 @@ class MoQClient {
     void onWebTransportBidiStream(
         proxygen::HTTPCodec::StreamID,
         proxygen::WebTransport::BidiStreamHandle handle) noexcept override {
-      client_.onWebTransportBidiStream(std::move(handle));
+      client_.onNewBidiStream(std::move(handle));
     }
     void onWebTransportUniStream(
         proxygen::HTTPCodec::StreamID,
         proxygen::WebTransport::StreamReadHandle* handle) noexcept override {
-      client_.onWebTransportUniStream(handle);
+      client_.onNewUniStream(handle);
     }
     void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override {
       client_.onDatagram(std::move(datagram));
@@ -61,10 +66,9 @@ class MoQClient {
     MoQClient& client_;
     proxygen::HTTPTransaction* txn_{nullptr};
     std::pair<
-        folly::coro::Promise<std::shared_ptr<MoQSession>>,
-        folly::coro::Future<std::shared_ptr<MoQSession>>>
-        sessionContract{
-            folly::coro::makePromiseContract<std::shared_ptr<MoQSession>>()};
+        folly::coro::Promise<proxygen::WebTransport*>,
+        folly::coro::Future<proxygen::WebTransport*>>
+        wtContract{folly::coro::makePromiseContract<proxygen::WebTransport*>()};
   };
 
   std::shared_ptr<MoQSession> moqSession_;
@@ -74,16 +78,24 @@ class MoQClient {
       Role role = Role::PUB_AND_SUB) noexcept;
 
  private:
-  void onSessionEnd(folly::Optional<proxygen::HTTPException> ex);
-  void onWebTransportBidiStream(
-      proxygen::WebTransport::BidiStreamHandle handle);
-  void onWebTransportUniStream(
-      proxygen::WebTransport::StreamReadHandle* handle);
-  void onDatagram(std::unique_ptr<folly::IOBuf> datagram);
+  std::shared_ptr<MoQSession> setupMoQSessionImpl(
+      proxygen::WebTransport* wt,
+      folly::EventBase* evb,
+      Role role,
+      folly::Optional<std::string> path);
+
+  void onSessionEnd(folly::Optional<uint32_t>);
+  void onNewBidiStream(
+      proxygen::WebTransport::BidiStreamHandle handle) override;
+  void onNewUniStream(
+      proxygen::WebTransport::StreamReadHandle* handle) override;
+  void onDatagram(std::unique_ptr<folly::IOBuf>) override;
 
   folly::EventBase* evb_{nullptr};
   proxygen::URL url_;
   HTTPHandler httpHandler_{*this};
+  TransportType transportType_;
+  std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
 };
 
 } // namespace moxygen
