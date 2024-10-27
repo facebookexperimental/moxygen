@@ -14,14 +14,6 @@ using namespace moxygen;
 namespace {
 class TestUnderflow : public std::exception {};
 
-FrameType parseFrameType(folly::io::Cursor& cursor) {
-  auto frameType = quic::decodeQuicInteger(cursor);
-  if (!frameType) {
-    throw std::runtime_error("Failed to decode frame type");
-  }
-  return FrameType(frameType->first);
-}
-
 StreamType parseStreamType(folly::io::Cursor& cursor) {
   auto frameType = quic::decodeQuicInteger(cursor);
   if (!frameType) {

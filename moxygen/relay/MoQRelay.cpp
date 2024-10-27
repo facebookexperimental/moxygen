@@ -13,7 +13,7 @@ MoQRelay::AnnounceNode* MoQRelay::findNamespaceNode(
     bool createMissingNodes,
     std::vector<std::shared_ptr<MoQSession>>* sessions) {
   AnnounceNode* nodePtr = &announceRoot_;
-  for (auto i = 0; i < ns.size(); i++) {
+  for (auto i = 0ul; i < ns.size(); i++) {
     if (sessions) {
       sessions->insert(
           sessions->end(), nodePtr->sessions.begin(), nodePtr->sessions.end());

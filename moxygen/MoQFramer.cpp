@@ -144,7 +144,7 @@ folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numVersions->second;
-  for (auto i = 0; i < numVersions->first; i++) {
+  for (auto i = 0ul; i < numVersions->first; i++) {
     auto version = quic::decodeQuicInteger(cursor, length);
     if (!version) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -252,6 +252,8 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
       streamType == StreamType::STREAM_HEADER_SUBGROUP);
   auto length = cursor.totalLength();
   ObjectHeader objectHeader;
+  objectHeader.group = std::numeric_limits<uint64_t>::max(); // unset
+  objectHeader.id = std::numeric_limits<uint64_t>::max();    // unset
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -279,6 +281,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     length -= subgroup->second;
     objectHeader.forwardPreference = ForwardPreference::Subgroup;
   } else {
+    objectHeader.subgroup = std::numeric_limits<uint64_t>::max();
     objectHeader.forwardPreference = ForwardPreference::Track;
   }
   // TODO: 8 uint 8?
@@ -1213,7 +1216,7 @@ WriteResult writeObject(
   writeVarint(writeBuf, objectHeader.id, size, error);
   CHECK(
       objectHeader.status != ObjectStatus::NORMAL ||
-      objectHeader.length && *objectHeader.length > 0)
+      (objectHeader.length && *objectHeader.length > 0))
       << "Normal objects require non-zero length";
   if (objectHeader.forwardPreference == ForwardPreference::Datagram) {
     writeBuf.append(&objectHeader.priority, 1);
