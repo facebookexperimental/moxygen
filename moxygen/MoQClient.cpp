@@ -149,12 +149,12 @@ std::shared_ptr<MoQSession> MoQClient::setupMoQSessionImpl(
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxSubscribeId = 100;
-  ClientSetup clientSetup(
+  ClientSetup clientSetup{
       {kVersionDraftCurrent},
       {{folly::to_underlying(SetupKey::ROLE), "", folly::to_underlying(role)},
        {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
-        kDefaultMaxSubscribeId}});
+        kDefaultMaxSubscribeId}}};
   if (path) {
     clientSetup.params.emplace_back(
         SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0}));
