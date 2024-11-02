@@ -144,9 +144,10 @@ constexpr uint64_t kVersionDraft06 = 0xff000006;
 constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft06_exp =
     0xff060004; // Draft 6 in progress version
-constexpr uint64_t kVersionDraft07_exp =
-    0xff070001; // Draft 7 in progress version
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft07_exp;
+constexpr uint64_t kVersionDraft07_exp = 0xff070001; // Draft 7 FETCH support
+constexpr uint64_t kVersionDraft07_exp2 =
+    0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft07_exp2;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -180,7 +181,6 @@ enum class ObjectStatus : uint64_t {
 std::ostream& operator<<(std::ostream& os, ObjectStatus type);
 
 struct ObjectHeader {
-  uint64_t subscribeID;
   uint64_t trackAlias;
   uint64_t group;
   uint64_t subgroup{0}; // meaningless for Track and Datagram

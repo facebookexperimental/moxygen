@@ -192,12 +192,6 @@ folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   ObjectHeader objectHeader;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= subscribeID->second;
-  objectHeader.subscribeID = subscribeID->first;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -254,12 +248,6 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
   ObjectHeader objectHeader;
   objectHeader.group = std::numeric_limits<uint64_t>::max(); // unset
   objectHeader.id = std::numeric_limits<uint64_t>::max();    // unset
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= subscribeID->second;
-  objectHeader.subscribeID = subscribeID->first;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1169,7 +1157,6 @@ WriteResult writeStreamHeader(
   } else {
     LOG(FATAL) << "Unsupported forward preference to stream header";
   }
-  writeVarint(writeBuf, objectHeader.subscribeID, size, error);
   writeVarint(writeBuf, objectHeader.trackAlias, size, error);
   if (objectHeader.forwardPreference == ForwardPreference::Subgroup) {
     writeVarint(writeBuf, objectHeader.group, size, error);
@@ -1207,7 +1194,6 @@ WriteResult writeObject(
         folly::to_underlying(StreamType::OBJECT_DATAGRAM),
         size,
         error);
-    writeVarint(writeBuf, objectHeader.subscribeID, size, error);
     writeVarint(writeBuf, objectHeader.trackAlias, size, error);
   }
   if (objectHeader.forwardPreference != ForwardPreference::Subgroup) {
@@ -1759,8 +1745,7 @@ std::ostream& operator<<(std::ostream& os, ObjectStatus status) {
 }
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
-  os << "subscribeID=" << header.subscribeID
-     << " trackAlias=" << header.trackAlias << " group=" << header.group
+  os << " trackAlias=" << header.trackAlias << " group=" << header.group
      << " subgroup=" << header.subgroup << " id=" << header.id
      << " priority=" << uint32_t(header.priority)
      << " forwardPreference=" << uint32_t(header.forwardPreference)

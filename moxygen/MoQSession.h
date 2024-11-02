@@ -304,15 +304,19 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   // Publish this object.
   folly::SemiFuture<folly::Unit> publish(
       const ObjectHeader& objHeader,
+      uint64_t subscribeID,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom);
   folly::SemiFuture<folly::Unit> publishStreamPerObject(
       const ObjectHeader& objHeader,
+      uint64_t subscribeID,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom);
-  folly::SemiFuture<folly::Unit> publishStatus(const ObjectHeader& objHeader);
+  folly::SemiFuture<folly::Unit> publishStatus(
+      const ObjectHeader& objHeader,
+      uint64_t subscribeID);
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
   void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) override;
@@ -335,8 +339,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onServerSetup(ServerSetup serverSetup) override;
   void onObjectHeader(ObjectHeader objectHeader) override;
   void onObjectPayload(
-      uint64_t subscribeID,
-      uint64_t trackAlias,
+      SubscriptionIdentifier subscriptionIdentifier,
       uint64_t groupID,
       uint64_t id,
       std::unique_ptr<folly::IOBuf> payload,
@@ -371,12 +374,13 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   folly::SemiFuture<folly::Unit> publishImpl(
       const ObjectHeader& objHeader,
+      uint64_t subscribeID,
       uint64_t payloadOffset,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom,
       bool streamPerObject);
 
-  uint64_t order(const ObjectHeader& objHeader);
+  uint64_t order(const ObjectHeader& objHeader, const uint64_t subscribeID);
 
   struct PublishKey {
     uint64_t subscribeID;
@@ -440,9 +444,13 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
   folly::coro::UnboundedQueue<MoQMessage, true, true> controlMessages_;
+
   // Subscriber State
-  // Subscribe ID -> Track Handle
-  folly::F14FastMap<uint64_t, std::shared_ptr<TrackHandle>> subTracks_;
+  using TrackAlias = uint64_t;
+  using SubscribeID = uint64_t;
+  // Track Alias -> Track Handle
+  folly::F14FastMap<TrackAlias, std::shared_ptr<TrackHandle>> subTracks_;
+  folly::F14FastMap<SubscribeID, TrackAlias> subIdToTrackAlias_;
 
   // Publisher State
   // Track Namespace -> Promise<AnnounceOK>
@@ -463,6 +471,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     uint8_t priority;
     GroupOrder groupOrder;
   };
+  // Subscriber ID -> metadata about a publish track
   folly::F14FastMap<uint64_t, PubTrack> pubTracks_;
   folly::F14FastMap<PublishKey, PublishData, PublishKey::hash> publishDataMap_;
   uint64_t nextTrackId_{0};

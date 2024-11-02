@@ -141,9 +141,14 @@ class MoQObjectStreamCodec : public MoQCodec {
     ~ObjectCallback() override = default;
 
     virtual void onObjectHeader(ObjectHeader objectHeader) = 0;
+
+    struct SubscriptionIdentifier {
+      std::optional<uint64_t> subscribeID;
+      std::optional<uint64_t> trackAlias;
+    };
+
     virtual void onObjectPayload(
-        uint64_t subscribeID,
-        uint64_t trackAlias,
+        SubscriptionIdentifier subscriptionIdentifier,
         uint64_t groupID,
         uint64_t id,
         std::unique_ptr<folly::IOBuf> payload,

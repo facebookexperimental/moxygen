@@ -212,10 +212,12 @@ int main(int argc, char* argv[]) {
   SigHandler handler(
       &eventBase, [&textClient](int) mutable { textClient.stop(); });
   auto subParams = flags2params();
+  const auto subscribeID = 0;
+  const auto trackAlias = 1;
   textClient
       .run(
-          {0,
-           0,
+          {subscribeID,
+           trackAlias,
            moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
            0,
            GroupOrder::OldestFirst,

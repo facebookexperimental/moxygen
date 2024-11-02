@@ -126,8 +126,7 @@ class MoQChatServer : MoQServer {
     auto catGroup = catGroup_++;
     for (auto& sub : subscribers_) {
       sub.second.first->publishStreamPerObject(
-          {sub.second.second,
-           0 /* WRONG */,
+          {sub.second.second, // Use Subscriber ID as track alias for now
            catGroup,
            /*subgroup=*/0,
            /*id=*/0,
@@ -135,6 +134,7 @@ class MoQChatServer : MoQServer {
            ForwardPreference::Subgroup,
            ObjectStatus::NORMAL,
            folly::none},
+          sub.second.second,
           0,
           catalogBuf->clone(),
           true);

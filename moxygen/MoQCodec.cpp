@@ -210,8 +210,7 @@ void MoQObjectStreamCodec::onIngress(
         bool endOfObject = (*curObjectHeader_.length == 0);
         if (callback_ && (payload || endOfObject)) {
           callback_->onObjectPayload(
-              curObjectHeader_.subscribeID,
-              curObjectHeader_.trackAlias,
+              {.trackAlias = curObjectHeader_.trackAlias},
               curObjectHeader_.group,
               curObjectHeader_.id,
               std::move(payload),

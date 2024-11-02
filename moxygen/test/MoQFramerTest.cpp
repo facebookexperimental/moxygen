@@ -172,8 +172,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeObject(
       writeBuf,
-      {11, // subscribeID
-       22, // trackAlias
+      {22, // trackAlias
        33, // group
        0,  // subgroup
        44, // id
@@ -190,7 +189,6 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   auto length = cursor.totalLength();
   auto parseResult = parseObjectHeader(cursor, length);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->subscribeID, 11);
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
@@ -200,7 +198,6 @@ TEST(SerializeAndParse, ParseObjectHeader) {
 
 TEST(SerializeAndParse, ParseStreamHeader) {
   ObjectHeader expectedObjectHeader = {
-      11, // subscribeID
       22, // trackAlias
       33, // group
       0,  // subgroup
@@ -232,7 +229,6 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   auto parseResult = parseMultiObjectHeader(
       cursor, StreamType::STREAM_HEADER_TRACK, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->subscribeID, 11);
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
@@ -244,7 +240,6 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   parseResult = parseMultiObjectHeader(
       cursor, StreamType::STREAM_HEADER_TRACK, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->subscribeID, 11);
   EXPECT_EQ(parseResult->trackAlias, 22);
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);

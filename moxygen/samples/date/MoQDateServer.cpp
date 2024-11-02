@@ -70,7 +70,9 @@ class MoQDateServer : MoQServer {
     void operator()(SubscribeRequest subscribeReq) const override {
       XLOG(INFO) << "SubscribeRequest track ns="
                  << subscribeReq.fullTrackName.trackNamespace
-                 << " name=" << subscribeReq.fullTrackName.trackName;
+                 << " name=" << subscribeReq.fullTrackName.trackName
+                 << " subscribe id=" << subscribeReq.subscribeID
+                 << " track alias=" << subscribeReq.trackAlias;
       if (subscribeReq.fullTrackName != server_.dateTrackName()) {
         clientSession_->subscribeError(
             {subscribeReq.subscribeID, 403, "unexpected subscribe"});
@@ -196,8 +198,7 @@ class MoQDateServer : MoQServer {
         {uint64_t(in_time_t / 60), uint64_t(lt->tm_sec + 1)});
     if (lt->tm_sec == 0 || forceGroup) {
       ObjectHeader objHeader(
-          {subscribeID,
-           trackAlias,
+          {trackAlias,
            nowLoc.group,
            /*subgroup=*/0,
            /*object=*/0,
@@ -217,8 +218,7 @@ class MoQDateServer : MoQServer {
       auto secBuf = folly::to<std::string>(lt->tm_sec);
       uint64_t subgroup = streamPerObject_ ? nowLoc.object + 1 : 0;
       ObjectHeader objHeader(
-          {subscribeID,
-           trackAlias,
+          {trackAlias,
            nowLoc.group,
            subgroup,
            nowLoc.object,
