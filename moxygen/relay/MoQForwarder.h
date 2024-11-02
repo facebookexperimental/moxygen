@@ -175,15 +175,15 @@ class MoQForwarder {
              buf = (payload) ? payload->clone() : nullptr,
              eom,
              streamPerObject]() mutable {
-              objHeader.subscribeID = subId;
               objHeader.trackAlias = trackAlias;
               if (objHeader.status != ObjectStatus::NORMAL) {
-                session->publishStatus(objHeader);
+                session->publishStatus(objHeader, subId);
               } else if (streamPerObject) {
                 session->publishStreamPerObject(
-                    objHeader, payloadOffset, std::move(buf), eom);
+                    objHeader, subId, payloadOffset, std::move(buf), eom);
               } else {
-                session->publish(objHeader, payloadOffset, std::move(buf), eom);
+                session->publish(
+                    objHeader, subId, payloadOffset, std::move(buf), eom);
               }
             });
         it++;

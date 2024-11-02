@@ -158,14 +158,14 @@ void MoQChatClient::publishLoop() {
         moqClient_.moqSession_.reset();
       } else if (chatSubscribeID_) {
         moqClient_.moqSession_->publishStreamPerObject(
-            {*chatSubscribeID_,
-             *chatTrackAlias_,
+            {*chatTrackAlias_,
              nextGroup_++,
              /*subgroup=*/0,
              /*id=*/0,
              /*pri=*/0,
              ForwardPreference::Subgroup,
              ObjectStatus::NORMAL},
+            *chatSubscribeID_,
             0,
             folly::IOBuf::copyBuffer(input),
             true);

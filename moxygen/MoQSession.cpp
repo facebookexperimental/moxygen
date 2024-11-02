@@ -231,33 +231,46 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 void MoQSession::onObjectHeader(ObjectHeader objHeader) {
   XLOG(DBG1) << "MoQSession::" << __func__ << " " << objHeader
              << " sess=" << this;
-  auto trackIt = subTracks_.find(objHeader.subscribeID);
+  auto trackIt = subTracks_.find(objHeader.trackAlias);
   if (trackIt == subTracks_.end()) {
-    // received an object for unknown sub id
-    XLOG(ERR) << "unknown sub id=" << objHeader.subscribeID << " sess=" << this;
+    // received an object for unknown track alias
+    XLOG(ERR) << "unknown track alias=" << objHeader.trackAlias
+              << " sess=" << this;
     return;
   }
   trackIt->second->onObjectHeader(std::move(objHeader));
 }
 
 void MoQSession::onObjectPayload(
-    uint64_t subscribeID,
-    uint64_t /*trackAlias*/,
+    SubscriptionIdentifier subscriptionIdentifier,
     uint64_t groupID,
     uint64_t id,
     std::unique_ptr<folly::IOBuf> payload,
     bool eom) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto trackIt = subTracks_.find(subscribeID);
-  if (trackIt == subTracks_.end()) {
-    // received an object for unknown sub id
-    XLOG(ERR) << "unknown subscribeID=" << subscribeID << " sess=" << this;
+
+  if (subscriptionIdentifier.trackAlias.has_value()) {
+    auto trackAlias = subscriptionIdentifier.trackAlias.value();
+    auto trackIt = subTracks_.find(trackAlias);
+    if (trackIt == subTracks_.end()) {
+      // received an object for unknown track alias
+      XLOG(ERR) << "unknown track alias=" << trackAlias << " sess=" << this;
+      return;
+    }
+    trackIt->second->onObjectPayload(groupID, id, std::move(payload), eom);
+    return;
+  } else if (subscriptionIdentifier.subscribeID.has_value()) {
+    XLOG(ERR)
+        << "FETCH (or future object with Subscribe ID type) not yet implemented"
+        << " sess=" << this;
     return;
   }
-  trackIt->second->onObjectPayload(groupID, id, std::move(payload), eom);
+  XLOG(ERR)
+      << "received an object payload with neither a Subscribe ID nor Track Alias. Strange!";
 }
 
 void MoQSession::TrackHandle::onObjectHeader(ObjectHeader objHeader) {
+  XLOG(DBG1) << __func__ << " objHeader=" << objHeader << " sess=" << this;
   uint64_t objectIdKey = objHeader.id;
   auto status = objHeader.status;
   if (status != ObjectStatus::NORMAL) {
@@ -345,40 +358,43 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
 
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto subIt = subTracks_.find(subOk.subscribeID);
-  if (subIt == subTracks_.end()) {
+  auto trackAliasIt = subIdToTrackAlias_.find(subOk.subscribeID);
+  if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
     XLOG(ERR) << "No matching subscribe ID=" << subOk.subscribeID
               << " sess=" << this;
     return;
   }
-  subIt->second->subscribeOK(subIt->second, subOk.groupOrder, subOk.latest);
+  subTracks_[trackAliasIt->second]->subscribeOK(
+      subTracks_[trackAliasIt->second], subOk.groupOrder, subOk.latest);
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto subIt = subTracks_.find(subErr.subscribeID);
-  if (subIt == subTracks_.end()) {
+  auto trackAliasIt = subIdToTrackAlias_.find(subErr.subscribeID);
+  if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
     XLOG(ERR) << "No matching subscribe ID=" << subErr.subscribeID
               << " sess=" << this;
     return;
   }
-  subIt->second->subscribeError(std::move(subErr));
-  subTracks_.erase(subIt);
+  subTracks_[trackAliasIt->second]->subscribeError(std::move(subErr));
+  subTracks_.erase(trackAliasIt->second);
+  subIdToTrackAlias_.erase(trackAliasIt);
 }
 
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto trackIt = subTracks_.find(subscribeDone.subscribeID);
-  if (trackIt == subTracks_.end()) {
-    // received an object for unknown sub id
-    XLOG(ERR) << "unknown subscribeID=" << subscribeDone.subscribeID
+  auto trackAliasIt = subIdToTrackAlias_.find(subscribeDone.subscribeID);
+  if (trackAliasIt == subIdToTrackAlias_.end()) {
+    // unknown
+    XLOG(ERR) << "No matching subscribe ID=" << subscribeDone.subscribeID
               << " sess=" << this;
     return;
   }
+
   // TODO: handle final object and status code
-  trackIt->second->fin();
+  subTracks_[trackAliasIt->second]->fin();
   controlMessages_.enqueue(std::move(subscribeDone));
 }
 
@@ -637,7 +653,7 @@ MoQSession::subscribe(SubscribeRequest sub) {
   }
   auto subID = nextSubscribeID_++;
   sub.subscribeID = subID;
-  sub.trackAlias = sub.subscribeID;
+  auto trackAlias = sub.trackAlias;
   auto wres = writeSubscribeRequest(controlWriteBuf_, std::move(sub));
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed" << " sess=" << this;
@@ -645,14 +661,15 @@ MoQSession::subscribe(SubscribeRequest sub) {
         SubscribeError({subID, 500, "local write failed", folly::none}));
   }
   controlWriteEvent_.signal();
-  auto res = subTracks_.emplace(
+  auto res = subIdToTrackAlias_.emplace(subID, trackAlias);
+  XCHECK(res.second) << "Duplicate subscribe ID";
+  auto subTrack = subTracks_.emplace(
       std::piecewise_construct,
-      std::forward_as_tuple(subID),
+      std::forward_as_tuple(trackAlias),
       std::forward_as_tuple(std::make_shared<TrackHandle>(
           fullTrackName, subID, cancellationSource_.getToken())));
-  XCHECK(res.second) << "Duplicate subscribe ID";
 
-  co_return co_await res.first->second->ready();
+  co_return co_await subTrack.first->second->ready();
 }
 
 void MoQSession::subscribeOk(SubscribeOk subOk) {
@@ -724,10 +741,12 @@ uint32_t objOrder(uint64_t objId) {
 }
 } // namespace
 
-uint64_t MoQSession::order(const ObjectHeader& objHeader) {
+uint64_t MoQSession::order(
+    const ObjectHeader& objHeader,
+    const uint64_t subscribeID) {
   PubTrack pubTrack{
       std::numeric_limits<uint8_t>::max(), GroupOrder::OldestFirst};
-  auto pubTrackIt = pubTracks_.find(objHeader.subscribeID);
+  auto pubTrackIt = pubTracks_.find(subscribeID);
   if (pubTrackIt != pubTracks_.end()) {
     pubTrack = pubTrackIt->second;
   }
@@ -742,31 +761,37 @@ uint64_t MoQSession::order(const ObjectHeader& objHeader) {
 
 folly::SemiFuture<folly::Unit> MoQSession::publish(
     const ObjectHeader& objHeader,
+    uint64_t subscribeID,
     uint64_t payloadOffset,
     std::unique_ptr<folly::IOBuf> payload,
     bool eom) {
   XCHECK_EQ(objHeader.status, ObjectStatus::NORMAL);
-  return publishImpl(objHeader, payloadOffset, std::move(payload), eom, false);
+  return publishImpl(
+      objHeader, subscribeID, payloadOffset, std::move(payload), eom, false);
 }
 
 folly::SemiFuture<folly::Unit> MoQSession::publishStreamPerObject(
     const ObjectHeader& objHeader,
+    uint64_t subscribeID,
     uint64_t payloadOffset,
     std::unique_ptr<folly::IOBuf> payload,
     bool eom) {
   XCHECK_EQ(objHeader.status, ObjectStatus::NORMAL);
   XCHECK_EQ(objHeader.forwardPreference, ForwardPreference::Subgroup);
-  return publishImpl(objHeader, payloadOffset, std::move(payload), eom, true);
+  return publishImpl(
+      objHeader, subscribeID, payloadOffset, std::move(payload), eom, true);
 }
 
 folly::SemiFuture<folly::Unit> MoQSession::publishStatus(
-    const ObjectHeader& objHeader) {
+    const ObjectHeader& objHeader,
+    uint64_t subscribeID) {
   XCHECK_NE(objHeader.status, ObjectStatus::NORMAL);
-  return publishImpl(objHeader, 0, nullptr, true, false);
+  return publishImpl(objHeader, subscribeID, 0, nullptr, true, false);
 }
 
 folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     const ObjectHeader& objHeader,
+    uint64_t subscribeID,
     uint64_t payloadOffset,
     std::unique_ptr<folly::IOBuf> payload,
     bool eom,
@@ -779,7 +804,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
       objHeader.forwardPreference == ForwardPreference::Datagram;
 
   PublishKey publishKey(
-      {objHeader.subscribeID,
+      {objHeader.trackAlias,
        objHeader.group,
        objHeader.subgroup,
        objHeader.forwardPreference,
@@ -817,7 +842,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
       stream = *res;
       XLOG(DBG4) << "New stream created, id: " << stream->getID()
                  << " sess=" << this;
-      stream->setPriority(1, order(objHeader), false);
+      stream->setPriority(1, order(objHeader, subscribeID), false);
     }
 
     // Add publishing key
@@ -908,8 +933,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
       writeObject(
           writeBuf,
           ObjectHeader(
-              {objHeader.subscribeID,
-               objHeader.trackAlias,
+              {objHeader.trackAlias,
                objHeader.group,
                objHeader.subgroup,
                objHeader.id,

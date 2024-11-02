@@ -188,7 +188,6 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
   auto res = writeStreamHeader(
       writeBuf,
       ObjectHeader({
-          0,
           1,
           2,
           3,
@@ -201,21 +200,12 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {0,
-           1,
-           2,
-           3,
-           4,
-           5,
-           ForwardPreference::Track,
-           ObjectStatus::NORMAL,
-           11}),
+          {1, 2, 3, 4, 5, ForwardPreference::Track, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello world"));
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {0,
-           1,
+          {1,
            2,
            3,
            4,

@@ -55,12 +55,7 @@ TEST(MoQCodec, AllObject) {
   EXPECT_CALL(
       callback,
       onObjectPayload(
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_))
+          testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(1);
   codec.onIngress(std::move(allMsgs), true);
 }
@@ -116,12 +111,7 @@ TEST(MoQCodec, UnderflowObjects) {
   EXPECT_CALL(
       callback,
       onObjectPayload(
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_))
+          testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(strlen("hello world"));
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
@@ -133,7 +123,7 @@ TEST(MoQCodec, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {0, 1, 2, 3, 4, 5, ForwardPreference::Subgroup, ObjectStatus::NORMAL, 11},
+      {1, 2, 3, 4, 5, ForwardPreference::Subgroup, ObjectStatus::NORMAL, 11},
       folly::IOBuf::copyBuffer("hello world"));
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
@@ -142,12 +132,7 @@ TEST(MoQCodec, ObjectStreamPayload) {
   EXPECT_CALL(
       callback,
       onObjectPayload(
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_))
+          testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(1);
 
   codec.onIngress(writeBuf.move(), false);
@@ -158,8 +143,7 @@ TEST(MoQCodec, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {0,
-       1,
+      {1,
        2,
        3,
        4,
@@ -184,7 +168,6 @@ TEST(MoQCodec, TruncatedObject) {
   auto res = writeStreamHeader(
       writeBuf,
       ObjectHeader({
-          0,
           1,
           2,
           3,
@@ -197,15 +180,7 @@ TEST(MoQCodec, TruncatedObject) {
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {0,
-           1,
-           2,
-           3,
-           4,
-           5,
-           ForwardPreference::Track,
-           ObjectStatus::NORMAL,
-           11}),
+          {1, 2, 3, 4, 5, ForwardPreference::Track, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
