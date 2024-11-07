@@ -17,16 +17,17 @@ struct SubscribeRange {
 };
 
 inline SubscribeRange toSubscribeRange(
-    const SubscribeRequest& sub,
+    folly::Optional<AbsoluteLocation> start,
+    folly::Optional<AbsoluteLocation> end,
+    LocationType locType,
     folly::Optional<AbsoluteLocation> latest) {
-  XLOG(DBG1) << "m=" << uint64_t(sub.locType)
-             << (sub.start
-                     ? folly::to<std::string>(
-                           "g=", sub.start->group, " o=", sub.start->object)
-                     : std::string());
+  XLOG(DBG1) << "m=" << uint64_t(locType)
+             << (start ? folly::to<std::string>(
+                             "g=", start->group, " o=", start->object)
+                       : std::string());
   SubscribeRange result;
   result.end = kLocationMax;
-  switch (sub.locType) {
+  switch (locType) {
     case LocationType::LatestGroup:
       result.start.group = latest.value_or(kLocationMin).group;
       result.start.object = 0;
@@ -36,24 +37,30 @@ inline SubscribeRange toSubscribeRange(
       result.start.object = latest.value_or(kLocationMin).object;
       break;
     case LocationType::AbsoluteRange:
-      XCHECK(sub.end);
-      if (sub.end->object == 0) {
-        result.end.group = sub.end->group + 1;
+      XCHECK(end);
+      if (end->object == 0) {
+        result.end.group = end->group + 1;
         result.end.object = 0;
       } else {
         // moxygen uses exclusive end objects, so no need to subtract 1 here
-        result.end = *sub.end;
+        result.end = *end;
       }
       FMT_FALLTHROUGH;
     case LocationType::AbsoluteStart:
-      XCHECK(sub.start);
-      result.start.group = sub.start->group;
-      result.start.object = sub.start->object;
+      XCHECK(start);
+      result.start.group = start->group;
+      result.start.object = start->object;
       break;
   }
   XLOG(DBG1) << "g=" << result.start.group << " o=" << result.start.object
              << "g=" << result.end.group << " o=" << result.end.object;
   return result;
+}
+
+inline SubscribeRange toSubscribeRange(
+    const SubscribeRequest& sub,
+    folly::Optional<AbsoluteLocation> latest) {
+  return toSubscribeRange(sub.start, sub.end, sub.locType, latest);
 }
 
 } // namespace moxygen
