@@ -84,7 +84,7 @@ class MoQClient : public proxygen::WebTransportHandler {
       Role role,
       folly::Optional<std::string> path);
 
-  void onSessionEnd(folly::Optional<uint32_t>);
+  void onSessionEnd(folly::Optional<uint32_t>) override;
   void onNewBidiStream(
       proxygen::WebTransport::BidiStreamHandle handle) override;
   void onNewUniStream(

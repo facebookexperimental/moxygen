@@ -122,7 +122,6 @@ class MoQControlCodec : public MoQCodec {
 
   folly::Expected<folly::Unit, ErrorCode> parseFrame(folly::io::Cursor& cursor);
 
-  Direction dir_;
   ControlCallback* callback_{nullptr};
   FrameType curFrameType_;
   size_t curFrameLength_{0};
