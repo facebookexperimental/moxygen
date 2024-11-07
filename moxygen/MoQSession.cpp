@@ -60,6 +60,7 @@ void MoQSession::start() {
 }
 
 void MoQSession::close(folly::Optional<SessionCloseErrorCode> error) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
   if (wt_) {
     // TODO: The error code should be propagated to
     // whatever implemented proxygen::WebTransport.
@@ -270,7 +271,8 @@ void MoQSession::onObjectPayload(
 }
 
 void MoQSession::TrackHandle::onObjectHeader(ObjectHeader objHeader) {
-  XLOG(DBG1) << __func__ << " objHeader=" << objHeader << " sess=" << this;
+  XLOG(DBG1) << __func__ << " objHeader=" << objHeader
+             << " trackHandle=" << this;
   uint64_t objectIdKey = objHeader.id;
   auto status = objHeader.status;
   if (status != ObjectStatus::NORMAL) {
@@ -303,20 +305,20 @@ void MoQSession::TrackHandle::onObjectPayload(
     bool eom) {
   XLOG(DBG1) << __func__ << " g=" << groupId << " o=" << id
              << " len=" << (payload ? payload->computeChainDataLength() : 0)
-             << " eom=" << uint64_t(eom) << " sess=" << this;
+             << " eom=" << uint64_t(eom) << " trackHandle=" << this;
   auto objIt = objects_.find(std::make_pair(groupId, id));
   if (objIt == objects_.end()) {
     // error;
     XLOG(ERR) << "unknown object gid=" << groupId << " seq=" << id
-              << " sess=" << this;
+              << " trackHandle=" << this;
     return;
   }
   if (payload) {
-    XLOG(DBG1) << "payload enqueued" << " sess=" << this;
+    XLOG(DBG1) << "payload enqueued" << " trackHandle=" << this;
     objIt->second->payloadQueue.enqueue(std::move(payload));
   }
   if (eom) {
-    XLOG(DBG1) << "eom enqueued" << " sess=" << this;
+    XLOG(DBG1) << "eom enqueued" << " trackHandle=" << this;
     objIt->second->payloadQueue.enqueue(nullptr);
   }
 }
@@ -627,13 +629,17 @@ void MoQSession::subscribeAnnouncesError(
 folly::coro::AsyncGenerator<
     std::shared_ptr<MoQSession::TrackHandle::ObjectSource>>
 MoQSession::TrackHandle::objects() {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " trackHandle=" << this;
+  auto g =
+      folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   auto cancelToken = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::CancellationToken::merge(cancelToken, cancelToken_);
   while (!mergeToken.isCancellationRequested()) {
     auto obj = co_await folly::coro::co_withCancellation(
         mergeToken, newObjects_.dequeue());
     if (!obj) {
+      XLOG(DBG3) << "Out of objects for trackHandle=" << this
+                 << " id=" << subscribeID_;
       break;
     }
     co_yield obj;
@@ -669,7 +675,10 @@ MoQSession::subscribe(SubscribeRequest sub) {
       std::forward_as_tuple(std::make_shared<TrackHandle>(
           fullTrackName, subID, cancellationSource_.getToken())));
 
-  co_return co_await subTrack.first->second->ready();
+  auto res2 = co_await subTrack.first->second->ready();
+  XLOG(DBG1) << "Subscribe ready trackHandle=" << subTrack.first->second
+             << " subscribeID=" << subID;
+  co_return res2;
 }
 
 void MoQSession::subscribeOk(SubscribeOk subOk) {
