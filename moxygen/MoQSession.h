@@ -290,6 +290,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void subscribeError(SubscribeError subErr);
   void unsubscribe(Unsubscribe unsubscribe);
   void subscribeDone(SubscribeDone subDone);
+  void subscribeUpdate(SubscribeUpdate subUpdate);
 
   class WebTransportException : public std::runtime_error {
    public:

@@ -737,6 +737,16 @@ void MoQSession::subscribeDone(SubscribeDone subDone) {
   controlWriteEvent_.signal();
 }
 
+void MoQSession::subscribeUpdate(SubscribeUpdate subUpdate) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto res = writeSubscribeUpdate(controlWriteBuf_, std::move(subUpdate));
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeUpdate failed" << " sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
 namespace {
 constexpr uint32_t IdMask = 0x1FFFFF;
 uint64_t groupOrder(GroupOrder groupOrder, uint64_t group) {
