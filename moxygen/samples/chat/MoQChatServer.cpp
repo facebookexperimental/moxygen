@@ -126,7 +126,8 @@ class MoQChatServer : MoQServer {
     auto catGroup = catGroup_++;
     for (auto& sub : subscribers_) {
       sub.second.first->publishStreamPerObject(
-          {sub.second.second, // Use Subscriber ID as track alias for now
+          {// Use Subscriber ID as track alias for now
+           TrackAlias(sub.second.second.value),
            catGroup,
            /*subgroup=*/0,
            /*id=*/0,
@@ -163,9 +164,10 @@ class MoQChatServer : MoQServer {
 
  private:
   std::string chatID_;
-  folly::
-      F14FastMap<std::string, std::pair<std::shared_ptr<MoQSession>, uint64_t>>
-          subscribers_;
+  folly::F14FastMap<
+      std::string,
+      std::pair<std::shared_ptr<MoQSession>, SubscribeID>>
+      subscribers_;
   uint64_t catGroup_{0};
   MoQRelay relay_;
 

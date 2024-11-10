@@ -197,7 +197,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= trackAlias->second;
-  objectHeader.trackAlias = trackAlias->first;
+  objectHeader.trackIdentifier = TrackAlias(trackAlias->first);
   auto group = quic::decodeQuicInteger(cursor, length);
   if (!group) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -253,7 +253,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= trackAlias->second;
-  objectHeader.trackAlias = trackAlias->first;
+  objectHeader.trackIdentifier = TrackAlias(trackAlias->first);
   if (streamType == StreamType::STREAM_HEADER_SUBGROUP) {
     auto group = quic::decodeQuicInteger(cursor, length);
     if (!group) {
@@ -1157,7 +1157,7 @@ WriteResult writeStreamHeader(
   } else {
     LOG(FATAL) << "Unsupported forward preference to stream header";
   }
-  writeVarint(writeBuf, objectHeader.trackAlias, size, error);
+  writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
   if (objectHeader.forwardPreference == ForwardPreference::Subgroup) {
     writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
@@ -1194,7 +1194,7 @@ WriteResult writeObject(
         folly::to_underlying(StreamType::OBJECT_DATAGRAM),
         size,
         error);
-    writeVarint(writeBuf, objectHeader.trackAlias, size, error);
+    writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
   }
   if (objectHeader.forwardPreference != ForwardPreference::Subgroup) {
     writeVarint(writeBuf, objectHeader.group, size, error);
@@ -1232,8 +1232,8 @@ WriteResult writeSubscribeRequest(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
-  writeVarint(writeBuf, subscribeRequest.subscribeID, size, error);
-  writeVarint(writeBuf, subscribeRequest.trackAlias, size, error);
+  writeVarint(writeBuf, subscribeRequest.subscribeID.value, size, error);
+  writeVarint(writeBuf, subscribeRequest.trackAlias.value, size, error);
   writeFullTrackName(writeBuf, subscribeRequest.fullTrackName, size, error);
   writeBuf.append(&subscribeRequest.priority, 1);
   size += 1;
@@ -1265,7 +1265,7 @@ WriteResult writeSubscribeUpdate(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);
-  writeVarint(writeBuf, update.subscribeID, size, error);
+  writeVarint(writeBuf, update.subscribeID.value, size, error);
   writeVarint(writeBuf, update.start.group, size, error);
   writeVarint(writeBuf, update.start.object, size, error);
   writeVarint(writeBuf, update.end.group, size, error);
@@ -1286,7 +1286,7 @@ WriteResult writeSubscribeOk(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
-  writeVarint(writeBuf, subscribeOk.subscribeID, size, error);
+  writeVarint(writeBuf, subscribeOk.subscribeID.value, size, error);
   writeVarint(writeBuf, subscribeOk.expires.count(), size, error);
   auto order = folly::to_underlying(subscribeOk.groupOrder);
   writeBuf.append(&order, 1);
@@ -1312,7 +1312,7 @@ WriteResult writeSubscribeError(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
-  writeVarint(writeBuf, subscribeError.subscribeID, size, error);
+  writeVarint(writeBuf, subscribeError.subscribeID.value, size, error);
   writeVarint(writeBuf, subscribeError.errorCode, size, error);
   writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
   writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
@@ -1329,7 +1329,7 @@ WriteResult writeMaxSubscribeId(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_SUBSCRIBE_ID, error);
-  writeVarint(writeBuf, maxSubscribeId.subscribeID, size, error);
+  writeVarint(writeBuf, maxSubscribeId.subscribeID.value, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1343,7 +1343,7 @@ WriteResult writeUnsubscribe(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE, error);
-  writeVarint(writeBuf, unsubscribe.subscribeID, size, error);
+  writeVarint(writeBuf, unsubscribe.subscribeID.value, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1357,7 +1357,7 @@ WriteResult writeSubscribeDone(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_DONE, error);
-  writeVarint(writeBuf, subscribeDone.subscribeID, size, error);
+  writeVarint(writeBuf, subscribeDone.subscribeID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(subscribeDone.statusCode), size, error);
   writeFixedString(writeBuf, subscribeDone.reasonPhrase, size, error);
@@ -1576,7 +1576,7 @@ WriteResult writeFetch(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
-  writeVarint(writeBuf, fetch.subscribeID, size, error);
+  writeVarint(writeBuf, fetch.subscribeID.value, size, error);
   writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
 
   writeBuf.append(&fetch.priority, 1);
@@ -1605,7 +1605,7 @@ WriteResult writeFetchCancel(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_CANCEL, error);
-  writeVarint(writeBuf, fetchCancel.subscribeID, size, error);
+  writeVarint(writeBuf, fetchCancel.subscribeID.value, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -1619,7 +1619,7 @@ WriteResult writeFetchOk(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
-  writeVarint(writeBuf, fetchOk.subscribeID, size, error);
+  writeVarint(writeBuf, fetchOk.subscribeID.value, size, error);
   auto order = folly::to_underlying(fetchOk.groupOrder);
   writeBuf.append(&order, 1);
   size += 1;
@@ -1641,7 +1641,7 @@ WriteResult writeFetchError(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
-  writeVarint(writeBuf, fetchError.subscribeID, size, error);
+  writeVarint(writeBuf, fetchError.subscribeID.value, size, error);
   writeVarint(writeBuf, fetchError.errorCode, size, error);
   writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
@@ -1744,10 +1744,20 @@ std::ostream& operator<<(std::ostream& os, ObjectStatus status) {
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os, TrackAlias alias) {
+  os << alias.value;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, SubscribeID id) {
+  os << id.value;
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
-  os << " trackAlias=" << header.trackAlias << " group=" << header.group
-     << " subgroup=" << header.subgroup << " id=" << header.id
-     << " priority=" << uint32_t(header.priority)
+  os << " trackIdentifier=" << value(header.trackIdentifier)
+     << " group=" << header.group << " subgroup=" << header.subgroup
+     << " id=" << header.id << " priority=" << uint32_t(header.priority)
      << " forwardPreference=" << uint32_t(header.forwardPreference)
      << " status=" << getObjectStatusString(header.status) << " length="
      << (header.length.hasValue() ? std::to_string(header.length.value())

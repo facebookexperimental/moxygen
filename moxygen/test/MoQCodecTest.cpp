@@ -123,7 +123,14 @@ TEST(MoQCodec, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {1, 2, 3, 4, 5, ForwardPreference::Subgroup, ObjectStatus::NORMAL, 11},
+      {TrackAlias(1),
+       2,
+       3,
+       4,
+       5,
+       ForwardPreference::Subgroup,
+       ObjectStatus::NORMAL,
+       11},
       folly::IOBuf::copyBuffer("hello world"));
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
@@ -143,7 +150,7 @@ TEST(MoQCodec, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {1,
+      {TrackAlias(1),
        2,
        3,
        4,
@@ -168,7 +175,7 @@ TEST(MoQCodec, TruncatedObject) {
   auto res = writeStreamHeader(
       writeBuf,
       ObjectHeader({
-          1,
+          TrackAlias(1),
           2,
           3,
           4,
@@ -180,7 +187,14 @@ TEST(MoQCodec, TruncatedObject) {
   res = writeObject(
       writeBuf,
       ObjectHeader(
-          {1, 2, 3, 4, 5, ForwardPreference::Track, ObjectStatus::NORMAL, 11}),
+          {TrackAlias(1),
+           2,
+           3,
+           4,
+           5,
+           ForwardPreference::Track,
+           ObjectStatus::NORMAL,
+           11}),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);

@@ -17,7 +17,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(
       void,
       onObjectPayload,
-      (SubscriptionIdentifier subscriptionIdentifier,
+      (TrackIdentifier trackIdentifier,
        uint64_t groupID,
        uint64_t id,
        std::unique_ptr<folly::IOBuf> payload,

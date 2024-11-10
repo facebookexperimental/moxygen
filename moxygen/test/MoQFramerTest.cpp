@@ -172,11 +172,11 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeObject(
       writeBuf,
-      {22, // trackAlias
-       33, // group
-       0,  // subgroup
-       44, // id
-       55, // priority
+      {TrackAlias(22), // trackAlias
+       33,             // group
+       0,              // subgroup
+       44,             // id
+       55,             // priority
        ForwardPreference::Datagram,
        ObjectStatus::OBJECT_NOT_EXIST,
        0},
@@ -189,7 +189,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   auto length = cursor.totalLength();
   auto parseResult = parseObjectHeader(cursor, length);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
   EXPECT_EQ(parseResult->priority, 55);
@@ -198,11 +198,11 @@ TEST(SerializeAndParse, ParseObjectHeader) {
 
 TEST(SerializeAndParse, ParseStreamHeader) {
   ObjectHeader expectedObjectHeader = {
-      22, // trackAlias
-      33, // group
-      0,  // subgroup
-      44, // id
-      55, // priority
+      TrackAlias(22), // trackAlias
+      33,             // group
+      0,              // subgroup
+      44,             // id
+      55,             // priority
       ForwardPreference::Track,
       ObjectStatus::NORMAL,
       4};
@@ -229,7 +229,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   auto parseResult = parseMultiObjectHeader(
       cursor, StreamType::STREAM_HEADER_TRACK, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
   EXPECT_EQ(parseResult->priority, 55);
@@ -240,7 +240,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   parseResult = parseMultiObjectHeader(
       cursor, StreamType::STREAM_HEADER_TRACK, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->trackAlias, 22);
+  EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
   EXPECT_EQ(parseResult->priority, 55);

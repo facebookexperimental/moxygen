@@ -44,16 +44,16 @@ class MoQForwarder {
 
   struct Subscriber {
     std::shared_ptr<MoQSession> session;
-    uint64_t subscribeID;
-    uint64_t trackAlias;
+    SubscribeID subscribeID;
+    TrackAlias trackAlias;
     SubscribeRange range;
 
     struct hash {
       std::uint64_t operator()(const Subscriber& subscriber) const {
         return folly::hash::hash_combine(
             subscriber.session.get(),
-            subscriber.subscribeID,
-            subscriber.trackAlias,
+            subscriber.subscribeID.value,
+            subscriber.trackAlias.value,
             subscriber.range.start.group,
             subscriber.range.start.object,
             subscriber.range.end.group,
@@ -79,8 +79,8 @@ class MoQForwarder {
 
   void addSubscriber(
       std::shared_ptr<MoQSession> session,
-      uint64_t subscribeID,
-      uint64_t trackAlias,
+      SubscribeID subscribeID,
+      TrackAlias trackAlias,
       const SubscribeRequest& sub) {
     subscribers_.emplace(Subscriber(
         {std::move(session),
@@ -112,7 +112,7 @@ class MoQForwarder {
 
   void removeSession(
       const std::shared_ptr<MoQSession>& session,
-      folly::Optional<uint64_t> subID = folly::none) {
+      folly::Optional<SubscribeID> subID = folly::none) {
     // The same session could have multiple subscriptions, remove all of them
     // TODO: This shouldn't need to be a linear search
     for (auto it = subscribers_.begin(); it != subscribers_.end();) {
@@ -175,7 +175,7 @@ class MoQForwarder {
              buf = (payload) ? payload->clone() : nullptr,
              eom,
              streamPerObject]() mutable {
-              objHeader.trackAlias = trackAlias;
+              objHeader.trackIdentifier = trackAlias;
               if (objHeader.status != ObjectStatus::NORMAL) {
                 session->publishStatus(objHeader, subId);
               } else if (streamPerObject) {

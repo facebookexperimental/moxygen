@@ -130,7 +130,7 @@ class MoQTextClient {
   }
   MoQClient moqClient_;
   FullTrackName fullTrackName_;
-  uint64_t subscribeID_{0};
+  SubscribeID subscribeID_{0};
 };
 } // namespace
 

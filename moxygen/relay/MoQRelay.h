@@ -53,7 +53,7 @@ class MoQRelay {
   struct RelaySubscription {
     std::shared_ptr<MoQForwarder> forwarder;
     std::shared_ptr<MoQSession> upstream;
-    uint64_t subscribeID;
+    SubscribeID subscribeID;
     folly::CancellationSource cancellationSource;
   };
   folly::coro::Task<void> forwardTrack(

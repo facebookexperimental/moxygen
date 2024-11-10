@@ -49,13 +49,13 @@ class MoQChatClient {
   std::string deviceId_;
   std::string timestampString_;
   MoQClient moqClient_;
-  folly::Optional<uint64_t> chatSubscribeID_;
-  folly::Optional<uint64_t> chatTrackAlias_;
+  folly::Optional<SubscribeID> chatSubscribeID_;
+  folly::Optional<TrackAlias> chatTrackAlias_;
   uint64_t nextGroup_{0};
   struct UserTrack {
     std::string deviceId;
     std::chrono::seconds timestamp;
-    uint64_t subscribeId;
+    SubscribeID subscribeId;
   };
   std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>

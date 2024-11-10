@@ -141,8 +141,8 @@ class MoQDateServer : MoQServer {
 
   bool catchup(
       std::shared_ptr<MoQSession> clientSession,
-      uint64_t subscribeID,
-      uint64_t trackAlias,
+      SubscribeID subscribeID,
+      TrackAlias trackAlias,
       SubscribeRange range,
       AbsoluteLocation now) {
     if (range.start >= now) {
@@ -185,8 +185,8 @@ class MoQDateServer : MoQServer {
       MoQForwarder& forwarder,
       time_t in_time_t,
       bool forceGroup,
-      uint64_t subscribeID,
-      uint64_t trackAlias,
+      SubscribeID subscribeID,
+      TrackAlias trackAlias,
       folly::Optional<AbsoluteLocation> end) {
     size_t objectsPublished = 0;
     struct tm local_tm;

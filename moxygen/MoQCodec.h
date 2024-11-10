@@ -141,13 +141,8 @@ class MoQObjectStreamCodec : public MoQCodec {
 
     virtual void onObjectHeader(ObjectHeader objectHeader) = 0;
 
-    struct SubscriptionIdentifier {
-      std::optional<uint64_t> subscribeID;
-      std::optional<uint64_t> trackAlias;
-    };
-
     virtual void onObjectPayload(
-        SubscriptionIdentifier subscriptionIdentifier,
+        TrackIdentifier trackIdentifier,
         uint64_t groupID,
         uint64_t id,
         std::unique_ptr<folly::IOBuf> payload,
