@@ -157,6 +157,10 @@ class MoQObjectStreamCodec : public MoQCodec {
 
   void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
+  TrackIdentifier getTrackIdentifier() const {
+    return curObjectHeader_.trackIdentifier;
+  }
+
  private:
   enum class ParseState {
     STREAM_HEADER_TYPE,
