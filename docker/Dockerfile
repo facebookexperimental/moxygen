@@ -28,9 +28,4 @@ ENV MOQ_PORT=4433
 
 EXPOSE ${MOQ_PORT}
 
-CMD ./_build/bin/moqrelayserver \
--port ${MOQ_PORT} \
--cert ./certs/certificate.pem \
--key ./certs/certificate.key \
--endpoint "/moq" \
---logging ${MOQ_LOG_LEVEL}
+CMD ["sh", "-c", "./_build/bin/moqrelayserver -port ${MOQ_PORT} -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint \"/moq\" --logging ${MOQ_LOG_LEVEL}"]
