@@ -2,15 +2,15 @@ name: Docker Build AMD64
 
 on:
   push:
-    tags: 
-      - 'v*'
-  pull_request:
     branches: 
       - main
+    tags: 
+      - 'v*'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: moqrelay
 
 jobs:
   build-amd64:
