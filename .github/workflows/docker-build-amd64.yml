@@ -1,0 +1,41 @@
+name: Docker Build AMD64
+
+on:
+  push:
+    tags: 
+      - 'v*'
+  pull_request:
+    branches: 
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-amd64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to registry
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+
+      - name: Build AMD64 image
+        run: |
+          docker build . -f docker/Dockerfile \
+            -t ghcr.io/${{ env.IMAGE_NAME }}:latest-amd64 \
+            -t ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
+
+      - name: Push AMD64 image
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push ghcr.io/${{ env.IMAGE_NAME }}:latest-amd64
+          docker push ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64

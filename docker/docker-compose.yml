@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  moqrelay:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${MOQ_PORT}:${MOQ_PORT}"
+    volumes:
+      - ${CERT_PATH:-./certs}:/certs
+    environment:
+      - MOQ_LOG_LEVEL=${MOQ_LOG_LEVEL:-DBG}
+      - MOQ_PORT=${MOQ_PORT:-4433}
+      - CERT_FILE=${CERT_FILE:-/certs/certificate.pem}
+      - KEY_FILE=${KEY_FILE:-/certs/certificate.key}
+      
