@@ -24,6 +24,8 @@ class MockControlVisitorBase {
   virtual void onSubscribeDone(SubscribeDone subscribeDone) const = 0;
   virtual void onMaxSubscribeId(MaxSubscribeId maxSubscribeId) const = 0;
   virtual void onUnsubscribe(Unsubscribe unsubscribe) const = 0;
+  virtual void onFetch(Fetch fetch) const = 0;
+  virtual void onFetchCancel(FetchCancel fetchCancel) const = 0;
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
   virtual void onAnnounceCancel(AnnounceCancel announceCancel) const = 0;
@@ -93,6 +95,16 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
   MOCK_METHOD(void, onUnsubscribe, (Unsubscribe), (const));
   void operator()(Unsubscribe unsubscribe) const override {
     onUnsubscribe(unsubscribe);
+  }
+
+  MOCK_METHOD(void, onFetch, (Fetch), (const));
+  void operator()(Fetch fetch) const override {
+    onFetch(fetch);
+  }
+
+  MOCK_METHOD(void, onFetchCancel, (FetchCancel), (const));
+  void operator()(FetchCancel fetchCancel) const override {
+    onFetchCancel(fetchCancel);
   }
 
   MOCK_METHOD(void, onMaxSubscribeId, (MaxSubscribeId), (const));

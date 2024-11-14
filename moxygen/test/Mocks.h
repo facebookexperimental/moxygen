@@ -22,6 +22,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
        uint64_t id,
        std::unique_ptr<folly::IOBuf> payload,
        bool eom));
+  MOCK_METHOD(void, onFetchHeader, (uint64_t subscribeID));
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest subscribeRequest));
   MOCK_METHOD(void, onSubscribeUpdate, (SubscribeUpdate subscribeUpdate));
   MOCK_METHOD(void, onSubscribeOk, (SubscribeOk subscribeOk));
