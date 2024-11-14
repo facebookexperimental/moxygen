@@ -39,6 +39,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   ~MoQSession() override;
 
   void start();
+  void drain();
   void close(folly::Optional<SessionCloseErrorCode> error = folly::none);
 
   void setup(ClientSetup setup);
@@ -252,14 +253,25 @@ class MoQSession : public MoQControlCodec::ControlCallback,
           co_return nullptr;
         }
         folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-        while (true) {
-          auto buf = co_await folly::coro::co_withCancellation(
-              cancelToken, payloadQueue.dequeue());
+        auto curCancelToken =
+            co_await folly::coro::co_current_cancellation_token;
+        auto mergeToken =
+            folly::CancellationToken::merge(curCancelToken, cancelToken);
+        while (!curCancelToken.isCancellationRequested()) {
+          std::unique_ptr<folly::IOBuf> buf;
+          auto optionalBuf = payloadQueue.try_dequeue();
+          if (optionalBuf) {
+            buf = std::move(*optionalBuf);
+          } else {
+            buf = co_await folly::coro::co_withCancellation(
+                cancelToken, payloadQueue.dequeue());
+          }
           if (!buf) {
-            co_return payloadBuf.move();
+            break;
           }
           payloadBuf.append(std::move(buf));
         }
+        co_return payloadBuf.move();
       }
     };
 
@@ -400,6 +412,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
+  void checkForCloseOnDrain();
 
   folly::SemiFuture<folly::Unit> publishImpl(
       const ObjectHeader& objHeader,
@@ -524,6 +537,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   moxygen::TimedBaton sentSetup_;
   moxygen::TimedBaton receivedSetup_;
   bool setupComplete_{false};
+  bool draining_{false};
   folly::CancellationSource cancellationSource_;
 
   // SubscribeID must be a unique monotonically increasing number that is
