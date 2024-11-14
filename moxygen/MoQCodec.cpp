@@ -128,7 +128,10 @@ void MoQObjectStreamCodec::onIngress(
           case StreamType::STREAM_HEADER_SUBGROUP:
             parseState_ = ParseState::OBJECT_STREAM;
             break;
-          //  CONTROL doesn't have a wire type yet.
+          case StreamType::FETCH_HEADER:
+            parseState_ = ParseState::FETCH_HEADER;
+            break;
+            //  CONTROL doesn't have a wire type yet.
           default:
             XLOG(DBG4) << "Stream not allowed: 0x" << std::setfill('0')
                        << std::setw(sizeof(uint64_t) * 2) << std::hex
@@ -152,6 +155,19 @@ void MoQObjectStreamCodec::onIngress(
         if (callback_) {
           callback_->onObjectHeader(std::move(res.value()));
         }
+        break;
+      }
+      case ParseState::FETCH_HEADER: {
+        auto newCursor = cursor;
+        auto res = parseFetchHeader(newCursor);
+        if (res.hasError()) {
+          XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
+          connError_ = res.error();
+          break;
+        }
+        curObjectHeader_.trackIdentifier = SubscribeID(res.value());
+        parseState_ = ParseState::MULTI_OBJECT_HEADER;
+        cursor = newCursor;
         break;
       }
       case ParseState::OBJECT_STREAM: {

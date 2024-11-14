@@ -56,6 +56,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       SubscribeUpdate,
       Unsubscribe,
       SubscribeDone,
+      Fetch,
+      FetchCancel,
       MaxSubscribeId,
       TrackStatusRequest,
       TrackStatus,
@@ -126,12 +128,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     virtual void operator()(FetchCancel fetchCancel) const {
       XLOG(INFO) << "FetchCancel subID=" << fetchCancel.subscribeID;
     }
-    virtual void operator()(FetchOk fetchOk) const {
-      XLOG(INFO) << "FetchOk subID=" << fetchOk.subscribeID;
-    }
-    virtual void operator()(FetchError fetchError) const {
-      XLOG(INFO) << "FetchError subID=" << fetchError.subscribeID;
-    }
     virtual void operator()(TrackStatusRequest trackStatusRequest) const {
       XLOG(INFO) << "Subscribe ftn="
                  << trackStatusRequest.fullTrackName.trackNamespace
@@ -182,6 +178,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
           folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>>();
       promise_ = std::move(contract.first);
       future_ = std::move(contract.second);
+      auto contract2 = folly::coro::makePromiseContract<
+          folly::Expected<std::shared_ptr<TrackHandle>, FetchError>>();
+      fetchPromise_ = std::move(contract2.first);
+      fetchFuture_ = std::move(contract2.second);
     }
 
     void setTrackName(FullTrackName trackName) {
@@ -207,7 +207,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     ready() {
       co_return co_await std::move(future_);
     }
-
     void subscribeOK(
         std::shared_ptr<TrackHandle> self,
         GroupOrder order,
@@ -221,6 +220,22 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       if (!promise_.isFulfilled()) {
         subErr.subscribeID = subscribeID_;
         promise_.setValue(folly::makeUnexpected(std::move(subErr)));
+      }
+    }
+
+    folly::coro::Task<folly::Expected<std::shared_ptr<TrackHandle>, FetchError>>
+    fetchReady() {
+      co_return co_await std::move(fetchFuture_);
+    }
+    void fetchOK(std::shared_ptr<TrackHandle> self) {
+      XCHECK_EQ(self.get(), this);
+      XLOG(DBG1) << __func__ << " trackHandle=" << this;
+      fetchPromise_.setValue(std::move(self));
+    }
+    void fetchError(FetchError fetchErr) {
+      if (!promise_.isFulfilled()) {
+        fetchErr.subscribeID = subscribeID_;
+        fetchPromise_.setValue(folly::makeUnexpected(std::move(fetchErr)));
       }
     }
 
@@ -268,12 +283,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
    private:
     FullTrackName fullTrackName_;
     SubscribeID subscribeID_;
-    folly::coro::Promise<
-        folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>>
-        promise_;
-    folly::coro::Future<
-        folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>>
-        future_;
+    using SubscribeResult =
+        folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>;
+    folly::coro::Promise<SubscribeResult> promise_;
+    folly::coro::Future<SubscribeResult> future_;
+    using FetchResult =
+        folly::Expected<std::shared_ptr<TrackHandle>, FetchError>;
+    folly::coro::Promise<FetchResult> fetchPromise_;
+    folly::coro::Future<FetchResult> fetchFuture_;
     folly::
         F14FastMap<std::pair<uint64_t, uint64_t>, std::shared_ptr<ObjectSource>>
             objects_;
@@ -292,6 +309,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void unsubscribe(Unsubscribe unsubscribe);
   void subscribeDone(SubscribeDone subDone);
   void subscribeUpdate(SubscribeUpdate subUpdate);
+
+  folly::coro::Task<folly::Expected<std::shared_ptr<TrackHandle>, FetchError>>
+  fetch(Fetch fetch);
+  void fetchOk(FetchOk fetchOk);
+  void fetchError(FetchError fetchError);
+  void fetchCancel(FetchCancel fetchCancel);
 
   class WebTransportException : public std::runtime_error {
    public:
@@ -319,6 +342,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::SemiFuture<folly::Unit> publishStatus(
       const ObjectHeader& objHeader,
       SubscribeID subscribeID);
+  void closeFetchStream(SubscribeID subID);
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
   void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) override;
@@ -348,6 +372,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       uint64_t id,
       std::unique_ptr<folly::IOBuf> payload,
       bool eom) override;
+  void onFetchHeader(uint64_t subscribeID) override {}
   void onSubscribe(SubscribeRequest subscribeRequest) override;
   void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
@@ -402,6 +427,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       } else if (pref == ForwardPreference::Subgroup) {
         return group == other.group && subgroup == other.subgroup;
       } else if (pref == ForwardPreference::Track) {
+        return true;
+      } else if (pref == ForwardPreference::Fetch) {
         return true;
       }
       return false;
@@ -459,6 +486,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   // Track Alias -> Track Handle
   folly::F14FastMap<TrackAlias, std::shared_ptr<TrackHandle>, TrackAlias::hash>
       subTracks_;
+  folly::
+      F14FastMap<SubscribeID, std::shared_ptr<TrackHandle>, SubscribeID::hash>
+          fetches_;
   folly::F14FastMap<SubscribeID, TrackAlias, SubscribeID::hash>
       subIdToTrackAlias_;
 

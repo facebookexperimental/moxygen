@@ -39,8 +39,6 @@ class MoQServer {
     void operator()(MaxSubscribeId maxSubscribeId) const override;
     void operator()(Fetch fetch) const override;
     void operator()(FetchCancel fetchCancel) const override;
-    void operator()(FetchOk fetchOk) const override;
-    void operator()(FetchError fetchError) const override;
     void operator()(Unannounce unannounce) const override;
     void operator()(AnnounceCancel announceCancel) const override;
     void operator()(SubscribeAnnounces subscribeAnnounces) const override;

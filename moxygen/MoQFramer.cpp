@@ -188,6 +188,15 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
   return serverSetup;
 }
 
+folly::Expected<uint64_t, ErrorCode> parseFetchHeader(
+    folly::io::Cursor& cursor) noexcept {
+  auto subscribeID = quic::decodeQuicInteger(cursor);
+  if (!subscribeID) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  return subscribeID->first;
+}
+
 folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
@@ -288,10 +297,13 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     const ObjectHeader& headerTemplate) noexcept {
   DCHECK(
       streamType == StreamType::STREAM_HEADER_TRACK ||
-      streamType == StreamType::STREAM_HEADER_SUBGROUP);
+      streamType == StreamType::STREAM_HEADER_SUBGROUP ||
+      streamType == StreamType::FETCH_HEADER);
+  // TODO get rid of this
   auto length = cursor.totalLength();
   ObjectHeader objectHeader = headerTemplate;
-  if (streamType == StreamType::STREAM_HEADER_TRACK) {
+  if (streamType == StreamType::STREAM_HEADER_TRACK ||
+      streamType == StreamType::FETCH_HEADER) {
     auto group = quic::decodeQuicInteger(cursor, length);
     if (!group) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -302,12 +314,28 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
   } else {
     objectHeader.forwardPreference = ForwardPreference::Subgroup;
   }
+  if (streamType == StreamType::FETCH_HEADER) {
+    objectHeader.forwardPreference = ForwardPreference::Fetch;
+    auto subgroup = quic::decodeQuicInteger(cursor, length);
+    if (!subgroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= subgroup->second;
+    objectHeader.subgroup = subgroup->first;
+  }
   auto id = quic::decodeQuicInteger(cursor, length);
   if (!id) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= id->second;
   objectHeader.id = id->first;
+  if (streamType == StreamType::FETCH_HEADER) {
+    if (length < 2) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    objectHeader.priority = cursor.readBE<uint8_t>();
+    length--;
+  }
   auto payloadLength = quic::decodeQuicInteger(cursor, length);
   if (!payloadLength) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1154,6 +1182,9 @@ WriteResult writeStreamHeader(
         folly::to_underlying(StreamType::STREAM_HEADER_SUBGROUP),
         size,
         error);
+  } else if (objectHeader.forwardPreference == ForwardPreference::Fetch) {
+    writeVarint(
+        writeBuf, folly::to_underlying(StreamType::FETCH_HEADER), size, error);
   } else {
     LOG(FATAL) << "Unsupported forward preference to stream header";
   }
@@ -1162,7 +1193,9 @@ WriteResult writeStreamHeader(
     writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
-  writeVarint(writeBuf, objectHeader.priority, size, error);
+  if (objectHeader.forwardPreference != ForwardPreference::Fetch) {
+    writeVarint(writeBuf, objectHeader.priority, size, error);
+  }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1199,12 +1232,16 @@ WriteResult writeObject(
   if (objectHeader.forwardPreference != ForwardPreference::Subgroup) {
     writeVarint(writeBuf, objectHeader.group, size, error);
   }
+  if (objectHeader.forwardPreference == ForwardPreference::Fetch) {
+    writeVarint(writeBuf, objectHeader.subgroup, size, error);
+  }
   writeVarint(writeBuf, objectHeader.id, size, error);
   CHECK(
       objectHeader.status != ObjectStatus::NORMAL ||
       (objectHeader.length && *objectHeader.length > 0))
       << "Normal objects require non-zero length";
-  if (objectHeader.forwardPreference == ForwardPreference::Datagram) {
+  if (objectHeader.forwardPreference == ForwardPreference::Datagram ||
+      objectHeader.forwardPreference == ForwardPreference::Fetch) {
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
   }

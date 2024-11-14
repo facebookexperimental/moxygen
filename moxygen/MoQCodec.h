@@ -139,6 +139,7 @@ class MoQObjectStreamCodec : public MoQCodec {
    public:
     ~ObjectCallback() override = default;
 
+    virtual void onFetchHeader(uint64_t subscribeID) = 0;
     virtual void onObjectHeader(ObjectHeader objectHeader) = 0;
 
     virtual void onObjectPayload(
@@ -166,6 +167,7 @@ class MoQObjectStreamCodec : public MoQCodec {
     STREAM_HEADER_TYPE,
     DATAGRAM,
     OBJECT_STREAM,
+    FETCH_HEADER,
     MULTI_OBJECT_HEADER,
     OBJECT_PAYLOAD,
     // OBJECT_PAYLOAD_NO_LENGTH
