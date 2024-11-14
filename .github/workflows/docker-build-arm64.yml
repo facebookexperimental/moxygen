@@ -27,14 +27,14 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
-      - name: Build ARM64 image
+      - name: Build arm64 image
         run: |
           docker build . -f docker/Dockerfile \
             --platform linux/arm64 \
             -t ghcr.io/${{ env.IMAGE_NAME }}:latest-arm64 \
             -t ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
 
-      - name: Push ARM64 image
+      - name: Push arm64 image
         if: github.event_name != 'pull_request'
         run: |
           docker push ghcr.io/${{ env.IMAGE_NAME }}:latest-arm64
