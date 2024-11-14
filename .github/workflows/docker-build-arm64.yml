@@ -1,5 +1,4 @@
 name: Docker Build ARM64
-
 on:
   push:
     tags: 
@@ -8,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: moqrelay
+  IMAGE_NAME: ${{ github.repository_owner }}/moqrelay
 
 jobs:
   build-arm64:
@@ -16,7 +15,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
