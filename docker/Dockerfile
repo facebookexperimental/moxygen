@@ -4,28 +4,28 @@
 # 
 # To run the container:
 #
-# Using default values (port 4433, logging DBG)
-# docker run --rm -p 4433:4433 moqrelay
+# Using default values (udp port 4433, logging DBG)
+# docker run --rm -p 4433:4433/udp moqrelay
 #
 # Override logging level
-# docker run --rm -p 4433:4433 -e MOQ_LOG_LEVEL=INFO moqrelay
+# docker run --rm -p 4433:4433/udp -e MOQ_LOG_LEVEL=INFO moqrelay
 #
 # Override both port and logging
-# docker run --rm -p 8080:8080 -e MOQ_PORT=8080 -e MOQ_LOG_LEVEL=INFO moqrelay
+# docker run --rm -p 8080:8080/udp -e MOQ_PORT=8080 -e MOQ_LOG_LEVEL=INFO moqrelay
 #
 # Using certs from a specific host directory
-# docker run --rm -p 4433:4433 \
+# docker run --rm -p 4433:4433/udp \
 #   -v /path/to/your/certs:/certs \
 #   moqrelay
 #
 # Using individual cert files with different names
-# docker run --rm -p 4433:4433 \
+# docker run --rm -p 4433:4433/udp \
 #   -v /path/to/custom.pem:/certs/certificate.pem \
 #   -v /path/to/custom.key:/certs/certificate.key \
 #   moqrelay
 #
 # # Using completely custom paths with environment variables
-# docker run --rm -p 4433:4433 \
+# docker run --rm -p 4433:4433/udp \
 #   -v /path/to/certs:/custom/certs \
 #   -e CERT_FILE=/custom/certs/my-cert.pem \
 #   -e KEY_FILE=/custom/certs/my-key.key \
@@ -58,6 +58,6 @@ RUN ./scripts/create-server-certs.sh
 ENV MOQ_LOG_LEVEL=DBG
 ENV MOQ_PORT=4433
 
-EXPOSE ${MOQ_PORT}
+EXPOSE ${MOQ_PORT}/udp
 
 CMD ["sh", "-c", "./_build/bin/moqrelayserver -port ${MOQ_PORT} -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint \"/moq\" --logging ${MOQ_LOG_LEVEL}"]
