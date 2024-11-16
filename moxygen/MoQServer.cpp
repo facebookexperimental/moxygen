@@ -109,14 +109,6 @@ void MoQServer::ControlVisitor::operator()(FetchCancel fetchCancel) const {
   XLOG(INFO) << "FetchCancel id=" << fetchCancel.subscribeID;
 }
 
-void MoQServer::ControlVisitor::operator()(FetchOk fetchOk) const {
-  XLOG(INFO) << "FetchOk id=" << fetchOk.subscribeID;
-}
-
-void MoQServer::ControlVisitor::operator()(FetchError fetchError) const {
-  XLOG(INFO) << "FetchError id=" << fetchError.subscribeID;
-}
-
 void MoQServer::ControlVisitor::operator()(SubscribeDone subscribeDone) const {
   XLOG(INFO) << "SubscribeDone id=" << subscribeDone.subscribeID
              << " code=" << folly::to_underlying(subscribeDone.statusCode)

@@ -24,6 +24,10 @@ MoQSession::~MoQSession() {
     subTrack.second->subscribeError(
         {/*TrackHandle fills in subId*/ 0, 500, "session closed", folly::none});
   }
+  for (auto& fetch : fetches_) {
+    fetch.second->fetchError(
+        {/*TrackHandle fills in subId*/ 0, 500, "session closed"});
+  }
   for (auto& pendingAnn : pendingAnnounce_) {
     pendingAnn.second.setValue(folly::makeUnexpected(
         AnnounceError({pendingAnn.first, 500, "session closed"})));
@@ -56,6 +60,18 @@ void MoQSession::start() {
     readLoop(StreamType::CONTROL, controlStream.readHandle)
         .scheduleOn(evb_)
         .start();
+  }
+}
+
+void MoQSession::drain() {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  draining_ = true;
+  checkForCloseOnDrain();
+}
+
+void MoQSession::checkForCloseOnDrain() {
+  if (draining_ && fetches_.empty() && subTracks_.empty()) {
+    close();
   }
 }
 
@@ -168,10 +184,13 @@ folly::coro::Task<void> MoQSession::readLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   std::unique_ptr<MoQCodec> codec;
+  MoQObjectStreamCodec* objCodec = nullptr;
   if (streamType == StreamType::CONTROL) {
     codec = std::make_unique<MoQControlCodec>(dir_, this);
   } else {
-    codec = std::make_unique<MoQObjectStreamCodec>(this);
+    auto res = std::make_unique<MoQObjectStreamCodec>(this);
+    objCodec = res.get();
+    codec = std::move(res);
   }
   auto id = readHandle->getID();
   codec->setStreamId(id);
@@ -191,6 +210,17 @@ folly::coro::Task<void> MoQSession::readLoop(
       }
       fin = streamData->fin;
       XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
+      if (fin && objCodec) {
+        auto id = objCodec->getTrackIdentifier();
+        if (auto subscribeID = std::get_if<SubscribeID>(&id)) { // it's fetch
+          auto track = getTrack(id);
+          if (track) {
+            track->fin();
+            fetches_.erase(*subscribeID);
+            checkForCloseOnDrain();
+          }
+        }
+      }
     }
   }
 }
@@ -243,7 +273,15 @@ std::shared_ptr<MoQSession::TrackHandle> MoQSession::getTrack(
     }
     track = trackIt->second;
   } else {
-    // TODO - handle subscribe ID
+    auto subscribeID = std::get<SubscribeID>(trackIdentifier);
+    XLOG(DBG3) << "getTrack subID=" << subscribeID;
+    auto trackIt = fetches_.find(subscribeID);
+    if (trackIt == fetches_.end()) {
+      // received an object for unknown subscribe ID
+      XLOG(ERR) << "unknown subscribe ID=" << subscribeID << " sess=" << this;
+      return nullptr;
+    }
+    track = trackIt->second;
   }
   return track;
 }
@@ -383,6 +421,7 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
   subTracks_[trackAliasIt->second]->subscribeError(std::move(subErr));
   subTracks_.erase(trackAliasIt->second);
   subIdToTrackAlias_.erase(trackAliasIt);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
@@ -396,7 +435,13 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   }
 
   // TODO: handle final object and status code
+  // TODO: there could still be objects in flight.  Removing from maps now
+  // will prevent their delivery.  I think the only way to handle this is with
+  // timeouts.
   subTracks_[trackAliasIt->second]->fin();
+  subTracks_.erase(trackAliasIt->second);
+  subIdToTrackAlias_.erase(trackAliasIt);
+  checkForCloseOnDrain();
   controlMessages_.enqueue(std::move(subscribeDone));
 }
 
@@ -420,19 +465,38 @@ void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
 }
 
 void MoQSession::onFetch(Fetch fetch) {
-  XLOG(ERR) << "Not implemented yet";
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  controlMessages_.enqueue(std::move(fetch));
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
-  XLOG(ERR) << "Not implemented yet";
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  controlMessages_.enqueue(std::move(fetchCancel));
 }
 
 void MoQSession::onFetchOk(FetchOk fetchOk) {
-  XLOG(ERR) << "Not implemented yet";
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto fetchIt = fetches_.find(fetchOk.subscribeID);
+  if (fetchIt == fetches_.end()) {
+    XLOG(ERR) << "No matching subscribe ID=" << fetchOk.subscribeID
+              << " sess=" << this;
+    return;
+  }
+  auto trackHandle = fetchIt->second;
+  trackHandle->fetchOK(trackHandle);
 }
 
 void MoQSession::onFetchError(FetchError fetchError) {
-  XLOG(ERR) << "Not implemented yet";
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto fetchIt = fetches_.find(fetchError.subscribeID);
+  if (fetchIt == fetches_.end()) {
+    XLOG(ERR) << "No matching subscribe ID=" << fetchError.subscribeID
+              << " sess=" << this;
+    return;
+  }
+  fetchIt->second->fetchError(fetchError);
+  fetches_.erase(fetchIt);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::onAnnounce(Announce ann) {
@@ -634,9 +698,15 @@ MoQSession::TrackHandle::objects() {
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   auto cancelToken = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::CancellationToken::merge(cancelToken, cancelToken_);
-  while (!mergeToken.isCancellationRequested()) {
-    auto obj = co_await folly::coro::co_withCancellation(
-        mergeToken, newObjects_.dequeue());
+  while (!cancelToken.isCancellationRequested()) {
+    auto optionalObj = newObjects_.try_dequeue();
+    std::shared_ptr<ObjectSource> obj;
+    if (optionalObj) {
+      obj = *optionalObj;
+    } else {
+      obj = co_await folly::coro::co_withCancellation(
+          mergeToken, newObjects_.dequeue());
+    }
     if (!obj) {
       XLOG(DBG3) << "Out of objects for trackHandle=" << this
                  << " id=" << subscribeID_;
@@ -710,6 +780,8 @@ void MoQSession::unsubscribe(Unsubscribe unsubscribe) {
     XLOG(ERR) << "writeUnsubscribe failed" << " sess=" << this;
     return;
   }
+  // we rely on receiving subscribeDone after unsubscribe to remove from
+  // subTracks_
   controlWriteEvent_.signal();
 }
 
@@ -742,6 +814,60 @@ void MoQSession::subscribeUpdate(SubscribeUpdate subUpdate) {
   auto res = writeSubscribeUpdate(controlWriteBuf_, std::move(subUpdate));
   if (!res) {
     XLOG(ERR) << "writeSubscribeUpdate failed" << " sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
+folly::coro::Task<
+    folly::Expected<std::shared_ptr<MoQSession::TrackHandle>, FetchError>>
+MoQSession::fetch(Fetch fetch) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto g =
+      folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
+  auto fullTrackName = fetch.fullTrackName;
+  if (nextSubscribeID_ >= peerMaxSubscribeID_) {
+    XLOG(WARN) << "Issuing fetch that will fail; nextSubscribeID_="
+               << nextSubscribeID_
+               << " peerMaxSubscribeid_=" << peerMaxSubscribeID_
+               << " sess=" << this;
+  }
+  auto subID = nextSubscribeID_++;
+  fetch.subscribeID = subID;
+  auto wres = writeFetch(controlWriteBuf_, std::move(fetch));
+  if (!wres) {
+    XLOG(ERR) << "writeFetch failed" << " sess=" << this;
+    co_return folly::makeUnexpected(
+        FetchError({subID, 500, "local write failed"}));
+  }
+  controlWriteEvent_.signal();
+  auto subTrack = fetches_.emplace(
+      std::piecewise_construct,
+      std::forward_as_tuple(subID),
+      std::forward_as_tuple(std::make_shared<TrackHandle>(
+          fullTrackName, subID, cancellationSource_.getToken())));
+
+  auto res = co_await subTrack.first->second->fetchReady();
+  XLOG(DBG1) << __func__
+             << " fetchReady trackHandle=" << subTrack.first->second;
+  co_return res;
+}
+
+void MoQSession::fetchOk(FetchOk fetchOk) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto res = writeFetchOk(controlWriteBuf_, fetchOk);
+  if (!res) {
+    XLOG(ERR) << "writeFetchOk failed" << " sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
+void MoQSession::fetchError(FetchError subErr) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  auto res = writeFetchError(controlWriteBuf_, std::move(subErr));
+  if (!res) {
+    XLOG(ERR) << "writeFetchError failed" << " sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -808,6 +934,29 @@ folly::SemiFuture<folly::Unit> MoQSession::publishStatus(
   return publishImpl(objHeader, subscribeID, 0, nullptr, true, false);
 }
 
+void MoQSession::closeFetchStream(SubscribeID subID) {
+  PublishKey publishKey{
+      TrackIdentifier(subID), 0, 0, ForwardPreference::Fetch, 0};
+  auto pubDataIt = publishDataMap_.find(publishKey);
+  if (pubDataIt == publishDataMap_.end()) {
+    XLOG(ERR) << "Invalid subscribeID to closeFetchStream=" << subID.value;
+    return;
+  }
+  if (pubDataIt->second.objectLength && *pubDataIt->second.objectLength > 0) {
+    XLOG(ERR) << "Non-zero length remaining in previous obj id=" << subID.value;
+    return;
+  }
+  XLOG(DBG1) << "Closing fetch stream=" << pubDataIt->second.streamID;
+  auto writeRes =
+      wt_->writeStreamData(pubDataIt->second.streamID, nullptr, true);
+  if (!writeRes) {
+    XLOG(ERR) << "Failed to close fetch stream sess=" << this
+              << " error=" << static_cast<int>(writeRes.error());
+    return;
+  }
+  publishDataMap_.erase(pubDataIt);
+}
+
 folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     const ObjectHeader& objHeader,
     SubscribeID subscribeID,
@@ -840,10 +989,9 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     // - Next portion of the object calls this function again with payloadOffset
     // > 0
     if (payloadOffset != 0) {
-      XLOG(WARN)
-          << __func__
-          << " Can't start publishing in the middle. Disgregard data for this new obj with payloadOffset = "
-          << payloadOffset << " sess=" << this;
+      XLOG(WARN) << __func__ << " Can't start publishing in the middle. "
+                 << "Disgregard data for this new obj with payloadOffset = "
+                 << payloadOffset << " sess=" << this;
       return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
           std::runtime_error("Can't start publishing in the middle.")));
     }
@@ -880,6 +1028,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     pubDataIt = res.first;
     // Serialize multi-object stream header
     if (objHeader.forwardPreference == ForwardPreference::Track ||
+        objHeader.forwardPreference == ForwardPreference::Fetch ||
         objHeader.forwardPreference == ForwardPreference::Subgroup) {
       writeStreamHeader(writeBuf, objHeader);
     }
@@ -892,7 +1041,8 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     // new object
     // validate group and object are moving in the right direction
     bool multiObject = false;
-    if (objHeader.forwardPreference == ForwardPreference::Track) {
+    if (objHeader.forwardPreference == ForwardPreference::Track ||
+        objHeader.forwardPreference == ForwardPreference::Fetch) {
       if (objHeader.group < pubDataIt->second.group) {
         XLOG(ERR) << "Decreasing group in Track" << " sess=" << this;
         return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
