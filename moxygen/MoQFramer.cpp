@@ -272,13 +272,12 @@ folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     objectHeader.subgroup = std::numeric_limits<uint64_t>::max();
     objectHeader.forwardPreference = ForwardPreference::Track;
   }
-  // TODO: 8 uint 8?
-  auto priority = quic::decodeQuicInteger(cursor, length);
-  if (!priority) {
+  if (cursor.canAdvance(1)) {
+    objectHeader.priority = cursor.readBE<uint8_t>();
+    length -= 1;
+  } else {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= priority->second;
-  objectHeader.priority = priority->first;
   return objectHeader;
 }
 
@@ -1162,7 +1161,11 @@ WriteResult writeStreamHeader(
     writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
-  writeVarint(writeBuf, objectHeader.priority, size, error);
+  // TODO: Very weird conversion here (we are keeping obj priority in uint64 and
+  // we need to convert to uint8)
+  uint8_t priority = objectHeader.priority;
+  writeBuf.append(&priority, 1);
+  size += 1;
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1291,12 +1294,12 @@ WriteResult writeSubscribeOk(
   auto order = folly::to_underlying(subscribeOk.groupOrder);
   writeBuf.append(&order, 1);
   size += 1;
+  uint8_t contentExists = (subscribeOk.latest) ? 1 : 0;
+  writeBuf.append(&contentExists, 1);
+  size += 1;
   if (subscribeOk.latest) {
-    writeVarint(writeBuf, 1, size, error); // content exists
     writeVarint(writeBuf, subscribeOk.latest->group, size, error);
     writeVarint(writeBuf, subscribeOk.latest->object, size, error);
-  } else {
-    writeVarint(writeBuf, 0, size, error); // content exists
   }
   writeTrackRequestParams(writeBuf, subscribeOk.params, size, error);
   writeSize(sizePtr, size, error);
