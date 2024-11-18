@@ -58,7 +58,7 @@ class MoQRelayServer : MoQServer {
 
     void operator()(SubscribeRequest subscribeReq) const override {
       XLOG(INFO) << "SubscribeRequest track="
-                 << subscribeReq.fullTrackName.trackNamespace << "/"
+                 << subscribeReq.fullTrackName.trackNamespace << '/'
                  << subscribeReq.fullTrackName.trackName;
       server_.relay_.onSubscribe(std::move(subscribeReq), clientSession_)
           .scheduleOn(clientSession_->getEventBase())

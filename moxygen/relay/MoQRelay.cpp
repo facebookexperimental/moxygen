@@ -218,8 +218,7 @@ folly::coro::Task<void> MoQRelay::forwardTrack(
     std::shared_ptr<MoQForwarder> fowarder) {
   while (auto obj = co_await track->objects().next()) {
     XLOG(DBG1) << __func__
-               << " new object t=" << obj.value()->fullTrackName.trackNamespace
-               << obj.value()->fullTrackName.trackName
+               << " new object t=" << obj.value()->fullTrackName
                << " g=" << obj.value()->header.group
                << " o=" << obj.value()->header.id;
     folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
@@ -262,8 +261,7 @@ void MoQRelay::onUnsubscribe(
     subscription.forwarder->removeSession(session, unsub.subscribeID);
     if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for "
-                 << subscriptionIt->first.trackNamespace
-                 << subscriptionIt->first.trackName;
+                 << subscriptionIt->first.trackNamespace;
       subscription.cancellationSource.requestCancellation();
       subscription.upstream->unsubscribe({subscription.subscribeID});
       subscriptionIt = subscriptions_.erase(subscriptionIt);
@@ -324,8 +322,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
     }
     if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for "
-                 << subscriptionIt->first.trackNamespace
-                 << subscriptionIt->first.trackName;
+                 << subscriptionIt->first;
       subscription.upstream->unsubscribe({subscription.subscribeID});
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     } else {

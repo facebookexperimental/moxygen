@@ -341,12 +341,19 @@ struct TrackNamespace {
           tn.trackNamespace.begin(), tn.trackNamespace.end());
     }
   };
-  friend std::ostream& operator<<(
-      std::ostream& os,
-      const TrackNamespace& trackNs) {
-    for (const auto& s : trackNs.trackNamespace) {
-      os << s << "/";
+  friend std::ostream& operator<<(std::ostream& os,
+                                  const TrackNamespace& trackNs) {
+    if (trackNs.trackNamespace.empty()) {
+      return os;
     }
+
+    // Iterate through all elements except the last one
+    for (size_t i = 0; i < trackNs.trackNamespace.size() - 1; ++i) {
+      os << trackNs.trackNamespace[i] << '/';
+    }
+
+    // Add the last element without a trailing slash
+    os << trackNs.trackNamespace.back();
     return os;
   }
   bool empty() const {
@@ -386,6 +393,12 @@ struct FullTrackName {
   bool operator<(const FullTrackName& other) const {
     return trackNamespace < other.trackNamespace ||
         (trackNamespace == other.trackNamespace && trackName < other.trackName);
+  }
+  friend std::ostream& operator<<(std::ostream& os, const FullTrackName& ftn) {
+    if (ftn.trackNamespace.empty()) {
+      return os << ftn.trackName;
+    }
+    return os << ftn.trackNamespace << '/' << ftn.trackName;
   }
   struct hash {
     size_t operator()(const FullTrackName& ftn) const {
