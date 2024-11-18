@@ -260,8 +260,7 @@ void MoQRelay::onUnsubscribe(
     auto& subscription = subscriptionIt->second;
     subscription.forwarder->removeSession(session, unsub.subscribeID);
     if (subscription.forwarder->empty()) {
-      XLOG(INFO) << "Removed last subscriber for "
-                 << subscriptionIt->first.trackNamespace;
+      XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
       subscription.cancellationSource.requestCancellation();
       subscription.upstream->unsubscribe({subscription.subscribeID});
       subscriptionIt = subscriptions_.erase(subscriptionIt);
