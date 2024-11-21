@@ -8,11 +8,11 @@ if(NOT BUILD_TESTS)
     return()
 endif()
 
-flvparser_add_test(TARGET FlvParserTests
+moxygen_add_test(TARGET FlvParserTests
   SOURCES
     FlvReaderTest.cpp
     FlvSequentialReaderTest.cpp
   DEPENDS
     flvparser
-    Folly
+    Folly::folly
 )

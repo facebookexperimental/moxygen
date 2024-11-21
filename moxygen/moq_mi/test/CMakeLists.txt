@@ -8,10 +8,10 @@ if(NOT BUILD_TESTS)
     return()
 endif()
 
-moqmi_add_test(TARGET MoQMiTests
+moxygen_add_test(TARGET MoQMiTests
   SOURCES
     MoQMiTest.cpp
   DEPENDS
     moqmi
-    Folly
+    Folly::folly
 )
