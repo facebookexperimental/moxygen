@@ -436,7 +436,7 @@ void MoQSession::onFetchError(FetchError fetchError) {
 }
 
 void MoQSession::onAnnounce(Announce ann) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " sess=" << this << " ns=" << ann.trackNamespace;
   controlMessages_.enqueue(std::move(ann));
 }
 
