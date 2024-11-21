@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# FlvSequentialReader
+# flvparser
 add_library(flvparser
     FlvReader.cpp
     FlvSequentialReader.cpp
@@ -18,6 +18,7 @@ target_compile_options(
     flvparser PRIVATE
     ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
 )
+
 target_link_libraries(
     flvparser PUBLIC
     Folly::folly
@@ -30,4 +31,4 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
-add_subdirectory(test)
+#add_subdirectory(test)

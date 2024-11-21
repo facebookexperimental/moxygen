@@ -26,6 +26,8 @@ target_link_libraries(
   moqflvstreamerclient PUBLIC
   Folly::folly
   moxygen
+  flvparser
+  moqmi
 )
 
 install(

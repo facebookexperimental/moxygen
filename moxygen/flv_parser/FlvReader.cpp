@@ -144,7 +144,7 @@ uint8_t FlvReader::read1Byte() {
       throw std::runtime_error("EOF!");
     }
     throw std::runtime_error(
-        fmt::format("Failed to read 1 byte at offset {}", f_.tellg()));
+        fmt::format("Failed to read 1 byte at offset {}", (int)f_.tellg()));
   }
   return ret;
 }
@@ -164,7 +164,7 @@ uint32_t FlvReader::read3Bytes() {
     ret = tmpFin;
   } else {
     throw std::runtime_error(
-        fmt::format("Failed to read 3 byte at offset {}", f_.tellg()));
+        fmt::format("Failed to read 3 byte at offset {}", (int)f_.tellg()));
   }
   return ret;
 }
@@ -185,9 +185,9 @@ uint32_t FlvReader::read4Bytes() {
   } else {
     throw std::runtime_error(fmt::format(
         "Failed to read 4 byte at offset {}. bytesRead: {}, rdstate: {}",
-        f_.tellg(),
-        f_.gcount(),
-        f_.rdstate()));
+        (int)f_.tellg(),
+        (size_t)f_.gcount(),
+        (int)f_.rdstate()));
   }
   return ret;
 }
@@ -200,8 +200,8 @@ std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
   if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
     ret = folly::IOBuf::copyBuffer(tmp, bytesToRead);
   } else {
-    throw std::runtime_error(
-        fmt::format("Failed to read {} bytes at offset {}", n, f_.tellg()));
+    throw std::runtime_error(fmt::format(
+        "Failed to read {} bytes at offset {}", n, (int)f_.tellg()));
   }
   return ret;
 }
