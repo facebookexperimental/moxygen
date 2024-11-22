@@ -103,7 +103,7 @@ class MoQFlvStreamerClient {
       }
       for (auto& sub : subscriptions_) {
         XLOG(DBG1) << "Sending item: " << item->id
-                   << ", type: " << (int)item->type
+                   << ", type: " << folly::to_underlying(item->type)
                    << ", to subID-TrackAlias: " << sub.second.subscribeID << "-"
                    << sub.second.trackAlias;
 

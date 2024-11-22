@@ -55,7 +55,7 @@ TEST(FlvReaderTest, ReadOk) {
                    << ", dataSize: "
                    << ((videoTag->data)
                            ? videoTag->data->computeChainDataLength()
-                           : (size_t)0);
+                           : static_cast<size_t>(0));
       }
 
       if (std::get<2>(composedTag) != nullptr) {
