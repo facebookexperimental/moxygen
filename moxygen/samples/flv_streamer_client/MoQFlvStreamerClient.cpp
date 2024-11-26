@@ -183,11 +183,7 @@ class MoQFlvStreamerClient {
                                << objPayload->computeChainDataLength();
 
                     moqClient_.moqSession_->publish(
-                        objHeader,
-                        subscribeID,
-                        0,
-                        std::move(objPayload),
-                        false);
+                        objHeader, subscribeID, 0, std::move(objPayload), true);
                   }
                 });
 
