@@ -126,10 +126,11 @@ class MoQFlvStreamerClient {
                 [this,
                  objHeaderEndOfGroup,
                  subscribeID(sub.second.subscribeID)] {
-                  moqClient_.moqSession_->publish(
-                      objHeaderEndOfGroup, subscribeID, 0, nullptr, true);
+                  moqClient_.moqSession_->publishStatus(
+                      objHeaderEndOfGroup, subscribeID);
                 });
           }
+
           if (item->type == FlvSequentialReader::MediaType::VIDEO) {
             // Video
             if (item->isIdr &&
@@ -138,7 +139,7 @@ class MoQFlvStreamerClient {
               auto objHeaderEndOfGroup = createObjectHeaderEndOfGroup(
                   sub.second.trackAlias,
                   latestVideo_.group,
-                  latestVideo_.group,
+                  0, // subgroup per group
                   latestVideo_.object++,
                   videoPriority,
                   ForwardPreference::Subgroup);
@@ -148,45 +149,49 @@ class MoQFlvStreamerClient {
                   [this,
                    objHeaderEndOfGroup,
                    subscribeID(sub.second.subscribeID)] {
+                    moqClient_.moqSession_->publishStatus(
+                        objHeaderEndOfGroup, subscribeID);
+                  });
+
+              // Start new group
+              latestVideo_.group++;
+              latestVideo_.object = 0;
+            }
+            moqClient_.getEventBase()->runInEventBaseThread(
+                [this,
+                 item,
+                 latestVideo(latestVideo_),
+                 videoPriority,
+                 trackAlias(sub.second.trackAlias),
+                 subscribeID(sub.second.subscribeID)] {
+                  auto objPayload = encodeToMoQMi(item);
+                  if (!objPayload) {
+                    XLOG(ERR) << "Failed to encode video frame";
+                  } else {
+                    ObjectHeader objHeader = ObjectHeader{
+                        trackAlias,
+                        latestVideo.group,
+                        latestVideo.group,
+                        latestVideo.object,
+                        videoPriority,
+                        ForwardPreference::Subgroup,
+                        ObjectStatus::NORMAL,
+                        objPayload->computeChainDataLength()};
+
+                    XLOG(DBG1) << "Sending video frame" << objHeader
+                               << ", payload size: "
+                               << objPayload->computeChainDataLength();
+
                     moqClient_.moqSession_->publish(
-                        objHeaderEndOfGroup, subscribeID, 0, nullptr, true);
-                  });
-            }
-            if (item->data) {
-              // Send video data
-              if (item->isIdr) {
-                // Start new group
-                latestVideo_.group++;
-                latestVideo_.object = 0;
-              }
-              ObjectHeader objHeader = ObjectHeader{
-                  sub.second.trackAlias,
-                  latestVideo_.group,
-                  latestVideo_.group,
-                  latestVideo_.object++,
-                  videoPriority,
-                  ForwardPreference::Subgroup,
-                  ObjectStatus::NORMAL};
+                        objHeader,
+                        subscribeID,
+                        0,
+                        std::move(objPayload),
+                        false);
+                  }
+                });
 
-              moqClient_.getEventBase()->runInEventBaseThread(
-                  [this, objHeader, item, subscribeID(sub.second.subscribeID)] {
-                    auto objPayload = encodeToMoQMi(item);
-                    if (!objPayload) {
-                      XLOG(ERR) << "Failed to encode video frame";
-                    } else {
-                      XLOG(DBG1) << "Sending video frame" << objHeader
-                                 << ", payload size: "
-                                 << objPayload->computeChainDataLength();
-
-                      moqClient_.moqSession_->publish(
-                          objHeader,
-                          subscribeID,
-                          0,
-                          std::move(objPayload),
-                          false);
-                    }
-                  });
-            }
+            latestVideo_.object++;
           }
         }
         if (sub.second.fullTrackName == fullAudioTrackName_ &&
