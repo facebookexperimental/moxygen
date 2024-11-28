@@ -251,7 +251,7 @@ struct ObjectHeader {
   uint64_t group;
   uint64_t subgroup{0}; // meaningless for Track and Datagram
   uint64_t id;
-  uint64_t priority;
+  uint8_t priority;
   ForwardPreference forwardPreference;
   ObjectStatus status{ObjectStatus::NORMAL};
   folly::Optional<uint64_t> length{folly::none};

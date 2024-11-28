@@ -1161,10 +1161,7 @@ WriteResult writeStreamHeader(
     writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
-  // TODO: Very weird conversion here (we are keeping obj priority in uint64 and
-  // we need to convert to uint8)
-  uint8_t priority = objectHeader.priority;
-  writeBuf.append(&priority, 1);
+  writeBuf.append(&objectHeader.priority, 1);
   size += 1;
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

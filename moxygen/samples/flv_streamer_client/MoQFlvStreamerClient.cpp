@@ -108,18 +108,18 @@ class MoQFlvStreamerClient {
                    << sub.second.trackAlias;
 
         if (sub.second.fullTrackName == fullVideoTrackName_) {
-          auto videoPriority = calculatePriotity(latestVideo_, false);
-
           if (item->isEOF &&
               MoQFlvStreamerClient::isAnyElementSent(latestVideo_)) {
             // EOF detected and an some video element was sent, close group
-            auto objHeaderEndOfGroup = createObjectHeaderEndOfGroup(
+            ObjectHeader objHeaderEndOfGroup = {
                 sub.second.trackAlias,
                 latestVideo_.group,
-                latestVideo_.group,
+                0, // subgroup per group
                 latestVideo_.object++,
-                videoPriority,
-                ForwardPreference::Subgroup);
+                VIDEO_STREAM_PRIORITY,
+                ForwardPreference::Subgroup,
+                ObjectStatus::END_OF_GROUP};
+
             XLOG(DBG1) << "Closing group because EOF. objHeader: "
                        << objHeaderEndOfGroup;
             moqClient_.getEventBase()->runInEventBaseThread(
@@ -136,13 +136,15 @@ class MoQFlvStreamerClient {
             if (item->isIdr &&
                 MoQFlvStreamerClient::isAnyElementSent(latestVideo_)) {
               // Close group
-              auto objHeaderEndOfGroup = createObjectHeaderEndOfGroup(
+              ObjectHeader objHeaderEndOfGroup = {
                   sub.second.trackAlias,
                   latestVideo_.group,
                   0, // subgroup per group
                   latestVideo_.object++,
-                  videoPriority,
-                  ForwardPreference::Subgroup);
+                  VIDEO_STREAM_PRIORITY,
+                  ForwardPreference::Subgroup,
+                  ObjectStatus::END_OF_GROUP};
+
               XLOG(DBG1) << "Closing group because IDR. objHeader: "
                          << objHeaderEndOfGroup;
               moqClient_.getEventBase()->runInEventBaseThread(
@@ -161,7 +163,6 @@ class MoQFlvStreamerClient {
                 [this,
                  item,
                  latestVideo(latestVideo_),
-                 videoPriority,
                  trackAlias(sub.second.trackAlias),
                  subscribeID(sub.second.subscribeID)] {
                   auto objPayload = encodeToMoQMi(item);
@@ -171,9 +172,9 @@ class MoQFlvStreamerClient {
                     ObjectHeader objHeader = ObjectHeader{
                         trackAlias,
                         latestVideo.group,
-                        latestVideo.group,
+                        0, // subgroup per group
                         latestVideo.object,
-                        videoPriority,
+                        VIDEO_STREAM_PRIORITY,
                         ForwardPreference::Subgroup,
                         ObjectStatus::NORMAL,
                         objPayload->computeChainDataLength()};
@@ -193,8 +194,6 @@ class MoQFlvStreamerClient {
         if (sub.second.fullTrackName == fullAudioTrackName_ &&
             item->type == FlvSequentialReader::MediaType::AUDIO) {
           // Audio
-          auto audioPriority = calculatePriotity(latestAudio_, true);
-
           if (item->data) {
             // Send audio data in a thread (stream per object)
             ObjectHeader objHeader = ObjectHeader{
@@ -202,7 +201,7 @@ class MoQFlvStreamerClient {
                 latestAudio_.group++,
                 /*subgroup=*/0,
                 latestAudio_.object,
-                audioPriority,
+                AUDIO_STREAM_PRIORITY,
                 ForwardPreference::Subgroup,
                 ObjectStatus::NORMAL};
 
@@ -311,37 +310,14 @@ class MoQFlvStreamerClient {
   }
 
  private:
-  static const uint64_t PRIORITY_AUDIO_OFFSET =
-      std::numeric_limits<uint64_t>::max() / 2;
+  static const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
+  static const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
   static bool isAnyElementSent(const AbsoluteLocation& loc) {
     if (loc.group == 0 && loc.object == 0) {
       return false;
     }
     return true;
-  }
-
-  static uint64_t calculatePriotity(
-      const AbsoluteLocation& latest,
-      bool isAudio) {
-    return latest.group + (isAudio ? PRIORITY_AUDIO_OFFSET : 0);
-  }
-
-  static ObjectHeader createObjectHeaderEndOfGroup(
-      TrackIdentifier trackIdentifier,
-      uint64_t group,
-      uint64_t subgroup,
-      uint64_t id,
-      uint64_t priority,
-      ForwardPreference forwardPreference) {
-    return {
-        trackIdentifier,
-        group,
-        subgroup,
-        id,
-        priority,
-        forwardPreference,
-        ObjectStatus::END_OF_GROUP};
   }
 
   static std::unique_ptr<folly::IOBuf> encodeToMoQMi(
