@@ -26,11 +26,29 @@ class MoQSession : public MoQControlCodec::ControlCallback,
                    public MoQObjectStreamCodec::ObjectCallback,
                    public proxygen::WebTransportHandler {
  public:
+  class ServerSetupCallback {
+   public:
+    virtual ~ServerSetupCallback() = default;
+    virtual folly::Try<ServerSetup> onClientSetup(ClientSetup clientSetup) = 0;
+  };
+
   explicit MoQSession(
-      MoQControlCodec::Direction dir,
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       folly::EventBase* evb)
-      : dir_(dir), wt_(wt), evb_(evb) {}
+      : dir_(MoQControlCodec::Direction::CLIENT), wt_(wt), evb_(evb) {}
+
+  explicit MoQSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      ServerSetupCallback& serverSetupCallback,
+      folly::EventBase* evb)
+      : dir_(MoQControlCodec::Direction::SERVER),
+        wt_(wt),
+        evb_(evb),
+        serverSetupCallback_(&serverSetupCallback) {
+    // SERVER sessions use this promise/future as a signal
+    std::tie(setupPromise_, setupFuture_) =
+        folly::coro::makePromiseContract<ServerSetup>();
+  }
 
   [[nodiscard]] folly::EventBase* getEventBase() const {
     return evb_;
@@ -41,12 +59,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void start();
   void close(folly::Optional<SessionCloseErrorCode> error = folly::none);
 
-  void setup(ClientSetup setup);
-  void setup(ServerSetup setup);
+  folly::coro::Task<ServerSetup> setup(ClientSetup setup);
+  folly::coro::Task<void> clientSetupComplete() {
+    XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
+    // TODO timeout
+    co_await std::move(setupFuture_);
+  }
 
   using MoQMessage = boost::variant<
-      ClientSetup,
-      ServerSetup,
       Announce,
       Unannounce,
       AnnounceCancel,
@@ -67,9 +87,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     virtual ~ControlVisitor() = default;
     virtual void operator()(ClientSetup /*setup*/) const {
       XLOG(INFO) << "ClientSetup";
-    }
-    virtual void operator()(ServerSetup setup) const {
-      XLOG(INFO) << "ServerSetup, version=" << setup.selectedVersion;
     }
 
     virtual void operator()(Announce announce) const {
@@ -328,8 +345,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     close();
   }
 
-  folly::coro::Task<void> setupComplete();
-
  private:
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
@@ -340,7 +355,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   std::shared_ptr<TrackHandle> getTrack(TrackIdentifier trackidentifier);
 
   void onClientSetup(ClientSetup clientSetup) override;
-  void onServerSetup(ServerSetup serverSetup) override;
+  void onServerSetup(ServerSetup setup) override;
   void onObjectHeader(ObjectHeader objectHeader) override;
   void onObjectPayload(
       TrackIdentifier trackIdentifier,
@@ -491,8 +506,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   const uint64_t kMaxConcurrentSubscribes_{100};
   uint64_t peerMaxSubscribeID_{0};
 
-  moxygen::TimedBaton sentSetup_;
-  moxygen::TimedBaton receivedSetup_;
+  folly::coro::Promise<ServerSetup> setupPromise_;
+  folly::coro::Future<ServerSetup> setupFuture_;
   bool setupComplete_{false};
   folly::CancellationSource cancellationSource_;
 
@@ -500,5 +515,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   // less than maxSubscribeID.
   uint64_t nextSubscribeID_{0};
   uint64_t maxSubscribeID_{0};
+
+  ServerSetupCallback* serverSetupCallback_{nullptr};
 };
 } // namespace moxygen

@@ -50,19 +50,18 @@ void MoQServer::createMoQQuicSession(
     evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
               ->getBackingEventBase();
   }
-  auto moqSession =
-      std::make_shared<MoQSession>(MoQControlCodec::Direction::SERVER, wt, evb);
+  auto moqSession = std::make_shared<MoQSession>(wt, *this, evb);
   qWtPtr->setHandler(moqSession.get());
   // the handleClientSession coro this session moqSession
   handleClientSession(std::move(moqSession)).scheduleOn(evb).start();
 }
 
-void MoQServer::ControlVisitor::operator()(ClientSetup /*setup*/) const {
+folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup /*setup*/) {
   XLOG(INFO) << "ClientSetup";
   // TODO: Make the default MAX_SUBSCRIBE_ID configurable and
   // take in the value from ClientSetup
   static constexpr size_t kDefaultMaxSubscribeId = 100;
-  clientSession_->setup({
+  return folly::Try<ServerSetup>(ServerSetup({
       kVersionDraftCurrent,
       {{folly::to_underlying(SetupKey::ROLE),
         "",
@@ -70,13 +69,7 @@ void MoQServer::ControlVisitor::operator()(ClientSetup /*setup*/) const {
        {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
         kDefaultMaxSubscribeId}},
-  });
-}
-
-void MoQServer::ControlVisitor::operator()(ServerSetup) const {
-  // error
-  XLOG(ERR) << "Server received ServerSetup";
-  clientSession_->close();
+  }));
 }
 
 void MoQServer::ControlVisitor::operator()(
@@ -175,6 +168,7 @@ void MoQServer::ControlVisitor::operator()(Goaway goaway) const {
 folly::coro::Task<void> MoQServer::handleClientSession(
     std::shared_ptr<MoQSession> clientSession) {
   clientSession->start();
+  co_await clientSession->clientSetupComplete();
 
   auto control = makeControlVisitor(clientSession);
   while (auto msg = co_await clientSession->controlMessages().next()) {
@@ -211,8 +205,7 @@ void MoQServer::Handler::onHeadersComplete(
     return;
   }
   auto evb = folly::EventBaseManager::get()->getEventBase();
-  clientSession_ =
-      std::make_shared<MoQSession>(MoQControlCodec::Direction::SERVER, wt, evb);
+  clientSession_ = std::make_shared<MoQSession>(wt, server_, evb);
 
   server_.handleClientSession(clientSession_).scheduleOn(evb).start();
 }

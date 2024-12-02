@@ -14,11 +14,11 @@
 namespace {
 using namespace moxygen;
 
+const size_t kTestMaxSubscribeId = 100;
+
 class MockControlVisitorBase {
  public:
   virtual ~MockControlVisitorBase() = default;
-  virtual void onClientSetup(ClientSetup clientSetup) const = 0;
-  virtual void onServerSetup(ServerSetup serverSetup) const = 0;
   virtual void onSubscribe(SubscribeRequest subscribeRequest) const = 0;
   virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) const = 0;
   virtual void onSubscribeDone(SubscribeDone subscribeDone) const = 0;
@@ -42,14 +42,6 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
  public:
   MockControlVisitor() = default;
   ~MockControlVisitor() override = default;
-  MOCK_METHOD(void, onClientSetup, (ClientSetup), (const));
-  void operator()(ClientSetup setup) const override {
-    onClientSetup(setup);
-  }
-  MOCK_METHOD(void, onServerSetup, (ServerSetup), (const));
-  void operator()(ServerSetup setup) const override {
-    onServerSetup(setup);
-  }
 
   MOCK_METHOD(void, onAnnounce, (Announce), (const));
   void operator()(Announce announce) const override {
@@ -116,17 +108,17 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
  private:
 };
 
-class MoQSessionTest : public testing::Test {
+class MoQSessionTest : public testing::Test,
+                       public MoQSession::ServerSetupCallback {
  public:
   MoQSessionTest() {
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-    clientSession_ = std::make_shared<MoQSession>(
-        MoQControlCodec::Direction::CLIENT, clientWt_.get(), &eventBase_);
+    clientSession_ = std::make_shared<MoQSession>(clientWt_.get(), &eventBase_);
     serverWt_->setPeerHandler(clientSession_.get());
 
-    serverSession_ = std::make_shared<MoQSession>(
-        MoQControlCodec::Direction::SERVER, serverWt_.get(), &eventBase_);
+    serverSession_ =
+        std::make_shared<MoQSession>(serverWt_.get(), *this, &eventBase_);
     clientWt_->setPeerHandler(serverSession_.get());
   }
 
@@ -140,6 +132,25 @@ class MoQSessionTest : public testing::Test {
     }
   }
 
+  folly::Try<ServerSetup> onClientSetup(ClientSetup setup) override {
+    EXPECT_EQ(setup.supportedVersions[0], kVersionDraftCurrent);
+    if (!setup.params.empty()) {
+      EXPECT_EQ(
+          setup.params.at(0).key,
+          folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+      EXPECT_EQ(setup.params.at(0).asUint64, kTestMaxSubscribeId);
+    }
+    if (failServerSetup_) {
+      return folly::makeTryWith(
+          []() -> ServerSetup { throw std::runtime_error("failed"); });
+    }
+    return folly::Try<ServerSetup>(ServerSetup{
+        .selectedVersion = negotiatedVersion_,
+        .params = {
+            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+              .asUint64 = kTestMaxSubscribeId}}}});
+  }
+
  protected:
   folly::EventBase eventBase_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
@@ -148,6 +159,8 @@ class MoQSessionTest : public testing::Test {
   std::shared_ptr<MoQSession> serverSession_;
   MockControlVisitor clientControl;
   MockControlVisitor serverControl;
+  uint64_t negotiatedVersion_ = kVersionDraftCurrent;
+  bool failServerSetup_{false};
 };
 } // namespace
 
@@ -155,36 +168,22 @@ TEST_F(MoQSessionTest, Setup) {
   clientSession_->start();
   serverSession_->start();
   eventBase_.loopOnce();
-  const size_t kTestMaxSubscribeId = 100;
-  clientSession_->setup(ClientSetup{
-      .supportedVersions = {kVersionDraftCurrent},
-      .params = {
-          {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-            .asUint64 = kTestMaxSubscribeId}}}});
+  [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
+    auto serverSetup = co_await clientSession->setup(ClientSetup{
+        .supportedVersions = {kVersionDraftCurrent},
+        .params = {
+            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+              .asUint64 = kTestMaxSubscribeId}}}});
 
-  EXPECT_CALL(serverControl, onClientSetup(testing::_))
-      .WillOnce(testing::Invoke([kTestMaxSubscribeId, this](ClientSetup setup) {
-        EXPECT_EQ(setup.supportedVersions[0], kVersionDraftCurrent);
-        EXPECT_EQ(setup.params.size(), 1);
-        EXPECT_EQ(
-            setup.params.at(0).key,
-            folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
-        EXPECT_EQ(setup.params.at(0).asUint64, kTestMaxSubscribeId);
-        serverSession_->setup(ServerSetup{
-            .selectedVersion = kVersionDraftCurrent,
-            .params = {
-                {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-                  .asUint64 = kTestMaxSubscribeId}}}});
-      }));
-  EXPECT_CALL(clientControl, onServerSetup(testing::_))
-      .WillOnce(testing::Invoke([kTestMaxSubscribeId, this](ServerSetup setup) {
-        EXPECT_EQ(setup.selectedVersion, kVersionDraftCurrent);
-        EXPECT_EQ(
-            setup.params.at(0).key,
-            folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
-        EXPECT_EQ(setup.params.at(0).asUint64, kTestMaxSubscribeId);
-        clientSession_->close();
-      }));
+    EXPECT_EQ(serverSetup.selectedVersion, kVersionDraftCurrent);
+    EXPECT_EQ(
+        serverSetup.params.at(0).key,
+        folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+    EXPECT_EQ(serverSetup.params.at(0).asUint64, kTestMaxSubscribeId);
+    clientSession->close();
+  }(clientSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
   this->controlLoop(*serverSession_, serverControl)
       .scheduleOn(&eventBase_)
       .start();
@@ -195,3 +194,69 @@ TEST_F(MoQSessionTest, Setup) {
 }
 
 // receive bidi stream on client
+
+TEST_F(MoQSessionTest, SetupTimeout) {
+  eventBase_.loopOnce();
+  [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
+        .supportedVersions = {kVersionDraftCurrent},
+        .params = {
+            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+              .asUint64 = kTestMaxSubscribeId}}}}));
+    EXPECT_TRUE(serverSetup.hasException());
+    clientSession->close();
+  }(clientSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, InvalidVersion) {
+  clientSession_->start();
+  eventBase_.loopOnce();
+  [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
+        .supportedVersions = {0xfaceb001},
+        .params = {
+            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+              .asUint64 = kTestMaxSubscribeId}}}}));
+    EXPECT_TRUE(serverSetup.hasException());
+    clientSession->close();
+  }(clientSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, InvalidServerVersion) {
+  negotiatedVersion_ = 0xfaceb001;
+  clientSession_->start();
+  eventBase_.loopOnce();
+  [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
+        .supportedVersions = {kVersionDraftCurrent}, .params = {}}));
+    EXPECT_TRUE(serverSetup.hasException());
+    clientSession->close();
+  }(clientSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, ServerSetupFail) {
+  failServerSetup_ = true;
+  clientSession_->start();
+  eventBase_.loopOnce();
+  [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
+        .supportedVersions = {kVersionDraftCurrent},
+        .params = {
+            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+              .asUint64 = kTestMaxSubscribeId}}}}));
+    EXPECT_TRUE(serverSetup.hasException());
+    clientSession->close();
+  }(clientSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  eventBase_.loop();
+}

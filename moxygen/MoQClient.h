@@ -78,11 +78,7 @@ class MoQClient : public proxygen::WebTransportHandler {
       Role role = Role::PUB_AND_SUB) noexcept;
 
  private:
-  std::shared_ptr<MoQSession> setupMoQSessionImpl(
-      proxygen::WebTransport* wt,
-      folly::EventBase* evb,
-      Role role,
-      folly::Optional<std::string> path);
+  ClientSetup getClientSetup(Role role, folly::Optional<std::string> path);
 
   void onSessionEnd(folly::Optional<uint32_t>) override;
   void onNewBidiStream(

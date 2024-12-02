@@ -60,13 +60,6 @@ class MoQDateServer : MoQServer {
         : MoQServer::ControlVisitor(std::move(clientSession)),
           server_(server) {}
 
-    void operator()(ServerSetup) const override {
-      if (!server_.relayClient_) {
-        XLOG(ERR) << "Server received ServerSetup";
-        clientSession_->close();
-      }
-    }
-
     void operator()(SubscribeRequest subscribeReq) const override {
       XLOG(INFO) << "SubscribeRequest track ns="
                  << subscribeReq.fullTrackName.trackNamespace

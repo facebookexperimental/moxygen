@@ -260,29 +260,50 @@ void MoQObjectStreamCodec::onIngress(
 folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     folly::io::Cursor& cursor) {
   XLOG(DBG4) << "parsing frame type=" << folly::to_underlying(curFrameType_);
+  if (!seenSetup_) {
+    switch (curFrameType_) {
+      case FrameType::CLIENT_SETUP: {
+        if (dir_ == Direction::CLIENT) {
+          return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+        }
+        seenSetup_ = true;
+        auto res = parseClientSetup(cursor, curFrameLength_);
+        if (res) {
+          if (callback_) {
+            callback_->onClientSetup(std::move(res.value()));
+          }
+        } else {
+          return folly::makeUnexpected(res.error());
+        }
+        break;
+      }
+      case FrameType::SERVER_SETUP: {
+        if (dir_ == Direction::SERVER) {
+          return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+        }
+        seenSetup_ = true;
+        auto res = parseServerSetup(cursor, curFrameLength_);
+        if (res) {
+          if (callback_) {
+            callback_->onServerSetup(std::move(res.value()));
+          }
+        } else {
+          return folly::makeUnexpected(res.error());
+        }
+        break;
+      }
+      default:
+        XLOG(ERR) << "Invalid message before setup type=" << curFrameType_;
+        return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    }
+    return folly::unit;
+  }
+  XCHECK(seenSetup_);
   switch (curFrameType_) {
-    case FrameType::CLIENT_SETUP: {
-      auto res = parseClientSetup(cursor, curFrameLength_);
-      if (res) {
-        if (callback_) {
-          callback_->onClientSetup(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
-    case FrameType::SERVER_SETUP: {
-      auto res = parseServerSetup(cursor, curFrameLength_);
-      if (res) {
-        if (callback_) {
-          callback_->onServerSetup(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
+    case FrameType::CLIENT_SETUP:
+    case FrameType::SERVER_SETUP:
+      XLOG(ERR) << "Duplicate setup frame";
+      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
     case FrameType::SUBSCRIBE: {
       auto res = parseSubscribeRequest(cursor, curFrameLength_);
       if (res) {

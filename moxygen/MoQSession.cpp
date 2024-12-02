@@ -53,7 +53,9 @@ void MoQSession::start() {
         std::move(mergeToken), controlWriteLoop(controlStream.writeHandle))
         .scheduleOn(evb_)
         .start();
-    readLoop(StreamType::CONTROL, controlStream.readHandle)
+    co_withCancellation(
+        cancellationSource_.getToken(),
+        readLoop(StreamType::CONTROL, controlStream.readHandle))
         .scheduleOn(evb_)
         .start();
   }
@@ -98,54 +100,87 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
   }
 }
 
-void MoQSession::setup(ClientSetup setup) {
+folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+  std::tie(setupPromise_, setupFuture_) =
+      folly::coro::makePromiseContract<ServerSetup>();
+
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
   auto res = writeClientSetup(controlWriteBuf_, std::move(setup));
   if (!res) {
     XLOG(ERR) << "writeClientSetup failed" << " sess=" << this;
-    return;
+    co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
   }
   maxSubscribeID_ = maxSubscribeId;
-  sentSetup_.signal();
   controlWriteEvent_.signal();
+
+  auto deletedToken = cancellationSource_.getToken();
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto mergeToken = folly::CancellationToken::merge(deletedToken, token);
+  folly::EventBaseThreadTimekeeper tk(*evb_);
+  auto serverSetup = co_await co_awaitTry(folly::coro::co_withCancellation(
+      mergeToken,
+      folly::coro::timeout(std::move(setupFuture_), kSetupTimeout, &tk)));
+  if (mergeToken.isCancellationRequested()) {
+    co_yield folly::coro::co_error(folly::OperationCancelled());
+  }
+  if (serverSetup.hasException()) {
+    close();
+    XLOG(ERR) << "Setup Failed: " << serverSetup.exception().what();
+    co_yield folly::coro::co_error(serverSetup.exception());
+  }
+  setupComplete_ = true;
+  co_return *serverSetup;
 }
 
-void MoQSession::setup(ServerSetup setup) {
+void MoQSession::onServerSetup(ServerSetup serverSetup) {
+  XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (serverSetup.selectedVersion != kVersionDraftCurrent) {
+    XLOG(ERR) << "Invalid version = " << serverSetup.selectedVersion
+              << " sess=" << this;
+    close();
+    setupPromise_.setException(std::runtime_error("Invalid version"));
+    return;
+  }
+  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(serverSetup.params);
+  setupPromise_.setValue(std::move(serverSetup));
+}
+
+void MoQSession::onClientSetup(ClientSetup clientSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
-  auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
-  auto res = writeServerSetup(controlWriteBuf_, std::move(setup));
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  if (std::find(
+          clientSetup.supportedVersions.begin(),
+          clientSetup.supportedVersions.end(),
+          kVersionDraftCurrent) == clientSetup.supportedVersions.end()) {
+    XLOG(ERR) << "No matching versions" << " sess=" << this;
+    for (auto v : clientSetup.supportedVersions) {
+      XLOG(ERR) << "client sent=" << v << " sess=" << this;
+    }
+    close();
+    return;
+  }
+  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
+  auto serverSetup =
+      serverSetupCallback_->onClientSetup(std::move(clientSetup));
+  if (!serverSetup.hasValue()) {
+    XLOG(ERR) << "Server setup callback failed sess=" << this;
+    close();
+    return;
+  }
+
+  auto maxSubscribeId = getMaxSubscribeIdIfPresent(serverSetup->params);
+  auto res = writeServerSetup(controlWriteBuf_, std::move(*serverSetup));
   if (!res) {
     XLOG(ERR) << "writeServerSetup failed" << " sess=" << this;
     return;
   }
   maxSubscribeID_ = maxSubscribeId;
-  sentSetup_.signal();
+  setupComplete_ = true;
+  setupPromise_.setValue(ServerSetup());
   controlWriteEvent_.signal();
-}
-
-folly::coro::Task<void> MoQSession::setupComplete() {
-  auto deletedToken = cancellationSource_.getToken();
-  auto token = co_await folly::coro::co_current_cancellation_token;
-  folly::EventBaseThreadTimekeeper tk(*evb_);
-  auto result = co_await co_awaitTry(folly::coro::co_withCancellation(
-      folly::CancellationToken::merge(deletedToken, token),
-      folly::coro::timeout(
-          folly::coro::collectAllTry(sentSetup_.wait(), receivedSetup_.wait()),
-          kSetupTimeout,
-          &tk)));
-  if (deletedToken.isCancellationRequested()) {
-    co_return;
-  }
-  setupComplete_ =
-      (result.hasValue() && std::get<0>(result.value()).hasValue() &&
-       std::get<1>(result.value()).hasValue());
-  if (!token.isCancellationRequested() && !setupComplete_) {
-    close();
-    co_yield folly::coro::co_error(std::runtime_error("setup failed"));
-  }
 }
 
 folly::coro::AsyncGenerator<MoQSession::MoQMessage>
@@ -178,7 +213,8 @@ folly::coro::Task<void> MoQSession::readLoop(
 
   // TODO: disallow OBJECT on control streams and non-object on non-control
   bool fin = false;
-  while (!fin) {
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  while (!fin && !token.isCancellationRequested()) {
     auto streamData = co_await folly::coro::co_awaitTry(
         readHandle->readStreamData().via(evb_));
     if (streamData.hasException()) {
@@ -193,40 +229,6 @@ folly::coro::Task<void> MoQSession::readLoop(
       XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
     }
   }
-}
-
-void MoQSession::onClientSetup(ClientSetup clientSetup) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
-  if (std::find(
-          clientSetup.supportedVersions.begin(),
-          clientSetup.supportedVersions.end(),
-          kVersionDraftCurrent) == clientSetup.supportedVersions.end()) {
-    XLOG(ERR) << "No matching versions" << " sess=" << this;
-    for (auto v : clientSetup.supportedVersions) {
-      XLOG(ERR) << "client sent=" << v << " sess=" << this;
-    }
-    close();
-    receivedSetup_.cancel();
-    return;
-  }
-  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
-  receivedSetup_.signal();
-  controlMessages_.enqueue(std::move(clientSetup));
-  setupComplete().scheduleOn(evb_).start();
-}
-
-void MoQSession::onServerSetup(ServerSetup serverSetup) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
-  if (serverSetup.selectedVersion != kVersionDraftCurrent) {
-    XLOG(ERR) << "Invalid version = " << serverSetup.selectedVersion
-              << " sess=" << this;
-    close();
-    receivedSetup_.cancel();
-    return;
-  }
-  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(serverSetup.params);
-  receivedSetup_.signal();
-  controlMessages_.enqueue(std::move(serverSetup));
 }
 
 std::shared_ptr<MoQSession::TrackHandle> MoQSession::getTrack(
@@ -998,7 +1000,11 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
     return;
   }
   // maybe not STREAM_HEADER_SUBGROUP, but at least not control
-  readLoop(StreamType::STREAM_HEADER_SUBGROUP, rh).scheduleOn(evb_).start();
+  co_withCancellation(
+      cancellationSource_.getToken(),
+      readLoop(StreamType::STREAM_HEADER_SUBGROUP, rh))
+      .scheduleOn(evb_)
+      .start();
 }
 
 void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
@@ -1010,7 +1016,11 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
     bh.readHandle->stopSending(/*error=*/0);
   } else {
     bh.writeHandle->setPriority(0, 0, false);
-    readLoop(StreamType::CONTROL, bh.readHandle).scheduleOn(evb_).start();
+    co_withCancellation(
+        cancellationSource_.getToken(),
+        readLoop(StreamType::CONTROL, bh.readHandle))
+        .scheduleOn(evb_)
+        .start();
     auto mergeToken = folly::CancellationToken::merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
     folly::coro::co_withCancellation(

@@ -10,29 +10,34 @@
 
 namespace moxygen::test {
 
-std::unique_ptr<folly::IOBuf> writeAllControlMessages() {
+std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeClientSetup(
-      writeBuf,
-      ClientSetup(
-          {{1},
-           {
-               {folly::to_underlying(SetupKey::ROLE),
-                "",
-                folly::to_underlying(Role::SUBSCRIBER)},
-               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-               {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
-           }}));
-  res = writeServerSetup(
-      writeBuf,
-      ServerSetup(
-          {1,
-           {
-               {folly::to_underlying(SetupKey::ROLE),
-                "",
-                folly::to_underlying(Role::SUBSCRIBER)},
-               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-           }}));
+  WriteResult res;
+  if (in != TestControlMessages::SERVER) {
+    res = writeClientSetup(
+        writeBuf,
+        ClientSetup(
+            {{1},
+             {
+                 {folly::to_underlying(SetupKey::ROLE),
+                  "",
+                  folly::to_underlying(Role::SUBSCRIBER)},
+                 {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+                 {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
+             }}));
+  }
+  if (in != TestControlMessages::CLIENT) {
+    res = writeServerSetup(
+        writeBuf,
+        ServerSetup(
+            {1,
+             {
+                 {folly::to_underlying(SetupKey::ROLE),
+                  "",
+                  folly::to_underlying(Role::SUBSCRIBER)},
+                 {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+             }}));
+  }
   res = writeSubscribeRequest(
       writeBuf,
       SubscribeRequest(

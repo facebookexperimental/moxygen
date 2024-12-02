@@ -131,19 +131,14 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   }
 
   //  Create MoQSession and Setup MoQSession parameters
-  moqSession_ = setupMoQSessionImpl(wt, evb_, role, pathParam);
-  co_await moqSession_->setupComplete();
+  moqSession_ = std::make_shared<MoQSession>(wt, evb_);
+  moqSession_->start();
+  co_await moqSession_->setup(getClientSetup(role, pathParam));
 }
 
-std::shared_ptr<MoQSession> MoQClient::setupMoQSessionImpl(
-    proxygen::WebTransport* wt,
-    folly::EventBase* evb,
+ClientSetup MoQClient::getClientSetup(
     Role role,
     folly::Optional<std::string> path) {
-  auto moqSession =
-      std::make_shared<MoQSession>(MoQControlCodec::Direction::CLIENT, wt, evb);
-
-  moqSession->start();
   // Setup MoQSession parameters
 
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
@@ -159,8 +154,7 @@ std::shared_ptr<MoQSession> MoQClient::setupMoQSessionImpl(
     clientSetup.params.emplace_back(
         SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0}));
   }
-  moqSession->setup(std::move(clientSetup));
-  return moqSession;
+  return clientSetup;
 }
 
 void MoQClient::HTTPHandler::onHeadersComplete(

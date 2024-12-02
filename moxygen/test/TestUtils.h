@@ -10,11 +10,12 @@
 
 namespace moxygen::test {
 
-std::unique_ptr<folly::IOBuf> writeAllControlMessages();
+enum class TestControlMessages { CLIENT, SERVER, BOTH };
+std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in);
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages();
 
 inline std::unique_ptr<folly::IOBuf> writeAllMessages() {
-  auto buf = writeAllControlMessages();
+  auto buf = writeAllControlMessages(TestControlMessages::BOTH);
   buf->appendToChain(writeAllObjectMessages());
   return buf;
 }

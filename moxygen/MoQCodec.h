@@ -79,7 +79,7 @@ class MoQControlCodec : public MoQCodec {
 
   enum class Direction { CLIENT, SERVER };
   MoQControlCodec(Direction dir, ControlCallback* callback)
-      : callback_(callback) {}
+      : dir_(dir), callback_(callback) {}
 
   void setCallback(ControlCallback* callback) {
     callback_ = callback;
@@ -122,6 +122,7 @@ class MoQControlCodec : public MoQCodec {
 
   folly::Expected<folly::Unit, ErrorCode> parseFrame(folly::io::Cursor& cursor);
 
+  Direction dir_;
   ControlCallback* callback_{nullptr};
   FrameType curFrameType_;
   size_t curFrameLength_{0};
@@ -131,6 +132,7 @@ class MoQControlCodec : public MoQCodec {
     FRAME_PAYLOAD,
   };
   ParseState parseState_{ParseState::FRAME_HEADER_TYPE};
+  bool seenSetup_{false};
 };
 
 class MoQObjectStreamCodec : public MoQCodec {

@@ -10,15 +10,24 @@
 
 #include <folly/portability/GTest.h>
 
-using namespace moxygen;
+namespace moxygen::test {
+TestControlMessages fromDir(MoQControlCodec::Direction dir) {
+  // The control messages to write are the opposite of dir
+  return dir == MoQControlCodec::Direction::CLIENT
+      ? TestControlMessages::SERVER
+      : TestControlMessages::CLIENT;
+}
 
-TEST(MoQCodec, All) {
-  auto allMsgs = moxygen::test::writeAllControlMessages();
+void testAll(MoQControlCodec::Direction dir) {
+  auto allMsgs = moxygen::test::writeAllControlMessages(fromDir(dir));
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQControlCodec codec(MoQControlCodec::Direction::CLIENT, &callback);
+  MoQControlCodec codec(dir, &callback);
 
-  EXPECT_CALL(callback, onClientSetup(testing::_));
-  EXPECT_CALL(callback, onServerSetup(testing::_));
+  if (dir == MoQControlCodec::Direction::SERVER) {
+    EXPECT_CALL(callback, onClientSetup(testing::_));
+  } else {
+    EXPECT_CALL(callback, onServerSetup(testing::_));
+  }
   EXPECT_CALL(callback, onSubscribe(testing::_));
   EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
   EXPECT_CALL(callback, onSubscribeOk(testing::_));
@@ -41,9 +50,14 @@ TEST(MoQCodec, All) {
   EXPECT_CALL(callback, onFetchCancel(testing::_));
   EXPECT_CALL(callback, onFetchOk(testing::_));
   EXPECT_CALL(callback, onFetchError(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
 
   codec.onIngress(std::move(allMsgs), true);
+}
+
+TEST(MoQCodec, All) {
+  testAll(MoQControlCodec::Direction::CLIENT);
+  testAll(MoQControlCodec::Direction::SERVER);
 }
 
 TEST(MoQCodec, AllObject) {
@@ -60,16 +74,19 @@ TEST(MoQCodec, AllObject) {
   codec.onIngress(std::move(allMsgs), true);
 }
 
-TEST(MoQCodec, Underflow) {
-  auto allMsgs = moxygen::test::writeAllControlMessages();
+void testUnderflow(MoQControlCodec::Direction dir) {
+  auto allMsgs = moxygen::test::writeAllControlMessages(fromDir(dir));
   testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQControlCodec codec(MoQControlCodec::Direction::CLIENT, &callback);
+  MoQControlCodec codec(dir, &callback);
 
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   readBuf.append(std::move(allMsgs));
 
-  EXPECT_CALL(callback, onClientSetup(testing::_));
-  EXPECT_CALL(callback, onServerSetup(testing::_));
+  if (dir == MoQControlCodec::Direction::SERVER) {
+    EXPECT_CALL(callback, onClientSetup(testing::_));
+  } else {
+    EXPECT_CALL(callback, onServerSetup(testing::_));
+  }
   EXPECT_CALL(callback, onSubscribe(testing::_));
   EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
   EXPECT_CALL(callback, onSubscribeOk(testing::_));
@@ -92,11 +109,16 @@ TEST(MoQCodec, Underflow) {
   EXPECT_CALL(callback, onFetchCancel(testing::_));
   EXPECT_CALL(callback, onFetchOk(testing::_));
   EXPECT_CALL(callback, onFetchError(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }
   codec.onIngress(nullptr, true);
+}
+
+TEST(MoQCodec, Underflow) {
+  testUnderflow(MoQControlCodec::Direction::CLIENT);
+  testUnderflow(MoQControlCodec::Direction::SERVER);
 }
 
 TEST(MoQCodec, UnderflowObjects) {
@@ -214,3 +236,67 @@ TEST(MoQCodec, InvalidFrame) {
 
   codec.onIngress(writeBuf.move(), false);
 }
+
+TEST(MoQCodec, InvalidSetups) {
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // client gets client setup
+  writeClientSetup(
+      writeBuf,
+      ClientSetup(
+          {{1},
+           {
+               {folly::to_underlying(SetupKey::ROLE),
+                "",
+                folly::to_underlying(Role::SUBSCRIBER)},
+               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+               {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
+           }}));
+  {
+    MoQControlCodec clientCodec(MoQControlCodec::Direction::CLIENT, &callback);
+    EXPECT_CALL(callback, onConnectionError(testing::_));
+    clientCodec.onIngress(writeBuf.move(), false);
+  }
+
+  // codec gets non-setup first
+  writeUnsubscribe(
+      writeBuf,
+      Unsubscribe({
+          0,
+      }));
+  {
+    MoQControlCodec clientCodec(MoQControlCodec::Direction::CLIENT, &callback);
+    EXPECT_CALL(callback, onConnectionError(testing::_));
+    clientCodec.onIngress(writeBuf.move(), false);
+  }
+
+  writeServerSetup(
+      writeBuf,
+      ServerSetup(
+          {1,
+           {
+               {folly::to_underlying(SetupKey::ROLE),
+                "",
+                folly::to_underlying(Role::SUBSCRIBER)},
+               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+           }}));
+  auto serverSetup = writeBuf.front()->clone();
+  {
+    MoQControlCodec clientCodec(MoQControlCodec::Direction::CLIENT, &callback);
+    // This is legal, to setup next test
+    EXPECT_CALL(callback, onServerSetup(testing::_));
+    clientCodec.onIngress(writeBuf.move(), false);
+    // Second setup = error
+    EXPECT_CALL(callback, onConnectionError(testing::_));
+    clientCodec.onIngress(serverSetup->clone(), false);
+  }
+
+  {
+    // Server gets server setup = error
+    MoQControlCodec serverCodec(MoQControlCodec::Direction::SERVER, &callback);
+    EXPECT_CALL(callback, onConnectionError(testing::_));
+    serverCodec.onIngress(serverSetup->clone(), false);
+  }
+}
+} // namespace moxygen::test

@@ -15,13 +15,17 @@
 
 namespace moxygen {
 
-class MoQServer {
+class MoQServer : public MoQSession::ServerSetupCallback {
  public:
   MoQServer(
       uint16_t port,
       std::string cert,
       std::string key,
       std::string endpoint);
+  MoQServer(const MoQServer&) = delete;
+  MoQServer(MoQServer&&) = delete;
+  MoQServer& operator=(const MoQServer&) = delete;
+  MoQServer& operator=(MoQServer&&) = delete;
   virtual ~MoQServer() = default;
 
   class ControlVisitor : public MoQSession::ControlVisitor {
@@ -31,8 +35,6 @@ class MoQServer {
 
     ~ControlVisitor() override = default;
 
-    void operator()(ClientSetup setup) const override;
-    void operator()(ServerSetup) const override;
     void operator()(Announce announce) const override;
     void operator()(SubscribeRequest subscribeReq) const override;
     void operator()(SubscribeUpdate subscribeUpdate) const override;
@@ -118,6 +120,8 @@ class MoQServer {
   [[nodiscard]] const std::string& getEndpoint() const {
     return endpoint_;
   }
+
+  folly::Try<ServerSetup> onClientSetup(ClientSetup clientSetup) override;
 
  private:
   void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
