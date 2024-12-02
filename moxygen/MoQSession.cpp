@@ -18,7 +18,7 @@ constexpr std::chrono::seconds kSetupTimeout(5);
 namespace moxygen {
 
 MoQSession::~MoQSession() {
-  XLOG(DBG1) << "requestCancellation from dtor" << " sess=" << this;
+  XLOG(DBG1) << "requestCancellation from dtor sess=" << this;
   cancellationSource_.requestCancellation();
   for (auto& subTrack : subTracks_) {
     subTrack.second->subscribeError(
@@ -39,7 +39,7 @@ void MoQSession::start() {
   if (dir_ == MoQControlCodec::Direction::CLIENT) {
     auto cs = wt_->createBidiStream();
     if (!cs) {
-      XLOG(ERR) << "Failed to get control stream" << " sess=" << this;
+      XLOG(ERR) << "Failed to get control stream sess=" << this;
       wt_->closeSession();
       return;
     }
@@ -73,7 +73,7 @@ void MoQSession::close(folly::Optional<SessionCloseErrorCode> error) {
         error.has_value()
             ? folly::make_optional(folly::to_underlying(error.value()))
             : folly::none);
-    XLOG(DBG1) << "requestCancellation from close" << " sess=" << this;
+    XLOG(DBG1) << "requestCancellation from close sess=" << this;
     cancellationSource_.requestCancellation();
   }
 }
@@ -109,7 +109,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
   auto res = writeClientSetup(controlWriteBuf_, std::move(setup));
   if (!res) {
-    XLOG(ERR) << "writeClientSetup failed" << " sess=" << this;
+    XLOG(ERR) << "writeClientSetup failed sess=" << this;
     co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
   }
   maxSubscribeID_ = maxSubscribeId;
@@ -155,7 +155,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
           clientSetup.supportedVersions.begin(),
           clientSetup.supportedVersions.end(),
           kVersionDraftCurrent) == clientSetup.supportedVersions.end()) {
-    XLOG(ERR) << "No matching versions" << " sess=" << this;
+    XLOG(ERR) << "No matching versions sess=" << this;
     for (auto v : clientSetup.supportedVersions) {
       XLOG(ERR) << "client sent=" << v << " sess=" << this;
     }
@@ -174,7 +174,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(serverSetup->params);
   auto res = writeServerSetup(controlWriteBuf_, std::move(*serverSetup));
   if (!res) {
-    XLOG(ERR) << "writeServerSetup failed" << " sess=" << this;
+    XLOG(ERR) << "writeServerSetup failed sess=" << this;
     return;
   }
   maxSubscribeID_ = maxSubscribeId;
@@ -316,11 +316,11 @@ void MoQSession::TrackHandle::onObjectPayload(
     return;
   }
   if (payload) {
-    XLOG(DBG1) << "payload enqueued" << " trackHandle=" << this;
+    XLOG(DBG1) << "payload enqueued trackHandle=" << this;
     objIt->second->payloadQueue.enqueue(std::move(payload));
   }
   if (eom) {
-    XLOG(DBG1) << "eom enqueued" << " trackHandle=" << this;
+    XLOG(DBG1) << "eom enqueued trackHandle=" << this;
     objIt->second->payloadQueue.enqueue(nullptr);
   }
 }
@@ -545,7 +545,7 @@ MoQSession::announce(Announce ann) {
   auto trackNamespace = ann.trackNamespace;
   auto res = writeAnnounce(controlWriteBuf_, std::move(ann));
   if (!res) {
-    XLOG(ERR) << "writeAnnounce failed" << " sess=" << this;
+    XLOG(ERR) << "writeAnnounce failed sess=" << this;
     co_return folly::makeUnexpected(
         AnnounceError({std::move(trackNamespace), 500, "local write failed"}));
   }
@@ -561,7 +561,7 @@ void MoQSession::announceOk(AnnounceOk annOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto res = writeAnnounceOk(controlWriteBuf_, std::move(annOk));
   if (!res) {
-    XLOG(ERR) << "writeAnnounceOk failed" << " sess=" << this;
+    XLOG(ERR) << "writeAnnounceOk failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -571,7 +571,7 @@ void MoQSession::announceError(AnnounceError announceError) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto res = writeAnnounceError(controlWriteBuf_, std::move(announceError));
   if (!res) {
-    XLOG(ERR) << "writeAnnounceError failed" << " sess=" << this;
+    XLOG(ERR) << "writeAnnounceError failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -582,7 +582,7 @@ void MoQSession::unannounce(Unannounce unann) {
   auto trackNamespace = unann.trackNamespace;
   auto res = writeUnannounce(controlWriteBuf_, std::move(unann));
   if (!res) {
-    XLOG(ERR) << "writeUnannounce failed" << " sess=" << this;
+    XLOG(ERR) << "writeUnannounce failed sess=" << this;
   }
   controlWriteEvent_.signal();
 }
@@ -594,7 +594,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   auto trackNamespace = sa.trackNamespacePrefix;
   auto res = writeSubscribeAnnounces(controlWriteBuf_, std::move(sa));
   if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnounces failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
     co_return folly::makeUnexpected(SubscribeAnnouncesError(
         {std::move(trackNamespace), 500, "local write failed"}));
   }
@@ -610,7 +610,7 @@ void MoQSession::subscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto res = writeSubscribeAnnouncesOk(controlWriteBuf_, std::move(saOk));
   if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnouncesOk failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeAnnouncesOk failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -622,7 +622,7 @@ void MoQSession::subscribeAnnouncesError(
   auto res = writeSubscribeAnnouncesError(
       controlWriteBuf_, std::move(subscribeAnnouncesError));
   if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnouncesError failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -664,7 +664,7 @@ MoQSession::subscribe(SubscribeRequest sub) {
   TrackAlias trackAlias = sub.trackAlias;
   auto wres = writeSubscribeRequest(controlWriteBuf_, std::move(sub));
   if (!wres) {
-    XLOG(ERR) << "writeSubscribeRequest failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
     co_return folly::makeUnexpected(
         SubscribeError({subID, 500, "local write failed", folly::none}));
   }
@@ -688,7 +688,7 @@ void MoQSession::subscribeOk(SubscribeOk subOk) {
   pubTracks_[subOk.subscribeID].groupOrder = subOk.groupOrder;
   auto res = writeSubscribeOk(controlWriteBuf_, subOk);
   if (!res) {
-    XLOG(ERR) << "writeSubscribeOk failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -699,7 +699,7 @@ void MoQSession::subscribeError(SubscribeError subErr) {
   pubTracks_.erase(subErr.subscribeID);
   auto res = writeSubscribeError(controlWriteBuf_, std::move(subErr));
   if (!res) {
-    XLOG(ERR) << "writeSubscribeError failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeError failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -709,7 +709,7 @@ void MoQSession::unsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto res = writeUnsubscribe(controlWriteBuf_, std::move(unsubscribe));
   if (!res) {
-    XLOG(ERR) << "writeUnsubscribe failed" << " sess=" << this;
+    XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -720,7 +720,7 @@ void MoQSession::subscribeDone(SubscribeDone subDone) {
   pubTracks_.erase(subDone.subscribeID);
   auto res = writeSubscribeDone(controlWriteBuf_, std::move(subDone));
   if (!res) {
-    XLOG(ERR) << "writeSubscribeDone failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeDone failed sess=" << this;
     return;
   }
 
@@ -732,7 +732,7 @@ void MoQSession::subscribeDone(SubscribeDone subDone) {
     res =
         writeMaxSubscribeId(controlWriteBuf_, {.subscribeID = maxSubscribeID_});
     if (!res) {
-      XLOG(ERR) << "writeMaxSubscribeId failed" << " sess=" << this;
+      XLOG(ERR) << "writeMaxSubscribeId failed sess=" << this;
       return;
     }
   }
@@ -743,7 +743,7 @@ void MoQSession::subscribeUpdate(SubscribeUpdate subUpdate) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto res = writeSubscribeUpdate(controlWriteBuf_, std::move(subUpdate));
   if (!res) {
-    XLOG(ERR) << "writeSubscribeUpdate failed" << " sess=" << this;
+    XLOG(ERR) << "writeSubscribeUpdate failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();
@@ -856,7 +856,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
       auto res = wt_->createUniStream();
       if (!res) {
         // failed to create a stream
-        XLOG(ERR) << "Failed to create uni stream" << " sess=" << this;
+        XLOG(ERR) << "Failed to create uni stream sess=" << this;
         return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
             std::runtime_error("Failed to create uni stream.")));
       }
@@ -886,7 +886,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
       writeStreamHeader(writeBuf, objHeader);
     }
   } else {
-    XLOG(DBG4) << "Found open pub data" << " sess=" << this;
+    XLOG(DBG4) << "Found open pub data sess=" << this;
   }
   // TODO: Missing offset checks
   uint64_t payloadLength = payload ? payload->computeChainDataLength() : 0;
@@ -896,7 +896,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
     bool multiObject = false;
     if (objHeader.forwardPreference == ForwardPreference::Track) {
       if (objHeader.group < pubDataIt->second.group) {
-        XLOG(ERR) << "Decreasing group in Track" << " sess=" << this;
+        XLOG(ERR) << "Decreasing group in Track sess=" << this;
         return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
             std::runtime_error("Decreasing group in Track.")));
       }
@@ -904,7 +904,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
         if (objHeader.id < pubDataIt->second.objectID ||
             (objHeader.id == pubDataIt->second.objectID &&
              pubDataIt->second.offset != 0)) {
-          XLOG(ERR) << "obj id must increase within group" << " sess=" << this;
+          XLOG(ERR) << "obj id must increase within group sess=" << this;
           return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
               std::runtime_error("obj id must increase within group.")));
         }
@@ -915,7 +915,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
           ((objHeader.id < pubDataIt->second.objectID ||
             (objHeader.id == pubDataIt->second.objectID &&
              pubDataIt->second.offset != 0)))) {
-        XLOG(ERR) << "obj id must increase within subgroup" << " sess=" << this;
+        XLOG(ERR) << "obj id must increase within subgroup sess=" << this;
         return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
             std::runtime_error("obj id must increase within subgroup.")));
       }
@@ -928,14 +928,14 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
       if (eom) {
         objCopy.length = payloadLength;
       } else {
-        XLOG(ERR) << "Multi object streams require length" << " sess=" << this;
+        XLOG(ERR) << "Multi object streams require length sess=" << this;
       }
     }
     writeObject(writeBuf, objCopy, nullptr);
   }
   if (pubDataIt->second.objectLength &&
       *pubDataIt->second.objectLength < payloadLength) {
-    XLOG(ERR) << "Object length exceeds header length" << " sess=" << this;
+    XLOG(ERR) << "Object length exceeds header length sess=" << this;
     return folly::makeSemiFuture<folly::Unit>(folly::exception_wrapper(
         std::runtime_error("Object length exceeds header length.")));
   }
@@ -965,11 +965,11 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
           nullptr);
       streamEOM = true;
     }
-    XLOG_IF(DBG1, streamEOM) << "End of stream" << " sess=" << this;
+    XLOG_IF(DBG1, streamEOM) << "End of stream sess=" << this;
     auto writeRes = wt_->writeStreamData(
         pubDataIt->second.streamID, writeBuf.move(), streamEOM);
     if (!writeRes) {
-      XLOG(ERR) << "Failed to write stream data." << " sess=" << this
+      XLOG(ERR) << "Failed to write stream data. sess=" << this
                 << " error=" << static_cast<int>(writeRes.error());
       return folly::makeSemiFuture<folly::Unit>(
           folly::exception_wrapper(WebTransportException(
@@ -995,7 +995,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
 void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (!setupComplete_) {
-    XLOG(ERR) << "Uni stream before setup complete" << " sess=" << this;
+    XLOG(ERR) << "Uni stream before setup complete sess=" << this;
     close();
     return;
   }
@@ -1011,7 +1011,7 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   // TODO: prevent second control stream?
   if (dir_ == MoQControlCodec::Direction::CLIENT) {
-    XLOG(ERR) << "Received bidi stream on client, kill it" << " sess=" << this;
+    XLOG(ERR) << "Received bidi stream on client, kill it sess=" << this;
     bh.writeHandle->resetStream(/*error=*/0);
     bh.readHandle->stopSending(/*error=*/0);
   } else {
