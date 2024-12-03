@@ -151,6 +151,8 @@ class MoQSessionTest : public testing::Test,
               .asUint64 = kTestMaxSubscribeId}}}});
   }
 
+  void setupMoQSession();
+
  protected:
   folly::EventBase eventBase_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
@@ -162,9 +164,8 @@ class MoQSessionTest : public testing::Test,
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
   bool failServerSetup_{false};
 };
-} // namespace
 
-TEST_F(MoQSessionTest, Setup) {
+void MoQSessionTest::setupMoQSession() {
   clientSession_->start();
   serverSession_->start();
   eventBase_.loopOnce();
@@ -180,7 +181,7 @@ TEST_F(MoQSessionTest, Setup) {
         serverSetup.params.at(0).key,
         folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
     EXPECT_EQ(serverSetup.params.at(0).asUint64, kTestMaxSubscribeId);
-    clientSession->close();
+    clientSession->getEventBase()->terminateLoopSoon();
   }(clientSession_)
                                                        .scheduleOn(&eventBase_)
                                                        .start();
@@ -191,6 +192,12 @@ TEST_F(MoQSessionTest, Setup) {
       .scheduleOn(&eventBase_)
       .start();
   eventBase_.loop();
+}
+} // namespace
+
+TEST_F(MoQSessionTest, Setup) {
+  setupMoQSession();
+  clientSession_->close();
 }
 
 // receive bidi stream on client
