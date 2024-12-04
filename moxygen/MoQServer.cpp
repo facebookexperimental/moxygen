@@ -87,12 +87,6 @@ void MoQServer::ControlVisitor::operator()(
   XLOG(INFO) << "SubscribeRequest id=" << subscribeUpdate.subscribeID;
 }
 
-void MoQServer::ControlVisitor::operator()(
-    MaxSubscribeId maxSubscribeId) const {
-  XLOG(INFO) << fmt::format(
-      "maxSubscribeId id={}", maxSubscribeId.subscribeID.value);
-}
-
 // TODO: Implement message handling
 void MoQServer::ControlVisitor::operator()(Fetch fetch) const {
   XLOG(INFO) << "Fetch id=" << fetch.subscribeID;

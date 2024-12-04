@@ -14,7 +14,7 @@
 namespace {
 using namespace moxygen;
 
-const size_t kTestMaxSubscribeId = 100;
+const size_t kTestMaxSubscribeId = 2;
 
 class MockControlVisitorBase {
  public:
@@ -22,7 +22,6 @@ class MockControlVisitorBase {
   virtual void onSubscribe(SubscribeRequest subscribeRequest) const = 0;
   virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) const = 0;
   virtual void onSubscribeDone(SubscribeDone subscribeDone) const = 0;
-  virtual void onMaxSubscribeId(MaxSubscribeId maxSubscribeId) const = 0;
   virtual void onUnsubscribe(Unsubscribe unsubscribe) const = 0;
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
@@ -87,11 +86,6 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
     onUnsubscribe(unsubscribe);
   }
 
-  MOCK_METHOD(void, onMaxSubscribeId, (MaxSubscribeId), (const));
-  void operator()(MaxSubscribeId maxSubscribeId) const override {
-    onMaxSubscribeId(maxSubscribeId);
-  }
-
   MOCK_METHOD(void, onTrackStatusRequest, (TrackStatusRequest), (const));
   void operator()(TrackStatusRequest trackStatusRequest) const override {
     onTrackStatusRequest(trackStatusRequest);
@@ -138,7 +132,7 @@ class MoQSessionTest : public testing::Test,
       EXPECT_EQ(
           setup.params.at(0).key,
           folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
-      EXPECT_EQ(setup.params.at(0).asUint64, kTestMaxSubscribeId);
+      EXPECT_EQ(setup.params.at(0).asUint64, initialMaxSubscribeId_);
     }
     if (failServerSetup_) {
       return folly::makeTryWith(
@@ -148,7 +142,7 @@ class MoQSessionTest : public testing::Test,
         .selectedVersion = negotiatedVersion_,
         .params = {
             {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = kTestMaxSubscribeId}}}});
+              .asUint64 = initialMaxSubscribeId_}}}});
   }
 
   void setupMoQSession();
@@ -162,6 +156,7 @@ class MoQSessionTest : public testing::Test,
   MockControlVisitor clientControl;
   MockControlVisitor serverControl;
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
+  uint64_t initialMaxSubscribeId_{kTestMaxSubscribeId};
   bool failServerSetup_{false};
 };
 
@@ -169,22 +164,23 @@ void MoQSessionTest::setupMoQSession() {
   clientSession_->start();
   serverSession_->start();
   eventBase_.loopOnce();
-  [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
+  [](std::shared_ptr<MoQSession> clientSession,
+     uint64_t initialMaxSubscribeId) -> folly::coro::Task<void> {
     auto serverSetup = co_await clientSession->setup(ClientSetup{
         .supportedVersions = {kVersionDraftCurrent},
         .params = {
             {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = kTestMaxSubscribeId}}}});
+              .asUint64 = initialMaxSubscribeId}}}});
 
     EXPECT_EQ(serverSetup.selectedVersion, kVersionDraftCurrent);
     EXPECT_EQ(
         serverSetup.params.at(0).key,
         folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
-    EXPECT_EQ(serverSetup.params.at(0).asUint64, kTestMaxSubscribeId);
+    EXPECT_EQ(serverSetup.params.at(0).asUint64, initialMaxSubscribeId);
     clientSession->getEventBase()->terminateLoopSoon();
-  }(clientSession_)
-                                                       .scheduleOn(&eventBase_)
-                                                       .start();
+  }(clientSession_, initialMaxSubscribeId_)
+                                            .scheduleOn(&eventBase_)
+                                            .start();
   this->controlLoop(*serverSession_, serverControl)
       .scheduleOn(&eventBase_)
       .start();
@@ -206,10 +202,7 @@ TEST_F(MoQSessionTest, SetupTimeout) {
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
     auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent},
-        .params = {
-            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = kTestMaxSubscribeId}}}}));
+        .supportedVersions = {kVersionDraftCurrent}, .params = {}}));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
@@ -222,11 +215,8 @@ TEST_F(MoQSessionTest, InvalidVersion) {
   clientSession_->start();
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
-    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
-        .supportedVersions = {0xfaceb001},
-        .params = {
-            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = kTestMaxSubscribeId}}}}));
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(
+        ClientSetup{.supportedVersions = {0xfaceb001}, .params = {}}));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
@@ -256,14 +246,85 @@ TEST_F(MoQSessionTest, ServerSetupFail) {
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
     auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent},
-        .params = {
-            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = kTestMaxSubscribeId}}}}));
+        .supportedVersions = {kVersionDraftCurrent}, .params = {}}));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
                                                        .scheduleOn(&eventBase_)
                                                        .start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, MaxSubscribeID) {
+  setupMoQSession();
+  [](std::shared_ptr<MoQSession> clientSession,
+     std::shared_ptr<MoQSession> serverSession) -> folly::coro::Task<void> {
+    SubscribeRequest sub{
+        SubscribeID(0),
+        TrackAlias(0),
+        FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+        0,
+        GroupOrder::OldestFirst,
+        LocationType::LatestObject,
+        folly::none,
+        folly::none,
+        {}};
+    auto res = co_await clientSession->subscribe(sub);
+    co_await folly::coro::co_reschedule_on_current_executor;
+    // This is true because initial is 2 in this test case and we grant credit
+    // every 50%.
+    auto expectedSubId = 3;
+    EXPECT_EQ(serverSession->maxSubscribeID(), expectedSubId);
+
+    // subscribe again but this time we get a DONE
+    res = co_await clientSession->subscribe(sub);
+    co_await folly::coro::co_reschedule_on_current_executor;
+    expectedSubId++;
+    EXPECT_EQ(serverSession->maxSubscribeID(), expectedSubId);
+
+    // subscribe three more times, last one should fail
+    res = co_await clientSession->subscribe(sub);
+    res = co_await clientSession->subscribe(sub);
+    res = co_await clientSession->subscribe(sub);
+    EXPECT_TRUE(res.hasError());
+  }(clientSession_, serverSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  EXPECT_CALL(serverControl, onSubscribe(testing::_))
+      .WillOnce(testing::Invoke([this](auto sub) {
+        serverSession_->subscribeError(
+            {sub.subscribeID, 400, "bad", folly::none});
+      }))
+      .WillOnce(testing::Invoke([this](auto sub) {
+        serverSession_->subscribeOk(
+            {sub.subscribeID,
+             std::chrono::milliseconds(0),
+             GroupOrder::OldestFirst,
+             folly::none,
+             {}});
+        serverSession_->subscribeDone(
+            {sub.subscribeID,
+             SubscribeDoneStatusCode::TRACK_ENDED,
+             "end of track",
+             folly::none});
+      }))
+      .WillOnce(testing::Invoke([this](auto sub) {
+        serverSession_->subscribeOk(
+            {sub.subscribeID,
+             std::chrono::milliseconds(0),
+             GroupOrder::OldestFirst,
+             folly::none,
+             {}});
+      }))
+      .WillOnce(testing::Invoke([this](auto sub) {
+        serverSession_->subscribeOk(
+            {sub.subscribeID,
+             std::chrono::milliseconds(0),
+             GroupOrder::OldestFirst,
+             folly::none,
+             {}});
+      }));
+
+  EXPECT_CALL(clientControl, onSubscribeDone(testing::_));
   eventBase_.loop();
 }

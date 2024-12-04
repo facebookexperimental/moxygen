@@ -38,7 +38,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     void operator()(Announce announce) const override;
     void operator()(SubscribeRequest subscribeReq) const override;
     void operator()(SubscribeUpdate subscribeUpdate) const override;
-    void operator()(MaxSubscribeId maxSubscribeId) const override;
     void operator()(Fetch fetch) const override;
     void operator()(FetchCancel fetchCancel) const override;
     void operator()(FetchOk fetchOk) const override;

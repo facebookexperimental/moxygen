@@ -66,6 +66,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     co_await std::move(setupFuture_);
   }
 
+  void setMaxConcurrentSubscribes(uint64_t maxConcurrent) {
+    if (maxConcurrent > maxConcurrentSubscribes_) {
+      auto delta = maxConcurrent - maxConcurrentSubscribes_;
+      maxSubscribeID_ += delta;
+      sendMaxSubscribeID(/*signal=*/true);
+    }
+  }
+
   using MoQMessage = boost::variant<
       Announce,
       Unannounce,
@@ -76,7 +84,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       SubscribeUpdate,
       Unsubscribe,
       SubscribeDone,
-      MaxSubscribeId,
       TrackStatusRequest,
       TrackStatus,
       Goaway>;
@@ -133,10 +140,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     virtual void operator()(Unsubscribe unsubscribe) const {
       XLOG(INFO) << "Unsubscribe subID=" << unsubscribe.subscribeID;
     }
-    virtual void operator()(MaxSubscribeId maxSubId) const {
-      XLOG(INFO) << fmt::format(
-          "MaxSubscribeId subID={}", maxSubId.subscribeID.value);
-    }
     virtual void operator()(Fetch fetch) const {
       XLOG(INFO) << "Fetch subID=" << fetch.subscribeID;
     }
@@ -179,6 +182,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void subscribeAnnouncesOk(SubscribeAnnouncesOk annOk);
   void subscribeAnnouncesError(SubscribeAnnouncesError subscribeAnnouncesError);
   void unsubscribeAnnounces(UnsubscribeAnnounces unsubscribeAnnounces);
+
+  uint64_t maxSubscribeID() const {
+    return maxSubscribeID_;
+  }
 
   static GroupOrder resolveGroupOrder(
       GroupOrder pubOrder,
@@ -401,6 +408,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   uint64_t order(const ObjectHeader& objHeader, const SubscribeID subscribeID);
 
+  void retireSubscribeId(bool signal);
+  void sendMaxSubscribeID(bool signal);
+
   struct PublishKey {
     TrackIdentifier trackIdentifier;
     uint64_t group;
@@ -461,7 +471,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   //  Closes the session if the subscribeID is invalid, that is,
   //  subscribeID <= maxSubscribeID_;
   //  TODO: Add this to all messages that have subscribeId
-  void closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID);
+  bool closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID);
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
@@ -501,9 +511,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::F14FastMap<PublishKey, PublishData, PublishKey::hash> publishDataMap_;
   uint64_t nextTrackId_{0};
   uint64_t closedSubscribes_{0};
-  // TODO: Make this value configurable. kMaxConcurrentSubscribes_ represents
-  // the maximum number of concurrent subscriptions to a given sessions.
-  const uint64_t kMaxConcurrentSubscribes_{100};
+  // TODO: Make this value configurable. maxConcurrentSubscribes_ represents
+  // the maximum number of concurrent subscriptions to a given sessions, set
+  // to the initial MAX_SUBSCRIBE_ID
+  uint64_t maxConcurrentSubscribes_{100};
   uint64_t peerMaxSubscribeID_{0};
 
   folly::coro::Promise<ServerSetup> setupPromise_;
