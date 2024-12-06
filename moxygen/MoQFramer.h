@@ -112,6 +112,7 @@ enum class StreamType : uint64_t {
   OBJECT_DATAGRAM = 1,
   STREAM_HEADER_TRACK = 0x2,
   STREAM_HEADER_SUBGROUP = 0x4,
+  FETCH_HEADER = 0x5,
   CONTROL = 100000000
 };
 
@@ -148,7 +149,7 @@ constexpr uint64_t kVersionDraft06_exp =
 constexpr uint64_t kVersionDraft07_exp = 0xff070001; // Draft 7 FETCH support
 constexpr uint64_t kVersionDraft07_exp2 =
     0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft07_exp2;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft07;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -168,7 +169,7 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
-enum class ForwardPreference : uint8_t { Track, Subgroup, Datagram };
+enum class ForwardPreference : uint8_t { Track, Subgroup, Datagram, Fetch };
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,
@@ -263,6 +264,9 @@ std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
+
+folly::Expected<uint64_t, ErrorCode> parseFetchHeader(
+    folly::io::Cursor& cursor) noexcept;
 
 folly::Expected<ObjectHeader, ErrorCode> parseStreamHeader(
     folly::io::Cursor& cursor,

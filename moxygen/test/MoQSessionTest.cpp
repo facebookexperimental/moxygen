@@ -10,6 +10,9 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
+#include <moxygen/test/TestUtils.h>
+
+using namespace moxygen;
 
 namespace {
 using namespace moxygen;
@@ -23,6 +26,7 @@ class MockControlVisitorBase {
   virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) const = 0;
   virtual void onSubscribeDone(SubscribeDone subscribeDone) const = 0;
   virtual void onUnsubscribe(Unsubscribe unsubscribe) const = 0;
+  virtual void onFetch(Fetch fetch) const = 0;
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
   virtual void onAnnounceCancel(AnnounceCancel announceCancel) const = 0;
@@ -84,6 +88,11 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
   MOCK_METHOD(void, onUnsubscribe, (Unsubscribe), (const));
   void operator()(Unsubscribe unsubscribe) const override {
     onUnsubscribe(unsubscribe);
+  }
+
+  MOCK_METHOD(void, onFetch, (Fetch), (const));
+  void operator()(Fetch fetch) const override {
+    onFetch(fetch);
   }
 
   MOCK_METHOD(void, onTrackStatusRequest, (TrackStatusRequest), (const));
@@ -196,7 +205,378 @@ TEST_F(MoQSessionTest, Setup) {
   clientSession_->close();
 }
 
+TEST_F(MoQSessionTest, Fetch) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> session) mutable
+      -> folly::coro::Task<void> {
+    auto handle = co_await session->fetch(
+        {SubscribeID(0),
+         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+         0,
+         GroupOrder::OldestFirst,
+         AbsoluteLocation{0, 0},
+         AbsoluteLocation{0, 1},
+         {}});
+    EXPECT_TRUE(handle.hasValue());
+    auto obj = co_await handle.value()->objects().next();
+    EXPECT_NE(obj.value(), nullptr);
+    EXPECT_EQ(
+        *std::get_if<SubscribeID>(&obj.value()->header.trackIdentifier),
+        SubscribeID(0));
+    auto payload = co_await obj.value()->payload();
+    EXPECT_EQ(payload->computeChainDataLength(), 100);
+    obj = co_await handle.value()->objects().next();
+    EXPECT_FALSE(obj.has_value());
+    session->close();
+  };
+  EXPECT_CALL(serverControl, onFetch(testing::_))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+        serverSession_->publish(
+            {fetch.subscribeID,
+             fetch.start.group,
+             /*subgroup=*/0,
+             fetch.start.object,
+             /*priority=*/0,
+             ForwardPreference::Fetch,
+             ObjectStatus::NORMAL,
+             100},
+            fetch.subscribeID,
+            0,
+            moxygen::test::makeBuf(100),
+            true);
+        serverSession_->closeFetchStream(fetch.subscribeID);
+      }));
+  f(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> session,
+              std::shared_ptr<MoQSession> serverSession) mutable
+      -> folly::coro::Task<void> {
+    auto handle = co_await session->fetch(
+        {SubscribeID(0),
+         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+         0,
+         GroupOrder::OldestFirst,
+         AbsoluteLocation{0, 0},
+         AbsoluteLocation{0, 1},
+         {}});
+    EXPECT_TRUE(handle.hasValue());
+    // publish here now we know FETCH_OK has been received at client
+    serverSession->publish(
+        {handle.value()->subscribeID(),
+         /*group=*/0,
+         /*subgroup=*/0,
+         /*object=*/0,
+         /*priority=*/0,
+         ForwardPreference::Fetch,
+         ObjectStatus::NORMAL,
+         100},
+        handle.value()->subscribeID(),
+        0,
+        moxygen::test::makeBuf(100),
+        true);
+    serverSession->closeFetchStream(handle.value()->subscribeID());
+
+    auto obj = co_await handle.value()->objects().next();
+    EXPECT_NE(obj.value(), nullptr);
+    EXPECT_EQ(
+        *std::get_if<SubscribeID>(&obj.value()->header.trackIdentifier),
+        SubscribeID(0));
+    auto payload = co_await obj.value()->payload();
+    EXPECT_EQ(payload->computeChainDataLength(), 100);
+    obj = co_await handle.value()->objects().next();
+    EXPECT_FALSE(obj.has_value());
+    session->close();
+  };
+  EXPECT_CALL(serverControl, onFetch(testing::_))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+      }));
+  f(clientSession_, serverSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, FetchError) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> session) mutable
+      -> folly::coro::Task<void> {
+    auto handle = co_await session->fetch(
+        {SubscribeID(0),
+         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+         0,
+         GroupOrder::OldestFirst,
+         AbsoluteLocation{0, 1},
+         AbsoluteLocation{0, 0},
+         {}});
+    EXPECT_TRUE(handle.hasError());
+    EXPECT_EQ(
+        handle.error().errorCode,
+        folly::to_underlying(FetchErrorCode::INVALID_RANGE));
+    session->close();
+  };
+  f(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, FetchCancel) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> clientSession,
+              std::shared_ptr<MoQSession> serverSession) mutable
+      -> folly::coro::Task<void> {
+    auto handle = co_await clientSession->fetch(
+        {SubscribeID(0),
+         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+         0,
+         GroupOrder::OldestFirst,
+         AbsoluteLocation{0, 0},
+         AbsoluteLocation{0, 2},
+         {}});
+    EXPECT_TRUE(handle.hasValue());
+    auto subscribeID = handle.value()->subscribeID();
+    clientSession->fetchCancel({subscribeID});
+    co_await folly::coro::co_reschedule_on_current_executor;
+    co_await folly::coro::co_reschedule_on_current_executor;
+    co_await folly::coro::co_reschedule_on_current_executor;
+    auto res = co_await folly::coro::co_awaitTry(serverSession->publish(
+        {subscribeID,
+         /*group=*/0,
+         /*subgroup=*/0,
+         /*object=*/1,
+         /*priority=*/0,
+         ForwardPreference::Fetch,
+         ObjectStatus::NORMAL,
+         100},
+        subscribeID,
+        0,
+        moxygen::test::makeBuf(100),
+        true));
+    // publish after fetchCancel fails
+    EXPECT_TRUE(res.hasException());
+    clientSession->close();
+  };
+  EXPECT_CALL(serverControl, onFetch(testing::_))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+        serverSession_->publish(
+            {fetch.subscribeID,
+             fetch.start.group,
+             /*subgroup=*/0,
+             fetch.start.object,
+             /*priority=*/0,
+             ForwardPreference::Fetch,
+             ObjectStatus::NORMAL,
+             100},
+            fetch.subscribeID,
+            0,
+            moxygen::test::makeBuf(100),
+            true);
+        // published 1 object
+      }));
+  f(clientSession_, serverSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, FetchEarlyCancel) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> clientSession) mutable
+      -> folly::coro::Task<void> {
+    auto handle = co_await clientSession->fetch(
+        {SubscribeID(0),
+         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+         0,
+         GroupOrder::OldestFirst,
+         AbsoluteLocation{0, 0},
+         AbsoluteLocation{0, 2},
+         {}});
+    EXPECT_TRUE(handle.hasValue());
+    auto subscribeID = handle.value()->subscribeID();
+    // TODO: this no-ops right now so there's nothing to verify
+    clientSession->fetchCancel({subscribeID});
+    clientSession->close();
+  };
+  EXPECT_CALL(serverControl, onFetch(testing::_))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+      }));
+  f(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, FetchBadLength) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> session) mutable
+      -> folly::coro::Task<void> {
+    auto handle = co_await session->fetch(
+        {SubscribeID(0),
+         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+         0,
+         GroupOrder::OldestFirst,
+         AbsoluteLocation{0, 0},
+         AbsoluteLocation{0, 1},
+         {}});
+    // onSessionEnd races fetchOk, and the client gets a fetchError
+    EXPECT_FALSE(handle.hasValue());
+  };
+  EXPECT_CALL(serverControl, onFetch(testing::_))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+        serverSession_->publish(
+            {fetch.subscribeID,
+             fetch.start.group,
+             /*subgroup=*/0,
+             fetch.start.object,
+             /*priority=*/0,
+             ForwardPreference::Fetch,
+             ObjectStatus::NORMAL,
+             100},
+            fetch.subscribeID,
+            0,
+            moxygen::test::makeBuf(10),
+            false);
+        auto res = serverSession_->closeFetchStream(fetch.subscribeID);
+        EXPECT_TRUE(res.hasException());
+        // this should close the session too
+      }));
+  f(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, BadFetchClose) {
+  setupMoQSession();
+  auto res = clientSession_->closeFetchStream(SubscribeID(1000));
+  EXPECT_TRUE(res.hasException());
+}
+
+TEST_F(MoQSessionTest, FetchOverLimit) {
+  setupMoQSession();
+  auto f = [](std::shared_ptr<MoQSession> session) mutable
+      -> folly::coro::Task<void> {
+    Fetch fetch{
+        SubscribeID(0),
+        FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+        0,
+        GroupOrder::OldestFirst,
+        AbsoluteLocation{0, 0},
+        AbsoluteLocation{0, 1},
+        {}};
+    auto handle = co_await session->fetch(fetch);
+    handle = co_await session->fetch(fetch);
+    handle = co_await session->fetch(fetch);
+    EXPECT_TRUE(handle.hasError());
+  };
+  EXPECT_CALL(serverControl, onFetch(testing::_))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+      }))
+      .WillOnce(testing::Invoke([this](Fetch fetch) {
+        EXPECT_EQ(
+            fetch.fullTrackName,
+            FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+        serverSession_->fetchOk(
+            {fetch.subscribeID,
+             GroupOrder::OldestFirst,
+             /*endOfTrack=*/0,
+             AbsoluteLocation{100, 100},
+             {}});
+      }));
+  f(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, FetchBadID) {
+  setupMoQSession();
+  serverSession_->fetchOk(
+      {SubscribeID(1000),
+       GroupOrder::OldestFirst,
+       /*endOfTrack=*/0,
+       AbsoluteLocation{100, 100},
+       {}});
+  eventBase_.loopOnce();
+  serverSession_->fetchError({SubscribeID(2000), 500, "local write failed"});
+  eventBase_.loopOnce();
+  // These are no-ops
+}
+
+// Missing Test Cases
+// ===
 // receive bidi stream on client
+// getTrack by alias (subscribe with stream)
+// getTrack with invalid alias and subscribe ID
+// receive non-normal object
+// onObjectPayload maps to non-existent object in TrackHandle
+// subscribeUpdate/onSubscribeUpdate
+// unsubscribe/onUnsubscribe
+// onSubscribeOk/Error/Done with unknown ID
+// onMaxSubscribeID with ID == 0 {no setup param}
+// onFetchCancel with no publish data
+// announce/unannounce/announceCancel/announceError/announceOk
+// subscribeAnnounces/unsubscribeAnnounces
+// GOAWAY
+// onConnectionError
+// control message write failures
+// order on invalid pub track
+// publishStreamPerObject
+// publish with payloadOffset > 0
+// createUniStream fails
+// publish invalid group/object per forward pref
+// publish without length
+// publish object larger than length
+// datagrams
+// write stream data fails for object
+// publish with stream EOM
+// uni stream or datagram before setup complete
 
 TEST_F(MoQSessionTest, SetupTimeout) {
   eventBase_.loopOnce();

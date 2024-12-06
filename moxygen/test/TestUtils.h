@@ -20,4 +20,6 @@ inline std::unique_ptr<folly::IOBuf> writeAllMessages() {
   return buf;
 }
 
+std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size = 10);
+
 } // namespace moxygen::test
