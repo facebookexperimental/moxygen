@@ -34,35 +34,3 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
-
-# MoQChatServer
-add_executable(
-  moqchatserver
-  MoQChatServer.cpp
-)
-set_target_properties(
-  moqchatserver
-  PROPERTIES
-    BUILD_RPATH ${DEPS_LIBRARIES_DIR}
-    INSTALL_RPATH ${DEPS_LIBRARIES_DIR}
-)
-target_include_directories(
-  moqchatserver PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
-)
-target_compile_options(
-  moqchatserver PRIVATE
-  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
-)
-target_link_libraries(
-  moqchatserver PUBLIC
-  Folly::folly
-  moxygen
-  moqrelay
-)
-
-install(
-    TARGETS moqchatserver
-    EXPORT moxygen-exports
-    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
-    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
-)
