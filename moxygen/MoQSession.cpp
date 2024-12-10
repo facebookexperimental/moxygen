@@ -65,6 +65,18 @@ void MoQSession::start() {
   }
 }
 
+void MoQSession::drain() {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  draining_ = true;
+  checkForCloseOnDrain();
+}
+
+void MoQSession::checkForCloseOnDrain() {
+  if (draining_ && fetches_.empty() && subTracks_.empty()) {
+    close();
+  }
+}
+
 void MoQSession::close(folly::Optional<SessionCloseErrorCode> error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (wt_) {
@@ -274,6 +286,7 @@ folly::coro::Task<void> MoQSession::readLoop(
             track->setAllDataReceived();
             if (track->fetchOkReceived()) {
               fetches_.erase(*subscribeID);
+              checkForCloseOnDrain();
             }
           }
         }
@@ -448,6 +461,7 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
   subTracks_[trackAliasIt->second]->subscribeError(std::move(subErr));
   subTracks_.erase(trackAliasIt->second);
   subIdToTrackAlias_.erase(trackAliasIt);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
@@ -461,7 +475,13 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   }
 
   // TODO: handle final object and status code
+  // TODO: there could still be objects in flight.  Removing from maps now
+  // will prevent their delivery.  I think the only way to handle this is with
+  // timeouts.
   subTracks_[trackAliasIt->second]->fin();
+  subTracks_.erase(trackAliasIt->second);
+  subIdToTrackAlias_.erase(trackAliasIt);
+  checkForCloseOnDrain();
   controlMessages_.enqueue(std::move(subscribeDone));
 }
 
@@ -545,6 +565,7 @@ void MoQSession::onFetchError(FetchError fetchError) {
   }
   fetchIt->second->fetchError(fetchError);
   fetches_.erase(fetchIt);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::onAnnounce(Announce ann) {
@@ -746,9 +767,15 @@ MoQSession::TrackHandle::objects() {
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   auto cancelToken = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::CancellationToken::merge(cancelToken, cancelToken_);
-  while (!mergeToken.isCancellationRequested()) {
-    auto obj = co_await folly::coro::co_withCancellation(
-        mergeToken, newObjects_.dequeue());
+  while (!cancelToken.isCancellationRequested()) {
+    auto optionalObj = newObjects_.try_dequeue();
+    std::shared_ptr<ObjectSource> obj;
+    if (optionalObj) {
+      obj = *optionalObj;
+    } else {
+      obj = co_await folly::coro::co_withCancellation(
+          mergeToken, newObjects_.dequeue());
+    }
     if (!obj) {
       XLOG(DBG3) << "Out of objects for trackHandle=" << this
                  << " id=" << subscribeID_;
@@ -825,6 +852,8 @@ void MoQSession::unsubscribe(Unsubscribe unsubscribe) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
     return;
   }
+  // we rely on receiving subscribeDone after unsubscribe to remove from
+  // subTracks_
   controlWriteEvent_.signal();
 }
 
