@@ -167,7 +167,6 @@ class MoQObjectStreamCodec : public MoQCodec {
  private:
   enum class ParseState {
     STREAM_HEADER_TYPE,
-    DATAGRAM,
     OBJECT_STREAM,
     FETCH_HEADER,
     MULTI_OBJECT_HEADER,
@@ -175,7 +174,7 @@ class MoQObjectStreamCodec : public MoQCodec {
     // OBJECT_PAYLOAD_NO_LENGTH
   };
   ParseState parseState_{ParseState::STREAM_HEADER_TYPE};
-  StreamType streamType_{StreamType::OBJECT_DATAGRAM};
+  StreamType streamType_{StreamType::STREAM_HEADER_SUBGROUP};
   ObjectCallback* callback_;
 };
 

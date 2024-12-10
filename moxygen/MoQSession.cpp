@@ -1264,8 +1264,38 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
 
 void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  MoQObjectStreamCodec codec(this);
-  codec.onIngress(std::move(datagram), true);
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  readBuf.append(std::move(datagram));
+  folly::io::Cursor cursor(readBuf.front());
+  auto type = quic::decodeQuicInteger(cursor);
+  if (!type || StreamType(type->first) != StreamType::OBJECT_DATAGRAM) {
+    XLOG(ERR) << __func__ << " Bad datagram header";
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  auto dgLength = readBuf.chainLength();
+  auto res = parseObjectHeader(cursor, dgLength);
+  if (res.hasError()) {
+    XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  auto remainingLength = cursor.totalLength();
+  if (remainingLength != *res->length) {
+    XLOG(ERR) << __func__ << " Bad datagram: Length mismatch";
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  readBuf.trimStart(dgLength - remainingLength);
+  auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
+  XCHECK(alias);
+  auto track = getTrack(*alias);
+  if (track) {
+    auto groupID = res->group;
+    auto objID = res->id;
+    track->onObjectHeader(std::move(*res));
+    track->onObjectPayload(groupID, objID, readBuf.move(), true);
+  }
 }
 
 bool MoQSession::closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID) {

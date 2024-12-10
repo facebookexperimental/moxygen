@@ -121,9 +121,6 @@ void MoQObjectStreamCodec::onIngress(
         cursor = newCursor;
         streamType_ = StreamType(type->first);
         switch (streamType_) {
-          case StreamType::OBJECT_DATAGRAM:
-            parseState_ = ParseState::DATAGRAM;
-            break;
           case StreamType::STREAM_HEADER_TRACK:
           case StreamType::STREAM_HEADER_SUBGROUP:
             parseState_ = ParseState::OBJECT_STREAM;
@@ -138,22 +135,6 @@ void MoQObjectStreamCodec::onIngress(
                        << (uint64_t)streamType_ << " on streamID=" << streamId_;
             connError_.emplace(ErrorCode::PARSE_ERROR);
             break;
-        }
-        break;
-      }
-      case ParseState::DATAGRAM: {
-        auto newCursor = cursor;
-        auto res = parseObjectHeader(newCursor, ingress_.chainLength());
-        if (res.hasError()) {
-          XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
-          connError_ = res.error();
-          break;
-        }
-        cursor = newCursor;
-        curObjectHeader_ = res.value();
-        parseState_ = ParseState::OBJECT_PAYLOAD;
-        if (callback_) {
-          callback_->onObjectHeader(std::move(res.value()));
         }
         break;
       }
