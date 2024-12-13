@@ -87,6 +87,18 @@ class MoQDateServer : MoQServer {
       server_.unsubscribe(clientSession_, std::move(unsubscribe));
     }
 
+    void operator()(Fetch fetch) const override {
+      XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
+                 << " name=" << fetch.fullTrackName.trackName
+                 << " subscribe id=" << fetch.subscribeID;
+      if (fetch.fullTrackName != server_.dateTrackName()) {
+        clientSession_->fetchError(
+            {fetch.subscribeID, 403, "unexpected fetch"});
+      } else {
+        server_.onFetch(std::move(fetch), clientSession_);
+      }
+    }
+
     void operator()(Goaway) const override {
       XLOG(INFO) << "Goaway";
     }
@@ -109,6 +121,11 @@ class MoQDateServer : MoQServer {
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
     auto range = toSubscribeRange(subReq, nowLoc);
+    if (range.start < nowLoc) {
+      clientSession->subscribeError(
+          {subReq.subscribeID, 400, "start in the past, use FETCH"});
+      return;
+    }
     clientSession->subscribeOk(
         {subReq.subscribeID,
          std::chrono::milliseconds(0),
@@ -116,38 +133,84 @@ class MoQDateServer : MoQServer {
              GroupOrder::OldestFirst, subReq.groupOrder),
          nowLoc});
 
-    bool done = catchup(
-        clientSession, subReq.subscribeID, subReq.trackAlias, range, nowLoc);
-    if (!done) {
-      forwarder_.setLatest(nowLoc);
-      forwarder_.addSubscriber(
-          {std::move(clientSession),
-           subReq.subscribeID,
-           subReq.trackAlias,
-           range});
+    forwarder_.setLatest(nowLoc);
+    forwarder_.addSubscriber(
+        {std::move(clientSession),
+         subReq.subscribeID,
+         subReq.trackAlias,
+         range});
+  }
+
+  void onFetch(Fetch fetch, std::shared_ptr<MoQSession> clientSession) {
+    if (fetch.end < fetch.start) {
+      clientSession->fetchError({fetch.subscribeID, 400, "No objects"});
+      return;
     }
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    AbsoluteLocation nowLoc(
+        {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
+    auto range = toSubscribeRange(
+        fetch.start, fetch.end, LocationType::AbsoluteRange, nowLoc);
+    if (range.start > nowLoc) {
+      clientSession->fetchError(
+          {fetch.subscribeID, 400, "fetch starts in future"});
+      return;
+    }
+    range.end = std::min(range.end, nowLoc);
+    clientSession->fetchOk(
+        {fetch.subscribeID,
+         MoQSession::resolveGroupOrder(
+             GroupOrder::OldestFirst, fetch.groupOrder),
+         0, // not end of track
+         nowLoc,
+         {}});
+
+    catchup(clientSession, fetch.subscribeID, range, nowLoc);
   }
 
   bool onSubscribeUpdate(const SubscribeUpdate& subscribeUpdate) {
     return forwarder_.updateSubscriber(subscribeUpdate);
   }
 
-  bool catchup(
+  void catchup(
       std::shared_ptr<MoQSession> clientSession,
       SubscribeID subscribeID,
-      TrackAlias trackAlias,
       SubscribeRange range,
       AbsoluteLocation now) {
-    if (range.start >= now) {
-      return false;
+    if (range.start.object > 61) {
+      XLOG(ERR) << "Invalid start object";
+      return;
     }
-    MoQForwarder forwarder(dateTrackName());
-    forwarder.addSubscriber({clientSession, subscribeID, trackAlias, range});
     time_t t =
         range.start.group * 60 + std::max(range.start.object, (uint64_t)1) - 1;
+    auto pubFn = [clientSession, subscribeID](
+                     ObjectHeader objHdr,
+                     std::unique_ptr<folly::IOBuf> payload,
+                     uint64_t payloadOffset,
+                     bool eom,
+                     bool) {
+      objHdr.trackIdentifier = subscribeID;
+      if (objHdr.status == ObjectStatus::NORMAL) {
+        XLOG(DBG1) << "Publish normal object trackIdentifier="
+                   << std::get<SubscribeID>(objHdr.trackIdentifier);
+        clientSession
+            ->publish(
+                objHdr, subscribeID, payloadOffset, std::move(payload), eom)
+            .via(clientSession->getEventBase());
+      } else {
+        clientSession->publishStatus(objHdr, subscribeID);
+      }
+    };
     while (range.start < now && range.start < range.end) {
-      auto n =
-          publishDate(forwarder, t, false, subscribeID, trackAlias, range.end);
+      auto n = publishDate(
+          pubFn,
+          t,
+          false,
+          subscribeID,
+          TrackAlias(0),
+          ForwardPreference::Fetch,
+          range.end);
       t++;
       // publishDate publishes two objects for obj = 0
       range.start.object += n;
@@ -156,18 +219,38 @@ class MoQDateServer : MoQServer {
         range.start.object = 0;
       }
     }
-    return forwarder.empty();
+    // TODO - empty range may log an error?
+    clientSession->closeFetchStream(subscribeID);
   }
 
   folly::coro::Task<void> publishDateLoop() {
     bool first = false;
     auto cancelToken = co_await folly::coro::co_current_cancellation_token;
+    auto pubFn = [this](
+                     ObjectHeader objHdr,
+                     std::unique_ptr<folly::IOBuf> payload,
+                     uint64_t payloadOffset,
+                     bool eom,
+                     bool streamPerObject) {
+      forwarder_.publish(
+          std::move(objHdr),
+          std::move(payload),
+          payloadOffset,
+          eom,
+          streamPerObject);
+    };
     while (!cancelToken.isCancellationRequested()) {
       if (!forwarder_.empty()) {
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
-
-        publishDate(forwarder_, in_time_t, first, 0, 0, folly::none);
+        publishDate(
+            pubFn,
+            in_time_t,
+            first,
+            0,
+            0,
+            ForwardPreference::Subgroup,
+            folly::none);
         first = false;
       }
       co_await folly::coro::sleep(std::chrono::seconds(1));
@@ -175,11 +258,17 @@ class MoQDateServer : MoQServer {
   }
 
   size_t publishDate(
-      MoQForwarder& forwarder,
+      const std::function<void(
+          ObjectHeader,
+          std::unique_ptr<folly::IOBuf>,
+          uint64_t,
+          bool,
+          bool)>& publishFn,
       time_t in_time_t,
       bool forceGroup,
-      SubscribeID subscribeID,
+      SubscribeID,
       TrackAlias trackAlias,
+      ForwardPreference pref,
       folly::Optional<AbsoluteLocation> end) {
     size_t objectsPublished = 0;
     struct tm local_tm;
@@ -196,15 +285,15 @@ class MoQDateServer : MoQServer {
            /*subgroup=*/0,
            /*object=*/0,
            /*priority*/ 0,
-           ForwardPreference::Subgroup,
+           pref,
            ObjectStatus::NORMAL,
            folly::none});
-      forwarder.publish(
+      publishFn(
           objHeader,
           folly::IOBuf::copyBuffer(ss.str()),
           0,
           true,
-          streamPerObject_);
+          !end && streamPerObject_);
       objectsPublished++;
     }
     if (!end || nowLoc < *end) {
@@ -216,20 +305,20 @@ class MoQDateServer : MoQServer {
            subgroup,
            nowLoc.object,
            /*priority=*/0,
-           ForwardPreference::Subgroup,
+           pref,
            ObjectStatus::NORMAL,
            folly::none});
-      forwarder.publish(
+      publishFn(
           objHeader,
           folly::IOBuf::copyBuffer(secBuf),
           0,
           true,
-          streamPerObject_ && nowLoc.object < 60);
+          !end && streamPerObject_ && nowLoc.object < 60);
       objectsPublished++;
       if (nowLoc.object == 60) {
         objHeader.status = ObjectStatus::END_OF_GROUP;
         objHeader.id++;
-        forwarder.publish(std::move(objHeader), nullptr);
+        publishFn(std::move(objHeader), nullptr, 0, true, false);
       }
     }
     return objectsPublished;
