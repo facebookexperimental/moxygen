@@ -24,6 +24,9 @@ const size_t kMaxNamespaceLength = 32;
 
 //////// Types ////////
 
+using Payload = std::unique_ptr<folly::IOBuf>;
+using Priority = uint8_t;
+
 enum class ErrorCode : uint32_t {
   UNKNOWN = 0,
   PARSE_ERROR = 1,
@@ -76,6 +79,13 @@ enum class FetchErrorCode : uint32_t {
   TRACK_NOT_EXIST = 2,
   UNAUTHORIZED = 3,
   TIMEOUT = 4,
+};
+
+enum class ResetStreamErrorCode : uint32_t {
+  INTERNAL_ERROR = 0,
+  DELIVERY_TIMEOUT = 1,
+  SESSION_CLOSED = 2,
+  CANCELLED = 3, // received UNSUBSCRIBE / FETCH_CANCEL / STOP_SENDING
 };
 
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
