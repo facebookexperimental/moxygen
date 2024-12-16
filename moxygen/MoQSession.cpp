@@ -135,9 +135,16 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
     co_await folly::coro::co_safe_point;
     auto writeRes =
         controlStream->writeStreamData(controlWriteBuf_.move(), false);
-    if (writeRes) {
-      co_await std::move(writeRes.value()).via(evb_);
+    if (!writeRes) {
+      XLOG(ERR) << "Write error: " << uint64_t(writeRes.error());
+      break;
     }
+    auto awaitRes = controlStream->awaitWritable();
+    if (!awaitRes) {
+      XLOG(ERR) << "Control stream write error";
+      break;
+    }
+    co_await std::move(*awaitRes);
   }
 }
 
@@ -1341,7 +1348,7 @@ folly::SemiFuture<folly::Unit> MoQSession::publishImpl(
         }
       }
     }
-    return std::move(writeRes.value());
+    return folly::makeSemiFuture();
   }
 }
 
