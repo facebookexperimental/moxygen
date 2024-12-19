@@ -5,7 +5,7 @@
  */
 
 #include "moxygen/MoQSession.h"
-#include <folly/coro/Collect.h>
+#include <folly/coro/FutureUtil.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/EventBase.h>
 
@@ -771,7 +771,7 @@ void MoQSession::start() {
         .start();
     co_withCancellation(
         cancellationSource_.getToken(),
-        readLoop(StreamType::CONTROL, controlStream.readHandle))
+        controlReadLoop(controlStream.readHandle))
         .scheduleOn(evb_)
         .start();
   }
@@ -942,167 +942,493 @@ MoQSession::controlMessages() {
   }
 }
 
-folly::coro::Task<void> MoQSession::readLoop(
-    StreamType streamType,
+folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
   });
   co_await folly::coro::co_safe_point;
-  std::unique_ptr<MoQCodec> codec;
-  MoQObjectStreamCodec* objCodec = nullptr;
-  if (streamType == StreamType::CONTROL) {
-    codec = std::make_unique<MoQControlCodec>(dir_, this);
-  } else {
-    auto res = std::make_unique<MoQObjectStreamCodec>(this);
-    objCodec = res.get();
-    codec = std::move(res);
-  }
+  MoQControlCodec codec(dir_, this);
   auto streamId = readHandle->getID();
-  codec->setStreamId(streamId);
+  codec.setStreamId(streamId);
 
-  // TODO: disallow OBJECT on control streams and non-object on non-control
   bool fin = false;
   auto token = co_await folly::coro::co_current_cancellation_token;
-  std::shared_ptr<TrackHandle> track;
-  folly::CancellationSource cs;
   while (!fin && !token.isCancellationRequested()) {
     auto streamData = co_await folly::coro::co_awaitTry(
         readHandle->readStreamData().via(evb_));
     if (streamData.hasException()) {
       XLOG(ERR) << streamData.exception().what() << " id=" << streamId
                 << " sess=" << this;
-      // TODO: possibly erase fetch
-      cs.requestCancellation();
       break;
     } else {
       if (streamData->data || streamData->fin) {
-        codec->onIngress(std::move(streamData->data), streamData->fin);
-      }
-      if (!track && objCodec) {
-        // TODO: this might not be set
-        auto trackId = objCodec->getTrackIdentifier();
-        if (auto subscribeID = std::get_if<SubscribeID>(&trackId)) {
-          // it's fetch
-          track = getTrack(trackId);
-          track->mergeReadCancelToken(
-              folly::CancellationToken::merge(cs.getToken(), token));
+        try {
+          codec.onIngress(std::move(streamData->data), streamData->fin);
+        } catch (const std::exception& ex) {
+          XLOG(FATAL) << "exception thrown from onIngress ex=" << ex.what();
         }
       }
       fin = streamData->fin;
       XLOG_IF(DBG3, fin) << "End of stream id=" << streamId << " sess=" << this;
     }
   }
-  if (track) {
-    track->fin();
-    track->setAllDataReceived();
-    if (track->fetchOkReceived()) {
-      fetches_.erase(track->subscribeID());
-      checkForCloseOnDrain();
-    }
-  }
+  // TODO: close session on control exit
 }
 
-std::shared_ptr<MoQSession::TrackHandle> MoQSession::getTrack(
-    TrackIdentifier trackIdentifier) {
-  // This can be cached in the handling stream
-  std::shared_ptr<TrackHandle> track;
-  auto alias = std::get_if<TrackAlias>(&trackIdentifier);
-  if (alias) {
-    auto trackIt = subTracks_.find(*alias);
-    if (trackIt == subTracks_.end()) {
-      // received an object for unknown track alias
-      XLOG(ERR) << "unknown track alias=" << alias->value << " sess=" << this;
-      return nullptr;
-    }
-    track = trackIt->second;
-  } else {
-    auto subscribeID = std::get<SubscribeID>(trackIdentifier);
-    XLOG(DBG3) << "getTrack subID=" << subscribeID;
-    auto trackIt = fetches_.find(subscribeID);
-    if (trackIt == fetches_.end()) {
-      // received an object for unknown subscribe ID
-      XLOG(ERR) << "unknown subscribe ID=" << subscribeID << " sess=" << this;
-      return nullptr;
-    }
-    track = trackIt->second;
+std::shared_ptr<MoQSession::TrackHandle> MoQSession::getSubscribeTrack(
+    TrackAlias trackAlias) {
+  auto trackIt = subTracks_.find(trackAlias);
+  if (trackIt == subTracks_.end()) {
+    // received an object for unknown track alias
+    XLOG(ERR) << "unknown track alias=" << trackAlias << " sess=" << this;
+    return nullptr;
   }
-  return track;
+  return trackIt->second;
 }
 
-void MoQSession::onObjectHeader(ObjectHeader objHeader) {
-  XLOG(DBG1) << "MoQSession::" << __func__ << " " << objHeader
-             << " sess=" << this;
-  auto track = getTrack(objHeader.trackIdentifier);
-  if (track) {
-    track->onObjectHeader(std::move(objHeader));
+std::shared_ptr<MoQSession::TrackHandle> MoQSession::getFetchTrack(
+    SubscribeID subscribeID) {
+  XLOG(DBG3) << "getTrack subID=" << subscribeID;
+  auto trackIt = fetches_.find(subscribeID);
+  if (trackIt == fetches_.end()) {
+    // received an object for unknown subscribe ID
+    XLOG(ERR) << "unknown subscribe ID=" << subscribeID << " sess=" << this;
+    return nullptr;
   }
+  return trackIt->second;
 }
 
-void MoQSession::onObjectPayload(
-    TrackIdentifier trackIdentifier,
-    uint64_t groupID,
-    uint64_t id,
-    std::unique_ptr<folly::IOBuf> payload,
-    bool eom) {
+namespace {
+class SubgroupCodecCallback : public MoQObjectStreamCodec::ObjectCallback {
+ public:
+  explicit SubgroupCodecCallback(std::shared_ptr<MoQSession> session)
+      : session_(std::move(session)) {}
+
+  void setTrack(std::shared_ptr<MoQSession::TrackHandle> track) {
+    track_ = track;
+  }
+
+  void onSubgroup(
+      TrackAlias alias,
+      uint64_t group,
+      uint64_t subgroup,
+      Priority priority) override {
+    XCHECK(track_);
+    if (!track_->callback_) {
+      return;
+    }
+    auto res = track_->callback_->beginSubgroup(group, subgroup, priority);
+    if (res.hasValue()) {
+      subgroupCallback_ = *res;
+    } else {
+      error_ = std::move(res.error());
+    }
+  }
+
+  void onFetchHeader(SubscribeID /*subscribeID*/) override {
+    XLOG(FATAL) << "unreachable";
+  }
+
+  void onObjectBegin(
+      uint64_t /*group*/,
+      uint64_t /*subgroup*/,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      bool objectComplete,
+      bool subgroupComplete) override {
+    XCHECK(track_);
+    if (!subgroupCallback_ || !track_->callback_) {
+      return;
+    }
+
+    folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    if (objectComplete) {
+      res = subgroupCallback_->object(
+          objectID, std::move(initialPayload), subgroupComplete);
+      if (subgroupComplete) {
+        subgroupCallback_.reset();
+      }
+    } else {
+      res = subgroupCallback_->beginObject(
+          objectID, length, std::move(initialPayload));
+    }
+    if (!res) {
+      error_ = std::move(res.error());
+    }
+  }
+
+  void onObjectPayload(Payload payload, bool objectComplete) override {
+    XCHECK(track_);
+    if (!subgroupCallback_ || !!track_->callback_) {
+      return;
+    }
+
+    auto res =
+        subgroupCallback_->objectPayload(std::move(payload), objectComplete);
+    if (!res) {
+      error_ = std::move(res.error());
+    }
+  }
+
+  void onObjectStatus(
+      uint64_t group,
+      uint64_t subgroup,
+      uint64_t objectID,
+      ObjectStatus status) override {
+    XCHECK(track_);
+    if (!subgroupCallback_ || !track_->callback_) {
+      return;
+    }
+
+    folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    switch (status) {
+      case ObjectStatus::NORMAL:
+        XLOG(FATAL) << "Unreachable";
+        break;
+      case ObjectStatus::OBJECT_NOT_EXIST:
+        res = subgroupCallback_->objectNotExists(objectID);
+        break;
+      case ObjectStatus::GROUP_NOT_EXIST:
+        res = track_->callback_->groupNotExists(group, subgroup, true);
+        subgroupCallback_.reset();
+        break;
+      case ObjectStatus::END_OF_GROUP:
+        res = subgroupCallback_->endOfGroup(objectID);
+        subgroupCallback_.reset();
+        break;
+      case ObjectStatus::END_OF_TRACK_AND_GROUP:
+        res = subgroupCallback_->endOfTrackAndGroup(objectID);
+        subgroupCallback_.reset();
+        break;
+      case ObjectStatus::END_OF_SUBGROUP:
+        res = subgroupCallback_->endOfSubgroup();
+        subgroupCallback_.reset();
+        break;
+    }
+    if (!res) {
+      error_ = std::move(res.error());
+    }
+  }
+
+  void onEndOfStream() override {
+    XCHECK(track_);
+    if (subgroupCallback_ && track_->callback_) {
+      auto res = subgroupCallback_->endOfSubgroup();
+      if (!res) {
+        error_ = std::move(res.error());
+      }
+      subgroupCallback_.reset();
+    }
+  }
+
+  void onConnectionError(ErrorCode error) override {
+    XLOG(ERR) << "Parse error=" << folly::to_underlying(error);
+    session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // Called by read loop on read error (eg: RESET_STREAM)
+  bool reset(ResetStreamErrorCode error) {
+    if (subgroupCallback_) {
+      XCHECK(track_);
+      if (track_->callback_) {
+        // ignoring error from reset?
+        subgroupCallback_->reset(error);
+      }
+      subgroupCallback_.reset();
+      return true;
+    }
+    return false;
+  }
+
+  folly::Optional<MoQPublishError> error() const {
+    return error_;
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+  std::shared_ptr<MoQSession::TrackHandle> track_;
+  std::shared_ptr<SubgroupConsumer> subgroupCallback_;
+  folly::Optional<MoQPublishError> error_;
+};
+
+class FetchCodecCallback : public MoQObjectStreamCodec::ObjectCallback {
+ public:
+  explicit FetchCodecCallback(std::shared_ptr<MoQSession> session)
+      : session_(std::move(session)) {}
+
+  void setTrack(std::shared_ptr<MoQSession::TrackHandle> track) {
+    track_ = track;
+  }
+
+  void onSubgroup(TrackAlias, uint64_t, uint64_t, Priority) override {
+    XLOG(FATAL) << "unreachable";
+  }
+
+  void onFetchHeader(SubscribeID) override {}
+
+  void onObjectBegin(
+      uint64_t group,
+      uint64_t subgroup,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      bool objectComplete,
+      bool fetchComplete) override {
+    XCHECK(track_);
+    folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    if (!track_->fetchCallback_) {
+      return;
+    }
+    if (objectComplete) {
+      res = track_->fetchCallback_->object(
+          group, subgroup, objectID, std::move(initialPayload), fetchComplete);
+    } else {
+      res = track_->fetchCallback_->beginObject(
+          group, subgroup, objectID, length, std::move(initialPayload));
+    }
+    if (!res) {
+      error_ = std::move(res.error());
+    }
+  }
+
+  void onObjectPayload(Payload payload, bool objectComplete) override {
+    XCHECK(track_);
+    if (!track_->fetchCallback_) {
+      return;
+    }
+    auto res = track_->fetchCallback_->objectPayload(
+        std::move(payload),
+        /*finSubgroup=*/false);
+    if (!res) {
+      error_ = std::move(res.error());
+    } else {
+      XCHECK_EQ(objectComplete, res.value() == ObjectPublishStatus::DONE);
+    }
+  }
+
+  void onObjectStatus(
+      uint64_t group,
+      uint64_t subgroup,
+      uint64_t objectID,
+      ObjectStatus status) override {
+    XCHECK(track_);
+    if (!track_->fetchCallback_) {
+      return;
+    }
+    folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    switch (status) {
+      case ObjectStatus::NORMAL:
+        break;
+      case ObjectStatus::OBJECT_NOT_EXIST:
+        res =
+            track_->fetchCallback_->objectNotExists(group, subgroup, objectID);
+        break;
+      case ObjectStatus::GROUP_NOT_EXIST:
+        res = track_->fetchCallback_->groupNotExists(group, subgroup, false);
+        break;
+      case ObjectStatus::END_OF_GROUP:
+        res = track_->fetchCallback_->endOfGroup(
+            group, subgroup, objectID, false);
+        break;
+      case ObjectStatus::END_OF_TRACK_AND_GROUP:
+        res = track_->fetchCallback_->endOfTrackAndGroup(
+            group, subgroup, objectID);
+        track_->fetchCallback_.reset();
+        break;
+      case ObjectStatus::END_OF_SUBGROUP:
+        break;
+    }
+    if (!res) {
+      error_ = std::move(res.error());
+    }
+  }
+
+  void onEndOfStream() override {
+    XCHECK(track_);
+    if (track_->fetchCallback_) {
+      track_->fetchCallback_->endOfFetch();
+      track_->fetchCallback_.reset();
+    }
+  }
+
+  void onConnectionError(ErrorCode error) override {
+    XLOG(ERR) << "Parse error=" << folly::to_underlying(error);
+    session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  bool reset(ResetStreamErrorCode error) {
+    if (track_) {
+      if (track_->fetchCallback_) {
+        track_->fetchCallback_->reset(error);
+        track_->fetchCallback_.reset();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  folly::Optional<MoQPublishError> error() const {
+    return error_;
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+  std::shared_ptr<MoQSession::TrackHandle> track_;
+  folly::Optional<MoQPublishError> error_;
+};
+
+class DispatchCallback : public MoQObjectStreamCodec::ObjectCallback {
+ public:
+  DispatchCallback(
+      std::shared_ptr<MoQSession> session,
+      MoQObjectStreamCodec& codec,
+      folly::CancellationToken& token)
+      : session_(session),
+        subgroupCallback_(session),
+        fetchCallback_(session),
+        codec_(codec),
+        token_(token) {}
+
+  void onSubgroup(
+      TrackAlias alias,
+      uint64_t group,
+      uint64_t subgroup,
+      Priority priority) override {
+    auto track = session_->getSubscribeTrack(alias);
+    if (!track) {
+      error_ = MoQPublishError(
+          MoQPublishError::CANCELLED, "Subgroup for unknown track");
+      return;
+    }
+    token_ = folly::CancellationToken::merge(token_, track->getCancelToken());
+    codec_.setCallback(&subgroupCallback_);
+    subgroupCallback_.setTrack(std::move(track));
+    subgroupCallback_.onSubgroup(alias, group, subgroup, priority);
+  }
+
+  void onFetchHeader(SubscribeID subscribeID) override {
+    auto track = session_->getFetchTrack(subscribeID);
+
+    if (!track) {
+      error_ = MoQPublishError(
+          MoQPublishError::CANCELLED, "Fetch response for unknown track");
+      return;
+    }
+    token_ = folly::CancellationToken::merge(token_, track->getCancelToken());
+    codec_.setCallback(&fetchCallback_);
+    fetchCallback_.setTrack(std::move(track));
+    fetchCallback_.onFetchHeader(subscribeID);
+  }
+
+  void
+  onObjectBegin(uint64_t, uint64_t, uint64_t, uint64_t, Payload, bool, bool)
+      override {
+    XCHECK(error_);
+  }
+
+  void onObjectPayload(Payload, bool) override {
+    XCHECK(error_);
+  }
+
+  void onObjectStatus(uint64_t, uint64_t, uint64_t, ObjectStatus) override {
+    XCHECK(error_);
+  }
+
+  void onEndOfStream() override {
+    XCHECK(error_);
+  }
+
+  void onConnectionError(ErrorCode error) override {
+    subgroupCallback_.onConnectionError(error);
+  }
+
+  bool reset(ResetStreamErrorCode error) {
+    return (subgroupCallback_.reset(error) || fetchCallback_.reset(error));
+  }
+
+  folly::Optional<MoQPublishError> error() const {
+    if (error_) {
+      return error_;
+    }
+    auto err = subgroupCallback_.error();
+    if (err) {
+      return err;
+    } else {
+      return fetchCallback_.error();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+  SubgroupCodecCallback subgroupCallback_;
+  FetchCodecCallback fetchCallback_;
+  MoQObjectStreamCodec& codec_;
+  folly::CancellationToken& token_;
+  folly::Optional<MoQPublishError> error_;
+};
+} // namespace
+
+folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
+    std::shared_ptr<MoQSession> session,
+    proxygen::WebTransport::StreamReadHandle* readHandle) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto track = getTrack(trackIdentifier);
-  if (track) {
-    track->onObjectPayload(groupID, id, std::move(payload), eom);
-  }
-}
+  auto g = folly::makeGuard([func = __func__, this] {
+    XLOG(DBG1) << "exit " << func << " sess=" << this;
+  });
+  co_await folly::coro::co_safe_point;
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  MoQObjectStreamCodec codec(nullptr);
+  DispatchCallback dcb(session, codec, /*by ref*/ token);
+  codec.setCallback(&dcb);
+  auto id = readHandle->getID();
+  codec.setStreamId(id);
 
-void MoQSession::TrackHandle::onObjectHeader(ObjectHeader objHeader) {
-  XLOG(DBG1) << __func__ << " objHeader=" << objHeader
-             << " trackHandle=" << this;
-  uint64_t objectIdKey = objHeader.id;
-  auto status = objHeader.status;
-  if (status != ObjectStatus::NORMAL) {
-    objectIdKey |= (1ull << 63);
-  }
-  auto res = objects_.emplace(
-      std::piecewise_construct,
-      std::forward_as_tuple(std::make_pair(objHeader.group, objectIdKey)),
-      std::forward_as_tuple(std::make_shared<ObjectSource>()));
-  res.first->second->header = std::move(objHeader);
-  res.first->second->fullTrackName = fullTrackName_;
-  res.first->second->cancelToken = cancelToken_;
-  if (status != ObjectStatus::NORMAL) {
-    res.first->second->payloadQueue.enqueue(nullptr);
-  }
-  // TODO: objects_ accumulates the headers of all objects for the life of the
-  // track.  Remove an entry from objects when returning the end of the payload,
-  // or the object itself for non-normal.
-  newObjects_.enqueue(res.first->second);
-}
-
-void MoQSession::TrackHandle::fin() {
-  newObjects_.enqueue(nullptr);
-}
-
-void MoQSession::TrackHandle::onObjectPayload(
-    uint64_t groupId,
-    uint64_t id,
-    std::unique_ptr<folly::IOBuf> payload,
-    bool eom) {
-  XLOG(DBG1) << __func__ << " g=" << groupId << " o=" << id
-             << " len=" << (payload ? payload->computeChainDataLength() : 0)
-             << " eom=" << uint64_t(eom) << " trackHandle=" << this;
-  auto objIt = objects_.find(std::make_pair(groupId, id));
-  if (objIt == objects_.end()) {
-    // error;
-    XLOG(ERR) << "unknown object gid=" << groupId << " seq=" << id
-              << " trackHandle=" << this;
-    return;
-  }
-  if (payload) {
-    XLOG(DBG1) << "payload enqueued trackHandle=" << this;
-    objIt->second->payloadQueue.enqueue(std::move(payload));
-  }
-  if (eom) {
-    XLOG(DBG1) << "eom enqueued trackHandle=" << this;
-    objIt->second->payloadQueue.enqueue(nullptr);
+  bool fin = false;
+  while (!fin && !token.isCancellationRequested()) {
+    auto streamData =
+        co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
+            token,
+            folly::coro::toTaskInterruptOnCancel(
+                readHandle->readStreamData().via(evb_))));
+    if (streamData.hasException()) {
+      XLOG(ERR) << streamData.exception().what() << " id=" << id
+                << " sess=" << this;
+      ResetStreamErrorCode errorCode{ResetStreamErrorCode::INTERNAL_ERROR};
+      auto wtEx =
+          streamData.tryGetExceptionObject<proxygen::WebTransport::Exception>();
+      if (wtEx) {
+        errorCode = ResetStreamErrorCode(wtEx->error);
+      } else {
+        XLOG(ERR) << streamData.exception().what();
+      }
+      if (!dcb.reset(errorCode)) {
+        XLOG(ERR) << __func__ << " terminating for unknown "
+                  << "stream id=" << id << " sess=" << this;
+      }
+      break;
+    } else {
+      if (streamData->data || streamData->fin) {
+        fin = streamData->fin;
+        folly::Optional<MoQPublishError> err;
+        try {
+          codec.onIngress(std::move(streamData->data), streamData->fin);
+          err = dcb.error();
+        } catch (const std::exception& ex) {
+          err = MoQPublishError(MoQPublishError::CANCELLED, ex.what());
+        }
+        XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
+        if (err) {
+          XLOG(ERR) << "Error parsing stream, err=" << err->what();
+          if (!fin) {
+            readHandle->stopSending(/*error=*/0);
+            break;
+          }
+        }
+      } // else empty read
+    }
   }
 }
 
@@ -1171,8 +1497,12 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
               << " sess=" << this;
     return;
   }
-  subTracks_[trackAliasIt->second]->subscribeOK(
-      subTracks_[trackAliasIt->second], subOk.groupOrder, subOk.latest);
+  auto trackHandleIt = subTracks_.find(trackAliasIt->second);
+  if (trackHandleIt != subTracks_.end()) {
+    trackHandleIt->second->subscribeOK(std::move(subOk));
+  } else {
+    XLOG(ERR) << "Missing subTracks_ entry for alias=" << trackAliasIt->second;
+  }
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
@@ -1184,10 +1514,16 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
               << " sess=" << this;
     return;
   }
-  subTracks_[trackAliasIt->second]->subscribeError(std::move(subErr));
-  subTracks_.erase(trackAliasIt->second);
-  subIdToTrackAlias_.erase(trackAliasIt);
-  checkForCloseOnDrain();
+
+  auto trackHandleIt = subTracks_.find(trackAliasIt->second);
+  if (trackHandleIt != subTracks_.end()) {
+    trackHandleIt->second->subscribeError(std::move(subErr));
+    subTracks_.erase(trackHandleIt);
+    subIdToTrackAlias_.erase(trackAliasIt);
+    checkForCloseOnDrain();
+  } else {
+    XLOG(ERR) << "Missing subTracks_ entry for alias=" << trackAliasIt->second;
+  }
 }
 
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
@@ -1210,13 +1546,12 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   if (trackHandleIt != subTracks_.end()) {
     auto trackHandle = trackHandleIt->second;
     subTracks_.erase(trackHandleIt);
-    trackHandle->fin();
+    trackHandle->subscribeDone(std::move(subscribeDone));
   } else {
     XLOG(DFATAL) << "trackAliasIt but no trackHandleIt for id="
                  << subscribeDone.subscribeID << " sess=" << this;
   }
   subIdToTrackAlias_.erase(trackAliasIt);
-  controlMessages_.enqueue(std::move(subscribeDone));
   checkForCloseOnDrain();
 }
 
@@ -1277,7 +1612,7 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
     // It's possible the fetch stream hasn't opened yet if the application
     // hasn't made it to fetchOK.
     pubTrackIt->second->reset(ResetStreamErrorCode::CANCELLED);
-    retireSubscribeId(/*signal=*/true);
+    retireSubscribeId(/*signalWriteLoop=*/true);
   }
 }
 
@@ -1290,9 +1625,9 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
     return;
   }
   auto trackHandle = fetchIt->second;
-  trackHandle->fetchOK(trackHandle);
+  trackHandle->fetchOK();
   if (trackHandle->allDataReceived()) {
-    fetches_.erase(trackHandle->subscribeID());
+    fetches_.erase(fetchIt);
   }
 }
 
@@ -1407,8 +1742,11 @@ void MoQSession::onGoaway(Goaway goaway) {
 
 void MoQSession::onConnectionError(ErrorCode error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  XLOG(ERR) << "err=" << folly::to_underlying(error);
-  // TODO
+  XLOG(ERR) << "MoQCodec control stream parse error err="
+            << folly::to_underlying(error);
+  // TODO: This error is coming from MoQCodec -- do we need a better
+  // error code?
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
 folly::coro::Task<folly::Expected<AnnounceOk, AnnounceError>>
@@ -1500,37 +1838,10 @@ void MoQSession::subscribeAnnouncesError(
   controlWriteEvent_.signal();
 }
 
-folly::coro::AsyncGenerator<
-    std::shared_ptr<MoQSession::TrackHandle::ObjectSource>>
-MoQSession::TrackHandle::objects() {
-  XLOG(DBG1) << __func__ << " trackHandle=" << this;
-  auto g =
-      folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
-  auto cancelToken = co_await folly::coro::co_current_cancellation_token;
-  auto mergeToken = folly::CancellationToken::merge(cancelToken, cancelToken_);
-  folly::EventBaseThreadTimekeeper tk(*evb_);
-  while (!cancelToken.isCancellationRequested()) {
-    auto optionalObj = newObjects_.try_dequeue();
-    std::shared_ptr<ObjectSource> obj;
-    if (optionalObj) {
-      obj = *optionalObj;
-    } else {
-      obj = co_await folly::coro::co_withCancellation(
-          mergeToken,
-          folly::coro::timeout(newObjects_.dequeue(), objectTimeout_, &tk));
-    }
-    if (!obj) {
-      XLOG(DBG3) << "Out of objects for trackHandle=" << this
-                 << " id=" << subscribeID_;
-      break;
-    }
-    co_yield obj;
-  }
-}
-
-folly::coro::Task<
-    folly::Expected<std::shared_ptr<MoQSession::TrackHandle>, SubscribeError>>
-MoQSession::subscribe(SubscribeRequest sub) {
+folly::coro::Task<folly::Expected<SubscribeOk, SubscribeError>>
+MoQSession::subscribe(
+    SubscribeRequest sub,
+    std::shared_ptr<TrackConsumer> callback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto fullTrackName = sub.fullTrackName;
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
@@ -1552,17 +1863,21 @@ MoQSession::subscribe(SubscribeRequest sub) {
   controlWriteEvent_.signal();
   auto res = subIdToTrackAlias_.emplace(subID, trackAlias);
   XCHECK(res.second) << "Duplicate subscribe ID";
+  auto trackHandle = std::make_shared<TrackHandle>(
+      fullTrackName, subID, getEventBase(), callback, nullptr);
   auto subTrack = subTracks_.emplace(
       std::piecewise_construct,
       std::forward_as_tuple(trackAlias),
-      std::forward_as_tuple(std::make_shared<TrackHandle>(
-          fullTrackName, subID, evb_, cancellationSource_.getToken())));
+      std::forward_as_tuple(trackHandle));
 
-  auto trackHandle = subTrack.first->second;
   auto res2 = co_await trackHandle->ready();
   XLOG(DBG1) << "Subscribe ready trackHandle=" << trackHandle
              << " subscribeID=" << subID;
-  co_return res2;
+  if (res2.hasValue()) {
+    co_return std::move(res2.value());
+  } else {
+    co_return folly::makeUnexpected(res2.error());
+  }
 }
 
 std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(SubscribeOk subOk) {
@@ -1602,7 +1917,7 @@ void MoQSession::subscribeError(SubscribeError subErr) {
   }
   pubTracks_.erase(it);
   auto res = writeSubscribeError(controlWriteBuf_, std::move(subErr));
-  retireSubscribeId(/*signal=*/false);
+  retireSubscribeId(/*signalWriteLoop=*/false);
   if (!res) {
     XLOG(ERR) << "writeSubscribeError failed sess=" << this;
     return;
@@ -1631,6 +1946,7 @@ void MoQSession::unsubscribe(Unsubscribe unsubscribe) {
              << " sess=" << this;
   // if there are open streams for this subscription, we should STOP_SENDING
   // them?
+  trackIt->second->removeCallback();
   auto res = writeUnsubscribe(controlWriteBuf_, std::move(unsubscribe));
   if (!res) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
@@ -1665,7 +1981,7 @@ void MoQSession::subscribeDone(SubscribeDone subDone) {
     return;
   }
 
-  retireSubscribeId(/*signal=*/false);
+  retireSubscribeId(/*signalWriteLoop=*/false);
   controlWriteEvent_.signal();
 }
 
@@ -1679,7 +1995,7 @@ void MoQSession::retireSubscribeId(bool signal) {
   }
 }
 
-void MoQSession::sendMaxSubscribeID(bool signal) {
+void MoQSession::sendMaxSubscribeID(bool signalWriteLoop) {
   XLOG(DBG1) << "Issuing new maxSubscribeID=" << maxSubscribeID_
              << " sess=" << this;
   auto res =
@@ -1688,7 +2004,7 @@ void MoQSession::sendMaxSubscribeID(bool signal) {
     XLOG(ERR) << "writeMaxSubscribeId failed sess=" << this;
     return;
   }
-  if (signal) {
+  if (signalWriteLoop) {
     controlWriteEvent_.signal();
   }
 }
@@ -1735,9 +2051,9 @@ void MoQSession::subscribeUpdate(SubscribeUpdate subUpdate) {
   controlWriteEvent_.signal();
 }
 
-folly::coro::Task<
-    folly::Expected<std::shared_ptr<MoQSession::TrackHandle>, FetchError>>
-MoQSession::fetch(Fetch fetch) {
+folly::coro::Task<folly::Expected<SubscribeID, FetchError>> MoQSession::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> fetchCallback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
@@ -1757,13 +2073,13 @@ MoQSession::fetch(Fetch fetch) {
         FetchError({subID, 500, "local write failed"}));
   }
   controlWriteEvent_.signal();
+  auto trackHandle = std::make_shared<TrackHandle>(
+      fullTrackName, subID, getEventBase(), nullptr, fetchCallback);
   auto subTrack = fetches_.emplace(
       std::piecewise_construct,
       std::forward_as_tuple(subID),
-      std::forward_as_tuple(std::make_shared<TrackHandle>(
-          fullTrackName, subID, evb_, cancellationSource_.getToken())));
+      std::forward_as_tuple(trackHandle));
 
-  auto trackHandle = subTrack.first->second;
   trackHandle->setNewObjectTimeout(std::chrono::seconds(2));
   auto res = co_await trackHandle->fetchReady();
   XLOG(DBG1) << __func__ << " fetchReady trackHandle=" << trackHandle;
@@ -1830,6 +2146,7 @@ void MoQSession::fetchCancel(FetchCancel fetchCan) {
               << " sess=" << this;
     return;
   }
+  trackIt->second->removeCallback();
   auto res = writeFetchCancel(controlWriteBuf_, std::move(fetchCan));
   if (!res) {
     XLOG(ERR) << "writeFetchCancel failed sess=" << this;
@@ -1848,7 +2165,7 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
   // maybe not STREAM_HEADER_SUBGROUP, but at least not control
   co_withCancellation(
       cancellationSource_.getToken(),
-      readLoop(StreamType::STREAM_HEADER_SUBGROUP, rh))
+      unidirectionalReadLoop(shared_from_this(), rh))
       .scheduleOn(evb_)
       .start();
 }
@@ -1863,8 +2180,7 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
   } else {
     bh.writeHandle->setPriority(0, 0, false);
     co_withCancellation(
-        cancellationSource_.getToken(),
-        readLoop(StreamType::CONTROL, bh.readHandle))
+        cancellationSource_.getToken(), controlReadLoop(bh.readHandle))
         .scheduleOn(evb_)
         .start();
     auto mergeToken = folly::CancellationToken::merge(
@@ -1903,12 +2219,9 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   readBuf.trimStart(dgLength - remainingLength);
   auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
   XCHECK(alias);
-  auto track = getTrack(*alias);
-  if (track) {
-    auto groupID = res->group;
-    auto objID = res->id;
-    track->onObjectHeader(std::move(*res));
-    track->onObjectPayload(groupID, objID, readBuf.move(), true);
+  auto track = getSubscribeTrack(*alias);
+  if (track && track->callback_) {
+    track->callback_->datagram(std::move(*res), readBuf.move());
   }
 }
 
