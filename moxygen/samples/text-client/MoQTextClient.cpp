@@ -195,7 +195,7 @@ class MoQTextClient {
         XLOG(INFO) << "SubscribeDone";
       }
 
-      virtual void operator()(Goaway) const override {
+      void operator()(Goaway) const override {
         XLOG(INFO) << "Goaway";
         client_.moqClient_.moqSession_->unsubscribe({client_.subscribeID_});
       }

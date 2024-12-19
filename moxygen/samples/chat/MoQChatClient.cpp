@@ -104,7 +104,7 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
       if (client_.nextGroup_ > 0) {
         latest.emplace(client_.nextGroup_ - 1, 0);
       }
-      client_.moqClient_.moqSession_->subscribeOk(
+      client_.publisher_ = client_.moqClient_.moqSession_->subscribeOk(
           {subscribeReq.subscribeID,
            std::chrono::milliseconds(0),
            MoQSession::resolveGroupOrder(
@@ -124,6 +124,14 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
           unsubscribe.subscribeID == *client_.chatSubscribeID_) {
         client_.chatSubscribeID_.reset();
         client_.chatTrackAlias_.reset();
+        if (client_.publisher_) {
+          client_.publisher_->subscribeDone(
+              {unsubscribe.subscribeID,
+               SubscribeDoneStatusCode::UNSUBSCRIBED,
+               "",
+               folly::none});
+          client_.publisher_.reset();
+        }
       }
     }
 
@@ -157,18 +165,17 @@ void MoQChatClient::publishLoop() {
         moqClient_.moqSession_->close();
         moqClient_.moqSession_.reset();
       } else if (chatSubscribeID_) {
-        moqClient_.moqSession_->publishStreamPerObject(
-            {*chatTrackAlias_,
-             nextGroup_++,
-             /*subgroup=*/0,
-             /*id=*/0,
-             /*pri=*/0,
-             ForwardPreference::Subgroup,
-             ObjectStatus::NORMAL},
-            *chatSubscribeID_,
-            0,
-            folly::IOBuf::copyBuffer(input),
-            true);
+        if (publisher_) {
+          publisher_->objectStream(
+              {*chatTrackAlias_,
+               nextGroup_++,
+               /*subgroup=*/0,
+               /*id=*/0,
+               /*pri=*/0,
+               ForwardPreference::Subgroup,
+               ObjectStatus::NORMAL},
+              folly::IOBuf::copyBuffer(input));
+        }
       }
     });
     if (input == "/leave") {
