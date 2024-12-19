@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/samples/chat/MoQChatClient.h"
+#include "moxygen/ObjectReceiver.h"
 
 #include <folly/String.h>
 #include <folly/init/Init.h>
@@ -110,12 +111,6 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
            MoQSession::resolveGroupOrder(
                GroupOrder::OldestFirst, subscribeReq.groupOrder),
            latest});
-    }
-
-    void operator()(SubscribeDone subDone) const override {
-      XLOG(INFO) << "SubscribeDone is=" << subDone.subscribeID;
-      client_.subscribeDone(std::move(subDone));
-      // TODO: should be handled in session
     }
 
     void operator()(Unsubscribe unsubscribe) const override {
@@ -224,6 +219,43 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
         &userTracks.emplace_back(UserTrack({deviceId, timestamp, 0}));
   }
   // now subscribe and update timestamp.
+  class ChatObjectHandler : public ObjectReceiverCallback {
+   public:
+    explicit ChatObjectHandler(MoQChatClient& client, std::string username)
+        : client_(client), username_(username) {}
+    ~ChatObjectHandler() override = default;
+    FlowControlState onObject(const ObjectHeader&, Payload payload) override {
+      if (payload) {
+        std::cout << username_ << ": ";
+        payload->coalesce();
+        std::cout << payload->moveToFbString() << std::endl;
+      }
+      return FlowControlState::UNBLOCKED;
+    }
+    void onObjectStatus(const ObjectHeader&) override {}
+    void onEndOfStream() override {}
+    void onError(ResetStreamErrorCode error) override {
+      std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;
+    }
+
+    void onSubscribeDone(SubscribeDone subDone) override {
+      XLOG(INFO) << "SubscribeDone: " << subDone.reasonPhrase;
+      if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
+          client_.moqClient_.moqSession_) {
+        client_.moqClient_.moqSession_->unsubscribe({subDone.subscribeID});
+      }
+      client_.subscribeDone(std::move(subDone));
+      baton.post();
+    }
+
+    folly::coro::Baton baton;
+
+   private:
+    MoQChatClient& client_;
+    std::string username_;
+  };
+  ChatObjectHandler handler(*this, username);
+
   auto track = co_await co_awaitTry(moqClient_.moqSession_->subscribe(
       {0,
        0,
@@ -233,7 +265,8 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
        LocationType::LatestGroup,
        folly::none,
        folly::none,
-       {}}));
+       {}},
+      std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, &handler)));
   if (track.hasException()) {
     // subscribe failed
     XLOG(ERR) << track.exception();
@@ -246,17 +279,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     co_return;
   }
 
-  userTrackPtr->subscribeId = track->value()->subscribeID();
+  userTrackPtr->subscribeId = track->value().subscribeID;
   userTrackPtr->timestamp = timestamp;
-  while (auto obj = co_await track->value()->objects().next()) {
-    // how to cancel this loop
-    auto payload = co_await obj.value()->payload();
-    if (payload) {
-      std::cout << username << ": ";
-      payload->coalesce();
-      std::cout << payload->moveToFbString() << std::endl;
-    }
-  }
+  co_await handler.baton;
 }
 
 void MoQChatClient::subscribeDone(SubscribeDone subDone) {
