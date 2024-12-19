@@ -92,12 +92,6 @@ void MoQServer::ControlVisitor::operator()(Fetch fetch) const {
   XLOG(INFO) << "Fetch id=" << fetch.subscribeID;
 }
 
-void MoQServer::ControlVisitor::operator()(SubscribeDone subscribeDone) const {
-  XLOG(INFO) << "SubscribeDone id=" << subscribeDone.subscribeID
-             << " code=" << folly::to_underlying(subscribeDone.statusCode)
-             << " reason=" << subscribeDone.reasonPhrase;
-}
-
 void MoQServer::ControlVisitor::operator()(Unsubscribe unsubscribe) const {
   XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
 }

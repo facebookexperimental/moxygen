@@ -6,21 +6,22 @@
 
 #include <folly/portability/GFlags.h>
 #include "moxygen/MoQClient.h"
-#include "moxygen/MoQLocation.h"
 #include "moxygen/ObjectReceiver.h"
 
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <signal.h>
 
-DEFINE_string(connect_url, "", "URL for webtransport server");
-DEFINE_string(track_namespace, "", "Track Namespace");
+DEFINE_string(
+    connect_url,
+    "https://localhost:4433/moq",
+    "URL for webtransport server");
+DEFINE_string(track_namespace, "flvstreamer", "Track Namespace");
 DEFINE_string(track_namespace_delimiter, "/", "Track Namespace Delimiter");
-DEFINE_string(track_name, "", "Track Name");
-DEFINE_string(sg, "", "Start group, defaults to latest");
-DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or latest");
-DEFINE_string(eg, "", "End group");
-DEFINE_string(eo, "", "End object, leave blank for entire group");
+// TODO DEFINE_string(video_track_name, "video0", "Video track Name");
+// TODO: Fix and add proper audo & video parsing. This is set to video0 on
+// purpose to test the video track
+DEFINE_string(track_name, "video0", "Track Name");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
@@ -35,44 +36,13 @@ struct SubParams {
   folly::Optional<AbsoluteLocation> end;
 };
 
-SubParams flags2params() {
-  SubParams result;
-  std::string soStr(FLAGS_so);
-  if (FLAGS_sg.empty()) {
-    if (soStr.empty()) {
-      result.locType = LocationType::LatestObject;
-      return result;
-    } else if (auto so = folly::to<uint64_t>(soStr) > 0) {
-      XLOG(ERR) << "Invalid: sg blank, so=" << so;
-      exit(1);
-    } else {
-      result.locType = LocationType::LatestGroup;
-      return result;
-    }
-  } else if (soStr.empty()) {
-    soStr = std::string("0");
-  }
-  result.start.emplace(
-      folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(soStr));
-  if (FLAGS_eg.empty()) {
-    result.locType = LocationType::AbsoluteStart;
-    return result;
-  } else {
-    result.locType = LocationType::AbsoluteRange;
-    result.end.emplace(
-        folly::to<uint64_t>(FLAGS_eg),
-        (FLAGS_eo.empty() ? 0 : folly::to<uint64_t>(FLAGS_eo) + 1));
-    return result;
-  }
-  return result;
-}
-
-class TextHandler : public ObjectReceiverCallback {
+class TrackReceiverHandler : public ObjectReceiverCallback {
  public:
-  ~TextHandler() override = default;
+  ~TrackReceiverHandler() override = default;
   FlowControlState onObject(const ObjectHeader&, Payload payload) override {
     if (payload) {
-      std::cout << payload->moveToFbString() << std::endl;
+      std::cout << "Received payload. Size="
+                << payload->computeChainDataLength() << std::endl;
     }
     return FlowControlState::UNBLOCKED;
   }
@@ -84,17 +54,19 @@ class TextHandler : public ObjectReceiverCallback {
     std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;
   }
 
-  void onSubscribeDone(SubscribeDone) override {
-    std::cout << __func__ << std::endl;
+  void subscribeDone(SubscribeDone) override {
     baton.post();
   }
 
   folly::coro::Baton baton;
 };
 
-class MoQTextClient {
+class MoQFlvReceiverClient {
  public:
-  MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
+  MoQFlvReceiverClient(
+      folly::EventBase* evb,
+      proxygen::URL url,
+      FullTrackName ftn)
       : moqClient_(
             evb,
             std::move(url),
@@ -118,10 +90,10 @@ class MoQTextClient {
       sub.locType = LocationType::LatestObject;
       sub.start = folly::none;
       sub.end = folly::none;
-      subTextHandler_ = std::make_shared<ObjectReceiver>(
-          ObjectReceiver::SUBSCRIBE, &textHandler_);
+      subRxHandler_ = std::make_shared<ObjectReceiver>(
+          ObjectReceiver::SUBSCRIBE, &trackReceiverHandler_);
       auto track =
-          co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
+          co_await moqClient_.moqSession_->subscribe(sub, subRxHandler_);
       if (track.hasValue()) {
         subscribeID_ = track->subscribeID;
         XLOG(DBG1) << "subscribeID=" << subscribeID_;
@@ -129,58 +101,6 @@ class MoQTextClient {
         if (latest) {
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
                      << "}";
-        }
-        if (subParams.start && latest) {
-          // There was a specific start and the track has started
-          auto range = toSubscribeRange(
-              subParams.start, subParams.end, subParams.locType, *latest);
-          if (range.start <= *latest) {
-            AbsoluteLocation fetchEnd = *latest;
-            // The start was before latest, need to FETCH
-            if (range.end < *latest) {
-              // The end is before latest, UNSUBSCRIBE
-              XLOG(DBG1) << "end={" << range.end.group << ","
-                         << range.end.object << "} before latest, unsubscribe";
-              moqClient_.moqSession_->unsubscribe({subscribeID_});
-              fetchEnd = range.end;
-              if (fetchEnd.object == 0) {
-                fetchEnd.group--;
-              }
-            }
-            if (FLAGS_fetch) {
-              XLOG(DBG1) << "FETCH start={" << range.start.group << ","
-                         << range.start.object << "} end={" << fetchEnd.group
-                         << "," << fetchEnd.object << "}";
-              fetchTextHandler_ = std::make_shared<ObjectReceiver>(
-                  ObjectReceiver::FETCH, &textHandler_);
-              auto fetchTrack = co_await moqClient_.moqSession_->fetch(
-                  {SubscribeID(0),
-                   sub.fullTrackName,
-                   sub.priority,
-                   sub.groupOrder,
-                   range.start,
-                   fetchEnd,
-                   {}},
-                  fetchTextHandler_);
-              if (fetchTrack.hasError()) {
-                XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode
-                          << " reason=" << fetchTrack.error().reasonPhrase;
-              } else {
-                XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
-              }
-            }
-          } // else we started from current or no content - nothing to FETCH
-          if (subParams.end && (!latest || range.end > *latest)) {
-            // The end is set but after latest, SUBSCRIBE_UPDATE for the end
-            XLOG(DBG1) << "Setting subscribe end={" << range.end.group << ","
-                       << range.end.object << "} before latest, update";
-            moqClient_.moqSession_->subscribeUpdate(
-                {subscribeID_,
-                 latest.value_or(AbsoluteLocation{0, 0}),
-                 range.end,
-                 sub.priority,
-                 sub.params});
-          }
         }
       } else {
         XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
@@ -192,13 +112,11 @@ class MoQTextClient {
       XLOG(ERR) << ex.what();
       co_return;
     }
-    co_await textHandler_.baton;
+    co_await trackReceiverHandler_.baton;
     XLOG(INFO) << __func__ << " done";
   }
 
   void stop() {
-    textHandler_.baton.post();
-    // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
     moqClient_.moqSession_->unsubscribe({subscribeID_});
     moqClient_.moqSession_->close();
   }
@@ -206,7 +124,7 @@ class MoQTextClient {
   folly::coro::Task<void> controlReadLoop() {
     class ControlVisitor : public MoQSession::ControlVisitor {
      public:
-      explicit ControlVisitor(MoQTextClient& client) : client_(client) {}
+      explicit ControlVisitor(MoQFlvReceiverClient& client) : client_(client) {}
 
       void operator()(Announce announce) const override {
         XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
@@ -227,7 +145,7 @@ class MoQTextClient {
       }
 
      private:
-      MoQTextClient& client_;
+      MoQFlvReceiverClient& client_;
     };
     XLOG(INFO) << __func__;
     auto g =
@@ -243,9 +161,8 @@ class MoQTextClient {
   MoQClient moqClient_;
   FullTrackName fullTrackName_;
   SubscribeID subscribeID_{0};
-  TextHandler textHandler_;
-  std::shared_ptr<ObjectReceiver> subTextHandler_;
-  std::shared_ptr<ObjectReceiver> fetchTextHandler_;
+  TrackReceiverHandler trackReceiverHandler_;
+  std::shared_ptr<ObjectReceiver> subRxHandler_;
 };
 } // namespace
 
@@ -260,7 +177,7 @@ int main(int argc, char* argv[]) {
   }
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
-  MoQTextClient textClient(
+  MoQFlvReceiverClient flvReceiverClient(
       &eventBase,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}));
@@ -284,12 +201,14 @@ int main(int argc, char* argv[]) {
    private:
     std::function<void(int)> fn_;
   };
-  SigHandler handler(
-      &eventBase, [&textClient](int) mutable { textClient.stop(); });
-  auto subParams = flags2params();
+  SigHandler handler(&eventBase, [&flvReceiverClient](int) mutable {
+    flvReceiverClient.stop();
+  });
+  auto subParams =
+      SubParams{LocationType::LatestObject, folly::none, folly::none};
   const auto subscribeID = 0;
   const auto trackAlias = 1;
-  textClient
+  flvReceiverClient
       .run(
           {subscribeID,
            trackAlias,
