@@ -14,16 +14,6 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onFrame, (FrameType /*frameType*/));
   MOCK_METHOD(void, onClientSetup, (ClientSetup clientSetup));
   MOCK_METHOD(void, onServerSetup, (ServerSetup serverSetup));
-  MOCK_METHOD(void, onObjectHeader, (ObjectHeader objectHeader));
-  MOCK_METHOD(
-      void,
-      onObjectPayload,
-      (TrackIdentifier trackIdentifier,
-       uint64_t groupID,
-       uint64_t id,
-       std::unique_ptr<folly::IOBuf> payload,
-       bool eom));
-  MOCK_METHOD(void, onFetchHeader, (uint64_t subscribeID));
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest subscribeRequest));
   MOCK_METHOD(void, onSubscribeUpdate, (SubscribeUpdate subscribeUpdate));
   MOCK_METHOD(void, onSubscribeOk, (SubscribeOk subscribeOk));
@@ -57,6 +47,19 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onTrackStatus, (TrackStatus trackStatus));
   MOCK_METHOD(void, onGoaway, (Goaway goaway));
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));
+
+  MOCK_METHOD(void, onFetchHeader, (SubscribeID));
+  MOCK_METHOD(void, onSubgroup, (TrackAlias, uint64_t, uint64_t, uint8_t));
+  MOCK_METHOD(
+      void,
+      onObjectBegin,
+      (uint64_t, uint64_t, uint64_t, uint64_t, Payload, bool, bool));
+  MOCK_METHOD(
+      void,
+      onObjectStatus,
+      (uint64_t, uint64_t, uint64_t, ObjectStatus));
+  MOCK_METHOD(void, onObjectPayload, (Payload, bool));
+  MOCK_METHOD(void, onEndOfStream, ());
 };
 
 class MockTrackConsumer : public TrackConsumer {
