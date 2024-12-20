@@ -256,11 +256,6 @@ class MoQFlvStreamerClient {
         return;
       }
 
-      void operator()(SubscribeDone /* subscribeDone */) const override {
-        // Not expecxted to receive this
-        XLOG(INFO) << "SubscribeDone";
-      }
-
       void operator()(Unsubscribe unSubs) const override {
         XLOG(INFO) << "Unsubscribe";
         // Delete subscribe

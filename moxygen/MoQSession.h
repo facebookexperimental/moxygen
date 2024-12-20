@@ -24,8 +24,11 @@
 namespace moxygen {
 
 class MoQSession : public MoQControlCodec::ControlCallback,
-                   public MoQObjectStreamCodec::ObjectCallback,
-                   public proxygen::WebTransportHandler {
+                   public proxygen::WebTransportHandler,
+                   public std::enable_shared_from_this<MoQSession> {
+ private:
+  class TrackReceiveState;
+
  public:
   class ServerSetupCallback {
    public:
@@ -85,7 +88,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       SubscribeRequest,
       SubscribeUpdate,
       Unsubscribe,
-      SubscribeDone,
       Fetch,
       TrackStatusRequest,
       TrackStatus,
@@ -136,10 +138,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       XLOG(INFO) << "SubscribeUpdate subID=" << subscribeUpdate.subscribeID;
     }
 
-    virtual void operator()(SubscribeDone subscribeDone) const {
-      XLOG(INFO) << "SubscribeDone subID=" << subscribeDone.subscribeID;
-    }
-
     virtual void operator()(Unsubscribe unsubscribe) const {
       XLOG(INFO) << "Unsubscribe subID=" << unsubscribe.subscribeID;
     }
@@ -187,201 +185,21 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     return subOrder == GroupOrder::Default ? pubOrder : subOrder;
   }
 
-  class TrackHandle {
-   public:
-    TrackHandle(
-        FullTrackName fullTrackName,
-        SubscribeID subscribeID,
-        folly::EventBase* evb,
-        folly::CancellationToken token)
-        : fullTrackName_(std::move(fullTrackName)),
-          subscribeID_(subscribeID),
-          evb_(evb),
-          cancelToken_(std::move(token)) {
-      auto contract = folly::coro::makePromiseContract<
-          folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>>();
-      promise_ = std::move(contract.first);
-      future_ = std::move(contract.second);
-      auto contract2 = folly::coro::makePromiseContract<
-          folly::Expected<std::shared_ptr<TrackHandle>, FetchError>>();
-      fetchPromise_ = std::move(contract2.first);
-      fetchFuture_ = std::move(contract2.second);
-    }
-
-    void setTrackName(FullTrackName trackName) {
-      fullTrackName_ = std::move(trackName);
-    }
-
-    [[nodiscard]] const FullTrackName& fullTrackName() const {
-      return fullTrackName_;
-    }
-
-    SubscribeID subscribeID() const {
-      return subscribeID_;
-    }
-
-    void setNewObjectTimeout(std::chrono::milliseconds objectTimeout) {
-      objectTimeout_ = objectTimeout;
-    }
-
-    [[nodiscard]] folly::CancellationToken getCancelToken() const {
-      return cancelToken_;
-    }
-
-    void mergeReadCancelToken(folly::CancellationToken readToken) {
-      cancelToken_ = folly::CancellationToken::merge(cancelToken_, readToken);
-    }
-
-    void fin();
-
-    folly::coro::Task<
-        folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>>
-    ready() {
-      co_return co_await std::move(future_);
-    }
-    void subscribeOK(
-        std::shared_ptr<TrackHandle> self,
-        GroupOrder order,
-        folly::Optional<AbsoluteLocation> latest) {
-      XCHECK_EQ(self.get(), this);
-      groupOrder_ = order;
-      latest_ = std::move(latest);
-      promise_.setValue(std::move(self));
-    }
-    void subscribeError(SubscribeError subErr) {
-      if (!promise_.isFulfilled()) {
-        subErr.subscribeID = subscribeID_;
-        promise_.setValue(folly::makeUnexpected(std::move(subErr)));
-      }
-    }
-
-    folly::coro::Task<folly::Expected<std::shared_ptr<TrackHandle>, FetchError>>
-    fetchReady() {
-      co_return co_await std::move(fetchFuture_);
-    }
-    void fetchOK(std::shared_ptr<TrackHandle> self) {
-      XCHECK_EQ(self.get(), this);
-      XLOG(DBG1) << __func__ << " trackHandle=" << this;
-      fetchPromise_.setValue(std::move(self));
-    }
-    void fetchError(FetchError fetchErr) {
-      if (!promise_.isFulfilled()) {
-        fetchErr.subscribeID = subscribeID_;
-        fetchPromise_.setValue(folly::makeUnexpected(std::move(fetchErr)));
-      }
-    }
-
-    struct ObjectSource {
-      ObjectHeader header;
-      FullTrackName fullTrackName;
-      folly::CancellationToken cancelToken;
-
-      folly::coro::UnboundedQueue<std::unique_ptr<folly::IOBuf>, true, true>
-          payloadQueue;
-
-      folly::coro::Task<std::unique_ptr<folly::IOBuf>> payload() {
-        if (header.status != ObjectStatus::NORMAL) {
-          co_return nullptr;
-        }
-        folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-        auto curCancelToken =
-            co_await folly::coro::co_current_cancellation_token;
-        auto mergeToken =
-            folly::CancellationToken::merge(curCancelToken, cancelToken);
-        while (!curCancelToken.isCancellationRequested()) {
-          std::unique_ptr<folly::IOBuf> buf;
-          auto optionalBuf = payloadQueue.try_dequeue();
-          if (optionalBuf) {
-            buf = std::move(*optionalBuf);
-          } else {
-            buf = co_await folly::coro::co_withCancellation(
-                cancelToken, payloadQueue.dequeue());
-          }
-          if (!buf) {
-            break;
-          }
-          payloadBuf.append(std::move(buf));
-        }
-        co_return payloadBuf.move();
-      }
-    };
-
-    void onObjectHeader(ObjectHeader objHeader);
-    void onObjectPayload(
-        uint64_t groupId,
-        uint64_t id,
-        std::unique_ptr<folly::IOBuf> payload,
-        bool eom);
-
-    folly::coro::AsyncGenerator<std::shared_ptr<ObjectSource>> objects();
-
-    GroupOrder groupOrder() const {
-      return groupOrder_;
-    }
-
-    folly::Optional<AbsoluteLocation> latest() {
-      return latest_;
-    }
-
-    void setAllDataReceived() {
-      allDataReceived_ = true;
-    }
-
-    bool allDataReceived() const {
-      return allDataReceived_;
-    }
-
-    bool fetchOkReceived() const {
-      return fetchPromise_.isFulfilled();
-    }
-
-   private:
-    FullTrackName fullTrackName_;
-    SubscribeID subscribeID_;
-    folly::EventBase* evb_;
-    using SubscribeResult =
-        folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>;
-    folly::coro::Promise<SubscribeResult> promise_;
-    folly::coro::Future<SubscribeResult> future_;
-    using FetchResult =
-        folly::Expected<std::shared_ptr<TrackHandle>, FetchError>;
-    folly::coro::Promise<FetchResult> fetchPromise_;
-    folly::coro::Future<FetchResult> fetchFuture_;
-    folly::
-        F14FastMap<std::pair<uint64_t, uint64_t>, std::shared_ptr<ObjectSource>>
-            objects_;
-    folly::coro::UnboundedQueue<std::shared_ptr<ObjectSource>, true, true>
-        newObjects_;
-    GroupOrder groupOrder_;
-    folly::Optional<AbsoluteLocation> latest_;
-    folly::CancellationToken cancelToken_;
-    std::chrono::milliseconds objectTimeout_{std::chrono::hours(24)};
-    bool allDataReceived_{false};
-  };
-
-  folly::coro::Task<
-      folly::Expected<std::shared_ptr<TrackHandle>, SubscribeError>>
-  subscribe(SubscribeRequest sub);
+  using SubscribeResult = folly::Expected<SubscribeOk, SubscribeError>;
+  folly::coro::Task<SubscribeResult> subscribe(
+      SubscribeRequest sub,
+      std::shared_ptr<TrackConsumer> callback);
   std::shared_ptr<TrackConsumer> subscribeOk(SubscribeOk subOk);
   void subscribeError(SubscribeError subErr);
   void unsubscribe(Unsubscribe unsubscribe);
   void subscribeUpdate(SubscribeUpdate subUpdate);
 
-  folly::coro::Task<folly::Expected<std::shared_ptr<TrackHandle>, FetchError>>
-  fetch(Fetch fetch);
+  folly::coro::Task<folly::Expected<SubscribeID, FetchError>> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> fetchCallback);
   std::shared_ptr<FetchConsumer> fetchOk(FetchOk fetchOk);
   void fetchError(FetchError fetchError);
   void fetchCancel(FetchCancel fetchCancel);
-
-  class WebTransportException : public std::runtime_error {
-   public:
-    explicit WebTransportException(
-        proxygen::WebTransport::ErrorCode error,
-        const std::string& msg)
-        : std::runtime_error(msg), errorCode(error) {}
-
-    proxygen::WebTransport::ErrorCode errorCode;
-  };
 
   class PublisherImpl {
    public:
@@ -440,28 +258,60 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     close();
   }
 
+  // The following wrapper classes allow implementation details in the anonymous
+  // namespace can use parts of TrackReceiveState without making the entire
+  // class public.
+  class CallbackBase {
+   public:
+    CallbackBase() = default;
+    explicit CallbackBase(std::shared_ptr<TrackReceiveState> trackReceiveState)
+        : trackReceiveState_(std::move(trackReceiveState)) {}
+    operator bool() const {
+      return bool(trackReceiveState_);
+    }
+    folly::CancellationToken getCancelToken() const;
+
+   protected:
+    std::shared_ptr<TrackReceiveState> trackReceiveState_;
+  };
+
+  class SubscribeCallback : public CallbackBase {
+   public:
+    SubscribeCallback() = default;
+    explicit SubscribeCallback(
+        std::shared_ptr<TrackReceiveState> trackReceiveState)
+        : CallbackBase(std::move(trackReceiveState)) {}
+    std::shared_ptr<TrackConsumer> get() const;
+    void reset();
+  };
+
+  class FetchCallback : public CallbackBase {
+   public:
+    FetchCallback() = default;
+    explicit FetchCallback(std::shared_ptr<TrackReceiveState> trackReceiveState)
+        : CallbackBase(std::move(trackReceiveState)) {}
+    std::shared_ptr<FetchConsumer> get() const;
+    void reset();
+  };
+
+  SubscribeCallback getSubscribeCallback(TrackAlias trackAlias);
+  FetchCallback getFetchCallback(SubscribeID subscribeID);
+
  private:
   void cleanup();
 
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
-  folly::coro::Task<void> readLoop(
-      StreamType streamType,
+  folly::coro::Task<void> controlReadLoop(
+      proxygen::WebTransport::StreamReadHandle* readHandle);
+  folly::coro::Task<void> unidirectionalReadLoop(
+      std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
 
-  std::shared_ptr<TrackHandle> getTrack(TrackIdentifier trackidentifier);
   void subscribeDone(SubscribeDone subDone);
 
   void onClientSetup(ClientSetup clientSetup) override;
   void onServerSetup(ServerSetup setup) override;
-  void onObjectHeader(ObjectHeader objectHeader) override;
-  void onObjectPayload(
-      TrackIdentifier trackIdentifier,
-      uint64_t groupID,
-      uint64_t id,
-      std::unique_ptr<folly::IOBuf> payload,
-      bool eom) override;
-  void onFetchHeader(uint64_t) override {}
   void onSubscribe(SubscribeRequest subscribeRequest) override;
   void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
@@ -514,12 +364,135 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::coro::UnboundedQueue<MoQMessage, true, true> controlMessages_;
 
   // Subscriber State
+  class TrackReceiveState {
+   public:
+    TrackReceiveState(
+        FullTrackName fullTrackName,
+        SubscribeID subscribeID,
+        std::shared_ptr<TrackConsumer> callback,
+        std::shared_ptr<FetchConsumer> fetchCallback)
+        : callback_(std::move(callback)),
+          fetchCallback_(std::move(fetchCallback)),
+          fullTrackName_(std::move(fullTrackName)),
+          subscribeID_(subscribeID) {
+      auto contract = folly::coro::makePromiseContract<SubscribeResult>();
+      promise_ = std::move(contract.first);
+      future_ = std::move(contract.second);
+      auto contract2 = folly::coro::makePromiseContract<
+          folly::Expected<SubscribeID, FetchError>>();
+      fetchPromise_ = std::move(contract2.first);
+      fetchFuture_ = std::move(contract2.second);
+    }
+
+    void setTrackName(FullTrackName trackName) {
+      fullTrackName_ = std::move(trackName);
+    }
+
+    [[nodiscard]] const FullTrackName& fullTrackName() const {
+      return fullTrackName_;
+    }
+
+    [[nodiscard]] SubscribeID subscribeID() const {
+      return subscribeID_;
+    }
+
+    void setNewObjectTimeout(std::chrono::milliseconds objectTimeout) {
+      objectTimeout_ = objectTimeout;
+    }
+
+    folly::CancellationToken getCancelToken() {
+      return cancelSource_.getToken();
+    }
+
+    folly::coro::Task<SubscribeResult> ready() {
+      co_return co_await std::move(future_);
+    }
+
+    void removeCallback() {
+      callback_.reset();
+      fetchCallback_.reset();
+      cancelSource_.requestCancellation();
+    }
+    void subscribeOK(SubscribeOk subscribeOK) {
+      groupOrder_ = subscribeOK.groupOrder;
+      promise_.setValue(std::move(subscribeOK));
+    }
+    void subscribeError(SubscribeError subErr) {
+      XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
+      if (!promise_.isFulfilled()) {
+        subErr.subscribeID = subscribeID_;
+        promise_.setValue(folly::makeUnexpected(std::move(subErr)));
+      } else {
+        subscribeDone(
+            {subscribeID_,
+             SubscribeDoneStatusCode::INTERNAL_ERROR,
+             "closed locally",
+             folly::none});
+      }
+    }
+
+    void subscribeDone(SubscribeDone subDone) {
+      XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
+      if (callback_) {
+        callback_->subscribeDone(std::move(subDone));
+      } // else, unsubscribe raced with subscribeDone and callback was removed
+    }
+
+    folly::coro::Task<folly::Expected<SubscribeID, FetchError>> fetchReady() {
+      co_return co_await std::move(fetchFuture_);
+    }
+    void fetchOK() {
+      XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
+      fetchPromise_.setValue(subscribeID_);
+    }
+    void fetchError(FetchError fetchErr) {
+      if (!promise_.isFulfilled()) {
+        fetchErr.subscribeID = subscribeID_;
+        fetchPromise_.setValue(folly::makeUnexpected(std::move(fetchErr)));
+      } // there's likely a missing case here from shutdown
+    }
+
+    void setAllDataReceived() {
+      allDataReceived_ = true;
+    }
+
+    bool allDataReceived() const {
+      return allDataReceived_;
+    }
+
+    bool fetchOkReceived() const {
+      return fetchPromise_.isFulfilled();
+    }
+
+    // Accessed By SubscribeCallback/FetchCallback
+    std::shared_ptr<TrackConsumer> callback_;
+    std::shared_ptr<FetchConsumer> fetchCallback_;
+
+   private:
+    FullTrackName fullTrackName_;
+    SubscribeID subscribeID_;
+    folly::coro::Promise<SubscribeResult> promise_;
+    folly::coro::Future<SubscribeResult> future_;
+    using FetchResult = folly::Expected<SubscribeID, FetchError>;
+    folly::coro::Promise<FetchResult> fetchPromise_;
+    folly::coro::Future<FetchResult> fetchFuture_;
+    GroupOrder groupOrder_;
+    std::chrono::milliseconds objectTimeout_{std::chrono::hours(24)};
+    folly::CancellationSource cancelSource_;
+    bool allDataReceived_{false};
+  };
+
   // Track Alias -> Track Handle
-  folly::F14FastMap<TrackAlias, std::shared_ptr<TrackHandle>, TrackAlias::hash>
+  folly::F14FastMap<
+      TrackAlias,
+      std::shared_ptr<TrackReceiveState>,
+      TrackAlias::hash>
       subTracks_;
-  folly::
-      F14FastMap<SubscribeID, std::shared_ptr<TrackHandle>, SubscribeID::hash>
-          fetches_;
+  folly::F14FastMap<
+      SubscribeID,
+      std::shared_ptr<TrackReceiveState>,
+      SubscribeID::hash>
+      fetches_;
   folly::F14FastMap<SubscribeID, TrackAlias, SubscribeID::hash>
       subIdToTrackAlias_;
 
