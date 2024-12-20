@@ -107,92 +107,29 @@ class MoQFlvStreamerClient {
                    << ", to subID-TrackAlias: " << sub.second.subscribeID << "-"
                    << sub.second.trackAlias;
 
-        if (sub.second.fullTrackName == fullVideoTrackName_) {
+        if (sub.second.fullTrackName == fullVideoTrackName_ && videoPub_) {
           if (item->isEOF &&
               MoQFlvStreamerClient::isAnyElementSent(latestVideo_)) {
             // EOF detected and an some video element was sent, close group
-            ObjectHeader objHeaderEndOfGroup = {
-                sub.second.trackAlias,
-                latestVideo_.group,
-                0, // subgroup per group
-                latestVideo_.object++,
-                VIDEO_STREAM_PRIORITY,
-                ForwardPreference::Subgroup,
-                ObjectStatus::END_OF_GROUP};
-
-            XLOG(DBG1) << "Closing group because EOF. objHeader: "
-                       << objHeaderEndOfGroup;
-            moqClient_.getEventBase()->runInEventBaseThread(
-                [this,
-                 objHeaderEndOfGroup,
-                 subscribeID(sub.second.subscribeID)] {
-                  moqClient_.moqSession_->publishStatus(
-                      objHeaderEndOfGroup, subscribeID);
-                });
+            moqClient_.getEventBase()->runInEventBaseThread([this] {
+              latestVideo_.object++,
+                  XLOG(DBG1)
+                  << "Closing group because EOF. objId=" << latestVideo_.object;
+              if (videoSgPub_) {
+                videoSgPub_->endOfGroup(latestVideo_.object);
+                videoSgPub_.reset();
+              }
+            });
           }
 
           if (item->type == FlvSequentialReader::MediaType::VIDEO) {
             // Video
-            if (item->isIdr &&
-                MoQFlvStreamerClient::isAnyElementSent(latestVideo_)) {
-              // Close group
-              ObjectHeader objHeaderEndOfGroup = {
-                  sub.second.trackAlias,
-                  latestVideo_.group,
-                  0, // subgroup per group
-                  latestVideo_.object++,
-                  VIDEO_STREAM_PRIORITY,
-                  ForwardPreference::Subgroup,
-                  ObjectStatus::END_OF_GROUP};
-
-              XLOG(DBG1) << "Closing group because IDR. objHeader: "
-                         << objHeaderEndOfGroup;
-              moqClient_.getEventBase()->runInEventBaseThread(
-                  [this,
-                   objHeaderEndOfGroup,
-                   subscribeID(sub.second.subscribeID)] {
-                    moqClient_.moqSession_->publishStatus(
-                        objHeaderEndOfGroup, subscribeID);
-                  });
-
-              // Start new group
-              latestVideo_.group++;
-              latestVideo_.object = 0;
-            }
             moqClient_.getEventBase()->runInEventBaseThread(
-                [this,
-                 item,
-                 latestVideo(latestVideo_),
-                 trackAlias(sub.second.trackAlias),
-                 subscribeID(sub.second.subscribeID)] {
-                  auto objPayload = encodeToMoQMi(item);
-                  if (!objPayload) {
-                    XLOG(ERR) << "Failed to encode video frame";
-                  } else {
-                    ObjectHeader objHeader = ObjectHeader{
-                        trackAlias,
-                        latestVideo.group,
-                        0, // subgroup per group
-                        latestVideo.object,
-                        VIDEO_STREAM_PRIORITY,
-                        ForwardPreference::Subgroup,
-                        ObjectStatus::NORMAL,
-                        objPayload->computeChainDataLength()};
-
-                    XLOG(DBG1) << "Sending video frame" << objHeader
-                               << ", payload size: "
-                               << objPayload->computeChainDataLength();
-
-                    moqClient_.moqSession_->publish(
-                        objHeader, subscribeID, 0, std::move(objPayload), true);
-                  }
-                });
-
-            latestVideo_.object++;
+                [this, item]() mutable { publishVideoItem(std::move(item)); });
           }
         }
         if (sub.second.fullTrackName == fullAudioTrackName_ &&
-            item->type == FlvSequentialReader::MediaType::AUDIO) {
+            item->type == FlvSequentialReader::MediaType::AUDIO && audioPub_) {
           // Audio
           if (item->data) {
             // Send audio data in a thread (stream per object)
@@ -206,7 +143,7 @@ class MoQFlvStreamerClient {
                 ObjectStatus::NORMAL};
 
             moqClient_.getEventBase()->runInEventBaseThread(
-                [this, objHeader, item, subscribeID(sub.second.subscribeID)] {
+                [this, objHeader, item] {
                   auto objPayload = encodeToMoQMi(item);
                   if (!objPayload) {
                     XLOG(ERR) << "Failed to encode audio frame";
@@ -214,8 +151,7 @@ class MoQFlvStreamerClient {
                     XLOG(DBG1) << "Sending audio frame" << objHeader
                                << ", payload size: "
                                << objPayload->computeChainDataLength();
-                    moqClient_.moqSession_->publishStreamPerObject(
-                        objHeader, subscribeID, 0, std::move(objPayload), true);
+                    audioPub_->objectStream(objHeader, std::move(objPayload));
                   }
                 });
           }
@@ -227,6 +163,43 @@ class MoQFlvStreamerClient {
       }
     }
     co_return;
+  }
+
+  void publishVideoItem(std::shared_ptr<FlvSequentialReader::MediaItem> item) {
+    if (item->isIdr && MoQFlvStreamerClient::isAnyElementSent(latestVideo_) &&
+        videoSgPub_) {
+      // Close group
+      latestVideo_.object++,
+          XLOG(DBG1) << "Closing group because IDR. objHeader: "
+                     << latestVideo_.object;
+      videoSgPub_->endOfGroup(latestVideo_.object);
+      videoSgPub_.reset();
+
+      // Start new group
+      latestVideo_.group++;
+      latestVideo_.object = 0;
+    }
+    if (!videoSgPub_) {
+      auto res = videoPub_->beginSubgroup(
+          latestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
+      if (!res) {
+        XLOG(FATAL) << "Error creating subgroup";
+      }
+      videoSgPub_ = std::move(res.value());
+    }
+    auto objPayload = encodeToMoQMi(item);
+    if (!objPayload) {
+      XLOG(ERR) << "Failed to encode video frame";
+    } else {
+      XLOG(DBG1) << "Sending video frame={" << latestVideo_.group << ","
+                 << latestVideo_.object
+                 << "}, payload size: " << objPayload->computeChainDataLength();
+      videoSgPub_->object(
+          latestVideo_.object,
+          std::move(objPayload),
+          /*finSubgroup=*/false);
+    }
+    latestVideo_.object++;
   }
 
   folly::coro::Task<void> controlReadLoop() {
@@ -245,8 +218,10 @@ class MoQFlvStreamerClient {
         XLOG(INFO) << "SubscribeRequest";
         AbsoluteLocation latest_;
         // Track not available
+        bool isAudio = true;
         if (subscribeReq.fullTrackName == client_.fullVideoTrackName_) {
           latest_ = client_.latestVideo_;
+          isAudio = false;
         } else if (subscribeReq.fullTrackName == client_.fullAudioTrackName_) {
           latest_ = client_.latestAudio_;
         } else {
@@ -266,13 +241,18 @@ class MoQFlvStreamerClient {
         client_.subscriptions_[subscribeReq.subscribeID.value] = subscribeReq;
         XLOG(INFO) << "Subscribed " << subscribeReq.subscribeID;
 
-        client_.moqClient_.moqSession_->subscribeOk(
+        auto trackPub = client_.moqClient_.moqSession_->subscribeOk(
             {subscribeReq.subscribeID,
              std::chrono::milliseconds(0),
              MoQSession::resolveGroupOrder(
                  GroupOrder::OldestFirst, subscribeReq.groupOrder),
              latest_,
              {}});
+        if (isAudio) {
+          client_.audioPub_ = std::move(trackPub);
+        } else {
+          client_.videoPub_ = std::move(trackPub);
+        }
         return;
       }
 
@@ -360,6 +340,9 @@ class MoQFlvStreamerClient {
   AbsoluteLocation latestAudio_{0, 0};
 
   std::map<uint64_t, SubscribeRequest> subscriptions_;
+  std::shared_ptr<TrackConsumer> audioPub_;
+  std::shared_ptr<TrackConsumer> videoPub_;
+  std::shared_ptr<SubgroupConsumer> videoSgPub_;
 };
 } // namespace
 
