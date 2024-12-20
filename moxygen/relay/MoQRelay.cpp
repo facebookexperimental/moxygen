@@ -180,72 +180,44 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
     // TODO: we only subscribe with the downstream locations.
     subReq.priority = 1;
     subReq.groupOrder = GroupOrder::Default;
-    auto subRes = co_await upstreamSession->subscribe(subReq);
+    forwarder =
+        std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
+    // TODO: there's a race condition that the forwarder gets upstream objects
+    // before we add the downstream subscriber to it, below
+    auto subRes = co_await upstreamSession->subscribe(subReq, forwarder);
     if (subRes.hasError()) {
       session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
       co_return;
     }
-    forwarder = std::make_shared<MoQForwarder>(
-        subReq.fullTrackName, subRes.value()->latest());
-    forwarder->setGroupOrder(subRes.value()->groupOrder());
-    RelaySubscription rsub(
-        {forwarder,
-         upstreamSession,
-         (*subRes)->subscribeID(),
-         folly::CancellationSource()});
-    auto token = rsub.cancellationSource.getToken();
+    auto latest = subRes->latest;
+    if (latest) {
+      forwarder->updateLatest(latest->group, latest->object);
+    }
+    forwarder->setGroupOrder(subRes->groupOrder);
+    RelaySubscription rsub({forwarder, upstreamSession, subRes->subscribeID});
     subscriptions_[subReq.fullTrackName] = std::move(rsub);
-    folly::coro::co_withCancellation(
-        token, forwardTrack(subRes.value(), forwarder))
-        .scheduleOn(upstreamSession->getEventBase())
-        .start();
   } else {
     forwarder = subscriptionIt->second.forwarder;
   }
   // Add to subscribers list
   auto sessionPtr = session.get();
-  forwarder->addSubscriber(
-      std::move(session), subReq.subscribeID, subReq.trackAlias, subReq);
-  sessionPtr->subscribeOk(
+  auto trackPublisher = sessionPtr->subscribeOk(
       {subReq.subscribeID,
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(forwarder->groupOrder(), subGroupOrder),
        forwarder->latest()});
-}
-
-folly::coro::Task<void> MoQRelay::forwardTrack(
-    std::shared_ptr<MoQSession::TrackHandle> track,
-    std::shared_ptr<MoQForwarder> fowarder) {
-  while (auto obj = co_await track->objects().next()) {
-    XLOG(DBG1) << __func__ << " new object t=" << obj.value()->fullTrackName
-               << " g=" << obj.value()->header.group
-               << " o=" << obj.value()->header.id;
-    folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-    uint64_t payloadOffset = 0;
-    bool eom = false;
-    while (!eom) {
-      auto payload = co_await obj.value()->payloadQueue.dequeue();
-      if (payload) {
-        payloadBuf.append(std::move(payload));
-        XLOG(DBG1) << __func__
-                   << " object bytes, buflen now=" << payloadBuf.chainLength();
-      } else {
-        XLOG(DBG1) << __func__
-                   << " object eom, buflen now=" << payloadBuf.chainLength();
-        eom = true;
-      }
-      auto payloadLength = payloadBuf.chainLength();
-      if (eom || payloadOffset + payloadLength > 1280) {
-        fowarder->publish(
-            obj.value()->header, payloadBuf.move(), payloadOffset, eom);
-        payloadOffset += payloadLength;
-      } else {
-        XLOG(DBG1) << __func__
-                   << " Not publishing yet payloadOffset=" << payloadOffset
-                   << " payloadLength=" << payloadLength
-                   << " eom=" << uint64_t(eom);
-      }
-    }
+  if (trackPublisher) {
+    auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
+        std::move(session),
+        subReq.subscribeID,
+        subReq.trackAlias,
+        toSubscribeRange(subReq, forwarder->latest()),
+        std::move(trackPublisher),
+        MoQForwarder::Subscriber::SubgroupConsumerMap());
+    forwarder->addSubscriber(std::move(subscriber));
+  } else {
+    XLOG(ERR) << "Downstream subscribeOK failed";
+    // TODO: unsubsubscribe upstream
   }
 }
 
@@ -257,10 +229,14 @@ void MoQRelay::onUnsubscribe(
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
-    subscription.forwarder->removeSession(session, unsub.subscribeID);
+    subscription.forwarder->removeSession(
+        session,
+        {subscription.subscribeID,
+         SubscribeDoneStatusCode::UNSUBSCRIBED,
+         "",
+         subscription.forwarder->latest()});
     if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.cancellationSource.requestCancellation();
       subscription.upstream->unsubscribe({subscription.subscribeID});
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     } else {
@@ -312,9 +288,11 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
     if (subscription.upstream.get() == session.get()) {
-      subscription.forwarder->error(
-          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, "upstream disconnect");
-      subscription.cancellationSource.requestCancellation();
+      subscription.forwarder->subscribeDone(
+          {SubscribeID(0),
+           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+           "upstream disconnect",
+           subscription.forwarder->latest()});
     } else {
       subscription.forwarder->removeSession(session);
     }
