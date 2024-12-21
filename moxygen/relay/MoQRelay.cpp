@@ -204,25 +204,48 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
   }
   // Add to subscribers list
   auto sessionPtr = session.get();
-  forwarder->addSubscriber(
-      std::move(session), subReq.subscribeID, subReq.trackAlias, subReq);
-  sessionPtr->subscribeOk(
+  auto trackPublisher = sessionPtr->subscribeOk(
       {subReq.subscribeID,
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(forwarder->groupOrder(), subGroupOrder),
        forwarder->latest()});
+  if (trackPublisher) {
+    auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
+        std::move(session),
+        subReq.subscribeID,
+        subReq.trackAlias,
+        toSubscribeRange(subReq, forwarder->latest()),
+        std::move(trackPublisher),
+        MoQForwarder::Subscriber::SubgroupConsumerMap());
+    forwarder->addSubscriber(std::move(subscriber));
+  } else {
+    XLOG(ERR) << "Downstream subscribeOK failed";
+    // TODO: unsubsubscribe upstream
+  }
 }
 
 folly::coro::Task<void> MoQRelay::forwardTrack(
     std::shared_ptr<MoQSession::TrackHandle> track,
-    std::shared_ptr<MoQForwarder> fowarder) {
+    std::shared_ptr<MoQForwarder> forwarder) {
   while (auto obj = co_await track->objects().next()) {
     XLOG(DBG1) << __func__ << " new object t=" << obj.value()->fullTrackName
                << " g=" << obj.value()->header.group
                << " o=" << obj.value()->header.id;
     folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-    uint64_t payloadOffset = 0;
     bool eom = false;
+    // TODO: this is wrong - we're publishing each object in it's own subgroup
+    // stream now
+    auto res = forwarder->beginSubgroup(
+        obj.value()->header.group,
+        obj.value()->header.subgroup,
+        obj.value()->header.priority);
+    if (!res) {
+      XLOG(ERR) << "Failed to begin forwarding subgroup";
+      // TODO: error
+    }
+    auto subgroupPub = std::move(res.value());
+    subgroupPub->beginObject(
+        obj.value()->header.id, *obj.value()->header.length, nullptr);
     while (!eom) {
       auto payload = co_await obj.value()->payloadQueue.dequeue();
       if (payload) {
@@ -235,17 +258,15 @@ folly::coro::Task<void> MoQRelay::forwardTrack(
         eom = true;
       }
       auto payloadLength = payloadBuf.chainLength();
-      if (eom || payloadOffset + payloadLength > 1280) {
-        fowarder->publish(
-            obj.value()->header, payloadBuf.move(), payloadOffset, eom);
-        payloadOffset += payloadLength;
+      if (eom || payloadLength > 1280) {
+        subgroupPub->objectPayload(payloadBuf.move(), eom);
       } else {
         XLOG(DBG1) << __func__
-                   << " Not publishing yet payloadOffset=" << payloadOffset
-                   << " payloadLength=" << payloadLength
+                   << " Not publishing yet payloadLength=" << payloadLength
                    << " eom=" << uint64_t(eom);
       }
     }
+    subgroupPub.reset();
   }
 }
 
@@ -257,7 +278,12 @@ void MoQRelay::onUnsubscribe(
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
-    subscription.forwarder->removeSession(session, unsub.subscribeID);
+    subscription.forwarder->removeSession(
+        session,
+        {subscription.subscribeID,
+         SubscribeDoneStatusCode::UNSUBSCRIBED,
+         "",
+         subscription.forwarder->latest()});
     if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
       subscription.cancellationSource.requestCancellation();
@@ -312,8 +338,11 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
     if (subscription.upstream.get() == session.get()) {
-      subscription.forwarder->error(
-          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, "upstream disconnect");
+      subscription.forwarder->subscribeDone(
+          {SubscribeID(0),
+           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+           "upstream disconnect",
+           subscription.forwarder->latest()});
       subscription.cancellationSource.requestCancellation();
     } else {
       subscription.forwarder->removeSession(session);
