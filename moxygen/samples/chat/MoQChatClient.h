@@ -51,6 +51,7 @@ class MoQChatClient {
   MoQClient moqClient_;
   folly::Optional<SubscribeID> chatSubscribeID_;
   folly::Optional<TrackAlias> chatTrackAlias_;
+  std::shared_ptr<TrackConsumer> publisher_;
   uint64_t nextGroup_{0};
   struct UserTrack {
     std::string deviceId;
