@@ -103,12 +103,13 @@ void MoQCodec::onIngressEnd(
 
 void MoQObjectStreamCodec::onIngress(
     std::unique_ptr<folly::IOBuf> data,
-    bool eom) {
+    bool endOfStream) {
   onIngressStart(std::move(data));
   folly::io::Cursor cursor(ingress_.front());
+  bool isFetch = std::get_if<SubscribeID>(&curObjectHeader_.trackIdentifier);
   while (!connError_ &&
          ((ingress_.chainLength() > 0 && !cursor.isAtEnd())/* ||
-          (eom && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH)*/)) {
+          (endOfStream && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH)*/)) {
     switch (parseState_) {
       case ParseState::STREAM_HEADER_TYPE: {
         auto newCursor = cursor;
@@ -146,7 +147,12 @@ void MoQObjectStreamCodec::onIngress(
           connError_ = res.error();
           break;
         }
-        curObjectHeader_.trackIdentifier = SubscribeID(res.value());
+        auto subscribeID = SubscribeID(res.value());
+        curObjectHeader_.trackIdentifier = subscribeID;
+        isFetch = true;
+        if (callback_) {
+          callback_->onFetchHeader(subscribeID);
+        }
         parseState_ = ParseState::MULTI_OBJECT_HEADER;
         cursor = newCursor;
         break;
@@ -160,6 +166,16 @@ void MoQObjectStreamCodec::onIngress(
           break;
         }
         curObjectHeader_ = res.value();
+        auto trackAlias =
+            std::get_if<TrackAlias>(&curObjectHeader_.trackIdentifier);
+        XCHECK(trackAlias);
+        if (callback_) {
+          callback_->onSubgroup(
+              *trackAlias,
+              curObjectHeader_.group,
+              curObjectHeader_.subgroup,
+              curObjectHeader_.priority);
+        }
         parseState_ = ParseState::MULTI_OBJECT_HEADER;
         cursor = newCursor;
         [[fallthrough]];
@@ -174,20 +190,60 @@ void MoQObjectStreamCodec::onIngress(
           break;
         }
         curObjectHeader_ = res.value();
-        if (callback_) {
-          callback_->onObjectHeader(std::move(res.value()));
-        }
         cursor = newCursor;
         if (curObjectHeader_.status == ObjectStatus::NORMAL) {
-          parseState_ = ParseState::OBJECT_PAYLOAD;
+          XLOG(DBG2) << "Parsing object with length, need="
+                     << *curObjectHeader_.length
+                     << " have=" << cursor.totalLength();
+          std::unique_ptr<folly::IOBuf> payload;
+          auto chunkLen = cursor.cloneAtMost(payload, *curObjectHeader_.length);
+          auto endOfObject = chunkLen == *curObjectHeader_.length;
+          if (endOfStream && !endOfObject) {
+            connError_ = ErrorCode::PARSE_ERROR;
+            XLOG(DBG4) << __func__ << " " << uint32_t(*connError_);
+            break;
+          }
+          if (callback_) {
+            callback_->onObjectBegin(
+                curObjectHeader_.group,
+                curObjectHeader_.subgroup,
+                curObjectHeader_.id,
+                *curObjectHeader_.length,
+                std::move(payload),
+                endOfObject,
+                endOfStream && cursor.isAtEnd());
+          }
+          *curObjectHeader_.length -= chunkLen;
+          if (endOfObject) {
+            if (endOfStream && cursor.isAtEnd()) {
+              parseState_ = ParseState::STREAM_FIN_DELIVERED;
+            } else {
+              parseState_ = ParseState::MULTI_OBJECT_HEADER;
+            }
+            break;
+          } else {
+            parseState_ = ParseState::OBJECT_PAYLOAD;
+          }
         } else {
-          parseState_ = ParseState::MULTI_OBJECT_HEADER;
+          if (callback_) {
+            callback_->onObjectStatus(
+                curObjectHeader_.group,
+                curObjectHeader_.subgroup,
+                curObjectHeader_.id,
+                curObjectHeader_.status);
+          }
+          if (curObjectHeader_.status == ObjectStatus::END_OF_TRACK_AND_GROUP ||
+              (!isFetch &&
+               curObjectHeader_.status == ObjectStatus::END_OF_GROUP)) {
+            parseState_ = ParseState::STREAM_FIN_DELIVERED;
+          } else {
+            parseState_ = ParseState::MULTI_OBJECT_HEADER;
+          }
           break;
         }
         [[fallthrough]];
       }
       case ParseState::OBJECT_PAYLOAD: {
-        auto newCursor = cursor;
         // need to check for bufLen == 0?
         std::unique_ptr<folly::IOBuf> payload;
         // TODO: skip clone and do split
@@ -195,63 +251,41 @@ void MoQObjectStreamCodec::onIngress(
         XCHECK(curObjectHeader_.length);
         XLOG(DBG2) << "Parsing object with length, need="
                    << *curObjectHeader_.length;
-        if (ingress_.chainLength() > 0 && newCursor.canAdvance(1)) {
-          chunkLen = newCursor.cloneAtMost(payload, *curObjectHeader_.length);
+        if (ingress_.chainLength() > 0 && cursor.canAdvance(1)) {
+          chunkLen = cursor.cloneAtMost(payload, *curObjectHeader_.length);
         }
         *curObjectHeader_.length -= chunkLen;
-        if (eom && *curObjectHeader_.length != 0) {
+        if (endOfStream && *curObjectHeader_.length != 0) {
           connError_ = ErrorCode::PARSE_ERROR;
           XLOG(DBG4) << __func__ << " " << uint32_t(*connError_);
           break;
         }
         bool endOfObject = (*curObjectHeader_.length == 0);
         if (callback_ && (payload || endOfObject)) {
-          callback_->onObjectPayload(
-              curObjectHeader_.trackIdentifier,
-              curObjectHeader_.group,
-              curObjectHeader_.id,
-              std::move(payload),
-              endOfObject);
+          callback_->onObjectPayload(std::move(payload), endOfObject);
         }
         if (endOfObject) {
           parseState_ = ParseState::MULTI_OBJECT_HEADER;
         }
-        cursor = newCursor;
         break;
       }
-#if 0
-// This code is no longer reachable, but I'm leaving it here in case
-// the wire format changes back
-      case ParseState::OBJECT_PAYLOAD_NO_LENGTH: {
-        auto newCursor = cursor;
-        // need to check for bufLen == 0?
-        std::unique_ptr<folly::IOBuf> payload;
-        // TODO: skip clone and do split
-        if (ingress_.chainLength() > 0 && newCursor.canAdvance(1)) {
-          newCursor.cloneAtMost(payload, std::numeric_limits<uint64_t>::max());
-        }
-        XCHECK(!curObjectHeader_.length);
-        if (callback_ && (payload || eom)) {
-          callback_->onObjectPayload(
-              curObjectHeader_.trackIdentifier,
-              curObjectHeader_.group,
-              curObjectHeader_.id,
-              std::move(payload),
-              eom);
-        }
-        if (eom) {
-          parseState_ = ParseState::FRAME_HEADER_TYPE;
-        }
-        cursor = newCursor;
+      case ParseState::STREAM_FIN_DELIVERED: {
+        XLOG(DBG2) << "Bytes=" << cursor.totalLength()
+                   << " remaining in STREAM_FIN_DELIVERED";
+        connError_ = ErrorCode::PARSE_ERROR;
+        break;
       }
-#endif
     }
   }
   size_t remainingLength = 0;
-  if (!eom && !cursor.isAtEnd()) {
+  if (!endOfStream && !cursor.isAtEnd()) {
     remainingLength = cursor.totalLength(); // must be less than 1 message
   }
-  onIngressEnd(remainingLength, eom, callback_);
+  if (endOfStream && parseState_ != ParseState::STREAM_FIN_DELIVERED &&
+      !connError_ && callback_) {
+    callback_->onEndOfStream();
+  }
+  onIngressEnd(remainingLength, endOfStream, callback_);
 }
 
 folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(

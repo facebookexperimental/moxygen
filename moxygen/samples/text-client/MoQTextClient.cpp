@@ -7,6 +7,7 @@
 #include <folly/portability/GFlags.h>
 #include "moxygen/MoQClient.h"
 #include "moxygen/MoQLocation.h"
+#include "moxygen/ObjectReceiver.h"
 
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
@@ -66,6 +67,31 @@ SubParams flags2params() {
   return result;
 }
 
+class TextHandler : public ObjectReceiverCallback {
+ public:
+  ~TextHandler() override = default;
+  FlowControlState onObject(const ObjectHeader&, Payload payload) override {
+    if (payload) {
+      std::cout << payload->moveToFbString() << std::endl;
+    }
+    return FlowControlState::UNBLOCKED;
+  }
+  void onObjectStatus(const ObjectHeader& objHeader) override {
+    std::cout << "ObjectStatus=" << uint32_t(objHeader.status) << std::endl;
+  }
+  void onEndOfStream() override {}
+  void onError(ResetStreamErrorCode error) override {
+    std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;
+  }
+
+  void onSubscribeDone(SubscribeDone) override {
+    std::cout << __func__ << std::endl;
+    baton.post();
+  }
+
+  folly::coro::Baton baton;
+};
+
 class MoQTextClient {
  public:
   MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
@@ -92,11 +118,14 @@ class MoQTextClient {
       sub.locType = LocationType::LatestObject;
       sub.start = folly::none;
       sub.end = folly::none;
-      auto track = co_await moqClient_.moqSession_->subscribe(sub);
+      subTextHandler_ = std::make_shared<ObjectReceiver>(
+          ObjectReceiver::SUBSCRIBE, &textHandler_);
+      auto track =
+          co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
       if (track.hasValue()) {
-        subscribeID_ = track.value()->subscribeID();
+        subscribeID_ = track->subscribeID;
         XLOG(DBG1) << "subscribeID=" << subscribeID_;
-        auto latest = track.value()->latest();
+        auto latest = track->latest;
         if (latest) {
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
                      << "}";
@@ -112,6 +141,7 @@ class MoQTextClient {
               // The end is before latest, UNSUBSCRIBE
               XLOG(DBG1) << "end={" << range.end.group << ","
                          << range.end.object << "} before latest, unsubscribe";
+              textHandler_.baton.post();
               moqClient_.moqSession_->unsubscribe({subscribeID_});
               fetchEnd = range.end;
               if (fetchEnd.object == 0) {
@@ -122,6 +152,8 @@ class MoQTextClient {
               XLOG(DBG1) << "FETCH start={" << range.start.group << ","
                          << range.start.object << "} end={" << fetchEnd.group
                          << "," << fetchEnd.object << "}";
+              fetchTextHandler_ = std::make_shared<ObjectReceiver>(
+                  ObjectReceiver::FETCH, &textHandler_);
               auto fetchTrack = co_await moqClient_.moqSession_->fetch(
                   {SubscribeID(0),
                    sub.fullTrackName,
@@ -129,16 +161,13 @@ class MoQTextClient {
                    sub.groupOrder,
                    range.start,
                    fetchEnd,
-                   {}});
+                   {}},
+                  fetchTextHandler_);
               if (fetchTrack.hasError()) {
                 XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode
                           << " reason=" << fetchTrack.error().reasonPhrase;
               } else {
-                XLOG(DBG1) << "subscribeID="
-                           << fetchTrack.value()->subscribeID();
-                readTrack(std::move(fetchTrack.value()))
-                    .scheduleOn(exec)
-                    .start();
+                XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
               }
             }
           } // else we started from current or no content - nothing to FETCH
@@ -154,7 +183,6 @@ class MoQTextClient {
                  sub.params});
           }
         }
-        co_await readTrack(std::move(track.value()));
       } else {
         XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
                    << " code=" << track.error().errorCode
@@ -165,10 +193,13 @@ class MoQTextClient {
       XLOG(ERR) << ex.what();
       co_return;
     }
+    co_await textHandler_.baton;
     XLOG(INFO) << __func__ << " done";
   }
 
   void stop() {
+    textHandler_.baton.post();
+    // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
     moqClient_.moqSession_->unsubscribe({subscribeID_});
     moqClient_.moqSession_->close();
   }
@@ -191,10 +222,6 @@ class MoQTextClient {
             {subscribeReq.subscribeID, 404, "don't care"});
       }
 
-      void operator()(SubscribeDone) const override {
-        XLOG(INFO) << "SubscribeDone";
-      }
-
       void operator()(Goaway) const override {
         XLOG(INFO) << "Goaway";
         client_.moqClient_.moqSession_->unsubscribe({client_.subscribeID_});
@@ -214,22 +241,12 @@ class MoQTextClient {
     }
   }
 
-  folly::coro::Task<void> readTrack(
-      std::shared_ptr<MoQSession::TrackHandle> track) {
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    // TODO: check track.value()->getCancelToken()
-    while (auto obj = co_await track->objects().next()) {
-      auto payload = co_await obj.value()->payload();
-      if (payload) {
-        std::cout << payload->moveToFbString() << std::endl;
-      }
-    }
-  }
   MoQClient moqClient_;
   FullTrackName fullTrackName_;
   SubscribeID subscribeID_{0};
+  TextHandler textHandler_;
+  std::shared_ptr<ObjectReceiver> subTextHandler_;
+  std::shared_ptr<ObjectReceiver> fetchTextHandler_;
 };
 } // namespace
 

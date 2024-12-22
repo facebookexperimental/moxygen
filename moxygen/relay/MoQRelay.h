@@ -54,11 +54,7 @@ class MoQRelay {
     std::shared_ptr<MoQForwarder> forwarder;
     std::shared_ptr<MoQSession> upstream;
     SubscribeID subscribeID;
-    folly::CancellationSource cancellationSource;
   };
-  folly::coro::Task<void> forwardTrack(
-      std::shared_ptr<MoQSession::TrackHandle> track,
-      std::shared_ptr<MoQForwarder> forwarder);
 
   TrackNamespace allowedNamespacePrefix_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>

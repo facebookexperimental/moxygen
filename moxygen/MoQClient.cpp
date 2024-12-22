@@ -190,7 +190,8 @@ void MoQClient::HTTPHandler::onError(
 void MoQClient::onSessionEnd(folly::Optional<uint32_t>) {
   // TODO: cleanup?
   XLOG(DBG1) << "resetting moqSession_";
-  moqSession_.reset();
+  auto moqSession = std::move(moqSession_);
+  moqSession.reset();
   CHECK(!moqSession_);
 }
 

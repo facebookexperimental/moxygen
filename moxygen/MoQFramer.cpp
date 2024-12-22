@@ -353,6 +353,8 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     }
     objectHeader.status = ObjectStatus(objectStatus->first);
     length -= objectStatus->second;
+  } else {
+    objectHeader.status = ObjectStatus::NORMAL;
   }
 
   return objectHeader;
