@@ -164,17 +164,26 @@ class MoQSessionTest : public testing::Test,
   bool failServerSetup_{false};
 };
 
+namespace {
+// GCC barfs when using struct brace initializers inside a coroutine?
+// Helper function to make ClientSetup with MAX_SUBSCRIBE_ID
+moxygen::ClientSetup getClientSetup(uint64_t initialMaxSubscribeId) {
+  return ClientSetup{
+      .supportedVersions = {kVersionDraftCurrent},
+      .params = {
+          {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+            .asUint64 = initialMaxSubscribeId}}}};
+}
+} // namespace
+
 void MoQSessionTest::setupMoQSession() {
   clientSession_->start();
   serverSession_->start();
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession,
      uint64_t initialMaxSubscribeId) -> folly::coro::Task<void> {
-    auto serverSetup = co_await clientSession->setup(ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent},
-        .params = {
-            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = initialMaxSubscribeId}}}});
+    auto serverSetup =
+        co_await clientSession->setup(getClientSetup(initialMaxSubscribeId));
 
     EXPECT_EQ(serverSetup.selectedVersion, kVersionDraftCurrent);
     EXPECT_EQ(
@@ -201,8 +210,23 @@ TEST_F(MoQSessionTest, Setup) {
 }
 
 MATCHER_P(HasChainDataLengthOf, n, "") {
-  return arg->computeChainDataLength() == n;
+  return arg->computeChainDataLength() == uint64_t(n);
 }
+
+namespace {
+// GCC barfs when using struct brace initializers inside a coroutine?
+// Helper function to make a Fetch request
+Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
+  return Fetch{
+      SubscribeID(0),
+      FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+      0,
+      GroupOrder::OldestFirst,
+      start,
+      end,
+      {}};
+}
+} // namespace
 
 TEST_F(MoQSessionTest, Fetch) {
   setupMoQSession();
@@ -217,15 +241,7 @@ TEST_F(MoQSessionTest, Fetch) {
           baton.post();
           return folly::unit;
         }));
-    auto res = co_await session->fetch(
-        {SubscribeID(0),
-         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-         0,
-         GroupOrder::OldestFirst,
-         AbsoluteLocation{0, 0},
-         AbsoluteLocation{0, 1},
-         {}},
-        fetchCallback);
+    auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     co_await baton;
     session->close();
@@ -261,15 +277,7 @@ TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
-    auto res = co_await session->fetch(
-        {SubscribeID(0),
-         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-         0,
-         GroupOrder::OldestFirst,
-         AbsoluteLocation{0, 0},
-         AbsoluteLocation{0, 1},
-         {}},
-        fetchCallback);
+    auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     // publish here now we know FETCH_OK has been received at client
     XCHECK(fetchPub);
@@ -311,15 +319,7 @@ TEST_F(MoQSessionTest, FetchError) {
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
-    auto res = co_await session->fetch(
-        {SubscribeID(0),
-         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-         0,
-         GroupOrder::OldestFirst,
-         AbsoluteLocation{0, 1},
-         AbsoluteLocation{0, 0},
-         {}},
-        fetchCallback);
+    auto res = co_await session->fetch(getFetch({0, 1}, {0, 0}), fetchCallback);
     EXPECT_TRUE(res.hasError());
     EXPECT_EQ(
         res.error().errorCode,
@@ -346,15 +346,8 @@ TEST_F(MoQSessionTest, FetchCancel) {
     // TODO: fetchCancel removes the callback - should it also deliver a
     // reset() call to the callback?
     // EXPECT_CALL(*fetchCallback, reset(ResetStreamErrorCode::CANCELLED));
-    auto res = co_await clientSession->fetch(
-        {subscribeID,
-         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-         0,
-         GroupOrder::OldestFirst,
-         AbsoluteLocation{0, 0},
-         AbsoluteLocation{0, 2},
-         {}},
-        fetchCallback);
+    auto res =
+        co_await clientSession->fetch(getFetch({0, 0}, {0, 2}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     clientSession->fetchCancel({subscribeID});
     co_await folly::coro::co_reschedule_on_current_executor;
@@ -401,15 +394,8 @@ TEST_F(MoQSessionTest, FetchEarlyCancel) {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     SubscribeID subscribeID(0);
-    auto res = co_await clientSession->fetch(
-        {subscribeID,
-         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-         0,
-         GroupOrder::OldestFirst,
-         AbsoluteLocation{0, 0},
-         AbsoluteLocation{0, 2},
-         {}},
-        fetchCallback);
+    auto res =
+        co_await clientSession->fetch(getFetch({0, 0}, {0, 2}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     // TODO: this no-ops right now so there's nothing to verify
     clientSession->fetchCancel({subscribeID});
@@ -437,15 +423,7 @@ TEST_F(MoQSessionTest, FetchBadLength) {
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::NiceMock<MockFetchConsumer>>();
-    auto res = co_await session->fetch(
-        {SubscribeID(0),
-         FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-         0,
-         GroupOrder::OldestFirst,
-         AbsoluteLocation{0, 0},
-         AbsoluteLocation{0, 1},
-         {}},
-        fetchCallback);
+    auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     // FETCH_OK comes but the FETCH stream is reset and we timeout waiting
     // for a new object.
@@ -497,14 +475,7 @@ TEST_F(MoQSessionTest, FetchOverLimit) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     auto fetchCallback3 =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
-    Fetch fetch{
-        SubscribeID(0),
-        FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-        0,
-        GroupOrder::OldestFirst,
-        AbsoluteLocation{0, 0},
-        AbsoluteLocation{0, 1},
-        {}};
+    Fetch fetch = getFetch({0, 0}, {0, 1});
     auto res = co_await session->fetch(fetch, fetchCallback1);
     res = co_await session->fetch(fetch, fetchCallback2);
     res = co_await session->fetch(fetch, fetchCallback3);
@@ -583,8 +554,9 @@ TEST_F(MoQSessionTest, FetchBadID) {
 TEST_F(MoQSessionTest, SetupTimeout) {
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
-    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent}, .params = {}}));
+    ClientSetup setup;
+    setup.supportedVersions.push_back(kVersionDraftCurrent);
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(setup));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
@@ -597,8 +569,9 @@ TEST_F(MoQSessionTest, InvalidVersion) {
   clientSession_->start();
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
-    auto serverSetup = co_await co_awaitTry(clientSession->setup(
-        ClientSetup{.supportedVersions = {0xfaceb001}, .params = {}}));
+    ClientSetup setup;
+    setup.supportedVersions.push_back(0xfaceb001);
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(setup));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
@@ -612,8 +585,9 @@ TEST_F(MoQSessionTest, InvalidServerVersion) {
   clientSession_->start();
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
-    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent}, .params = {}}));
+    ClientSetup setup;
+    setup.supportedVersions.push_back(kVersionDraftCurrent);
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(setup));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
@@ -627,8 +601,9 @@ TEST_F(MoQSessionTest, ServerSetupFail) {
   clientSession_->start();
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession) -> folly::coro::Task<void> {
-    auto serverSetup = co_await co_awaitTry(clientSession->setup(ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent}, .params = {}}));
+    ClientSetup setup;
+    setup.supportedVersions.push_back(kVersionDraftCurrent);
+    auto serverSetup = co_await co_awaitTry(clientSession->setup(setup));
     EXPECT_TRUE(serverSetup.hasException());
     clientSession->close();
   }(clientSession_)
