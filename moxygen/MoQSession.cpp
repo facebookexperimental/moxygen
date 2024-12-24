@@ -344,10 +344,10 @@ folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::objectStream(
   switch (objHeader.status) {
     case ObjectStatus::NORMAL:
       return subgroup.value()->object(
-          objHeader.id, std::move(payload), /*finStream=*/true);
+          objHeader.id, std::move(payload), /*finSubgroup=*/true);
     case ObjectStatus::OBJECT_NOT_EXIST:
       return subgroup.value()->objectNotExists(
-          objHeader.id, /*finStream=*/true);
+          objHeader.id, /*finSubgroup=*/true);
     case ObjectStatus::GROUP_NOT_EXIST: {
       auto& subgroupPublisherImpl =
           static_cast<StreamPublisherImpl&>(*subgroup.value());
@@ -361,6 +361,8 @@ folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::objectStream(
     case ObjectStatus::END_OF_SUBGROUP:
       return subgroup.value()->endOfSubgroup();
   }
+  return folly::makeUnexpected(
+      MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
 }
 
 folly::Expected<folly::Unit, MoQPublishError>

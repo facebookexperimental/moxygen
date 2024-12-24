@@ -134,7 +134,7 @@ FlvReader::readNextTag() {
 uint8_t FlvReader::read1Byte() {
   uint8_t ret = 0;
   char tmp = 0;
-  size_t bytesToRead = 1;
+  const int64_t bytesToRead = 1;
   f_.read(&tmp, bytesToRead);
   if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
     ret = tmp;
@@ -151,7 +151,7 @@ uint8_t FlvReader::read1Byte() {
 
 uint32_t FlvReader::read3Bytes() {
   uint32_t ret = 0;
-  size_t bytesToRead = 3;
+  const int64_t bytesToRead = 3;
   uint8_t tmp[bytesToRead];
   f_.read((char*)tmp, bytesToRead);
   if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
@@ -171,7 +171,7 @@ uint32_t FlvReader::read3Bytes() {
 
 uint32_t FlvReader::read4Bytes() {
   uint32_t ret = 0;
-  size_t bytesToRead = 4;
+  const int64_t bytesToRead = 4;
   uint8_t tmp[bytesToRead];
   f_.read((char*)tmp, bytesToRead);
   if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
@@ -194,7 +194,11 @@ uint32_t FlvReader::read4Bytes() {
 
 std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
   std::unique_ptr<folly::IOBuf> ret;
-  size_t bytesToRead = n;
+  if (n > std::numeric_limits<int64_t>::max()) {
+    throw std::runtime_error(
+        fmt::format("Cannot read more than int64_t::max {}", n));
+  }
+  const int64_t bytesToRead = n;
   uint8_t tmp[bytesToRead];
   f_.read((char*)tmp, bytesToRead);
   if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {

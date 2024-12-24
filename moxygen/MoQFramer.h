@@ -231,7 +231,7 @@ using TrackIdentifier =
     std::variant<UnitializedIdentifier, TrackAlias, SubscribeID>;
 struct TrackIdentifierHash {
   size_t operator()(const TrackIdentifier& trackIdentifier) const {
-    XCHECK_GT(trackIdentifier.index(), 0);
+    XCHECK_GT(trackIdentifier.index(), 0llu);
     auto trackAlias = std::get_if<TrackAlias>(&trackIdentifier);
     if (trackAlias) {
       return folly::hash::hash_combine(
