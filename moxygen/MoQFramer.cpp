@@ -1056,7 +1056,8 @@ void writeSize(uint16_t* sizePtr, size_t size, bool& error) {
     error = true;
     return;
   }
-  *sizePtr = folly::Endian::big(uint16_t(0x4000 | size));
+  uint16_t sizeVal = folly::Endian::big(uint16_t(0x4000 | size));
+  memcpy(sizePtr, &sizeVal, 2);
 }
 
 void writeFullTrackName(
