@@ -56,6 +56,11 @@ class MoQForwarder : public TrackConsumer {
   };
   class SubgroupForwarder;
   struct Subscriber {
+    using SubgroupConsumerMap = folly::F14FastMap<
+      SubgroupIdentifier,
+      std::shared_ptr<SubgroupConsumer>,
+      SubgroupIdentifier::hash>;
+
     Subscriber(
         std::shared_ptr<MoQSession> s,
         SubscribeID& sid,
@@ -78,10 +83,6 @@ class MoQForwarder : public TrackConsumer {
     // Stores the SubgroupConsumer for this subscriber for all currently
     // publishing subgroups.  Having this state here makes it easy to remove
     // a Subscriber and all open subgroups.
-    using SubgroupConsumerMap = folly::F14FastMap<
-        SubgroupIdentifier,
-        std::shared_ptr<SubgroupConsumer>,
-        SubgroupIdentifier::hash>;
     SubgroupConsumerMap subgroups;
   };
 

@@ -529,12 +529,11 @@ echo "Current: $(pwd)"
 echo "Deps dir: $DEPS_DIR"
 echo "Prefix dir: $PREFIX"
 echo "MAYBE_BUILD_TESTS: $MAYBE_BUILD_TESTS"
-
+# XXX adding -std=c++20 also an option
 cmake                                     \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
   -DCMAKE_PREFIX_PATH="$DEPS_DIR"         \
   -DCMAKE_INSTALL_PREFIX="$PREFIX"        \
-# XXX adding -std=c++20 also an option
   -DCMAKE_CXX_STANDARD=20                 \
   "$MAYBE_BUILD_TESTS"                    \
   "$MAYBE_BUILD_FUZZERS"                  \
