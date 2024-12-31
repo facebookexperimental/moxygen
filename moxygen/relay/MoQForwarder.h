@@ -56,6 +56,20 @@ class MoQForwarder : public TrackConsumer {
   };
   class SubgroupForwarder;
   struct Subscriber {
+    Subscriber(
+        std::shared_ptr<MoQSession> s,
+        SubscribeID& sid,
+        TrackAlias& ta,
+        SubscribeRange r,
+        std::shared_ptr<TrackConsumer> tc,
+        SubgroupConsumerMap sg = {})
+        : session(std::move(s))
+        , subscribeID(sid)
+        , trackAlias(ta)
+        , range(r)
+        , trackConsumer(std::move(tc))
+        , subgroups(std::move(sg)) {}
+
     std::shared_ptr<MoQSession> session;
     SubscribeID subscribeID;
     TrackAlias trackAlias;
