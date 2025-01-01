@@ -6,6 +6,7 @@
 
 #include "moxygen/MoQSession.h"
 #include <folly/coro/BlockingWait.h>
+#include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
@@ -435,9 +436,10 @@ TEST_F(MoQSessionTest, FetchBadLength) {
           contract.first.setValue();
           return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
         });
+    folly::EventBaseThreadTimekeeper tk(*session->getEventBase());
     EXPECT_THROW(
         co_await folly::coro::timeout(
-            std::move(contract.second), std::chrono::milliseconds(100)),
+            std::move(contract.second), std::chrono::milliseconds(100), &tk),
         folly::FutureTimeout);
     session->close();
   };
@@ -519,6 +521,7 @@ TEST_F(MoQSessionTest, FetchBadID) {
   eventBase_.loopOnce();
   serverSession_->fetchError({SubscribeID(2000), 500, "local write failed"});
   eventBase_.loopOnce();
+  serverSession_->close();
   // These are no-ops
 }
 

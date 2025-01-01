@@ -1087,10 +1087,14 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
 folly::coro::AsyncGenerator<MoQSession::MoQMessage>
 MoQSession::controlMessages() {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  auto self = shared_from_this();
   while (true) {
-    auto message =
-        co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
-            cancellationSource_.getToken(), controlMessages_.dequeue()));
+    auto token = cancellationSource_.getToken();
+    auto message = co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(token, controlMessages_.dequeue()));
+    if (token.isCancellationRequested()) {
+      co_return;
+    }
     if (message.hasException()) {
       XLOG(ERR) << message.exception().what() << " sess=" << this;
       break;
