@@ -212,8 +212,7 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
         subReq.subscribeID,
         subReq.trackAlias,
         toSubscribeRange(subReq, forwarder->latest()),
-        std::move(trackPublisher),
-        MoQForwarder::Subscriber::SubgroupConsumerMap());
+        std::move(trackPublisher));
     forwarder->addSubscriber(std::move(subscriber));
   } else {
     XLOG(ERR) << "Downstream subscribeOK failed";
