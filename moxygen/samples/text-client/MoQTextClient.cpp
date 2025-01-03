@@ -190,7 +190,7 @@ class MoQTextClient {
       }
       moqClient_.moqSession_->drain();
     } catch (const std::exception& ex) {
-      XLOG(ERR) << ex.what();
+      XLOG(ERR) << folly::exceptionStr(ex);
       co_return;
     }
     co_await textHandler_.baton;

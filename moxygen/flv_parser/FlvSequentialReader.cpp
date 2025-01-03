@@ -137,7 +137,7 @@ FlvSequentialReader::getNextItem() {
         XLOG(WARNING) << "Read UNKNOWN tag " << std::get<0>(tag)->type;
       }
     } catch (std::exception& ex) {
-      XLOG(ERR) << "Error processing tag. Ex: " << ex.what();
+      XLOG(ERR) << "Error processing tag. Ex: " << folly::exceptionStr(ex);
       ret = nullptr;
       break;
     }
@@ -168,7 +168,7 @@ bool FlvSequentialReader::parseAscHeader(std::unique_ptr<folly::IOBuf> buf) {
     }
     numChannels_ = br.getNextBits(4); // numChannels
   } catch (std::exception& ex) {
-    XLOG(ERR) << "Failed parsing ASC header: " << ex.what();
+    XLOG(ERR) << "Failed parsing ASC header: " << folly::exceptionStr(ex);
     return false;
   }
 

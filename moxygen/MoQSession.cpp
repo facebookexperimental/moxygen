@@ -981,7 +981,8 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
       } else if (res.tryGetExceptionObject<folly::OperationCancelled>()) {
         co_return;
       } else if (res.hasException()) {
-        XLOG(ERR) << "Unexpected exception: " << res.exception().what();
+        XLOG(ERR) << "Unexpected exception: "
+                  << folly::exceptionStr(res.exception());
         co_return;
       }
     }
@@ -1028,7 +1029,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   }
   if (serverSetup.hasException()) {
     close();
-    XLOG(ERR) << "Setup Failed: " << serverSetup.exception().what();
+    XLOG(ERR) << "Setup Failed: "
+              << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
   }
   setupComplete_ = true;
@@ -1096,7 +1098,7 @@ MoQSession::controlMessages() {
       co_return;
     }
     if (message.hasException()) {
-      XLOG(ERR) << message.exception().what() << " sess=" << this;
+      XLOG(ERR) << folly::exceptionStr(message.exception()) << " sess=" << this;
       break;
     }
     co_yield *message;
@@ -1120,15 +1122,16 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     auto streamData = co_await folly::coro::co_awaitTry(
         readHandle->readStreamData().via(evb_));
     if (streamData.hasException()) {
-      XLOG(ERR) << streamData.exception().what() << " id=" << streamId
-                << " sess=" << this;
+      XLOG(ERR) << folly::exceptionStr(streamData.exception())
+                << " id=" << streamId << " sess=" << this;
       break;
     } else {
       if (streamData->data || streamData->fin) {
         try {
           codec.onIngress(std::move(streamData->data), streamData->fin);
         } catch (const std::exception& ex) {
-          XLOG(FATAL) << "exception thrown from onIngress ex=" << ex.what();
+          XLOG(FATAL) << "exception thrown from onIngress ex="
+                      << folly::exceptionStr(ex);
         }
       }
       fin = streamData->fin;
@@ -1446,7 +1449,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
             folly::coro::toTaskInterruptOnCancel(
                 readHandle->readStreamData().via(evb_))));
     if (streamData.hasException()) {
-      XLOG(ERR) << streamData.exception().what() << " id=" << id
+      XLOG(ERR) << folly::exceptionStr(streamData.exception()) << " id=" << id
                 << " sess=" << this;
       ResetStreamErrorCode errorCode{ResetStreamErrorCode::INTERNAL_ERROR};
       auto wtEx =
@@ -1454,7 +1457,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       if (wtEx) {
         errorCode = ResetStreamErrorCode(wtEx->error);
       } else {
-        XLOG(ERR) << streamData.exception().what();
+        XLOG(ERR) << folly::exceptionStr(streamData.exception());
       }
       if (!dcb.reset(errorCode)) {
         XLOG(ERR) << __func__ << " terminating for unknown "
@@ -1469,11 +1472,13 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
           codec.onIngress(std::move(streamData->data), streamData->fin);
           err = dcb.error();
         } catch (const std::exception& ex) {
-          err = MoQPublishError(MoQPublishError::CANCELLED, ex.what());
+          err = MoQPublishError(
+              MoQPublishError::CANCELLED,
+              folly::exceptionStr(ex).toStdString());
         }
         XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
         if (err) {
-          XLOG(ERR) << "Error parsing/consuming stream, err=" << err->what()
+          XLOG(ERR) << "Error parsing/consuming stream, " << err->describe()
                     << " id=" << id << " sess=" << this;
           if (!fin) {
             readHandle->stopSending(/*error=*/0);

@@ -75,7 +75,7 @@ class MoQFlvStreamerClient {
                    << " reason=" << annResp.error().reasonPhrase;
       }
     } catch (const std::exception& ex) {
-      XLOG(ERR) << ex.what();
+      XLOG(ERR) << folly::exceptionStr(ex);
       co_return;
     }
     XLOG(INFO) << __func__ << " done";

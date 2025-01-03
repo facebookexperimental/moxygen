@@ -178,12 +178,12 @@ void MoQClient::HTTPHandler::onError(
     const proxygen::HTTPException& ex) noexcept {
   XLOG(DBG1) << __func__;
   if (!wtContract.first.isFulfilled()) {
-    wtContract.first.setException(std::runtime_error(
-        fmt::format("Error setting up WebTransport: {0}", ex.what())));
+    wtContract.first.setException(std::runtime_error(fmt::format(
+        "Error setting up WebTransport: {0}", folly::exceptionStr(ex))));
     return;
   }
   // the moq session has been torn down...
-  XLOG(ERR) << ex.what();
+  XLOG(ERR) << folly::exceptionStr(ex);
   client_.onSessionEnd(folly::none);
 }
 

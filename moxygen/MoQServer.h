@@ -87,7 +87,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     }
     void onUpgrade(proxygen::UpgradeProtocol) noexcept override {}
     void onError(const proxygen::HTTPException& error) noexcept override {
-      XLOG(ERR) << error.what();
+      XLOG(ERR) << folly::exceptionStr(error);
       server_.terminateClientSession(std::move(clientSession_));
     }
     void onEgressPaused() noexcept override {}
