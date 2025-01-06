@@ -746,18 +746,16 @@ class MoQSession::SubscribeTrackReceiveState
       SubscribeID subscribeID,
       std::shared_ptr<TrackConsumer> callback)
       : TrackReceiveStateBase(std::move(fullTrackName), subscribeID),
-        callback_(std::move(callback)) {
+        callback_(std::move(callback)) {}
+
+  folly::coro::Future<SubscribeResult> subscribeFuture() {
     auto contract = folly::coro::makePromiseContract<SubscribeResult>();
     promise_ = std::move(contract.first);
-    future_ = std::move(contract.second);
+    return std::move(contract.second);
   }
 
   [[nodiscard]] const FullTrackName& fullTrackName() const {
     return fullTrackName_;
-  }
-
-  folly::coro::Task<SubscribeResult> ready() {
-    co_return co_await std::move(future_);
   }
 
   std::shared_ptr<TrackConsumer> getSubscribeCallback() const {
@@ -801,7 +799,6 @@ class MoQSession::SubscribeTrackReceiveState
  private:
   std::shared_ptr<TrackConsumer> callback_;
   folly::coro::Promise<SubscribeResult> promise_;
-  folly::coro::Future<SubscribeResult> future_;
 };
 
 class MoQSession::FetchTrackReceiveState
@@ -813,10 +810,12 @@ class MoQSession::FetchTrackReceiveState
       SubscribeID subscribeID,
       std::shared_ptr<FetchConsumer> fetchCallback)
       : TrackReceiveStateBase(std::move(fullTrackName), subscribeID),
-        callback_(std::move(fetchCallback)) {
+        callback_(std::move(fetchCallback)) {}
+
+  folly::coro::Future<FetchResult> fetchFuture() {
     auto contract = folly::coro::makePromiseContract<FetchResult>();
     promise_ = std::move(contract.first);
-    future_ = std::move(contract.second);
+    return std::move(contract.second);
   }
 
   std::shared_ptr<FetchConsumer> getFetchCallback() const {
@@ -834,10 +833,6 @@ class MoQSession::FetchTrackReceiveState
   void cancel(const std::shared_ptr<MoQSession>& session) {
     cancelSource_.requestCancellation();
     resetFetchCallback(session);
-  }
-
-  folly::coro::Task<FetchResult> ready() {
-    co_return co_await std::move(future_);
   }
 
   void fetchOK() {
@@ -859,7 +854,6 @@ class MoQSession::FetchTrackReceiveState
  private:
   std::shared_ptr<FetchConsumer> callback_;
   folly::coro::Promise<FetchResult> promise_;
-  folly::coro::Future<FetchResult> future_;
 };
 
 using folly::coro::co_awaitTry;
@@ -1924,7 +1918,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQSession::subscribe(
   XCHECK(subTrack.second) << "Track alias already in use alias=" << trackAlias
                           << " sess=" << this;
 
-  auto res2 = co_await trackReceiveState->ready();
+  auto res2 = co_await trackReceiveState->subscribeFuture();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " subscribeID=" << subID;
   if (res2.hasValue()) {
@@ -2132,7 +2126,7 @@ folly::coro::Task<folly::Expected<SubscribeID, FetchError>> MoQSession::fetch(
   auto fetchTrack = fetches_.try_emplace(subID, trackReceiveState);
   XCHECK(fetchTrack.second)
       << "SubscribeID already in use id=" << subID << " sess=" << this;
-  auto res = co_await trackReceiveState->ready();
+  auto res = co_await trackReceiveState->fetchFuture();
   XLOG(DBG1) << __func__
              << " fetchReady trackReceiveState=" << trackReceiveState;
   co_return res;
