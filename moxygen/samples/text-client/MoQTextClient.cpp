@@ -155,13 +155,13 @@ class MoQTextClient {
               fetchTextHandler_ = std::make_shared<ObjectReceiver>(
                   ObjectReceiver::FETCH, &textHandler_);
               auto fetchTrack = co_await moqClient_.moqSession_->fetch(
-                  {SubscribeID(0),
-                   sub.fullTrackName,
-                   sub.priority,
-                   sub.groupOrder,
-                   range.start,
-                   fetchEnd,
-                   {}},
+                  Fetch(
+                      SubscribeID(0),
+                      sub.fullTrackName,
+                      sub.priority,
+                      sub.groupOrder,
+                      range.start,
+                      fetchEnd),
                   fetchTextHandler_);
               if (fetchTrack.hasError()) {
                 XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode

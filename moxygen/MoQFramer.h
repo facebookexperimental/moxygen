@@ -580,6 +580,22 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
     size_t length) noexcept;
 
 struct Fetch {
+  Fetch() = default;
+  Fetch(
+      SubscribeID su,
+      FullTrackName n,
+      uint8_t p,
+      GroupOrder g,
+      AbsoluteLocation st,
+      AbsoluteLocation e,
+      std::vector<TrackRequestParameter> pa = {})
+      : subscribeID(su),
+        fullTrackName(std::move(n)),
+        priority(p),
+        groupOrder(g),
+        start(st),
+        end(e),
+        params(std::move(pa)) {}
   SubscribeID subscribeID;
   FullTrackName fullTrackName;
   uint8_t priority;

@@ -218,14 +218,13 @@ namespace {
 // GCC barfs when using struct brace initializers inside a coroutine?
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
-  return Fetch{
+  return Fetch(
       SubscribeID(0),
       FullTrackName{TrackNamespace{{"foo"}}, "bar"},
       0,
       GroupOrder::OldestFirst,
       start,
-      end,
-      {}};
+      end);
 }
 } // namespace
 
