@@ -1485,7 +1485,8 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
 }
 
 void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ftn=" << subscribeRequest.fullTrackName
+             << " sess=" << this;
   const auto subscribeID = subscribeRequest.subscribeID;
   if (closeSessionIfSubscribeIdInvalid(subscribeID)) {
     return;
@@ -1517,7 +1518,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
 }
 
 void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.subscribeID
+             << " sess=" << this;
   const auto subscribeID = subscribeUpdate.subscribeID;
   auto it = pubTracks_.find(subscribeID);
   if (it == pubTracks_.end()) {
@@ -1534,14 +1536,15 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
 }
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << unsubscribe.subscribeID
+             << " sess=" << this;
   // How does this impact pending subscribes?
   // and open TrackReceiveStates
   controlMessages_.enqueue(std::move(unsubscribe));
 }
 
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << subOk.subscribeID << " sess=" << this;
   auto trackAliasIt = subIdToTrackAlias_.find(subOk.subscribeID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
@@ -1558,7 +1561,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << subErr.subscribeID << " sess=" << this;
   auto trackAliasIt = subIdToTrackAlias_.find(subErr.subscribeID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
@@ -1626,7 +1629,7 @@ void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
 }
 
 void MoQSession::onFetch(Fetch fetch) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ftn=" << fetch.fullTrackName << " sess=" << this;
   const auto subscribeID = fetch.subscribeID;
   if (closeSessionIfSubscribeIdInvalid(subscribeID)) {
     return;
@@ -1652,7 +1655,8 @@ void MoQSession::onFetch(Fetch fetch) {
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << fetchCancel.subscribeID
+             << " sess=" << this;
   auto pubTrackIt = pubTracks_.find(fetchCancel.subscribeID);
   if (pubTrackIt == pubTracks_.end()) {
     XLOG(DBG4) << "No publish key for fetch id=" << fetchCancel.subscribeID
@@ -1669,7 +1673,7 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
 }
 
 void MoQSession::onFetchOk(FetchOk fetchOk) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << fetchOk.subscribeID << " sess=" << this;
   auto fetchIt = fetches_.find(fetchOk.subscribeID);
   if (fetchIt == fetches_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << fetchOk.subscribeID
@@ -1685,7 +1689,8 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
 }
 
 void MoQSession::onFetchError(FetchError fetchError) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << fetchError.subscribeID
+             << " sess=" << this;
   auto fetchIt = fetches_.find(fetchError.subscribeID);
   if (fetchIt == fetches_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << fetchError.subscribeID
@@ -1698,12 +1703,12 @@ void MoQSession::onFetchError(FetchError fetchError) {
 }
 
 void MoQSession::onAnnounce(Announce ann) {
-  XLOG(DBG1) << __func__ << " sess=" << this << " ns=" << ann.trackNamespace;
+  XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   controlMessages_.enqueue(std::move(ann));
 }
 
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
   auto annIt = pendingAnnounce_.find(annOk.trackNamespace);
   if (annIt == pendingAnnounce_.end()) {
     // unknown
@@ -1716,7 +1721,8 @@ void MoQSession::onAnnounceOk(AnnounceOk annOk) {
 }
 
 void MoQSession::onAnnounceError(AnnounceError announceError) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
+             << " sess=" << this;
   auto annIt = pendingAnnounce_.find(announceError.trackNamespace);
   if (annIt == pendingAnnounce_.end()) {
     // unknown
@@ -1729,22 +1735,25 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
 }
 
 void MoQSession::onUnannounce(Unannounce unAnn) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
   controlMessages_.enqueue(std::move(unAnn));
 }
 
 void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
+             << " sess=" << this;
   controlMessages_.enqueue(std::move(announceCancel));
 }
 
 void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
+             << " sess=" << this;
   controlMessages_.enqueue(std::move(sa));
 }
 
 void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
+             << " sess=" << this;
   auto saIt = pendingSubscribeAnnounces_.find(saOk.trackNamespacePrefix);
   if (saIt == pendingSubscribeAnnounces_.end()) {
     // unknown
@@ -1758,7 +1767,9 @@ void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
 
 void MoQSession::onSubscribeAnnouncesError(
     SubscribeAnnouncesError subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__
+             << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
+             << " sess=" << this;
   auto saIt = pendingSubscribeAnnounces_.find(
       subscribeAnnouncesError.trackNamespacePrefix);
   if (saIt == pendingSubscribeAnnounces_.end()) {
@@ -1774,17 +1785,21 @@ void MoQSession::onSubscribeAnnouncesError(
 }
 
 void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " prefix=" << unsub.trackNamespacePrefix
+             << " sess=" << this;
   controlMessages_.enqueue(std::move(unsub));
 }
 
 void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
+             << " sess=" << this;
   controlMessages_.enqueue(std::move(trackStatusRequest));
 }
 
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
+             << " code=" << uint64_t(trackStatus.statusCode)
+             << " sess=" << this;
   controlMessages_.enqueue(std::move(trackStatus));
 }
 
@@ -1801,7 +1816,7 @@ void MoQSession::onConnectionError(ErrorCode error) {
 
 folly::coro::Task<folly::Expected<AnnounceOk, AnnounceError>>
 MoQSession::announce(Announce ann) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   auto trackNamespace = ann.trackNamespace;
   auto res = writeAnnounce(controlWriteBuf_, std::move(ann));
   if (!res) {
@@ -1818,7 +1833,7 @@ MoQSession::announce(Announce ann) {
 }
 
 void MoQSession::announceOk(AnnounceOk annOk) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
   auto res = writeAnnounceOk(controlWriteBuf_, std::move(annOk));
   if (!res) {
     XLOG(ERR) << "writeAnnounceOk failed sess=" << this;
@@ -1828,7 +1843,8 @@ void MoQSession::announceOk(AnnounceOk annOk) {
 }
 
 void MoQSession::announceError(AnnounceError announceError) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
+             << " sess=" << this;
   auto res = writeAnnounceError(controlWriteBuf_, std::move(announceError));
   if (!res) {
     XLOG(ERR) << "writeAnnounceError failed sess=" << this;
@@ -1838,7 +1854,7 @@ void MoQSession::announceError(AnnounceError announceError) {
 }
 
 void MoQSession::unannounce(Unannounce unann) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
   auto trackNamespace = unann.trackNamespace;
   auto res = writeUnannounce(controlWriteBuf_, std::move(unann));
   if (!res) {
@@ -1850,7 +1866,8 @@ void MoQSession::unannounce(Unannounce unann) {
 folly::coro::Task<
     folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
 MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
+             << " sess=" << this;
   auto trackNamespace = sa.trackNamespacePrefix;
   auto res = writeSubscribeAnnounces(controlWriteBuf_, std::move(sa));
   if (!res) {
@@ -1867,7 +1884,8 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
 }
 
 void MoQSession::subscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
+             << " sess=" << this;
   auto res = writeSubscribeAnnouncesOk(controlWriteBuf_, std::move(saOk));
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnouncesOk failed sess=" << this;
@@ -1878,7 +1896,9 @@ void MoQSession::subscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
 
 void MoQSession::subscribeAnnouncesError(
     SubscribeAnnouncesError subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
+  XLOG(DBG1) << __func__
+             << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
+             << " sess=" << this;
   auto res = writeSubscribeAnnouncesError(
       controlWriteBuf_, std::move(subscribeAnnouncesError));
   if (!res) {
