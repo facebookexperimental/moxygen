@@ -201,7 +201,7 @@ class MoQTextClient {
     textHandler_.baton.post();
     // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
     moqClient_.moqSession_->unsubscribe({subscribeID_});
-    moqClient_.moqSession_->close();
+    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
 
   folly::coro::Task<void> controlReadLoop() {

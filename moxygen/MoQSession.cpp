@@ -783,7 +783,7 @@ class MoQSession::SubscribeTrackReceiveState
     } else {
       subscribeDone(
           {subscribeID_,
-           SubscribeDoneStatusCode::INTERNAL_ERROR,
+           SubscribeDoneStatusCode::SESSION_CLOSED,
            "closed locally",
            folly::none});
     }
@@ -936,11 +936,11 @@ void MoQSession::drain() {
 
 void MoQSession::checkForCloseOnDrain() {
   if (draining_ && fetches_.empty() && subTracks_.empty()) {
-    close();
+    close(SessionCloseErrorCode::NO_ERROR);
   }
 }
 
-void MoQSession::close(folly::Optional<SessionCloseErrorCode> error) {
+void MoQSession::close(SessionCloseErrorCode error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (wt_) {
     // TODO: The error code should be propagated to
@@ -951,10 +951,7 @@ void MoQSession::close(folly::Optional<SessionCloseErrorCode> error) {
 
     cleanup();
 
-    wt->closeSession(
-        error.has_value()
-            ? folly::make_optional(folly::to_underlying(error.value()))
-            : folly::none);
+    wt->closeSession(folly::to_underlying(error));
     XLOG(DBG1) << "requestCancellation from close sess=" << this;
     cancellationSource_.requestCancellation();
   }
@@ -1022,7 +1019,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
   }
   if (serverSetup.hasException()) {
-    close();
+    close(SessionCloseErrorCode::INTERNAL_ERROR);
     XLOG(ERR) << "Setup Failed: "
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
@@ -1037,7 +1034,7 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
   if (serverSetup.selectedVersion != kVersionDraftCurrent) {
     XLOG(ERR) << "Invalid version = " << serverSetup.selectedVersion
               << " sess=" << this;
-    close();
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     setupPromise_.setException(std::runtime_error("Invalid version"));
     return;
   }
@@ -1056,7 +1053,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     for (auto v : clientSetup.supportedVersions) {
       XLOG(ERR) << "client sent=" << v << " sess=" << this;
     }
-    close();
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
   peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
@@ -1064,7 +1061,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
   if (!serverSetup.hasValue()) {
     XLOG(ERR) << "Server setup callback failed sess=" << this;
-    close();
+    close(SessionCloseErrorCode::INTERNAL_ERROR);
     return;
   }
 
@@ -1810,8 +1807,11 @@ void MoQSession::onGoaway(Goaway goaway) {
 
 void MoQSession::onConnectionError(ErrorCode error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  XLOG(ERR) << "err=" << folly::to_underlying(error);
-  // TODO
+  XLOG(ERR) << "MoQCodec control stream parse error err="
+            << folly::to_underlying(error);
+  // TODO: This error is coming from MoQCodec -- do we need a better
+  // error code?
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
 folly::coro::Task<folly::Expected<AnnounceOk, AnnounceError>>
@@ -2225,7 +2225,7 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (!setupComplete_) {
     XLOG(ERR) << "Uni stream before setup complete sess=" << this;
-    close();
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
   // maybe not STREAM_HEADER_SUBGROUP, but at least not control

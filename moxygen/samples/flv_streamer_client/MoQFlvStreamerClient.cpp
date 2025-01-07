@@ -85,7 +85,7 @@ class MoQFlvStreamerClient {
     XLOG(INFO) << __func__;
     if (moqClient_.moqSession_) {
       moqClient_.moqSession_->unannounce({trackNamespace_});
-      moqClient_.moqSession_->close();
+      moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
     }
   }
 

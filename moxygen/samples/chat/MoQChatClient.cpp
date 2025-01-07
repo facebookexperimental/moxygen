@@ -157,7 +157,7 @@ void MoQChatClient::publishLoop() {
     moqClient_.getEventBase()->runInEventBaseThread([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
-        moqClient_.moqSession_->close();
+        moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
         moqClient_.moqSession_.reset();
       } else if (chatSubscribeID_) {
         if (publisher_) {

@@ -59,7 +59,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   void start();
   void drain();
-  void close(folly::Optional<SessionCloseErrorCode> error = folly::none);
+  void close(SessionCloseErrorCode error);
 
   folly::coro::Task<ServerSetup> setup(ClientSetup setup);
   folly::coro::Task<void> clientSetupComplete() {
@@ -250,9 +250,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
   void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) override;
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) override;
-  void onSessionEnd(folly::Optional<uint32_t>) override {
-    XLOG(DBG1) << __func__ << " sess=" << this;
-    close();
+  void onSessionEnd(folly::Optional<uint32_t> err) override {
+    XLOG(DBG1) << __func__ << "err="
+               << (err ? folly::to<std::string>(*err) : std::string("none"))
+               << " sess=" << this;
+    // The peer closed us, but we can close with NO_ERROR
+    close(SessionCloseErrorCode::NO_ERROR);
   }
 
   class TrackReceiveStateBase;

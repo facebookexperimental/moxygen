@@ -62,7 +62,9 @@ enum class SubscribeDoneStatusCode : uint32_t {
   TRACK_ENDED = 0x3,
   SUBSCRIPTION_ENDED = 0x4,
   GOING_AWAY = 0x5,
-  EXPIRED = 0x6
+  EXPIRED = 0x6,
+  //
+  SESSION_CLOSED = std::numeric_limits<uint32_t>::max()
 };
 
 enum class TrackStatusCode : uint32_t {
