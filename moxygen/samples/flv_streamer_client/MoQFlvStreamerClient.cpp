@@ -358,6 +358,11 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  XLOGF(
+      INFO,
+      "Starting publisher that will use: Stream(subGroup) per object for audio and Stream(subGroup) per GOP for video. Input file/pipe: {}",
+      FLAGS_input_flv_file);
+
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   MoQFlvStreamerClient streamerClient(
