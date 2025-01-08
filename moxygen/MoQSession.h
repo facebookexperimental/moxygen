@@ -203,22 +203,22 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     PublisherImpl(
         MoQSession* session,
         SubscribeID subscribeID,
-        Priority priority,
+        Priority subPriority,
         GroupOrder groupOrder)
         : session_(session),
           subscribeID_(subscribeID),
-          priority_(priority),
+          subPriority_(subPriority),
           groupOrder_(groupOrder) {}
     virtual ~PublisherImpl() = default;
 
     SubscribeID subscribeID() const {
       return subscribeID_;
     }
-    uint8_t priority() const {
-      return priority_;
+    uint8_t subPriority() const {
+      return subPriority_;
     }
-    void setPriority(uint8_t priority) {
-      priority_ = priority;
+    void setSubPriority(uint8_t subPriority) {
+      subPriority_ = subPriority;
     }
     void setGroupOrder(GroupOrder groupOrder) {
       groupOrder_ = groupOrder;
@@ -243,7 +243,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
     MoQSession* session_{nullptr};
     SubscribeID subscribeID_;
-    uint8_t priority_;
+    uint8_t subPriority_;
     GroupOrder groupOrder_;
   };
 

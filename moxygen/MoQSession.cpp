@@ -16,27 +16,44 @@ using namespace moxygen;
 constexpr std::chrono::seconds kSetupTimeout(5);
 
 constexpr uint32_t IdMask = 0x1FFFFF;
-uint64_t groupOrder(GroupOrder groupOrder, uint64_t group) {
+uint32_t groupPriorityBits(GroupOrder groupOrder, uint64_t group) {
+  // If the group order is oldest first, we want to give lower group
+  // ids a higher precedence. Otherwise, if it is newest first, we want
+  // to give higher group ids a higher precedence.
   uint32_t truncGroup = static_cast<uint32_t>(group) & IdMask;
   return groupOrder == GroupOrder::OldestFirst ? truncGroup
                                                : (IdMask - truncGroup);
 }
 
-uint32_t objOrder(uint64_t objId) {
-  return static_cast<uint32_t>(objId) & IdMask;
+uint32_t subgroupPriorityBits(uint32_t subgroupID) {
+  return static_cast<uint32_t>(subgroupID) & IdMask;
 }
 
-uint64_t order(
-    uint64_t group,
-    uint64_t object,
-    uint8_t priority,
+/*
+ * The spec mentions that scheduling should go as per
+ * the following precedence list:
+ * (1) Higher subscriber priority
+ * (2) Higher publisher priority
+ * (3) Group order, if the objects belong to different groups
+ * (4) Lowest subgroup id
+ *
+ * This function takes in the relevant parameters and encodes them into a stream
+ * priority so that we respect the aforementioned precedence order when we are
+ * sending objects.
+ */
+uint64_t getStreamPriority(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint8_t subPri,
     uint8_t pubPri,
     GroupOrder pubGroupOrder) {
   // 6 reserved bits | 58 bit order
   // 6 reserved | 8 sub pri | 8 pub pri | 21 group order | 21 obj order
+  uint32_t groupBits = groupPriorityBits(pubGroupOrder, groupID);
+  uint32_t subgroupBits = subgroupPriorityBits(subgroupID);
   return (
-      (uint64_t(pubPri) << 50) | (uint64_t(priority) << 42) |
-      (groupOrder(pubGroupOrder, group) << 21) | objOrder(object));
+      (uint64_t(subPri) << 50) | (uint64_t(pubPri) << 42) | (groupBits << 21) |
+      subgroupBits);
 }
 
 // Helper classes for publishing
@@ -215,9 +232,9 @@ class TrackPublisherImpl : public MoQSession::PublisherImpl,
       MoQSession* session,
       SubscribeID subscribeID,
       TrackAlias trackAlias,
-      Priority priority,
+      Priority subPriority,
       GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, priority, groupOrder),
+      : PublisherImpl(session, subscribeID, subPriority, groupOrder),
         trackAlias_(trackAlias) {}
 
   // PublisherImpl overrides
@@ -262,9 +279,9 @@ class FetchPublisherImpl : public MoQSession::PublisherImpl {
   FetchPublisherImpl(
       MoQSession* session,
       SubscribeID subscribeID,
-      Priority priority,
+      Priority subPriority,
       GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, priority, groupOrder) {}
+      : PublisherImpl(session, subscribeID, subPriority, groupOrder) {}
 
   folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError> beginFetch(
       GroupOrder groupOrder);
@@ -290,7 +307,7 @@ folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
 TrackPublisherImpl::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
-    Priority priority) {
+    Priority pubPriority) {
   auto wt = getWebTransport();
   if (!wt) {
     XLOG(ERR) << "Trying to publish after subscribeDone";
@@ -309,7 +326,10 @@ TrackPublisherImpl::beginSubgroup(
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
   stream.value()->setPriority(
-      1, order(groupID, subgroupID, priority, priority_, groupOrder_), false);
+      1,
+      getStreamPriority(
+          groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
+      false);
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
       this, *stream, trackAlias_, groupID, subgroupID);
   // TODO: these are currently unused, but the intent might be to reset
@@ -442,7 +462,9 @@ FetchPublisherImpl::beginFetch(GroupOrder groupOrder) {
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
   setGroupOrder(groupOrder);
-  stream.value()->setPriority(1, order(0, 0, 0, priority_, groupOrder_), false);
+  // Currently sets group=0 for FETCH priority bits
+  stream.value()->setPriority(
+      1, getStreamPriority(0, 0, subPriority_, 0, groupOrder_), false);
   streamPublisher_ = std::make_shared<StreamPublisherImpl>(this, *stream);
   return streamPublisher_;
 }
@@ -1527,7 +1549,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     return;
   }
 
-  it->second->setPriority(subscribeUpdate.priority);
+  it->second->setSubPriority(subscribeUpdate.priority);
   // TODO: update priority of tracks in flight
   controlMessages_.enqueue(std::move(subscribeUpdate));
 }
