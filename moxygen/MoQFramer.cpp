@@ -1239,26 +1239,24 @@ WriteResult writeObject(
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
   writeVarint(writeBuf, objectHeader.id, size, error);
-  CHECK(
-      objectHeader.status != ObjectStatus::NORMAL ||
-      (objectHeader.length && *objectHeader.length > 0))
-      << "Normal objects require non-zero length";
   if (objectHeader.forwardPreference == ForwardPreference::Datagram ||
       objectHeader.forwardPreference == ForwardPreference::Fetch) {
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
   }
-  if (objectHeader.status == ObjectStatus::NORMAL) {
+  bool hasLength = objectHeader.length && *objectHeader.length > 0;
+  CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
+      << "non-zero length objects require NORMAL status";
+  if (hasLength) {
     writeVarint(writeBuf, *objectHeader.length, size, error);
     writeBuf.append(std::move(objectPayload));
     // TODO: adjust size?
   } else {
-    CHECK(!objectHeader.length || *objectHeader.length == 0)
-        << "Non-normal objects have zero length";
+    CHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
+        << "non-empty objectPayload with no header length";
     writeVarint(writeBuf, 0, size, error);
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
-    CHECK(!objectPayload);
   }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

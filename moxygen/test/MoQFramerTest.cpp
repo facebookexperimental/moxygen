@@ -196,6 +196,35 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
+TEST(SerializeAndParse, ZeroLengthNormal) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeObject(
+      writeBuf,
+      {TrackAlias(22), // trackAlias
+       33,             // group
+       0,              // subgroup
+       44,             // id
+       55,             // priority
+       ForwardPreference::Datagram,
+       ObjectStatus::NORMAL,
+       0},
+      nullptr);
+  EXPECT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
+  auto length = cursor.totalLength();
+  auto parseResult = parseObjectHeader(cursor, length);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->priority, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*parseResult->length, 0);
+}
+
 TEST(SerializeAndParse, ParseStreamHeader) {
   ObjectHeader expectedObjectHeader = {
       TrackAlias(22), // trackAlias
