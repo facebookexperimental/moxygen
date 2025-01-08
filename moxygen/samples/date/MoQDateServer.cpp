@@ -312,7 +312,6 @@ class MoQDateServer : MoQServer {
         subgroup,
         object,
         /*priority=*/0,
-        ForwardPreference::Subgroup,
         ObjectStatus::NORMAL,
         folly::none};
     if (second == 0) {

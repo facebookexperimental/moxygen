@@ -231,7 +231,6 @@ class MoQFlvStreamerClient {
         /*subgroup=*/0,
         latestAudio_.object,
         AUDIO_STREAM_PRIORITY,
-        ForwardPreference::Subgroup,
         ObjectStatus::NORMAL};
 
     XLOG(DBG1) << "Sending audio frame" << objHeader

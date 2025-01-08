@@ -192,7 +192,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
 
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeStreamHeader(
+  auto res = writeSubgroupHeader(
       writeBuf,
       ObjectHeader({
           TrackAlias(1),
@@ -200,33 +200,19 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
           3,
           4,
           5,
-          ForwardPreference::Track,
           ObjectStatus::NORMAL,
           folly::none,
       }));
   res = writeObject(
       writeBuf,
-      ObjectHeader(
-          {TrackAlias(1),
-           2,
-           3,
-           4,
-           5,
-           ForwardPreference::Track,
-           ObjectStatus::NORMAL,
-           11}),
+      StreamType::STREAM_HEADER_SUBGROUP,
+      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello world"));
   res = writeObject(
       writeBuf,
+      StreamType::STREAM_HEADER_SUBGROUP,
       ObjectHeader(
-          {TrackAlias(1),
-           2,
-           3,
-           4,
-           5,
-           ForwardPreference::Track,
-           ObjectStatus::END_OF_TRACK_AND_GROUP,
-           0}),
+          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
       nullptr);
   return writeBuf.move();
 }

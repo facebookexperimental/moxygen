@@ -167,7 +167,6 @@ void MoQChatClient::publishLoop() {
                /*subgroup=*/0,
                /*id=*/0,
                /*pri=*/0,
-               ForwardPreference::Subgroup,
                ObjectStatus::NORMAL},
               folly::IOBuf::copyBuffer(input));
         }

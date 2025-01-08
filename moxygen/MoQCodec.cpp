@@ -122,7 +122,6 @@ void MoQObjectStreamCodec::onIngress(
         cursor = newCursor;
         streamType_ = StreamType(type->first);
         switch (streamType_) {
-          case StreamType::STREAM_HEADER_TRACK:
           case StreamType::STREAM_HEADER_SUBGROUP:
             parseState_ = ParseState::OBJECT_STREAM;
             break;
@@ -159,7 +158,7 @@ void MoQObjectStreamCodec::onIngress(
       }
       case ParseState::OBJECT_STREAM: {
         auto newCursor = cursor;
-        auto res = parseStreamHeader(newCursor, streamType_);
+        auto res = parseSubgroupHeader(newCursor);
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();

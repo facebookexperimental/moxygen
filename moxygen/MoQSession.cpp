@@ -219,6 +219,7 @@ class StreamPublisherImpl : public SubgroupConsumer,
 
   MoQSession::PublisherImpl* publisher_{nullptr};
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
+  StreamType streamType_;
   ObjectHeader header_;
   folly::Optional<uint64_t> currentLengthRemaining_;
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
@@ -396,7 +397,6 @@ TrackPublisherImpl::groupNotExists(
        subgroupID,
        0,
        priority,
-       ForwardPreference::Subgroup,
        ObjectStatus::GROUP_NOT_EXIST,
        0},
       nullptr);
@@ -405,7 +405,6 @@ TrackPublisherImpl::groupNotExists(
 folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::datagram(
     const ObjectHeader& header,
     Payload payload) {
-  XCHECK(header.forwardPreference == ForwardPreference::Datagram);
   auto wt = getWebTransport();
   if (!wt) {
     XLOG(ERR) << "Trying to publish after subscribeDone";
@@ -416,13 +415,13 @@ folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::datagram(
   XCHECK(header.length);
   (void)writeObject(
       writeBuf,
+      StreamType::OBJECT_DATAGRAM,
       ObjectHeader{
           trackAlias_,
           header.group,
           header.id,
           header.id,
           header.priority,
-          header.forwardPreference,
           header.status,
           *header.length},
       std::move(payload));
@@ -487,16 +486,16 @@ StreamPublisherImpl::StreamPublisherImpl(
           }),
       publisher_(publisher),
       writeHandle_(writeHandle),
+      streamType_(StreamType::FETCH_HEADER),
       header_{
           publisher->subscribeID(),
           0,
           0,
           std::numeric_limits<uint64_t>::max(),
           0,
-          ForwardPreference::Fetch,
           ObjectStatus::NORMAL,
           folly::none} {
-  (void)writeStreamHeader(writeBuf_, header_);
+  (void)writeFetchHeader(writeBuf_, publisher->subscribeID());
 }
 
 StreamPublisherImpl::StreamPublisherImpl(
@@ -506,11 +505,11 @@ StreamPublisherImpl::StreamPublisherImpl(
     uint64_t groupID,
     uint64_t subgroupID)
     : StreamPublisherImpl(publisher, writeHandle) {
-  writeBuf_.move();
+  streamType_ = StreamType::STREAM_HEADER_SUBGROUP;
   header_.trackIdentifier = alias;
-  header_.forwardPreference = ForwardPreference::Subgroup;
   setGroupAndSubgroup(groupID, subgroupID);
-  (void)writeStreamHeader(writeBuf_, header_);
+  writeBuf_.move(); // clear FETCH_HEADER
+  (void)writeSubgroupHeader(writeBuf_, header_);
 }
 
 // Private methods
@@ -552,7 +551,7 @@ StreamPublisherImpl::writeCurrentObject(
     bool finStream) {
   header_.id = objectID;
   header_.length = length;
-  (void)writeObject(writeBuf_, header_, std::move(payload));
+  (void)writeObject(writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream);
 }
 

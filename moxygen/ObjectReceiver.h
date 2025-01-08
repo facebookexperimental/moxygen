@@ -19,6 +19,7 @@ class ObjectReceiverCallback {
 
 class ObjectSubgroupReceiver : public SubgroupConsumer {
   ObjectReceiverCallback* callback_{nullptr};
+  StreamType streamType_;
   ObjectHeader header_;
   folly::IOBufQueue payload_{folly::IOBufQueue::cacheChainLength()};
 
@@ -29,20 +30,20 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
       uint64_t subgroupID = 0,
       uint8_t priority = 0)
       : callback_(callback),
+        streamType_(StreamType::STREAM_HEADER_SUBGROUP),
         header_{
             TrackAlias(0),
             groupID,
             subgroupID,
             0,
             priority,
-            ForwardPreference::Subgroup,
             ObjectStatus::NORMAL,
             folly::none} {}
 
   void setFetchGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
+    streamType_ = StreamType::FETCH_HEADER;
     header_.group = groupID;
     header_.subgroup = subgroupID;
-    header_.forwardPreference = ForwardPreference::Fetch;
   }
 
   folly::Expected<folly::Unit, MoQPublishError>
@@ -51,7 +52,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.status = ObjectStatus::NORMAL;
     auto fcState = callback_->onObject(header_, std::move(payload));
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
-      if (header_.forwardPreference == ForwardPreference::Fetch) {
+      if (streamType_ == StreamType::FETCH_HEADER) {
         return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
       } else {
         XLOG(WARN) << "ObjectReceiverCallback returned BLOCKED for Subscribe";
@@ -165,7 +166,6 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
          subgroup,
          0,
          pri,
-         ForwardPreference::Subgroup,
          ObjectStatus::END_OF_TRACK_AND_GROUP,
          0});
     return folly::unit;
