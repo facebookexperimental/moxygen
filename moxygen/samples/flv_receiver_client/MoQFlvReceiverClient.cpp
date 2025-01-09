@@ -11,6 +11,7 @@
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <signal.h>
+#include "moxygen/moq_mi/MoQMi.h"
 
 DEFINE_string(
     connect_url,
@@ -54,8 +55,22 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   ~TrackReceiverHandler() override = default;
   FlowControlState onObject(const ObjectHeader&, Payload payload) override {
     if (payload) {
-      std::cout << trackMediaType_.toStr() << " Received payload. Size="
-                << payload->computeChainDataLength() << std::endl;
+      auto payloadSize = payload->computeChainDataLength();
+      auto payloadDecodedData = MoQMi::fromObjectPayload(std::move(payload));
+      if (std::get<0>(payloadDecodedData)) {
+        XLOG(DBG1) << trackMediaType_.toStr()
+                   << " Received payload. Size=" << payloadSize << ". "
+                   << *std::get<0>(payloadDecodedData) << std::endl;
+      }
+      if (std::get<1>(payloadDecodedData)) {
+        XLOG(DBG1) << trackMediaType_.toStr()
+                   << " Received payload. Size=" << payloadSize << ". "
+                   << *std::get<1>(payloadDecodedData) << std::endl;
+      }
+      if (std::get<0>(payloadDecodedData) == nullptr &&
+          std::get<1>(payloadDecodedData) == nullptr) {
+        std::cout << "Received payload. Size=" << payloadSize << ". UNKNOWN";
+      }
     }
     return FlowControlState::UNBLOCKED;
   }
