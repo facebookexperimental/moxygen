@@ -106,9 +106,13 @@ class MoQFlvStreamerClient {
           if (item->data &&
               (item->type == flv::FlvSequentialReader::MediaType::VIDEO ||
                item->isEOF)) {
-            // Send audio data in a thread (stream per object)
+            // Send audio data in a thread (stream per object). Clone it since
+            // we can have multiple subscribers
+            auto itemClone = item->clone();
             moqClient_.getEventBase()->runInEventBaseThread(
-                [self(this), item] { self->publishVideo(item); });
+                [self(this), itemClone(std::move(itemClone))]() mutable {
+                  self->publishVideo(std::move(itemClone));
+                });
           }
         }
         if (sub.second.fullTrackName == fullAudioTrackName_ && audioPub_) {
@@ -116,10 +120,14 @@ class MoQFlvStreamerClient {
           if (item->data &&
               (item->type == flv::FlvSequentialReader::MediaType::AUDIO ||
                item->isEOF)) {
-            // Send audio data in a thread (stream per object)
+            // Send audio data in a thread (stream per object). Clone it since
+            // we can have multiple subscribers
+            auto itemClone = item->clone();
             moqClient_.getEventBase()->runInEventBaseThread(
-                [self(this), trackAlias(sub.second.trackAlias), item] {
-                  self->publishAudio(trackAlias, item);
+                [self(this),
+                 trackAlias(sub.second.trackAlias),
+                 itemClone(std::move(itemClone))]() mutable {
+                  self->publishAudio(trackAlias, std::move(itemClone));
                 });
           }
         }
@@ -215,12 +223,12 @@ class MoQFlvStreamerClient {
 
   void publishAudio(
       TrackAlias trackAlias,
-      std::shared_ptr<flv::FlvSequentialReader::MediaItem> item) {
+      std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
     if (item->isEOF) {
       XLOG(INFO) << "FLV audio received EOF";
       return;
     }
-    auto objPayload = encodeToMoQMi(item);
+    auto objPayload = encodeToMoQMi(std::move(item));
     if (!objPayload) {
       XLOG(ERR) << "Failed to encode audio frame";
       return;
@@ -238,7 +246,7 @@ class MoQFlvStreamerClient {
     audioPub_->objectStream(objHeader, std::move(objPayload));
   }
 
-  void publishVideo(std::shared_ptr<flv::FlvSequentialReader::MediaItem> item) {
+  void publishVideo(std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
     if (item->isEOF) {
       XLOG(INFO) << "FLV video received EOF";
       if (videoPub_ && videoSgPub_) {
@@ -251,18 +259,19 @@ class MoQFlvStreamerClient {
       return;
     }
 
-    auto objPayload = encodeToMoQMi(item);
-    if (!objPayload) {
-      XLOG(ERR) << "Failed to encode video frame";
-      return;
-    }
-
     if (!item->isIdr && !videoSgPub_) {
       XLOG(INFO) << "Discarding non-IDR frame before subgroup started";
       return;
     }
 
-    if (item->isIdr) {
+    auto isIdr = item->isIdr;
+    auto objPayload = encodeToMoQMi(std::move(item));
+    if (!objPayload) {
+      XLOG(ERR) << "Failed to encode video frame";
+      return;
+    }
+
+    if (isIdr) {
       if (videoSgPub_) {
         // Close previous subgroup
         videoSgPub_->endOfGroup(latestVideo_.object);
@@ -295,7 +304,7 @@ class MoQFlvStreamerClient {
   static const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
   static std::unique_ptr<folly::IOBuf> encodeToMoQMi(
-      std::shared_ptr<flv::FlvSequentialReader::MediaItem> item) {
+      std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
     if (item->type == flv::FlvSequentialReader::MediaType::VIDEO) {
       auto dataToEncode = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
           item->id,

@@ -10,14 +10,14 @@
 
 namespace moxygen::flv {
 
-std::shared_ptr<FlvSequentialReader::MediaItem>
+std::unique_ptr<FlvSequentialReader::MediaItem>
 FlvSequentialReader::getNextItem() {
-  std::shared_ptr<MediaItem> ret;
+  std::unique_ptr<MediaItem> ret;
   XLOG(DBG1) << __func__;
 
   while (!ret) {
     try {
-      std::shared_ptr<MediaItem> locaItem = std::make_shared<MediaItem>();
+      std::unique_ptr<MediaItem> locaItem = std::make_unique<MediaItem>();
       auto tag = reader_.readNextTag();
       if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_READCMD) {
         auto readsCmd = std::get<flv::FlvReadCmd>(tag);
@@ -86,7 +86,7 @@ FlvSequentialReader::getNextItem() {
           videoFrameId_++;
 
           // Return the item
-          ret = locaItem;
+          ret = std::move(locaItem);
         }
       } else if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_AUDIO) {
         XLOG(DBG1) << "Read tag AUDIO at frame " << audioFrameId_;
@@ -137,7 +137,7 @@ FlvSequentialReader::getNextItem() {
           audioFrameId_++;
 
           // Return the item
-          ret = locaItem;
+          ret = std::move(locaItem);
         }
       } else if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_SCRIPT) {
         XLOG(DBG1) << "Read tag SCRIPTDATAOBJECT";

@@ -114,6 +114,27 @@ class FlvSequentialReader {
           numChannels(0),
           isIdr{false},
           isEOF{false} {}
+    explicit MediaItem(const MediaItem& m)
+        : data(nullptr),
+          metadata(nullptr),
+          type(m.type),
+          id(m.id),
+          pts(m.pts),
+          dts(m.dts),
+          timescale(m.timescale),
+          duration(m.duration),
+          wallclock(m.wallclock),
+          sampleFreq(m.sampleFreq),
+          numChannels(m.numChannels),
+          isIdr(m.isIdr),
+          isEOF(m.isEOF) {}
+
+    std::unique_ptr<MediaItem> clone() {
+      auto clone = std::make_unique<MediaItem>(*this);
+      clone->data = data != nullptr ? data->clone() : nullptr;
+      clone->metadata = metadata != nullptr ? metadata->clone() : nullptr;
+      return clone;
+    }
   };
 
   explicit FlvSequentialReader(const std::string& file_path)
@@ -127,7 +148,7 @@ class FlvSequentialReader {
     XLOG(INFO) << __func__;
   }
 
-  std::shared_ptr<MediaItem> getNextItem();
+  std::unique_ptr<MediaItem> getNextItem();
 
  private:
   bool parseAscHeader(std::unique_ptr<folly::IOBuf>);
