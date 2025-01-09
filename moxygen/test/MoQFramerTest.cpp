@@ -200,12 +200,12 @@ TEST(SerializeAndParse, ZeroLengthNormal) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeObject(
       writeBuf,
+      StreamType::OBJECT_DATAGRAM,
       {TrackAlias(22), // trackAlias
        33,             // group
        0,              // subgroup
        44,             // id
        55,             // priority
-       ForwardPreference::Datagram,
        ObjectStatus::NORMAL,
        0},
       nullptr);
