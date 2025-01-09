@@ -8,7 +8,7 @@
 
 #include <folly/io/IOBuf.h>
 #include <fstream> // std::ifstream
-#include "FlvCommon.h"
+#include "moxygen/flv_parser/FlvCommon.h"
 
 namespace moxygen::flv {
 

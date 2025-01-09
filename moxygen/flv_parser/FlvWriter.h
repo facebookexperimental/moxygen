@@ -4,7 +4,7 @@
 
 #include <folly/io/IOBuf.h>
 #include <fstream> // std::ofstream
-#include "FlvCommon.h"
+#include "moxygen/flv_parser/FlvCommon.h"
 
 namespace moxygen::flv {
 
@@ -34,8 +34,8 @@ class FlvWriter {
 
   std::ofstream f_;
   bool headerWrote_{false};
-  bool audioHeaderWrote_{false};
-  bool videoHeaderWrote_{false};
+  bool audioHeaderWritten_{false};
+  bool videoHeaderWritten_{false};
 };
 
 } // namespace moxygen::flv

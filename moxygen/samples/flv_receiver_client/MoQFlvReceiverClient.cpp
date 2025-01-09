@@ -11,12 +11,17 @@
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <signal.h>
+#include "moxygen/flv_parser/FlvWriter.h"
 #include "moxygen/moq_mi/MoQMi.h"
 
 DEFINE_string(
     connect_url,
     "https://localhost:4433/moq",
     "URL for webtransport server");
+DEFINE_string(
+    flv_outpath,
+    "",
+    "File name to save the received FLV file to (ex: /tmp/test.flv)");
 DEFINE_string(track_namespace, "flvstreamer", "Track Namespace");
 DEFINE_string(track_namespace_delimiter, "/", "Track Namespace Delimiter");
 DEFINE_string(video_track_name, "video0", "Video track Name");
@@ -48,6 +53,101 @@ class TrackType {
   TrackType::MediaType mediaType_;
 };
 
+class FlvWriterShared : flv::FlvWriter {
+ public:
+  explicit FlvWriterShared(const std::string& flvOutPath)
+      : flv::FlvWriter(flvOutPath) {}
+
+  bool writeMoqMiPayload(MoQMi::MoqMiTag moqMiTag) {
+    bool ret = false;
+    if (moqMiTag.index() == MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_READCMD) {
+      return ret;
+    }
+
+    if (moqMiTag.index() ==
+        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC) {
+      auto moqv = std::move(
+          std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
+              moqMiTag));
+
+      uint32_t pts = static_cast<uint32_t>(moqv->pts);
+      if (moqv->pts > std::numeric_limits<uint32_t>::max()) {
+        XLOG_EVERY_N(WARNING, 1000) << "PTS truncated! Rolling over. From "
+                                    << moqv->pts << ", to: " << pts;
+      }
+      CHECK_GE(moqv->pts, moqv->dts);
+      uint32_t compositionTime = moqv->pts - moqv->dts;
+
+      if (moqv->metadata != nullptr && !videoHeaderWritten_) {
+        XLOG(INFO) << "Writing video header";
+        auto vhtag = flv::createVideoTag(
+            moqv->pts, 1, 7, 0, compositionTime, std::move(moqv->metadata));
+        ret = writeTag(std::move(vhtag));
+        if (!ret) {
+          return ret;
+        }
+        videoHeaderWritten_ = true;
+      }
+      bool isIdr = moqv->isIdr();
+      if (videoHeaderWritten_ && moqv->data != nullptr &&
+          moqv->data->length() > 0) {
+        if ((!firstIDRWritten_ && isIdr) || firstIDRWritten_) {
+          // Write frame
+          uint8_t frameType = isIdr ? 1 : 0;
+          XLOG(DBG1) << "Writing video frame, type: " << frameType;
+          auto vtag = flv::createVideoTag(
+              moqv->pts,
+              frameType,
+              7,
+              1,
+              compositionTime,
+              std::move(moqv->data));
+          ret = writeTag(std::move(vtag));
+          if (isIdr && !firstIDRWritten_) {
+            firstIDRWritten_ = true;
+            XLOG(INFO) << "Wrote first IDR frame";
+          }
+        }
+      }
+    } else if (
+        moqMiTag.index() ==
+        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
+      auto moqa = std::move(
+          std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
+              moqMiTag));
+      if (!audioHeaderWritten_) {
+        XLOG(INFO) << "Writing audio header";
+        auto ascHeader = moqa->getAscHeader();
+        auto ahtag = flv::createAudioTag(
+            moqa->pts, 10, 3, 1, 1, 0, std::move(ascHeader));
+        ret = writeTag(std::move(ahtag));
+        if (!ret) {
+          return ret;
+        }
+        audioHeaderWritten_ = true;
+      }
+      if (audioHeaderWritten_) {
+        XLOG(DBG1) << "Writing audio frame";
+        auto atag = flv::createAudioTag(
+            moqa->pts, 10, 3, 1, 1, 1, std::move(moqa->data));
+        ret = writeTag(std::move(atag));
+      }
+    }
+    return ret;
+  }
+
+ private:
+  bool writeTag(flv::FlvTag tag) {
+    std::lock_guard<std::mutex> g(mutex_);
+    return flv::FlvWriter::writeTag(std::move(tag));
+  }
+
+  std::mutex mutex_;
+  bool videoHeaderWritten_{false};
+  bool audioHeaderWritten_{false};
+  bool firstIDRWritten_{false};
+};
+
 class TrackReceiverHandler : public ObjectReceiverCallback {
  public:
   explicit TrackReceiverHandler(TrackType::MediaType mediaType)
@@ -56,20 +156,32 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   FlowControlState onObject(const ObjectHeader&, Payload payload) override {
     if (payload) {
       auto payloadSize = payload->computeChainDataLength();
+      XLOG(DBG1) << trackMediaType_.toStr()
+                 << " Received payload. Size=" << payloadSize;
+
       auto payloadDecodedData = MoQMi::fromObjectPayload(std::move(payload));
-      if (std::get<0>(payloadDecodedData)) {
-        XLOG(DBG1) << trackMediaType_.toStr()
-                   << " Received payload. Size=" << payloadSize << ". "
-                   << *std::get<0>(payloadDecodedData) << std::endl;
+      if (payloadDecodedData.index() ==
+          MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC) {
+        XLOG(DBG1)
+            << trackMediaType_.toStr() << " payloadDecodedData: "
+            << *std::get<
+                   MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
+                   payloadDecodedData);
+      } else if (
+          payloadDecodedData.index() ==
+          MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
+        XLOG(DBG1)
+            << trackMediaType_.toStr() << " payloadDecodedData: "
+            << *std::get<
+                   MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
+                   payloadDecodedData);
       }
-      if (std::get<1>(payloadDecodedData)) {
-        XLOG(DBG1) << trackMediaType_.toStr()
-                   << " Received payload. Size=" << payloadSize << ". "
-                   << *std::get<1>(payloadDecodedData) << std::endl;
-      }
-      if (std::get<0>(payloadDecodedData) == nullptr &&
-          std::get<1>(payloadDecodedData) == nullptr) {
-        std::cout << "Received payload. Size=" << payloadSize << ". UNKNOWN";
+      if (flvw_) {
+        if (flvw_->writeMoqMiPayload(std::move(payloadDecodedData))) {
+          XLOG(DBG1) << trackMediaType_.toStr() << " Wrote payload to output";
+        } else {
+          XLOG(WARNING) << trackMediaType_.toStr() << " Payload write failed";
+        }
       }
     }
     return FlowControlState::UNBLOCKED;
@@ -82,6 +194,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   void onError(ResetStreamErrorCode error) override {
     std::cout << trackMediaType_.toStr()
               << " Stream Error=" << folly::to_underlying(error) << std::endl;
+    ;
   }
   void onSubscribeDone(SubscribeDone) override {
     baton.post();
@@ -89,19 +202,28 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
 
   folly::coro::Baton baton;
 
+  void setFlvWriterShared(std::shared_ptr<FlvWriterShared> flvw) {
+    flvw_ = flvw;
+  }
+
  private:
   TrackType trackMediaType_;
+  std::shared_ptr<FlvWriterShared> flvw_;
 };
 
 class MoQFlvReceiverClient {
  public:
-  MoQFlvReceiverClient(folly::EventBase* evb, proxygen::URL url)
+  MoQFlvReceiverClient(
+      folly::EventBase* evb,
+      proxygen::URL url,
+      bool useQuic,
+      const std::string& flvOutPath)
       : moqClient_(
             evb,
             std::move(url),
-            (FLAGS_quic_transport
-                 ? MoQClient::TransportType::QUIC
-                 : MoQClient::TransportType::H3_WEBTRANSPORT)) {}
+            (useQuic ? MoQClient::TransportType::QUIC
+                     : MoQClient::TransportType::H3_WEBTRANSPORT)),
+        flvOutPath_(flvOutPath) {}
 
   folly::coro::Task<void> run(
       SubscribeRequest subAudio,
@@ -116,6 +238,11 @@ class MoQFlvReceiverClient {
           Role::SUBSCRIBER);
       auto exec = co_await folly::coro::co_current_executor;
       controlReadLoop().scheduleOn(exec).start();
+
+      // Create output file
+      flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
+      trackReceiverHandlerAudio_.setFlvWriterShared(flvw_);
+      trackReceiverHandlerVideo_.setFlvWriterShared(flvw_);
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(
@@ -215,6 +342,8 @@ class MoQFlvReceiverClient {
   MoQClient moqClient_;
   SubscribeID subscribeIDAudio_{0};
   SubscribeID subscribeIDVideo_{0};
+  std::string flvOutPath_;
+  std::shared_ptr<FlvWriterShared> flvw_;
   TrackReceiverHandler trackReceiverHandlerAudio_ =
       TrackReceiverHandler(TrackType::MediaType::Audio);
   std::shared_ptr<ObjectReceiver> subRxHandlerAudio_;
@@ -236,7 +365,8 @@ int main(int argc, char* argv[]) {
 
   XLOGF(INFO, "Starting consumer from URL: {}", FLAGS_connect_url);
 
-  MoQFlvReceiverClient flvReceiverClient(&eventBase, std::move(url));
+  MoQFlvReceiverClient flvReceiverClient(
+      &eventBase, std::move(url), FLAGS_quic_transport, FLAGS_flv_outpath);
 
   class SigHandler : public folly::AsyncSignalHandler {
    public:

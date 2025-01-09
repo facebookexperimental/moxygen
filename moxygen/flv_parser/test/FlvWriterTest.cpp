@@ -7,13 +7,11 @@
 #include "moxygen/flv_parser/FlvWriter.h"
 #include "common/files/FileUtil.h"
 #include "moxygen/flv_parser/FlvReader.h"
-#include "moxygen/flv_parser/test/FlvTestUtils.h"
 
 #include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
 
 using namespace moxygen::flv;
-using namespace moxygen::test;
 
 class FlvWriterTest : public ::testing::Test {
  public:

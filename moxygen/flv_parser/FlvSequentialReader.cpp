@@ -117,21 +117,17 @@ FlvSequentialReader::getNextItem() {
 
         if (audioTag->aacPacketType == 0x0) {
           // Update AAC metadata (ASC sequence header detected)
-          XLOG(INFO) << "Saving new ASC header, size: " << audioTag->size;
-          if (!parseAscHeader(std::move(audioTag->data))) {
-            XLOG(ERR) << "Failed to parse ASC header";
-          } else {
-            XLOG(INFO) << "Parsed ASC header, aot: " << aot_.value_or(0)
-                       << " sampleFreq: " << sampleFreq_.value_or(0)
-                       << ", numChannels: " << numChannels_.value_or(0);
+          XLOG(DBG1) << "Saving new ASC header, size: " << audioTag->size;
+          ascHeader_ = parseAscHeader(std::move(audioTag->data));
+          if (!ascHeader_.valid) {
+            XLOG(ERR) << "ASC header is corrupted at: " << audioTag->timestamp;
+            continue;
           }
+          XLOG(INFO) << "Parsed ASC header " << ascHeader_;
         } else {
-          if (!numChannels_ || !sampleFreq_) {
-            XLOG(WARN) << "numChannels or sampleFreq not set";
-          } else {
-            locaItem->sampleFreq = sampleFreq_.value();
-            locaItem->numChannels = numChannels_.value();
-          }
+          locaItem->sampleFreq = ascHeader_.sampleFreq;
+          locaItem->numChannels = ascHeader_.channels;
+
           locaItem->isIdr = true;
           locaItem->data = std::move(audioTag->data);
           audioFrameId_++;
@@ -152,32 +148,4 @@ FlvSequentialReader::getNextItem() {
   return ret;
 }
 
-bool FlvSequentialReader::parseAscHeader(std::unique_ptr<folly::IOBuf> buf) {
-  try {
-    if (buf == nullptr) {
-      throw std::runtime_error("ASC header is nullptr");
-    }
-    FlvSequentialReader::BitReader br(std::move(buf));
-
-    uint32_t aot = br.getNextBits(5); // audioObjectType
-    if (aot == 31) {
-      aot_ = 32 + br.getNextBits(6);
-    } else {
-      aot_ = aot;
-    }
-
-    uint8_t sampleFreqIndex = br.getNextBits(4); // sampleFrequencyIndex
-    if (sampleFreqIndex == 0x0f) {
-      sampleFreq_ = br.getNextBits(24); // sampleFrequency
-    } else {
-      sampleFreq_ = kAscFreqSamplingIndexMapping[sampleFreqIndex];
-    }
-    numChannels_ = br.getNextBits(4); // numChannels
-  } catch (std::exception& ex) {
-    XLOG(ERR) << "Failed parsing ASC header: " << folly::exceptionStr(ex);
-    return false;
-  }
-
-  return true;
-}
 } // namespace moxygen::flv

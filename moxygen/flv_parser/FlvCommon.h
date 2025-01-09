@@ -26,6 +26,97 @@ const std::array<uint32_t, 2> kAudioChannels{
     2, // 1
 };
 
+// Audio ASC sampling frequency mapping
+const uint32_t kAscFreqSamplingIndexMapping[16]{
+    96000, // 0
+    88200, // 1
+    64000, // 2
+    48000, // 3
+    44100, // 4
+    32000, // 5
+    24000, // 6
+    22050, // 7
+    16000, // 8
+    12000, // 9
+    11025, // 10
+    8000,  // 11
+    7350,  // 12
+    13,    // 13 - reserved
+    14,    // 14 - reserved
+    15,    // 15 - escape value
+};
+
+// Helper class to read bits from a buffer
+class BitReader {
+ public:
+  explicit BitReader(std::unique_ptr<folly::IOBuf> data)
+      : data_(std::move(data)) {}
+
+  uint64_t getNextBits(uint8_t numBits) {
+    uint64_t result = 0;
+
+    if (numBits > 64) {
+      throw std::runtime_error("Can not read more than 64 bits");
+    }
+
+    for (uint64_t i = 0; i < numBits; i++) {
+      uint64_t bytePos = bitOffset_ / 8;
+      uint64_t bitPos = bitOffset_ % 8;
+      if (bytePos >= data_->computeChainDataLength()) {
+        throw std::runtime_error("Can not read more bits, short");
+      }
+      uint8_t tmp =
+          ((uint8_t)data_->data()[bytePos]) & (uint8_t)std::pow(2, 7 - bitPos);
+      result = result << 1;
+      if (tmp > 0) {
+        result |= 1;
+      } else {
+        result |= 0;
+      }
+      bitOffset_++;
+    }
+    return result;
+  }
+
+ private:
+  std::unique_ptr<folly::IOBuf> data_;
+  uint64_t bitOffset_{0};
+};
+
+// ASC functions
+
+uint8_t getAscFreqIndex(uint32_t sampleFreq);
+
+struct AscHeaderData {
+  bool valid;
+  uint8_t aot;
+  uint8_t freqIndex;
+  uint32_t sampleFreq;
+  uint8_t channels;
+  AscHeaderData()
+      : valid(false), aot(0), freqIndex(0xff), sampleFreq(0), channels(0) {}
+  AscHeaderData(uint8_t aot, uint32_t sampleFreq, uint8_t channels)
+      : valid(true),
+        aot(aot),
+        freqIndex(0xff),
+        sampleFreq(sampleFreq),
+        channels(channels) {
+    freqIndex = getAscFreqIndex(sampleFreq);
+  }
+  bool operator==(const AscHeaderData& other) {
+    return (
+        this->valid == other.valid && this->aot == other.aot &&
+        this->freqIndex == other.freqIndex &&
+        this->sampleFreq == other.sampleFreq &&
+        this->channels == other.channels);
+  }
+  friend std::ostream& operator<<(std::ostream& os, const AscHeaderData& v);
+};
+
+AscHeaderData parseAscHeader(std::unique_ptr<folly::IOBuf> buf);
+std::unique_ptr<folly::IOBuf>
+createAscheader(uint8_t aot, uint32_t sampleFreq, uint8_t channels);
+
 struct FlvTagBase {
   uint8_t type;
   uint32_t size;
@@ -192,11 +283,30 @@ enum FlvTagTypeIndex {
   FLV_TAG_INDEX_AUDIO = 2,
   FLV_TAG_INDEX_READCMD = 3
 };
-typedef std::variant<
+using FlvTag = std::variant<
     std::unique_ptr<FlvScriptTag>,
     std::unique_ptr<FlvVideoTag>,
     std::unique_ptr<FlvAudioTag>,
-    FlvReadCmd>
-    FlvTag;
+    FlvReadCmd>;
 
+std::unique_ptr<flv::FlvScriptTag> createScriptTag(
+    uint32_t ts,
+    std::unique_ptr<folly::IOBuf> data);
+
+std::unique_ptr<flv::FlvVideoTag> createVideoTag(
+    uint32_t ts,
+    uint8_t frameType,
+    uint8_t codecId,
+    uint8_t avcPacketType,
+    uint32_t compositionTime,
+    std::unique_ptr<folly::IOBuf> data);
+
+std::unique_ptr<flv::FlvAudioTag> createAudioTag(
+    uint32_t ts,
+    uint8_t soundFormat,
+    uint32_t soundRate,
+    uint8_t soundSize,
+    uint8_t soundType,
+    uint8_t aacPacketType,
+    std::unique_ptr<folly::IOBuf> data);
 } // namespace moxygen::flv

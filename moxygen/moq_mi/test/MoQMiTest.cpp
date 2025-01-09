@@ -6,6 +6,7 @@
 
 #include "moxygen/moq_mi/MoQMi.h"
 
+#include <folly/String.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
 
@@ -13,6 +14,13 @@ using namespace moxygen;
 
 const auto kTestData = folly::IOBuf::copyBuffer("Data: Hello world");
 const auto kTestMetadata = folly::IOBuf::copyBuffer("Metadata: Hello world");
+
+uint8_t idrNaluBuff[5] = {0x00, 0x00, 0x00, 0x01, 0x05};
+const auto kTestVideoDataIDR =
+    folly::IOBuf::copyBuffer(idrNaluBuff, sizeof(idrNaluBuff));
+uint8_t noIdrNaluBuff[5] = {0x00, 0x00, 0x00, 0x01, 0x01};
+const auto kTestVideoDataNoIDR =
+    folly::IOBuf::copyBuffer(noIdrNaluBuff, sizeof(noIdrNaluBuff));
 
 TEST(MoQMi, EncodeVideoH264TestNoMetadata) {
   // Expected wire format:
@@ -140,7 +148,6 @@ TEST(MoQMi, DecodeVideoH264TestWithMetadata) {
   auto res = MoQMi::fromObjectPayload(buff->clone());
 
   EXPECT_NE(std::get<0>(res), nullptr);
-  EXPECT_EQ(std::get<1>(res), nullptr);
   EXPECT_EQ(std::get<0>(res)->seqId, 0x3FFFFFFFFFFFFF00);
   EXPECT_EQ(std::get<0>(res)->pts, 0x3FFFFFFFFFFFFF01);
   EXPECT_EQ(std::get<0>(res)->timescale, 0x3FFFFFFFFFFFFF04);
@@ -167,7 +174,6 @@ TEST(MoQMi, DecodeVideoH264TestNoMetadata) {
   auto res = MoQMi::fromObjectPayload(buff->clone());
 
   EXPECT_NE(std::get<0>(res), nullptr);
-  EXPECT_EQ(std::get<1>(res), nullptr);
   EXPECT_EQ(std::get<0>(res)->seqId, 0x3FFFFFFFFFFFFF00);
   EXPECT_EQ(std::get<0>(res)->pts, 0x3FFFFFFFFFFFFF01);
   EXPECT_EQ(std::get<0>(res)->timescale, 0x3FFFFFFFFFFFFF04);
@@ -194,7 +200,6 @@ TEST(MoQMi, DecodeAudioAAC) {
   // Test AudioAACMP4LCWCPData
   auto res = MoQMi::fromObjectPayload(buff->clone());
 
-  EXPECT_EQ(std::get<0>(res), nullptr);
   EXPECT_NE(std::get<1>(res), nullptr);
   EXPECT_EQ(std::get<1>(res)->seqId, 0x3FFFFFFFFFFFFF00);
   EXPECT_EQ(std::get<1>(res)->pts, 0x3FFFFFFFFFFFFF01);
@@ -247,4 +252,65 @@ TEST(MoQMi, OverrideStreamOpAudioAAC) {
 
   ss << *dataAudio;
   EXPECT_EQ(ss.str(), expected);
+}
+
+TEST(MoQMi, IsIdr) {
+  auto dataVideoIdr = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
+      1,                          // SeqId
+      2,                          // Pts
+      3,                          // Timescale
+      4,                          // Duration
+      5,                          // Wallclock
+      kTestVideoDataIDR->clone(), // Data
+      kTestMetadata->clone(),     // Metadata
+      6                           // Dts
+  );
+  auto dataVideoNoIdr = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
+      1,                            // SeqId
+      2,                            // Pts
+      3,                            // Timescale
+      10,                           // Duration
+      5,                            // Wallclock
+      kTestVideoDataNoIDR->clone(), // Data
+      kTestMetadata->clone(),       // Metadata
+      6                             // Dts
+  );
+
+  XLOG(INFO) << "dataVideoIdr: " << *dataVideoIdr;
+  XLOG(INFO) << "dataVideoIdr->data: "
+             << folly::hexDump(
+                    dataVideoIdr->data->data(), dataVideoIdr->data->length());
+  XLOG(INFO) << "dataVideoNoIdr: " << *dataVideoNoIdr;
+  XLOG(INFO) << "dataVideoNoIdr->data: "
+             << folly::hexDump(
+                    dataVideoNoIdr->data->data(),
+                    dataVideoNoIdr->data->length());
+
+  EXPECT_TRUE(dataVideoIdr->isIdr());
+  EXPECT_FALSE(dataVideoNoIdr->isIdr());
+}
+
+TEST(MoQMi, AscAudioHeader) {
+  flv::AscHeaderData expectedAsc = flv::AscHeaderData(2, 48000, 2);
+  auto audioData = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
+      0x3FFFFFFFFFFFFF00,     // SeqId
+      0x3FFFFFFFFFFFFF01,     // Pts
+      0x3FFFFFFFFFFFFF04,     // Timescale
+      0x3FFFFFFFFFFFFF03,     // Duration
+      0x3FFFFFFFFFFFFF05,     // Wallclock
+      kTestData->clone(),     // Data
+      expectedAsc.sampleFreq, // SampleFreq
+      expectedAsc.channels    // NumChannels
+  );
+
+  auto ascHeaderData = audioData->getAscHeader();
+  ascHeaderData->coalesce();
+  XLOG(INFO) << "ascHeaderData: "
+             << folly::hexDump(ascHeaderData->data(), ascHeaderData->length());
+  auto ascHeaderDataDecoded = flv::parseAscHeader(ascHeaderData->clone());
+
+  XLOG(INFO) << "expectedAsc: " << expectedAsc;
+  XLOG(INFO) << "ascHeaderDataDecoded: " << ascHeaderDataDecoded;
+
+  EXPECT_TRUE(ascHeaderDataDecoded == expectedAsc);
 }
