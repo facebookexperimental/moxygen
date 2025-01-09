@@ -9,10 +9,11 @@
 #include <folly/portability/GTest.h>
 #include "moxygen/flv_parser/test/FlvTestUtils.h"
 
-using namespace moxygen;
+using namespace moxygen::flv;
+using namespace moxygen::test;
 
 namespace {
-const std::string kTestDir = test::getContainingDirectory(XLOG_FILENAME).str();
+const std::string kTestDir = getContainingDirectory(XLOG_FILENAME).str();
 const std::string kFlvOkTestFilePath = "resources/testOK1s.flv";
 } // namespace
 

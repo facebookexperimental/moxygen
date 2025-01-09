@@ -11,7 +11,7 @@
 #include <folly/logging/xlog.h>
 #include "moxygen/flv_parser/FlvReader.h"
 
-namespace moxygen {
+namespace moxygen::flv {
 
 class FlvSequentialReader {
  public:
@@ -148,4 +148,4 @@ class FlvSequentialReader {
   folly::Optional<uint64_t> lastAudioPts_;
 };
 
-} // namespace moxygen
+} // namespace moxygen::flv

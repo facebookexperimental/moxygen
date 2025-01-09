@@ -6,8 +6,8 @@
 
 #pragma once
 
-#include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
+#include "moxygen/flv_parser/FlvCommon.h"
 
 namespace moxygen::test {
 
@@ -30,5 +30,56 @@ inline folly::StringPiece getContainingDirectory(folly::StringPiece input) {
 // text=\'Local time %{localtime\: %Y\/%m\/%d %H.%M.%S} (%{n})\': x=10: y=10:
 // fontsize=16: fontcolor=white: box=1: boxcolor=0x00000099" -f flv
 // ~/test_files/testOK1s.flv
+
+std::unique_ptr<flv::FlvScriptTag> createScriptTag(
+    uint32_t ts,
+    std::unique_ptr<folly::IOBuf> data) {
+  flv::FlvTagBase tag(18, data->length(), ts, 0);
+  std::unique_ptr<flv::FlvScriptTag> scriptTag =
+      std::make_unique<flv::FlvScriptTag>(tag, std::move(data));
+  return scriptTag;
+}
+
+std::unique_ptr<flv::FlvVideoTag> createVideoTag(
+    uint32_t ts,
+    uint8_t frameType,
+    uint8_t codecId,
+    uint8_t avcPacketType,
+    uint32_t compositionTime,
+    std::unique_ptr<folly::IOBuf> data) {
+  size_t tagSize = data->length();
+  flv::FlvTagBase tag(9, data->length() + 5, ts, 0);
+  std::unique_ptr<flv::FlvVideoTag> videoTag =
+      std::make_unique<flv::FlvVideoTag>(
+          tag,
+          frameType,
+          codecId,
+          avcPacketType,
+          compositionTime & 0xFFFFFF,
+          std::move(data));
+  return videoTag;
+}
+
+std::unique_ptr<flv::FlvAudioTag> createAudioTag(
+    uint32_t ts,
+    uint8_t soundFormat,
+    uint32_t soundRate,
+    uint8_t soundSize,
+    uint8_t soundType,
+    uint8_t aacPacketType,
+    std::unique_ptr<folly::IOBuf> data) {
+  size_t tagSize = data->length();
+  flv::FlvTagBase tag(8, data->length() + 2, ts, 0);
+  std::unique_ptr<flv::FlvAudioTag> audioTag =
+      std::make_unique<flv::FlvAudioTag>(
+          tag,
+          soundFormat,
+          soundRate,
+          soundSize,
+          soundType,
+          aacPacketType,
+          std::move(data));
+  return audioTag;
+}
 
 } // namespace moxygen::test

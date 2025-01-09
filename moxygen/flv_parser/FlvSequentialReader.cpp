@@ -8,7 +8,7 @@
 #include <folly/logging/xlog.h>
 #include <chrono>
 
-namespace moxygen {
+namespace moxygen::flv {
 
 std::shared_ptr<FlvSequentialReader::MediaItem>
 FlvSequentialReader::getNextItem() {
@@ -19,10 +19,16 @@ FlvSequentialReader::getNextItem() {
     try {
       std::shared_ptr<MediaItem> locaItem = std::make_shared<MediaItem>();
       auto tag = reader_.readNextTag();
-      if (std::get<0>(tag) == nullptr) {
-        XLOG(INFO) << "End of flv file";
-        locaItem->isEOF = true;
-        return locaItem;
+      if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_READCMD) {
+        auto readsCmd = std::get<flv::FlvReadCmd>(tag);
+        if (readsCmd == flv::FlvReadCmd::FLV_EOF) {
+          XLOG(INFO) << "End of flv file";
+          locaItem->isEOF = true;
+          return locaItem;
+        } else if (readsCmd == flv::FlvReadCmd::FLV_UNKNOWN_TAG) {
+          XLOG(WARNING) << "Unknown tag";
+          return locaItem;
+        }
       }
 
       // Set FLV timebase
@@ -33,12 +39,13 @@ FlvSequentialReader::getNextItem() {
               std::chrono::system_clock::now().time_since_epoch())
               .count();
 
-      if (std::get<1>(tag) != nullptr) {
+      if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_VIDEO) {
         XLOG(DBG1) << "Read tag VIDEO at frame " << videoFrameId_;
         locaItem->type = MediaType::VIDEO;
         locaItem->id = videoFrameId_;
 
-        auto videoTag = std::move(std::get<1>(tag));
+        auto videoTag =
+            std::move(std::get<FlvTagTypeIndex::FLV_TAG_INDEX_VIDEO>(tag));
 
         // Not B frames for now
         locaItem->pts = locaItem->dts = videoTag->timestamp;
@@ -81,12 +88,13 @@ FlvSequentialReader::getNextItem() {
           // Return the item
           ret = locaItem;
         }
-      } else if (std::get<2>(tag) != nullptr) {
+      } else if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_AUDIO) {
         XLOG(DBG1) << "Read tag AUDIO at frame " << audioFrameId_;
         locaItem->type = MediaType::AUDIO;
         locaItem->id = audioFrameId_;
 
-        auto audioTag = std::move(std::get<2>(tag));
+        auto audioTag =
+            std::move(std::get<FlvTagTypeIndex::FLV_TAG_INDEX_AUDIO>(tag));
 
         if (audioTag->soundFormat != 10) {
           XLOG(WARN) << "Not supported audio format codecID: "
@@ -131,10 +139,8 @@ FlvSequentialReader::getNextItem() {
           // Return the item
           ret = locaItem;
         }
-      } else if (std::get<0>(tag)->type == 18) {
+      } else if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_SCRIPT) {
         XLOG(DBG1) << "Read tag SCRIPTDATAOBJECT";
-      } else {
-        XLOG(WARNING) << "Read UNKNOWN tag " << std::get<0>(tag)->type;
       }
     } catch (std::exception& ex) {
       XLOG(ERR) << "Error processing tag. Ex: " << folly::exceptionStr(ex);
@@ -174,4 +180,4 @@ bool FlvSequentialReader::parseAscHeader(std::unique_ptr<folly::IOBuf> buf) {
 
   return true;
 }
-} // namespace moxygen
+} // namespace moxygen::flv

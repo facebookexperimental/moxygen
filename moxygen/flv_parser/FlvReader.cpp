@@ -5,14 +5,11 @@
  */
 
 #include "moxygen/flv_parser/FlvReader.h"
+#include <netinet/in.h>
 
-namespace moxygen {
+namespace moxygen::flv {
 
-std::tuple<
-    std::unique_ptr<FlvReader::FlvTag>,
-    std::unique_ptr<FlvReader::FlvVideoTag>,
-    std::unique_ptr<FlvReader::FlvAudioTag>>
-FlvReader::readNextTag() {
+FlvTag FlvReader::readNextTag() {
   if (!header_) {
     // Read header
     header_ = readBytes(9);
@@ -23,18 +20,13 @@ FlvReader::readNextTag() {
 
   if (f_.peek() == EOF) {
     // Clean end of file
-    return {
-        nullptr,
-        nullptr,
-        nullptr,
-    };
+    return FlvReadCmd::FLV_EOF;
   }
 
-  std::unique_ptr<FlvTag> tag = std::make_unique<FlvTag>();
+  std::unique_ptr<FlvTagBase> tag = std::make_unique<FlvTagBase>();
   std::unique_ptr<FlvAudioTag> audioTag;
   std::unique_ptr<FlvVideoTag> videoTag;
-
-  // Tag type
+  std::unique_ptr<FlvScriptTag> scriptTag;
   tag->type = read1Byte();
 
   // Tag data size
@@ -54,35 +46,36 @@ FlvReader::readNextTag() {
 
     auto tmp = read1Byte();
     audioTag->soundFormat = (tmp >> 4) & 0x0f;
-    auto soundRateIndex = (tmp >> 2) & 0x3;
-    if (soundRateIndex > 3) {
+    audioTag->soundRate = (tmp >> 2) & 0x3;
+    if (audioTag->soundRate > 3) {
       throw std::runtime_error(fmt::format(
           "Unsupported audio sampling rate. soundRateIndex {}",
-          soundRateIndex));
+          audioTag->soundRate));
     }
-    audioTag->soundRate =
-        FlvReader::kAudioFreqSamplingIndexMapping[soundRateIndex];
-    auto soundSizeIndex = (tmp >> 1) & 0x1;
-    if (soundSizeIndex > 1) {
+    // audioTag->soundRate = kAudioFreqSamplingIndexMapping[soundRateIndex];
+    audioTag->soundSize = (tmp >> 1) & 0x1;
+    if (audioTag->soundSize > 1) {
       throw std::runtime_error(fmt::format(
           "Unsupported audio bits per sample. soundSizeIndex {}",
-          soundSizeIndex));
+          audioTag->soundSize));
     }
-    audioTag->soundSize = kAudioBitsPerSampleMapping[soundSizeIndex];
-    auto soundTypeIndex = tmp & 0x1;
-    if (soundTypeIndex > 1) {
+    // audioTag->soundSize = kAudioBitsPerSampleMapping[soundSizeIndex];
+    audioTag->soundType = tmp & 0x1;
+    if (audioTag->soundType > 1) {
       throw std::runtime_error(fmt::format(
-          "Unsupported number of channels. soundSizeIndex {}", soundTypeIndex));
+          "Unsupported number of channels. soundSizeIndex {}",
+          audioTag->soundType));
     }
-    audioTag->soundType = kAudioChannels[soundTypeIndex];
-    if (audioTag->soundFormat != 10 || audioTag->soundRate != 44100 ||
-        audioTag->soundSize != 16 || audioTag->soundType != 2) {
+    // audioTag->soundType = kAudioChannels[soundTypeIndex];
+    if (audioTag->soundFormat != 10 || audioTag->soundRate != 3 ||
+        audioTag->soundSize != 1 || audioTag->soundType != 1) {
       throw std::runtime_error(fmt::format(
-          "Unsupported audio format, only AAC is supported. soundFormat {}, soundRate {}, soundSize {}, soundType {}",
+          "Unsupported audio format, only AAC is supported. soundFormat {}, soundRate {}, soundSize {}, soundType {} (byte: {})",
           audioTag->soundFormat,
           audioTag->soundRate,
           audioTag->soundSize,
-          audioTag->soundType));
+          audioTag->soundType,
+          tmp));
     }
 
     audioTag->aacPacketType = read1Byte();
@@ -96,7 +89,11 @@ FlvReader::readNextTag() {
     if (tag->size > 2) {
       audioTag->data = readBytes(tag->size - 2);
     }
-  } else if (tag->type == 0x09) {
+
+    return audioTag;
+  }
+
+  if (tag->type == 0x09) {
     // Video tag
     videoTag = std::make_unique<FlvVideoTag>(*tag);
 
@@ -120,15 +117,24 @@ FlvReader::readNextTag() {
     if (tag->size > 5) {
       videoTag->data = readBytes(tag->size - 5);
     }
-  } else {
-    readBytes(tag->size);
+
+    return videoTag;
   }
 
-  return {
-      std::move(tag),
-      std::move(videoTag),
-      std::move(audioTag),
-  };
+  if (tag->type == 0x12) {
+    // Script tag
+    scriptTag = std::make_unique<FlvScriptTag>(*tag);
+    // Read data
+    if (tag->size > 0) {
+      scriptTag->data = readBytes(tag->size);
+    }
+    return scriptTag;
+  }
+
+  // Skip data
+  readBytes(tag->size);
+
+  return FlvReadCmd::FLV_UNKNOWN_TAG;
 }
 
 uint8_t FlvReader::read1Byte() {
@@ -151,17 +157,10 @@ uint8_t FlvReader::read1Byte() {
 
 uint32_t FlvReader::read3Bytes() {
   uint32_t ret = 0;
-  const int64_t bytesToRead = 3;
-  uint8_t tmp[bytesToRead];
-  f_.read((char*)tmp, bytesToRead);
-  if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
-    uint32_t tmpFin = 0;
-    if (std::endian::native == std::endian::little) {
-      tmpFin = (tmp[0] << 16 | tmp[1] << 8 | tmp[2]);
-    } else {
-      tmpFin = (tmp[2] << 16 | tmp[1] << 8 | tmp[0]);
-    }
-    ret = tmpFin;
+  uint32_t readData = 0;
+  f_.read(reinterpret_cast<char*>(&readData), 3);
+  if (f_.gcount() == 3 && f_.rdstate() == std::ios::goodbit) {
+    ret = ntohl(readData << 8);
   } else {
     throw std::runtime_error(fmt::format(
         "Failed to read 3 byte at offset {}", static_cast<int>(f_.tellg())));
@@ -171,17 +170,11 @@ uint32_t FlvReader::read3Bytes() {
 
 uint32_t FlvReader::read4Bytes() {
   uint32_t ret = 0;
-  const int64_t bytesToRead = 4;
-  uint8_t tmp[bytesToRead];
-  f_.read((char*)tmp, bytesToRead);
-  if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
-    uint32_t tmpFin = 0;
-    if (std::endian::native == std::endian::little) {
-      tmpFin = tmp[0] << 24 | tmp[1] << 16 | tmp[2] << 8 | tmp[3];
-    } else {
-      tmpFin = tmp[3] << 24 | tmp[2] << 16 | tmp[1] << 8 | tmp[0];
-    }
-    ret = tmpFin;
+  uint32_t readData;
+  f_.read(reinterpret_cast<char*>(&readData), 4);
+  if (f_.gcount() == 4 && f_.rdstate() == std::ios::goodbit) {
+    ret = ntohl(readData);
+
   } else {
     throw std::runtime_error(fmt::format(
         "Failed to read 4 byte at offset {}. bytesRead: {}, rdstate: {}",
@@ -194,7 +187,7 @@ uint32_t FlvReader::read4Bytes() {
 
 std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
   std::unique_ptr<folly::IOBuf> ret;
-  if (n > std::numeric_limits<int64_t>::max()) {
+  if (n > std::numeric_limits<int32_t>::max()) {
     throw std::runtime_error(
         fmt::format("Cannot read more than int64_t::max {}", n));
   }
@@ -212,4 +205,4 @@ std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
   return ret;
 }
 
-} // namespace moxygen
+} // namespace moxygen::flv
