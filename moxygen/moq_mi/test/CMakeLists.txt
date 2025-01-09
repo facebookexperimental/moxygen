@@ -13,5 +13,7 @@ moxygen_add_test(TARGET MoQMiTests
     MoQMiTest.cpp
   DEPENDS
     moqmi
+    flvparser
+    proxygen::proxygen
     Folly::folly
 )

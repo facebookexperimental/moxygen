@@ -14,5 +14,6 @@ moxygen_add_test(TARGET FlvParserTests
     FlvSequentialReaderTest.cpp
   DEPENDS
     flvparser
+    moqmi
     Folly::folly
 )

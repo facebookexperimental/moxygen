@@ -6,7 +6,9 @@
 
 # flvparser
 add_library(flvparser
+    FlvCommon.cpp
     FlvReader.cpp
+    FlvWriter.cpp
     FlvSequentialReader.cpp
 )
 

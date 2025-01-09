@@ -206,4 +206,28 @@ void MoQMi::writeVarint(
   }
 }
 
+std::ostream& operator<<(
+    std::ostream& os,
+    MoQMi::VideoH264AVCCWCPData const& v) {
+  auto metadataSize =
+      v.metadata != nullptr ? v.metadata->computeChainDataLength() : 0;
+  auto dataSize = v.data != nullptr ? v.data->computeChainDataLength() : 0;
+  os << "VideoH264. id: " << v.seqId << ", pts: " << v.pts << ", dts: " << v.dts
+     << ", timescale: " << v.timescale << ", duration: " << v.duration
+     << ", wallclock: " << v.wallclock << ", metadata length: " << metadataSize
+     << ", data length: " << dataSize;
+  return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    MoQMi::AudioAACMP4LCWCPData const& a) {
+  auto dataSize = a.data != nullptr ? a.data->computeChainDataLength() : 0;
+  os << "AudioAAC. id: " << a.seqId << ", pts: " << a.pts
+     << ", sampleFreq: " << a.sampleFreq << ", numChannels: " << a.numChannels
+     << ", timescale: " << a.timescale << ", duration: " << a.duration
+     << ", wallclock: " << a.wallclock << ", data length: " << dataSize;
+  return os;
+}
+
 } // namespace moxygen
