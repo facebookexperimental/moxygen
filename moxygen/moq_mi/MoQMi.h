@@ -73,6 +73,10 @@ class MoQMi {
               std::move(data)),
           metadata(std::move(metadata)),
           dts(dts) {}
+
+    friend std::ostream& operator<<(
+        std::ostream& os,
+        const VideoH264AVCCWCPData& v);
   };
 
   struct AudioAACMP4LCWCPData : public CommonData {
@@ -97,6 +101,10 @@ class MoQMi {
               std::move(data)),
           sampleFreq(sampleFreq),
           numChannels(numChannels) {}
+
+    friend std::ostream& operator<<(
+        std::ostream& os,
+        const AudioAACMP4LCWCPData& a);
   };
 
   explicit MoQMi() {}
@@ -106,6 +114,11 @@ class MoQMi {
       std::unique_ptr<VideoH264AVCCWCPData> data) noexcept;
   static std::unique_ptr<folly::IOBuf> toObjectPayload(
       std::unique_ptr<AudioAACMP4LCWCPData> data) noexcept;
+
+  static std::tuple<
+      std::unique_ptr<MoQMi::VideoH264AVCCWCPData>,
+      std::unique_ptr<MoQMi::AudioAACMP4LCWCPData>>
+  fromObjectPayload(std::unique_ptr<folly::IOBuf> data) noexcept;
 
  private:
   static const size_t kMaxQuicIntSize = 32;
@@ -122,5 +135,28 @@ class MoQMi {
       size_t& size,
       bool& error) noexcept;
 };
+
+std::ostream& operator<<(
+    std::ostream& os,
+    MoQMi::VideoH264AVCCWCPData const& v) {
+  auto metadataSize = v.metadata != nullptr ? v.metadata->length() : 0;
+  auto dataSize = v.data != nullptr ? v.data->length() : 0;
+  os << "VideoH264. id: " << v.seqId << ", pts: " << v.pts << ", dts: " << v.dts
+     << ", timescale: " << v.timescale << ", duration: " << v.duration
+     << ", wallclock: " << v.wallclock << ", metadata length: " << metadataSize
+     << ", data length: " << dataSize;
+  return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    MoQMi::AudioAACMP4LCWCPData const& a) {
+  auto dataSize = a.data != nullptr ? a.data->length() : 0;
+  os << "AudioAAC. id: " << a.seqId << ", pts: " << a.pts
+     << ", sampleFreq: " << a.sampleFreq << ", numChannels: " << a.numChannels
+     << ", timescale: " << a.timescale << ", duration: " << a.duration
+     << ", wallclock: " << a.wallclock << ", data length: " << dataSize;
+  return os;
+}
 
 } // namespace moxygen

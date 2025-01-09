@@ -24,7 +24,7 @@ TEST(MoQMi, EncodeVideoH264TestNoMetadata) {
       0x05, 0x00, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c,
       0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
 
-  // Test VideoH264AVCCWCPData with metadata
+  // Test VideoH264AVCCWCPData without metadata
   auto dataToEncode = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
       0x3FFFFFFFFFFFFF00, // SeqId
       0x3FFFFFFFFFFFFF01, // Pts
@@ -98,7 +98,7 @@ TEST(MoQMi, EncodeAudioAAC) {
       0xff, 0x05, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c,
       0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
 
-  // Test VideoH264AVCCWCPData with metadata
+  // Test AudioAACMP4LCWCPData
   auto dataToEncode = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
       0x3FFFFFFFFFFFFF00, // SeqId
       0x3FFFFFFFFFFFFF01, // Pts
@@ -121,4 +121,130 @@ TEST(MoQMi, EncodeAudioAAC) {
 
   folly::IOBufEqualTo eq;
   EXPECT_TRUE(eq(mi, folly::IOBuf::copyBuffer(expectedWire, 74)));
+}
+
+TEST(MoQMi, DecodeVideoH264TestWithMetadata) {
+  uint8_t fromWire[88] = {
+      0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
+      0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0xff, 0xff, 0x02, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04,
+      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff,
+      0xff, 0xff, 0xff, 0xff, 0x05, 0x15, 0x4d, 0x65, 0x74, 0x61, 0x64,
+      0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20,
+      0x77, 0x6f, 0x72, 0x6c, 0x64, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20,
+      0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+
+  auto buff = folly::IOBuf::copyBuffer(fromWire, sizeof(fromWire));
+
+  // Test VideoH264AVCCWCPData with metadata
+  auto res = MoQMi::fromObjectPayload(buff->clone());
+
+  EXPECT_NE(std::get<0>(res), nullptr);
+  EXPECT_EQ(std::get<1>(res), nullptr);
+  EXPECT_EQ(std::get<0>(res)->seqId, 0x3FFFFFFFFFFFFF00);
+  EXPECT_EQ(std::get<0>(res)->pts, 0x3FFFFFFFFFFFFF01);
+  EXPECT_EQ(std::get<0>(res)->timescale, 0x3FFFFFFFFFFFFF04);
+  EXPECT_EQ(std::get<0>(res)->duration, 0x3FFFFFFFFFFFFF03);
+  EXPECT_EQ(std::get<0>(res)->wallclock, 0x3FFFFFFFFFFFFF05);
+  EXPECT_EQ(std::get<0>(res)->dts, 0x3FFFFFFFFFFFFF02);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(std::get<0>(res)->data, kTestData));
+  EXPECT_TRUE(eq(std::get<0>(res)->metadata, kTestMetadata));
+}
+
+TEST(MoQMi, DecodeVideoH264TestNoMetadata) {
+  uint8_t fromWire[67] = {
+      0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff,
+      0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0x02, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04, 0xff, 0xff, 0xff,
+      0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0x05, 0x00, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c,
+      0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+
+  auto buff = folly::IOBuf::copyBuffer(fromWire, sizeof(fromWire));
+
+  // Test VideoH264AVCCWCPData without metadata
+  auto res = MoQMi::fromObjectPayload(buff->clone());
+
+  EXPECT_NE(std::get<0>(res), nullptr);
+  EXPECT_EQ(std::get<1>(res), nullptr);
+  EXPECT_EQ(std::get<0>(res)->seqId, 0x3FFFFFFFFFFFFF00);
+  EXPECT_EQ(std::get<0>(res)->pts, 0x3FFFFFFFFFFFFF01);
+  EXPECT_EQ(std::get<0>(res)->timescale, 0x3FFFFFFFFFFFFF04);
+  EXPECT_EQ(std::get<0>(res)->duration, 0x3FFFFFFFFFFFFF03);
+  EXPECT_EQ(std::get<0>(res)->wallclock, 0x3FFFFFFFFFFFFF05);
+  EXPECT_EQ(std::get<0>(res)->dts, 0x3FFFFFFFFFFFFF02);
+  EXPECT_EQ(std::get<0>(res)->metadata, nullptr);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(std::get<0>(res)->data, kTestData));
+}
+
+TEST(MoQMi, DecodeAudioAAC) {
+  uint8_t fromWire[74] = {
+      0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
+      0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x06,
+      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0xff, 0xff, 0xff,
+      0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+      0xff, 0x05, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c,
+      0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+
+  auto buff = folly::IOBuf::copyBuffer(fromWire, sizeof(fromWire));
+
+  // Test AudioAACMP4LCWCPData
+  auto res = MoQMi::fromObjectPayload(buff->clone());
+
+  EXPECT_EQ(std::get<0>(res), nullptr);
+  EXPECT_NE(std::get<1>(res), nullptr);
+  EXPECT_EQ(std::get<1>(res)->seqId, 0x3FFFFFFFFFFFFF00);
+  EXPECT_EQ(std::get<1>(res)->pts, 0x3FFFFFFFFFFFFF01);
+  EXPECT_EQ(std::get<1>(res)->timescale, 0x3FFFFFFFFFFFFF04);
+  EXPECT_EQ(std::get<1>(res)->duration, 0x3FFFFFFFFFFFFF03);
+  EXPECT_EQ(std::get<1>(res)->wallclock, 0x3FFFFFFFFFFFFF05);
+  EXPECT_EQ(std::get<1>(res)->sampleFreq, 0x3FFFFFFFFFFFFF06);
+  EXPECT_EQ(std::get<1>(res)->numChannels, 0x3FFFFFFFFFFFFF07);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(std::get<1>(res)->data, kTestData));
+}
+
+TEST(MoQMi, OverrideStreamOpVideoH264) {
+  std::string expected =
+      "VideoH264. id: 1, pts: 2, dts: 6, timescale: 3, duration: 4, wallclock: 5, metadata length: 21, data length: 17";
+
+  auto dataVideo = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
+      1,                      // SeqId
+      2,                      // Pts
+      3,                      // Timescale
+      4,                      // Duration
+      5,                      // Wallclock
+      kTestData->clone(),     // Data
+      kTestMetadata->clone(), // Metadata
+      6                       // Dts
+  );
+
+  std::stringstream ss;
+
+  ss << *dataVideo;
+  EXPECT_EQ(ss.str(), expected);
+}
+
+TEST(MoQMi, OverrideStreamOpAudioAAC) {
+  std::string expected =
+      "AudioAAC. id: 1, pts: 2, sampleFreq: 6, numChannels: 7, timescale: 3, duration: 4, wallclock: 5, data length: 17";
+
+  auto dataAudio = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
+      1,                  // SeqId
+      2,                  // Pts
+      3,                  // Timescale
+      4,                  // Duration
+      5,                  // Wallclock
+      kTestData->clone(), // Data
+      6,                  // SampleFreq
+      7                   // NumChannels
+  );
+
+  std::stringstream ss;
+
+  ss << *dataAudio;
+  EXPECT_EQ(ss.str(), expected);
 }

@@ -67,6 +67,131 @@ std::unique_ptr<folly::IOBuf> MoQMi::toObjectPayload(
   return buffQueue.move();
 }
 
+std::tuple<
+    std::unique_ptr<MoQMi::VideoH264AVCCWCPData>,
+    std::unique_ptr<MoQMi::AudioAACMP4LCWCPData>>
+MoQMi::fromObjectPayload(std::unique_ptr<folly::IOBuf> payload) noexcept {
+  folly::io::Cursor cursor(payload.get());
+
+  auto mediaType = quic::decodeQuicInteger(cursor);
+  if (!mediaType) {
+    return {
+        nullptr,
+        nullptr,
+    };
+  }
+
+  if (mediaType->first == folly::to_underlying(PayloadType::VideoH264AVCCWCP)) {
+    VideoH264AVCCWCPData videoData;
+    auto seqId = quic::decodeQuicInteger(cursor);
+    if (!seqId) {
+      return {nullptr, nullptr};
+    }
+    auto pts = quic::decodeQuicInteger(cursor);
+    if (!pts) {
+      return {nullptr, nullptr};
+    }
+    auto dts = quic::decodeQuicInteger(cursor);
+    if (!dts) {
+      return {nullptr, nullptr};
+    }
+    auto timescale = quic::decodeQuicInteger(cursor);
+    if (!timescale) {
+      return {nullptr, nullptr};
+    }
+    auto duration = quic::decodeQuicInteger(cursor);
+    if (!duration) {
+      return {nullptr, nullptr};
+    }
+    auto wallclock = quic::decodeQuicInteger(cursor);
+    if (!wallclock) {
+      return {nullptr, nullptr};
+    }
+    auto metadataSize = quic::decodeQuicInteger(cursor);
+    if (!metadataSize) {
+      return {nullptr, nullptr};
+    }
+    std::unique_ptr<folly::IOBuf> metadata;
+    if (metadataSize->first > 0) {
+      if (!cursor.canAdvance(metadataSize->first)) {
+        return {nullptr, nullptr};
+      }
+      auto b = cursor.data();
+      metadata = folly::IOBuf::copyBuffer(b, metadataSize->first);
+      cursor.skip(metadataSize->first);
+    }
+
+    auto b = cursor.data();
+    auto data = folly::IOBuf::copyBuffer(b, cursor.length());
+    cursor.skip(cursor.length());
+    return {
+        std::make_unique<VideoH264AVCCWCPData>(
+            seqId->first,
+            pts->first,
+            timescale->first,
+            duration->first,
+            wallclock->first,
+            std::move(data),
+            std::move(metadata),
+            dts->first),
+        nullptr};
+  }
+
+  if (mediaType->first == folly::to_underlying(PayloadType::AudioAACMP4LCWCP)) {
+    AudioAACMP4LCWCPData audioData;
+
+    auto seqId = quic::decodeQuicInteger(cursor);
+    if (!seqId) {
+      return {nullptr, nullptr};
+    }
+    auto pts = quic::decodeQuicInteger(cursor);
+    if (!pts) {
+      return {nullptr, nullptr};
+    }
+    auto timescale = quic::decodeQuicInteger(cursor);
+    if (!timescale) {
+      return {nullptr, nullptr};
+    }
+    auto sampleFreq = quic::decodeQuicInteger(cursor);
+    if (!sampleFreq) {
+      return {nullptr, nullptr};
+    }
+    auto numChannels = quic::decodeQuicInteger(cursor);
+    if (!numChannels) {
+      return {nullptr, nullptr};
+    }
+    auto duration = quic::decodeQuicInteger(cursor);
+    if (!duration) {
+      return {nullptr, nullptr};
+    }
+    auto wallclock = quic::decodeQuicInteger(cursor);
+    if (!wallclock) {
+      return {nullptr, nullptr};
+    }
+    auto b = cursor.data();
+    auto data = folly::IOBuf::copyBuffer(b, cursor.length());
+    cursor.skip(cursor.length());
+
+    return {
+        nullptr,
+        std::make_unique<AudioAACMP4LCWCPData>(
+            seqId->first,
+            pts->first,
+            timescale->first,
+            duration->first,
+            wallclock->first,
+            std::move(data),
+            sampleFreq->first,
+            numChannels->first)};
+  }
+
+  // Not implemented payload type
+  return {
+      nullptr,
+      nullptr,
+  };
+}
+
 void MoQMi::writeBuffer(
     folly::IOBufQueue& buf,
     std::unique_ptr<folly::IOBuf> data,
