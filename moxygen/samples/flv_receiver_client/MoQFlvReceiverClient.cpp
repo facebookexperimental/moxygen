@@ -90,7 +90,7 @@ class FlvWriterShared : flv::FlvWriter {
       }
       bool isIdr = moqv->isIdr();
       if (videoHeaderWritten_ && moqv->data != nullptr &&
-          moqv->data->length() > 0) {
+          moqv->data->computeChainDataLength() > 0) {
         if ((!firstIDRWritten_ && isIdr) || firstIDRWritten_) {
           // Write frame
           uint8_t frameType = isIdr ? 1 : 0;

@@ -21,8 +21,6 @@ bool FlvWriter::writeTag(FlvTag tag) {
     headerWrote_ = true;
   }
 
-  // TODO: Save header first
-
   size_t tagSize = 0;
   if (tag.index() == FlvTagTypeIndex::FLV_TAG_INDEX_SCRIPT) {
     // Script
@@ -101,10 +99,20 @@ void FlvWriter::writeByte(std::byte b) {
 }
 
 size_t FlvWriter::writeIoBuf(std::unique_ptr<folly::IOBuf> buf) {
+  size_t ret = 0;
   CHECK(buf != nullptr);
-  buf->coalesce();
-  size_t ret = buf->length();
-  f_.write(reinterpret_cast<const char*>(buf->data()), buf->length());
+
+  // Write all the chain if IOBuf without coalesing
+  const folly::IOBuf* current = buf.get();
+  do {
+    if (current->length() > 0) {
+      f_.write(
+          reinterpret_cast<const char*>(current->data()), current->length());
+      ret += current->length();
+    }
+    current = current->next();
+
+  } while (current != buf.get());
 
   return ret;
 }

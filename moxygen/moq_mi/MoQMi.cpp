@@ -69,9 +69,6 @@ std::unique_ptr<folly::IOBuf> MoQMi::toObjectPayload(
 
 MoQMi::MoqMiTag MoQMi::fromObjectPayload(
     std::unique_ptr<folly::IOBuf> payload) noexcept {
-  // IOBuff needs to be coalesced before we can decode it, we do a buf copy
-  payload->coalesce();
-
   folly::io::Cursor cursor(payload.get());
 
   auto mediaType = quic::decodeQuicInteger(cursor);
@@ -117,7 +114,7 @@ MoQMi::MoqMiTag MoQMi::fromObjectPayload(
       cursor.clone(metadata, metadataSize->first);
     }
     std::unique_ptr<folly::IOBuf> data;
-    cursor.clone(data, cursor.length());
+    cursor.clone(data, cursor.totalLength());
     return std::make_unique<VideoH264AVCCWCPData>(
         seqId->first,
         pts->first,
@@ -161,7 +158,7 @@ MoQMi::MoqMiTag MoQMi::fromObjectPayload(
       return MoQMi::MoqMiReadCmd::MOQMI_ERR;
     }
     std::unique_ptr<folly::IOBuf> data;
-    cursor.clone(data, cursor.length());
+    cursor.clone(data, cursor.totalLength());
     return std::make_unique<AudioAACMP4LCWCPData>(
         seqId->first,
         pts->first,

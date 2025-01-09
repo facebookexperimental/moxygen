@@ -7,7 +7,7 @@ namespace moxygen::flv {
 std::unique_ptr<flv::FlvScriptTag> createScriptTag(
     uint32_t ts,
     std::unique_ptr<folly::IOBuf> data) {
-  flv::FlvTagBase tag(18, data->length(), ts, 0);
+  flv::FlvTagBase tag(18, data->computeChainDataLength(), ts, 0);
   std::unique_ptr<flv::FlvScriptTag> scriptTag =
       std::make_unique<flv::FlvScriptTag>(tag, std::move(data));
   return scriptTag;
@@ -20,7 +20,7 @@ std::unique_ptr<flv::FlvVideoTag> createVideoTag(
     uint8_t avcPacketType,
     uint32_t compositionTime,
     std::unique_ptr<folly::IOBuf> data) {
-  flv::FlvTagBase tag(9, data->length() + 5, ts, 0);
+  flv::FlvTagBase tag(9, data->computeChainDataLength() + 5, ts, 0);
   std::unique_ptr<flv::FlvVideoTag> videoTag =
       std::make_unique<flv::FlvVideoTag>(
           tag,
@@ -40,7 +40,7 @@ std::unique_ptr<flv::FlvAudioTag> createAudioTag(
     uint8_t soundType,
     uint8_t aacPacketType,
     std::unique_ptr<folly::IOBuf> data) {
-  flv::FlvTagBase tag(8, data->length() + 2, ts, 0);
+  flv::FlvTagBase tag(8, data->computeChainDataLength() + 2, ts, 0);
   std::unique_ptr<flv::FlvAudioTag> audioTag =
       std::make_unique<flv::FlvAudioTag>(
           tag,

@@ -6,7 +6,6 @@
 
 #pragma once
 
-// TODO: We need to opensource (or re implememt) FLV reader
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/IOBufQueue.h>
@@ -189,8 +188,9 @@ class MoQMi {
 std::ostream& operator<<(
     std::ostream& os,
     MoQMi::VideoH264AVCCWCPData const& v) {
-  auto metadataSize = v.metadata != nullptr ? v.metadata->length() : 0;
-  auto dataSize = v.data != nullptr ? v.data->length() : 0;
+  auto metadataSize =
+      v.metadata != nullptr ? v.metadata->computeChainDataLength() : 0;
+  auto dataSize = v.data != nullptr ? v.data->computeChainDataLength() : 0;
   os << "VideoH264. id: " << v.seqId << ", pts: " << v.pts << ", dts: " << v.dts
      << ", timescale: " << v.timescale << ", duration: " << v.duration
      << ", wallclock: " << v.wallclock << ", metadata length: " << metadataSize
@@ -201,7 +201,7 @@ std::ostream& operator<<(
 std::ostream& operator<<(
     std::ostream& os,
     MoQMi::AudioAACMP4LCWCPData const& a) {
-  auto dataSize = a.data != nullptr ? a.data->length() : 0;
+  auto dataSize = a.data != nullptr ? a.data->computeChainDataLength() : 0;
   os << "AudioAAC. id: " << a.seqId << ", pts: " << a.pts
      << ", sampleFreq: " << a.sampleFreq << ", numChannels: " << a.numChannels
      << ", timescale: " << a.timescale << ", duration: " << a.duration

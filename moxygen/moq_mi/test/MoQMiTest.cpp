@@ -9,6 +9,7 @@
 #include <folly/String.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
+#include <proxygen/lib/utils/Logging.h>
 
 using namespace moxygen;
 
@@ -45,7 +46,7 @@ TEST(MoQMi, EncodeVideoH264TestNoMetadata) {
   );
   // Total: 1+8+8+8+8+8+8+1+17 = 67 bytes
 
-  XLOG(INFO) << "dataToEncode->data->length()="
+  XLOG(INFO) << "dataToEncode->data->computeChainDataLength()="
              << dataToEncode->data->computeChainDataLength();
 
   auto mi = MoQMi::toObjectPayload(std::move(dataToEncode));
@@ -82,9 +83,10 @@ TEST(MoQMi, EncodeVideoH264TestWithMetadata) {
   );
   // Total: 1+8+8+8+8+8+8+21+1+17 = 88 bytes
 
-  XLOG(INFO) << "dataToEncode->metadata->length()="
-             << dataToEncode->metadata->length();
-  XLOG(INFO) << "dataToEncode->data->length()=" << dataToEncode->data->length();
+  XLOG(INFO) << "dataToEncode->metadata->computeChainDataLength()="
+             << dataToEncode->metadata->computeChainDataLength();
+  XLOG(INFO) << "dataToEncode->data->computeChainDataLength()="
+             << dataToEncode->data->computeChainDataLength();
 
   auto mi = MoQMi::toObjectPayload(std::move(dataToEncode));
 
@@ -119,7 +121,7 @@ TEST(MoQMi, EncodeAudioAAC) {
   );
   // Total: 1+8+8+8+8+8+8+8+17 = 74 bytes
 
-  XLOG(INFO) << "dataToEncode->data->length()="
+  XLOG(INFO) << "dataToEncode->data->computeChainDataLength()="
              << dataToEncode->data->computeChainDataLength();
 
   auto mi = MoQMi::toObjectPayload(std::move(dataToEncode));
@@ -278,13 +280,13 @@ TEST(MoQMi, IsIdr) {
 
   XLOG(INFO) << "dataVideoIdr: " << *dataVideoIdr;
   XLOG(INFO) << "dataVideoIdr->data: "
-             << folly::hexDump(
-                    dataVideoIdr->data->data(), dataVideoIdr->data->length());
+             << proxygen::IOBufPrinter::printHexFolly(
+                    dataVideoIdr->data.get(), true);
+
   XLOG(INFO) << "dataVideoNoIdr: " << *dataVideoNoIdr;
   XLOG(INFO) << "dataVideoNoIdr->data: "
-             << folly::hexDump(
-                    dataVideoNoIdr->data->data(),
-                    dataVideoNoIdr->data->length());
+             << proxygen::IOBufPrinter::printHexFolly(
+                    dataVideoNoIdr->data.get(), true);
 
   EXPECT_TRUE(dataVideoIdr->isIdr());
   EXPECT_FALSE(dataVideoNoIdr->isIdr());
@@ -304,11 +306,10 @@ TEST(MoQMi, AscAudioHeader) {
   );
 
   auto ascHeaderData = audioData->getAscHeader();
-  ascHeaderData->coalesce();
   XLOG(INFO) << "ascHeaderData: "
-             << folly::hexDump(ascHeaderData->data(), ascHeaderData->length());
+             << proxygen::IOBufPrinter::printHexFolly(
+                    ascHeaderData.get(), true);
   auto ascHeaderDataDecoded = flv::parseAscHeader(ascHeaderData->clone());
-
   XLOG(INFO) << "expectedAsc: " << expectedAsc;
   XLOG(INFO) << "ascHeaderDataDecoded: " << ascHeaderDataDecoded;
 

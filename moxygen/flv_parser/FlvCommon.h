@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <folly/Optional.h>
+#include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <cstdint>
 #include <variant>
@@ -50,23 +52,30 @@ const uint32_t kAscFreqSamplingIndexMapping[16]{
 class BitReader {
  public:
   explicit BitReader(std::unique_ptr<folly::IOBuf> data)
-      : data_(std::move(data)) {}
+      : data_(std::move(data)) {
+    if (data_ != nullptr) {
+      cursor_ = std::make_unique<folly::io::Cursor>(data_.get());
+    }
+  }
 
   uint64_t getNextBits(uint8_t numBits) {
+    if (data_ == nullptr || cursor_ == nullptr) {
+      throw std::runtime_error("Can not read from empty buffer");
+    }
     uint64_t result = 0;
-
     if (numBits > 64) {
       throw std::runtime_error("Can not read more than 64 bits");
     }
-
-    for (uint64_t i = 0; i < numBits; i++) {
-      uint64_t bytePos = bitOffset_ / 8;
+    for (int i = 0; i < numBits; i++) {
       uint64_t bitPos = bitOffset_ % 8;
-      if (bytePos >= data_->computeChainDataLength()) {
-        throw std::runtime_error("Can not read more bits, short");
+      if (bitPos == 0) {
+        if (!cursor_->canAdvance(1)) {
+          throw std::runtime_error("Can not read more bits, short");
+        }
+        currentByte_ = cursor_->readBE<uint8_t>();
       }
-      uint8_t tmp =
-          ((uint8_t)data_->data()[bytePos]) & (uint8_t)std::pow(2, 7 - bitPos);
+      CHECK_EQ(currentByte_.has_value(), true);
+      uint8_t tmp = currentByte_.value_or(0) & (uint8_t)std::pow(2, 7 - bitPos);
       result = result << 1;
       if (tmp > 0) {
         result |= 1;
@@ -80,6 +89,8 @@ class BitReader {
 
  private:
   std::unique_ptr<folly::IOBuf> data_;
+  std::unique_ptr<folly::io::Cursor> cursor_;
+  folly::Optional<uint8_t> currentByte_{folly::none};
   uint64_t bitOffset_{0};
 };
 
