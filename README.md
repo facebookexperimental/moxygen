@@ -28,7 +28,7 @@ cd scripts
 
 - Execute date server (from project root dir)
 ```
-./_build/bin/moqdateserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key --logging DBG
+./_build/bin/moqdateserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key --logging DBG1
 ```
 
 - Execute text client
@@ -74,7 +74,20 @@ I0520 13:08:11.351163 7064889 MoQClient.cpp:137] onWebTransportUniStream
 11
 ```
 
-## Test with media client
+## Test with media streamer and media receiver
+
+To simplify testing MOQ at media level we added the following binaries to the repo `MoQFlvStreamerClient` and `MoQFlvReceiverClient`.
+
+![moq-relay-streamer-receiver](./pics/moq_streamer_receiver.png)
+Fig3: MoQFlvStreamerClient, MoQFlvReceiverClient, and moxygen
+
+- `MoQFlvStreamerClient`: Convert any FLV (h264 / AAC-LC) file or stream (fifo) into MOQ, publishing it to a relay using MoqMi packager (see RFC [draft-cenzano-moq-media-interop](https://datatracker.ietf.org/doc/draft-cenzano-moq-media-interop/))
+
+- `MoQFlvReceiverClient`: Subscribes to a relay for a video and audio track, demuxes them from MoqMi (expecting h264 / AAC-LC), transmuxes them to FLV and saves that to disc (or stream using fifo)
+
+They work with FLV packager. Since [ffmpeg](https://www.ffmpeg.org/ffmpeg.html) is able to mux and / or demux this packager in low latency and real time very nice you can build a huge variety of tests set ups, for more information and examples take a look to [READMOQMEDIA.md](./READMOQMEDIA.md)
+
+## Test with web media client
 - You can use [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) as encoder (publisher), and also as player (consumer)
 
 - You need to install that website ([moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)) in a https server (apache2 recommended)
@@ -85,7 +98,9 @@ I0520 13:08:11.351163 7064889 MoQClient.cpp:137] onWebTransportUniStream
 ./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG
 ```
 
-## Local test with media client (server running in localhost)
+## Local test with web media client
+
+Assuming all running in localhost
 
 - Execute (from project root dir)
 ```
@@ -95,7 +110,7 @@ I0520 13:08:11.351163 7064889 MoQClient.cpp:137] onWebTransportUniStream
 Note: [moq-encoder-player] indicate the root directory of that project. So you need to use those certs to enable connections from Chrome to localhost
 
 - Start client (MACOS)
-Run MOQ encoder / player locally
+Run MOQ encoder / player in the browser locally
    - Open a Chrome window and follow the instructions you will find in [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)
 
 

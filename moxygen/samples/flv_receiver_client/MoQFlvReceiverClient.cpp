@@ -154,6 +154,8 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
       : trackMediaType_(TrackType(mediaType)) {}
   ~TrackReceiverHandler() override = default;
   FlowControlState onObject(const ObjectHeader&, Payload payload) override {
+    // TODO: Add jitter buffer to fix out of order packets, we will need latency
+    // parameter to determine how much to buffer we want
     if (payload) {
       auto payloadSize = payload->computeChainDataLength();
       XLOG(DBG1) << trackMediaType_.toStr()
