@@ -79,8 +79,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     void onBody(std::unique_ptr<folly::IOBuf>) noexcept override {}
     void onTrailers(std::unique_ptr<proxygen::HTTPHeaders>) noexcept override {}
     void onEOM() noexcept override {
-      XLOG(DBG1) << "Session terminated";
-      server_.terminateClientSession(std::move(clientSession_));
+      XLOG(DBG1) << "WebTransport session terminated";
+      onSessionEnd(folly::none);
       if (!txn_->isEgressEOMSeen()) {
         txn_->sendEOM();
       }
@@ -88,7 +88,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     void onUpgrade(proxygen::UpgradeProtocol) noexcept override {}
     void onError(const proxygen::HTTPException& error) noexcept override {
       XLOG(ERR) << folly::exceptionStr(error);
-      server_.terminateClientSession(std::move(clientSession_));
+      onSessionEnd(proxygen::WebTransport::kInternalError);
     }
     void onEgressPaused() noexcept override {}
     void onEgressResumed() noexcept override {}
@@ -107,6 +107,12 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     }
 
    private:
+    void onSessionEnd(folly::Optional<uint32_t> err) {
+      if (clientSession_) {
+        clientSession_->onSessionEnd(err);
+        clientSession_.reset();
+      }
+    }
     MoQServer& server_;
     proxygen::HTTPTransaction* txn_{nullptr};
     std::shared_ptr<MoQSession> clientSession_;
