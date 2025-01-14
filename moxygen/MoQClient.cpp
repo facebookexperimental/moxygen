@@ -187,12 +187,12 @@ void MoQClient::HTTPHandler::onError(
   client_.onSessionEnd(folly::none);
 }
 
-void MoQClient::onSessionEnd(folly::Optional<uint32_t>) {
-  // TODO: cleanup?
-  XLOG(DBG1) << "resetting moqSession_";
-  auto moqSession = std::move(moqSession_);
-  moqSession.reset();
-  CHECK(!moqSession_);
+void MoQClient::onSessionEnd(folly::Optional<uint32_t> err) {
+  if (moqSession_) {
+    moqSession_->onSessionEnd(err);
+    XLOG(DBG1) << "resetting moqSession_";
+    moqSession_.reset();
+  }
 }
 
 void MoQClient::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bidi) {
