@@ -51,7 +51,17 @@ Subscribes to a relay for a video and audio track, demuxes them from MoqMi (expe
 -video_track_name (Video track Name) type: string default: "video0"
 ```
 
-## Stream VOD file simulating live stream
+## Why FLV packager?
+It is known that fmp4 would have been the more future proof option, and it will be probably the next step. But FLV checks a lot of boxes for prototyping:
+- Streaming friendly (you can start send / decode bytes as they are produced)
+- Very simple
+- Carries AVCDecoderRecord, also used by MOQMI, so no transcoding of this header is needed
+- Uses AudioSpecificCodec (ASC) header for audio, very simple to decode
+- We are very familiar with it (for good and bad :-))
+
+## Examples
+
+### Stream VOD file simulating live stream
 
 Important you follow the next steps in order (when fifo pipes are involved is important to send data before we connect the reader)
 
@@ -77,7 +87,7 @@ Note: fontfile location can change depending on OS
 ```
 This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (dafeult value) to the relay
 
-## Save stream to a file
+### Save stream to a file
 
 Assuming we already did all specified in [Stream VOD file simulating live stream](#stream-vod-file-simulating-live-stream)
 
@@ -105,7 +115,7 @@ Or if you system has UI, you can play it back with any media player, for instanc
 ffplay ~/Movies/my-moq-out.flv
 ```
 
-## Watch it live (OS needs UI)
+### Watch it live (OS needs UI)
 
 Assuming we already did all specified in [Stream VOD file simulating live stream](#stream-vod-file-simulating-live-stream)
 
@@ -127,7 +137,7 @@ ffplay ~/Movies/fifo-out.flv
 ![Live playback](./pics/moq-streamer-play.png)
 Fig3: Live playback via ffplay
 
-## Connect streamer app with browser (webcodecs) playback
+### Connect streamer app with browser (webcodecs) playback
 
 Assuming you have moxygen running in localhost with following params (terminal1):
 ```
@@ -159,7 +169,7 @@ This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-
 ![Live playback in browser](./pics/moq-wc-play-from-app.png)
 Fig4: Live playback in the brower using Webcodecs
 
-## Connect browser streamer (webcodecs) and play it in application
+### Connect browser streamer (webcodecs) and play it in application
 
 Assuming you have moxygen running in localhost with following params:
 ```
@@ -173,6 +183,9 @@ Assuming you have moxygen running in localhost with following params:
     - Remove "Track name prefix"
     - Change audio codec to "AAC-LC"
     - Click "Start"
+
+![Encoder webpage](./pics/moq-streamer-encode-from-wc.png)
+Fig5: Encoder webpage
 
 - Create out fifo (terminal4)
 ```
@@ -189,11 +202,8 @@ ffplay ~/Movies/fifo-out.flv
 ./_build/bin/moqflvreceiverclient --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
 ```
 
-**TODO: We need to define authinfo in the receiver!!!!**
+You should see /listen now live playback from browser to ffplay
 
-```
-src-encoder/?local&verbose=1:809 [MOQ-SENDER] Invalid subscribe authInfo undefined does not match with {"audio":{"namespace":"flvstreamer","name":"audio0","maxInFlightRequests":60,"isHipri":true,"authInfo":"secret","moqMapping":"SubGroupPerObj"},"video":{"namespace":"flvstreamer","name":"video0","maxInFlightRequests":39,"isHipri":false,"authInfo":"secret","moqMapping":"SubGroupPerObj"}}
-```
 
 ![Live playback](./pics/moq-streamer-play-from-wc.png)
-Fig5: Live playback from WebCodecs via ffplay
+Fig6: Live playback from WebCodecs via ffplay

@@ -35,6 +35,7 @@ DEFINE_int32(
     "Dejitter buffer size in ms (this translates to added latency)");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
+DEFINE_string(auth, "secret", "MOQ subscription auth string");
 
 namespace {
 using namespace moxygen;
@@ -522,6 +523,7 @@ int main(int argc, char* argv[]) {
   const auto trackAliasAudio = 1;
   const auto subscribeIDVideo = 1;
   const auto trackAliasVideo = 2;
+
   flvReceiverClient
       .run(
           {subscribeIDAudio,
@@ -535,7 +537,9 @@ int main(int argc, char* argv[]) {
            LocationType::LatestObject,
            folly::none,
            folly::none,
-           {}},
+           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+             FLAGS_auth,
+             0}}},
           {subscribeIDVideo,
            trackAliasVideo,
            moxygen::FullTrackName(
@@ -547,7 +551,9 @@ int main(int argc, char* argv[]) {
            LocationType::LatestObject,
            folly::none,
            folly::none,
-           {}})
+           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+             FLAGS_auth,
+             0}}})
       .scheduleOn(&eventBase)
       .start()
       .via(&eventBase)
