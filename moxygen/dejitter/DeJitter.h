@@ -31,21 +31,20 @@ class DeJitter {
         : gapType(gapType), gapSize(gapSize) {}
   };
 
-  DeJitter(uint64_t bufferSizeMs, uint64_t avgItemSizeMs) {
-    bufferSize_ = bufferSizeMs / avgItemSizeMs;
-    CHECK_GT(bufferSize_, 0);
-  }
-  explicit DeJitter(uint64_t bufferSize) : bufferSize_(bufferSize) {
-    CHECK_GT(bufferSize_, 0);
+  explicit DeJitter(uint64_t bufferSizeMs) : maxBufferSizeMs_(bufferSizeMs) {
+    CHECK_GT(maxBufferSizeMs_, 0);
   }
 
   size_t size() const {
     return buffer_.size();
   }
+  uint64_t sizeMs() const {
+    return currentBufferSizeMs_;
+  }
 
   // Assuming pos in monotically increasing
   inline std::tuple<folly::Optional<T>, typename DeJitter<T>::GapInfo>
-  insertItem(uint64_t pos, T item) {
+  insertItem(uint64_t pos, uint64_t durationMs, T item) {
     // Arrived late
     if (lastSent_.has_value() && pos <= lastSent_.value()) {
       return std::make_tuple(
@@ -54,8 +53,10 @@ class DeJitter {
     }
 
     // Add to buffer
-    buffer_.emplace(std::make_pair(pos, std::move(item)));
-    if (buffer_.size() <= bufferSize_) {
+    auto itemAndDur = ItemAndDuration{std::move(item), durationMs};
+    buffer_.emplace(std::make_pair(pos, std::move(itemAndDur)));
+    currentBufferSizeMs_ += durationMs;
+    if (currentBufferSizeMs_ <= maxBufferSizeMs_) {
       return std::make_tuple(
           folly::none, GapInfo{DeJitter<T>::GapType::FILLING_BUFFER, 0});
     }
@@ -69,7 +70,8 @@ class DeJitter {
       if (lastSent_.has_value()) {
         if (it->first == lastSent_.value() + 1) {
           lastSent_ = it->first;
-          auto v = std::make_tuple(std::move(it->second), GapInfo{});
+          auto v = std::make_tuple(std::move(it->second.item), GapInfo{});
+          currentBufferSizeMs_ -= it->second.durationMs;
           buffer_.erase(it);
           return v;
         }
@@ -81,22 +83,29 @@ class DeJitter {
           folly::none, GapInfo{DeJitter<T>::GapType::INTERNAL_ERROR, 0});
     }
 
-    auto v = std::move(buffer_[minVal.value()]);
+    auto itemDur = std::move(buffer_[minVal.value()]);
     uint64_t gapSize = 0;
     if (lastSent_.has_value()) {
       gapSize = minVal.value() - lastSent_.value_or(0) - 1;
     }
     lastSent_ = minVal.value();
     buffer_.erase(minVal.value());
+    currentBufferSizeMs_ -= itemDur.durationMs;
     // At start there is NO gat
     auto gap = (gapSize > 0) ? DeJitter<T>::GapType::GAP
                              : DeJitter<T>::GapType::NO_GAP;
-    return std::make_tuple(std::move(v), GapInfo{gap, gapSize});
+    return std::make_tuple(std::move(itemDur.item), GapInfo{gap, gapSize});
   }
 
  private:
-  std::map<uint64_t, T> buffer_;
-  uint64_t bufferSize_{0};
+  struct ItemAndDuration {
+    T item;
+    uint64_t durationMs;
+  };
+
+  std::map<uint64_t, ItemAndDuration> buffer_;
+  uint64_t maxBufferSizeMs_{0};
+  uint64_t currentBufferSizeMs_{0};
   folly::Optional<uint64_t> lastSent_;
 };
 

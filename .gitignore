@@ -26,5 +26,7 @@ package-lock.json
 DartConfiguration.tcl
 moxygen/test/
 moqflvstreamerclient
+moqflvreceiverclient
 FlvParserTests
 MoQMiTests
+DeJitterTests

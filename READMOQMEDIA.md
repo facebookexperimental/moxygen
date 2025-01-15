@@ -38,6 +38,8 @@ Subscribes to a relay for a video and audio track, demuxes them from MoqMi (expe
 -connect_timeout (Connect timeout (ms)) type: int32 default: 1000
 -connect_url (URL for webtransport server) type: string
     default: "https://localhost:4433/moq"
+-dejitter_buffer_size_ms (Dejitter buffer size in ms (this translates to
+    added latency)) type: int32 default: 300
 -fetch (Use fetch rather than subscribe) type: bool default: false
 -flv_outpath (File name to save the received FLV file to (ex:
     /tmp/test.flv)) type: string default: ""
@@ -187,7 +189,7 @@ ffplay ~/Movies/fifo-out.flv
 ./_build/bin/moqflvreceiverclient --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
 ```
 
-**TODO: We need to define authinfo in the receiver and de-jitter!!!!**
+**TODO: We need to define authinfo in the receiver!!!!**
 
 ```
 src-encoder/?local&verbose=1:809 [MOQ-SENDER] Invalid subscribe authInfo undefined does not match with {"audio":{"namespace":"flvstreamer","name":"audio0","maxInFlightRequests":60,"isHipri":true,"authInfo":"secret","moqMapping":"SubGroupPerObj"},"video":{"namespace":"flvstreamer","name":"video0","maxInFlightRequests":39,"isHipri":false,"authInfo":"secret","moqMapping":"SubGroupPerObj"}}
