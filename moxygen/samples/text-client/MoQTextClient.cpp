@@ -110,7 +110,8 @@ class MoQTextClient {
       co_await moqClient_.setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          Role::SUBSCRIBER);
+          nullptr,
+          nullptr);
       auto exec = co_await folly::coro::co_current_executor;
       controlReadLoop().scheduleOn(exec).start();
 
@@ -123,9 +124,10 @@ class MoQTextClient {
       auto track =
           co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
       if (track.hasValue()) {
-        subscribeID_ = track->subscribeID;
-        XLOG(DBG1) << "subscribeID=" << subscribeID_;
-        auto latest = track->latest;
+        subscription_ = std::move(track.value());
+        auto subscribeID = subscription_->subscribeOk().subscribeID;
+        XLOG(DBG1) << "subscribeID=" << subscribeID;
+        auto latest = subscription_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
                      << "}";
@@ -142,7 +144,8 @@ class MoQTextClient {
               XLOG(DBG1) << "end={" << range.end.group << ","
                          << range.end.object << "} before latest, unsubscribe";
               textHandler_.baton.post();
-              moqClient_.moqSession_->unsubscribe({subscribeID_});
+              subscription_->unsubscribe();
+              subscription_.reset();
               fetchEnd = range.end;
               if (fetchEnd.object == 0) {
                 fetchEnd.group--;
@@ -175,8 +178,8 @@ class MoQTextClient {
             // The end is set but after latest, SUBSCRIBE_UPDATE for the end
             XLOG(DBG1) << "Setting subscribe end={" << range.end.group << ","
                        << range.end.object << "} before latest, update";
-            moqClient_.moqSession_->subscribeUpdate(
-                {subscribeID_,
+            subscription_->subscribeUpdate(
+                {subscribeID,
                  latest.value_or(AbsoluteLocation{0, 0}),
                  range.end,
                  sub.priority,
@@ -188,7 +191,9 @@ class MoQTextClient {
                    << " code=" << track.error().errorCode
                    << " reason=" << track.error().reasonPhrase;
       }
-      moqClient_.moqSession_->drain();
+      if (moqClient_.moqSession_) {
+        moqClient_.moqSession_->drain();
+      }
     } catch (const std::exception& ex) {
       XLOG(ERR) << folly::exceptionStr(ex);
       co_return;
@@ -200,7 +205,10 @@ class MoQTextClient {
   void stop() {
     textHandler_.baton.post();
     // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
-    moqClient_.moqSession_->unsubscribe({subscribeID_});
+    if (subscription_) {
+      subscription_->unsubscribe();
+      subscription_.reset();
+    }
     moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
 
@@ -216,15 +224,12 @@ class MoQTextClient {
         client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
       }
 
-      void operator()(SubscribeRequest subscribeReq) const override {
-        XLOG(INFO) << "SubscribeRequest";
-        client_.moqClient_.moqSession_->subscribeError(
-            {subscribeReq.subscribeID, 404, "don't care"});
-      }
-
       void operator()(Goaway) const override {
         XLOG(INFO) << "Goaway";
-        client_.moqClient_.moqSession_->unsubscribe({client_.subscribeID_});
+        if (client_.subscription_) {
+          client_.subscription_->unsubscribe();
+          client_.subscription_.reset();
+        }
       }
 
      private:
@@ -243,7 +248,7 @@ class MoQTextClient {
 
   MoQClient moqClient_;
   FullTrackName fullTrackName_;
-  SubscribeID subscribeID_{0};
+  std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
   TextHandler textHandler_;
   std::shared_ptr<ObjectReceiver> subTextHandler_;
   std::shared_ptr<ObjectReceiver> fetchTextHandler_;

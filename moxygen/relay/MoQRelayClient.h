@@ -21,13 +21,17 @@ class MoQRelayClient {
       : moqClient_(evb, url), controllerFn_(controllerFn) {}
 
   folly::coro::Task<void> run(
-      Role role,
+      std::shared_ptr<Publisher> publisher,
+      std::shared_ptr<Subscriber> subscriber,
       std::vector<TrackNamespace> namespaces,
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
       std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60)) {
     try {
       co_await moqClient_.setupMoQSession(
-          connectTimeout, transactionTimeout, role);
+          connectTimeout,
+          transactionTimeout,
+          std::move(publisher),
+          std::move(subscriber));
       auto exec = co_await folly::coro::co_current_executor;
       auto controller = controllerFn_(moqClient_.moqSession_);
       if (!controller) {

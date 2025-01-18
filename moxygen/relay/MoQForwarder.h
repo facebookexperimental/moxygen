@@ -26,10 +26,6 @@ class MoQForwarder : public TrackConsumer {
     groupOrder_ = order;
   }
 
-  GroupOrder groupOrder() const {
-    return groupOrder_;
-  }
-
   void setLatest(AbsoluteLocation latest) {
     latest_ = latest;
   }
@@ -38,8 +34,14 @@ class MoQForwarder : public TrackConsumer {
     return latest_;
   }
 
-  void setFinAfterEnd(bool finAfterEnd) {
-    finAfterEnd_ = finAfterEnd;
+  class Callback {
+   public:
+    virtual ~Callback() = default;
+    virtual void onEmpty(MoQForwarder*) = 0;
+  };
+
+  void setCallback(std::shared_ptr<Callback> callback) {
+    callback_ = std::move(callback);
   }
 
   struct SubgroupIdentifier {
@@ -55,23 +57,52 @@ class MoQForwarder : public TrackConsumer {
     }
   };
   class SubgroupForwarder;
-  struct Subscriber {
+  struct Subscriber : public Publisher::SubscriptionHandle {
     using SubgroupConsumerMap = folly::F14FastMap<
         SubgroupIdentifier,
         std::shared_ptr<SubgroupConsumer>,
         SubgroupIdentifier::hash>;
 
     Subscriber(
+        MoQForwarder& f,
+        SubscribeOk ok,
         std::shared_ptr<MoQSession> s,
         SubscribeID sid,
         TrackAlias ta,
         SubscribeRange r,
         std::shared_ptr<TrackConsumer> tc)
-        : session(std::move(s)),
+        : SubscriptionHandle(std::move(ok)),
+          session(std::move(s)),
           subscribeID(sid),
           trackAlias(ta),
           range(r),
-          trackConsumer(std::move(tc)) {}
+          trackConsumer(std::move(tc)),
+          forwarder(f) {}
+
+    // This method is for a relay to fixup the publisher group order of the
+    // first subscriber if it was added before the upstream SubscribeOK.
+    void setPublisherGroupOrder(GroupOrder pubGroupOrder) {
+      subscribeOk_->groupOrder = MoQSession::resolveGroupOrder(
+          pubGroupOrder, subscribeOk_->groupOrder);
+    }
+
+    void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
+      // TODO: Validate update subscription range conforms to SUBSCRIBE_UPDATE
+      // rules
+      // If it moved end before latest, then the next published object will
+      // generate SUBSCRIBE_DONE
+      range.start = subscribeUpdate.start;
+      range.end = subscribeUpdate.end;
+    }
+
+    void unsubscribe() override {
+      forwarder.removeSession(
+          session,
+          {subscribeID,
+           SubscribeDoneStatusCode::UNSUBSCRIBED,
+           "",
+           forwarder.latest()});
+    }
 
     std::shared_ptr<MoQSession> session;
     SubscribeID subscribeID;
@@ -82,34 +113,33 @@ class MoQForwarder : public TrackConsumer {
     // publishing subgroups.  Having this state here makes it easy to remove
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
+    MoQForwarder& forwarder;
   };
 
   [[nodiscard]] bool empty() const {
     return subscribers_.empty();
   }
 
-  void addSubscriber(std::shared_ptr<Subscriber> sub) {
-    auto session = sub->session.get();
-    subscribers_.emplace(session, std::move(sub));
-  }
-
-  bool updateSubscriber(
-      const std::shared_ptr<MoQSession> session,
-      const SubscribeUpdate& subscribeUpdate) {
-    auto subIt = subscribers_.find(session.get());
-    if (subIt == subscribers_.end()) {
-      return false;
-    }
-    auto& subscriber = subIt->second;
-    if (subscribeUpdate.subscribeID != subscriber->subscribeID) {
-      XLOG(ERR) << "Invalid subscribeID";
-      return false;
-    }
-    // TODO: Validate update subscription range conforms to SUBSCRIBE_UPDATE
-    // rules
-    subscriber->range.start = subscribeUpdate.start;
-    subscriber->range.end = subscribeUpdate.end;
-    return true;
+  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
+      std::shared_ptr<MoQSession> session,
+      const SubscribeRequest& subReq,
+      std::shared_ptr<TrackConsumer> consumer) {
+    auto sessionPtr = session.get();
+    auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
+        *this,
+        SubscribeOk{
+            subReq.subscribeID,
+            std::chrono::milliseconds(0),
+            MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
+            latest_,
+            {}},
+        std::move(session),
+        subReq.subscribeID,
+        subReq.trackAlias,
+        toSubscribeRange(subReq, latest_),
+        std::move(consumer));
+    subscribers_.emplace(sessionPtr, subscriber);
+    return subscriber;
   }
 
   void removeSession(const std::shared_ptr<MoQSession>& session) {
@@ -134,6 +164,9 @@ class MoQForwarder : public TrackConsumer {
     subscribeDone(*subIt->second, subDone);
     subscribers_.erase(subIt);
     XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
+    if (subscribers_.empty() && callback_) {
+      callback_->onEmpty(this);
+    }
   }
 
   void subscribeDone(Subscriber& subscriber, SubscribeDone subDone) {
@@ -499,7 +532,7 @@ class MoQForwarder : public TrackConsumer {
       subgroups_;
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
   folly::Optional<AbsoluteLocation> latest_;
-  bool finAfterEnd_{true};
+  std::shared_ptr<Callback> callback_;
 };
 
 } // namespace moxygen

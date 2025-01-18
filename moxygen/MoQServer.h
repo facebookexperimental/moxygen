@@ -36,16 +36,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     ~ControlVisitor() override = default;
 
     void operator()(Announce announce) const override;
-    void operator()(SubscribeRequest subscribeReq) const override;
-    void operator()(SubscribeUpdate subscribeUpdate) const override;
-    void operator()(Fetch fetch) const override;
     void operator()(Unannounce unannounce) const override;
     void operator()(AnnounceCancel announceCancel) const override;
-    void operator()(SubscribeAnnounces subscribeAnnounces) const override;
-    void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override;
-    void operator()(Unsubscribe unsubscribe) const override;
-    void operator()(TrackStatusRequest trackStatusRequest) const override;
-    void operator()(TrackStatus trackStatus) const override;
     void operator()(Goaway goaway) const override;
 
    protected:

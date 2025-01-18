@@ -41,7 +41,9 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   try {
     co_await moqClient_.setupMoQSession(
         std::chrono::milliseconds(FLAGS_connect_timeout),
-        std::chrono::seconds(FLAGS_transaction_timeout));
+        std::chrono::seconds(FLAGS_transaction_timeout),
+        /*publishHandler=*/shared_from_this(),
+        /*subscribeHandler=*/nullptr);
     auto exec = co_await folly::coro::co_current_executor;
     controlReadLoop().scheduleOn(exec).start();
 
@@ -56,6 +58,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
+      subscribeAnnounceHandle_ = std::move(sa.value());
     } else {
       XLOG(INFO) << "SubscribeAnnounces id=" << sa.error().trackNamespacePrefix
                  << " code=" << sa.error().errorCode
@@ -91,45 +94,6 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
       }
     }
 
-    void operator()(SubscribeRequest subscribeReq) const override {
-      XLOG(INFO) << "SubscribeRequest";
-      if (subscribeReq.fullTrackName.trackNamespace !=
-          client_.participantTrackName(client_.username_)) {
-        client_.moqClient_.moqSession_->subscribeError(
-            {subscribeReq.subscribeID, 404, "no such track"});
-        return;
-      }
-      client_.chatSubscribeID_.emplace(subscribeReq.subscribeID);
-      client_.chatTrackAlias_.emplace(subscribeReq.trackAlias);
-      folly::Optional<AbsoluteLocation> latest;
-      if (client_.nextGroup_ > 0) {
-        latest.emplace(client_.nextGroup_ - 1, 0);
-      }
-      client_.publisher_ = client_.moqClient_.moqSession_->subscribeOk(
-          {subscribeReq.subscribeID,
-           std::chrono::milliseconds(0),
-           MoQSession::resolveGroupOrder(
-               GroupOrder::OldestFirst, subscribeReq.groupOrder),
-           latest});
-    }
-
-    void operator()(Unsubscribe unsubscribe) const override {
-      XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
-      if (client_.chatSubscribeID_ &&
-          unsubscribe.subscribeID == *client_.chatSubscribeID_) {
-        client_.chatSubscribeID_.reset();
-        client_.chatTrackAlias_.reset();
-        if (client_.publisher_) {
-          client_.publisher_->subscribeDone(
-              {unsubscribe.subscribeID,
-               SubscribeDoneStatusCode::UNSUBSCRIBED,
-               "",
-               folly::none});
-          client_.publisher_.reset();
-        }
-      }
-    }
-
    private:
     MoQChatClient& client_;
   };
@@ -141,6 +105,51 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
   while (auto msg = co_await moqClient_.moqSession_->controlMessages().next()) {
     boost::apply_visitor(*vptr, msg.value());
   }
+}
+
+folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
+    SubscribeRequest subscribeReq,
+    std::shared_ptr<TrackConsumer> consumer) {
+  XLOG(INFO) << "SubscribeRequest";
+  if (subscribeReq.fullTrackName.trackNamespace !=
+      participantTrackName(username_)) {
+    co_return folly::makeUnexpected(
+        SubscribeError{subscribeReq.subscribeID, 404, "no such track"});
+  }
+  if (publisher_) {
+    co_return folly::makeUnexpected(SubscribeError{
+        subscribeReq.subscribeID, 400, "Duplicate subscribe for track"});
+  }
+  chatSubscribeID_.emplace(subscribeReq.subscribeID);
+  chatTrackAlias_.emplace(subscribeReq.trackAlias);
+  folly::Optional<AbsoluteLocation> latest;
+  if (nextGroup_ > 0) {
+    latest.emplace(nextGroup_ - 1, 0);
+  }
+  publisher_ = std::move(consumer);
+  setSubscribeOk(
+      {subscribeReq.subscribeID,
+       std::chrono::milliseconds(0),
+       MoQSession::resolveGroupOrder(
+           GroupOrder::OldestFirst, subscribeReq.groupOrder),
+       latest,
+       {}});
+  co_return shared_from_this();
+}
+
+void MoQChatClient::unsubscribe() {
+  // MoQChatClient only publishes a single track at a time.
+  XLOG(INFO) << "Unsubscribe id=" << *chatSubscribeID_;
+  if (publisher_) {
+    publisher_->subscribeDone(
+        {*chatSubscribeID_,
+         SubscribeDoneStatusCode::UNSUBSCRIBED,
+         "",
+         folly::none});
+    publisher_.reset();
+  }
+  chatSubscribeID_.reset();
+  chatTrackAlias_.reset();
 }
 
 void MoQChatClient::publishLoop() {
@@ -157,9 +166,7 @@ void MoQChatClient::publishLoop() {
     moqClient_.getEventBase()->runInEventBaseThread([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
-        moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-        moqClient_.moqSession_.reset();
-      } else if (chatSubscribeID_) {
+        subscribeAnnounceHandle_->unsubscribeAnnounces();
         if (publisher_) {
           publisher_->objectStream(
               {*chatTrackAlias_,
@@ -167,9 +174,24 @@ void MoQChatClient::publishLoop() {
                /*subgroup=*/0,
                /*id=*/0,
                /*pri=*/0,
-               ObjectStatus::NORMAL},
-              folly::IOBuf::copyBuffer(input));
+               ObjectStatus::END_OF_TRACK_AND_GROUP},
+              nullptr);
+          // Publisher=TrackReceiveState which contains a shared_ptr to the
+          // chat client (to deliver unsubscribe/subscribeUpdate).  It *must*
+          // be reset to prevent memory leaks
+          publisher_.reset();
         }
+        moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+        moqClient_.moqSession_.reset();
+      } else if (publisher_) {
+        publisher_->objectStream(
+            {*chatTrackAlias_,
+             nextGroup_++,
+             /*subgroup=*/0,
+             /*id=*/0,
+             /*pri=*/0,
+             ObjectStatus::NORMAL},
+            folly::IOBuf::copyBuffer(input));
       }
     });
     if (input == "/leave") {
@@ -200,7 +222,12 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     if (userTrack.deviceId == deviceId) {
       if (userTrack.timestamp < timestamp) {
         XLOG(INFO) << "Device has later track, unsubscribing";
-        moqClient_.moqSession_->unsubscribe({userTrack.subscribeId});
+        if (userTrack.subscription) {
+          userTrack.subscription->unsubscribe();
+          userTrack.subscription.reset();
+        } else {
+          XLOG(INFO) << "Subscribe in progress, bad?";
+        }
         userTrackPtr = &userTrack;
         break;
       } else {
@@ -239,10 +266,6 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
 
     void onSubscribeDone(SubscribeDone subDone) override {
       XLOG(INFO) << "SubscribeDone: " << subDone.reasonPhrase;
-      if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
-          client_.moqClient_.moqSession_) {
-        client_.moqClient_.moqSession_->unsubscribe({subDone.subscribeID});
-      }
       client_.subscribeDone(std::move(subDone));
       baton.post();
     }
@@ -278,7 +301,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     co_return;
   }
 
-  userTrackPtr->subscribeId = track->value().subscribeID;
+  userTrackPtr->subscription = std::move(track->value());
+  userTrackPtr->subscribeId =
+      userTrackPtr->subscription->subscribeOk().subscribeID;
   userTrackPtr->timestamp = timestamp;
   co_await handler.baton;
 }
@@ -289,6 +314,10 @@ void MoQChatClient::subscribeDone(SubscribeDone subDone) {
          userTrackIt != userTracks.second.end();
          ++userTrackIt) {
       if (userTrackIt->subscribeId == subDone.subscribeID) {
+        if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
+            userTrackIt->subscription) {
+          userTrackIt->subscription->unsubscribe();
+        }
         userTracks.second.erase(userTrackIt);
         break;
       }
@@ -304,8 +333,8 @@ int main(int argc, char* argv[]) {
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
   }
-  moxygen::MoQChatClient chatClient(
+  auto chatClient = std::make_shared<moxygen::MoQChatClient>(
       &eventBase, std::move(url), FLAGS_chat_id, FLAGS_username, FLAGS_device);
-  chatClient.run().scheduleOn(&eventBase).start();
+  chatClient->run().scheduleOn(&eventBase).start();
   eventBase.loop();
 }

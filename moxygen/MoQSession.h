@@ -17,6 +17,7 @@
 #include <folly/coro/UnboundedQueue.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQConsumers.h>
+#include <moxygen/Publisher.h>
 #include "moxygen/util/TimedBaton.h"
 
 #include <boost/variant.hpp>
@@ -25,8 +26,28 @@ namespace moxygen {
 
 class MoQSession : public MoQControlCodec::ControlCallback,
                    public proxygen::WebTransportHandler,
+                   public Publisher,
                    public std::enable_shared_from_this<MoQSession> {
  public:
+  struct MoQSessionRequestData : public folly::RequestData {
+    explicit MoQSessionRequestData(std::shared_ptr<MoQSession> s)
+        : session(std::move(s)) {}
+    bool hasCallback() override {
+      return false;
+    }
+    std::shared_ptr<MoQSession> session;
+  };
+
+  static std::shared_ptr<MoQSession> getRequestSession() {
+    auto reqData =
+        folly::RequestContext::get()->getContextData(sessionRequestToken());
+    XCHECK(reqData);
+    auto sessionData = dynamic_cast<MoQSessionRequestData*>(reqData);
+    XCHECK(sessionData);
+    XCHECK(sessionData->session);
+    return sessionData->session;
+  }
+
   class ServerSetupCallback {
    public:
     virtual ~ServerSetupCallback() = default;
@@ -49,6 +70,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     // SERVER sessions use this promise/future as a signal
     std::tie(setupPromise_, setupFuture_) =
         folly::coro::makePromiseContract<ServerSetup>();
+  }
+
+  void setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
+    publishHandler_ = std::move(publishHandler);
   }
 
   [[nodiscard]] folly::EventBase* getEventBase() const {
@@ -76,19 +101,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     }
   }
 
-  using MoQMessage = boost::variant<
-      Announce,
-      Unannounce,
-      AnnounceCancel,
-      SubscribeAnnounces,
-      UnsubscribeAnnounces,
-      SubscribeRequest,
-      SubscribeUpdate,
-      Unsubscribe,
-      Fetch,
-      TrackStatusRequest,
-      TrackStatus,
-      Goaway>;
+  using MoQMessage =
+      boost::variant<Announce, Unannounce, AnnounceCancel, Goaway>;
 
   class ControlVisitor : public boost::static_visitor<> {
    public:
@@ -110,46 +124,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
     }
 
-    virtual void operator()(SubscribeAnnounces subscribeAnnounces) const {
-      XLOG(INFO) << "subscribeAnnounces nsp="
-                 << subscribeAnnounces.trackNamespacePrefix;
-    }
-
-    virtual void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const {
-      XLOG(INFO) << "UnsubscribeAnnounces nsp="
-                 << unsubscribeAnnounces.trackNamespacePrefix;
-    }
-
     virtual void operator()(AnnounceError announceError) const {
       XLOG(INFO) << "AnnounceError ns=" << announceError.trackNamespace
                  << " code=" << announceError.errorCode
                  << " reason=" << announceError.reasonPhrase;
     }
 
-    virtual void operator()(SubscribeRequest subscribe) const {
-      XLOG(INFO) << "Subscribe ftn=" << subscribe.fullTrackName.trackNamespace
-                 << subscribe.fullTrackName.trackName;
-    }
-
-    virtual void operator()(SubscribeUpdate subscribeUpdate) const {
-      XLOG(INFO) << "SubscribeUpdate subID=" << subscribeUpdate.subscribeID;
-    }
-
-    virtual void operator()(Unsubscribe unsubscribe) const {
-      XLOG(INFO) << "Unsubscribe subID=" << unsubscribe.subscribeID;
-    }
-    virtual void operator()(Fetch fetch) const {
-      XLOG(INFO) << "Fetch subID=" << fetch.subscribeID;
-    }
-    virtual void operator()(TrackStatusRequest trackStatusRequest) const {
-      XLOG(INFO) << "Subscribe ftn="
-                 << trackStatusRequest.fullTrackName.trackNamespace
-                 << trackStatusRequest.fullTrackName.trackName;
-    }
-    virtual void operator()(TrackStatus trackStatus) const {
-      XLOG(INFO) << "Subscribe ftn=" << trackStatus.fullTrackName.trackNamespace
-                 << trackStatus.fullTrackName.trackName;
-    }
     virtual void operator()(Goaway goaway) const {
       XLOG(INFO) << "Goaway, newURI=" << goaway.newSessionUri;
     }
@@ -165,13 +145,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void announceError(AnnounceError announceError);
   void unannounce(Unannounce unannounce);
 
-  folly::coro::Task<
-      folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
-  subscribeAnnounces(SubscribeAnnounces ann);
-  void subscribeAnnouncesOk(SubscribeAnnouncesOk annOk);
-  void subscribeAnnouncesError(SubscribeAnnouncesError subscribeAnnouncesError);
-  void unsubscribeAnnounces(UnsubscribeAnnounces unsubscribeAnnounces);
-
   uint64_t maxSubscribeID() const {
     return maxSubscribeID_;
   }
@@ -182,21 +155,18 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     return subOrder == GroupOrder::Default ? pubOrder : subOrder;
   }
 
-  using SubscribeResult = folly::Expected<SubscribeOk, SubscribeError>;
+  // TODO: trackStatus
+
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
-      std::shared_ptr<TrackConsumer> callback);
-  std::shared_ptr<TrackConsumer> subscribeOk(SubscribeOk subOk);
-  void subscribeError(SubscribeError subErr);
-  void unsubscribe(Unsubscribe unsubscribe);
-  void subscribeUpdate(SubscribeUpdate subUpdate);
+      std::shared_ptr<TrackConsumer> callback) override;
 
-  folly::coro::Task<folly::Expected<SubscribeID, FetchError>> fetch(
+  folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
-      std::shared_ptr<FetchConsumer> fetchCallback);
-  std::shared_ptr<FetchConsumer> fetchOk(FetchOk fetchOk);
-  void fetchError(FetchError fetchError);
-  void fetchCancel(FetchCancel fetchCancel);
+      std::shared_ptr<FetchConsumer> fetchy) override;
+
+  folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
+      SubscribeAnnounces subAnn) override;
 
   class PublisherImpl {
    public:
@@ -233,7 +203,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
     void fetchComplete();
 
-   protected:
     proxygen::WebTransport* getWebTransport() const {
       if (session_) {
         return session_->wt_;
@@ -241,6 +210,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       return nullptr;
     }
 
+   protected:
     MoQSession* session_{nullptr};
     SubscribeID subscribeID_;
     uint8_t subPriority_;
@@ -269,6 +239,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       SubscribeID subscribeID);
 
  private:
+  static const folly::RequestToken& sessionRequestToken();
+
+  void setRequestSession() {
+    folly::RequestContext::get()->setContextData(
+        sessionRequestToken(),
+        std::make_unique<MoQSessionRequestData>(shared_from_this()));
+  }
+
   void cleanup();
 
   folly::coro::Task<void> controlWriteLoop(
@@ -279,7 +257,35 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
 
+  class TrackPublisherImpl;
+  class FetchPublisherImpl;
+
+  folly::coro::Task<void> handleTrackStatus(TrackStatusRequest trackStatusReq);
+  void writeTrackStatus(TrackStatus trackStatus);
+
+  folly::coro::Task<void> handleSubscribe(
+      SubscribeRequest sub,
+      std::shared_ptr<TrackPublisherImpl> trackPublisher);
+  std::shared_ptr<TrackConsumer> subscribeOk(SubscribeOk subOk);
+  void subscribeError(SubscribeError subErr);
+  void unsubscribe(Unsubscribe unsubscribe);
+  void subscribeUpdate(SubscribeUpdate subUpdate);
   void subscribeDone(SubscribeDone subDone);
+
+  folly::coro::Task<void> handleFetch(
+      Fetch fetch,
+      std::shared_ptr<FetchPublisherImpl> fetchPublisher);
+  void fetchOk(FetchOk fetchOk);
+  void fetchError(FetchError fetchError);
+  void fetchCancel(FetchCancel fetchCancel);
+
+  folly::coro::Task<void> handleSubscribeAnnounces(SubscribeAnnounces sa);
+  void subscribeAnnouncesOk(SubscribeAnnouncesOk saOk);
+  void subscribeAnnouncesError(SubscribeAnnouncesError subscribeAnnouncesError);
+  void unsubscribeAnnounces(UnsubscribeAnnounces unsubscribeAnnounces);
+
+  class ReceiverSubscriptionHandle;
+  class ReceiverFetchHandle;
 
   void onClientSetup(ClientSetup clientSetup) override;
   void onServerSetup(ServerSetup setup) override;
@@ -367,6 +373,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::
       F14FastMap<SubscribeID, std::shared_ptr<PublisherImpl>, SubscribeID::hash>
           pubTracks_;
+
+  class SubscribeAnnouncesHandle;
+  folly::F14FastMap<
+      TrackNamespace,
+      std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
+      TrackNamespace::hash>
+      subscribeAnnounces_;
+
   uint64_t nextTrackId_{0};
   uint64_t closedSubscribes_{0};
   // TODO: Make this value configurable. maxConcurrentSubscribes_ represents
@@ -387,5 +401,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   uint64_t maxSubscribeID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};
+  std::shared_ptr<Publisher> publishHandler_;
 };
 } // namespace moxygen
