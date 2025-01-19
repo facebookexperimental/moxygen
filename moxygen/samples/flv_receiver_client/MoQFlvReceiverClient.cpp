@@ -335,7 +335,9 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   uint32_t dejitterBufferSizeMs_;
 };
 
-class MoQFlvReceiverClient {
+class MoQFlvReceiverClient
+    : public Subscriber,
+      public std::enable_shared_from_this<MoQFlvReceiverClient> {
  public:
   MoQFlvReceiverClient(
       folly::EventBase* evb,
@@ -359,10 +361,8 @@ class MoQFlvReceiverClient {
       co_await moqClient_.setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          Role::SUBSCRIBER);
-      auto exec = co_await folly::coro::co_current_executor;
-      controlReadLoop().scheduleOn(exec).start();
-
+          /*publishHandler=*/nullptr,
+          /*subscribeHandler=*/shared_from_this());
       // Create output file
       flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
       trackReceiverHandlerAudio_.setFlvWriterShared(flvw_);
@@ -374,9 +374,10 @@ class MoQFlvReceiverClient {
       auto trackAudio = co_await moqClient_.moqSession_->subscribe(
           subAudio, subRxHandlerAudio_);
       if (trackAudio.hasValue()) {
-        subscribeIDAudio_ = trackAudio->subscribeID;
-        XLOG(DBG1) << "Audio subscribeID=" << subscribeIDAudio_;
-        auto latest = trackAudio->latest;
+        audioSubscribeHandle_ = std::move(trackAudio.value());
+        XLOG(DBG1) << "Audio subscribeID="
+                   << audioSubscribeHandle_->subscribeOk().subscribeID;
+        auto latest = audioSubscribeHandle_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Audio Latest={" << latest->group << ", "
                      << latest->object << "}";
@@ -394,9 +395,10 @@ class MoQFlvReceiverClient {
       auto trackVideo = co_await moqClient_.moqSession_->subscribe(
           subVideo, subRxHandlerVideo_);
       if (trackVideo.hasValue()) {
-        subscribeIDVideo_ = trackVideo->subscribeID;
-        XLOG(DBG1) << "Video subscribeID=" << subscribeIDVideo_;
-        auto latest = trackVideo->latest;
+        videoSubscribeHandle_ = std::move(trackVideo.value());
+        XLOG(DBG1) << "Video subscribeID="
+                   << videoSubscribeHandle_->subscribeOk().subscribeID;
+        auto latest = videoSubscribeHandle_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Video Latest={" << latest->group << ", "
                      << latest->object << "}";
@@ -413,61 +415,44 @@ class MoQFlvReceiverClient {
       XLOG(ERR) << ex.what();
       co_return;
     }
+    // TODO: should we co_await collectAll(trackReceiverHandlerAudio_.baton,
+    // trackReceiverHandlerVideo_.baton);
     co_await trackReceiverHandlerAudio_.baton;
     co_await trackReceiverHandlerVideo_.baton;
     XLOG(INFO) << __func__ << " done";
   }
 
-  void stop() {
-    moqClient_.moqSession_->unsubscribe({subscribeIDAudio_});
-    moqClient_.moqSession_->unsubscribe({subscribeIDVideo_});
-    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+  folly::coro::Task<AnnounceResult> announce(
+      Announce announce,
+      std::shared_ptr<AnnounceCallback>) override {
+    XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+    // receiver client doesn't expect server or relay to announce anything, but
+    // announce OK anyways
+    return folly::coro::makeTask<AnnounceResult>(
+        std::make_shared<AnnounceHandle>(AnnounceOk{announce.trackNamespace}));
   }
 
-  folly::coro::Task<void> controlReadLoop() {
-    class ControlVisitor : public MoQSession::ControlVisitor {
-     public:
-      explicit ControlVisitor(MoQFlvReceiverClient& client) : client_(client) {}
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Goaway uri=" << goaway.newSessionUri;
+    stop();
+  }
 
-      void operator()(Announce announce) const override {
-        XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
-        // text client doesn't expect server or relay to announce anything,
-        // but announce OK anyways
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-      void operator()(SubscribeRequest subscribeReq) const override {
-        XLOG(INFO) << "SubscribeRequest";
-        client_.moqClient_.moqSession_->subscribeError(
-            {subscribeReq.subscribeID, 404, "don't care"});
-      }
-
-      void operator()(Goaway) const override {
-        XLOG(INFO) << "Goaway";
-        client_.moqClient_.moqSession_->unsubscribe(
-            {client_.subscribeIDAudio_});
-        client_.moqClient_.moqSession_->unsubscribe(
-            {client_.subscribeIDVideo_});
-      }
-
-     private:
-      MoQFlvReceiverClient& client_;
-    };
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    ControlVisitor visitor(*this);
-    MoQSession::ControlVisitor* vptr(&visitor);
-    while (auto msg =
-               co_await moqClient_.moqSession_->controlMessages().next()) {
-      boost::apply_visitor(*vptr, msg.value());
+  void stop() {
+    if (audioSubscribeHandle_) {
+      audioSubscribeHandle_->unsubscribe();
+      audioSubscribeHandle_.reset();
     }
+    if (videoSubscribeHandle_) {
+      videoSubscribeHandle_->unsubscribe();
+      videoSubscribeHandle_.reset();
+    }
+    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
 
  private:
   MoQClient moqClient_;
-  SubscribeID subscribeIDAudio_{0};
-  SubscribeID subscribeIDVideo_{0};
+  std::shared_ptr<Publisher::SubscriptionHandle> audioSubscribeHandle_;
+  std::shared_ptr<Publisher::SubscriptionHandle> videoSubscribeHandle_;
   std::string flvOutPath_;
   std::shared_ptr<FlvWriterShared> flvw_;
   TrackReceiverHandler trackReceiverHandlerAudio_ = TrackReceiverHandler(

@@ -25,133 +25,93 @@ DEFINE_bool(stream_per_object, false, "Use one stream for each object");
 namespace {
 using namespace moxygen;
 
-class MoQDateServer : MoQServer {
+class MoQDateServer : public MoQServer,
+                      public Publisher,
+                      public std::enable_shared_from_this<MoQDateServer> {
  public:
-  explicit MoQDateServer(folly::EventBase* evb, bool streamPerObject)
+  explicit MoQDateServer(bool streamPerObject)
       : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, "/moq-date"),
         forwarder_(dateTrackName()),
-        streamPerObject_(streamPerObject) {
-    if (!FLAGS_relay_url.empty()) {
-      proxygen::URL url(FLAGS_relay_url);
-      if (!url.isValid() || !url.hasHost()) {
-        XLOG(ERR) << "Invalid url: " << FLAGS_relay_url;
-      }
-      relayClient_ = std::make_unique<MoQRelayClient>(
-          evb, url, [this](std::shared_ptr<MoQSession> session) {
-            return std::make_unique<DateControlVisitor>(
-                *this, std::move(session));
-          });
-      relayClient_
-          ->run(
-              Role::PUBLISHER,
-              {TrackNamespace({"moq-date"})},
-              std::chrono::milliseconds(FLAGS_relay_connect_timeout),
-              std::chrono::seconds(FLAGS_relay_transaction_timeout))
-          .scheduleOn(evb)
-          .start();
-      publishDateLoop().scheduleOn(evb).start();
+        streamPerObject_(streamPerObject) {}
+
+  bool startRelayClient(folly::EventBase* evb) {
+    proxygen::URL url(FLAGS_relay_url);
+    if (!url.isValid() || !url.hasHost()) {
+      XLOG(ERR) << "Invalid url: " << FLAGS_relay_url;
+      return false;
     }
+    relayClient_ = std::make_unique<MoQRelayClient>(evb, url);
+    relayClient_
+        ->run(
+            /*publisher=*/shared_from_this(),
+            /*subscriber=*/nullptr,
+            {TrackNamespace({"moq-date"})},
+            std::chrono::milliseconds(FLAGS_relay_connect_timeout),
+            std::chrono::seconds(FLAGS_relay_transaction_timeout))
+        .scheduleOn(evb)
+        .start();
+    loopRunning_ = true;
+    publishDateLoop().scheduleOn(evb).start();
+    return true;
   }
 
-  class DateControlVisitor : public MoQServer::ControlVisitor {
-   public:
-    DateControlVisitor(
-        MoQDateServer& server,
-        std::shared_ptr<MoQSession> clientSession)
-        : MoQServer::ControlVisitor(std::move(clientSession)),
-          server_(server) {}
-
-    void operator()(SubscribeRequest subscribeReq) const override {
-      XLOG(INFO) << "SubscribeRequest track ns="
-                 << subscribeReq.fullTrackName.trackNamespace
-                 << " name=" << subscribeReq.fullTrackName.trackName
-                 << " subscribe id=" << subscribeReq.subscribeID
-                 << " track alias=" << subscribeReq.trackAlias;
-      if (subscribeReq.fullTrackName != server_.dateTrackName()) {
-        clientSession_->subscribeError(
-            {subscribeReq.subscribeID, 403, "unexpected subscribe"});
-      } else {
-        server_.onSubscribe(std::move(subscribeReq), clientSession_);
-      }
-    }
-
-    void operator()(SubscribeUpdate subscribeUpdate) const override {
-      XLOG(INFO) << "SubscribeUpdate id=" << subscribeUpdate.subscribeID;
-      if (!server_.onSubscribeUpdate(clientSession_, subscribeUpdate)) {
-        clientSession_->subscribeError(
-            {subscribeUpdate.subscribeID, 403, "unexpected subscribe update"});
-      }
-    }
-
-    void operator()(Unsubscribe unsubscribe) const override {
-      XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
-      server_.unsubscribe(clientSession_, std::move(unsubscribe));
-    }
-
-    void operator()(Fetch fetch) const override {
-      XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
-                 << " name=" << fetch.fullTrackName.trackName
-                 << " subscribe id=" << fetch.subscribeID;
-      if (fetch.fullTrackName != server_.dateTrackName()) {
-        clientSession_->fetchError(
-            {fetch.subscribeID, 403, "unexpected fetch"});
-      } else {
-        server_.onFetch(std::move(fetch), clientSession_);
-      }
-    }
-
-    void operator()(Goaway) const override {
-      XLOG(INFO) << "Goaway";
-    }
-
-   private:
-    MoQDateServer& server_;
-  };
-
-  std::unique_ptr<ControlVisitor> makeControlVisitor(
-      std::shared_ptr<MoQSession> clientSession) override {
+  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
+    clientSession->setPublishHandler(shared_from_this());
     if (!loopRunning_) {
       // start date loop on first server connect
       loopRunning_ = true;
       publishDateLoop().scheduleOn(clientSession->getEventBase()).start();
     }
-    return std::make_unique<DateControlVisitor>(
-        *this, std::move(clientSession));
   }
 
-  void onSubscribe(
+  folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest subReq,
-      std::shared_ptr<MoQSession> clientSession) {
+      std::shared_ptr<TrackConsumer> consumer) override {
+    XLOG(INFO) << "SubscribeRequest track ns="
+               << subReq.fullTrackName.trackNamespace
+               << " name=" << subReq.fullTrackName.trackName
+               << " subscribe id=" << subReq.subscribeID
+               << " track alias=" << subReq.trackAlias;
+    if (subReq.fullTrackName != dateTrackName()) {
+      co_return folly::makeUnexpected(
+          SubscribeError{subReq.subscribeID, 404, "unexpected subscribe"});
+    }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
     auto range = toSubscribeRange(subReq, nowLoc);
     if (range.start < nowLoc) {
-      clientSession->subscribeError(
-          {subReq.subscribeID, 400, "start in the past, use FETCH"});
-      return;
+      co_return folly::makeUnexpected(SubscribeError{
+          subReq.subscribeID, 400, "start in the past, use FETCH"});
     }
-    auto trackPublisher = clientSession->subscribeOk(
-        {subReq.subscribeID,
-         std::chrono::milliseconds(0),
-         MoQSession::resolveGroupOrder(
-             GroupOrder::OldestFirst, subReq.groupOrder),
-         nowLoc});
-
     forwarder_.setLatest(nowLoc);
-    forwarder_.addSubscriber(std::make_shared<MoQForwarder::Subscriber>(
-        std::move(clientSession),
-        subReq.subscribeID,
-        subReq.trackAlias,
-        range,
-        std::move(trackPublisher)));
+    co_return forwarder_.addSubscriber(
+        MoQSession::getRequestSession(), subReq, std::move(consumer));
   }
 
-  void onFetch(Fetch fetch, std::shared_ptr<MoQSession> clientSession) {
+  class FetchHandle : public Publisher::FetchHandle {
+   public:
+    explicit FetchHandle(FetchOk ok) : Publisher::FetchHandle(std::move(ok)) {}
+    void fetchCancel() override {
+      cancelSource.requestCancellation();
+    }
+    folly::CancellationSource cancelSource;
+  };
+
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override {
+    XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
+               << " name=" << fetch.fullTrackName.trackName
+               << " subscribe id=" << fetch.subscribeID;
+    if (fetch.fullTrackName != dateTrackName()) {
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, 403, "unexpected fetch"});
+    }
     if (fetch.end < fetch.start) {
-      clientSession->fetchError({fetch.subscribeID, 400, "No objects"});
-      return;
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, 400, "No objects"});
     }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
@@ -160,28 +120,35 @@ class MoQDateServer : MoQServer {
     auto range = toSubscribeRange(
         fetch.start, fetch.end, LocationType::AbsoluteRange, nowLoc);
     if (range.start > nowLoc) {
-      clientSession->fetchError(
-          {fetch.subscribeID, 400, "fetch starts in future"});
-      return;
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, 400, "fetch starts in future"});
     }
     range.end = std::min(range.end, nowLoc);
-    auto fetchPub = clientSession->fetchOk(
-        {fetch.subscribeID,
-         MoQSession::resolveGroupOrder(
-             GroupOrder::OldestFirst, fetch.groupOrder),
-         0, // not end of track
-         nowLoc,
-         {}});
 
-    catchup(fetchPub, range, nowLoc)
+    auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
+        fetch.subscribeID,
+        MoQSession::resolveGroupOrder(
+            GroupOrder::OldestFirst, fetch.groupOrder),
+        0, // not end of track
+        nowLoc,
+        {}});
+    auto clientSession = MoQSession::getRequestSession();
+    folly::coro::co_withCancellation(
+        fetchHandle->cancelSource.getToken(),
+        catchup(std::move(consumer), range, nowLoc))
         .scheduleOn(clientSession->getEventBase())
         .start();
+    co_return fetchHandle;
   }
 
-  bool onSubscribeUpdate(
-      const std::shared_ptr<MoQSession>& session,
-      const SubscribeUpdate& subscribeUpdate) {
-    return forwarder_.updateSubscriber(session, subscribeUpdate);
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
+    auto session = MoQSession::getRequestSession();
+    if (relayClient_ && relayClient_->getSession() == session) {
+      // TODO: relay is going away
+    } else {
+      forwarder_.removeSession(session);
+    }
   }
 
   Payload minutePayload(uint64_t group) {
@@ -209,7 +176,9 @@ class MoQDateServer : MoQServer {
       XLOG(ERR) << "Invalid start object";
       co_return;
     }
-    while (range.start < now && range.start < range.end) {
+    auto token = co_await folly::coro::co_current_cancellation_token;
+    while (!token.isCancellationRequested() && range.start < now &&
+           range.start < range.end) {
       uint64_t subgroup = streamPerObject_ ? range.start.object : 0;
       folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
       if (range.start.object == 0) {
@@ -256,8 +225,12 @@ class MoQDateServer : MoQServer {
         range.start.object = 0;
       }
     }
-    // TODO - empty range may log an error?
-    fetchPub->endOfFetch();
+    if (token.isCancellationRequested()) {
+      fetchPub->reset(ResetStreamErrorCode::CANCELLED);
+    } else {
+      // TODO - empty range may log an error?
+      fetchPub->endOfFetch();
+    }
   }
 
   folly::coro::Task<void> publishDateLoop() {
@@ -328,12 +301,6 @@ class MoQDateServer : MoQServer {
     }
   }
 
-  void unsubscribe(
-      std::shared_ptr<MoQSession> session,
-      Unsubscribe unsubscribe) {
-    forwarder_.removeSession(session);
-  }
-
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << __func__;
     forwarder_.removeSession(session);
@@ -352,7 +319,10 @@ class MoQDateServer : MoQServer {
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
   folly::EventBase evb;
-  MoQDateServer moqDateServer(&evb, FLAGS_stream_per_object);
+  auto server = std::make_shared<MoQDateServer>(FLAGS_stream_per_object);
+  if (!FLAGS_relay_url.empty() && !server->startRelayClient(&evb)) {
+    return 1;
+  }
   evb.loopForever();
   return 0;
 }

@@ -62,16 +62,13 @@ uint64_t getStreamPriority(
 // or a Fetch response.  It's of course illegal to mix-and-match the APIs, but
 // the object is only handed to the application as either a SubgroupConsumer
 // or a FetchConsumer
-class StreamPublisherImpl : public SubgroupConsumer,
-                            public FetchConsumer,
-                            public folly::CancellationCallback {
+class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
  public:
   StreamPublisherImpl() = delete;
 
-  // Fetch constructor
-  StreamPublisherImpl(
-      MoQSession::PublisherImpl* publisher,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle);
+  // Fetch constructor - we defer creating the stream/writeHandle until the
+  // first published object.
+  explicit StreamPublisherImpl(MoQSession::PublisherImpl* publisher);
 
   // Subscribe constructor
   StreamPublisherImpl(
@@ -204,6 +201,10 @@ class StreamPublisherImpl : public SubgroupConsumer,
     return true;
   }
 
+  folly::Expected<folly::Unit, MoQPublishError> ensureWriteHandle();
+
+  void setWriteHandle(proxygen::WebTransport::StreamWriteHandle* writeHandle);
+
   folly::Expected<folly::Unit, MoQPublishError> validatePublish(
       uint64_t objectID);
   folly::Expected<ObjectPublishStatus, MoQPublishError>
@@ -218,6 +219,7 @@ class StreamPublisherImpl : public SubgroupConsumer,
   void onStreamComplete();
 
   MoQSession::PublisherImpl* publisher_{nullptr};
+  folly::Optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   StreamType streamType_;
   ObjectHeader header_;
@@ -225,267 +227,10 @@ class StreamPublisherImpl : public SubgroupConsumer,
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
 };
 
-class TrackPublisherImpl : public MoQSession::PublisherImpl,
-                           public TrackConsumer {
- public:
-  TrackPublisherImpl() = delete;
-  TrackPublisherImpl(
-      MoQSession* session,
-      SubscribeID subscribeID,
-      TrackAlias trackAlias,
-      Priority subPriority,
-      GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, subPriority, groupOrder),
-        trackAlias_(trackAlias) {}
-
-  // PublisherImpl overrides
-  void onStreamComplete(const ObjectHeader& finalHeader) override;
-
-  void reset(ResetStreamErrorCode) override {
-    // TBD: reset all subgroups_?  Currently called from cleanup()
-  }
-
-  // TrackConsumer overrides
-  folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
-      override;
-
-  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
-  awaitStreamCredit() override;
-
-  folly::Expected<folly::Unit, MoQPublishError> objectStream(
-      const ObjectHeader& header,
-      Payload payload) override;
-
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
-
-  folly::Expected<folly::Unit, MoQPublishError> datagram(
-      const ObjectHeader& header,
-      Payload payload) override;
-
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) override;
-
- private:
-  TrackAlias trackAlias_;
-  folly::F14FastMap<
-      std::pair<uint64_t, uint64_t>,
-      std::shared_ptr<StreamPublisherImpl>>
-      subgroups_;
-};
-
-class FetchPublisherImpl : public MoQSession::PublisherImpl {
- public:
-  FetchPublisherImpl(
-      MoQSession* session,
-      SubscribeID subscribeID,
-      Priority subPriority,
-      GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, subPriority, groupOrder) {}
-
-  folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError> beginFetch(
-      GroupOrder groupOrder);
-
-  void reset(ResetStreamErrorCode error) override {
-    if (streamPublisher_) {
-      streamPublisher_->reset(error);
-    }
-  }
-
-  void onStreamComplete(const ObjectHeader&) override {
-    streamPublisher_.reset();
-    PublisherImpl::fetchComplete();
-  }
-
- private:
-  std::shared_ptr<StreamPublisherImpl> streamPublisher_;
-};
-
-// TrackPublisherImpl
-
-folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-TrackPublisherImpl::beginSubgroup(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    Priority pubPriority) {
-  auto wt = getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Trying to publish after subscribeDone";
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
-  }
-  auto stream = wt->createUniStream();
-  if (!stream) {
-    // failed to create a stream
-    // TODO: can it fail for non-stream credit reasons? Session closing should
-    // be handled above.
-    XLOG(ERR) << "Failed to create uni stream tp=" << this;
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::BLOCKED, "Failed to create uni stream."));
-  }
-  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
-             << " tp=" << this;
-  stream.value()->setPriority(
-      1,
-      getStreamPriority(
-          groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
-      false);
-  auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
-      this, *stream, trackAlias_, groupID, subgroupID);
-  // TODO: these are currently unused, but the intent might be to reset
-  // open subgroups automatically from some path?
-  subgroups_[{groupID, subgroupID}] = subgroupPublisher;
-  return subgroupPublisher;
-}
-
-folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
-TrackPublisherImpl::awaitStreamCredit() {
-  auto wt = getWebTransport();
-  if (!wt) {
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "awaitStreamCredit after subscribeDone"));
-  }
-  return wt->awaitUniStreamCredit();
-}
-
-void TrackPublisherImpl::onStreamComplete(const ObjectHeader& finalHeader) {
-  subgroups_.erase({finalHeader.group, finalHeader.subgroup});
-}
-
-folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::objectStream(
-    const ObjectHeader& objHeader,
-    Payload payload) {
-  XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
-  auto subgroup =
-      beginSubgroup(objHeader.group, objHeader.subgroup, objHeader.priority);
-  if (subgroup.hasError()) {
-    return folly::makeUnexpected(std::move(subgroup.error()));
-  }
-  switch (objHeader.status) {
-    case ObjectStatus::NORMAL:
-      return subgroup.value()->object(
-          objHeader.id, std::move(payload), /*finSubgroup=*/true);
-    case ObjectStatus::OBJECT_NOT_EXIST:
-      return subgroup.value()->objectNotExists(
-          objHeader.id, /*finSubgroup=*/true);
-    case ObjectStatus::GROUP_NOT_EXIST: {
-      auto& subgroupPublisherImpl =
-          static_cast<StreamPublisherImpl&>(*subgroup.value());
-      return subgroupPublisherImpl.publishStatus(
-          objHeader.id, objHeader.status, /*finStream=*/true);
-    }
-    case ObjectStatus::END_OF_GROUP:
-      return subgroup.value()->endOfGroup(objHeader.id);
-    case ObjectStatus::END_OF_TRACK_AND_GROUP:
-      return subgroup.value()->endOfTrackAndGroup(objHeader.id);
-    case ObjectStatus::END_OF_SUBGROUP:
-      return subgroup.value()->endOfSubgroup();
-  }
-  return folly::makeUnexpected(
-      MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
-}
-
-folly::Expected<folly::Unit, MoQPublishError>
-TrackPublisherImpl::groupNotExists(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    Priority priority) {
-  return objectStream(
-      {trackAlias_,
-       groupID,
-       subgroupID,
-       0,
-       priority,
-       ObjectStatus::GROUP_NOT_EXIST,
-       0},
-      nullptr);
-}
-
-folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::datagram(
-    const ObjectHeader& header,
-    Payload payload) {
-  auto wt = getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Trying to publish after subscribeDone";
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
-  }
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  XCHECK(header.length);
-  (void)writeObject(
-      writeBuf,
-      StreamType::OBJECT_DATAGRAM,
-      ObjectHeader{
-          trackAlias_,
-          header.group,
-          header.id,
-          header.id,
-          header.priority,
-          header.status,
-          *header.length},
-      std::move(payload));
-  // TODO: set priority when WT has an API for that
-  auto res = wt->sendDatagram(writeBuf.move());
-  if (res.hasError()) {
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::WRITE_ERROR, "sendDatagram failed"));
-  }
-  return folly::unit;
-}
-
-folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::subscribeDone(
-    SubscribeDone subDone) {
-  subDone.subscribeID = subscribeID_;
-  return PublisherImpl::subscribeDone(std::move(subDone));
-}
-
-// FetchPublisherImpl
-
-folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
-FetchPublisherImpl::beginFetch(GroupOrder groupOrder) {
-  auto wt = getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Trying to publish after fetchCancel";
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after fetchCancel"));
-  }
-
-  auto stream = wt->createUniStream();
-  if (!stream) {
-    // failed to create a stream
-    XLOG(ERR) << "Failed to create uni stream tp=" << this;
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::BLOCKED, "Failed to create uni stream."));
-  }
-  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
-             << " tp=" << this;
-  setGroupOrder(groupOrder);
-  // Currently sets group=0 for FETCH priority bits
-  stream.value()->setPriority(
-      1, getStreamPriority(0, 0, subPriority_, 0, groupOrder_), false);
-  streamPublisher_ = std::make_shared<StreamPublisherImpl>(this, *stream);
-  return streamPublisher_;
-}
-
 // StreamPublisherImpl
 
-StreamPublisherImpl::StreamPublisherImpl(
-    MoQSession::PublisherImpl* publisher,
-    proxygen::WebTransport::StreamWriteHandle* writeHandle)
-    : CancellationCallback(
-          writeHandle->getCancelToken(),
-          [this] {
-            if (writeHandle_) {
-              auto code = writeHandle_->stopSendingErrorCode();
-              XLOG(DBG1) << "Peer requested write termination code="
-                         << (code ? folly::to<std::string>(*code)
-                                  : std::string("none"));
-              reset(ResetStreamErrorCode::CANCELLED);
-            }
-          }),
-      publisher_(publisher),
-      writeHandle_(writeHandle),
+StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
+    : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_{
           publisher->subscribeID(),
@@ -504,9 +249,10 @@ StreamPublisherImpl::StreamPublisherImpl(
     TrackAlias alias,
     uint64_t groupID,
     uint64_t subgroupID)
-    : StreamPublisherImpl(publisher, writeHandle) {
+    : StreamPublisherImpl(publisher) {
   streamType_ = StreamType::STREAM_HEADER_SUBGROUP;
   header_.trackIdentifier = alias;
+  setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
   writeBuf_.move(); // clear FETCH_HEADER
   (void)writeSubgroupHeader(writeBuf_, header_);
@@ -514,9 +260,29 @@ StreamPublisherImpl::StreamPublisherImpl(
 
 // Private methods
 
+void StreamPublisherImpl::setWriteHandle(
+    proxygen::WebTransport::StreamWriteHandle* writeHandle) {
+  XCHECK(publisher_);
+  XCHECK(!writeHandle_);
+  writeHandle_ = writeHandle;
+  cancelCallback_.emplace(writeHandle_->getCancelToken(), [this] {
+    if (writeHandle_) {
+      auto code = writeHandle_->stopSendingErrorCode();
+      XLOG(DBG1) << "Peer requested write termination code="
+                 << (code ? folly::to<std::string>(*code)
+                          : std::string("none"));
+      reset(ResetStreamErrorCode::CANCELLED);
+    }
+  });
+}
+
 void StreamPublisherImpl::onStreamComplete() {
   XCHECK_EQ(writeHandle_, nullptr);
-  publisher_->onStreamComplete(header_);
+  auto publisher = publisher_;
+  publisher_ = nullptr;
+  if (publisher) {
+    publisher->onStreamComplete(header_);
+  }
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -535,12 +301,7 @@ StreamPublisherImpl::validatePublish(uint64_t objectID) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Object ID not advancing in subgroup"));
   }
-  if (!writeHandle_) {
-    XLOG(ERR) << "Write after subgroup complete sgp=" << this;
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "Subgroup reset"));
-  }
-  return folly::unit;
+  return ensureWriteHandle();
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -712,7 +473,7 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
     writeHandle_ = nullptr;
     writeHandle->resetStream(uint32_t(error));
   } else {
-    // Can happen on STOP_SENDING
+    // Can happen on STOP_SENDING or prior to first fetch write
     XLOG(ERR) << "reset with no write handle: sgp=" << this;
   }
   onStreamComplete();
@@ -732,9 +493,301 @@ StreamPublisherImpl::awaitReadyToConsume() {
   return std::move(writableFuture.value());
 }
 
+folly::Expected<folly::Unit, MoQPublishError>
+StreamPublisherImpl::ensureWriteHandle() {
+  if (writeHandle_) {
+    return folly::unit;
+  }
+  if (!publisher_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Write after stream complete"));
+  }
+  // This has to be FETCH, subscribe is created with a writeHandle_ and
+  // publisher_ is cleared when the stream FIN's or resets.
+  auto wt = publisher_->getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Trying to publish after fetchCancel";
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Publish after fetchCancel"));
+  }
+
+  auto stream = wt->createUniStream();
+  if (!stream) {
+    // failed to create a stream
+    XLOG(ERR) << "Failed to create uni stream tp=" << this;
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::BLOCKED, "Failed to create uni stream."));
+  }
+  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
+             << " tp=" << this;
+  // publisher group order is not known here, but it shouldn't matter
+  // Currently sets group=0 for FETCH priority bits
+  stream.value()->setPriority(
+      1,
+      getStreamPriority(
+          0, 0, publisher_->subPriority(), 0, GroupOrder::OldestFirst),
+      false);
+  setWriteHandle(*stream);
+  return folly::unit;
+}
+
 } // namespace
 
 namespace moxygen {
+
+class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
+                                       public TrackConsumer {
+ public:
+  TrackPublisherImpl() = delete;
+  TrackPublisherImpl(
+      MoQSession* session,
+      SubscribeID subscribeID,
+      TrackAlias trackAlias,
+      Priority subPriority,
+      GroupOrder groupOrder)
+      : PublisherImpl(session, subscribeID, subPriority, groupOrder),
+        trackAlias_(trackAlias) {}
+
+  void setSubscriptionHandle(
+      std::shared_ptr<Publisher::SubscriptionHandle> handle) {
+    handle_ = std::move(handle);
+    if (pendingSubscribeDone_) {
+      // If subscribeDone is called before publishHandler_->subscribe() returns,
+      // catch the DONE here and defer it until after we send subscribe OK.
+      auto subDone = std::move(*pendingSubscribeDone_);
+      pendingSubscribeDone_.reset();
+      PublisherImpl::subscribeDone(std::move(subDone));
+    }
+  }
+
+  std::shared_ptr<Publisher::SubscriptionHandle> getSubscriptionHandle() const {
+    return handle_;
+  }
+
+  // PublisherImpl overrides
+  void onStreamComplete(const ObjectHeader& finalHeader) override;
+
+  void reset(ResetStreamErrorCode) override {
+    // TBD: reset all subgroups_?  Currently called from cleanup()
+  }
+
+  // TrackConsumer overrides
+  folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
+      override;
+
+  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  awaitStreamCredit() override;
+
+  folly::Expected<folly::Unit, MoQPublishError> objectStream(
+      const ObjectHeader& header,
+      Payload payload) override;
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
+
+  folly::Expected<folly::Unit, MoQPublishError> datagram(
+      const ObjectHeader& header,
+      Payload payload) override;
+
+  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
+      SubscribeDone subDone) override;
+
+ private:
+  std::shared_ptr<Publisher::SubscriptionHandle> handle_;
+  TrackAlias trackAlias_;
+  folly::Optional<SubscribeDone> pendingSubscribeDone_;
+  folly::F14FastMap<
+      std::pair<uint64_t, uint64_t>,
+      std::shared_ptr<StreamPublisherImpl>>
+      subgroups_;
+};
+
+class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
+ public:
+  FetchPublisherImpl(
+      MoQSession* session,
+      SubscribeID subscribeID,
+      Priority subPriority,
+      GroupOrder groupOrder)
+      : PublisherImpl(session, subscribeID, subPriority, groupOrder) {
+    streamPublisher_ = std::make_shared<StreamPublisherImpl>(this);
+  }
+
+  std::shared_ptr<StreamPublisherImpl> getStreamPublisher() const {
+    return streamPublisher_;
+  }
+
+  void setFetchHandle(std::shared_ptr<Publisher::FetchHandle> handle) {
+    handle_ = std::move(handle);
+  }
+
+  std::shared_ptr<Publisher::FetchHandle> getFetchHandle() const {
+    return handle_;
+  }
+
+  void reset(ResetStreamErrorCode error) override {
+    if (streamPublisher_) {
+      streamPublisher_->reset(error);
+    }
+  }
+
+  void onStreamComplete(const ObjectHeader&) override {
+    streamPublisher_.reset();
+    PublisherImpl::fetchComplete();
+  }
+
+ private:
+  std::shared_ptr<Publisher::FetchHandle> handle_;
+  std::shared_ptr<StreamPublisherImpl> streamPublisher_;
+};
+
+// TrackPublisherImpl
+
+folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+MoQSession::TrackPublisherImpl::beginSubgroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Priority pubPriority) {
+  auto wt = getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Trying to publish after subscribeDone";
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
+  }
+  auto stream = wt->createUniStream();
+  if (!stream) {
+    // failed to create a stream
+    // TODO: can it fail for non-stream credit reasons? Session closing should
+    // be handled above.
+    XLOG(ERR) << "Failed to create uni stream tp=" << this;
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::BLOCKED, "Failed to create uni stream."));
+  }
+  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
+             << " tp=" << this;
+  stream.value()->setPriority(
+      1,
+      getStreamPriority(
+          groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
+      false);
+  auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
+      this, *stream, trackAlias_, groupID, subgroupID);
+  // TODO: these are currently unused, but the intent might be to reset
+  // open subgroups automatically from some path?
+  subgroups_[{groupID, subgroupID}] = subgroupPublisher;
+  return subgroupPublisher;
+}
+
+folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+MoQSession::TrackPublisherImpl::awaitStreamCredit() {
+  auto wt = getWebTransport();
+  if (!wt) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "awaitStreamCredit after subscribeDone"));
+  }
+  return wt->awaitUniStreamCredit();
+}
+
+void MoQSession::TrackPublisherImpl::onStreamComplete(
+    const ObjectHeader& finalHeader) {
+  subgroups_.erase({finalHeader.group, finalHeader.subgroup});
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::objectStream(
+    const ObjectHeader& objHeader,
+    Payload payload) {
+  XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
+  auto subgroup =
+      beginSubgroup(objHeader.group, objHeader.subgroup, objHeader.priority);
+  if (subgroup.hasError()) {
+    return folly::makeUnexpected(std::move(subgroup.error()));
+  }
+  switch (objHeader.status) {
+    case ObjectStatus::NORMAL:
+      return subgroup.value()->object(
+          objHeader.id, std::move(payload), /*finSubgroup=*/true);
+    case ObjectStatus::OBJECT_NOT_EXIST:
+      return subgroup.value()->objectNotExists(
+          objHeader.id, /*finSubgroup=*/true);
+    case ObjectStatus::GROUP_NOT_EXIST: {
+      auto& subgroupPublisherImpl =
+          static_cast<StreamPublisherImpl&>(*subgroup.value());
+      return subgroupPublisherImpl.publishStatus(
+          objHeader.id, objHeader.status, /*finStream=*/true);
+    }
+    case ObjectStatus::END_OF_GROUP:
+      return subgroup.value()->endOfGroup(objHeader.id);
+    case ObjectStatus::END_OF_TRACK_AND_GROUP:
+      return subgroup.value()->endOfTrackAndGroup(objHeader.id);
+    case ObjectStatus::END_OF_SUBGROUP:
+      return subgroup.value()->endOfSubgroup();
+  }
+  return folly::makeUnexpected(
+      MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::groupNotExists(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Priority priority) {
+  return objectStream(
+      {trackAlias_,
+       groupID,
+       subgroupID,
+       0,
+       priority,
+       ObjectStatus::GROUP_NOT_EXIST,
+       0},
+      nullptr);
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::datagram(
+    const ObjectHeader& header,
+    Payload payload) {
+  auto wt = getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Trying to publish after subscribeDone";
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
+  }
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  XCHECK(header.length);
+  (void)writeObject(
+      writeBuf,
+      StreamType::OBJECT_DATAGRAM,
+      ObjectHeader{
+          trackAlias_,
+          header.group,
+          header.id,
+          header.id,
+          header.priority,
+          header.status,
+          *header.length},
+      std::move(payload));
+  // TODO: set priority when WT has an API for that
+  auto res = wt->sendDatagram(writeBuf.move());
+  if (res.hasError()) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::WRITE_ERROR, "sendDatagram failed"));
+  }
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
+  subDone.subscribeID = subscribeID_;
+  if (!handle_) {
+    // subscribeDone called from inside the subscribe handler,
+    // before subscribeOk.
+    pendingSubscribeDone_ = std::move(subDone);
+    return folly::unit;
+  }
+  return PublisherImpl::subscribeDone(std::move(subDone));
+}
 
 // Receive State
 class MoQSession::TrackReceiveStateBase {
@@ -761,7 +814,7 @@ class MoQSession::TrackReceiveStateBase {
 class MoQSession::SubscribeTrackReceiveState
     : public MoQSession::TrackReceiveStateBase {
  public:
-  using SubscribeResult = MoQSession::SubscribeResult;
+  using SubscribeResult = folly::Expected<SubscribeOk, SubscribeError>;
   SubscribeTrackReceiveState(
       FullTrackName fullTrackName,
       SubscribeID subscribeID,
@@ -825,7 +878,7 @@ class MoQSession::SubscribeTrackReceiveState
 class MoQSession::FetchTrackReceiveState
     : public MoQSession::TrackReceiveStateBase {
  public:
-  using FetchResult = folly::Expected<SubscribeID, FetchError>;
+  using FetchResult = folly::Expected<FetchOk, FetchError>;
   FetchTrackReceiveState(
       FullTrackName fullTrackName,
       SubscribeID subscribeID,
@@ -856,9 +909,9 @@ class MoQSession::FetchTrackReceiveState
     resetFetchCallback(session);
   }
 
-  void fetchOK() {
+  void fetchOK(FetchOk ok) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
-    promise_.setValue(subscribeID_);
+    promise_.setValue(std::move(ok));
   }
 
   void fetchError(FetchError fetchErr) {
@@ -880,12 +933,68 @@ class MoQSession::FetchTrackReceiveState
 using folly::coro::co_awaitTry;
 using folly::coro::co_error;
 
+class MoQSession::SubscriberAnnounceCallback
+    : public Subscriber::AnnounceCallback {
+ public:
+  SubscriberAnnounceCallback(MoQSession& session, TrackNamespace ns)
+      : session_(session), trackNamespace_(ns) {}
+
+  void announceCancel(uint64_t errorCode, std::string reasonPhrase) override {
+    session_.announceCancel(
+        {trackNamespace_, errorCode, std::move(reasonPhrase)});
+  }
+
+  std::shared_ptr<Subscriber::AnnounceHandle> handle;
+
+ private:
+  MoQSession& session_;
+  TrackNamespace trackNamespace_;
+};
+
+class MoQSession::PublisherAnnounceHandle : public Subscriber::AnnounceHandle {
+ public:
+  PublisherAnnounceHandle(std::shared_ptr<MoQSession> session, AnnounceOk annOk)
+      : Subscriber::AnnounceHandle(std::move(annOk)),
+        session_(std::move(session)) {}
+  PublisherAnnounceHandle(const PublisherAnnounceHandle&) = delete;
+  PublisherAnnounceHandle& operator=(const PublisherAnnounceHandle&) = delete;
+  ~PublisherAnnounceHandle() override {
+    unannounce();
+  }
+
+  void unannounce() override {
+    if (session_) {
+      session_->unannounce({announceOk().trackNamespace});
+      session_.reset();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+};
+
 MoQSession::~MoQSession() {
   cleanup();
+  XLOG(DBG1) << __func__ << " sess=" << this;
 }
 
 void MoQSession::cleanup() {
   // TODO: Are these loops safe since they may (should?) delete elements
+  for (auto& subAnn : subscribeAnnounces_) {
+    subAnn.second->unsubscribeAnnounces();
+  }
+  subscribeAnnounces_.clear();
+  for (auto& ann : subscriberAnnounces_) {
+    ann.second->handle->unannounce();
+  }
+  subscriberAnnounces_.clear();
+  for (auto& ann : publisherAnnounces_) {
+    if (ann.second) {
+      ann.second->announceCancel(
+          std::numeric_limits<uint64_t>::max(), "Session ended");
+    }
+  }
+  publisherAnnounces_.clear();
   for (auto& pubTrack : pubTracks_) {
     pubTrack.second->reset(ResetStreamErrorCode::SESSION_CLOSED);
   }
@@ -922,6 +1031,11 @@ void MoQSession::cleanup() {
   }
 }
 
+const folly::RequestToken& MoQSession::sessionRequestToken() {
+  static folly::RequestToken token("moq_session");
+  return token;
+}
+
 void MoQSession::start() {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (dir_ == MoQControlCodec::Direction::CLIENT) {
@@ -953,6 +1067,14 @@ void MoQSession::drain() {
   XLOG(DBG1) << __func__ << " sess=" << this;
   draining_ = true;
   checkForCloseOnDrain();
+}
+
+void MoQSession::goaway(Goaway goaway) {
+  if (!draining_) {
+    writeGoaway(controlWriteBuf_, std::move(goaway));
+    controlWriteEvent_.signal();
+    drain();
+  }
 }
 
 void MoQSession::checkForCloseOnDrain() {
@@ -1017,7 +1139,8 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
 folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  std::tie(setupPromise_, setupFuture_) =
+  folly::coro::Future<ServerSetup> setupFuture;
+  std::tie(setupPromise_, setupFuture) =
       folly::coro::makePromiseContract<ServerSetup>();
 
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
@@ -1035,7 +1158,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   folly::EventBaseThreadTimekeeper tk(*evb_);
   auto serverSetup = co_await co_awaitTry(folly::coro::co_withCancellation(
       mergeToken,
-      folly::coro::timeout(std::move(setupFuture_), kSetupTimeout, &tk)));
+      folly::coro::timeout(std::move(setupFuture), kSetupTimeout, &tk)));
   if (mergeToken.isCancellationRequested()) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
   }
@@ -1094,27 +1217,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
   maxSubscribeID_ = maxConcurrentSubscribes_ = maxSubscribeId;
   setupComplete_ = true;
-  setupPromise_.setValue(ServerSetup());
   controlWriteEvent_.signal();
-}
-
-folly::coro::AsyncGenerator<MoQSession::MoQMessage>
-MoQSession::controlMessages() {
-  XLOG(DBG1) << __func__ << " sess=" << this;
-  auto self = shared_from_this();
-  while (true) {
-    auto token = cancellationSource_.getToken();
-    auto message = co_await folly::coro::co_awaitTry(
-        folly::coro::co_withCancellation(token, controlMessages_.dequeue()));
-    if (token.isCancellationRequested()) {
-      co_return;
-    }
-    if (message.hasException()) {
-      XLOG(ERR) << folly::exceptionStr(message.exception()) << " sess=" << this;
-      break;
-    }
-    co_yield *message;
-  }
 }
 
 folly::coro::Task<void> MoQSession::controlReadLoop(
@@ -1529,16 +1632,56 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       subscribeRequest.trackAlias,
       subscribeRequest.priority,
       subscribeRequest.groupOrder);
-  pubTracks_.emplace(subscribeID, std::move(trackPublisher));
+  pubTracks_.emplace(subscribeID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
-  controlMessages_.enqueue(std::move(subscribeRequest));
+  handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher))
+      .scheduleOn(evb_)
+      .start();
+}
+
+folly::coro::Task<void> MoQSession::handleSubscribe(
+    SubscribeRequest sub,
+    std::shared_ptr<TrackPublisherImpl> trackPublisher) {
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto subscribeID = sub.subscribeID;
+  auto subscribeResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->subscribe(
+          std::move(sub),
+          std::static_pointer_cast<TrackConsumer>(trackPublisher))));
+  if (subscribeResult.hasException()) {
+    XLOG(ERR) << "Exception in Publisher callback ex="
+              << subscribeResult.exception().what().toStdString();
+    subscribeError(
+        {subscribeID, 500, subscribeResult.exception().what().toStdString()});
+    co_return;
+  }
+  if (subscribeResult->hasError()) {
+    XLOG(DBG1) << "Application subscribe error err="
+               << subscribeResult->error().reasonPhrase;
+    auto subErr = std::move(subscribeResult->error());
+    subErr.subscribeID = subscribeID; // In case app got it wrong
+    subscribeError(std::move(subErr));
+  } else {
+    auto subHandle = std::move(subscribeResult->value());
+    auto subOk = subHandle->subscribeOk();
+    subOk.subscribeID = subscribeID;
+    subscribeOk(std::move(subOk));
+    trackPublisher->setSubscriptionHandle(std::move(subHandle));
+  }
 }
 
 void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.subscribeID
              << " sess=" << this;
   const auto subscribeID = subscribeUpdate.subscribeID;
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << "No publisher callback set";
+    return;
+  }
+
   auto it = pubTracks_.find(subscribeID);
   if (it == pubTracks_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << subscribeID << " sess=" << this;
@@ -1550,15 +1693,53 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
   it->second->setSubPriority(subscribeUpdate.priority);
   // TODO: update priority of tracks in flight
-  controlMessages_.enqueue(std::move(subscribeUpdate));
+  auto pubTrackIt = pubTracks_.find(subscribeID);
+  if (pubTrackIt == pubTracks_.end()) {
+    XLOG(ERR) << "SubscribeUpdate track not found id=" << subscribeID
+              << " sess=" << this;
+    return;
+  }
+  auto trackPublisher =
+      dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
+  if (!trackPublisher) {
+    XLOG(ERR) << "SubscribeID in SubscribeUpdate is for a FETCH, id="
+              << subscribeID << " sess=" << this;
+  } else if (!trackPublisher->getSubscriptionHandle()) {
+    XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
+              << subscribeID << " sess=" << this;
+  } else {
+    trackPublisher->getSubscriptionHandle()->subscribeUpdate(
+        std::move(subscribeUpdate));
+  }
 }
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__ << " id=" << unsubscribe.subscribeID
              << " sess=" << this;
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << "No publisher callback set";
+    return;
+  }
   // How does this impact pending subscribes?
   // and open TrackReceiveStates
-  controlMessages_.enqueue(std::move(unsubscribe));
+  auto pubTrackIt = pubTracks_.find(unsubscribe.subscribeID);
+  if (pubTrackIt == pubTracks_.end()) {
+    XLOG(ERR) << "Unsubscribe track not found id=" << unsubscribe.subscribeID
+              << " sess=" << this;
+    return;
+  }
+  auto trackPublisher =
+      dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
+  if (!trackPublisher) {
+    XLOG(ERR) << "SubscribeID in Unscubscribe is for a FETCH, id="
+              << unsubscribe.subscribeID << " sess=" << this;
+  } else if (!trackPublisher->getSubscriptionHandle()) {
+    XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
+              << unsubscribe.subscribeID << " sess=" << this;
+  } else {
+    trackPublisher->getSubscriptionHandle()->unsubscribe();
+    // Maybe issue SUBSCRIBE_DONE/UNSUBSCRIBED + reset open streams?
+  }
 }
 
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
@@ -1668,8 +1849,43 @@ void MoQSession::onFetch(Fetch fetch) {
   }
   auto fetchPublisher = std::make_shared<FetchPublisherImpl>(
       this, fetch.subscribeID, fetch.priority, fetch.groupOrder);
-  pubTracks_.emplace(fetch.subscribeID, std::move(fetchPublisher));
-  controlMessages_.enqueue(std::move(fetch));
+  pubTracks_.emplace(fetch.subscribeID, fetchPublisher);
+  handleFetch(std::move(fetch), std::move(fetchPublisher))
+      .scheduleOn(evb_)
+      .start();
+}
+
+folly::coro::Task<void> MoQSession::handleFetch(
+    Fetch fetch,
+    std::shared_ptr<FetchPublisherImpl> fetchPublisher) {
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto subscribeID = fetch.subscribeID;
+  auto fetchResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->fetch(
+          std::move(fetch), fetchPublisher->getStreamPublisher())));
+  if (fetchResult.hasException()) {
+    XLOG(ERR) << "Exception in Publisher callback ex="
+              << fetchResult.exception().what();
+    fetchError(
+        {subscribeID, 500, fetchResult.exception().what().toStdString()});
+    co_return;
+  }
+  if (fetchResult->hasError()) {
+    XLOG(DBG1) << "Application fetch error err="
+               << fetchResult->error().reasonPhrase;
+    auto fetchErr = std::move(fetchResult->error());
+    fetchErr.subscribeID = subscribeID; // In case app got it wrong
+    fetchError(std::move(fetchErr));
+  } else {
+    // What happens if this got cancelled
+    auto fetchHandle = std::move(fetchResult->value());
+    auto fetchOkMsg = fetchHandle->fetchOk();
+    fetchOkMsg.subscribeID = subscribeID;
+    fetchOk(std::move(fetchOkMsg));
+    fetchPublisher->setFetchHandle(std::move(fetchHandle));
+  }
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
@@ -1685,7 +1901,16 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
   } else {
     // It's possible the fetch stream hasn't opened yet if the application
     // hasn't made it to fetchOK.
-    pubTrackIt->second->reset(ResetStreamErrorCode::CANCELLED);
+    auto fetchPublisher =
+        std::dynamic_pointer_cast<FetchPublisherImpl>(pubTrackIt->second);
+    if (!fetchPublisher) {
+      XLOG(ERR) << "FETCH_CANCEL on SUBSCRIBE id=" << fetchCancel.subscribeID;
+      return;
+    }
+    fetchPublisher->reset(ResetStreamErrorCode::CANCELLED);
+    if (fetchPublisher->getFetchHandle()) {
+      fetchPublisher->getFetchHandle()->fetchCancel();
+    }
     retireSubscribeId(/*signalWriteLoop=*/true);
   }
 }
@@ -1699,7 +1924,7 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
     return;
   }
   const auto& trackReceiveState = fetchIt->second;
-  trackReceiveState->fetchOK();
+  trackReceiveState->fetchOK(std::move(fetchOk));
   if (trackReceiveState->fetchOkAndAllDataReceived()) {
     fetches_.erase(fetchIt);
     checkForCloseOnDrain();
@@ -1722,7 +1947,45 @@ void MoQSession::onFetchError(FetchError fetchError) {
 
 void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
-  controlMessages_.enqueue(std::move(ann));
+  if (!subscribeHandler_) {
+    XLOG(DBG1) << __func__ << "No subscriber callback set";
+    announceError({ann.trackNamespace, 500, "Not a subscriber"});
+  } else {
+    handleAnnounce(std::move(ann)).scheduleOn(evb_).start();
+  }
+}
+
+folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto annCb = std::make_shared<SubscriberAnnounceCallback>(
+      *this, announce.trackNamespace);
+  auto announceResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      subscribeHandler_->announce(announce, annCb)));
+  if (announceResult.hasException()) {
+    XLOG(ERR) << "Exception in Subscriber callback ex="
+              << announceResult.exception().what().toStdString();
+    announceError(
+        {announce.trackNamespace,
+         500,
+         announceResult.exception().what().toStdString()});
+    co_return;
+  }
+  if (announceResult->hasError()) {
+    XLOG(DBG1) << "Application announce error err="
+               << announceResult->error().reasonPhrase;
+    auto annErr = std::move(announceResult->error());
+    annErr.trackNamespace = announce.trackNamespace; // In case app got it wrong
+    announceError(std::move(annErr));
+  } else {
+    annCb->handle = std::move(announceResult->value());
+    auto announceOkMsg = annCb->handle->announceOk();
+    announceOkMsg.trackNamespace = announce.trackNamespace;
+    announceOk(std::move(announceOkMsg));
+    // TODO: what about UNANNOUNCE before ANNOUNCE_OK
+    subscriberAnnounces_[announce.trackNamespace] = std::move(annCb);
+  }
 }
 
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
@@ -1748,25 +2011,85 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
               << announceError.trackNamespace << " sess=" << this;
     return;
   }
+  publisherAnnounces_.erase(announceError.trackNamespace);
   annIt->second.setValue(folly::makeUnexpected(std::move(announceError)));
   pendingAnnounce_.erase(annIt);
 }
 
 void MoQSession::onUnannounce(Unannounce unAnn) {
   XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
-  controlMessages_.enqueue(std::move(unAnn));
+  auto annIt = subscriberAnnounces_.find(unAnn.trackNamespace);
+  if (annIt == subscriberAnnounces_.end()) {
+    XLOG(ERR) << "Unannounce for bad namespace ns=" << unAnn.trackNamespace;
+  } else {
+    annIt->second->handle->unannounce();
+    subscriberAnnounces_.erase(annIt);
+  }
+}
+
+void MoQSession::announceCancel(AnnounceCancel annCan) {
+  auto res = writeAnnounceCancel(controlWriteBuf_, annCan);
+  if (!res) {
+    XLOG(ERR) << "writeAnnounceCancel failed sess=" << this;
+  }
+  controlWriteEvent_.signal();
+  subscriberAnnounces_.erase(annCan.trackNamespace);
 }
 
 void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
   XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
              << " sess=" << this;
-  controlMessages_.enqueue(std::move(announceCancel));
+  auto it = publisherAnnounces_.find(announceCancel.trackNamespace);
+  if (it == publisherAnnounces_.end()) {
+    XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
+  } else {
+    it->second->announceCancel(
+        announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
+    publisherAnnounces_.erase(it);
+  }
 }
 
 void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
-  controlMessages_.enqueue(std::move(sa));
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << "No publisher callback set";
+    subscribeAnnouncesError({sa.trackNamespacePrefix, 500, "Not a publisher"});
+    return;
+  }
+  handleSubscribeAnnounces(std::move(sa)).scheduleOn(evb_).start();
+}
+
+folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
+    SubscribeAnnounces subAnn) {
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto subAnnResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->subscribeAnnounces(subAnn)));
+  if (subAnnResult.hasException()) {
+    XLOG(ERR) << "Exception in Publisher callback ex="
+              << subAnnResult.exception().what().toStdString();
+    subscribeAnnouncesError(
+        {subAnn.trackNamespacePrefix,
+         500,
+         subAnnResult.exception().what().toStdString()});
+    co_return;
+  }
+  if (subAnnResult->hasError()) {
+    XLOG(DBG1) << "Application subAnn error err="
+               << subAnnResult->error().reasonPhrase;
+    auto subAnnErr = std::move(subAnnResult->error());
+    subAnnErr.trackNamespacePrefix =
+        subAnn.trackNamespacePrefix; // In case app got it wrong
+    subscribeAnnouncesError(std::move(subAnnErr));
+  } else {
+    auto handle = std::move(subAnnResult->value());
+    auto subAnnOk = handle->subscribeAnnouncesOk();
+    subAnnOk.trackNamespacePrefix = subAnn.trackNamespacePrefix;
+    subscribeAnnouncesOk(std::move(subAnnOk));
+    subscribeAnnounces_[subAnn.trackNamespacePrefix] = std::move(handle);
+  }
 }
 
 void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
@@ -1805,25 +2128,86 @@ void MoQSession::onSubscribeAnnouncesError(
 void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
   XLOG(DBG1) << __func__ << " prefix=" << unsub.trackNamespacePrefix
              << " sess=" << this;
-  controlMessages_.enqueue(std::move(unsub));
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << "No publisher callback set";
+    return;
+  }
+  auto saIt = subscribeAnnounces_.find(unsub.trackNamespacePrefix);
+  if (saIt == subscribeAnnounces_.end()) {
+    XLOG(ERR) << "Invalid unsub announce nsp=" << unsub.trackNamespacePrefix;
+  } else {
+    folly::RequestContextScopeGuard guard;
+    setRequestSession();
+    saIt->second->unsubscribeAnnounces();
+    subscribeAnnounces_.erase(saIt);
+  }
 }
 
 void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << " sess=" << this;
-  controlMessages_.enqueue(std::move(trackStatusRequest));
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << "No publisher callback set";
+    writeTrackStatus(
+        {trackStatusRequest.fullTrackName,
+         TrackStatusCode::UNKNOWN,
+         folly::none});
+  } else {
+    handleTrackStatus(std::move(trackStatusRequest)).scheduleOn(evb_).start();
+  }
+}
+
+folly::coro::Task<void> MoQSession::handleTrackStatus(
+    TrackStatusRequest trackStatusReq) {
+  auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->trackStatus(trackStatusReq)));
+  if (trackStatusResult.hasException()) {
+    XLOG(ERR) << "Exception in Publisher callback ex="
+              << trackStatusResult.exception().what().toStdString();
+    writeTrackStatus(
+        {trackStatusReq.fullTrackName, TrackStatusCode::UNKNOWN, folly::none});
+  } else {
+    trackStatusResult.value().fullTrackName = trackStatusReq.fullTrackName;
+    writeTrackStatus(std::move(trackStatusResult.value()));
+  }
+}
+
+void MoQSession::writeTrackStatus(TrackStatus trackStatus) {
+  auto res = moxygen::writeTrackStatus(controlWriteBuf_, trackStatus);
+  if (!res) {
+    XLOG(ERR) << "writeTrackStatus failed sess=" << this;
+  } else {
+    controlWriteEvent_.signal();
+  }
 }
 
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << " code=" << uint64_t(trackStatus.statusCode)
              << " sess=" << this;
-  controlMessages_.enqueue(std::move(trackStatus));
+  // TODO
 }
 
 void MoQSession::onGoaway(Goaway goaway) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  controlMessages_.enqueue(std::move(goaway));
+  if (receivedGoaway_) {
+    XLOG(ERR) << "Received multiple GOAWAYs sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  receivedGoaway_ = true;
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  if (publishHandler_) {
+    publishHandler_->goaway(goaway);
+  }
+  // This doesn't work if the application made a single object inherit both
+  // classes but provided separate intances.  But that's unlikely.
+  if (subscribeHandler_ &&
+      typeid(subscribeHandler_.get()) != typeid(publishHandler_.get())) {
+    subscribeHandler_->goaway(goaway);
+  }
 }
 
 void MoQSession::onConnectionError(ErrorCode error) {
@@ -1835,8 +2219,9 @@ void MoQSession::onConnectionError(ErrorCode error) {
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
-folly::coro::Task<folly::Expected<AnnounceOk, AnnounceError>>
-MoQSession::announce(Announce ann) {
+folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
+    Announce ann,
+    std::shared_ptr<AnnounceCallback> announceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   auto trackNamespace = ann.trackNamespace;
   auto res = writeAnnounce(controlWriteBuf_, std::move(ann));
@@ -1848,9 +2233,16 @@ MoQSession::announce(Announce ann) {
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<AnnounceOk, AnnounceError>>();
+  publisherAnnounces_[trackNamespace] = std::move(announceCallback);
   pendingAnnounce_.emplace(
       std::move(trackNamespace), std::move(contract.first));
-  co_return co_await std::move(contract.second);
+  auto announceResult = co_await std::move(contract.second);
+  if (announceResult.hasError()) {
+    co_return folly::makeUnexpected(announceResult.error());
+  } else {
+    co_return std::make_shared<PublisherAnnounceHandle>(
+        shared_from_this(), std::move(announceResult.value()));
+  }
 }
 
 void MoQSession::announceOk(AnnounceOk annOk) {
@@ -1876,6 +2268,11 @@ void MoQSession::announceError(AnnounceError announceError) {
 
 void MoQSession::unannounce(Unannounce unann) {
   XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
+  auto it = publisherAnnounces_.find(unann.trackNamespace);
+  if (it == publisherAnnounces_.end()) {
+    XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
+    return;
+  }
   auto trackNamespace = unann.trackNamespace;
   auto res = writeUnannounce(controlWriteBuf_, std::move(unann));
   if (!res) {
@@ -1884,8 +2281,33 @@ void MoQSession::unannounce(Unannounce unann) {
   controlWriteEvent_.signal();
 }
 
-folly::coro::Task<
-    folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
+class MoQSession::SubscribeAnnouncesHandle
+    : public Publisher::SubscribeAnnouncesHandle {
+ public:
+  SubscribeAnnouncesHandle(
+      std::shared_ptr<MoQSession> session,
+      SubscribeAnnouncesOk subAnnOk)
+      : Publisher::SubscribeAnnouncesHandle(std::move(subAnnOk)),
+        session_(std::move(session)) {}
+  SubscribeAnnouncesHandle(const SubscribeAnnouncesHandle&) = delete;
+  SubscribeAnnouncesHandle& operator=(const SubscribeAnnouncesHandle&) = delete;
+  ~SubscribeAnnouncesHandle() override {
+    unsubscribeAnnounces();
+  }
+
+  void unsubscribeAnnounces() override {
+    if (session_) {
+      session_->unsubscribeAnnounces(
+          {subscribeAnnouncesOk_->trackNamespacePrefix});
+      session_.reset();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+};
+
+folly::coro::Task<Publisher::SubscribeAnnouncesResult>
 MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
@@ -1901,7 +2323,13 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
       folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>();
   pendingSubscribeAnnounces_.emplace(
       std::move(trackNamespace), std::move(contract.first));
-  co_return co_await std::move(contract.second);
+  auto subAnnResult = co_await std::move(contract.second);
+  if (subAnnResult.hasError()) {
+    co_return folly::makeUnexpected(subAnnResult.error());
+  } else {
+    co_return std::make_shared<SubscribeAnnouncesHandle>(
+        shared_from_this(), std::move(subAnnResult.value()));
+  }
 }
 
 void MoQSession::subscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
@@ -1929,10 +2357,58 @@ void MoQSession::subscribeAnnouncesError(
   controlWriteEvent_.signal();
 }
 
-folly::coro::Task<MoQSession::SubscribeResult> MoQSession::subscribe(
+void MoQSession::unsubscribeAnnounces(UnsubscribeAnnounces unsubAnn) {
+  XLOG(DBG1) << __func__ << " prefix=" << unsubAnn.trackNamespacePrefix
+             << " sess=" << this;
+  auto res = writeUnsubscribeAnnounces(controlWriteBuf_, std::move(unsubAnn));
+  if (!res) {
+    XLOG(ERR) << "writeUnsubscribeAnnounces failed sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
+class MoQSession::ReceiverSubscriptionHandle
+    : public Publisher::SubscriptionHandle {
+ public:
+  ReceiverSubscriptionHandle(
+      SubscribeOk ok,
+      TrackAlias alias,
+      std::shared_ptr<MoQSession> session)
+      : SubscriptionHandle(std::move(ok)),
+        trackAlias_(alias),
+        session_(std::move(session)) {}
+
+  void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
+    if (session_) {
+      subscribeUpdate.subscribeID = subscribeOk_->subscribeID;
+      session_->subscribeUpdate(std::move(subscribeUpdate));
+    }
+  }
+
+  void unsubscribe() override {
+    if (session_) {
+      session_->unsubscribe({subscribeOk_->subscribeID});
+      session_.reset();
+    }
+  }
+
+ private:
+  TrackAlias trackAlias_;
+  std::shared_ptr<MoQSession> session_;
+};
+
+folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (draining_) {
+    co_return folly::makeUnexpected(SubscribeError{
+        std::numeric_limits<uint64_t>::max(),
+        500,
+        "Draining session",
+        folly::none});
+  }
   auto fullTrackName = sub.fullTrackName;
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
     XLOG(WARN) << "Issuing subscribe that will fail; nextSubscribeID_="
@@ -1942,7 +2418,8 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQSession::subscribe(
   }
   SubscribeID subID = nextSubscribeID_++;
   sub.subscribeID = subID;
-  sub.trackAlias = TrackAlias(subID.value);
+  TrackAlias alias = subID.value;
+  sub.trackAlias = alias;
   TrackAlias trackAlias = sub.trackAlias;
   auto wres = writeSubscribeRequest(controlWriteBuf_, std::move(sub));
   if (!wres) {
@@ -1959,13 +2436,14 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQSession::subscribe(
   XCHECK(subTrack.second) << "Track alias already in use alias=" << trackAlias
                           << " sess=" << this;
 
-  auto res2 = co_await trackReceiveState->subscribeFuture();
+  auto subscribeResult = co_await trackReceiveState->subscribeFuture();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " subscribeID=" << subID;
-  if (res2.hasValue()) {
-    co_return std::move(res2.value());
+  if (subscribeResult.hasError()) {
+    co_return folly::makeUnexpected(subscribeResult.error());
   } else {
-    co_return folly::makeUnexpected(res2.error());
+    co_return std::make_shared<ReceiverSubscriptionHandle>(
+        std::move(subscribeResult.value()), alias, shared_from_this());
   }
 }
 
@@ -2036,7 +2514,7 @@ void MoQSession::unsubscribe(Unsubscribe unsubscribe) {
   // if there are open streams for this subscription, we should STOP_SENDING
   // them?
   trackIt->second->cancel();
-  auto res = writeUnsubscribe(controlWriteBuf_, std::move(unsubscribe));
+  auto res = writeUnsubscribe(controlWriteBuf_, unsubscribe);
   if (!res) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
     return;
@@ -2140,12 +2618,32 @@ void MoQSession::subscribeUpdate(SubscribeUpdate subUpdate) {
   controlWriteEvent_.signal();
 }
 
-folly::coro::Task<folly::Expected<SubscribeID, FetchError>> MoQSession::fetch(
+class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle {
+ public:
+  ReceiverFetchHandle(FetchOk ok, std::shared_ptr<MoQSession> session)
+      : FetchHandle(std::move(ok)), session_(std::move(session)) {}
+
+  void fetchCancel() override {
+    if (session_) {
+      session_->fetchCancel({fetchOk_->subscribeID});
+      session_.reset();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+};
+
+folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     Fetch fetch,
-    std::shared_ptr<FetchConsumer> fetchCallback) {
+    std::shared_ptr<FetchConsumer> consumer) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
+  if (draining_) {
+    co_return folly::makeUnexpected(FetchError{
+        std::numeric_limits<uint64_t>::max(), 500, "Draining session"});
+  }
   auto fullTrackName = fetch.fullTrackName;
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
     XLOG(WARN) << "Issuing fetch that will fail; nextSubscribeID_="
@@ -2163,50 +2661,30 @@ folly::coro::Task<folly::Expected<SubscribeID, FetchError>> MoQSession::fetch(
   }
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<FetchTrackReceiveState>(
-      fullTrackName, subID, fetchCallback);
+      fullTrackName, subID, std::move(consumer));
   auto fetchTrack = fetches_.try_emplace(subID, trackReceiveState);
   XCHECK(fetchTrack.second)
       << "SubscribeID already in use id=" << subID << " sess=" << this;
-  auto res = co_await trackReceiveState->fetchFuture();
+  auto fetchResult = co_await trackReceiveState->fetchFuture();
   XLOG(DBG1) << __func__
              << " fetchReady trackReceiveState=" << trackReceiveState;
-  co_return res;
+  if (fetchResult.hasError()) {
+    XLOG(ERR) << fetchResult.error().reasonPhrase;
+    co_return folly::makeUnexpected(fetchResult.error());
+  } else {
+    co_return std::make_shared<ReceiverFetchHandle>(
+        std::move(fetchResult.value()), shared_from_this());
+  }
 }
 
-std::shared_ptr<FetchConsumer> MoQSession::fetchOk(FetchOk fetchOk) {
+void MoQSession::fetchOk(FetchOk fetchOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto it = pubTracks_.find(fetchOk.subscribeID);
-  if (it == pubTracks_.end()) {
-    XLOG(ERR) << "Invalid Fetch OK, id=" << fetchOk.subscribeID;
-    return nullptr;
-  }
-  auto fetchPublisher = dynamic_cast<FetchPublisherImpl*>(it->second.get());
-  if (!fetchPublisher) {
-    XLOG(ERR) << "subscribe ID maps to a subscribe, not a fetch, id="
-              << fetchOk.subscribeID;
-    fetchError(
-        {fetchOk.subscribeID,
-         folly::to_underlying(FetchErrorCode::INTERNAL_ERROR),
-         ""});
-    return nullptr;
-  }
-  auto fetchConsumer = fetchPublisher->beginFetch(fetchOk.groupOrder);
-  if (!fetchConsumer) {
-    XLOG(ERR) << "beginFetch Failed, id=" << fetchOk.subscribeID;
-    fetchError(
-        {fetchOk.subscribeID,
-         folly::to_underlying(FetchErrorCode::INTERNAL_ERROR),
-         ""});
-    return nullptr;
-  }
-
   auto res = writeFetchOk(controlWriteBuf_, fetchOk);
   if (!res) {
     XLOG(ERR) << "writeFetchOk failed sess=" << this;
-    return nullptr;
+    return;
   }
   controlWriteEvent_.signal();
-  return *fetchConsumer;
 }
 
 void MoQSession::fetchError(FetchError fetchErr) {

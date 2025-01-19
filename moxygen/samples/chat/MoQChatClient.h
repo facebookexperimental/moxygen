@@ -10,7 +10,10 @@
 
 namespace moxygen {
 
-class MoQChatClient {
+class MoQChatClient : public Publisher,
+                      public Publisher::SubscriptionHandle,
+                      public Subscriber,
+                      public std::enable_shared_from_this<MoQChatClient> {
  public:
   MoQChatClient(
       folly::EventBase* evb,
@@ -22,7 +25,32 @@ class MoQChatClient {
   folly::coro::Task<void> run() noexcept;
 
  private:
-  folly::coro::Task<void> controlReadLoop();
+  folly::coro::Task<Publisher::SubscribeResult> subscribe(
+      SubscribeRequest subscribeReq,
+      std::shared_ptr<TrackConsumer> consumer) override;
+  void subscribeUpdate(SubscribeUpdate) override {}
+  void unsubscribe() override;
+
+  class AnnounceHandle : public Subscriber::AnnounceHandle {
+   public:
+    AnnounceHandle(AnnounceOk ok, std::shared_ptr<MoQChatClient> client)
+        : Subscriber::AnnounceHandle(std::move(ok)),
+          client_(std::move(client)) {}
+
+    void unannounce() override {
+      client_->unannounce(announceOk_->trackNamespace);
+      client_.reset();
+    }
+
+   private:
+    std::shared_ptr<MoQChatClient> client_;
+  };
+
+  folly::coro::Task<Subscriber::AnnounceResult> announce(
+      Announce announce,
+      std::shared_ptr<AnnounceCallback>) override;
+  void unannounce(const TrackNamespace&);
+
   void publishLoop();
   folly::coro::Task<void> subscribeToUser(TrackNamespace trackNamespace);
   void subscribeDone(SubscribeDone subDone);
@@ -57,10 +85,13 @@ class MoQChatClient {
     std::string deviceId;
     std::chrono::seconds timestamp;
     SubscribeID subscribeId;
+    std::shared_ptr<Publisher::SubscriptionHandle> subscription;
   };
   std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>
       peerSetup_{folly::coro::makePromiseContract<ServerSetup>()};
+  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
+  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subscribeAnnounceHandle_;
 };
 
 } // namespace moxygen

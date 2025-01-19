@@ -72,84 +72,17 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup /*setup*/) {
   }));
 }
 
-void MoQServer::ControlVisitor::operator()(
-    SubscribeRequest subscribeReq) const {
-  XLOG(INFO) << "SubscribeRequest track="
-             << subscribeReq.fullTrackName.trackNamespace
-             << subscribeReq.fullTrackName.trackName
-             << " id=" << subscribeReq.subscribeID;
-  clientSession_->subscribeError(
-      {subscribeReq.subscribeID, 500, "not implemented"});
-}
-
-void MoQServer::ControlVisitor::operator()(
-    SubscribeUpdate subscribeUpdate) const {
-  XLOG(INFO) << "SubscribeRequest id=" << subscribeUpdate.subscribeID;
-}
-
-// TODO: Implement message handling
-void MoQServer::ControlVisitor::operator()(Fetch fetch) const {
-  XLOG(INFO) << "Fetch id=" << fetch.subscribeID;
-}
-
-void MoQServer::ControlVisitor::operator()(Unsubscribe unsubscribe) const {
-  XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
-}
-
-void MoQServer::ControlVisitor::operator()(Announce announce) const {
-  XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-  clientSession_->announceError(
-      {announce.trackNamespace, 500, "not implemented"});
-}
-
-void MoQServer::ControlVisitor::operator()(Unannounce unannounce) const {
-  XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
-}
-
-void MoQServer::ControlVisitor::operator()(
-    AnnounceCancel announceCancel) const {
-  XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
-}
-
-void MoQServer::ControlVisitor::operator()(
-    SubscribeAnnounces subscribeAnnounces) const {
-  XLOG(INFO) << "SubscribeAnnounces ns="
-             << subscribeAnnounces.trackNamespacePrefix;
-  clientSession_->subscribeAnnouncesError(
-      {subscribeAnnounces.trackNamespacePrefix, 500, "not implemented"});
-}
-
-void MoQServer::ControlVisitor::operator()(
-    UnsubscribeAnnounces unsubscribeAnnounces) const {
-  XLOG(INFO) << "UnsubscribeAnnounces ns="
-             << unsubscribeAnnounces.trackNamespacePrefix;
-}
-
-void MoQServer::ControlVisitor::operator()(
-    TrackStatusRequest trackStatusRequest) const {
-  XLOG(INFO) << "TrackStatusRequest track="
-             << trackStatusRequest.fullTrackName.trackNamespace
-             << trackStatusRequest.fullTrackName.trackName;
-}
-
-void MoQServer::ControlVisitor::operator()(TrackStatus trackStatus) const {
-  XLOG(INFO) << "TrackStatus track=" << trackStatus.fullTrackName.trackNamespace
-             << trackStatus.fullTrackName.trackName;
-}
-
-void MoQServer::ControlVisitor::operator()(Goaway goaway) const {
-  XLOG(INFO) << "Goaway nsuri=" << goaway.newSessionUri;
-}
-
 folly::coro::Task<void> MoQServer::handleClientSession(
     std::shared_ptr<MoQSession> clientSession) {
+  onNewSession(clientSession);
   clientSession->start();
-  co_await clientSession->clientSetupComplete();
 
-  auto control = makeControlVisitor(clientSession);
-  while (auto msg = co_await clientSession->controlMessages().next()) {
-    boost::apply_visitor(*control, msg.value());
-  }
+  // The clientSession will cancel this token when the app calls close() or
+  // the underlying transport invokes onSessionEnd
+  folly::coro::Baton baton;
+  folly::CancellationCallback cb(
+      clientSession->getCancelToken(), [&baton] { baton.post(); });
+  co_await baton;
   terminateClientSession(std::move(clientSession));
 }
 

@@ -8,11 +8,12 @@
 
 namespace moxygen {
 
-MoQRelay::AnnounceNode* MoQRelay::findNamespaceNode(
+std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
     std::vector<std::shared_ptr<MoQSession>>* sessions) {
-  AnnounceNode* nodePtr = &announceRoot_;
+  std::shared_ptr<AnnounceNode> nodePtr(
+      std::shared_ptr<void>(), &announceRoot_);
   for (auto i = 0ul; i < ns.size(); i++) {
     if (sessions) {
       sessions->insert(
@@ -22,111 +23,142 @@ MoQRelay::AnnounceNode* MoQRelay::findNamespaceNode(
     auto it = nodePtr->children.find(name);
     if (it == nodePtr->children.end()) {
       if (createMissingNodes) {
-        nodePtr =
-            &nodePtr->children.emplace(name, AnnounceNode()).first->second;
+        auto node = std::make_shared<AnnounceNode>(*this);
+        nodePtr->children.emplace(name, node);
+        nodePtr = std::move(node);
       } else {
         XLOG(ERR) << "prefix not found in announce tree";
         return nullptr;
       }
     } else {
-      nodePtr = &it->second;
+      nodePtr = it->second;
     }
   }
   return nodePtr;
 }
 
-void MoQRelay::onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session) {
+folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
+    Announce ann,
+    std::shared_ptr<Subscriber::AnnounceCallback>) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace;
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
-    session->announceError({ann.trackNamespace, 403, "bad namespace"});
-    return;
+    co_return folly::makeUnexpected(
+        AnnounceError{ann.trackNamespace, 403, "bad namespace"});
   }
   std::vector<std::shared_ptr<MoQSession>> sessions;
   auto nodePtr = findNamespaceNode(
       ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
 
   // TODO: store auth for forwarding on future SubscribeAnnounces?
+  auto session = MoQSession::getRequestSession();
   nodePtr->sourceSession = std::move(session);
-  nodePtr->sourceSession->announceOk({ann.trackNamespace});
+  nodePtr->setAnnounceOk({ann.trackNamespace});
   for (auto& outSession : sessions) {
-    auto evb = outSession->getEventBase();
-    // We don't really care if we get announce error, I guess?
-    outSession->announce(ann).scheduleOn(evb).start();
+    if (outSession != session) {
+      auto evb = outSession->getEventBase();
+      announceToSession(outSession, ann, nodePtr).scheduleOn(evb).start();
+    }
+  }
+  co_return nodePtr;
+}
+
+folly::coro::Task<void> MoQRelay::announceToSession(
+    std::shared_ptr<MoQSession> session,
+    Announce ann,
+    std::shared_ptr<AnnounceNode> nodePtr) {
+  auto announceHandle = co_await session->announce(ann);
+  if (announceHandle.hasError()) {
+    XLOG(ERR) << "Announce failed err=" << announceHandle.error().reasonPhrase;
+  } else {
+    // This can race with unsubscribeAnnounces
+    nodePtr->announcements[session] = std::move(announceHandle.value());
   }
 }
 
-void MoQRelay::onUnannounce(
-    Unannounce&& unann,
-    const std::shared_ptr<MoQSession>& session) {
-  XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace;
-  std::vector<std::shared_ptr<MoQSession>> sessions;
-  auto nodePtr = findNamespaceNode(
-      unann.trackNamespace, /*createMissingNodes=*/false, &sessions);
-  if (!nodePtr) {
-    // TODO: maybe error?
-    return;
+void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
+  XLOG(DBG1) << __func__ << " ns=" << trackNamespace;
+  // Node would be useful if there were back links
+  auto nodePtr =
+      findNamespaceNode(trackNamespace, /*createMissingNodes=*/false, nullptr);
+  XCHECK(nodePtr);
+  nodePtr->sourceSession = nullptr;
+  for (auto& announcement : nodePtr->announcements) {
+    auto evb = announcement.first->getEventBase();
+    evb->runInEventBaseThread([announceHandle = announcement.second] {
+      announceHandle->unannounce();
+    });
   }
-  if (nodePtr->sourceSession.get() == session.get()) {
-    nodePtr->sourceSession = nullptr;
-    for (auto& outSession : sessions) {
-      auto evb = outSession->getEventBase();
-      evb->runInEventBaseThread(
-          [outSession, unann] { outSession->unannounce(unann); });
-    }
-  } else {
-    if (nodePtr->sourceSession) {
-      XLOG(ERR) << "unannounce namespace announced by another session";
-    } else {
-      XLOG(DBG1) << "unannounce namespace that was not announced";
-    }
-  }
-
+  nodePtr->announcements.clear();
   // TODO: prune Announce tree
 }
 
-void MoQRelay::onSubscribeAnnounces(
-    SubscribeAnnounces&& subNs,
-    std::shared_ptr<MoQSession> session) {
+class MoQRelay::AnnouncesSubscription
+    : public Publisher::SubscribeAnnouncesHandle {
+ public:
+  AnnouncesSubscription(
+      std::shared_ptr<MoQRelay> relay,
+      std::shared_ptr<MoQSession> session,
+      SubscribeAnnouncesOk ok)
+      : Publisher::SubscribeAnnouncesHandle(std::move(ok)),
+        relay_(std::move(relay)),
+        session_(std::move(session)) {}
+
+  void unsubscribeAnnounces() override {
+    if (relay_) {
+      relay_->unsubscribeAnnounces(
+          subscribeAnnouncesOk_->trackNamespacePrefix, std::move(session_));
+      relay_.reset();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQRelay> relay_;
+  std::shared_ptr<MoQSession> session_;
+};
+
+folly::coro::Task<Publisher::SubscribeAnnouncesResult>
+MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
   // check auth
   if (subNs.trackNamespacePrefix.empty()) {
-    session->subscribeAnnouncesError(
-        {subNs.trackNamespacePrefix, 400, "empty"});
-    return;
+    co_return folly::makeUnexpected(
+        SubscribeAnnouncesError{subNs.trackNamespacePrefix, 400, "empty"});
   }
+  auto session = MoQSession::getRequestSession();
   auto nodePtr = findNamespaceNode(
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
-  auto sessionPtr = session.get();
-  nodePtr->sessions.emplace(std::move(session));
-  sessionPtr->subscribeAnnouncesOk({subNs.trackNamespacePrefix});
+  nodePtr->sessions.emplace(session);
 
   // Find all nested Announcements and forward
-  std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
+  std::deque<std::tuple<TrackNamespace, std::shared_ptr<AnnounceNode>>> nodes{
       {subNs.trackNamespacePrefix, nodePtr}};
-  auto evb = sessionPtr->getEventBase();
+  auto evb = session->getEventBase();
   while (!nodes.empty()) {
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
-    if (nodePtr->sourceSession) {
-      // We don't really care if we get announce error, I guess?
+    if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
       // TODO: Auth/params
-      sessionPtr->announce({prefix, {}}).scheduleOn(evb).start();
+      announceToSession(session, {prefix, {}}, nodePtr).scheduleOn(evb).start();
     }
     for (auto& nextNodeIt : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
       nodePrefix.append(nextNodeIt.first);
-      nodes.emplace_back(std::forward_as_tuple(nodePrefix, &nextNodeIt.second));
+      nodes.emplace_back(std::forward_as_tuple(nodePrefix, nextNodeIt.second));
     }
   }
+  co_return std::make_shared<AnnouncesSubscription>(
+      shared_from_this(),
+      std::move(session),
+      SubscribeAnnouncesOk{subNs.trackNamespacePrefix});
 }
 
-void MoQRelay::onUnsubscribeAnnounces(
-    UnsubscribeAnnounces&& unsubNs,
-    const std::shared_ptr<MoQSession>& session) {
-  XLOG(DBG1) << __func__ << " nsp=" << unsubNs.trackNamespacePrefix;
-  auto nodePtr = findNamespaceNode(
-      unsubNs.trackNamespacePrefix, /*createMissingNodes=*/false);
+void MoQRelay::unsubscribeAnnounces(
+    TrackNamespace trackNamespacePrefix,
+    std::shared_ptr<MoQSession> session) {
+  XLOG(DBG1) << __func__ << " nsp=" << trackNamespacePrefix;
+  auto nodePtr =
+      findNamespaceNode(trackNamespacePrefix, /*createMissingNodes=*/false);
   if (!nodePtr) {
     // TODO: maybe error?
     return;
@@ -151,96 +183,95 @@ std::shared_ptr<MoQSession> MoQRelay::findAnnounceSession(
   return nodePtr->sourceSession;
 }
 
-folly::coro::Task<void> MoQRelay::onSubscribe(
+folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     SubscribeRequest subReq,
-    std::shared_ptr<MoQSession> session) {
+    std::shared_ptr<TrackConsumer> consumer) {
+  auto session = MoQSession::getRequestSession();
   auto subscriptionIt = subscriptions_.find(subReq.fullTrackName);
-  std::shared_ptr<MoQForwarder> forwarder;
-  auto subGroupOrder = subReq.groupOrder;
   if (subscriptionIt == subscriptions_.end()) {
     // first subscriber
 
     // check auth
     // get trackNamespace
     if (subReq.fullTrackName.trackNamespace.empty()) {
-      session->subscribeError({subReq.subscribeID, 400, "namespace required"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 400, "namespace required"}));
     }
     auto upstreamSession =
         findAnnounceSession(subReq.fullTrackName.trackNamespace);
     if (!upstreamSession) {
       // no such namespace has been announced
-      session->subscribeError({subReq.subscribeID, 404, "no such namespace"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 404, "no such namespace"}));
     }
     if (session.get() == upstreamSession.get()) {
-      session->subscribeError({subReq.subscribeID, 400, "self subscribe"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 400, "self subscribe"}));
     }
     // TODO: we only subscribe with the downstream locations.
     subReq.priority = 1;
     subReq.groupOrder = GroupOrder::Default;
-    forwarder =
+    auto forwarder =
         std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
-    // TODO: there's a race condition that the forwarder gets upstream objects
-    // before we add the downstream subscriber to it, below
+    forwarder->setCallback(shared_from_this());
+    subscriptions_.emplace(
+        std::piecewise_construct,
+        std::forward_as_tuple(subReq.fullTrackName),
+        std::forward_as_tuple(forwarder, upstreamSession));
+    auto g = folly::makeGuard([this, trackName = subReq.fullTrackName] {
+      auto it = subscriptions_.find(trackName);
+      if (it != subscriptions_.end()) {
+        it->second.promise.setException(std::runtime_error("failed"));
+        subscriptions_.erase(it);
+      }
+    });
+    // Add subscriber first in case objects come before subscribe OK.
+    auto subscriber = forwarder->addSubscriber(
+        std::move(session), subReq, std::move(consumer));
     auto subRes = co_await upstreamSession->subscribe(subReq, forwarder);
     if (subRes.hasError()) {
-      session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 502, "subscribe failed"}));
     }
-    auto latest = subRes->latest;
+    g.dismiss();
+    auto latest = subRes.value()->subscribeOk().latest;
     if (latest) {
       forwarder->updateLatest(latest->group, latest->object);
     }
-    forwarder->setGroupOrder(subRes->groupOrder);
-    RelaySubscription rsub({forwarder, upstreamSession, subRes->subscribeID});
-    subscriptions_[subReq.fullTrackName] = std::move(rsub);
+    auto pubGroupOrder = subRes.value()->subscribeOk().groupOrder;
+    forwarder->setGroupOrder(pubGroupOrder);
+    subscriber->setPublisherGroupOrder(pubGroupOrder);
+    auto it = subscriptions_.find(subReq.fullTrackName);
+    XCHECK(it != subscriptions_.end());
+    auto& rsub = it->second;
+    rsub.subscribeID = subRes.value()->subscribeOk().subscribeID;
+    rsub.handle = std::move(subRes.value());
+    rsub.promise.setValue(folly::unit);
+    co_return subscriber;
   } else {
-    forwarder = subscriptionIt->second.forwarder;
-  }
-  // Add to subscribers list
-  auto sessionPtr = session.get();
-  auto trackPublisher = sessionPtr->subscribeOk(
-      {subReq.subscribeID,
-       std::chrono::milliseconds(0),
-       MoQSession::resolveGroupOrder(forwarder->groupOrder(), subGroupOrder),
-       forwarder->latest()});
-  if (trackPublisher) {
-    auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
-        std::move(session),
-        subReq.subscribeID,
-        subReq.trackAlias,
-        toSubscribeRange(subReq, forwarder->latest()),
-        std::move(trackPublisher));
-    forwarder->addSubscriber(std::move(subscriber));
-  } else {
-    XLOG(ERR) << "Downstream subscribeOK failed";
-    // TODO: unsubsubscribe upstream
+    if (!subscriptionIt->second.promise.isFulfilled()) {
+      // this will throw if the dependent subscribe failed, which is good
+      // because subscriptionIt will be invalid
+      co_await subscriptionIt->second.promise.getFuture();
+    }
+    co_return subscriptionIt->second.forwarder->addSubscriber(
+        std::move(session), subReq, std::move(consumer));
   }
 }
 
-void MoQRelay::onUnsubscribe(
-    Unsubscribe unsub,
-    std::shared_ptr<MoQSession> session) {
-  // TODO: session+subscribe ID should uniquely identify this subscription,
-  // we shouldn't need a linear search to find where to remove it.
+void MoQRelay::onEmpty(MoQForwarder* forwarder) {
+  // TODO: we shouldn't need a linear search if forwarder stores FullTrackName
   for (auto subscriptionIt = subscriptions_.begin();
-       subscriptionIt != subscriptions_.end();) {
+       subscriptionIt != subscriptions_.end();
+       ++subscriptionIt) {
     auto& subscription = subscriptionIt->second;
-    subscription.forwarder->removeSession(
-        session,
-        {subscription.subscribeID,
-         SubscribeDoneStatusCode::UNSUBSCRIBED,
-         "",
-         subscription.forwarder->latest()});
-    if (subscription.forwarder->empty()) {
-      XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.upstream->unsubscribe({subscription.subscribeID});
-      subscriptionIt = subscriptions_.erase(subscriptionIt);
-    } else {
-      subscriptionIt++;
+    if (subscription.forwarder.get() != forwarder) {
+      continue;
     }
+    XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
+    subscription.handle->unsubscribe();
+    subscriptionIt = subscriptions_.erase(subscriptionIt);
+    return;
   }
 }
 
@@ -257,27 +288,30 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
     // Implicit UnsubscribeAnnounces
     nodePtr->sessions.erase(session);
 
-    // Add sessions for future Unannounce
-    notifySessions.insert(
-        notifySessions.end(),
-        nodePtr->sessions.begin(),
-        nodePtr->sessions.end());
+    auto it = nodePtr->announcements.find(session);
+    if (it != nodePtr->announcements.end()) {
+      // we've announced this node to the removing session.
+      // Do we really need to unannounce?
+      it->second->unannounce();
+      nodePtr->announcements.erase(it);
+    }
 
     if (nodePtr->sourceSession == session) {
       // This session is unannouncing
       nodePtr->sourceSession = nullptr;
-      for (auto& outSession : notifySessions) {
-        auto evb = outSession->getEventBase();
-        Unannounce unann{prefix};
-        evb->runInEventBaseThread(
-            [outSession, unann] { outSession->unannounce(unann); });
+      for (auto& announcement : nodePtr->announcements) {
+        auto evb = announcement.first->getEventBase();
+        evb->runInEventBaseThread([announceHandle = announcement.second] {
+          announceHandle->unannounce();
+        });
       }
+      nodePtr->announcements.clear();
     }
     for (auto& nextNode : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
       nodePrefix.append(nextNode.first);
       nodes.emplace_back(
-          std::forward_as_tuple(std::move(nodePrefix), &nextNode.second));
+          std::forward_as_tuple(std::move(nodePrefix), nextNode.second.get()));
     }
   }
 
@@ -286,6 +320,8 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
+    subscriptionIt++;
+    // these actions may erase the current subscription
     if (subscription.upstream.get() == session.get()) {
       subscription.forwarder->subscribeDone(
           {SubscribeID(0),
@@ -294,13 +330,6 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
            subscription.forwarder->latest()});
     } else {
       subscription.forwarder->removeSession(session);
-    }
-    if (subscription.forwarder->empty()) {
-      XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.upstream->unsubscribe({subscription.subscribeID});
-      subscriptionIt = subscriptions_.erase(subscriptionIt);
-    } else {
-      subscriptionIt++;
     }
   }
 }

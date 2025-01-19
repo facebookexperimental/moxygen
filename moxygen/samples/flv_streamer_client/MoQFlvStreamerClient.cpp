@@ -29,7 +29,9 @@ DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 namespace {
 using namespace moxygen;
 
-class MoQFlvStreamerClient {
+class MoQFlvStreamerClient
+    : public Publisher,
+      std::enable_shared_from_this<MoQFlvStreamerClient> {
  public:
   MoQFlvStreamerClient(
       folly::EventBase* evb,
@@ -53,19 +55,16 @@ class MoQFlvStreamerClient {
       co_await moqClient_.setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          Role::PUBLISHER);
-      auto exec = co_await folly::coro::co_current_executor;
-      controlReadLoop().scheduleOn(exec).start();
-
+          /*publishHandler=*/shared_from_this(),
+          /*subscribeHandler=*/nullptr);
       // Announce
       auto annResp = co_await moqClient_.moqSession_->announce(std::move(ann));
       if (annResp.hasValue()) {
-        trackNamespace_ = annResp->trackNamespace;
-
+        announceHandle_ = std::move(annResp.value());
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
       } else {
         XLOG(INFO) << "Announce error trackNamespace="
-                   << annResp->trackNamespace
+                   << annResp.error().trackNamespace
                    << " code=" << annResp.error().errorCode
                    << " reason=" << annResp.error().reasonPhrase;
       }
@@ -78,8 +77,10 @@ class MoQFlvStreamerClient {
 
   void stop() {
     XLOG(INFO) << __func__;
+    if (announceHandle_) {
+      announceHandle_->unannounce();
+    }
     if (moqClient_.moqSession_) {
-      moqClient_.moqSession_->unannounce({trackNamespace_});
       moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
     }
   }
@@ -99,10 +100,11 @@ class MoQFlvStreamerClient {
       for (auto& sub : subscriptions_) {
         XLOG(DBG1) << "Evaluating to send item: " << item->id
                    << ", type: " << folly::to_underlying(item->type)
-                   << ", to subID-TrackAlias: " << sub.second.subscribeID << "-"
-                   << sub.second.trackAlias;
+                   << ", to subID-TrackAlias: "
+                   << sub.second->subscribeOk().subscribeID << "-"
+                   << sub.second->trackAlias;
 
-        if (sub.second.fullTrackName == fullVideoTrackName_ && videoPub_) {
+        if (videoPub_ && sub.second->consumer == videoPub_.get()) {
           if (item->data &&
               (item->type == flv::FlvSequentialReader::MediaType::VIDEO ||
                item->isEOF)) {
@@ -115,7 +117,7 @@ class MoQFlvStreamerClient {
                 });
           }
         }
-        if (sub.second.fullTrackName == fullAudioTrackName_ && audioPub_) {
+        if (audioPub_ && sub.second->consumer == audioPub_.get()) {
           // Audio
           if (item->data &&
               (item->type == flv::FlvSequentialReader::MediaType::AUDIO ||
@@ -125,7 +127,7 @@ class MoQFlvStreamerClient {
             auto itemClone = item->clone();
             moqClient_.getEventBase()->runInEventBaseThread(
                 [self(this),
-                 trackAlias(sub.second.trackAlias),
+                 trackAlias(sub.second->trackAlias),
                  itemClone(std::move(itemClone))]() mutable {
                   self->publishAudio(trackAlias, std::move(itemClone));
                 });
@@ -139,86 +141,50 @@ class MoQFlvStreamerClient {
     }
   }
 
-  folly::coro::Task<void> controlReadLoop() {
-    class ControlVisitor : public MoQSession::ControlVisitor {
-     public:
-      explicit ControlVisitor(MoQFlvStreamerClient& client) : client_(client) {}
-
-      void operator()(Announce announce) const override {
-        XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
-        // text client doesn't expect server or relay to announce anything,
-        // but announce OK anyways
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-      void operator()(SubscribeRequest subscribeReq) const override {
-        XLOG(INFO) << "SubscribeRequest";
-        AbsoluteLocation latest_;
-        // Track not available
-        bool isAudio = true;
-        if (subscribeReq.fullTrackName == client_.fullVideoTrackName_) {
-          latest_ = client_.latestVideo_;
-          isAudio = false;
-        } else if (subscribeReq.fullTrackName == client_.fullAudioTrackName_) {
-          latest_ = client_.latestAudio_;
-        } else {
-          client_.moqClient_.moqSession_->subscribeError(
-              {subscribeReq.subscribeID, 404, "Full trackname NOT available"});
-          return;
-        }
-        // Location mode not supported
-        if (subscribeReq.locType != LocationType::LatestObject) {
-          client_.moqClient_.moqSession_->subscribeError(
-              {subscribeReq.subscribeID,
-               403,
-               "Only location LatestObject mode supported"});
-          return;
-        }
-        // Save subscribe
-        client_.subscriptions_[subscribeReq.subscribeID.value] = subscribeReq;
-        XLOG(INFO) << "Subscribed " << subscribeReq.subscribeID;
-
-        auto trackPub = client_.moqClient_.moqSession_->subscribeOk(
-            {subscribeReq.subscribeID,
-             std::chrono::milliseconds(0),
-             MoQSession::resolveGroupOrder(
-                 GroupOrder::OldestFirst, subscribeReq.groupOrder),
-             latest_,
-             {}});
-        if (isAudio) {
-          client_.audioPub_ = std::move(trackPub);
-        } else {
-          client_.videoPub_ = std::move(trackPub);
-        }
-        return;
-      }
-
-      void operator()(Unsubscribe unSubs) const override {
-        XLOG(INFO) << "Unsubscribe";
-        // Delete subscribe
-        client_.subscriptions_.erase(unSubs.subscribeID.value);
-
-        XLOG(INFO) << "Unsubscribed " << unSubs.subscribeID;
-      }
-
-      virtual void operator()(Goaway) const override {
-        XLOG(WARN) << "Goaway - NOT IMPLEMENTED";
-      }
-
-     private:
-      MoQFlvStreamerClient& client_;
-    };
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    ControlVisitor visitor(*this);
-    MoQSession::ControlVisitor* vptr(&visitor);
-    while (auto msg =
-               co_await moqClient_.moqSession_->controlMessages().next()) {
-      boost::apply_visitor(*vptr, msg.value());
+  folly::coro::Task<SubscribeResult> subscribe(
+      SubscribeRequest subscribeReq,
+      std::shared_ptr<TrackConsumer> consumer) override {
+    XLOG(INFO) << "SubscribeRequest track ns="
+               << subscribeReq.fullTrackName.trackNamespace
+               << " name=" << subscribeReq.fullTrackName.trackName
+               << " subscribe id=" << subscribeReq.subscribeID
+               << " track alias=" << subscribeReq.trackAlias;
+    AbsoluteLocation latest;
+    // Location mode not supported
+    if (subscribeReq.locType != LocationType::LatestObject) {
+      co_return folly::makeUnexpected(SubscribeError{
+          subscribeReq.subscribeID,
+          403,
+          "Only location LatestObject mode supported"});
     }
+    // Track not available
+    auto consumerPtr = consumer.get();
+    if (subscribeReq.fullTrackName == fullVideoTrackName_) {
+      latest = latestVideo_;
+      videoPub_ = std::move(consumer);
+    } else if (subscribeReq.fullTrackName == fullAudioTrackName_) {
+      latest = latestAudio_;
+      audioPub_ = std::move(consumer);
+    } else {
+      co_return folly::makeUnexpected(SubscribeError{
+          subscribeReq.subscribeID, 404, "Full trackname NOT available"});
+    }
+    // Save subscribe
+    auto subscription = std::make_shared<Subscription>(
+        SubscribeOk{
+            subscribeReq.subscribeID,
+            std::chrono::milliseconds(0),
+            MoQSession::resolveGroupOrder(
+                GroupOrder::OldestFirst, subscribeReq.groupOrder),
+            latest,
+            {}},
+        subscribeReq.trackAlias,
+        consumerPtr,
+        *this);
+    subscriptions_.emplace(subscribeReq.subscribeID, subscription);
+    XLOG(INFO) << "Subscribed " << subscribeReq.subscribeID;
 
-    XLOG(INFO) << "Session closed";
+    co_return subscription;
   }
 
   void publishAudio(
@@ -334,14 +300,40 @@ class MoQFlvStreamerClient {
   }
 
   MoQClient moqClient_;
-  TrackNamespace trackNamespace_;
+  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   FullTrackName fullVideoTrackName_;
   FullTrackName fullAudioTrackName_;
 
   AbsoluteLocation latestVideo_{0, 0};
   AbsoluteLocation latestAudio_{0, 0};
 
-  std::map<uint64_t, SubscribeRequest> subscriptions_;
+  struct Subscription : public Publisher::SubscriptionHandle {
+    Subscription(
+        SubscribeOk ok,
+        TrackAlias alias,
+        TrackConsumer* consumerPtr,
+        MoQFlvStreamerClient& client)
+        : SubscriptionHandle(std::move(ok)),
+          trackAlias(alias),
+          consumer(consumerPtr),
+          client_(client) {}
+
+    const TrackAlias trackAlias;
+    const TrackConsumer* consumer{nullptr};
+
+    void subscribeUpdate(SubscribeUpdate) override {}
+    void unsubscribe() override {
+      auto subscribeID = subscribeOk_->subscribeID;
+      XLOG(INFO) << "Unsubscribe id=" << subscribeID;
+      // Delete subscribe/this
+      client_.subscriptions_.erase(subscribeID);
+      XLOG(INFO) << "Unsubscribed id=" << subscribeID;
+    }
+
+   private:
+    MoQFlvStreamerClient& client_;
+  };
+  std::map<SubscribeID, std::shared_ptr<Subscription>> subscriptions_;
   std::shared_ptr<TrackConsumer> audioPub_;
   std::shared_ptr<TrackConsumer> videoPub_;
   std::shared_ptr<SubgroupConsumer> videoSgPub_;

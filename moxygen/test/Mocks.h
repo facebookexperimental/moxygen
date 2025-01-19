@@ -3,6 +3,7 @@
 #include <folly/portability/GMock.h>
 #include <moxygen/MoQCodec.h>
 #include <moxygen/MoQConsumers.h>
+#include <moxygen/Publisher.h>
 
 namespace moxygen {
 
@@ -159,6 +160,56 @@ class MockFetchConsumer : public FetchConsumer {
       (folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>),
       awaitReadyToConsume,
       (),
+      (override));
+};
+
+class MockSubscriptionHandle : public Publisher::SubscriptionHandle {
+ public:
+  explicit MockSubscriptionHandle(SubscribeOk ok)
+      : SubscriptionHandle(std::move(ok)) {}
+
+  MOCK_METHOD(void, unsubscribe, (), (override));
+  MOCK_METHOD(void, subscribeUpdate, (SubscribeUpdate), (override));
+};
+
+class MockFetchHandle : public Publisher::FetchHandle {
+ public:
+  explicit MockFetchHandle(FetchOk ok)
+      : Publisher::FetchHandle(std::move(ok)) {}
+
+  MOCK_METHOD(void, fetchCancel, (), (override));
+};
+
+class MockSubscribeAnnouncesHandle
+    : public Publisher::SubscribeAnnouncesHandle {
+ public:
+  MOCK_METHOD(void, unsubscribeAnnounces, (), (override));
+};
+
+class MockPublisher : public Publisher {
+ public:
+  MOCK_METHOD(
+      folly::coro::Task<TrackStatusResult>,
+      trackStatus,
+      (TrackStatusRequest),
+      (override));
+
+  MOCK_METHOD(
+      folly::coro::Task<SubscribeResult>,
+      subscribe,
+      (SubscribeRequest, std::shared_ptr<TrackConsumer>),
+      (override));
+
+  MOCK_METHOD(
+      folly::coro::Task<FetchResult>,
+      fetch,
+      (Fetch, std::shared_ptr<FetchConsumer>),
+      (override));
+
+  MOCK_METHOD(
+      folly::coro::Task<SubscribeAnnouncesResult>,
+      subscribeAnnounces,
+      (SubscribeAnnounces),
       (override));
 };
 } // namespace moxygen

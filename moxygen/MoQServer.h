@@ -28,40 +28,13 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   MoQServer& operator=(MoQServer&&) = delete;
   virtual ~MoQServer() = default;
 
-  class ControlVisitor : public MoQSession::ControlVisitor {
-   public:
-    explicit ControlVisitor(std::shared_ptr<MoQSession> clientSession)
-        : clientSession_(std::move(clientSession)) {}
-
-    ~ControlVisitor() override = default;
-
-    void operator()(Announce announce) const override;
-    void operator()(SubscribeRequest subscribeReq) const override;
-    void operator()(SubscribeUpdate subscribeUpdate) const override;
-    void operator()(Fetch fetch) const override;
-    void operator()(Unannounce unannounce) const override;
-    void operator()(AnnounceCancel announceCancel) const override;
-    void operator()(SubscribeAnnounces subscribeAnnounces) const override;
-    void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override;
-    void operator()(Unsubscribe unsubscribe) const override;
-    void operator()(TrackStatusRequest trackStatusRequest) const override;
-    void operator()(TrackStatus trackStatus) const override;
-    void operator()(Goaway goaway) const override;
-
-   protected:
-    std::shared_ptr<MoQSession> clientSession_;
-  };
-
-  virtual std::unique_ptr<ControlVisitor> makeControlVisitor(
-      std::shared_ptr<MoQSession> clientSession) {
-    return std::make_unique<ControlVisitor>(std::move(clientSession));
-  }
-
-  virtual folly::coro::Task<void> handleClientSession(
-      std::shared_ptr<MoQSession> clientSession);
-
+  virtual void onNewSession(std::shared_ptr<MoQSession> clientSession) = 0;
   virtual void terminateClientSession(std::shared_ptr<MoQSession> /*session*/) {
   }
+
+ private:
+  folly::coro::Task<void> handleClientSession(
+      std::shared_ptr<MoQSession> clientSession);
 
   class Handler : public proxygen::HTTPTransactionHandler {
    public:
@@ -124,7 +97,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   folly::Try<ServerSetup> onClientSetup(ClientSetup clientSetup) override;
 
- private:
   void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
 
   quic::samples::HQServerParams params_;

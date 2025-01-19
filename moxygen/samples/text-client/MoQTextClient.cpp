@@ -92,7 +92,8 @@ class TextHandler : public ObjectReceiverCallback {
   folly::coro::Baton baton;
 };
 
-class MoQTextClient {
+class MoQTextClient : public Subscriber,
+                      public std::enable_shared_from_this<MoQTextClient> {
  public:
   MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
       : moqClient_(
@@ -110,10 +111,8 @@ class MoQTextClient {
       co_await moqClient_.setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          Role::SUBSCRIBER);
-      auto exec = co_await folly::coro::co_current_executor;
-      controlReadLoop().scheduleOn(exec).start();
-
+          /*publisher=*/nullptr,
+          /*subscriber=*/shared_from_this());
       SubParams subParams{sub.locType, sub.start, sub.end};
       sub.locType = LocationType::LatestObject;
       sub.start = folly::none;
@@ -123,9 +122,10 @@ class MoQTextClient {
       auto track =
           co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
       if (track.hasValue()) {
-        subscribeID_ = track->subscribeID;
-        XLOG(DBG1) << "subscribeID=" << subscribeID_;
-        auto latest = track->latest;
+        subscription_ = std::move(track.value());
+        auto subscribeID = subscription_->subscribeOk().subscribeID;
+        XLOG(DBG1) << "subscribeID=" << subscribeID;
+        auto latest = subscription_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
                      << "}";
@@ -142,7 +142,8 @@ class MoQTextClient {
               XLOG(DBG1) << "end={" << range.end.group << ","
                          << range.end.object << "} before latest, unsubscribe";
               textHandler_.baton.post();
-              moqClient_.moqSession_->unsubscribe({subscribeID_});
+              subscription_->unsubscribe();
+              subscription_.reset();
               fetchEnd = range.end;
               if (fetchEnd.object == 0) {
                 fetchEnd.group--;
@@ -175,8 +176,8 @@ class MoQTextClient {
             // The end is set but after latest, SUBSCRIBE_UPDATE for the end
             XLOG(DBG1) << "Setting subscribe end={" << range.end.group << ","
                        << range.end.object << "} before latest, update";
-            moqClient_.moqSession_->subscribeUpdate(
-                {subscribeID_,
+            subscription_->subscribeUpdate(
+                {subscribeID,
                  latest.value_or(AbsoluteLocation{0, 0}),
                  range.end,
                  sub.priority,
@@ -188,7 +189,9 @@ class MoQTextClient {
                    << " code=" << track.error().errorCode
                    << " reason=" << track.error().reasonPhrase;
       }
-      moqClient_.moqSession_->drain();
+      if (moqClient_.moqSession_) {
+        moqClient_.moqSession_->drain();
+      }
     } catch (const std::exception& ex) {
       XLOG(ERR) << folly::exceptionStr(ex);
       co_return;
@@ -197,53 +200,34 @@ class MoQTextClient {
     XLOG(INFO) << __func__ << " done";
   }
 
+  folly::coro::Task<AnnounceResult> announce(
+      Announce announce,
+      std::shared_ptr<AnnounceCallback>) override {
+    XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+    // text client doesn't expect server or relay to announce anything,
+    // but announce OK anyways
+    return folly::coro::makeTask<AnnounceResult>(
+        std::make_shared<AnnounceHandle>(AnnounceOk{announce.trackNamespace}));
+  }
+
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Goaway uri=" << goaway.newSessionUri;
+    stop();
+  }
+
   void stop() {
     textHandler_.baton.post();
     // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
-    moqClient_.moqSession_->unsubscribe({subscribeID_});
-    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-  }
-
-  folly::coro::Task<void> controlReadLoop() {
-    class ControlVisitor : public MoQSession::ControlVisitor {
-     public:
-      explicit ControlVisitor(MoQTextClient& client) : client_(client) {}
-
-      void operator()(Announce announce) const override {
-        XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
-        // text client doesn't expect server or relay to announce anything,
-        // but announce OK anyways
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-      void operator()(SubscribeRequest subscribeReq) const override {
-        XLOG(INFO) << "SubscribeRequest";
-        client_.moqClient_.moqSession_->subscribeError(
-            {subscribeReq.subscribeID, 404, "don't care"});
-      }
-
-      void operator()(Goaway) const override {
-        XLOG(INFO) << "Goaway";
-        client_.moqClient_.moqSession_->unsubscribe({client_.subscribeID_});
-      }
-
-     private:
-      MoQTextClient& client_;
-    };
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    ControlVisitor visitor(*this);
-    MoQSession::ControlVisitor* vptr(&visitor);
-    while (auto msg =
-               co_await moqClient_.moqSession_->controlMessages().next()) {
-      boost::apply_visitor(*vptr, msg.value());
+    if (subscription_) {
+      subscription_->unsubscribe();
+      subscription_.reset();
     }
+    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
 
   MoQClient moqClient_;
   FullTrackName fullTrackName_;
-  SubscribeID subscribeID_{0};
+  std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
   TextHandler textHandler_;
   std::shared_ptr<ObjectReceiver> subTextHandler_;
   std::shared_ptr<ObjectReceiver> fetchTextHandler_;
@@ -261,7 +245,7 @@ int main(int argc, char* argv[]) {
   }
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
-  MoQTextClient textClient(
+  auto textClient = std::make_shared<MoQTextClient>(
       &eventBase,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}));
@@ -286,12 +270,12 @@ int main(int argc, char* argv[]) {
     std::function<void(int)> fn_;
   };
   SigHandler handler(
-      &eventBase, [&textClient](int) mutable { textClient.stop(); });
+      &eventBase, [&textClient](int) mutable { textClient->stop(); });
   auto subParams = flags2params();
   const auto subscribeID = 0;
   const auto trackAlias = 1;
   textClient
-      .run(
+      ->run(
           {subscribeID,
            trackAlias,
            moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
