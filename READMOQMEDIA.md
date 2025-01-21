@@ -6,7 +6,7 @@ To simplify testing MOQ at media level we added the following binaries to the re
 ![moq-relay-streamer-receiver](./pics/moq_streamer_receiver.png)
 Fig1: MoQFlvStreamerClient, MoQFlvReceiverClient, and moxygen
 
-Remeber that ffmpeg allows you to install capture cards and playback cards (such DDD), this allows to send any broadcast feed (SDI) via MOQ or/and send any MOQ feed on to a broadcaster via SDI.
+Remember that ffmpeg allows you to install capture cards and playback cards (such DDD), this allows to send any broadcast feed (SDI) via MOQ or/and send any MOQ feed on to a broadcaster via SDI.
 
 ![moq-to-sdi](./pics/sdi-to-moq.png)
 Fig2: Ingest SDI and send it via MOQ
@@ -70,7 +70,7 @@ Important you follow the next steps in order (when fifo pipes are involved is im
 ./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG1
 ```
 
-Note: Look at [README.md](./README.md) on how to gernerate certificates
+Note: Look at [README.md](./README.md) on how to generate certificates
 
 - Stream FLV live stream in real time to a fifo (Speed = x1) (terminal2)
 ```
@@ -85,7 +85,7 @@ Note: fontfile location can change depending on OS
 ```
 ./_build/bin/moqflvstreamerclient -input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
-This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (dafeult value) to the relay
+This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (default value) to the relay
 
 ### Save stream to a file
 
@@ -100,7 +100,7 @@ This will subscribe to video `video0` and audio `audio0` tracks from `flvstreame
 
 - Check / play the file
 
-You can check the correctness of the genated file with `ffprobe`
+You can check the correctness of the generated file with `ffprobe`
 ```
 ffprobe ~/Movies/my-moq-out.flv
 ...
@@ -157,7 +157,7 @@ Note: fontfile location can change depending on OS
 ```
 ./_build/bin/moqflvstreamerclient -input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
-This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (dafeult value) to the relay
+This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (default value) to the relay
 
 - Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [this instructions](./README.md#local-test-with-web-media-client)
 
