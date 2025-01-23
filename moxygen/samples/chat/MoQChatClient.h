@@ -57,6 +57,7 @@ class MoQChatClient {
     std::string deviceId;
     std::chrono::seconds timestamp;
     SubscribeID subscribeId;
+    std::shared_ptr<Publisher::SubscriptionHandle> subscription;
   };
   std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>

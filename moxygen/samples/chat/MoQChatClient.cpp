@@ -202,7 +202,12 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     if (userTrack.deviceId == deviceId) {
       if (userTrack.timestamp < timestamp) {
         XLOG(INFO) << "Device has later track, unsubscribing";
-        moqClient_.moqSession_->unsubscribe({userTrack.subscribeId});
+        if (userTrack.subscription) {
+          userTrack.subscription->unsubscribe();
+          userTrack.subscription.reset();
+        } else {
+          XLOG(INFO) << "Subscribe in progress, bad?";
+        }
         userTrackPtr = &userTrack;
         break;
       } else {
@@ -241,10 +246,6 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
 
     void onSubscribeDone(SubscribeDone subDone) override {
       XLOG(INFO) << "SubscribeDone: " << subDone.reasonPhrase;
-      if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
-          client_.moqClient_.moqSession_) {
-        client_.moqClient_.moqSession_->unsubscribe({subDone.subscribeID});
-      }
       client_.subscribeDone(std::move(subDone));
       baton.post();
     }
@@ -280,7 +281,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     co_return;
   }
 
-  userTrackPtr->subscribeId = track->value()->subscribeOk().subscribeID;
+  userTrackPtr->subscription = std::move(track->value());
+  userTrackPtr->subscribeId =
+      userTrackPtr->subscription->subscribeOk().subscribeID;
   userTrackPtr->timestamp = timestamp;
   co_await handler.baton;
 }
@@ -291,6 +294,10 @@ void MoQChatClient::subscribeDone(SubscribeDone subDone) {
          userTrackIt != userTracks.second.end();
          ++userTrackIt) {
       if (userTrackIt->subscribeId == subDone.subscribeID) {
+        if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
+            userTrackIt->subscription) {
+          userTrackIt->subscription->unsubscribe();
+        }
         userTracks.second.erase(userTrackIt);
         break;
       }

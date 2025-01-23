@@ -222,7 +222,8 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
     RelaySubscription rsub(
         {forwarder,
          upstreamSession,
-         subRes.value()->subscribeOk().subscribeID});
+         subRes.value()->subscribeOk().subscribeID,
+         subRes.value()});
     subscriptions_[subReq.fullTrackName] = std::move(rsub);
   } else {
     forwarder = subscriptionIt->second.forwarder;
@@ -264,7 +265,7 @@ void MoQRelay::onUnsubscribe(
          subscription.forwarder->latest()});
     if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.upstream->unsubscribe({subscription.subscribeID});
+      subscription.handle->unsubscribe();
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     } else {
       subscriptionIt++;
@@ -325,7 +326,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
     }
     if (subscription.forwarder->empty()) {
       XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.upstream->unsubscribe({subscription.subscribeID});
+      subscription.handle->unsubscribe();
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     } else {
       subscriptionIt++;
