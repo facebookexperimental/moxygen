@@ -176,100 +176,78 @@ std::shared_ptr<MoQSession> MoQRelay::findAnnounceSession(
   return nodePtr->sourceSession;
 }
 
-folly::coro::Task<void> MoQRelay::onSubscribe(
+folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     SubscribeRequest subReq,
-    std::shared_ptr<MoQSession> session) {
+    std::shared_ptr<TrackConsumer> consumer) {
+  auto session = MoQSession::getRequestSession();
   auto subscriptionIt = subscriptions_.find(subReq.fullTrackName);
-  std::shared_ptr<MoQForwarder> forwarder;
-  auto subGroupOrder = subReq.groupOrder;
   if (subscriptionIt == subscriptions_.end()) {
     // first subscriber
 
     // check auth
     // get trackNamespace
     if (subReq.fullTrackName.trackNamespace.empty()) {
-      session->subscribeError({subReq.subscribeID, 400, "namespace required"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 400, "namespace required"}));
     }
     auto upstreamSession =
         findAnnounceSession(subReq.fullTrackName.trackNamespace);
     if (!upstreamSession) {
       // no such namespace has been announced
-      session->subscribeError({subReq.subscribeID, 404, "no such namespace"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 404, "no such namespace"}));
     }
     if (session.get() == upstreamSession.get()) {
-      session->subscribeError({subReq.subscribeID, 400, "self subscribe"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 400, "self subscribe"}));
     }
     // TODO: we only subscribe with the downstream locations.
     subReq.priority = 1;
     subReq.groupOrder = GroupOrder::Default;
-    forwarder =
+    auto forwarder =
         std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
-    // TODO: there's a race condition that the forwarder gets upstream objects
-    // before we add the downstream subscriber to it, below
+    forwarder->setCallback(shared_from_this());
+    // Add subscriber first in case objects come before subscribe OK.
+    auto subscriber = forwarder->addSubscriber(
+        std::move(session), subReq, std::move(consumer));
     auto subRes = co_await upstreamSession->subscribe(subReq, forwarder);
     if (subRes.hasError()) {
-      session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
-      co_return;
+      co_return folly::makeUnexpected(
+          SubscribeError({subReq.subscribeID, 502, "subscribe failed"}));
     }
     auto latest = subRes.value()->subscribeOk().latest;
     if (latest) {
       forwarder->updateLatest(latest->group, latest->object);
     }
-    forwarder->setGroupOrder(subRes.value()->subscribeOk().groupOrder);
+    auto pubGroupOrder = subRes.value()->subscribeOk().groupOrder;
+    forwarder->setGroupOrder(pubGroupOrder);
+    subscriber->setPublisherGroupOrder(pubGroupOrder);
     RelaySubscription rsub(
         {forwarder,
          upstreamSession,
          subRes.value()->subscribeOk().subscribeID,
          subRes.value()});
     subscriptions_[subReq.fullTrackName] = std::move(rsub);
+    co_return subscriber;
   } else {
-    forwarder = subscriptionIt->second.forwarder;
-  }
-  // Add to subscribers list
-  auto sessionPtr = session.get();
-  auto trackPublisher = sessionPtr->subscribeOk(
-      {subReq.subscribeID,
-       std::chrono::milliseconds(0),
-       MoQSession::resolveGroupOrder(forwarder->groupOrder(), subGroupOrder),
-       forwarder->latest()});
-  if (trackPublisher) {
-    auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
-        std::move(session),
-        subReq.subscribeID,
-        subReq.trackAlias,
-        toSubscribeRange(subReq, forwarder->latest()),
-        std::move(trackPublisher));
-    forwarder->addSubscriber(std::move(subscriber));
-  } else {
-    XLOG(ERR) << "Downstream subscribeOK failed";
-    // TODO: unsubsubscribe upstream
+    co_return subscriptionIt->second.forwarder->addSubscriber(
+        std::move(session), subReq, std::move(consumer));
   }
 }
 
-void MoQRelay::onUnsubscribe(
-    Unsubscribe unsub,
-    std::shared_ptr<MoQSession> session) {
-  // TODO: session+subscribe ID should uniquely identify this subscription,
-  // we shouldn't need a linear search to find where to remove it.
+void MoQRelay::onEmpty(MoQForwarder* forwarder) {
+  // TODO: we shouldn't need a linear search if forwarder stores FullTrackName
   for (auto subscriptionIt = subscriptions_.begin();
-       subscriptionIt != subscriptions_.end();) {
+       subscriptionIt != subscriptions_.end();
+       ++subscriptionIt) {
     auto& subscription = subscriptionIt->second;
-    subscription.forwarder->removeSession(
-        session,
-        {subscription.subscribeID,
-         SubscribeDoneStatusCode::UNSUBSCRIBED,
-         "",
-         subscription.forwarder->latest()});
-    if (subscription.forwarder->empty()) {
-      XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.handle->unsubscribe();
-      subscriptionIt = subscriptions_.erase(subscriptionIt);
-    } else {
-      subscriptionIt++;
+    if (subscription.forwarder.get() != forwarder) {
+      continue;
     }
+    XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
+    subscription.handle->unsubscribe();
+    subscriptionIt = subscriptions_.erase(subscriptionIt);
+    return;
   }
 }
 
@@ -315,6 +293,8 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
+    subscriptionIt++;
+    // these actions may erase the current subscription
     if (subscription.upstream.get() == session.get()) {
       subscription.forwarder->subscribeDone(
           {SubscribeID(0),
@@ -323,13 +303,6 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
            subscription.forwarder->latest()});
     } else {
       subscription.forwarder->removeSession(session);
-    }
-    if (subscription.forwarder->empty()) {
-      XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-      subscription.handle->unsubscribe();
-      subscriptionIt = subscriptions_.erase(subscriptionIt);
-    } else {
-      subscriptionIt++;
     }
   }
 }

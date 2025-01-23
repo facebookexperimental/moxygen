@@ -212,6 +212,9 @@ struct SubscribeID {
   bool operator==(const SubscribeID& s) const {
     return value == s.value;
   }
+  std::strong_ordering operator<=>(const SubscribeID& other) const {
+    return value <=> other.value;
+  }
   struct hash {
     size_t operator()(const SubscribeID& s) const {
       return std::hash<uint64_t>{}(s.value);

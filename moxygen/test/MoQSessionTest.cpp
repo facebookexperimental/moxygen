@@ -24,9 +24,6 @@ const size_t kTestMaxSubscribeId = 2;
 class MockControlVisitorBase {
  public:
   virtual ~MockControlVisitorBase() = default;
-  virtual void onSubscribe(SubscribeRequest subscribeRequest) const = 0;
-  virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) const = 0;
-  virtual void onUnsubscribe(Unsubscribe unsubscribe) const = 0;
   virtual void onFetch(Fetch fetch) const = 0;
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
@@ -53,20 +50,6 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
   MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel), (const));
   void operator()(AnnounceCancel announceCancel) const override {
     onAnnounceCancel(announceCancel);
-  }
-
-  MOCK_METHOD(void, onSubscribe, (SubscribeRequest), (const));
-  void operator()(SubscribeRequest subscribe) const override {
-    onSubscribe(subscribe);
-  }
-  MOCK_METHOD(void, onSubscribeUpdate, (SubscribeUpdate), (const));
-  void operator()(SubscribeUpdate subscribeUpdate) const override {
-    onSubscribeUpdate(subscribeUpdate);
-  }
-
-  MOCK_METHOD(void, onUnsubscribe, (Unsubscribe), (const));
-  void operator()(Unsubscribe unsubscribe) const override {
-    onUnsubscribe(unsubscribe);
   }
 
   MOCK_METHOD(void, onFetch, (Fetch), (const));
@@ -135,6 +118,10 @@ class MoQSessionTest : public testing::Test,
   std::shared_ptr<MoQSession> serverSession_;
   MockControlVisitor clientControl;
   MockControlVisitor serverControl;
+  std::shared_ptr<MockPublisher> clientPublisher{
+      std::make_shared<MockPublisher>()};
+  std::shared_ptr<MockPublisher> serverPublisher{
+      std::make_shared<MockPublisher>()};
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
   uint64_t initialMaxSubscribeId_{kTestMaxSubscribeId};
   bool failServerSetup_{false};
@@ -153,7 +140,9 @@ moxygen::ClientSetup getClientSetup(uint64_t initialMaxSubscribeId) {
 } // namespace
 
 void MoQSessionTest::setupMoQSession() {
+  clientSession_->setPublishHandler(clientPublisher);
   clientSession_->start();
+  serverSession_->setPublishHandler(serverPublisher);
   serverSession_->start();
   eventBase_.loopOnce();
   [](std::shared_ptr<MoQSession> clientSession,
@@ -636,40 +625,47 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
   }(clientSession_, serverSession_)
                                                        .scheduleOn(&eventBase_)
                                                        .start();
-  EXPECT_CALL(serverControl, onSubscribe(testing::_))
-      .WillOnce(testing::Invoke([this](auto sub) {
-        serverSession_->subscribeError(
-            {sub.subscribeID, 400, "bad", folly::none});
-      }))
-      .WillOnce(testing::Invoke([this](auto sub) {
-        auto pub = serverSession_->subscribeOk(
-            {sub.subscribeID,
-             std::chrono::milliseconds(0),
-             GroupOrder::OldestFirst,
-             folly::none,
-             {}});
-        pub->subscribeDone(
-            {sub.subscribeID,
-             SubscribeDoneStatusCode::TRACK_ENDED,
-             "end of track",
-             folly::none});
-      }))
-      .WillOnce(testing::Invoke([this](auto sub) {
-        serverSession_->subscribeOk(
-            {sub.subscribeID,
-             std::chrono::milliseconds(0),
-             GroupOrder::OldestFirst,
-             folly::none,
-             {}});
-      }))
-      .WillOnce(testing::Invoke([this](auto sub) {
-        serverSession_->subscribeOk(
-            {sub.subscribeID,
-             std::chrono::milliseconds(0),
-             GroupOrder::OldestFirst,
-             folly::none,
-             {}});
-      }));
+  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+      .WillOnce(testing::Invoke(
+          [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return folly::makeUnexpected(
+                SubscribeError{sub.subscribeID, 400, "bad", folly::none});
+          }))
+      .WillOnce(testing::Invoke(
+          [this](auto sub, auto pub)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            eventBase_.add([pub, sub] {
+              pub->subscribeDone(
+                  {sub.subscribeID,
+                   SubscribeDoneStatusCode::TRACK_ENDED,
+                   "end of track",
+                   folly::none});
+            });
+            co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.subscribeID,
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                folly::none,
+                {}});
+          }))
+      .WillOnce(testing::Invoke(
+          [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.subscribeID,
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                folly::none,
+                {}});
+          }))
+      .WillOnce(testing::Invoke(
+          [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.subscribeID,
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                folly::none,
+                {}});
+          }));
 
   eventBase_.loop();
 }

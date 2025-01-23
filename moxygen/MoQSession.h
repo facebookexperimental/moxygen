@@ -101,15 +101,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     }
   }
 
-  using MoQMessage = boost::variant<
-      Announce,
-      Unannounce,
-      AnnounceCancel,
-      SubscribeRequest,
-      SubscribeUpdate,
-      Unsubscribe,
-      Fetch,
-      Goaway>;
+  using MoQMessage =
+      boost::variant<Announce, Unannounce, AnnounceCancel, Fetch, Goaway>;
 
   class ControlVisitor : public boost::static_visitor<> {
    public:
@@ -137,18 +130,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
                  << " reason=" << announceError.reasonPhrase;
     }
 
-    virtual void operator()(SubscribeRequest subscribe) const {
-      XLOG(INFO) << "Subscribe ftn=" << subscribe.fullTrackName.trackNamespace
-                 << subscribe.fullTrackName.trackName;
-    }
-
-    virtual void operator()(SubscribeUpdate subscribeUpdate) const {
-      XLOG(INFO) << "SubscribeUpdate subID=" << subscribeUpdate.subscribeID;
-    }
-
-    virtual void operator()(Unsubscribe unsubscribe) const {
-      XLOG(INFO) << "Unsubscribe subID=" << unsubscribe.subscribeID;
-    }
     virtual void operator()(Fetch fetch) const {
       XLOG(INFO) << "Fetch subID=" << fetch.subscribeID;
     }
@@ -182,8 +163,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback) override;
-  std::shared_ptr<TrackConsumer> subscribeOk(SubscribeOk subOk);
-  void subscribeError(SubscribeError subErr);
 
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
@@ -287,13 +266,17 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   class TrackPublisherImpl;
   class FetchPublisherImpl;
 
-  void subscribeDone(SubscribeDone subDone);
-
   folly::coro::Task<void> handleTrackStatus(TrackStatusRequest trackStatusReq);
   void writeTrackStatus(const TrackStatus& trackStatus);
 
-  void unsubscribe(Unsubscribe unsubscribe);
-  void subscribeUpdate(SubscribeUpdate subUpdate);
+  folly::coro::Task<void> handleSubscribe(
+      SubscribeRequest sub,
+      std::shared_ptr<TrackPublisherImpl> trackPublisher);
+  std::shared_ptr<TrackConsumer> subscribeOk(const SubscribeOk& subOk);
+  void subscribeError(const SubscribeError& subErr);
+  void unsubscribe(const Unsubscribe& unsubscribe);
+  void subscribeUpdate(const SubscribeUpdate& subUpdate);
+  void subscribeDone(const SubscribeDone& subDone);
 
   folly::coro::Task<void> handleSubscribeAnnounces(SubscribeAnnounces sa);
   void subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk);

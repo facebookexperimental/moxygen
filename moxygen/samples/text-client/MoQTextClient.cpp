@@ -110,7 +110,8 @@ class MoQTextClient {
       co_await moqClient_.setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          Role::SUBSCRIBER);
+          nullptr,
+          nullptr);
       auto exec = co_await folly::coro::co_current_executor;
       controlReadLoop().scheduleOn(exec).start();
 

@@ -162,4 +162,51 @@ class MockFetchConsumer : public FetchConsumer {
       (),
       (override));
 };
+
+class MockSubscriptionHandle : public Publisher::SubscriptionHandle {
+ public:
+  explicit MockSubscriptionHandle(SubscribeOk ok)
+      : SubscriptionHandle(std::move(ok)) {}
+
+  MOCK_METHOD(void, unsubscribe, (), (override));
+  MOCK_METHOD(void, subscribeUpdate, (SubscribeUpdate), (override));
+};
+
+class MockFetchHandle : public Publisher::FetchHandle {
+ public:
+  MOCK_METHOD(void, fetchCancel, (), (override));
+};
+
+class MockSubscribeAnnouncesHandle
+    : public Publisher::SubscribeAnnouncesHandle {
+ public:
+  MOCK_METHOD(void, unsubscribeAnnounces, (), (override));
+};
+
+class MockPublisher : public Publisher {
+ public:
+  MOCK_METHOD(
+      folly::coro::Task<TrackStatusResult>,
+      trackStatus,
+      (TrackStatusRequest),
+      (override));
+
+  MOCK_METHOD(
+      folly::coro::Task<SubscribeResult>,
+      subscribe,
+      (SubscribeRequest, std::shared_ptr<TrackConsumer>),
+      (override));
+
+  MOCK_METHOD(
+      folly::coro::Task<FetchResult>,
+      fetch,
+      (Fetch, std::shared_ptr<FetchConsumer>),
+      (override));
+
+  MOCK_METHOD(
+      folly::coro::Task<SubscribeAnnouncesResult>,
+      subscribeAnnounces,
+      (SubscribeAnnounces),
+      (override));
+};
 } // namespace moxygen

@@ -14,11 +14,16 @@
 namespace moxygen {
 
 class MoQRelay : public Publisher,
-                 public std::enable_shared_from_this<MoQRelay> {
+                 public std::enable_shared_from_this<MoQRelay>,
+                 public MoQForwarder::Callback {
  public:
   void setAllowedNamespacePrefix(TrackNamespace allowed) {
     allowedNamespacePrefix_ = std::move(allowed);
   }
+
+  folly::coro::Task<SubscribeResult> subscribe(
+      SubscribeRequest subReq,
+      std::shared_ptr<TrackConsumer> consumer) override;
 
   folly::coro::Task<SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces subAnn) override;
@@ -27,11 +32,6 @@ class MoQRelay : public Publisher,
   void onUnannounce(
       Unannounce&& ann,
       const std::shared_ptr<MoQSession>& session);
-
-  folly::coro::Task<void> onSubscribe(
-      SubscribeRequest subReq,
-      std::shared_ptr<MoQSession> session);
-  void onUnsubscribe(Unsubscribe unsub, std::shared_ptr<MoQSession> session);
 
   void removeSession(const std::shared_ptr<MoQSession>& session);
 
@@ -59,6 +59,8 @@ class MoQRelay : public Publisher,
     SubscribeID subscribeID;
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
   };
+
+  void onEmpty(MoQForwarder* forwarder) override;
 
   TrackNamespace allowedNamespacePrefix_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>

@@ -41,7 +41,9 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   try {
     co_await moqClient_.setupMoQSession(
         std::chrono::milliseconds(FLAGS_connect_timeout),
-        std::chrono::seconds(FLAGS_transaction_timeout));
+        std::chrono::seconds(FLAGS_transaction_timeout),
+        /*publishHandler=*/shared_from_this(),
+        /*subscribeHandler=*/nullptr);
     auto exec = co_await folly::coro::co_current_executor;
     controlReadLoop().scheduleOn(exec).start();
 
@@ -92,45 +94,6 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
       }
     }
 
-    void operator()(SubscribeRequest subscribeReq) const override {
-      XLOG(INFO) << "SubscribeRequest";
-      if (subscribeReq.fullTrackName.trackNamespace !=
-          client_.participantTrackName(client_.username_)) {
-        client_.moqClient_.moqSession_->subscribeError(
-            {subscribeReq.subscribeID, 404, "no such track"});
-        return;
-      }
-      client_.chatSubscribeID_.emplace(subscribeReq.subscribeID);
-      client_.chatTrackAlias_.emplace(subscribeReq.trackAlias);
-      folly::Optional<AbsoluteLocation> latest;
-      if (client_.nextGroup_ > 0) {
-        latest.emplace(client_.nextGroup_ - 1, 0);
-      }
-      client_.publisher_ = client_.moqClient_.moqSession_->subscribeOk(
-          {subscribeReq.subscribeID,
-           std::chrono::milliseconds(0),
-           MoQSession::resolveGroupOrder(
-               GroupOrder::OldestFirst, subscribeReq.groupOrder),
-           latest});
-    }
-
-    void operator()(Unsubscribe unsubscribe) const override {
-      XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
-      if (client_.chatSubscribeID_ &&
-          unsubscribe.subscribeID == *client_.chatSubscribeID_) {
-        client_.chatSubscribeID_.reset();
-        client_.chatTrackAlias_.reset();
-        if (client_.publisher_) {
-          client_.publisher_->subscribeDone(
-              {unsubscribe.subscribeID,
-               SubscribeDoneStatusCode::UNSUBSCRIBED,
-               "",
-               folly::none});
-          client_.publisher_.reset();
-        }
-      }
-    }
-
    private:
     MoQChatClient& client_;
   };
@@ -142,6 +105,51 @@ folly::coro::Task<void> MoQChatClient::controlReadLoop() {
   while (auto msg = co_await moqClient_.moqSession_->controlMessages().next()) {
     boost::apply_visitor(*vptr, msg.value());
   }
+}
+
+folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
+    SubscribeRequest subscribeReq,
+    std::shared_ptr<TrackConsumer> consumer) {
+  XLOG(INFO) << "SubscribeRequest";
+  if (subscribeReq.fullTrackName.trackNamespace !=
+      participantTrackName(username_)) {
+    co_return folly::makeUnexpected(
+        SubscribeError{subscribeReq.subscribeID, 404, "no such track"});
+  }
+  if (publisher_) {
+    co_return folly::makeUnexpected(SubscribeError{
+        subscribeReq.subscribeID, 400, "Duplicate subscribe for track"});
+  }
+  chatSubscribeID_.emplace(subscribeReq.subscribeID);
+  chatTrackAlias_.emplace(subscribeReq.trackAlias);
+  folly::Optional<AbsoluteLocation> latest;
+  if (nextGroup_ > 0) {
+    latest.emplace(nextGroup_ - 1, 0);
+  }
+  publisher_ = std::move(consumer);
+  setSubscribeOk(
+      {subscribeReq.subscribeID,
+       std::chrono::milliseconds(0),
+       MoQSession::resolveGroupOrder(
+           GroupOrder::OldestFirst, subscribeReq.groupOrder),
+       latest,
+       {}});
+  co_return shared_from_this();
+}
+
+void MoQChatClient::unsubscribe() {
+  // MoQChatClient only publishes a single track at a time.
+  XLOG(INFO) << "Unsubscribe id=" << *chatSubscribeID_;
+  if (publisher_) {
+    publisher_->subscribeDone(
+        {*chatSubscribeID_,
+         SubscribeDoneStatusCode::UNSUBSCRIBED,
+         "",
+         folly::none});
+    publisher_.reset();
+  }
+  chatSubscribeID_.reset();
+  chatTrackAlias_.reset();
 }
 
 void MoQChatClient::publishLoop() {
@@ -159,9 +167,6 @@ void MoQChatClient::publishLoop() {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
         subscribeAnnounceHandle_->unsubscribeAnnounces();
-        moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-        moqClient_.moqSession_.reset();
-      } else if (chatSubscribeID_) {
         if (publisher_) {
           publisher_->objectStream(
               {*chatTrackAlias_,
@@ -169,9 +174,24 @@ void MoQChatClient::publishLoop() {
                /*subgroup=*/0,
                /*id=*/0,
                /*pri=*/0,
-               ObjectStatus::NORMAL},
-              folly::IOBuf::copyBuffer(input));
+               ObjectStatus::END_OF_TRACK_AND_GROUP},
+              nullptr);
+          // Publisher=TrackReceiveState which contains a shared_ptr to the
+          // chat client (to deliver unsubscribe/subscribeUpdate).  It *must*
+          // be reset to prevent memory leaks
+          publisher_.reset();
         }
+        moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+        moqClient_.moqSession_.reset();
+      } else if (publisher_) {
+        publisher_->objectStream(
+            {*chatTrackAlias_,
+             nextGroup_++,
+             /*subgroup=*/0,
+             /*id=*/0,
+             /*pri=*/0,
+             ObjectStatus::NORMAL},
+            folly::IOBuf::copyBuffer(input));
       }
     });
     if (input == "/leave") {
@@ -313,8 +333,8 @@ int main(int argc, char* argv[]) {
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
   }
-  moxygen::MoQChatClient chatClient(
+  auto chatClient = std::make_shared<moxygen::MoQChatClient>(
       &eventBase, std::move(url), FLAGS_chat_id, FLAGS_username, FLAGS_device);
-  chatClient.run().scheduleOn(&eventBase).start();
+  chatClient->run().scheduleOn(&eventBase).start();
   eventBase.loop();
 }
