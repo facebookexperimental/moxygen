@@ -88,10 +88,6 @@ void MoQServer::ControlVisitor::operator()(
   XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
 }
 
-void MoQServer::ControlVisitor::operator()(Goaway goaway) const {
-  XLOG(INFO) << "Goaway nsuri=" << goaway.newSessionUri;
-}
-
 folly::coro::Task<void> MoQServer::handleClientSession(
     std::shared_ptr<MoQSession> clientSession) {
   clientSession->start();

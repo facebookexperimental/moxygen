@@ -27,7 +27,6 @@ class MockControlVisitorBase {
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
   virtual void onAnnounceCancel(AnnounceCancel announceCancel) const = 0;
-  virtual void onGoaway(Goaway goaway) const = 0;
 };
 
 class MockControlVisitor : public MoQSession::ControlVisitor,
@@ -49,11 +48,6 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
   MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel), (const));
   void operator()(AnnounceCancel announceCancel) const override {
     onAnnounceCancel(announceCancel);
-  }
-
-  MOCK_METHOD(void, onGoaway, (Goaway), (const));
-  void operator()(Goaway goaway) const override {
-    onGoaway(goaway);
   }
 
  private:
