@@ -40,11 +40,7 @@ class MoQDateServer : public MoQServer,
       XLOG(ERR) << "Invalid url: " << FLAGS_relay_url;
       return false;
     }
-    relayClient_ = std::make_unique<MoQRelayClient>(
-        evb, url, [this](std::shared_ptr<MoQSession> session) {
-          return std::make_unique<DateControlVisitor>(
-              *this, std::move(session));
-        });
+    relayClient_ = std::make_unique<MoQRelayClient>(evb, url);
     relayClient_
         ->run(
             /*publisher=*/shared_from_this(),
@@ -59,28 +55,13 @@ class MoQDateServer : public MoQServer,
     return true;
   }
 
-  class DateControlVisitor : public MoQServer::ControlVisitor {
-   public:
-    DateControlVisitor(
-        MoQDateServer& server,
-        std::shared_ptr<MoQSession> clientSession)
-        : MoQServer::ControlVisitor(std::move(clientSession)),
-          server_(server) {}
-
-   private:
-    MoQDateServer& server_;
-  };
-
-  std::unique_ptr<ControlVisitor> makeControlVisitor(
-      std::shared_ptr<MoQSession> clientSession) override {
+  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
     if (!loopRunning_) {
       // start date loop on first server connect
       loopRunning_ = true;
       publishDateLoop().scheduleOn(clientSession->getEventBase()).start();
     }
-    return std::make_unique<DateControlVisitor>(
-        *this, std::move(clientSession));
   }
 
   folly::coro::Task<SubscribeResult> subscribe(

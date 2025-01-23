@@ -57,18 +57,14 @@ class MoQFlvStreamerClient
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/shared_from_this(),
           /*subscribeHandler=*/nullptr);
-      auto exec = co_await folly::coro::co_current_executor;
-      controlReadLoop().scheduleOn(exec).start();
-
       // Announce
       auto annResp = co_await moqClient_.moqSession_->announce(std::move(ann));
       if (annResp.hasValue()) {
-        trackNamespace_ = annResp->trackNamespace;
-
+        announceHandle_ = std::move(annResp.value());
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
       } else {
         XLOG(INFO) << "Announce error trackNamespace="
-                   << annResp->trackNamespace
+                   << annResp.error().trackNamespace
                    << " code=" << annResp.error().errorCode
                    << " reason=" << annResp.error().reasonPhrase;
       }
@@ -81,8 +77,10 @@ class MoQFlvStreamerClient
 
   void stop() {
     XLOG(INFO) << __func__;
+    if (announceHandle_) {
+      announceHandle_->unannounce();
+    }
     if (moqClient_.moqSession_) {
-      moqClient_.moqSession_->unannounce({trackNamespace_});
       moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
     }
   }
@@ -187,34 +185,6 @@ class MoQFlvStreamerClient
     XLOG(INFO) << "Subscribed " << subscribeReq.subscribeID;
 
     co_return subscription;
-  }
-
-  folly::coro::Task<void> controlReadLoop() {
-    class ControlVisitor : public MoQSession::ControlVisitor {
-     public:
-      explicit ControlVisitor(MoQFlvStreamerClient& client) : client_(client) {}
-
-      void operator()(Announce announce) const override {
-        XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
-        // text client doesn't expect server or relay to announce anything,
-        // but announce OK anyways
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-     private:
-      MoQFlvStreamerClient& client_;
-    };
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    ControlVisitor visitor(*this);
-    MoQSession::ControlVisitor* vptr(&visitor);
-    while (auto msg =
-               co_await moqClient_.moqSession_->controlMessages().next()) {
-      boost::apply_visitor(*vptr, msg.value());
-    }
-
-    XLOG(INFO) << "Session closed";
   }
 
   void publishAudio(
@@ -330,7 +300,7 @@ class MoQFlvStreamerClient
   }
 
   MoQClient moqClient_;
-  TrackNamespace trackNamespace_;
+  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   FullTrackName fullVideoTrackName_;
   FullTrackName fullAudioTrackName_;
 

@@ -24,33 +24,9 @@ class MoQRelayServer : MoQServer {
   MoQRelayServer()
       : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, FLAGS_endpoint) {}
 
-  class RelayControlVisitor : public MoQServer::ControlVisitor {
-   public:
-    RelayControlVisitor(
-        MoQRelayServer& server,
-        std::shared_ptr<MoQSession> clientSession)
-        : MoQServer::ControlVisitor(std::move(clientSession)),
-          server_(server) {}
-
-    void operator()(Announce announce) const override {
-      XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-      server_.relay_->onAnnounce(std::move(announce), clientSession_);
-    }
-
-    void operator()(Unannounce unannounce) const override {
-      XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
-      server_.relay_->onUnannounce(std::move(unannounce), clientSession_);
-    }
-
-   private:
-    MoQRelayServer& server_;
-  };
-
-  std::unique_ptr<ControlVisitor> makeControlVisitor(
-      std::shared_ptr<MoQSession> clientSession) override {
+  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(relay_);
-    return std::make_unique<RelayControlVisitor>(
-        *this, std::move(clientSession));
+    clientSession->setSubscribeHandler(relay_);
   }
 
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {

@@ -8,11 +8,12 @@
 
 namespace moxygen {
 
-MoQRelay::AnnounceNode* MoQRelay::findNamespaceNode(
+std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
     std::vector<std::shared_ptr<MoQSession>>* sessions) {
-  AnnounceNode* nodePtr = &announceRoot_;
+  std::shared_ptr<AnnounceNode> nodePtr(
+      std::shared_ptr<void>(), &announceRoot_);
   for (auto i = 0ul; i < ns.size(); i++) {
     if (sessions) {
       sessions->insert(
@@ -22,66 +23,73 @@ MoQRelay::AnnounceNode* MoQRelay::findNamespaceNode(
     auto it = nodePtr->children.find(name);
     if (it == nodePtr->children.end()) {
       if (createMissingNodes) {
-        nodePtr =
-            &nodePtr->children.emplace(name, AnnounceNode()).first->second;
+        auto node = std::make_shared<AnnounceNode>(*this);
+        nodePtr->children.emplace(name, node);
+        nodePtr = std::move(node);
       } else {
         XLOG(ERR) << "prefix not found in announce tree";
         return nullptr;
       }
     } else {
-      nodePtr = &it->second;
+      nodePtr = it->second;
     }
   }
   return nodePtr;
 }
 
-void MoQRelay::onAnnounce(Announce&& ann, std::shared_ptr<MoQSession> session) {
+folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
+    Announce ann,
+    std::shared_ptr<Subscriber::AnnounceCallback>) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace;
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
-    session->announceError({ann.trackNamespace, 403, "bad namespace"});
-    return;
+    co_return folly::makeUnexpected(
+        AnnounceError{ann.trackNamespace, 403, "bad namespace"});
   }
   std::vector<std::shared_ptr<MoQSession>> sessions;
   auto nodePtr = findNamespaceNode(
       ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
 
   // TODO: store auth for forwarding on future SubscribeAnnounces?
+  auto session = MoQSession::getRequestSession();
   nodePtr->sourceSession = std::move(session);
-  nodePtr->sourceSession->announceOk({ann.trackNamespace});
+  nodePtr->setAnnounceOk({ann.trackNamespace});
   for (auto& outSession : sessions) {
-    auto evb = outSession->getEventBase();
-    // We don't really care if we get announce error, I guess?
-    outSession->announce(ann).scheduleOn(evb).start();
+    if (outSession != session) {
+      auto evb = outSession->getEventBase();
+      announceToSession(outSession, ann, nodePtr).scheduleOn(evb).start();
+    }
+  }
+  co_return nodePtr;
+}
+
+folly::coro::Task<void> MoQRelay::announceToSession(
+    std::shared_ptr<MoQSession> session,
+    Announce ann,
+    std::shared_ptr<AnnounceNode> nodePtr) {
+  auto announceHandle = co_await session->announce(ann);
+  if (announceHandle.hasError()) {
+    XLOG(ERR) << "Announce failed err=" << announceHandle.error().reasonPhrase;
+  } else {
+    // This can race with unsubscribeAnnounces
+    nodePtr->announcements[session] = std::move(announceHandle.value());
   }
 }
 
-void MoQRelay::onUnannounce(
-    Unannounce&& unann,
-    const std::shared_ptr<MoQSession>& session) {
-  XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace;
-  std::vector<std::shared_ptr<MoQSession>> sessions;
-  auto nodePtr = findNamespaceNode(
-      unann.trackNamespace, /*createMissingNodes=*/false, &sessions);
-  if (!nodePtr) {
-    // TODO: maybe error?
-    return;
+void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
+  XLOG(DBG1) << __func__ << " ns=" << trackNamespace;
+  // Node would be useful if there were back links
+  auto nodePtr =
+      findNamespaceNode(trackNamespace, /*createMissingNodes=*/false, nullptr);
+  XCHECK(nodePtr);
+  nodePtr->sourceSession = nullptr;
+  for (auto& announcement : nodePtr->announcements) {
+    auto evb = announcement.first->getEventBase();
+    evb->runInEventBaseThread([announceHandle = announcement.second] {
+      announceHandle->unannounce();
+    });
   }
-  if (nodePtr->sourceSession.get() == session.get()) {
-    nodePtr->sourceSession = nullptr;
-    for (auto& outSession : sessions) {
-      auto evb = outSession->getEventBase();
-      evb->runInEventBaseThread(
-          [outSession, unann] { outSession->unannounce(unann); });
-    }
-  } else {
-    if (nodePtr->sourceSession) {
-      XLOG(ERR) << "unannounce namespace announced by another session";
-    } else {
-      XLOG(DBG1) << "unannounce namespace that was not announced";
-    }
-  }
-
+  nodePtr->announcements.clear();
   // TODO: prune Announce tree
 }
 
@@ -123,21 +131,20 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   nodePtr->sessions.emplace(session);
 
   // Find all nested Announcements and forward
-  std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
+  std::deque<std::tuple<TrackNamespace, std::shared_ptr<AnnounceNode>>> nodes{
       {subNs.trackNamespacePrefix, nodePtr}};
   auto evb = session->getEventBase();
   while (!nodes.empty()) {
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
-    if (nodePtr->sourceSession) {
-      // We don't really care if we get announce error, I guess?
+    if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
       // TODO: Auth/params
-      session->announce({prefix, {}}).scheduleOn(evb).start();
+      announceToSession(session, {prefix, {}}, nodePtr).scheduleOn(evb).start();
     }
     for (auto& nextNodeIt : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
       nodePrefix.append(nextNodeIt.first);
-      nodes.emplace_back(std::forward_as_tuple(nodePrefix, &nextNodeIt.second));
+      nodes.emplace_back(std::forward_as_tuple(nodePrefix, nextNodeIt.second));
     }
   }
   co_return std::make_shared<AnnouncesSubscription>(
@@ -284,27 +291,30 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
     // Implicit UnsubscribeAnnounces
     nodePtr->sessions.erase(session);
 
-    // Add sessions for future Unannounce
-    notifySessions.insert(
-        notifySessions.end(),
-        nodePtr->sessions.begin(),
-        nodePtr->sessions.end());
+    auto it = nodePtr->announcements.find(session);
+    if (it != nodePtr->announcements.end()) {
+      // we've announced this node to the removing session.
+      // Do we really need to unannounce?
+      it->second->unannounce();
+      nodePtr->announcements.erase(it);
+    }
 
     if (nodePtr->sourceSession == session) {
       // This session is unannouncing
       nodePtr->sourceSession = nullptr;
-      for (auto& outSession : notifySessions) {
-        auto evb = outSession->getEventBase();
-        Unannounce unann{prefix};
-        evb->runInEventBaseThread(
-            [outSession, unann] { outSession->unannounce(unann); });
+      for (auto& announcement : nodePtr->announcements) {
+        auto evb = announcement.first->getEventBase();
+        evb->runInEventBaseThread([announceHandle = announcement.second] {
+          announceHandle->unannounce();
+        });
       }
+      nodePtr->announcements.clear();
     }
     for (auto& nextNode : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
       nodePrefix.append(nextNode.first);
       nodes.emplace_back(
-          std::forward_as_tuple(std::move(nodePrefix), &nextNode.second));
+          std::forward_as_tuple(std::move(nodePrefix), nextNode.second.get()));
     }
   }
 

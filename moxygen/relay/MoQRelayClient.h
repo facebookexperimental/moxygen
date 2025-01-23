@@ -13,12 +13,8 @@ namespace moxygen {
 
 class MoQRelayClient {
  public:
-  MoQRelayClient(
-      folly::EventBase* evb,
-      proxygen::URL url,
-      std::function<std::unique_ptr<MoQSession::ControlVisitor>(
-          std::shared_ptr<MoQSession>)> controllerFn)
-      : moqClient_(evb, url), controllerFn_(controllerFn) {}
+  MoQRelayClient(folly::EventBase* evb, proxygen::URL url)
+      : moqClient_(evb, std::move(url)) {}
 
   folly::coro::Task<void> run(
       std::shared_ptr<Publisher> publisher,
@@ -33,12 +29,6 @@ class MoQRelayClient {
           std::move(publisher),
           std::move(subscriber));
       auto exec = co_await folly::coro::co_current_executor;
-      auto controller = controllerFn_(moqClient_.moqSession_);
-      if (!controller) {
-        XLOG(ERR) << "Failed to make controller";
-        co_return;
-      }
-      controlReadLoop(std::move(controller)).scheduleOn(exec).start();
       // could parallelize
       if (!moqClient_.moqSession_) {
         XLOG(ERR) << "Session is dead now #sad";
@@ -64,20 +54,7 @@ class MoQRelayClient {
   }
 
  private:
-  folly::coro::Task<void> controlReadLoop(
-      std::unique_ptr<MoQSession::ControlVisitor> controller) {
-    while (moqClient_.moqSession_) {
-      auto msg = co_await moqClient_.moqSession_->controlMessages().next();
-      if (!msg) {
-        break;
-      }
-      boost::apply_visitor(*controller, msg.value());
-    }
-  }
   MoQClient moqClient_;
-  std::function<std::unique_ptr<MoQSession::ControlVisitor>(
-      std::shared_ptr<MoQSession>)>
-      controllerFn_;
 };
 
 } // namespace moxygen

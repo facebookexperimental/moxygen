@@ -113,9 +113,6 @@ class MoQTextClient : public Subscriber,
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
           /*subscribeHandler=*/shared_from_this());
-      auto exec = co_await folly::coro::co_current_executor;
-      controlReadLoop().scheduleOn(exec).start();
-
       SubParams subParams{sub.locType, sub.start, sub.end};
       sub.locType = LocationType::LatestObject;
       sub.start = folly::none;
@@ -203,6 +200,16 @@ class MoQTextClient : public Subscriber,
     XLOG(INFO) << __func__ << " done";
   }
 
+  folly::coro::Task<AnnounceResult> announce(
+      Announce announce,
+      std::shared_ptr<AnnounceCallback>) override {
+    XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+    // text client doesn't expect server or relay to announce anything,
+    // but announce OK anyways
+    return folly::coro::makeTask<AnnounceResult>(
+        std::make_shared<AnnounceHandle>(AnnounceOk{announce.trackNamespace}));
+  }
+
   void goaway(Goaway goaway) override {
     XLOG(INFO) << "Goaway uri=" << goaway.newSessionUri;
     stop();
@@ -216,32 +223,6 @@ class MoQTextClient : public Subscriber,
       subscription_.reset();
     }
     moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-  }
-
-  folly::coro::Task<void> controlReadLoop() {
-    class ControlVisitor : public MoQSession::ControlVisitor {
-     public:
-      explicit ControlVisitor(MoQTextClient& client) : client_(client) {}
-
-      void operator()(Announce announce) const override {
-        XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
-        // text client doesn't expect server or relay to announce anything,
-        // but announce OK anyways
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-     private:
-      MoQTextClient& client_;
-    };
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    ControlVisitor visitor(*this);
-    MoQSession::ControlVisitor* vptr(&visitor);
-    while (auto msg =
-               co_await moqClient_.moqSession_->controlMessages().next()) {
-      boost::apply_visitor(*vptr, msg.value());
-    }
   }
 
   MoQClient moqClient_;

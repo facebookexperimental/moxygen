@@ -43,13 +43,15 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         std::chrono::milliseconds(FLAGS_connect_timeout),
         std::chrono::seconds(FLAGS_transaction_timeout),
         /*publishHandler=*/shared_from_this(),
-        /*subscribeHandler=*/nullptr);
-    auto exec = co_await folly::coro::co_current_executor;
-    controlReadLoop().scheduleOn(exec).start();
-
-    // the announce and subscribe should be in parallel
+        /*subscribeHandler=*/shared_from_this());
+    // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.moqSession_->announce(
         {participantTrackName(username_), {}});
+    if (announceRes.hasError()) {
+      XLOG(ERR) << "Announce failed err=" << announceRes.error().reasonPhrase;
+      co_return;
+    }
+    announceHandle_ = std::move(announceRes.value());
     // subscribe to the catalog track from the beginning of the latest group
     auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
         {TrackNamespace(chatPrefix()),
@@ -71,40 +73,29 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   XLOG(INFO) << __func__ << " done";
 }
 
-folly::coro::Task<void> MoQChatClient::controlReadLoop() {
-  class ControlVisitor : public MoQSession::ControlVisitor {
-   public:
-    explicit ControlVisitor(MoQChatClient& client) : client_(client) {}
-
-    void operator()(Announce announce) const override {
-      XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-      if (announce.trackNamespace.startsWith(
-              TrackNamespace(client_.chatPrefix()))) {
-        if (announce.trackNamespace.size() != 5) {
-          client_.moqClient_.moqSession_->announceError(
-              {announce.trackNamespace, 400, "Invalid announce"});
-        }
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-        client_.subscribeToUser(std::move(announce.trackNamespace))
-            .scheduleOn(client_.moqClient_.moqSession_->getEventBase())
-            .start();
-      } else {
-        client_.moqClient_.moqSession_->announceError(
-            {announce.trackNamespace, 404, "don't care"});
-      }
+folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
+    Announce announce,
+    std::shared_ptr<AnnounceCallback>) {
+  XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+  if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
+    if (announce.trackNamespace.size() != 5) {
+      co_return folly::makeUnexpected(
+          AnnounceError{announce.trackNamespace, 400, "Invalid chat announce"});
     }
-
-   private:
-    MoQChatClient& client_;
-  };
-  XLOG(INFO) << __func__;
-  auto g =
-      folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-  ControlVisitor visitor(*this);
-  MoQSession::ControlVisitor* vptr(&visitor);
-  while (auto msg = co_await moqClient_.moqSession_->controlMessages().next()) {
-    boost::apply_visitor(*vptr, msg.value());
+    subscribeToUser(std::move(announce.trackNamespace))
+        .scheduleOn(moqClient_.moqSession_->getEventBase())
+        .start();
+  } else {
+    co_return folly::makeUnexpected(
+        AnnounceError{announce.trackNamespace, 404, "don't care"});
   }
+  co_return std::make_shared<AnnounceHandle>(
+      AnnounceOk{announce.trackNamespace}, shared_from_this());
+}
+
+void MoQChatClient::unannounce(const TrackNamespace&) {
+  // TODO: Upon receiving an UNANNOUNCE, a client SHOULD UNSUBSCRIBE from that
+  // matching track if it had previously subscribed.
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
@@ -166,6 +157,7 @@ void MoQChatClient::publishLoop() {
     if (token.isCancellationRequested()) {
       XLOG(DBG1) << "Detected deleted moqSession, cleaning up";
       evb->runInEventBaseThread([this] {
+        announceHandle_.reset();
         subscribeAnnounceHandle_.reset();
         publisher_.reset();
       });
@@ -174,6 +166,7 @@ void MoQChatClient::publishLoop() {
     evb->runInEventBaseThread([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
+        announceHandle_->unannounce();
         subscribeAnnounceHandle_->unsubscribeAnnounces();
         if (publisher_) {
           publisher_->objectStream(

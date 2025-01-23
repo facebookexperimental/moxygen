@@ -72,31 +72,17 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup /*setup*/) {
   }));
 }
 
-// TODO: Implement message handling
-void MoQServer::ControlVisitor::operator()(Announce announce) const {
-  XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-  clientSession_->announceError(
-      {announce.trackNamespace, 500, "not implemented"});
-}
-
-void MoQServer::ControlVisitor::operator()(Unannounce unannounce) const {
-  XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
-}
-
-void MoQServer::ControlVisitor::operator()(
-    AnnounceCancel announceCancel) const {
-  XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
-}
-
 folly::coro::Task<void> MoQServer::handleClientSession(
     std::shared_ptr<MoQSession> clientSession) {
+  onNewSession(clientSession);
   clientSession->start();
-  co_await clientSession->clientSetupComplete();
 
-  auto control = makeControlVisitor(clientSession);
-  while (auto msg = co_await clientSession->controlMessages().next()) {
-    boost::apply_visitor(*control, msg.value());
-  }
+  // The clientSession will cancel this token when the app calls close() or
+  // the underlying transport invokes onSessionEnd
+  folly::coro::Baton baton;
+  folly::CancellationCallback cb(
+      clientSession->getCancelToken(), [&baton] { baton.post(); });
+  co_await baton;
   terminateClientSession(std::move(clientSession));
 }
 

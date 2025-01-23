@@ -363,9 +363,6 @@ class MoQFlvReceiverClient
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
           /*subscribeHandler=*/shared_from_this());
-      auto exec = co_await folly::coro::co_current_executor;
-      controlReadLoop().scheduleOn(exec).start();
-
       // Create output file
       flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
       trackReceiverHandlerAudio_.setFlvWriterShared(flvw_);
@@ -418,9 +415,21 @@ class MoQFlvReceiverClient
       XLOG(ERR) << ex.what();
       co_return;
     }
+    // TODO: should we co_await collectAll(trackReceiverHandlerAudio_.baton,
+    // trackReceiverHandlerVideo_.baton);
     co_await trackReceiverHandlerAudio_.baton;
     co_await trackReceiverHandlerVideo_.baton;
     XLOG(INFO) << __func__ << " done";
+  }
+
+  folly::coro::Task<AnnounceResult> announce(
+      Announce announce,
+      std::shared_ptr<AnnounceCallback>) override {
+    XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+    // receiver client doesn't expect server or relay to announce anything, but
+    // announce OK anyways
+    return folly::coro::makeTask<AnnounceResult>(
+        std::make_shared<AnnounceHandle>(AnnounceOk{announce.trackNamespace}));
   }
 
   void goaway(Goaway goaway) override {
@@ -438,32 +447,6 @@ class MoQFlvReceiverClient
       videoSubscribeHandle_.reset();
     }
     moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-  }
-
-  folly::coro::Task<void> controlReadLoop() {
-    class ControlVisitor : public MoQSession::ControlVisitor {
-     public:
-      explicit ControlVisitor(MoQFlvReceiverClient& client) : client_(client) {}
-
-      void operator()(Announce announce) const override {
-        XLOG(WARN) << "Announce ns=" << announce.trackNamespace;
-        // text client doesn't expect server or relay to announce anything,
-        // but announce OK anyways
-        client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-     private:
-      MoQFlvReceiverClient& client_;
-    };
-    XLOG(INFO) << __func__;
-    auto g =
-        folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    ControlVisitor visitor(*this);
-    MoQSession::ControlVisitor* vptr(&visitor);
-    while (auto msg =
-               co_await moqClient_.moqSession_->controlMessages().next()) {
-      boost::apply_visitor(*vptr, msg.value());
-    }
   }
 
  private:

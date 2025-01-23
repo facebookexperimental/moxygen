@@ -21,38 +21,6 @@ using namespace moxygen;
 
 const size_t kTestMaxSubscribeId = 2;
 
-class MockControlVisitorBase {
- public:
-  virtual ~MockControlVisitorBase() = default;
-  virtual void onAnnounce(Announce announce) const = 0;
-  virtual void onUnannounce(Unannounce unannounce) const = 0;
-  virtual void onAnnounceCancel(AnnounceCancel announceCancel) const = 0;
-};
-
-class MockControlVisitor : public MoQSession::ControlVisitor,
-                           MockControlVisitorBase {
- public:
-  MockControlVisitor() = default;
-  ~MockControlVisitor() override = default;
-
-  MOCK_METHOD(void, onAnnounce, (Announce), (const));
-  void operator()(Announce announce) const override {
-    onAnnounce(announce);
-  }
-
-  MOCK_METHOD(void, onUnannounce, (Unannounce), (const));
-  void operator()(Unannounce unannounce) const override {
-    onUnannounce(unannounce);
-  }
-
-  MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel), (const));
-  void operator()(AnnounceCancel announceCancel) const override {
-    onAnnounceCancel(announceCancel);
-  }
-
- private:
-};
-
 class MoQSessionTest : public testing::Test,
                        public MoQSession::ServerSetupCallback {
  public:
@@ -68,14 +36,6 @@ class MoQSessionTest : public testing::Test,
   }
 
   void SetUp() override {}
-
-  folly::coro::Task<void> controlLoop(
-      MoQSession& session,
-      MockControlVisitor& control) {
-    while (auto msg = co_await session.controlMessages().next()) {
-      boost::apply_visitor(control, msg.value());
-    }
-  }
 
   folly::Try<ServerSetup> onClientSetup(ClientSetup setup) override {
     EXPECT_EQ(setup.supportedVersions[0], kVersionDraftCurrent);
@@ -104,8 +64,6 @@ class MoQSessionTest : public testing::Test,
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt_;
   std::shared_ptr<MoQSession> clientSession_;
   std::shared_ptr<MoQSession> serverSession_;
-  MockControlVisitor clientControl;
-  MockControlVisitor serverControl;
   std::shared_ptr<MockPublisher> clientPublisher{
       std::make_shared<MockPublisher>()};
   std::shared_ptr<MockPublisher> serverPublisher{
@@ -147,12 +105,6 @@ void MoQSessionTest::setupMoQSession() {
   }(clientSession_, initialMaxSubscribeId_)
                                             .scheduleOn(&eventBase_)
                                             .start();
-  this->controlLoop(*serverSession_, serverControl)
-      .scheduleOn(&eventBase_)
-      .start();
-  this->controlLoop(*clientSession_, clientControl)
-      .scheduleOn(&eventBase_)
-      .start();
   eventBase_.loop();
 }
 } // namespace

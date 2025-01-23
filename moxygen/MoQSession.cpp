@@ -933,6 +933,46 @@ class MoQSession::FetchTrackReceiveState
 using folly::coro::co_awaitTry;
 using folly::coro::co_error;
 
+class MoQSession::SubscriberAnnounceCallback
+    : public Subscriber::AnnounceCallback {
+ public:
+  SubscriberAnnounceCallback(MoQSession& session, const TrackNamespace& ns)
+      : session_(session), trackNamespace_(ns) {}
+
+  void announceCancel(uint64_t errorCode, std::string reasonPhrase) override {
+    session_.announceCancel(
+        {trackNamespace_, errorCode, std::move(reasonPhrase)});
+  }
+
+ private:
+  MoQSession& session_;
+  TrackNamespace trackNamespace_;
+};
+
+class MoQSession::PublisherAnnounceHandle : public Subscriber::AnnounceHandle {
+ public:
+  PublisherAnnounceHandle(std::shared_ptr<MoQSession> session, AnnounceOk annOk)
+      : Subscriber::AnnounceHandle(std::move(annOk)),
+        session_(std::move(session)) {}
+  PublisherAnnounceHandle(const PublisherAnnounceHandle&) = delete;
+  PublisherAnnounceHandle& operator=(const PublisherAnnounceHandle&) = delete;
+  PublisherAnnounceHandle(PublisherAnnounceHandle&&) = delete;
+  PublisherAnnounceHandle& operator=(PublisherAnnounceHandle&&) = delete;
+  ~PublisherAnnounceHandle() override {
+    unannounce();
+  }
+
+  void unannounce() override {
+    if (session_) {
+      session_->unannounce({announceOk().trackNamespace});
+      session_.reset();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQSession> session_;
+};
+
 MoQSession::~MoQSession() {
   cleanup();
   XLOG(DBG1) << __func__ << " sess=" << this;
@@ -944,6 +984,17 @@ void MoQSession::cleanup() {
     subAnn.second->unsubscribeAnnounces();
   }
   subscribeAnnounces_.clear();
+  for (auto& ann : subscriberAnnounces_) {
+    ann.second->unannounce();
+  }
+  subscriberAnnounces_.clear();
+  for (auto& ann : publisherAnnounces_) {
+    if (ann.second) {
+      ann.second->announceCancel(
+          std::numeric_limits<uint64_t>::max(), "Session ended");
+    }
+  }
+  publisherAnnounces_.clear();
   for (auto& pubTrack : pubTracks_) {
     pubTrack.second->reset(ResetStreamErrorCode::SESSION_CLOSED);
   }
@@ -1088,7 +1139,8 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
 folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  std::tie(setupPromise_, setupFuture_) =
+  folly::coro::Future<ServerSetup> setupFuture;
+  std::tie(setupPromise_, setupFuture) =
       folly::coro::makePromiseContract<ServerSetup>();
 
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
@@ -1106,7 +1158,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   folly::EventBaseThreadTimekeeper tk(*evb_);
   auto serverSetup = co_await co_awaitTry(folly::coro::co_withCancellation(
       mergeToken,
-      folly::coro::timeout(std::move(setupFuture_), kSetupTimeout, &tk)));
+      folly::coro::timeout(std::move(setupFuture), kSetupTimeout, &tk)));
   if (mergeToken.isCancellationRequested()) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
   }
@@ -1165,27 +1217,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
   maxSubscribeID_ = maxConcurrentSubscribes_ = maxSubscribeId;
   setupComplete_ = true;
-  setupPromise_.setValue(ServerSetup());
   controlWriteEvent_.signal();
-}
-
-folly::coro::AsyncGenerator<MoQSession::MoQMessage>
-MoQSession::controlMessages() {
-  XLOG(DBG1) << __func__ << " sess=" << this;
-  auto self = shared_from_this();
-  while (true) {
-    auto token = cancellationSource_.getToken();
-    auto message = co_await folly::coro::co_awaitTry(
-        folly::coro::co_withCancellation(token, controlMessages_.dequeue()));
-    if (token.isCancellationRequested()) {
-      co_return;
-    }
-    if (message.hasException()) {
-      XLOG(ERR) << folly::exceptionStr(message.exception()) << " sess=" << this;
-      break;
-    }
-    co_yield *message;
-  }
 }
 
 folly::coro::Task<void> MoQSession::controlReadLoop(
@@ -1915,7 +1947,45 @@ void MoQSession::onFetchError(FetchError fetchError) {
 
 void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
-  controlMessages_.enqueue(std::move(ann));
+  if (!subscribeHandler_) {
+    XLOG(DBG1) << __func__ << "No subscriber callback set";
+    announceError({ann.trackNamespace, 500, "Not a subscriber"});
+  } else {
+    handleAnnounce(std::move(ann)).scheduleOn(evb_).start();
+  }
+}
+
+folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto annCb = std::make_shared<SubscriberAnnounceCallback>(
+      *this, announce.trackNamespace);
+  auto announceResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      subscribeHandler_->announce(announce, std::move(annCb))));
+  if (announceResult.hasException()) {
+    XLOG(ERR) << "Exception in Subscriber callback ex="
+              << announceResult.exception().what().toStdString();
+    announceError(
+        {announce.trackNamespace,
+         500,
+         announceResult.exception().what().toStdString()});
+    co_return;
+  }
+  if (announceResult->hasError()) {
+    XLOG(DBG1) << "Application announce error err="
+               << announceResult->error().reasonPhrase;
+    auto annErr = std::move(announceResult->error());
+    annErr.trackNamespace = announce.trackNamespace; // In case app got it wrong
+    announceError(annErr);
+  } else {
+    auto handle = std::move(announceResult->value());
+    auto announceOkMsg = handle->announceOk();
+    announceOkMsg.trackNamespace = announce.trackNamespace;
+    announceOk(announceOkMsg);
+    // TODO: what about UNANNOUNCE before ANNOUNCE_OK
+    subscriberAnnounces_[announce.trackNamespace] = std::move(handle);
+  }
 }
 
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
@@ -1941,19 +2011,42 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
               << announceError.trackNamespace << " sess=" << this;
     return;
   }
+  publisherAnnounces_.erase(announceError.trackNamespace);
   annIt->second.setValue(folly::makeUnexpected(std::move(announceError)));
   pendingAnnounce_.erase(annIt);
 }
 
 void MoQSession::onUnannounce(Unannounce unAnn) {
   XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
-  controlMessages_.enqueue(std::move(unAnn));
+  auto annIt = subscriberAnnounces_.find(unAnn.trackNamespace);
+  if (annIt == subscriberAnnounces_.end()) {
+    XLOG(ERR) << "Unannounce for bad namespace ns=" << unAnn.trackNamespace;
+  } else {
+    annIt->second->unannounce();
+    subscriberAnnounces_.erase(annIt);
+  }
+}
+
+void MoQSession::announceCancel(const AnnounceCancel& annCan) {
+  auto res = writeAnnounceCancel(controlWriteBuf_, annCan);
+  if (!res) {
+    XLOG(ERR) << "writeAnnounceCancel failed sess=" << this;
+  }
+  controlWriteEvent_.signal();
+  subscriberAnnounces_.erase(annCan.trackNamespace);
 }
 
 void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
   XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
              << " sess=" << this;
-  controlMessages_.enqueue(std::move(announceCancel));
+  auto it = publisherAnnounces_.find(announceCancel.trackNamespace);
+  if (it == publisherAnnounces_.end()) {
+    XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
+  } else {
+    it->second->announceCancel(
+        announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
+    publisherAnnounces_.erase(it);
+  }
 }
 
 void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
@@ -2126,8 +2219,9 @@ void MoQSession::onConnectionError(ErrorCode error) {
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
-folly::coro::Task<folly::Expected<AnnounceOk, AnnounceError>>
-MoQSession::announce(Announce ann) {
+folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
+    Announce ann,
+    std::shared_ptr<AnnounceCallback> announceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   auto trackNamespace = ann.trackNamespace;
   auto res = writeAnnounce(controlWriteBuf_, std::move(ann));
@@ -2139,14 +2233,21 @@ MoQSession::announce(Announce ann) {
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<AnnounceOk, AnnounceError>>();
+  publisherAnnounces_[trackNamespace] = std::move(announceCallback);
   pendingAnnounce_.emplace(
       std::move(trackNamespace), std::move(contract.first));
-  co_return co_await std::move(contract.second);
+  auto announceResult = co_await std::move(contract.second);
+  if (announceResult.hasError()) {
+    co_return folly::makeUnexpected(announceResult.error());
+  } else {
+    co_return std::make_shared<PublisherAnnounceHandle>(
+        shared_from_this(), std::move(announceResult.value()));
+  }
 }
 
-void MoQSession::announceOk(AnnounceOk annOk) {
+void MoQSession::announceOk(const AnnounceOk& annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
-  auto res = writeAnnounceOk(controlWriteBuf_, std::move(annOk));
+  auto res = writeAnnounceOk(controlWriteBuf_, annOk);
   if (!res) {
     XLOG(ERR) << "writeAnnounceOk failed sess=" << this;
     return;
@@ -2154,10 +2255,10 @@ void MoQSession::announceOk(AnnounceOk annOk) {
   controlWriteEvent_.signal();
 }
 
-void MoQSession::announceError(AnnounceError announceError) {
+void MoQSession::announceError(const AnnounceError& announceError) {
   XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
              << " sess=" << this;
-  auto res = writeAnnounceError(controlWriteBuf_, std::move(announceError));
+  auto res = writeAnnounceError(controlWriteBuf_, announceError);
   if (!res) {
     XLOG(ERR) << "writeAnnounceError failed sess=" << this;
     return;
@@ -2165,10 +2266,15 @@ void MoQSession::announceError(AnnounceError announceError) {
   controlWriteEvent_.signal();
 }
 
-void MoQSession::unannounce(Unannounce unann) {
+void MoQSession::unannounce(const Unannounce& unann) {
   XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
+  auto it = publisherAnnounces_.find(unann.trackNamespace);
+  if (it == publisherAnnounces_.end()) {
+    XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
+    return;
+  }
   auto trackNamespace = unann.trackNamespace;
-  auto res = writeUnannounce(controlWriteBuf_, std::move(unann));
+  auto res = writeUnannounce(controlWriteBuf_, unann);
   if (!res) {
     XLOG(ERR) << "writeUnannounce failed sess=" << this;
   }
