@@ -85,6 +85,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     return evb_;
   }
 
+  folly::CancellationToken getCancelToken() const {
+    return cancellationSource_.getToken();
+  }
+
   ~MoQSession() override;
 
   void start();

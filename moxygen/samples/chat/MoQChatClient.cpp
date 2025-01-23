@@ -157,13 +157,21 @@ void MoQChatClient::publishLoop() {
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   std::string input;
-  folly::Executor::KeepAlive keepAlive(moqClient_.getEventBase());
-  while (moqClient_.moqSession_ && std::cin.good() && !std::cin.eof()) {
+  auto evb = moqClient_.getEventBase();
+  folly::Executor::KeepAlive keepAlive(evb);
+  auto token = moqClient_.moqSession_->getCancelToken();
+  while (!token.isCancellationRequested() && std::cin.good() &&
+         !std::cin.eof()) {
     std::getline(std::cin, input);
-    if (!moqClient_.moqSession_) {
+    if (token.isCancellationRequested()) {
+      XLOG(DBG1) << "Detected deleted moqSession, cleaning up";
+      evb->runInEventBaseThread([this] {
+        subscribeAnnounceHandle_.reset();
+        publisher_.reset();
+      });
       break;
     }
-    moqClient_.getEventBase()->runInEventBaseThread([this, input] {
+    evb->runInEventBaseThread([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
         subscribeAnnounceHandle_->unsubscribeAnnounces();
