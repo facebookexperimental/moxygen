@@ -67,18 +67,6 @@ class MoQDateServer : public MoQServer,
         : MoQServer::ControlVisitor(std::move(clientSession)),
           server_(server) {}
 
-    void operator()(Fetch fetch) const override {
-      XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
-                 << " name=" << fetch.fullTrackName.trackName
-                 << " subscribe id=" << fetch.subscribeID;
-      if (fetch.fullTrackName != server_.dateTrackName()) {
-        clientSession_->fetchError(
-            {fetch.subscribeID, 403, "unexpected fetch"});
-      } else {
-        server_.onFetch(std::move(fetch), clientSession_);
-      }
-    }
-
     void operator()(Goaway) const override {
       XLOG(INFO) << "Goaway";
     }
@@ -125,10 +113,28 @@ class MoQDateServer : public MoQServer,
         MoQSession::getRequestSession(), subReq, std::move(consumer));
   }
 
-  void onFetch(Fetch fetch, std::shared_ptr<MoQSession> clientSession) {
+  class FetchHandle : public Publisher::FetchHandle {
+   public:
+    explicit FetchHandle(FetchOk ok) : Publisher::FetchHandle(std::move(ok)) {}
+    void fetchCancel() override {
+      cancelSource.requestCancellation();
+    }
+    folly::CancellationSource cancelSource;
+  };
+
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override {
+    XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
+               << " name=" << fetch.fullTrackName.trackName
+               << " subscribe id=" << fetch.subscribeID;
+    if (fetch.fullTrackName != dateTrackName()) {
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, 403, "unexpected fetch"});
+    }
     if (fetch.end < fetch.start) {
-      clientSession->fetchError({fetch.subscribeID, 400, "No objects"});
-      return;
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, 400, "No objects"});
     }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
@@ -137,22 +143,25 @@ class MoQDateServer : public MoQServer,
     auto range = toSubscribeRange(
         fetch.start, fetch.end, LocationType::AbsoluteRange, nowLoc);
     if (range.start > nowLoc) {
-      clientSession->fetchError(
-          {fetch.subscribeID, 400, "fetch starts in future"});
-      return;
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, 400, "fetch starts in future"});
     }
     range.end = std::min(range.end, nowLoc);
-    auto fetchPub = clientSession->fetchOk(
-        {fetch.subscribeID,
-         MoQSession::resolveGroupOrder(
-             GroupOrder::OldestFirst, fetch.groupOrder),
-         0, // not end of track
-         nowLoc,
-         {}});
 
-    catchup(fetchPub, range, nowLoc)
+    auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
+        fetch.subscribeID,
+        MoQSession::resolveGroupOrder(
+            GroupOrder::OldestFirst, fetch.groupOrder),
+        0, // not end of track
+        nowLoc,
+        {}});
+    auto clientSession = MoQSession::getRequestSession();
+    folly::coro::co_withCancellation(
+        fetchHandle->cancelSource.getToken(),
+        catchup(std::move(consumer), range, nowLoc))
         .scheduleOn(clientSession->getEventBase())
         .start();
+    co_return fetchHandle;
   }
 
   Payload minutePayload(uint64_t group) {
@@ -180,7 +189,9 @@ class MoQDateServer : public MoQServer,
       XLOG(ERR) << "Invalid start object";
       co_return;
     }
-    while (range.start < now && range.start < range.end) {
+    auto token = co_await folly::coro::co_current_cancellation_token;
+    while (!token.isCancellationRequested() && range.start < now &&
+           range.start < range.end) {
       uint64_t subgroup = streamPerObject_ ? range.start.object : 0;
       folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
       if (range.start.object == 0) {
@@ -227,8 +238,12 @@ class MoQDateServer : public MoQServer,
         range.start.object = 0;
       }
     }
-    // TODO - empty range may log an error?
-    fetchPub->endOfFetch();
+    if (token.isCancellationRequested()) {
+      fetchPub->reset(ResetStreamErrorCode::CANCELLED);
+    } else {
+      // TODO - empty range may log an error?
+      fetchPub->endOfFetch();
+    }
   }
 
   folly::coro::Task<void> publishDateLoop() {

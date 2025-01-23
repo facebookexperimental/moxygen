@@ -102,7 +102,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   }
 
   using MoQMessage =
-      boost::variant<Announce, Unannounce, AnnounceCancel, Fetch, Goaway>;
+      boost::variant<Announce, Unannounce, AnnounceCancel, Goaway>;
 
   class ControlVisitor : public boost::static_visitor<> {
    public:
@@ -130,9 +130,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
                  << " reason=" << announceError.reasonPhrase;
     }
 
-    virtual void operator()(Fetch fetch) const {
-      XLOG(INFO) << "Fetch subID=" << fetch.subscribeID;
-    }
     virtual void operator()(Goaway goaway) const {
       XLOG(INFO) << "Goaway, newURI=" << goaway.newSessionUri;
     }
@@ -166,10 +163,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
-      std::shared_ptr<FetchConsumer> fetchCallback) override;
-  std::shared_ptr<FetchConsumer> fetchOk(FetchOk fetchOk);
-  void fetchError(FetchError fetchError);
-  void fetchCancel(FetchCancel fetchCancel);
+      std::shared_ptr<FetchConsumer> fetchy) override;
 
   folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces subAnn) override;
@@ -209,7 +203,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
     void fetchComplete();
 
-   protected:
     proxygen::WebTransport* getWebTransport() const {
       if (session_) {
         return session_->wt_;
@@ -217,6 +210,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       return nullptr;
     }
 
+   protected:
     MoQSession* session_{nullptr};
     SubscribeID subscribeID_;
     uint8_t subPriority_;
@@ -277,6 +271,13 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void unsubscribe(const Unsubscribe& unsubscribe);
   void subscribeUpdate(const SubscribeUpdate& subUpdate);
   void subscribeDone(const SubscribeDone& subDone);
+
+  folly::coro::Task<void> handleFetch(
+      Fetch fetch,
+      std::shared_ptr<FetchPublisherImpl> fetchPublisher);
+  void fetchOk(const FetchOk& fetchOk);
+  void fetchError(const FetchError& fetchError);
+  void fetchCancel(const FetchCancel& fetchCancel);
 
   folly::coro::Task<void> handleSubscribeAnnounces(SubscribeAnnounces sa);
   void subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk);
