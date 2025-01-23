@@ -61,6 +61,7 @@ class MoQChatClient {
   std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>
       peerSetup_{folly::coro::makePromiseContract<ServerSetup>()};
+  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subscribeAnnounceHandle_;
 };
 
 } // namespace moxygen

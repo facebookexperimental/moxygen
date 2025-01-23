@@ -31,13 +31,6 @@ class MockControlVisitorBase {
   virtual void onAnnounce(Announce announce) const = 0;
   virtual void onUnannounce(Unannounce unannounce) const = 0;
   virtual void onAnnounceCancel(AnnounceCancel announceCancel) const = 0;
-  virtual void onSubscribeAnnounces(
-      SubscribeAnnounces subscribeAnnounces) const = 0;
-  virtual void onUnsubscribeAnnounces(
-      UnsubscribeAnnounces subscribeAnnounces) const = 0;
-  virtual void onTrackStatusRequest(
-      TrackStatusRequest trackStatusRequest) const = 0;
-  virtual void onTrackStatus(TrackStatus trackStatus) const = 0;
   virtual void onGoaway(Goaway goaway) const = 0;
 };
 
@@ -62,16 +55,6 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
     onAnnounceCancel(announceCancel);
   }
 
-  MOCK_METHOD(void, onSubscribeAnnounces, (SubscribeAnnounces), (const));
-  void operator()(SubscribeAnnounces subscribeAnnounces) const override {
-    onSubscribeAnnounces(subscribeAnnounces);
-  }
-
-  MOCK_METHOD(void, onUnsubscribeAnnounces, (UnsubscribeAnnounces), (const));
-  void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override {
-    onUnsubscribeAnnounces(unsubscribeAnnounces);
-  }
-
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest), (const));
   void operator()(SubscribeRequest subscribe) const override {
     onSubscribe(subscribe);
@@ -91,14 +74,6 @@ class MockControlVisitor : public MoQSession::ControlVisitor,
     onFetch(fetch);
   }
 
-  MOCK_METHOD(void, onTrackStatusRequest, (TrackStatusRequest), (const));
-  void operator()(TrackStatusRequest trackStatusRequest) const override {
-    onTrackStatusRequest(trackStatusRequest);
-  }
-  MOCK_METHOD(void, onTrackStatus, (TrackStatus), (const));
-  void operator()(TrackStatus trackStatus) const override {
-    onTrackStatus(trackStatus);
-  }
   MOCK_METHOD(void, onGoaway, (Goaway), (const));
   void operator()(Goaway goaway) const override {
     onGoaway(goaway);

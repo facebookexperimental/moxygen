@@ -41,11 +41,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     void operator()(Fetch fetch) const override;
     void operator()(Unannounce unannounce) const override;
     void operator()(AnnounceCancel announceCancel) const override;
-    void operator()(SubscribeAnnounces subscribeAnnounces) const override;
-    void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override;
     void operator()(Unsubscribe unsubscribe) const override;
-    void operator()(TrackStatusRequest trackStatusRequest) const override;
-    void operator()(TrackStatus trackStatus) const override;
     void operator()(Goaway goaway) const override;
 
    protected:

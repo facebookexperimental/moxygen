@@ -123,9 +123,9 @@ class MoQTextClient {
       auto track =
           co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
       if (track.hasValue()) {
-        subscribeID_ = track->subscribeID;
+        subscribeID_ = track.value()->subscribeOk().subscribeID;
         XLOG(DBG1) << "subscribeID=" << subscribeID_;
-        auto latest = track->latest;
+        auto latest = track.value()->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
                      << "}";

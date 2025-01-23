@@ -374,9 +374,9 @@ class MoQFlvReceiverClient {
       auto trackAudio = co_await moqClient_.moqSession_->subscribe(
           subAudio, subRxHandlerAudio_);
       if (trackAudio.hasValue()) {
-        subscribeIDAudio_ = trackAudio->subscribeID;
+        subscribeIDAudio_ = trackAudio.value()->subscribeOk().subscribeID;
         XLOG(DBG1) << "Audio subscribeID=" << subscribeIDAudio_;
-        auto latest = trackAudio->latest;
+        auto latest = trackAudio.value()->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Audio Latest={" << latest->group << ", "
                      << latest->object << "}";
@@ -394,9 +394,9 @@ class MoQFlvReceiverClient {
       auto trackVideo = co_await moqClient_.moqSession_->subscribe(
           subVideo, subRxHandlerVideo_);
       if (trackVideo.hasValue()) {
-        subscribeIDVideo_ = trackVideo->subscribeID;
+        subscribeIDVideo_ = trackVideo.value()->subscribeOk().subscribeID;
         XLOG(DBG1) << "Video subscribeID=" << subscribeIDVideo_;
-        auto latest = trackVideo->latest;
+        auto latest = trackVideo.value()->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Video Latest={" << latest->group << ", "
                      << latest->object << "}";

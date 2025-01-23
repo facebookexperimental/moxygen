@@ -56,6 +56,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
+      subscribeAnnounceHandle_ = std::move(sa.value());
     } else {
       XLOG(INFO) << "SubscribeAnnounces id=" << sa.error().trackNamespacePrefix
                  << " code=" << sa.error().errorCode
@@ -157,6 +158,7 @@ void MoQChatClient::publishLoop() {
     moqClient_.getEventBase()->runInEventBaseThread([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
+        subscribeAnnounceHandle_->unsubscribeAnnounces();
         moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
         moqClient_.moqSession_.reset();
       } else if (chatSubscribeID_) {
@@ -278,7 +280,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     co_return;
   }
 
-  userTrackPtr->subscribeId = track->value().subscribeID;
+  userTrackPtr->subscribeId = track->value()->subscribeOk().subscribeID;
   userTrackPtr->timestamp = timestamp;
   co_await handler.baton;
 }
