@@ -225,249 +225,6 @@ class StreamPublisherImpl : public SubgroupConsumer,
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
 };
 
-class TrackPublisherImpl : public MoQSession::PublisherImpl,
-                           public TrackConsumer {
- public:
-  TrackPublisherImpl() = delete;
-  TrackPublisherImpl(
-      MoQSession* session,
-      SubscribeID subscribeID,
-      TrackAlias trackAlias,
-      Priority subPriority,
-      GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, subPriority, groupOrder),
-        trackAlias_(trackAlias) {}
-
-  // PublisherImpl overrides
-  void onStreamComplete(const ObjectHeader& finalHeader) override;
-
-  void reset(ResetStreamErrorCode) override {
-    // TBD: reset all subgroups_?  Currently called from cleanup()
-  }
-
-  // TrackConsumer overrides
-  folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
-      override;
-
-  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
-  awaitStreamCredit() override;
-
-  folly::Expected<folly::Unit, MoQPublishError> objectStream(
-      const ObjectHeader& header,
-      Payload payload) override;
-
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
-
-  folly::Expected<folly::Unit, MoQPublishError> datagram(
-      const ObjectHeader& header,
-      Payload payload) override;
-
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) override;
-
- private:
-  TrackAlias trackAlias_;
-  folly::F14FastMap<
-      std::pair<uint64_t, uint64_t>,
-      std::shared_ptr<StreamPublisherImpl>>
-      subgroups_;
-};
-
-class FetchPublisherImpl : public MoQSession::PublisherImpl {
- public:
-  FetchPublisherImpl(
-      MoQSession* session,
-      SubscribeID subscribeID,
-      Priority subPriority,
-      GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, subPriority, groupOrder) {}
-
-  folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError> beginFetch(
-      GroupOrder groupOrder);
-
-  void reset(ResetStreamErrorCode error) override {
-    if (streamPublisher_) {
-      streamPublisher_->reset(error);
-    }
-  }
-
-  void onStreamComplete(const ObjectHeader&) override {
-    streamPublisher_.reset();
-    PublisherImpl::fetchComplete();
-  }
-
- private:
-  std::shared_ptr<StreamPublisherImpl> streamPublisher_;
-};
-
-// TrackPublisherImpl
-
-folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-TrackPublisherImpl::beginSubgroup(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    Priority pubPriority) {
-  auto wt = getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Trying to publish after subscribeDone";
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
-  }
-  auto stream = wt->createUniStream();
-  if (!stream) {
-    // failed to create a stream
-    // TODO: can it fail for non-stream credit reasons? Session closing should
-    // be handled above.
-    XLOG(ERR) << "Failed to create uni stream tp=" << this;
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::BLOCKED, "Failed to create uni stream."));
-  }
-  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
-             << " tp=" << this;
-  stream.value()->setPriority(
-      1,
-      getStreamPriority(
-          groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
-      false);
-  auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
-      this, *stream, trackAlias_, groupID, subgroupID);
-  // TODO: these are currently unused, but the intent might be to reset
-  // open subgroups automatically from some path?
-  subgroups_[{groupID, subgroupID}] = subgroupPublisher;
-  return subgroupPublisher;
-}
-
-folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
-TrackPublisherImpl::awaitStreamCredit() {
-  auto wt = getWebTransport();
-  if (!wt) {
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "awaitStreamCredit after subscribeDone"));
-  }
-  return wt->awaitUniStreamCredit();
-}
-
-void TrackPublisherImpl::onStreamComplete(const ObjectHeader& finalHeader) {
-  subgroups_.erase({finalHeader.group, finalHeader.subgroup});
-}
-
-folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::objectStream(
-    const ObjectHeader& objHeader,
-    Payload payload) {
-  XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
-  auto subgroup =
-      beginSubgroup(objHeader.group, objHeader.subgroup, objHeader.priority);
-  if (subgroup.hasError()) {
-    return folly::makeUnexpected(std::move(subgroup.error()));
-  }
-  switch (objHeader.status) {
-    case ObjectStatus::NORMAL:
-      return subgroup.value()->object(
-          objHeader.id, std::move(payload), /*finSubgroup=*/true);
-    case ObjectStatus::OBJECT_NOT_EXIST:
-      return subgroup.value()->objectNotExists(
-          objHeader.id, /*finSubgroup=*/true);
-    case ObjectStatus::GROUP_NOT_EXIST: {
-      auto& subgroupPublisherImpl =
-          static_cast<StreamPublisherImpl&>(*subgroup.value());
-      return subgroupPublisherImpl.publishStatus(
-          objHeader.id, objHeader.status, /*finStream=*/true);
-    }
-    case ObjectStatus::END_OF_GROUP:
-      return subgroup.value()->endOfGroup(objHeader.id);
-    case ObjectStatus::END_OF_TRACK_AND_GROUP:
-      return subgroup.value()->endOfTrackAndGroup(objHeader.id);
-    case ObjectStatus::END_OF_SUBGROUP:
-      return subgroup.value()->endOfSubgroup();
-  }
-  return folly::makeUnexpected(
-      MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
-}
-
-folly::Expected<folly::Unit, MoQPublishError>
-TrackPublisherImpl::groupNotExists(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    Priority priority) {
-  return objectStream(
-      {trackAlias_,
-       groupID,
-       subgroupID,
-       0,
-       priority,
-       ObjectStatus::GROUP_NOT_EXIST,
-       0},
-      nullptr);
-}
-
-folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::datagram(
-    const ObjectHeader& header,
-    Payload payload) {
-  auto wt = getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Trying to publish after subscribeDone";
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
-  }
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  XCHECK(header.length);
-  (void)writeObject(
-      writeBuf,
-      StreamType::OBJECT_DATAGRAM,
-      ObjectHeader{
-          trackAlias_,
-          header.group,
-          header.id,
-          header.id,
-          header.priority,
-          header.status,
-          *header.length},
-      std::move(payload));
-  // TODO: set priority when WT has an API for that
-  auto res = wt->sendDatagram(writeBuf.move());
-  if (res.hasError()) {
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::WRITE_ERROR, "sendDatagram failed"));
-  }
-  return folly::unit;
-}
-
-folly::Expected<folly::Unit, MoQPublishError> TrackPublisherImpl::subscribeDone(
-    SubscribeDone subDone) {
-  subDone.subscribeID = subscribeID_;
-  return PublisherImpl::subscribeDone(std::move(subDone));
-}
-
-// FetchPublisherImpl
-
-folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
-FetchPublisherImpl::beginFetch(GroupOrder groupOrder) {
-  auto wt = getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Trying to publish after fetchCancel";
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after fetchCancel"));
-  }
-
-  auto stream = wt->createUniStream();
-  if (!stream) {
-    // failed to create a stream
-    XLOG(ERR) << "Failed to create uni stream tp=" << this;
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::BLOCKED, "Failed to create uni stream."));
-  }
-  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
-             << " tp=" << this;
-  setGroupOrder(groupOrder);
-  // Currently sets group=0 for FETCH priority bits
-  stream.value()->setPriority(
-      1, getStreamPriority(0, 0, subPriority_, 0, groupOrder_), false);
-  streamPublisher_ = std::make_shared<StreamPublisherImpl>(this, *stream);
-  return streamPublisher_;
-}
-
 // StreamPublisherImpl
 
 StreamPublisherImpl::StreamPublisherImpl(
@@ -735,6 +492,252 @@ StreamPublisherImpl::awaitReadyToConsume() {
 } // namespace
 
 namespace moxygen {
+
+class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
+                                       public TrackConsumer {
+ public:
+  TrackPublisherImpl() = delete;
+  TrackPublisherImpl(
+      MoQSession* session,
+      SubscribeID subscribeID,
+      TrackAlias trackAlias,
+      Priority subPriority,
+      GroupOrder groupOrder)
+      : PublisherImpl(session, subscribeID, subPriority, groupOrder),
+        trackAlias_(trackAlias) {}
+
+  // PublisherImpl overrides
+  void onStreamComplete(const ObjectHeader& finalHeader) override;
+
+  void reset(ResetStreamErrorCode) override {
+    // TBD: reset all subgroups_?  Currently called from cleanup()
+  }
+
+  // TrackConsumer overrides
+  folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
+      override;
+
+  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  awaitStreamCredit() override;
+
+  folly::Expected<folly::Unit, MoQPublishError> objectStream(
+      const ObjectHeader& header,
+      Payload payload) override;
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
+
+  folly::Expected<folly::Unit, MoQPublishError> datagram(
+      const ObjectHeader& header,
+      Payload payload) override;
+
+  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
+      SubscribeDone subDone) override;
+
+ private:
+  TrackAlias trackAlias_;
+  folly::F14FastMap<
+      std::pair<uint64_t, uint64_t>,
+      std::shared_ptr<StreamPublisherImpl>>
+      subgroups_;
+};
+
+class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
+ public:
+  FetchPublisherImpl(
+      MoQSession* session,
+      SubscribeID subscribeID,
+      Priority subPriority,
+      GroupOrder groupOrder)
+      : PublisherImpl(session, subscribeID, subPriority, groupOrder) {}
+
+  folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError> beginFetch(
+      GroupOrder groupOrder);
+
+  void reset(ResetStreamErrorCode error) override {
+    if (streamPublisher_) {
+      streamPublisher_->reset(error);
+    }
+  }
+
+  void onStreamComplete(const ObjectHeader&) override {
+    streamPublisher_.reset();
+    PublisherImpl::fetchComplete();
+  }
+
+ private:
+  std::shared_ptr<StreamPublisherImpl> streamPublisher_;
+};
+
+// TrackPublisherImpl
+
+folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+MoQSession::TrackPublisherImpl::beginSubgroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Priority pubPriority) {
+  auto wt = getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Trying to publish after subscribeDone";
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
+  }
+  auto stream = wt->createUniStream();
+  if (!stream) {
+    // failed to create a stream
+    // TODO: can it fail for non-stream credit reasons? Session closing should
+    // be handled above.
+    XLOG(ERR) << "Failed to create uni stream tp=" << this;
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::BLOCKED, "Failed to create uni stream."));
+  }
+  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
+             << " tp=" << this;
+  stream.value()->setPriority(
+      1,
+      getStreamPriority(
+          groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
+      false);
+  auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
+      this, *stream, trackAlias_, groupID, subgroupID);
+  // TODO: these are currently unused, but the intent might be to reset
+  // open subgroups automatically from some path?
+  subgroups_[{groupID, subgroupID}] = subgroupPublisher;
+  return subgroupPublisher;
+}
+
+folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+MoQSession::TrackPublisherImpl::awaitStreamCredit() {
+  auto wt = getWebTransport();
+  if (!wt) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "awaitStreamCredit after subscribeDone"));
+  }
+  return wt->awaitUniStreamCredit();
+}
+
+void MoQSession::TrackPublisherImpl::onStreamComplete(
+    const ObjectHeader& finalHeader) {
+  subgroups_.erase({finalHeader.group, finalHeader.subgroup});
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::objectStream(
+    const ObjectHeader& objHeader,
+    Payload payload) {
+  XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
+  auto subgroup =
+      beginSubgroup(objHeader.group, objHeader.subgroup, objHeader.priority);
+  if (subgroup.hasError()) {
+    return folly::makeUnexpected(std::move(subgroup.error()));
+  }
+  switch (objHeader.status) {
+    case ObjectStatus::NORMAL:
+      return subgroup.value()->object(
+          objHeader.id, std::move(payload), /*finSubgroup=*/true);
+    case ObjectStatus::OBJECT_NOT_EXIST:
+      return subgroup.value()->objectNotExists(
+          objHeader.id, /*finSubgroup=*/true);
+    case ObjectStatus::GROUP_NOT_EXIST: {
+      auto& subgroupPublisherImpl =
+          static_cast<StreamPublisherImpl&>(*subgroup.value());
+      return subgroupPublisherImpl.publishStatus(
+          objHeader.id, objHeader.status, /*finStream=*/true);
+    }
+    case ObjectStatus::END_OF_GROUP:
+      return subgroup.value()->endOfGroup(objHeader.id);
+    case ObjectStatus::END_OF_TRACK_AND_GROUP:
+      return subgroup.value()->endOfTrackAndGroup(objHeader.id);
+    case ObjectStatus::END_OF_SUBGROUP:
+      return subgroup.value()->endOfSubgroup();
+  }
+  return folly::makeUnexpected(
+      MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::groupNotExists(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Priority priority) {
+  return objectStream(
+      {trackAlias_,
+       groupID,
+       subgroupID,
+       0,
+       priority,
+       ObjectStatus::GROUP_NOT_EXIST,
+       0},
+      nullptr);
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::datagram(
+    const ObjectHeader& header,
+    Payload payload) {
+  auto wt = getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Trying to publish after subscribeDone";
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
+  }
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  XCHECK(header.length);
+  (void)writeObject(
+      writeBuf,
+      StreamType::OBJECT_DATAGRAM,
+      ObjectHeader{
+          trackAlias_,
+          header.group,
+          header.id,
+          header.id,
+          header.priority,
+          header.status,
+          *header.length},
+      std::move(payload));
+  // TODO: set priority when WT has an API for that
+  auto res = wt->sendDatagram(writeBuf.move());
+  if (res.hasError()) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::WRITE_ERROR, "sendDatagram failed"));
+  }
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
+  subDone.subscribeID = subscribeID_;
+  return PublisherImpl::subscribeDone(std::move(subDone));
+}
+
+// FetchPublisherImpl
+
+folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
+MoQSession::FetchPublisherImpl::beginFetch(GroupOrder groupOrder) {
+  auto wt = getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Trying to publish after fetchCancel";
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Publish after fetchCancel"));
+  }
+
+  auto stream = wt->createUniStream();
+  if (!stream) {
+    // failed to create a stream
+    XLOG(ERR) << "Failed to create uni stream tp=" << this;
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::BLOCKED, "Failed to create uni stream."));
+  }
+  XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
+             << " tp=" << this;
+  setGroupOrder(groupOrder);
+  // Currently sets group=0 for FETCH priority bits
+  stream.value()->setPriority(
+      1, getStreamPriority(0, 0, subPriority_, 0, groupOrder_), false);
+  streamPublisher_ = std::make_shared<StreamPublisherImpl>(this, *stream);
+  return streamPublisher_;
+}
 
 // Receive State
 class MoQSession::TrackReceiveStateBase {
