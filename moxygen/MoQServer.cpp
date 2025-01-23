@@ -73,10 +73,6 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup /*setup*/) {
 }
 
 // TODO: Implement message handling
-void MoQServer::ControlVisitor::operator()(Fetch fetch) const {
-  XLOG(INFO) << "Fetch id=" << fetch.subscribeID;
-}
-
 void MoQServer::ControlVisitor::operator()(Announce announce) const {
   XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
   clientSession_->announceError(

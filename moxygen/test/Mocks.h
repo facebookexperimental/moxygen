@@ -174,6 +174,9 @@ class MockSubscriptionHandle : public Publisher::SubscriptionHandle {
 
 class MockFetchHandle : public Publisher::FetchHandle {
  public:
+  explicit MockFetchHandle(FetchOk ok)
+      : Publisher::FetchHandle(std::move(ok)) {}
+
   MOCK_METHOD(void, fetchCancel, (), (override));
 };
 
