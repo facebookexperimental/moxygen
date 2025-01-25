@@ -191,7 +191,9 @@ class MoQTextClient {
                    << " code=" << track.error().errorCode
                    << " reason=" << track.error().reasonPhrase;
       }
-      moqClient_.moqSession_->drain();
+      if (moqClient_.moqSession_) {
+        moqClient_.moqSession_->drain();
+      }
     } catch (const std::exception& ex) {
       XLOG(ERR) << folly::exceptionStr(ex);
       co_return;
