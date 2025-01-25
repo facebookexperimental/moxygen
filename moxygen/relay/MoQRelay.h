@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/coro/SharedPromise.h>
 #include "moxygen/MoQSession.h"
 #include "moxygen/relay/MoQForwarder.h"
 
@@ -54,10 +55,16 @@ class MoQRelay : public Publisher,
   std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
 
   struct RelaySubscription {
+    RelaySubscription(
+        std::shared_ptr<MoQForwarder> f,
+        std::shared_ptr<MoQSession> u)
+        : forwarder(std::move(f)), upstream(std::move(u)) {}
+
     std::shared_ptr<MoQForwarder> forwarder;
     std::shared_ptr<MoQSession> upstream;
-    SubscribeID subscribeID;
+    SubscribeID subscribeID{0};
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
+    folly::coro::SharedPromise<folly::Unit> promise;
   };
 
   void onEmpty(MoQForwarder* forwarder) override;
