@@ -92,7 +92,8 @@ namespace moxygen {
 folly::coro::Task<void> MoQClient::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
-    Role role) noexcept {
+    std::shared_ptr<Publisher> publishHandler,
+    std::shared_ptr<Subscriber> subscribeHandler) noexcept {
   proxygen::WebTransport* wt = nullptr;
   folly::Optional<std::string> pathParam;
   if (transportType_ == TransportType::QUIC) {
@@ -131,7 +132,12 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   }
 
   //  Create MoQSession and Setup MoQSession parameters
+  Role role = Role(
+      (publishHandler ? folly::to_underlying(Role::PUBLISHER) : 0) |
+      (subscribeHandler ? folly::to_underlying(Role::SUBSCRIBER) : 0));
   moqSession_ = std::make_shared<MoQSession>(wt, evb_);
+  moqSession_->setPublishHandler(std::move(publishHandler));
+  // TODO: setSubscriber here
   moqSession_->start();
   co_await moqSession_->setup(getClientSetup(role, pathParam));
 }

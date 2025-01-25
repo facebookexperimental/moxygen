@@ -42,18 +42,6 @@ class MoQRelayServer : MoQServer {
       server_.relay_->onUnannounce(std::move(unannounce), clientSession_);
     }
 
-    void operator()(SubscribeRequest subscribeReq) const override {
-      XLOG(INFO) << "SubscribeRequest track=" << subscribeReq.fullTrackName;
-      server_.relay_->onSubscribe(std::move(subscribeReq), clientSession_)
-          .scheduleOn(clientSession_->getEventBase())
-          .start();
-    }
-
-    void operator()(Unsubscribe unsubscribe) const override {
-      XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
-      server_.relay_->onUnsubscribe(unsubscribe, clientSession_);
-    }
-
     void operator()(Goaway) const override {
       XLOG(INFO) << "Goaway";
     }

@@ -15,6 +15,8 @@
 
 namespace moxygen {
 
+class Subscriber;
+
 class MoQClient : public proxygen::WebTransportHandler {
  public:
   enum class TransportType { H3_WEBTRANSPORT, QUIC };
@@ -75,7 +77,8 @@ class MoQClient : public proxygen::WebTransportHandler {
   folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,
       std::chrono::milliseconds transaction_timeout,
-      Role role = Role::PUB_AND_SUB) noexcept;
+      std::shared_ptr<Publisher> publishHandler,
+      std::shared_ptr<Subscriber> subscribeHandler) noexcept;
 
  private:
   ClientSetup getClientSetup(Role role, folly::Optional<std::string> path);

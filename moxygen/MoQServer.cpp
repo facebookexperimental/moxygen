@@ -72,28 +72,9 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup /*setup*/) {
   }));
 }
 
-void MoQServer::ControlVisitor::operator()(
-    SubscribeRequest subscribeReq) const {
-  XLOG(INFO) << "SubscribeRequest track="
-             << subscribeReq.fullTrackName.trackNamespace
-             << subscribeReq.fullTrackName.trackName
-             << " id=" << subscribeReq.subscribeID;
-  clientSession_->subscribeError(
-      {subscribeReq.subscribeID, 500, "not implemented"});
-}
-
-void MoQServer::ControlVisitor::operator()(
-    SubscribeUpdate subscribeUpdate) const {
-  XLOG(INFO) << "SubscribeRequest id=" << subscribeUpdate.subscribeID;
-}
-
 // TODO: Implement message handling
 void MoQServer::ControlVisitor::operator()(Fetch fetch) const {
   XLOG(INFO) << "Fetch id=" << fetch.subscribeID;
-}
-
-void MoQServer::ControlVisitor::operator()(Unsubscribe unsubscribe) const {
-  XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
 }
 
 void MoQServer::ControlVisitor::operator()(Announce announce) const {

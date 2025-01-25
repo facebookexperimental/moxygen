@@ -10,7 +10,9 @@
 
 namespace moxygen {
 
-class MoQChatClient {
+class MoQChatClient : public Publisher,
+                      public Publisher::SubscriptionHandle,
+                      public std::enable_shared_from_this<MoQChatClient> {
  public:
   MoQChatClient(
       folly::EventBase* evb,
@@ -22,6 +24,11 @@ class MoQChatClient {
   folly::coro::Task<void> run() noexcept;
 
  private:
+  folly::coro::Task<Publisher::SubscribeResult> subscribe(
+      SubscribeRequest subscribeReq,
+      std::shared_ptr<TrackConsumer> consumer) override;
+  void subscribeUpdate(SubscribeUpdate) override {}
+  void unsubscribe() override;
   folly::coro::Task<void> controlReadLoop();
   void publishLoop();
   folly::coro::Task<void> subscribeToUser(TrackNamespace trackNamespace);
