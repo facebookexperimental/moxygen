@@ -28,6 +28,7 @@ namespace moxygen {
 class MoQSession : public MoQControlCodec::ControlCallback,
                    public proxygen::WebTransportHandler,
                    public Publisher,
+                   public Subscriber,
                    public std::enable_shared_from_this<MoQSession> {
  public:
   struct MoQSessionRequestData : public folly::RequestData {
@@ -67,11 +68,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       : dir_(MoQControlCodec::Direction::SERVER),
         wt_(wt),
         evb_(evb),
-        serverSetupCallback_(&serverSetupCallback) {
-    // SERVER sessions use this promise/future as a signal
-    std::tie(setupPromise_, setupFuture_) =
-        folly::coro::makePromiseContract<ServerSetup>();
-  }
+        serverSetupCallback_(&serverSetupCallback) {}
 
   void setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
     publishHandler_ = std::move(publishHandler);
@@ -98,11 +95,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void goaway(Goaway goaway) override;
 
   folly::coro::Task<ServerSetup> setup(ClientSetup setup);
-  folly::coro::Task<void> clientSetupComplete() {
-    XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
-    // TODO timeout
-    co_await std::move(setupFuture_);
-  }
 
   void setMaxConcurrentSubscribes(uint64_t maxConcurrent) {
     if (maxConcurrent > maxConcurrentSubscribes_) {
@@ -111,45 +103,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       sendMaxSubscribeID(/*signalWriteLoop=*/true);
     }
   }
-
-  using MoQMessage = boost::variant<Announce, Unannounce, AnnounceCancel>;
-
-  class ControlVisitor : public boost::static_visitor<> {
-   public:
-    ControlVisitor() = default;
-    virtual ~ControlVisitor() = default;
-    virtual void operator()(ClientSetup /*setup*/) const {
-      XLOG(INFO) << "ClientSetup";
-    }
-
-    virtual void operator()(Announce announce) const {
-      XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-    }
-
-    virtual void operator()(Unannounce unannounce) const {
-      XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
-    }
-
-    virtual void operator()(AnnounceCancel announceCancel) const {
-      XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
-    }
-
-    virtual void operator()(AnnounceError announceError) const {
-      XLOG(INFO) << "AnnounceError ns=" << announceError.trackNamespace
-                 << " code=" << announceError.errorCode
-                 << " reason=" << announceError.reasonPhrase;
-    }
-
-   private:
-  };
-
-  folly::coro::AsyncGenerator<MoQMessage> controlMessages();
-
-  folly::coro::Task<folly::Expected<AnnounceOk, AnnounceError>> announce(
-      Announce ann);
-  void announceOk(AnnounceOk annOk);
-  void announceError(AnnounceError announceError);
-  void unannounce(Unannounce unannounce);
 
   uint64_t maxSubscribeID() const {
     return maxSubscribeID_;
@@ -173,6 +126,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces subAnn) override;
+
+  folly::coro::Task<Subscriber::AnnounceResult> announce(
+      Announce ann,
+      std::shared_ptr<AnnounceCallback> announceCallback = nullptr) override;
 
   class PublisherImpl {
    public:
@@ -291,6 +248,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       const SubscribeAnnouncesError& subscribeAnnouncesError);
   void unsubscribeAnnounces(const UnsubscribeAnnounces& unsubscribeAnnounces);
 
+  folly::coro::Task<void> handleAnnounce(Announce announce);
+  void announceOk(const AnnounceOk& annOk);
+  void announceError(const AnnounceError& announceError);
+  void announceCancel(const AnnounceCancel& annCan);
+  void unannounce(const Unannounce& unannounce);
+
   class ReceiverSubscriptionHandle;
   class ReceiverFetchHandle;
 
@@ -345,7 +308,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::EventBase* evb_{nullptr}; // keepalive?
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
-  folly::coro::UnboundedQueue<MoQMessage, true, true> controlMessages_;
 
   // Track Alias -> Receive State
   folly::F14FastMap<
@@ -381,7 +343,19 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       F14FastMap<SubscribeID, std::shared_ptr<PublisherImpl>, SubscribeID::hash>
           pubTracks_;
 
+  class SubscriberAnnounceCallback;
+  class PublisherAnnounceHandle;
   class SubscribeAnnouncesHandle;
+  folly::F14FastMap<
+      TrackNamespace,
+      std::shared_ptr<Subscriber::AnnounceHandle>,
+      TrackNamespace::hash>
+      subscriberAnnounces_;
+  folly::F14FastMap<
+      TrackNamespace,
+      std::shared_ptr<Subscriber::AnnounceCallback>,
+      TrackNamespace::hash>
+      publisherAnnounces_;
   folly::F14FastMap<
       TrackNamespace,
       std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
@@ -397,7 +371,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   uint64_t peerMaxSubscribeID_{0};
 
   folly::coro::Promise<ServerSetup> setupPromise_;
-  folly::coro::Future<ServerSetup> setupFuture_;
   bool setupComplete_{false};
   bool draining_{false};
   bool receivedGoaway_{false};
