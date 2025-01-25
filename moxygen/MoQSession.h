@@ -284,6 +284,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
 
+  class TrackPublisherImpl;
+  class FetchPublisherImpl;
+
   void subscribeDone(SubscribeDone subDone);
 
   folly::coro::Task<void> handleTrackStatus(TrackStatusRequest trackStatusReq);
