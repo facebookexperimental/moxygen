@@ -57,6 +57,7 @@ class MoQRelay : public Publisher,
     std::shared_ptr<MoQForwarder> forwarder;
     std::shared_ptr<MoQSession> upstream;
     SubscribeID subscribeID;
+    std::shared_ptr<Publisher::SubscriptionHandle> handle;
   };
 
   TrackNamespace allowedNamespacePrefix_;

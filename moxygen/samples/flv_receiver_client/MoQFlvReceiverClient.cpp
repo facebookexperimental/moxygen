@@ -374,9 +374,10 @@ class MoQFlvReceiverClient {
       auto trackAudio = co_await moqClient_.moqSession_->subscribe(
           subAudio, subRxHandlerAudio_);
       if (trackAudio.hasValue()) {
-        subscribeIDAudio_ = trackAudio.value()->subscribeOk().subscribeID;
-        XLOG(DBG1) << "Audio subscribeID=" << subscribeIDAudio_;
-        auto latest = trackAudio.value()->subscribeOk().latest;
+        audioSubscribeHandle_ = std::move(trackAudio.value());
+        XLOG(DBG1) << "Audio subscribeID="
+                   << audioSubscribeHandle_->subscribeOk().subscribeID;
+        auto latest = audioSubscribeHandle_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Audio Latest={" << latest->group << ", "
                      << latest->object << "}";
@@ -394,9 +395,10 @@ class MoQFlvReceiverClient {
       auto trackVideo = co_await moqClient_.moqSession_->subscribe(
           subVideo, subRxHandlerVideo_);
       if (trackVideo.hasValue()) {
-        subscribeIDVideo_ = trackVideo.value()->subscribeOk().subscribeID;
-        XLOG(DBG1) << "Video subscribeID=" << subscribeIDVideo_;
-        auto latest = trackVideo.value()->subscribeOk().latest;
+        videoSubscribeHandle_ = std::move(trackVideo.value());
+        XLOG(DBG1) << "Video subscribeID="
+                   << videoSubscribeHandle_->subscribeOk().subscribeID;
+        auto latest = videoSubscribeHandle_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Video Latest={" << latest->group << ", "
                      << latest->object << "}";
@@ -419,8 +421,14 @@ class MoQFlvReceiverClient {
   }
 
   void stop() {
-    moqClient_.moqSession_->unsubscribe({subscribeIDAudio_});
-    moqClient_.moqSession_->unsubscribe({subscribeIDVideo_});
+    if (audioSubscribeHandle_) {
+      audioSubscribeHandle_->unsubscribe();
+      audioSubscribeHandle_.reset();
+    }
+    if (videoSubscribeHandle_) {
+      videoSubscribeHandle_->unsubscribe();
+      videoSubscribeHandle_.reset();
+    }
     moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
 
@@ -444,10 +452,7 @@ class MoQFlvReceiverClient {
 
       void operator()(Goaway) const override {
         XLOG(INFO) << "Goaway";
-        client_.moqClient_.moqSession_->unsubscribe(
-            {client_.subscribeIDAudio_});
-        client_.moqClient_.moqSession_->unsubscribe(
-            {client_.subscribeIDVideo_});
+        client_.stop();
       }
 
      private:
@@ -466,8 +471,8 @@ class MoQFlvReceiverClient {
 
  private:
   MoQClient moqClient_;
-  SubscribeID subscribeIDAudio_{0};
-  SubscribeID subscribeIDVideo_{0};
+  std::shared_ptr<Publisher::SubscriptionHandle> audioSubscribeHandle_;
+  std::shared_ptr<Publisher::SubscriptionHandle> videoSubscribeHandle_;
   std::string flvOutPath_;
   std::shared_ptr<FlvWriterShared> flvw_;
   TrackReceiverHandler trackReceiverHandlerAudio_ = TrackReceiverHandler(
