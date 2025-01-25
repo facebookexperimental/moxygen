@@ -335,7 +335,9 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   uint32_t dejitterBufferSizeMs_;
 };
 
-class MoQFlvReceiverClient {
+class MoQFlvReceiverClient
+    : public Subscriber,
+      public std::enable_shared_from_this<MoQFlvReceiverClient> {
  public:
   MoQFlvReceiverClient(
       folly::EventBase* evb,
@@ -360,7 +362,7 @@ class MoQFlvReceiverClient {
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
-          /*subscribeHandler=*/nullptr); // for now, until we implement ANNOUNCE
+          /*subscribeHandler=*/shared_from_this());
       auto exec = co_await folly::coro::co_current_executor;
       controlReadLoop().scheduleOn(exec).start();
 
@@ -421,6 +423,11 @@ class MoQFlvReceiverClient {
     XLOG(INFO) << __func__ << " done";
   }
 
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Goaway uri=" << goaway.newSessionUri;
+    stop();
+  }
+
   void stop() {
     if (audioSubscribeHandle_) {
       audioSubscribeHandle_->unsubscribe();
@@ -443,11 +450,6 @@ class MoQFlvReceiverClient {
         // text client doesn't expect server or relay to announce anything,
         // but announce OK anyways
         client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-      void operator()(Goaway) const override {
-        XLOG(INFO) << "Goaway";
-        client_.stop();
       }
 
      private:

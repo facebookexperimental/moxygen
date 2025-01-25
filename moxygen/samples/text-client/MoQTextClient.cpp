@@ -92,7 +92,8 @@ class TextHandler : public ObjectReceiverCallback {
   folly::coro::Baton baton;
 };
 
-class MoQTextClient {
+class MoQTextClient : public Subscriber,
+                      public std::enable_shared_from_this<MoQTextClient> {
  public:
   MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
       : moqClient_(
@@ -110,8 +111,8 @@ class MoQTextClient {
       co_await moqClient_.setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          nullptr,
-          nullptr);
+          /*publishHandler=*/nullptr,
+          /*subscribeHandler=*/shared_from_this());
       auto exec = co_await folly::coro::co_current_executor;
       controlReadLoop().scheduleOn(exec).start();
 
@@ -202,6 +203,11 @@ class MoQTextClient {
     XLOG(INFO) << __func__ << " done";
   }
 
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Goaway uri=" << goaway.newSessionUri;
+    stop();
+  }
+
   void stop() {
     textHandler_.baton.post();
     // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
@@ -222,14 +228,6 @@ class MoQTextClient {
         // text client doesn't expect server or relay to announce anything,
         // but announce OK anyways
         client_.moqClient_.moqSession_->announceOk({announce.trackNamespace});
-      }
-
-      void operator()(Goaway) const override {
-        XLOG(INFO) << "Goaway";
-        if (client_.subscription_) {
-          client_.subscription_->unsubscribe();
-          client_.subscription_.reset();
-        }
       }
 
      private:
@@ -266,7 +264,7 @@ int main(int argc, char* argv[]) {
   }
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
-  MoQTextClient textClient(
+  auto textClient = std::make_shared<MoQTextClient>(
       &eventBase,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}));
@@ -291,12 +289,12 @@ int main(int argc, char* argv[]) {
     std::function<void(int)> fn_;
   };
   SigHandler handler(
-      &eventBase, [&textClient](int) mutable { textClient.stop(); });
+      &eventBase, [&textClient](int) mutable { textClient->stop(); });
   auto subParams = flags2params();
   const auto subscribeID = 0;
   const auto trackAlias = 1;
   textClient
-      .run(
+      ->run(
           {subscribeID,
            trackAlias,
            moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),

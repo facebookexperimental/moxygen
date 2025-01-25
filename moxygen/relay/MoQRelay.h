@@ -36,6 +36,11 @@ class MoQRelay : public Publisher,
 
   void removeSession(const std::shared_ptr<MoQSession>& session);
 
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
+    removeSession(MoQSession::getRequestSession());
+  }
+
  private:
   class AnnouncesSubscription;
   void unsubscribeAnnounces(

@@ -18,6 +18,7 @@
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/Subscriber.h>
 #include "moxygen/util/TimedBaton.h"
 
 #include <boost/variant.hpp>
@@ -76,6 +77,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     publishHandler_ = std::move(publishHandler);
   }
 
+  void setSubscribeHandler(std::shared_ptr<Subscriber> subscribeHandler) {
+    subscribeHandler_ = std::move(subscribeHandler);
+  }
+
   [[nodiscard]] folly::EventBase* getEventBase() const {
     return evb_;
   }
@@ -89,6 +94,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void start();
   void drain();
   void close(SessionCloseErrorCode error);
+
+  void goaway(Goaway goaway) override;
 
   folly::coro::Task<ServerSetup> setup(ClientSetup setup);
   folly::coro::Task<void> clientSetupComplete() {
@@ -105,8 +112,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     }
   }
 
-  using MoQMessage =
-      boost::variant<Announce, Unannounce, AnnounceCancel, Goaway>;
+  using MoQMessage = boost::variant<Announce, Unannounce, AnnounceCancel>;
 
   class ControlVisitor : public boost::static_visitor<> {
    public:
@@ -132,10 +138,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       XLOG(INFO) << "AnnounceError ns=" << announceError.trackNamespace
                  << " code=" << announceError.errorCode
                  << " reason=" << announceError.reasonPhrase;
-    }
-
-    virtual void operator()(Goaway goaway) const {
-      XLOG(INFO) << "Goaway, newURI=" << goaway.newSessionUri;
     }
 
    private:
@@ -398,6 +400,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::coro::Future<ServerSetup> setupFuture_;
   bool setupComplete_{false};
   bool draining_{false};
+  bool receivedGoaway_{false};
   folly::CancellationSource cancellationSource_;
 
   // SubscribeID must be a unique monotonically increasing number that is
@@ -407,5 +410,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   ServerSetupCallback* serverSetupCallback_{nullptr};
   std::shared_ptr<Publisher> publishHandler_;
+  std::shared_ptr<Subscriber> subscribeHandler_;
 };
 } // namespace moxygen

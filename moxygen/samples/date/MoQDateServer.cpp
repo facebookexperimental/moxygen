@@ -67,10 +67,6 @@ class MoQDateServer : public MoQServer,
         : MoQServer::ControlVisitor(std::move(clientSession)),
           server_(server) {}
 
-    void operator()(Goaway) const override {
-      XLOG(INFO) << "Goaway";
-    }
-
    private:
     MoQDateServer& server_;
   };
@@ -162,6 +158,16 @@ class MoQDateServer : public MoQServer,
         .scheduleOn(clientSession->getEventBase())
         .start();
     co_return fetchHandle;
+  }
+
+  void goaway(Goaway goaway) override {
+    XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
+    auto session = MoQSession::getRequestSession();
+    if (relayClient_ && relayClient_->getSession() == session) {
+      // TODO: relay is going away
+    } else {
+      forwarder_.removeSession(session);
+    }
   }
 
   Payload minutePayload(uint64_t group) {

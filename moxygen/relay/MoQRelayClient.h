@@ -59,6 +59,10 @@ class MoQRelayClient {
     }
   }
 
+  std::shared_ptr<MoQSession> getSession() const {
+    return moqClient_.moqSession_;
+  }
+
  private:
   folly::coro::Task<void> controlReadLoop(
       std::unique_ptr<MoQSession::ControlVisitor> controller) {

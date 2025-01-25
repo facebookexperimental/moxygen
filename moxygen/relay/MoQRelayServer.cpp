@@ -42,10 +42,6 @@ class MoQRelayServer : MoQServer {
       server_.relay_->onUnannounce(std::move(unannounce), clientSession_);
     }
 
-    void operator()(Goaway) const override {
-      XLOG(INFO) << "Goaway";
-    }
-
    private:
     MoQRelayServer& server_;
   };

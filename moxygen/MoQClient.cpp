@@ -137,7 +137,7 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
       (subscribeHandler ? folly::to_underlying(Role::SUBSCRIBER) : 0));
   moqSession_ = std::make_shared<MoQSession>(wt, evb_);
   moqSession_->setPublishHandler(std::move(publishHandler));
-  // TODO: setSubscriber here
+  moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->start();
   co_await moqSession_->setup(getClientSetup(role, pathParam));
 }
