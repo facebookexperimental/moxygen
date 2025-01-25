@@ -85,33 +85,54 @@ void MoQRelay::onUnannounce(
   // TODO: prune Announce tree
 }
 
-void MoQRelay::onSubscribeAnnounces(
-    SubscribeAnnounces&& subNs,
-    std::shared_ptr<MoQSession> session) {
+class MoQRelay::AnnouncesSubscription
+    : public Publisher::SubscribeAnnouncesHandle {
+ public:
+  AnnouncesSubscription(
+      std::shared_ptr<MoQRelay> relay,
+      std::shared_ptr<MoQSession> session,
+      SubscribeAnnouncesOk ok)
+      : Publisher::SubscribeAnnouncesHandle(std::move(ok)),
+        relay_(std::move(relay)),
+        session_(std::move(session)) {}
+
+  void unsubscribeAnnounces() override {
+    if (relay_) {
+      relay_->unsubscribeAnnounces(
+          subscribeAnnouncesOk_->trackNamespacePrefix, std::move(session_));
+      relay_.reset();
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQRelay> relay_;
+  std::shared_ptr<MoQSession> session_;
+};
+
+folly::coro::Task<Publisher::SubscribeAnnouncesResult>
+MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
   // check auth
   if (subNs.trackNamespacePrefix.empty()) {
-    session->subscribeAnnouncesError(
-        {subNs.trackNamespacePrefix, 400, "empty"});
-    return;
+    co_return folly::makeUnexpected(
+        SubscribeAnnouncesError{subNs.trackNamespacePrefix, 400, "empty"});
   }
+  auto session = MoQSession::getRequestSession();
   auto nodePtr = findNamespaceNode(
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
-  auto sessionPtr = session.get();
-  nodePtr->sessions.emplace(std::move(session));
-  sessionPtr->subscribeAnnouncesOk({subNs.trackNamespacePrefix});
+  nodePtr->sessions.emplace(session);
 
   // Find all nested Announcements and forward
   std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
       {subNs.trackNamespacePrefix, nodePtr}};
-  auto evb = sessionPtr->getEventBase();
+  auto evb = session->getEventBase();
   while (!nodes.empty()) {
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
     if (nodePtr->sourceSession) {
       // We don't really care if we get announce error, I guess?
       // TODO: Auth/params
-      sessionPtr->announce({prefix, {}}).scheduleOn(evb).start();
+      session->announce({prefix, {}}).scheduleOn(evb).start();
     }
     for (auto& nextNodeIt : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
@@ -119,14 +140,18 @@ void MoQRelay::onSubscribeAnnounces(
       nodes.emplace_back(std::forward_as_tuple(nodePrefix, &nextNodeIt.second));
     }
   }
+  co_return std::make_shared<AnnouncesSubscription>(
+      shared_from_this(),
+      std::move(session),
+      SubscribeAnnouncesOk{subNs.trackNamespacePrefix});
 }
 
-void MoQRelay::onUnsubscribeAnnounces(
-    UnsubscribeAnnounces&& unsubNs,
-    const std::shared_ptr<MoQSession>& session) {
-  XLOG(DBG1) << __func__ << " nsp=" << unsubNs.trackNamespacePrefix;
-  auto nodePtr = findNamespaceNode(
-      unsubNs.trackNamespacePrefix, /*createMissingNodes=*/false);
+void MoQRelay::unsubscribeAnnounces(
+    const TrackNamespace& trackNamespacePrefix,
+    std::shared_ptr<MoQSession> session) {
+  XLOG(DBG1) << __func__ << " nsp=" << trackNamespacePrefix;
+  auto nodePtr =
+      findNamespaceNode(trackNamespacePrefix, /*createMissingNodes=*/false);
   if (!nodePtr) {
     // TODO: maybe error?
     return;
@@ -189,12 +214,15 @@ folly::coro::Task<void> MoQRelay::onSubscribe(
       session->subscribeError({subReq.subscribeID, 502, "subscribe failed"});
       co_return;
     }
-    auto latest = subRes->latest;
+    auto latest = subRes.value()->subscribeOk().latest;
     if (latest) {
       forwarder->updateLatest(latest->group, latest->object);
     }
-    forwarder->setGroupOrder(subRes->groupOrder);
-    RelaySubscription rsub({forwarder, upstreamSession, subRes->subscribeID});
+    forwarder->setGroupOrder(subRes.value()->subscribeOk().groupOrder);
+    RelaySubscription rsub(
+        {forwarder,
+         upstreamSession,
+         subRes.value()->subscribeOk().subscribeID});
     subscriptions_[subReq.fullTrackName] = std::move(rsub);
   } else {
     forwarder = subscriptionIt->second.forwarder;

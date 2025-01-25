@@ -3,6 +3,7 @@
 #include <folly/portability/GMock.h>
 #include <moxygen/MoQCodec.h>
 #include <moxygen/MoQConsumers.h>
+#include <moxygen/Publisher.h>
 
 namespace moxygen {
 

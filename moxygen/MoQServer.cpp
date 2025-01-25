@@ -111,32 +111,6 @@ void MoQServer::ControlVisitor::operator()(
   XLOG(INFO) << "AnnounceCancel ns=" << announceCancel.trackNamespace;
 }
 
-void MoQServer::ControlVisitor::operator()(
-    SubscribeAnnounces subscribeAnnounces) const {
-  XLOG(INFO) << "SubscribeAnnounces ns="
-             << subscribeAnnounces.trackNamespacePrefix;
-  clientSession_->subscribeAnnouncesError(
-      {subscribeAnnounces.trackNamespacePrefix, 500, "not implemented"});
-}
-
-void MoQServer::ControlVisitor::operator()(
-    UnsubscribeAnnounces unsubscribeAnnounces) const {
-  XLOG(INFO) << "UnsubscribeAnnounces ns="
-             << unsubscribeAnnounces.trackNamespacePrefix;
-}
-
-void MoQServer::ControlVisitor::operator()(
-    TrackStatusRequest trackStatusRequest) const {
-  XLOG(INFO) << "TrackStatusRequest track="
-             << trackStatusRequest.fullTrackName.trackNamespace
-             << trackStatusRequest.fullTrackName.trackName;
-}
-
-void MoQServer::ControlVisitor::operator()(TrackStatus trackStatus) const {
-  XLOG(INFO) << "TrackStatus track=" << trackStatus.fullTrackName.trackNamespace
-             << trackStatus.fullTrackName.trackName;
-}
-
 void MoQServer::ControlVisitor::operator()(Goaway goaway) const {
   XLOG(INFO) << "Goaway nsuri=" << goaway.newSessionUri;
 }

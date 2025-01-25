@@ -34,38 +34,24 @@ class MoQRelayServer : MoQServer {
 
     void operator()(Announce announce) const override {
       XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-      server_.relay_.onAnnounce(std::move(announce), clientSession_);
+      server_.relay_->onAnnounce(std::move(announce), clientSession_);
     }
 
     void operator()(Unannounce unannounce) const override {
       XLOG(INFO) << "Unannounce ns=" << unannounce.trackNamespace;
-      server_.relay_.onUnannounce(std::move(unannounce), clientSession_);
-    }
-
-    void operator()(SubscribeAnnounces subscribeAnnounces) const override {
-      XLOG(INFO) << "SubscribeAnnounces ns="
-                 << subscribeAnnounces.trackNamespacePrefix;
-      server_.relay_.onSubscribeAnnounces(
-          std::move(subscribeAnnounces), clientSession_);
-    }
-
-    void operator()(UnsubscribeAnnounces unsubscribeAnnounces) const override {
-      XLOG(INFO) << "UnsubscribeAnnounces ns="
-                 << unsubscribeAnnounces.trackNamespacePrefix;
-      server_.relay_.onUnsubscribeAnnounces(
-          std::move(unsubscribeAnnounces), clientSession_);
+      server_.relay_->onUnannounce(std::move(unannounce), clientSession_);
     }
 
     void operator()(SubscribeRequest subscribeReq) const override {
       XLOG(INFO) << "SubscribeRequest track=" << subscribeReq.fullTrackName;
-      server_.relay_.onSubscribe(std::move(subscribeReq), clientSession_)
+      server_.relay_->onSubscribe(std::move(subscribeReq), clientSession_)
           .scheduleOn(clientSession_->getEventBase())
           .start();
     }
 
     void operator()(Unsubscribe unsubscribe) const override {
       XLOG(INFO) << "Unsubscribe id=" << unsubscribe.subscribeID;
-      server_.relay_.onUnsubscribe(std::move(unsubscribe), clientSession_);
+      server_.relay_->onUnsubscribe(unsubscribe, clientSession_);
     }
 
     void operator()(Goaway) const override {
@@ -78,16 +64,17 @@ class MoQRelayServer : MoQServer {
 
   std::unique_ptr<ControlVisitor> makeControlVisitor(
       std::shared_ptr<MoQSession> clientSession) override {
+    clientSession->setPublishHandler(relay_);
     return std::make_unique<RelayControlVisitor>(
         *this, std::move(clientSession));
   }
 
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
-    relay_.removeSession(session);
+    relay_->removeSession(session);
   }
 
  private:
-  MoQRelay relay_;
+  std::shared_ptr<MoQRelay> relay_{std::make_shared<MoQRelay>()};
 };
 } // namespace
 
