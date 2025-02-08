@@ -11,5 +11,8 @@
     "cmake.buildBeforeRun": false,
     "cmake.buildTask": false,
     "cmake.deleteBuildDirOnCleanConfigure": false,
-    "testMate.cpp.test.executables": "{build,Build,BUILD,out,Out,OUT,moxygen}/**/*{test,Test,TEST}*"
+    "testMate.cpp.test.executables": "{build,Build,BUILD,out,Out,OUT,moxygen}/**/*{test,Test,TEST}*",
+    "files.associations": {
+        "chrono": "cpp"
+    }
 }

@@ -308,7 +308,7 @@ class MoQDateServer : public MoQServer,
 
  private:
   static FullTrackName dateTrackName() {
-    return FullTrackName({TrackNamespace({"moq-date"}), "/date"});
+    return FullTrackName({TrackNamespace({"moq-date"}), "date"});
   }
   MoQForwarder forwarder_;
   std::unique_ptr<MoQRelayClient> relayClient_;
