@@ -27,6 +27,10 @@ class MoQRelay : public Publisher,
       SubscribeRequest subReq,
       std::shared_ptr<TrackConsumer> consumer) override;
 
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override;
+
   folly::coro::Task<SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces subAnn) override;
 
