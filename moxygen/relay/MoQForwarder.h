@@ -86,6 +86,10 @@ class MoQForwarder : public TrackConsumer {
           pubGroupOrder, subscribeOk_->groupOrder);
     }
 
+    void updateLatest(AbsoluteLocation latest) {
+      subscribeOk_->latest = latest;
+    }
+
     void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
       // TODO: Validate update subscription range conforms to SUBSCRIBE_UPDATE
       // rules

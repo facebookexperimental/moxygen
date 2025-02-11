@@ -240,6 +240,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     auto latest = subRes.value()->subscribeOk().latest;
     if (latest) {
       forwarder->updateLatest(latest->group, latest->object);
+      subscriber->updateLatest(*latest);
     }
     auto pubGroupOrder = subRes.value()->subscribeOk().groupOrder;
     forwarder->setGroupOrder(pubGroupOrder);
