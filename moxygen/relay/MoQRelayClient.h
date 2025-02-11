@@ -28,19 +28,21 @@ class MoQRelayClient {
           transactionTimeout,
           std::move(publisher),
           std::move(subscriber));
-      auto exec = co_await folly::coro::co_current_executor;
       // could parallelize
       if (!moqClient_.moqSession_) {
         XLOG(ERR) << "Session is dead now #sad";
         co_return;
       }
       for (auto& ns : namespaces) {
-        auto res =
-            co_await moqClient_.moqSession_->announce({std::move(ns), {}});
+        Announce ann;
+        ann.trackNamespace = std::move(ns);
+        auto res = co_await moqClient_.moqSession_->announce(std::move(ann));
         if (!res) {
           XLOG(ERR) << "AnnounceError namespace=" << res.error().trackNamespace
                     << " code=" << res.error().errorCode
                     << " reason=" << res.error().reasonPhrase;
+        } else {
+          announceHandles_.emplace_back(std::move(res.value()));
         }
       }
     } catch (const std::exception& ex) {
@@ -53,8 +55,16 @@ class MoQRelayClient {
     return moqClient_.moqSession_;
   }
 
+  void shutdown() {
+    for (auto& handle : announceHandles_) {
+      handle->unannounce();
+    }
+    announceHandles_.clear();
+  }
+
  private:
   MoQClient moqClient_;
+  std::vector<std::shared_ptr<Subscriber::AnnounceHandle>> announceHandles_;
 };
 
 } // namespace moxygen
