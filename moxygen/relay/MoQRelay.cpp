@@ -262,6 +262,32 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
   }
 }
 
+folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  auto session = MoQSession::getRequestSession();
+
+  // check auth
+  // get trackNamespace
+  if (fetch.fullTrackName.trackNamespace.empty()) {
+    co_return folly::makeUnexpected(
+        FetchError({fetch.subscribeID, 400, "namespace required"}));
+  }
+  auto upstreamSession =
+      findAnnounceSession(fetch.fullTrackName.trackNamespace);
+  if (!upstreamSession) {
+    // no such namespace has been announced
+    co_return folly::makeUnexpected(
+        FetchError({fetch.subscribeID, 404, "no such namespace"}));
+  }
+  if (session.get() == upstreamSession.get()) {
+    co_return folly::makeUnexpected(
+        FetchError({fetch.subscribeID, 400, "self fetch"}));
+  }
+  fetch.priority = 127;
+  co_return co_await upstreamSession->fetch(fetch, std::move(consumer));
+}
+
 void MoQRelay::onEmpty(MoQForwarder* forwarder) {
   // TODO: we shouldn't need a linear search if forwarder stores FullTrackName
   for (auto subscriptionIt = subscriptions_.begin();
