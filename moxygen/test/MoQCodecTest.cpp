@@ -230,7 +230,7 @@ TEST(MoQCodec, TruncatedObject) {
       }));
   res = writeObject(
       writeBuf,
-      StreamType::STREAM_HEADER_SUBGROUP,
+      StreamType::SUBGROUP_HEADER,
       ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
   testing::NiceMock<MockMoQCodecCallback> callback;
@@ -258,7 +258,7 @@ TEST(MoQCodec, TruncatedObjectPayload) {
       }));
   res = writeObject(
       writeBuf,
-      StreamType::STREAM_HEADER_SUBGROUP,
+      StreamType::SUBGROUP_HEADER,
       ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
       nullptr);
   testing::NiceMock<MockMoQCodecCallback> callback;

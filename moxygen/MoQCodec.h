@@ -183,7 +183,7 @@ class MoQObjectStreamCodec : public MoQCodec {
     // OBJECT_PAYLOAD_NO_LENGTH
   };
   ParseState parseState_{ParseState::STREAM_HEADER_TYPE};
-  StreamType streamType_{StreamType::STREAM_HEADER_SUBGROUP};
+  StreamType streamType_{StreamType::SUBGROUP_HEADER};
   ObjectCallback* callback_;
 };
 

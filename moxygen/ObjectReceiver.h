@@ -30,7 +30,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
       uint64_t subgroupID = 0,
       uint8_t priority = 0)
       : callback_(callback),
-        streamType_(StreamType::STREAM_HEADER_SUBGROUP),
+        streamType_(StreamType::SUBGROUP_HEADER),
         header_{
             TrackAlias(0),
             groupID,

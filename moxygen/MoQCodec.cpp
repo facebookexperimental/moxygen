@@ -122,7 +122,7 @@ void MoQObjectStreamCodec::onIngress(
         cursor = newCursor;
         streamType_ = StreamType(type->first);
         switch (streamType_) {
-          case StreamType::STREAM_HEADER_SUBGROUP:
+          case StreamType::SUBGROUP_HEADER:
             parseState_ = ParseState::OBJECT_STREAM;
             break;
           case StreamType::FETCH_HEADER:

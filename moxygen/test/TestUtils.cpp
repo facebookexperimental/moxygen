@@ -205,12 +205,12 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
       }));
   res = writeObject(
       writeBuf,
-      StreamType::STREAM_HEADER_SUBGROUP,
+      StreamType::SUBGROUP_HEADER,
       ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello world"));
   res = writeObject(
       writeBuf,
-      StreamType::STREAM_HEADER_SUBGROUP,
+      StreamType::SUBGROUP_HEADER,
       ObjectHeader(
           {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
       nullptr);

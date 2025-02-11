@@ -122,7 +122,7 @@ enum class FrameType : uint64_t {
 
 enum class StreamType : uint64_t {
   OBJECT_DATAGRAM = 1,
-  STREAM_HEADER_SUBGROUP = 0x4,
+  SUBGROUP_HEADER = 0x4,
   FETCH_HEADER = 0x5,
 };
 

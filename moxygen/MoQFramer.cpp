@@ -284,7 +284,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     StreamType streamType,
     const ObjectHeader& headerTemplate) noexcept {
   DCHECK(
-      streamType == StreamType::STREAM_HEADER_SUBGROUP ||
+      streamType == StreamType::SUBGROUP_HEADER ||
       streamType == StreamType::FETCH_HEADER);
   // TODO get rid of this
   auto length = cursor.totalLength();
@@ -1153,10 +1153,7 @@ WriteResult writeSubgroupHeader(
   size_t size = 0;
   bool error = false;
   writeVarint(
-      writeBuf,
-      folly::to_underlying(StreamType::STREAM_HEADER_SUBGROUP),
-      size,
-      error);
+      writeBuf, folly::to_underlying(StreamType::SUBGROUP_HEADER), size, error);
   writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
   writeVarint(writeBuf, objectHeader.group, size, error);
   writeVarint(writeBuf, objectHeader.subgroup, size, error);
@@ -1190,7 +1187,7 @@ WriteResult writeSingleObjectStream(
   if (res) {
     return writeObject(
         writeBuf,
-        StreamType::STREAM_HEADER_SUBGROUP,
+        StreamType::SUBGROUP_HEADER,
         objectHeader,
         std::move(objectPayload));
   } else {
@@ -1209,14 +1206,14 @@ WriteResult writeObject(
     writeVarint(writeBuf, folly::to_underlying(streamType), size, error);
     writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
   }
-  if (streamType != StreamType::STREAM_HEADER_SUBGROUP) {
+  if (streamType != StreamType::SUBGROUP_HEADER) {
     writeVarint(writeBuf, objectHeader.group, size, error);
   }
   if (streamType == StreamType::FETCH_HEADER) {
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
   writeVarint(writeBuf, objectHeader.id, size, error);
-  if (streamType != StreamType::STREAM_HEADER_SUBGROUP) {
+  if (streamType != StreamType::SUBGROUP_HEADER) {
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
   }
@@ -1706,8 +1703,8 @@ const char* getStreamTypeString(StreamType type) {
   switch (type) {
     case StreamType::OBJECT_DATAGRAM:
       return "OBJECT_DATAGRAM";
-    case StreamType::STREAM_HEADER_SUBGROUP:
-      return "STREAM_HEADER_SUBGROUP";
+    case StreamType::SUBGROUP_HEADER:
+      return "SUBGROUP_HEADER";
     case StreamType::FETCH_HEADER:
       return "FETCH_HEADER";
     default:

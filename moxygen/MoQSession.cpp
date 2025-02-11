@@ -250,7 +250,7 @@ StreamPublisherImpl::StreamPublisherImpl(
     uint64_t groupID,
     uint64_t subgroupID)
     : StreamPublisherImpl(publisher) {
-  streamType_ = StreamType::STREAM_HEADER_SUBGROUP;
+  streamType_ = StreamType::SUBGROUP_HEADER;
   header_.trackIdentifier = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -2730,7 +2730,7 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  // maybe not STREAM_HEADER_SUBGROUP, but at least not control
+  // maybe not SUBGROUP_HEADER, but at least not control
   co_withCancellation(
       cancellationSource_.getToken(),
       unidirectionalReadLoop(shared_from_this(), rh))

@@ -154,8 +154,8 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   auto res = parseSubgroupHeader(cursor);
   testUnderflowResult(res);
 
-  auto r15 = parseMultiObjectHeader(
-      cursor, StreamType::STREAM_HEADER_SUBGROUP, res.value());
+  auto r15 =
+      parseMultiObjectHeader(cursor, StreamType::SUBGROUP_HEADER, res.value());
   testUnderflowResult(r15);
   skip(cursor, 1);
 }
@@ -239,7 +239,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_TRUE(result.hasValue());
   result = writeObject(
       writeBuf,
-      StreamType::STREAM_HEADER_SUBGROUP,
+      StreamType::SUBGROUP_HEADER,
       expectedObjectHeader,
       folly::IOBuf::copyBuffer("EFGH"));
   EXPECT_TRUE(result.hasValue());
@@ -248,20 +248,17 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
   expectedObjectHeader.length = 0;
   result = writeObject(
-      writeBuf,
-      StreamType::STREAM_HEADER_SUBGROUP,
-      expectedObjectHeader,
-      nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER, expectedObjectHeader, nullptr);
   EXPECT_TRUE(result.hasValue());
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::STREAM_HEADER_SUBGROUP);
+  EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
   auto parseStreamHeaderResult = parseSubgroupHeader(cursor);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult = parseMultiObjectHeader(
-      cursor, StreamType::STREAM_HEADER_SUBGROUP, *parseStreamHeaderResult);
+      cursor, StreamType::SUBGROUP_HEADER, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -272,7 +269,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   cursor.skip(*parseResult->length);
 
   parseResult = parseMultiObjectHeader(
-      cursor, StreamType::STREAM_HEADER_SUBGROUP, *parseStreamHeaderResult);
+      cursor, StreamType::SUBGROUP_HEADER, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
