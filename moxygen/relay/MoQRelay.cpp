@@ -6,6 +6,10 @@
 
 #include "moxygen/relay/MoQRelay.h"
 
+namespace {
+constexpr uint8_t kDefaultUpstreamPriority = 128;
+}
+
 namespace moxygen {
 
 std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
@@ -209,7 +213,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
           SubscribeError({subReq.subscribeID, 400, "self subscribe"}));
     }
     // TODO: we only subscribe with the downstream locations.
-    subReq.priority = 1;
+    subReq.priority = kDefaultUpstreamPriority;
     subReq.groupOrder = GroupOrder::Default;
     auto forwarder =
         std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
@@ -285,7 +289,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     co_return folly::makeUnexpected(
         FetchError({fetch.subscribeID, 400, "self fetch"}));
   }
-  fetch.priority = 127;
+  fetch.priority = kDefaultUpstreamPriority;
   co_return co_await upstreamSession->fetch(fetch, std::move(consumer));
 }
 
