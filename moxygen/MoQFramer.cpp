@@ -62,19 +62,7 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     length -= key->second;
     SetupParameter p;
     p.key = key->first;
-    if (p.key == folly::to_underlying(SetupKey::ROLE)) {
-      auto res = quic::decodeQuicInteger(cursor, length);
-      if (!res) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= res->second;
-      res = quic::decodeQuicInteger(cursor, res->first);
-      if (!res) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= res->second;
-      p.asUint64 = res->first;
-    } else if (p.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (p.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
       auto res = quic::decodeQuicInteger(cursor);
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1091,11 +1079,7 @@ WriteResult writeClientSetup(
   writeVarint(writeBuf, clientSetup.params.size(), size, error);
   for (auto& param : clientSetup.params) {
     writeVarint(writeBuf, param.key, size, error);
-    if (param.key == folly::to_underlying(SetupKey::ROLE)) {
-      CHECK_LE(param.asUint64, folly::to_underlying(Role::PUB_AND_SUB));
-      writeVarint(writeBuf, 1, size, error);
-      writeVarint(writeBuf, param.asUint64, size, error);
-    } else if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
       auto ret = quic::getQuicIntegerSize(param.asUint64);
       if (ret.hasError()) {
         XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
@@ -1124,11 +1108,7 @@ WriteResult writeServerSetup(
   writeVarint(writeBuf, serverSetup.params.size(), size, error);
   for (auto& param : serverSetup.params) {
     writeVarint(writeBuf, param.key, size, error);
-    if (param.key == folly::to_underlying(SetupKey::ROLE)) {
-      CHECK_LE(param.asUint64, folly::to_underlying(Role::PUB_AND_SUB));
-      writeVarint(writeBuf, 1, size, error);
-      writeVarint(writeBuf, param.asUint64, size, error);
-    } else if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
       auto ret = quic::getQuicIntegerSize(param.asUint64);
       if (ret.hasError()) {
         XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;

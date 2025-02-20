@@ -375,9 +375,6 @@ TEST(MoQCodec, InvalidSetups) {
       ClientSetup(
           {{1},
            {
-               {folly::to_underlying(SetupKey::ROLE),
-                "",
-                folly::to_underlying(Role::SUBSCRIBER)},
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
                {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
            }}));
@@ -404,9 +401,6 @@ TEST(MoQCodec, InvalidSetups) {
       ServerSetup(
           {1,
            {
-               {folly::to_underlying(SetupKey::ROLE),
-                "",
-                folly::to_underlying(Role::SUBSCRIBER)},
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
            }}));
   auto serverSetup = writeBuf.front()->clone();

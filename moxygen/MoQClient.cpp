@@ -132,28 +132,21 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   }
 
   //  Create MoQSession and Setup MoQSession parameters
-  Role role = Role(
-      (publishHandler ? folly::to_underlying(Role::PUBLISHER) : 0) |
-      (subscribeHandler ? folly::to_underlying(Role::SUBSCRIBER) : 0));
   moqSession_ = std::make_shared<MoQSession>(wt, evb_);
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->start();
-  co_await moqSession_->setup(getClientSetup(role, pathParam));
+  co_await moqSession_->setup(getClientSetup(pathParam));
 }
 
-ClientSetup MoQClient::getClientSetup(
-    Role role,
-    folly::Optional<std::string> path) {
+ClientSetup MoQClient::getClientSetup(folly::Optional<std::string> path) {
   // Setup MoQSession parameters
-
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxSubscribeId = 100;
   ClientSetup clientSetup{
       {kVersionDraftCurrent},
-      {{folly::to_underlying(SetupKey::ROLE), "", folly::to_underlying(role)},
-       {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+      {{folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
         kDefaultMaxSubscribeId}}};
   if (path) {

@@ -63,10 +63,7 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup /*setup*/) {
   static constexpr size_t kDefaultMaxSubscribeId = 100;
   return folly::Try<ServerSetup>(ServerSetup({
       kVersionDraftCurrent,
-      {{folly::to_underlying(SetupKey::ROLE),
-        "",
-        folly::to_underlying(Role::PUB_AND_SUB)},
-       {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+      {{folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
         kDefaultMaxSubscribeId}},
   }));

@@ -131,12 +131,9 @@ std::ostream& operator<<(std::ostream& os, FrameType type);
 std::ostream& operator<<(std::ostream& os, StreamType type);
 
 enum class SetupKey : uint64_t {
-  ROLE = 0,
   PATH = 1,
   MAX_SUBSCRIBE_ID = 2,
 };
-
-enum class Role : uint8_t { PUBLISHER = 1, SUBSCRIBER = 2, PUB_AND_SUB = 3 };
 
 struct Parameter {
   uint64_t key;
@@ -159,7 +156,8 @@ constexpr uint64_t kVersionDraft06_exp =
 constexpr uint64_t kVersionDraft07_exp = 0xff070001; // Draft 7 FETCH support
 constexpr uint64_t kVersionDraft07_exp2 =
     0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft07;
+constexpr uint64_t kVersionDraft08 = 0xff080001; // Draft 8 no ROLE
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
