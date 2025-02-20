@@ -322,7 +322,8 @@ StreamPublisherImpl::writeToStream(bool finStream) {
   if (finStream) {
     writeHandle_ = nullptr;
   }
-  auto writeRes = writeHandle->writeStreamData(writeBuf_.move(), finStream);
+  auto writeRes =
+      writeHandle->writeStreamData(writeBuf_.move(), finStream, nullptr);
   if (writeRes.hasValue()) {
     if (finStream) {
       onStreamComplete();
@@ -1122,7 +1123,7 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
     }
     co_await folly::coro::co_safe_point;
     auto writeRes =
-        controlStream->writeStreamData(controlWriteBuf_.move(), false);
+        controlStream->writeStreamData(controlWriteBuf_.move(), false, nullptr);
     if (!writeRes) {
       XLOG(ERR) << "Write error: " << uint64_t(writeRes.error());
       break;
