@@ -148,7 +148,7 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   testUnderflowResult(r18);
 
   skip(cursor, 1);
-  auto r19 = parseFetchCancel(cursor, frameLength(cursor));
+  auto r19 = parseFetchError(cursor, frameLength(cursor));
   testUnderflowResult(r19);
 
   auto res = parseSubgroupHeader(cursor);
