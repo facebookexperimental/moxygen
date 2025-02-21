@@ -212,9 +212,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       co_return folly::makeUnexpected(
           SubscribeError({subReq.subscribeID, 400, "self subscribe"}));
     }
-    // TODO: we only subscribe with the downstream locations.
     subReq.priority = kDefaultUpstreamPriority;
     subReq.groupOrder = GroupOrder::Default;
+    // We only subscribe upstream with LatestObject. This is to satisfy other
+    // subscribers that join with narrower filters
+    subReq.locType = LocationType::LatestObject;
     auto forwarder =
         std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
     forwarder->setCallback(shared_from_this());
