@@ -82,7 +82,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
              3600000}}}));
   res = writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
   res = writeSubscribeError(
-      writeBuf, SubscribeError({0, 404, "not found", folly::none}));
+      writeBuf,
+      SubscribeError(
+          {0, SubscribeErrorCode::TRACK_NOT_EXIST, "not found", folly::none}));
   res = writeUnsubscribe(
       writeBuf,
       Unsubscribe({
@@ -120,10 +122,16 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   res = writeAnnounceOk(writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
   res = writeAnnounceError(
       writeBuf,
-      AnnounceError({TrackNamespace({"hello"}), 500, "server error"}));
+      AnnounceError(
+          {TrackNamespace({"hello"}),
+           AnnounceErrorCode::INTERNAL_ERROR,
+           "server error"}));
   res = writeAnnounceCancel(
       writeBuf,
-      AnnounceCancel({TrackNamespace({"hello"}), 500, "internal error"}));
+      AnnounceCancel(
+          {TrackNamespace({"hello"}),
+           AnnounceErrorCode::INTERNAL_ERROR,
+           "internal error"}));
   res = writeUnannounce(
       writeBuf,
       Unannounce({
@@ -151,7 +159,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   res = writeSubscribeAnnouncesError(
       writeBuf,
       SubscribeAnnouncesError(
-          {TrackNamespace({"hello"}), 500, "server error"}));
+          {TrackNamespace({"hello"}),
+           SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+           "server error"}));
   res = writeUnsubscribeAnnounces(
       writeBuf, UnsubscribeAnnounces({TrackNamespace({"hello"})}));
   res = writeFetch(
@@ -181,10 +191,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
                 0})}}));
   res = writeFetchError(
       writeBuf,
-      FetchError(
-          {0,
-           folly::to_underlying(FetchErrorCode::INVALID_RANGE),
-           "Invalid range"}));
+      FetchError({0, FetchErrorCode::INVALID_RANGE, "Invalid range"}));
 
   return writeBuf.move();
 }

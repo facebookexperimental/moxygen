@@ -63,7 +63,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
       subscribeAnnounceHandle_ = std::move(sa.value());
     } else {
       XLOG(INFO) << "SubscribeAnnounces id=" << sa.error().trackNamespacePrefix
-                 << " code=" << sa.error().errorCode
+                 << " code=" << folly::to_underlying(sa.error().errorCode)
                  << " reason=" << sa.error().reasonPhrase;
     }
   } catch (const std::exception& ex) {
@@ -79,15 +79,19 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
   XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
   if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
     if (announce.trackNamespace.size() != 5) {
-      co_return folly::makeUnexpected(
-          AnnounceError{announce.trackNamespace, 400, "Invalid chat announce"});
+      co_return folly::makeUnexpected(AnnounceError{
+          announce.trackNamespace,
+          AnnounceErrorCode::UNINTERESTED,
+          "Invalid chat announce"});
     }
     subscribeToUser(std::move(announce.trackNamespace))
         .scheduleOn(moqClient_.moqSession_->getEventBase())
         .start();
   } else {
-    co_return folly::makeUnexpected(
-        AnnounceError{announce.trackNamespace, 404, "don't care"});
+    co_return folly::makeUnexpected(AnnounceError{
+        announce.trackNamespace,
+        AnnounceErrorCode::UNINTERESTED,
+        "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
       AnnounceOk{announce.trackNamespace}, shared_from_this());
@@ -104,12 +108,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   XLOG(INFO) << "SubscribeRequest";
   if (subscribeReq.fullTrackName.trackNamespace !=
       participantTrackName(username_)) {
-    co_return folly::makeUnexpected(
-        SubscribeError{subscribeReq.subscribeID, 404, "no such track"});
+    co_return folly::makeUnexpected(SubscribeError{
+        subscribeReq.subscribeID,
+        SubscribeErrorCode::TRACK_NOT_EXIST,
+        "no such track"});
   }
   if (publisher_) {
     co_return folly::makeUnexpected(SubscribeError{
-        subscribeReq.subscribeID, 400, "Duplicate subscribe for track"});
+        subscribeReq.subscribeID,
+        SubscribeErrorCode::INTERNAL_ERROR,
+        "Duplicate subscribe for track"});
   }
   chatSubscribeID_.emplace(subscribeReq.subscribeID);
   chatTrackAlias_.emplace(subscribeReq.trackAlias);
@@ -298,7 +306,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   }
   if (track.value().hasError()) {
     XLOG(INFO) << "SubscribeError id=" << track->error().subscribeID
-               << " code=" << track->error().errorCode
+               << " code=" << folly::to_underlying(track->error().errorCode)
                << " reason=" << track->error().reasonPhrase;
     co_return;
   }
