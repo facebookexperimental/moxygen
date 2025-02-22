@@ -139,15 +139,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
 void MoQChatClient::unsubscribe() {
   // MoQChatClient only publishes a single track at a time.
   XLOG(INFO) << "Unsubscribe id=" << *chatSubscribeID_;
-  if (publisher_) {
-    publisher_->subscribeDone(
-        {*chatSubscribeID_,
-         SubscribeDoneStatusCode::UNSUBSCRIBED,
-         0, // filled in by session
-         "",
-         folly::none});
-    publisher_.reset();
-  }
+  publisher_.reset();
   chatSubscribeID_.reset();
   chatTrackAlias_.reset();
 }
@@ -324,8 +316,7 @@ void MoQChatClient::subscribeDone(SubscribeDone subDone) {
          userTrackIt != userTracks.second.end();
          ++userTrackIt) {
       if (userTrackIt->subscribeId == subDone.subscribeID) {
-        if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
-            userTrackIt->subscription) {
+        if (userTrackIt->subscription) {
           userTrackIt->subscription->unsubscribe();
         }
         userTracks.second.erase(userTrackIt);
