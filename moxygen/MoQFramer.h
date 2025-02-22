@@ -85,6 +85,8 @@ enum class FetchErrorCode : uint32_t {
   NOT_SUPPORTED = 3,
   TRACK_NOT_EXIST = 4,
   INVALID_RANGE = 5,
+  //
+  CANCELLED = std::numeric_limits<uint32_t>::max()
 };
 
 enum class SubscribeAnnouncesErrorCode : uint32_t {
