@@ -163,7 +163,8 @@ constexpr uint64_t kVersionDraft08_exp1 = 0xff080001; // Draft 8 no ROLE
 constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
 constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
 constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp4;
+constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp5;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -365,18 +366,25 @@ struct TrackNamespace {
   friend std::ostream& operator<<(
       std::ostream& os,
       const TrackNamespace& trackNs) {
-    if (trackNs.trackNamespace.empty()) {
-      return os;
+    os << trackNs.describe();
+    return os;
+  }
+
+  std::string describe() const {
+    std::string result;
+    if (trackNamespace.empty()) {
+      return result;
     }
 
     // Iterate through all elements except the last one
-    for (size_t i = 0; i < trackNs.trackNamespace.size() - 1; ++i) {
-      os << trackNs.trackNamespace[i] << '/';
+    for (size_t i = 0; i < trackNamespace.size() - 1; ++i) {
+      result += trackNamespace[i];
+      result += '/';
     }
 
     // Add the last element without a trailing slash
-    os << trackNs.trackNamespace.back();
-    return os;
+    result += trackNamespace.back();
+    return result;
   }
   bool empty() const {
     return trackNamespace.empty() ||
@@ -417,10 +425,14 @@ struct FullTrackName {
         (trackNamespace == other.trackNamespace && trackName < other.trackName);
   }
   friend std::ostream& operator<<(std::ostream& os, const FullTrackName& ftn) {
-    if (ftn.trackNamespace.empty()) {
-      return os << ftn.trackName;
+    os << ftn.describe();
+    return os;
+  }
+  std::string describe() const {
+    if (trackNamespace.empty()) {
+      return trackName;
     }
-    return os << ftn.trackNamespace << '/' << ftn.trackName;
+    return folly::to<std::string>(trackNamespace.describe(), '/', trackName);
   }
   struct hash {
     size_t operator()(const FullTrackName& ftn) const {
@@ -587,31 +599,73 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
+enum class FetchType : uint8_t {
+  STANDALONE = 0x1,
+  JOINING = 0x2,
+};
+
+struct StandaloneFetch {
+  StandaloneFetch() = default;
+  StandaloneFetch(AbsoluteLocation s, AbsoluteLocation e) : start(s), end(e) {}
+  AbsoluteLocation start;
+  AbsoluteLocation end;
+};
+
+struct JoiningFetch {
+  JoiningFetch(SubscribeID jsid, uint64_t pgo)
+      : joiningSubscribeID(jsid), precedingGroupOffset(pgo) {}
+  SubscribeID joiningSubscribeID;
+  uint64_t precedingGroupOffset;
+};
+
 struct Fetch {
-  Fetch() = default;
+  Fetch() : args(StandaloneFetch()) {}
   Fetch(
       SubscribeID su,
-      FullTrackName n,
+      FullTrackName ftn,
       uint8_t p,
       GroupOrder g,
       AbsoluteLocation st,
       AbsoluteLocation e,
       std::vector<TrackRequestParameter> pa = {})
       : subscribeID(su),
-        fullTrackName(std::move(n)),
+        fullTrackName(std::move(ftn)),
         priority(p),
         groupOrder(g),
-        start(st),
-        end(e),
-        params(std::move(pa)) {}
+        params(std::move(pa)),
+        args(StandaloneFetch(st, e)) {}
+  Fetch(
+      SubscribeID su,
+      SubscribeID jsid,
+      uint64_t pgo,
+      uint8_t p,
+      GroupOrder g,
+      std::vector<TrackRequestParameter> pa = {})
+      : subscribeID(su),
+        priority(p),
+        groupOrder(g),
+        params(std::move(pa)),
+        args(JoiningFetch(jsid, pgo)) {}
   SubscribeID subscribeID;
   FullTrackName fullTrackName;
   uint8_t priority;
   GroupOrder groupOrder;
-  AbsoluteLocation start;
-  AbsoluteLocation end;
   std::vector<TrackRequestParameter> params;
+  std::variant<StandaloneFetch, JoiningFetch> args;
 };
+
+inline std::pair<StandaloneFetch*, JoiningFetch*> fetchType(Fetch& fetch) {
+  auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+  auto joining = std::get_if<JoiningFetch>(&fetch.args);
+  return {standalone, joining};
+}
+
+inline std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
+    const Fetch& fetch) {
+  auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+  auto joining = std::get_if<JoiningFetch>(&fetch.args);
+  return {standalone, joining};
+}
 
 folly::Expected<Fetch, ErrorCode> parseFetch(
     folly::io::Cursor& cursor,
