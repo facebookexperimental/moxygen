@@ -591,6 +591,13 @@ folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
   length -= statusCode->second;
   subscribeDone.statusCode = SubscribeDoneStatusCode(statusCode->first);
 
+  auto streamCount = quic::decodeQuicInteger(cursor, length);
+  if (!streamCount) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= streamCount->second;
+  subscribeDone.streamCount = streamCount->first;
+
   auto reas = parseFixedString(cursor, length);
   if (!reas) {
     return folly::makeUnexpected(reas.error());
@@ -1351,6 +1358,7 @@ WriteResult writeSubscribeDone(
   writeVarint(writeBuf, subscribeDone.subscribeID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(subscribeDone.statusCode), size, error);
+  writeVarint(writeBuf, subscribeDone.streamCount, size, error);
   writeFixedString(writeBuf, subscribeDone.reasonPhrase, size, error);
   if (subscribeDone.finalObject) {
     writeVarint(writeBuf, 1, size, error);
