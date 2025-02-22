@@ -44,7 +44,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
            GroupOrder::Default,
            LocationType::LatestObject,
            folly::none,
-           folly::none,
+           0,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky",
              0},
@@ -59,7 +59,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
       SubscribeUpdate(
           {0,
            {1, 2},
-           {3, 4},
+           3,
            255,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky",
