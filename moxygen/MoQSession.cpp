@@ -733,8 +733,9 @@ MoQSession::TrackPublisherImpl::objectStream(
       return subgroup.value()->endOfGroup(objHeader.id);
     case ObjectStatus::END_OF_TRACK_AND_GROUP:
       return subgroup.value()->endOfTrackAndGroup(objHeader.id);
-    case ObjectStatus::END_OF_SUBGROUP:
-      return subgroup.value()->endOfSubgroup();
+    case ObjectStatus::END_OF_TRACK:
+      // Validate input id?
+      return subgroup.value()->endOfTrackAndGroup(0);
   }
   return folly::makeUnexpected(
       MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
@@ -1519,6 +1520,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         }
         break;
       case ObjectStatus::END_OF_TRACK_AND_GROUP:
+      case ObjectStatus::END_OF_TRACK:
         res = invokeCallback(
             &SubgroupConsumer::endOfTrackAndGroup,
             &FetchConsumer::endOfTrackAndGroup,
@@ -1526,9 +1528,6 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
             subgroup,
             objectID);
         endOfSubgroup();
-        break;
-      case ObjectStatus::END_OF_SUBGROUP:
-        endOfSubgroup(/*deliverCallback=*/true);
         break;
     }
     if (!res) {
