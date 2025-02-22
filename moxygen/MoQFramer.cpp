@@ -8,6 +8,11 @@
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
 
+namespace {
+constexpr uint64_t kMaxExtensions = 16;
+constexpr uint64_t kMaxExtensionLength = 1024;
+} // namespace
+
 namespace moxygen {
 
 folly::Expected<std::string, ErrorCode> parseFixedString(
@@ -123,6 +128,53 @@ folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
   return location;
 }
 
+folly::Expected<folly::Unit, ErrorCode> parseExtensions(
+    folly::io::Cursor& cursor,
+    size_t& length,
+    ObjectHeader& objectHeader) {
+  auto numExt = quic::decodeQuicInteger(cursor, length);
+  if (!numExt) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numExt->second;
+  if (numExt->first > kMaxExtensions) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  }
+  for (auto i = 0u; i < numExt->first; i++) {
+    auto type = quic::decodeQuicInteger(cursor, length);
+    if (!type) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= type->second;
+    Extension ext;
+    ext.type = type->first;
+    if (ext.type & 0x1) {
+      auto extLen = quic::decodeQuicInteger(cursor, length);
+      if (!extLen) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= extLen->second;
+      if (length < extLen->first) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      if (extLen->first > kMaxExtensionLength) {
+        return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      }
+      ext.arrayValue.resize(extLen->first);
+      cursor.pull(ext.arrayValue.data(), extLen->first);
+      length -= extLen->first;
+    } else {
+      auto iVal = quic::decodeQuicInteger(cursor, length);
+      if (!iVal) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= iVal->second;
+      ext.intValue = iVal->first;
+    }
+  }
+  return folly::unit;
+}
+
 folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
@@ -213,6 +265,11 @@ folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
   length -= 1;
+  auto ext = parseExtensions(cursor, length, objectHeader);
+  if (!ext) {
+    return folly::makeUnexpected(ext.error());
+  }
+
   if (streamType == StreamType::OBJECT_DATAGRAM_STATUS) {
     auto status = quic::decodeQuicInteger(cursor, length);
     if (!status) {
@@ -332,6 +389,11 @@ folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
   objectHeader.priority = cursor.readBE<uint8_t>();
   length--;
 
+  auto ext = parseExtensions(cursor, length, objectHeader);
+  if (!ext) {
+    return folly::makeUnexpected(ext.error());
+  }
+
   auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
   if (!res) {
     return folly::makeUnexpected(res.error());
@@ -351,6 +413,11 @@ folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
   }
   length -= id->second;
   objectHeader.id = id->first;
+
+  auto ext = parseExtensions(cursor, length, objectHeader);
+  if (!ext) {
+    return folly::makeUnexpected(ext.error());
+  }
 
   auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
   if (!res) {
@@ -1241,6 +1308,25 @@ WriteResult writeSingleObjectStream(
   }
 }
 
+void writeExtensions(
+    folly::IOBufQueue& writeBuf,
+    const std::vector<Extension>& extensions,
+    size_t& size,
+    bool& error) {
+  writeVarint(writeBuf, extensions.size(), size, error);
+  for (const auto& ext : extensions) {
+    writeVarint(writeBuf, ext.type, size, error);
+    if (ext.type & 0x1) {
+      // length prefix
+      writeVarint(writeBuf, ext.arrayValue.size(), size, error);
+      writeBuf.append(ext.arrayValue.data(), size);
+    } else {
+      // even = single varint
+      writeVarint(writeBuf, ext.intValue, size, error);
+    }
+  }
+}
+
 WriteResult writeDatagramObject(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
@@ -1263,6 +1349,7 @@ WriteResult writeDatagramObject(
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
+    writeExtensions(writeBuf, objectHeader.extensions, size, error);
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
   } else {
@@ -1276,6 +1363,7 @@ WriteResult writeDatagramObject(
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
+    writeExtensions(writeBuf, objectHeader.extensions, size, error);
     writeBuf.append(std::move(objectPayload));
   }
   if (error) {
@@ -1300,6 +1388,7 @@ WriteResult writeStreamObject(
   } else {
     writeVarint(writeBuf, objectHeader.id, size, error);
   }
+  writeExtensions(writeBuf, objectHeader.extensions, size, error);
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
       << "non-zero length objects require NORMAL status";

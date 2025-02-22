@@ -233,14 +233,13 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
 StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
-      header_{
+      header_(
           publisher->subscribeID(),
           0,
           0,
           std::numeric_limits<uint64_t>::max(),
           0,
-          ObjectStatus::NORMAL,
-          folly::none} {
+          ObjectStatus::NORMAL) {
   (void)writeFetchHeader(writeBuf_, publisher->subscribeID());
 }
 
@@ -776,13 +775,13 @@ MoQSession::TrackPublisherImpl::groupNotExists(
     uint64_t subgroupID,
     Priority priority) {
   return objectStream(
-      {trackAlias_,
-       groupID,
-       subgroupID,
-       0,
-       priority,
-       ObjectStatus::GROUP_NOT_EXIST,
-       0},
+      ObjectHeader(
+          trackAlias_,
+          groupID,
+          subgroupID,
+          0,
+          priority,
+          ObjectStatus::GROUP_NOT_EXIST),
       nullptr);
 }
 
@@ -806,14 +805,15 @@ MoQSession::TrackPublisherImpl::datagram(
   DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
   (void)writeDatagramObject(
       writeBuf,
-      ObjectHeader{
+      ObjectHeader(
           trackAlias_,
           header.group,
           header.id,
           header.id,
           header.priority,
           header.status,
-          headerLength},
+          std::vector<Extension>(),
+          headerLength),
       std::move(payload));
   // TODO: set priority when WT has an API for that
   auto res = wt->sendDatagram(writeBuf.move());

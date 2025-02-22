@@ -183,7 +183,7 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
 
   skip(cursor, 1);
   auto r24 =
-      parseDatagramObjectHeader(cursor, StreamType::OBJECT_DATAGRAM_STATUS, 5);
+      parseDatagramObjectHeader(cursor, StreamType::OBJECT_DATAGRAM_STATUS, 6);
   testUnderflowResult(r24);
   EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
 
@@ -213,6 +213,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
        44,             // id
        55,             // priority
        ObjectStatus::OBJECT_NOT_EXIST,
+       std::vector<Extension>(),
        0},
       nullptr);
   EXPECT_TRUE(result.hasValue());
@@ -242,6 +243,7 @@ TEST(SerializeAndParse, ParseDatagramNormal) {
        44,             // id
        55,             // priority
        ObjectStatus::NORMAL,
+       std::vector<Extension>(),
        8},
       folly::IOBuf::copyBuffer("datagram"));
   EXPECT_TRUE(result.hasValue());
@@ -271,6 +273,7 @@ TEST(SerializeAndParse, ZeroLengthNormal) {
        44,             // id
        55,             // priority
        ObjectStatus::NORMAL,
+       std::vector<Extension>(),
        0},
       nullptr);
   EXPECT_TRUE(result.hasValue());
@@ -298,6 +301,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
       44,             // id
       55,             // priority
       ObjectStatus::NORMAL,
+      std::vector<Extension>(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeSubgroupHeader(writeBuf, expectedObjectHeader);
@@ -350,6 +354,7 @@ TEST(SerializeAndParse, ParseFetchHeader) {
       44,              // id
       55,              // priority
       ObjectStatus::NORMAL,
+      std::vector<Extension>(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeFetchHeader(
@@ -459,13 +464,13 @@ TEST(FramerTests, SingleObjectStream) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeSingleObjectStream(
       writeBuf,
-      {TrackAlias(22), // trackAlias
-       33,             // group
-       0,              // subgroup
-       44,             // id
-       55,             // priority
-       ObjectStatus::NORMAL,
-       4},
+      ObjectHeader(
+          TrackAlias(22), // trackAlias
+          33,             // group
+          0,              // subgroup
+          44,             // id
+          55,             // priority
+          4),
       folly::IOBuf::copyBuffer("abcd"));
   EXPECT_TRUE(result.hasValue());
   auto serialized = writeBuf.move();
