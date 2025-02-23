@@ -2299,6 +2299,12 @@ void MoQSession::onGoaway(Goaway goaway) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
+  if (dir_ == MoQControlCodec::Direction::SERVER &&
+      !goaway.newSessionUri.empty()) {
+    XLOG(ERR) << "Server received GOAWAY newSessionUri sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
   receivedGoaway_ = true;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
