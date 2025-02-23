@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQSession.h"
+#include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/EventBase.h>
@@ -545,11 +546,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   TrackPublisherImpl() = delete;
   TrackPublisherImpl(
       MoQSession* session,
+      FullTrackName fullTrackName,
       SubscribeID subscribeID,
       TrackAlias trackAlias,
       Priority subPriority,
       GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, subPriority, groupOrder),
+      : PublisherImpl(
+            session,
+            std::move(fullTrackName),
+            subscribeID,
+            subPriority,
+            groupOrder),
         trackAlias_(trackAlias) {}
 
   void setSubscriptionHandle(
@@ -619,10 +626,16 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
  public:
   FetchPublisherImpl(
       MoQSession* session,
+      FullTrackName fullTrackName,
       SubscribeID subscribeID,
       Priority subPriority,
       GroupOrder groupOrder)
-      : PublisherImpl(session, subscribeID, subPriority, groupOrder) {
+      : PublisherImpl(
+            session,
+            std::move(fullTrackName),
+            subscribeID,
+            subPriority,
+            groupOrder) {
     streamPublisher_ = std::make_shared<StreamPublisherImpl>(this);
   }
 
@@ -1686,6 +1699,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   // TODO: Check for duplicate alias
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
+      subscribeRequest.fullTrackName,
       subscribeRequest.subscribeID,
       subscribeRequest.trackAlias,
       subscribeRequest.priority,
@@ -1893,17 +1907,32 @@ void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
 }
 
 void MoQSession::onFetch(Fetch fetch) {
-  XLOG(DBG1) << __func__ << " ftn=" << fetch.fullTrackName << " sess=" << this;
+  auto [standalone, joining] = fetchType(fetch);
+  auto logStr = (standalone)
+      ? fetch.fullTrackName.describe()
+      : folly::to<std::string>("joining=", joining->joiningSubscribeID.value);
+  XLOG(DBG1) << __func__ << " (" << logStr << ") sess=" << this;
   const auto subscribeID = fetch.subscribeID;
   if (closeSessionIfSubscribeIdInvalid(subscribeID)) {
     return;
   }
-  if (fetch.end < fetch.start) {
-    fetchError(
-        {fetch.subscribeID,
-         folly::to_underlying(FetchErrorCode::INVALID_RANGE),
-         "End must be after start"});
-    return;
+  if (standalone) {
+    if (standalone->end < standalone->start) {
+      fetchError(
+          {fetch.subscribeID,
+           folly::to_underlying(FetchErrorCode::INVALID_RANGE),
+           "End must be after start"});
+      return;
+    }
+  } else {
+    auto joinIt = pubTracks_.find(joining->joiningSubscribeID);
+    if (joinIt == pubTracks_.end()) {
+      XLOG(ERR) << "Unknown joining subscribe ID="
+                << joining->joiningSubscribeID << " sess=" << this;
+      fetchError({fetch.subscribeID, 400, "Unknown joining subscribeID"});
+      return;
+    }
+    fetch.fullTrackName = joinIt->second->fullTrackName();
   }
   auto it = pubTracks_.find(fetch.subscribeID);
   if (it != pubTracks_.end()) {
@@ -1913,7 +1942,11 @@ void MoQSession::onFetch(Fetch fetch) {
     return;
   }
   auto fetchPublisher = std::make_shared<FetchPublisherImpl>(
-      this, fetch.subscribeID, fetch.priority, fetch.groupOrder);
+      this,
+      fetch.fullTrackName,
+      fetch.subscribeID,
+      fetch.priority,
+      fetch.groupOrder);
   pubTracks_.emplace(fetch.subscribeID, fetchPublisher);
   handleFetch(std::move(fetch), std::move(fetchPublisher))
       .scheduleOn(evb_)
@@ -1926,6 +1959,11 @@ folly::coro::Task<void> MoQSession::handleFetch(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto subscribeID = fetch.subscribeID;
+  if (!fetchPublisher->getStreamPublisher()) {
+    XLOG(ERR) << "Fetch Publisher killed sess=" << this;
+    fetchError({subscribeID, 500, "Fetch Failed"});
+    co_return;
+  }
   auto fetchResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->fetch(
@@ -2712,12 +2750,36 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     co_return folly::makeUnexpected(FetchError{
         std::numeric_limits<uint64_t>::max(), 500, "Draining session"});
   }
-  auto fullTrackName = fetch.fullTrackName;
+
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
     XLOG(WARN) << "Issuing fetch that will fail; nextSubscribeID_="
                << nextSubscribeID_
                << " peerMaxSubscribeid_=" << peerMaxSubscribeID_
                << " sess=" << this;
+  }
+  auto [standalone, joining] = fetchType(fetch);
+  FullTrackName fullTrackName = fetch.fullTrackName;
+  if (joining) {
+    auto subIt = subIdToTrackAlias_.find(joining->joiningSubscribeID);
+    if (subIt == subIdToTrackAlias_.end()) {
+      XLOG(ERR) << "API error, joining FETCH for invalid subscribe id="
+                << joining->joiningSubscribeID.value << " sess=" << this;
+      co_return folly::makeUnexpected(FetchError{
+          std::numeric_limits<uint64_t>::max(), 400, "Invalid JSID"});
+    }
+    auto stateIt = subTracks_.find(subIt->second);
+    if (stateIt == subTracks_.end()) {
+      XLOG(ERR) << "API error, missing receive state for alias="
+                << subIt->second << " sess=" << this;
+      co_return folly::makeUnexpected(FetchError{
+          std::numeric_limits<uint64_t>::max(), 500, "Missing state"});
+    }
+    if (fullTrackName != stateIt->second->fullTrackName()) {
+      XLOG(ERR) << "API error, track name mismatch=" << fullTrackName << ","
+                << stateIt->second->fullTrackName() << " sess=" << this;
+      co_return folly::makeUnexpected(FetchError{
+          std::numeric_limits<uint64_t>::max(), 500, "Track name mismatch"});
+    }
   }
   auto subID = nextSubscribeID_++;
   fetch.subscribeID = subID;
@@ -2786,6 +2848,28 @@ void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
     return;
   }
   controlWriteEvent_.signal();
+}
+
+folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
+    SubscribeRequest sub,
+    std::shared_ptr<TrackConsumer> subscribeCallback,
+    uint64_t precedingGroupOffset,
+    uint8_t fetchPri,
+    GroupOrder fetchOrder,
+    std::vector<TrackRequestParameter> fetchParams,
+    std::shared_ptr<FetchConsumer> fetchCallback) {
+  Fetch fetchReq(
+      0,                // will be picked by fetch()
+      nextSubscribeID_, // this will be the ID for subscribe()
+      precedingGroupOffset,
+      fetchPri,
+      fetchOrder,
+      std::move(fetchParams));
+  fetchReq.fullTrackName = sub.fullTrackName;
+  auto [subscribeResult, fetchResult] = co_await folly::coro::collectAll(
+      subscribe(std::move(sub), std::move(subscribeCallback)),
+      fetch(std::move(fetchReq), std::move(fetchCallback)));
+  co_return {subscribeResult, fetchResult};
 }
 
 void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
