@@ -146,7 +146,7 @@ void MoQObjectStreamCodec::onIngress(
           connError_ = res.error();
           break;
         }
-        auto subscribeID = SubscribeID(res.value());
+        auto subscribeID = res.value();
         curObjectHeader_.trackIdentifier = subscribeID;
         isFetch = true;
         if (callback_) {
@@ -181,8 +181,13 @@ void MoQObjectStreamCodec::onIngress(
       }
       case ParseState::MULTI_OBJECT_HEADER: {
         auto newCursor = cursor;
-        auto res =
-            parseMultiObjectHeader(newCursor, streamType_, curObjectHeader_);
+        folly::Expected<ObjectHeader, ErrorCode> res;
+        if (streamType_ == StreamType::FETCH_HEADER) {
+          res = parseFetchObjectHeader(newCursor, curObjectHeader_);
+        } else {
+          DCHECK(streamType_ == StreamType::SUBGROUP_HEADER);
+          res = parseSubgroupObjectHeader(newCursor, curObjectHeader_);
+        }
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
