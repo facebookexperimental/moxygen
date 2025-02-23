@@ -39,7 +39,7 @@ class MoQRelayClient {
         auto res = co_await moqClient_.moqSession_->announce(std::move(ann));
         if (!res) {
           XLOG(ERR) << "AnnounceError namespace=" << res.error().trackNamespace
-                    << " code=" << res.error().errorCode
+                    << " code=" << folly::to_underlying(res.error().errorCode)
                     << " reason=" << res.error().reasonPhrase;
         } else {
           announceHandles_.emplace_back(std::move(res.value()));

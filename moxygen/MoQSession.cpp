@@ -1011,7 +1011,8 @@ class MoQSession::SubscriberAnnounceCallback
   SubscriberAnnounceCallback(MoQSession& session, const TrackNamespace& ns)
       : session_(session), trackNamespace_(ns) {}
 
-  void announceCancel(uint64_t errorCode, std::string reasonPhrase) override {
+  void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase)
+      override {
     session_.announceCancel(
         {trackNamespace_, errorCode, std::move(reasonPhrase)});
   }
@@ -1063,7 +1064,7 @@ void MoQSession::cleanup() {
   for (auto& ann : publisherAnnounces_) {
     if (ann.second) {
       ann.second->announceCancel(
-          std::numeric_limits<uint64_t>::max(), "Session ended");
+          AnnounceErrorCode::INTERNAL_ERROR, "Session ended");
     }
   }
   publisherAnnounces_.clear();
@@ -1074,7 +1075,7 @@ void MoQSession::cleanup() {
   for (auto& subTrack : subTracks_) {
     subTrack.second->subscribeError(
         {/*TrackReceiveState fills in subId*/ 0,
-         500,
+         SubscribeErrorCode::INTERNAL_ERROR,
          "session closed",
          folly::none});
   }
@@ -1084,17 +1085,23 @@ void MoQSession::cleanup() {
     // both from here, when close races the FETCH stream, and from readLoop
     // where we get a reset.
     fetch.second->fetchError(
-        {/*TrackReceiveState fills in subId*/ 0, 500, "session closed"});
+        {/*TrackReceiveState fills in subId*/ 0,
+         FetchErrorCode::INTERNAL_ERROR,
+         "session closed"});
   }
   fetches_.clear();
   for (auto& [trackNamespace, pendingAnn] : pendingAnnounce_) {
-    pendingAnn.setValue(folly::makeUnexpected(
-        AnnounceError({trackNamespace, 500, "session closed"})));
+    pendingAnn.setValue(folly::makeUnexpected(AnnounceError(
+        {trackNamespace,
+         AnnounceErrorCode::INTERNAL_ERROR,
+         "session closed"})));
   }
   pendingAnnounce_.clear();
   for (auto& [trackNamespace, pendingSn] : pendingSubscribeAnnounces_) {
-    pendingSn.setValue(folly::makeUnexpected(
-        SubscribeAnnouncesError({trackNamespace, 500, "session closed"})));
+    pendingSn.setValue(folly::makeUnexpected(SubscribeAnnouncesError(
+        {trackNamespace,
+         SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+         "session closed"})));
   }
   pendingSubscribeAnnounces_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
@@ -1693,7 +1700,11 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   if (it != pubTracks_.end()) {
     XLOG(ERR) << "Duplicate subscribe ID=" << subscribeRequest.subscribeID
               << " sess=" << this;
-    subscribeError({subscribeRequest.subscribeID, 400, "dup sub ID"});
+    // TODO: message error?
+    subscribeError(
+        {subscribeRequest.subscribeID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         "dup sub ID"});
     return;
   }
   // TODO: Check for duplicate alias
@@ -1727,7 +1738,9 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subscribeResult.exception().what().toStdString();
     subscribeError(
-        {subscribeID, 500, subscribeResult.exception().what().toStdString()});
+        {subscribeID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         subscribeResult.exception().what().toStdString()});
     co_return;
   }
   if (subscribeResult->hasError()) {
@@ -1920,7 +1933,7 @@ void MoQSession::onFetch(Fetch fetch) {
     if (standalone->end < standalone->start) {
       fetchError(
           {fetch.subscribeID,
-           folly::to_underlying(FetchErrorCode::INVALID_RANGE),
+           FetchErrorCode::INVALID_RANGE,
            "End must be after start"});
       return;
     }
@@ -1929,7 +1942,11 @@ void MoQSession::onFetch(Fetch fetch) {
     if (joinIt == pubTracks_.end()) {
       XLOG(ERR) << "Unknown joining subscribe ID="
                 << joining->joiningSubscribeID << " sess=" << this;
-      fetchError({fetch.subscribeID, 400, "Unknown joining subscribeID"});
+      // message error
+      fetchError(
+          {fetch.subscribeID,
+           FetchErrorCode::INTERNAL_ERROR,
+           "Unknown joining subscribeID"});
       return;
     }
     fetch.fullTrackName = joinIt->second->fullTrackName();
@@ -1938,7 +1955,9 @@ void MoQSession::onFetch(Fetch fetch) {
   if (it != pubTracks_.end()) {
     XLOG(ERR) << "Duplicate subscribe ID=" << fetch.subscribeID
               << " sess=" << this;
-    fetchError({fetch.subscribeID, 400, "dup sub ID"});
+    // message error
+    fetchError(
+        {fetch.subscribeID, FetchErrorCode::INTERNAL_ERROR, "dup sub ID"});
     return;
   }
   auto fetchPublisher = std::make_shared<FetchPublisherImpl>(
@@ -1961,7 +1980,7 @@ folly::coro::Task<void> MoQSession::handleFetch(
   auto subscribeID = fetch.subscribeID;
   if (!fetchPublisher->getStreamPublisher()) {
     XLOG(ERR) << "Fetch Publisher killed sess=" << this;
-    fetchError({subscribeID, 500, "Fetch Failed"});
+    fetchError({subscribeID, FetchErrorCode::INTERNAL_ERROR, "Fetch Failed"});
     co_return;
   }
   auto fetchResult = co_await co_awaitTry(co_withCancellation(
@@ -1972,7 +1991,9 @@ folly::coro::Task<void> MoQSession::handleFetch(
     XLOG(ERR) << "Exception in Publisher callback ex="
               << fetchResult.exception().what();
     fetchError(
-        {subscribeID, 500, fetchResult.exception().what().toStdString()});
+        {subscribeID,
+         FetchErrorCode::INTERNAL_ERROR,
+         fetchResult.exception().what().toStdString()});
     co_return;
   }
   if (fetchResult->hasError()) {
@@ -2052,7 +2073,10 @@ void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << "No subscriber callback set";
-    announceError({ann.trackNamespace, 500, "Not a subscriber"});
+    announceError(
+        {ann.trackNamespace,
+         AnnounceErrorCode::NOT_SUPPORTED,
+         "Not a subscriber"});
   } else {
     handleAnnounce(std::move(ann)).scheduleOn(evb_).start();
   }
@@ -2071,7 +2095,7 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
               << announceResult.exception().what().toStdString();
     announceError(
         {announce.trackNamespace,
-         500,
+         AnnounceErrorCode::INTERNAL_ERROR,
          announceResult.exception().what().toStdString()});
     co_return;
   }
@@ -2157,7 +2181,10 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
              << " sess=" << this;
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
-    subscribeAnnouncesError({sa.trackNamespacePrefix, 500, "Not a publisher"});
+    subscribeAnnouncesError(
+        {sa.trackNamespacePrefix,
+         SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+         "Not a publisher"});
     return;
   }
   handleSubscribeAnnounces(std::move(sa)).scheduleOn(evb_).start();
@@ -2175,7 +2202,7 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
               << subAnnResult.exception().what().toStdString();
     subscribeAnnouncesError(
         {subAnn.trackNamespacePrefix,
-         500,
+         SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          subAnnResult.exception().what().toStdString()});
     co_return;
   }
@@ -2336,8 +2363,10 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
   auto res = writeAnnounce(controlWriteBuf_, std::move(ann));
   if (!res) {
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
-    co_return folly::makeUnexpected(
-        AnnounceError({std::move(trackNamespace), 500, "local write failed"}));
+    co_return folly::makeUnexpected(AnnounceError(
+        {std::move(trackNamespace),
+         AnnounceErrorCode::INTERNAL_ERROR,
+         "local write failed"}));
   }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
@@ -2427,7 +2456,9 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
     co_return folly::makeUnexpected(SubscribeAnnouncesError(
-        {std::move(trackNamespace), 500, "local write failed"}));
+        {std::move(trackNamespace),
+         SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+         "local write failed"}));
   }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
@@ -2516,7 +2547,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   if (draining_) {
     co_return folly::makeUnexpected(SubscribeError{
         std::numeric_limits<uint64_t>::max(),
-        500,
+        SubscribeErrorCode::INTERNAL_ERROR,
         "Draining session",
         folly::none});
   }
@@ -2535,8 +2566,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto wres = writeSubscribeRequest(controlWriteBuf_, std::move(sub));
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
-    co_return folly::makeUnexpected(
-        SubscribeError({subID, 500, "local write failed", folly::none}));
+    co_return folly::makeUnexpected(SubscribeError(
+        {subID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         "local write failed",
+         folly::none}));
   }
   controlWriteEvent_.signal();
   auto res = subIdToTrackAlias_.emplace(subID, trackAlias);
@@ -2573,8 +2607,8 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
               << subOk.subscribeID;
     subscribeError(
         {subOk.subscribeID,
-         folly::to_underlying(FetchErrorCode::INTERNAL_ERROR),
-         ""});
+         SubscribeErrorCode::INTERNAL_ERROR,
+         "Invalid internal state"});
     return nullptr;
   }
   trackPublisher->setGroupOrder(subOk.groupOrder);
@@ -2754,7 +2788,9 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   if (draining_) {
     co_return folly::makeUnexpected(FetchError{
-        std::numeric_limits<uint64_t>::max(), 500, "Draining session"});
+        std::numeric_limits<uint64_t>::max(),
+        FetchErrorCode::INTERNAL_ERROR,
+        "Draining session"});
   }
 
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
@@ -2771,20 +2807,26 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
       XLOG(ERR) << "API error, joining FETCH for invalid subscribe id="
                 << joining->joiningSubscribeID.value << " sess=" << this;
       co_return folly::makeUnexpected(FetchError{
-          std::numeric_limits<uint64_t>::max(), 400, "Invalid JSID"});
+          std::numeric_limits<uint64_t>::max(),
+          FetchErrorCode::INTERNAL_ERROR,
+          "Invalid JSID"});
     }
     auto stateIt = subTracks_.find(subIt->second);
     if (stateIt == subTracks_.end()) {
       XLOG(ERR) << "API error, missing receive state for alias="
                 << subIt->second << " sess=" << this;
       co_return folly::makeUnexpected(FetchError{
-          std::numeric_limits<uint64_t>::max(), 500, "Missing state"});
+          std::numeric_limits<uint64_t>::max(),
+          FetchErrorCode::INTERNAL_ERROR,
+          "Missing state"});
     }
     if (fullTrackName != stateIt->second->fullTrackName()) {
       XLOG(ERR) << "API error, track name mismatch=" << fullTrackName << ","
                 << stateIt->second->fullTrackName() << " sess=" << this;
       co_return folly::makeUnexpected(FetchError{
-          std::numeric_limits<uint64_t>::max(), 500, "Track name mismatch"});
+          std::numeric_limits<uint64_t>::max(),
+          FetchErrorCode::INTERNAL_ERROR,
+          "Track name mismatch"});
     }
   }
   auto subID = nextSubscribeID_++;
@@ -2792,8 +2834,8 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto wres = writeFetch(controlWriteBuf_, std::move(fetch));
   if (!wres) {
     XLOG(ERR) << "writeFetch failed sess=" << this;
-    co_return folly::makeUnexpected(
-        FetchError({subID, 500, "local write failed"}));
+    co_return folly::makeUnexpected(FetchError(
+        {subID, FetchErrorCode::INTERNAL_ERROR, "local write failed"}));
   }
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<FetchTrackReceiveState>(

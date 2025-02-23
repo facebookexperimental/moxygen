@@ -62,7 +62,7 @@ class Subscriber {
     virtual ~AnnounceCallback() = default;
 
     virtual void announceCancel(
-        uint64_t errorCode,
+        AnnounceErrorCode errorCode,
         std::string reasonPhrase) = 0;
   };
 
@@ -72,8 +72,11 @@ class Subscriber {
   virtual folly::coro::Task<AnnounceResult> announce(
       Announce ann,
       std::shared_ptr<AnnounceCallback> = nullptr) {
-    return folly::coro::makeTask<AnnounceResult>(folly::makeUnexpected(
-        AnnounceError{ann.trackNamespace, 500, "unimplemented"}));
+    return folly::coro::makeTask<AnnounceResult>(
+        folly::makeUnexpected(AnnounceError{
+            ann.trackNamespace,
+            AnnounceErrorCode::NOT_SUPPORTED,
+            "unimplemented"}));
   }
 
   virtual void goaway(Goaway /*goaway*/) {}

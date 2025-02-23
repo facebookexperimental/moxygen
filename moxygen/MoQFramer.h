@@ -43,16 +43,19 @@ enum class SessionCloseErrorCode : uint32_t {
   DUPLICATE_TRACK_ALIAS = 4,
   PARAMETER_LENGTH_MISMATCH = 5,
   TOO_MANY_SUBSCRIBES = 0x6,
-  GOAWAY_TIMEOUT = 0x10
+  GOAWAY_TIMEOUT = 0x10,
+  CONTROL_MESSAGE_TIMEOUT = 0x11,
+  DATA_STREAM_TIMEOUT = 0x12,
 };
 
 enum class SubscribeErrorCode : uint32_t {
   INTERNAL_ERROR = 0,
-  INVALID_RANGE = 1,
-  RETRY_TRACK_ALIAS = 2,
-  TRACK_NOT_EXIST = 3,
-  UNAUTHORIZED = 4,
-  TIMEOUT = 5,
+  UNAUTHORIZED = 1,
+  TIMEOUT = 2,
+  NOT_SUPPORTED = 3,
+  TRACK_NOT_EXIST = 4,
+  INVALID_RANGE = 5,
+  RETRY_TRACK_ALIAS = 6,
 };
 
 enum class SubscribeDoneStatusCode : uint32_t {
@@ -77,10 +80,27 @@ enum class TrackStatusCode : uint32_t {
 
 enum class FetchErrorCode : uint32_t {
   INTERNAL_ERROR = 0,
-  INVALID_RANGE = 1,
-  TRACK_NOT_EXIST = 2,
-  UNAUTHORIZED = 3,
-  TIMEOUT = 4,
+  UNAUTHORIZED = 1,
+  TIMEOUT = 2,
+  NOT_SUPPORTED = 3,
+  TRACK_NOT_EXIST = 4,
+  INVALID_RANGE = 5,
+};
+
+enum class SubscribeAnnouncesErrorCode : uint32_t {
+  INTERNAL_ERROR = 0,
+  UNAUTHORIZED = 1,
+  TIMEOUT = 2,
+  NOT_SUPPORTED = 3,
+  NAMESPACE_PREFIX_UNKNOWN = 4,
+};
+
+enum class AnnounceErrorCode : uint32_t {
+  INTERNAL_ERROR = 0,
+  UNAUTHORIZED = 1,
+  TIMEOUT = 2,
+  NOT_SUPPORTED = 3,
+  UNINTERESTED = 4,
 };
 
 enum class ResetStreamErrorCode : uint32_t {
@@ -165,7 +185,8 @@ constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
 constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
 constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
 constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp6;
+constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp7;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -492,7 +513,7 @@ folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
 
 struct SubscribeError {
   SubscribeID subscribeID;
-  uint64_t errorCode;
+  SubscribeErrorCode errorCode;
   std::string reasonPhrase;
   folly::Optional<uint64_t> retryAlias{folly::none};
 };
@@ -540,7 +561,7 @@ folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
 
 struct AnnounceError {
   TrackNamespace trackNamespace;
-  uint64_t errorCode;
+  AnnounceErrorCode errorCode;
   std::string reasonPhrase;
 };
 
@@ -558,7 +579,7 @@ folly::Expected<Unannounce, ErrorCode> parseUnannounce(
 
 struct AnnounceCancel {
   TrackNamespace trackNamespace;
-  uint64_t errorCode;
+  AnnounceErrorCode errorCode;
   std::string reasonPhrase;
 };
 
@@ -694,7 +715,7 @@ folly::Expected<FetchOk, ErrorCode> parseFetchOk(
 
 struct FetchError {
   SubscribeID subscribeID;
-  uint64_t errorCode;
+  FetchErrorCode errorCode;
   std::string reasonPhrase;
 };
 
@@ -721,7 +742,7 @@ folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
 
 struct SubscribeAnnouncesError {
   TrackNamespace trackNamespacePrefix;
-  uint64_t errorCode;
+  SubscribeAnnouncesErrorCode errorCode;
   std::string reasonPhrase;
 };
 

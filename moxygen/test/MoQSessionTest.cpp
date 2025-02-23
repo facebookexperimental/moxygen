@@ -338,9 +338,7 @@ TEST_F(MoQSessionTest, FetchError) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     auto res = co_await session->fetch(getFetch({0, 1}, {0, 0}), fetchCallback);
     EXPECT_TRUE(res.hasError());
-    EXPECT_EQ(
-        res.error().errorCode,
-        folly::to_underlying(FetchErrorCode::INVALID_RANGE));
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
   f(clientSession_).scheduleOn(&eventBase_).start();
@@ -355,9 +353,7 @@ TEST_F(MoQSessionTest, FetchPublisherError) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
-    EXPECT_EQ(
-        res.error().errorCode,
-        folly::to_underlying(FetchErrorCode::TRACK_NOT_EXIST));
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::TRACK_NOT_EXIST);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
@@ -365,7 +361,7 @@ TEST_F(MoQSessionTest, FetchPublisherError) {
           [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             co_return folly::makeUnexpected(FetchError{
                 fetch.subscribeID,
-                folly::to_underlying(FetchErrorCode::TRACK_NOT_EXIST),
+                FetchErrorCode::TRACK_NOT_EXIST,
                 "Bad trackname"});
           }));
   f(clientSession_).scheduleOn(&eventBase_).start();
@@ -380,7 +376,7 @@ TEST_F(MoQSessionTest, FetchPublisherThrow) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
-    EXPECT_EQ(res.error().errorCode, 500);
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
@@ -729,8 +725,11 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
   EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
       .WillOnce(testing::Invoke(
           [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
-            co_return folly::makeUnexpected(
-                SubscribeError{sub.subscribeID, 400, "bad", folly::none});
+            co_return folly::makeUnexpected(SubscribeError{
+                sub.subscribeID,
+                SubscribeErrorCode::UNAUTHORIZED,
+                "bad",
+                folly::none});
           }))
       .WillOnce(testing::Invoke(
           [this](auto sub, auto pub)
