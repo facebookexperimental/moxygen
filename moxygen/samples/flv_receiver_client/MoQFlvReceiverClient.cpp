@@ -521,7 +521,7 @@ int main(int argc, char* argv[]) {
            GroupOrder::OldestFirst,
            LocationType::LatestObject,
            folly::none,
-           folly::none,
+           0,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              FLAGS_auth,
              0}}},
@@ -535,7 +535,7 @@ int main(int argc, char* argv[]) {
            GroupOrder::OldestFirst,
            LocationType::LatestObject,
            folly::none,
-           folly::none,
+           0,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              FLAGS_auth,
              0}}})

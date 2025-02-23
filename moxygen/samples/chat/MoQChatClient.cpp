@@ -135,6 +135,7 @@ void MoQChatClient::unsubscribe() {
     publisher_->subscribeDone(
         {*chatSubscribeID_,
          SubscribeDoneStatusCode::UNSUBSCRIBED,
+         0, // filled in by session
          "",
          folly::none});
     publisher_.reset();
@@ -287,7 +288,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
        GroupOrder::OldestFirst,
        LocationType::LatestGroup,
        folly::none,
-       folly::none,
+       0,
        {}},
       std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, &handler)));
   if (track.hasException()) {

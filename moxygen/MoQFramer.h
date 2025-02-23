@@ -122,6 +122,7 @@ enum class FrameType : uint64_t {
 
 enum class StreamType : uint64_t {
   OBJECT_DATAGRAM = 1,
+  OBJECT_DATAGRAM_STATUS = 02,
   SUBGROUP_HEADER = 0x4,
   FETCH_HEADER = 0x5,
 };
@@ -150,14 +151,21 @@ constexpr uint64_t kVersionDraft03 = 0xff000003;
 constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
-constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft06_exp =
     0xff060004; // Draft 6 in progress version
+constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft07_exp = 0xff070001; // Draft 7 FETCH support
 constexpr uint64_t kVersionDraft07_exp2 =
     0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
-constexpr uint64_t kVersionDraft08 = 0xff080001; // Draft 8 no ROLE
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
+constexpr uint64_t kVersionDraft08 = 0xff000008;
+constexpr uint64_t kVersionDraft08_exp1 = 0xff080001; // Draft 8 no ROLE
+// SUBSCRIBE_DONE stream count
+constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
+constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
+constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
+constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
+constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp6;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -183,7 +191,7 @@ enum class ObjectStatus : uint64_t {
   GROUP_NOT_EXIST = 2,
   END_OF_GROUP = 3,
   END_OF_TRACK_AND_GROUP = 4,
-  END_OF_SUBGROUP = 5,
+  END_OF_TRACK = 5,
 };
 
 std::ostream& operator<<(std::ostream& os, ObjectStatus type);
@@ -269,19 +277,23 @@ struct ObjectHeader {
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 
 // datagram only
-folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
+    StreamType streamType,
     size_t length) noexcept;
 
-folly::Expected<uint64_t, ErrorCode> parseFetchHeader(
+folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
     folly::io::Cursor& cursor) noexcept;
 
 folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
     folly::io::Cursor& cursor) noexcept;
 
-folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
     folly::io::Cursor& cursor,
-    StreamType streamType,
+    const ObjectHeader& headerTemplate) noexcept;
+
+folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
+    folly::io::Cursor& cursor,
     const ObjectHeader& headerTemplate) noexcept;
 
 enum class TrackRequestParamKey : uint64_t {
@@ -355,18 +367,25 @@ struct TrackNamespace {
   friend std::ostream& operator<<(
       std::ostream& os,
       const TrackNamespace& trackNs) {
-    if (trackNs.trackNamespace.empty()) {
-      return os;
+    os << trackNs.describe();
+    return os;
+  }
+
+  std::string describe() const {
+    std::string result;
+    if (trackNamespace.empty()) {
+      return result;
     }
 
     // Iterate through all elements except the last one
-    for (size_t i = 0; i < trackNs.trackNamespace.size() - 1; ++i) {
-      os << trackNs.trackNamespace[i] << '/';
+    for (size_t i = 0; i < trackNamespace.size() - 1; ++i) {
+      result += trackNamespace[i];
+      result += '/';
     }
 
     // Add the last element without a trailing slash
-    os << trackNs.trackNamespace.back();
-    return os;
+    result += trackNamespace.back();
+    return result;
   }
   bool empty() const {
     return trackNamespace.empty() ||
@@ -407,10 +426,14 @@ struct FullTrackName {
         (trackNamespace == other.trackNamespace && trackName < other.trackName);
   }
   friend std::ostream& operator<<(std::ostream& os, const FullTrackName& ftn) {
-    if (ftn.trackNamespace.empty()) {
-      return os << ftn.trackName;
+    os << ftn.describe();
+    return os;
+  }
+  std::string describe() const {
+    if (trackNamespace.empty()) {
+      return trackName;
     }
-    return os << ftn.trackNamespace << '/' << ftn.trackName;
+    return folly::to<std::string>(trackNamespace.describe(), '/', trackName);
   }
   struct hash {
     size_t operator()(const FullTrackName& ftn) const {
@@ -434,7 +457,7 @@ struct SubscribeRequest {
   GroupOrder groupOrder;
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
-  folly::Optional<AbsoluteLocation> end;
+  uint64_t endGroup;
   std::vector<TrackRequestParameter> params;
 };
 
@@ -445,7 +468,7 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
 struct SubscribeUpdate {
   SubscribeID subscribeID;
   AbsoluteLocation start;
-  AbsoluteLocation end;
+  uint64_t endGroup;
   uint8_t priority;
   std::vector<TrackRequestParameter> params;
 };
@@ -489,6 +512,7 @@ folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
 struct SubscribeDone {
   SubscribeID subscribeID;
   SubscribeDoneStatusCode statusCode;
+  uint64_t streamCount;
   std::string reasonPhrase;
   folly::Optional<AbsoluteLocation> finalObject;
 };
@@ -576,31 +600,73 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
+enum class FetchType : uint8_t {
+  STANDALONE = 0x1,
+  JOINING = 0x2,
+};
+
+struct StandaloneFetch {
+  StandaloneFetch() = default;
+  StandaloneFetch(AbsoluteLocation s, AbsoluteLocation e) : start(s), end(e) {}
+  AbsoluteLocation start;
+  AbsoluteLocation end;
+};
+
+struct JoiningFetch {
+  JoiningFetch(SubscribeID jsid, uint64_t pgo)
+      : joiningSubscribeID(jsid), precedingGroupOffset(pgo) {}
+  SubscribeID joiningSubscribeID;
+  uint64_t precedingGroupOffset;
+};
+
 struct Fetch {
-  Fetch() = default;
+  Fetch() : args(StandaloneFetch()) {}
   Fetch(
       SubscribeID su,
-      FullTrackName n,
+      FullTrackName ftn,
       uint8_t p,
       GroupOrder g,
       AbsoluteLocation st,
       AbsoluteLocation e,
       std::vector<TrackRequestParameter> pa = {})
       : subscribeID(su),
-        fullTrackName(std::move(n)),
+        fullTrackName(std::move(ftn)),
         priority(p),
         groupOrder(g),
-        start(st),
-        end(e),
-        params(std::move(pa)) {}
+        params(std::move(pa)),
+        args(StandaloneFetch(st, e)) {}
+  Fetch(
+      SubscribeID su,
+      SubscribeID jsid,
+      uint64_t pgo,
+      uint8_t p,
+      GroupOrder g,
+      std::vector<TrackRequestParameter> pa = {})
+      : subscribeID(su),
+        priority(p),
+        groupOrder(g),
+        params(std::move(pa)),
+        args(JoiningFetch(jsid, pgo)) {}
   SubscribeID subscribeID;
   FullTrackName fullTrackName;
   uint8_t priority;
   GroupOrder groupOrder;
-  AbsoluteLocation start;
-  AbsoluteLocation end;
   std::vector<TrackRequestParameter> params;
+  std::variant<StandaloneFetch, JoiningFetch> args;
 };
+
+inline std::pair<StandaloneFetch*, JoiningFetch*> fetchType(Fetch& fetch) {
+  auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+  auto joining = std::get_if<JoiningFetch>(&fetch.args);
+  return {standalone, joining};
+}
+
+inline std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
+    const Fetch& fetch) {
+  auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+  auto joining = std::get_if<JoiningFetch>(&fetch.args);
+  return {standalone, joining};
+}
 
 folly::Expected<Fetch, ErrorCode> parseFetch(
     folly::io::Cursor& cursor,
@@ -693,7 +759,12 @@ WriteResult writeStreamHeader(
     StreamType streamType,
     const ObjectHeader& objectHeader) noexcept;
 
-WriteResult writeObject(
+WriteResult writeDatagramObject(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+
+WriteResult writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
     const ObjectHeader& objectHeader,

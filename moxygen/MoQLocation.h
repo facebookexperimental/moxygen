@@ -38,13 +38,8 @@ inline SubscribeRange toSubscribeRange(
       break;
     case LocationType::AbsoluteRange:
       XCHECK(end);
-      if (end->object == 0) {
-        result.end.group = end->group + 1;
-        result.end.object = 0;
-      } else {
-        // moxygen uses exclusive end objects, so no need to subtract 1 here
-        result.end = *end;
-      }
+      // moxygen uses exclusive end objects, so no need to subtract 1 here
+      result.end = *end;
       FMT_FALLTHROUGH;
     case LocationType::AbsoluteStart:
       XCHECK(start);
@@ -60,7 +55,11 @@ inline SubscribeRange toSubscribeRange(
 inline SubscribeRange toSubscribeRange(
     const SubscribeRequest& sub,
     folly::Optional<AbsoluteLocation> latest) {
-  return toSubscribeRange(sub.start, sub.end, sub.locType, latest);
+  folly::Optional<AbsoluteLocation> end;
+  if (sub.endGroup > 0) {
+    end = AbsoluteLocation({sub.endGroup, 0});
+  }
+  return toSubscribeRange(sub.start, end, sub.locType, latest);
 }
 
 } // namespace moxygen
