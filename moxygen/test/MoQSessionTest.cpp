@@ -225,7 +225,7 @@ TEST_F(MoQSessionTest, JoiningFetch) {
           [](auto sub,
              auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
             pub->datagram(
-                {sub.trackAlias, 0, 0, 1, 0, ObjectStatus::NORMAL, 11},
+                ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
                 folly::IOBuf::copyBuffer("hello world"));
             pub->subscribeDone(
                 {sub.subscribeID,
@@ -817,13 +817,7 @@ TEST_F(MoQSessionTest, SubscribeDoneStreamCount) {
               -> folly::coro::Task<Publisher::SubscribeResult> {
             eventBase_.add([pub, sub] {
               pub->objectStream(
-                  {sub.trackAlias,
-                   0,
-                   0,
-                   0,
-                   0,
-                   ObjectStatus::NORMAL,
-                   folly::none},
+                  ObjectHeader(sub.trackAlias, 0, 0, 0, 0),
                   moxygen::test::makeBuf(10));
               auto sgp = pub->beginSubgroup(0, 1, 0).value();
               sgp->object(1, moxygen::test::makeBuf(10));
@@ -942,13 +936,7 @@ TEST_F(MoQSessionTest, SubscribeDoneAPIErrors) {
                 MoQPublishError::API_ERROR);
             EXPECT_EQ(
                 pub->datagram(
-                       {sub.trackAlias,
-                        2,
-                        2,
-                        2,
-                        2,
-                        ObjectStatus::NORMAL,
-                        folly::none},
+                       ObjectHeader(sub.trackAlias, 2, 2, 2, 2),
                        moxygen::test::makeBuf(10))
                     .error()
                     .code,
@@ -1018,16 +1006,11 @@ TEST_F(MoQSessionTest, Datagrams) {
           [](auto sub,
              auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
             pub->datagram(
-                {sub.trackAlias, 0, 0, 1, 0, ObjectStatus::NORMAL, 11},
+                ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
                 folly::IOBuf::copyBuffer("hello world"));
             pub->datagram(
-                {sub.trackAlias,
-                 0,
-                 0,
-                 2,
-                 0,
-                 ObjectStatus::OBJECT_NOT_EXIST,
-                 folly::none},
+                ObjectHeader(
+                    sub.trackAlias, 0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST),
                 nullptr);
             pub->subscribeDone(
                 {sub.subscribeID,

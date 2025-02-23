@@ -198,28 +198,17 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
 
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeSubgroupHeader(
-      writeBuf,
-      ObjectHeader({
-          TrackAlias(1),
-          2,
-          3,
-          4,
-          5,
-          ObjectStatus::NORMAL,
-          folly::none,
-      }));
+  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5);
+  auto res = writeSubgroupHeader(writeBuf, obj);
+  obj.length = 11;
   res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      obj,
       folly::IOBuf::copyBuffer("hello world"));
-  res = writeStreamObject(
-      writeBuf,
-      StreamType::SUBGROUP_HEADER,
-      ObjectHeader(
-          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
-      nullptr);
+  obj.length = folly::none;
+  obj.status = ObjectStatus::END_OF_TRACK_AND_GROUP;
+  res = writeStreamObject(writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
   return writeBuf.move();
 }
 
@@ -229,13 +218,13 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
   res = writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
   res = writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
       ObjectHeader(
-          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
+          TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP),
       nullptr);
   return writeBuf.move();
 }
@@ -244,12 +233,11 @@ std::unique_ptr<folly::IOBuf> writeAllDatagramMessages() {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = writeDatagramObject(
       writeBuf,
-      ObjectHeader(
-          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, 0}),
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
       nullptr);
   res = writeDatagramObject(
       writeBuf,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
   return writeBuf.move();
 }

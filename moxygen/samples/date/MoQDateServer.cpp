@@ -303,14 +303,12 @@ class MoQDateServer : public MoQServer,
   void publishDate(uint64_t group, uint64_t second) {
     uint64_t subgroup = second;
     uint64_t object = second;
-    ObjectHeader header{
+    ObjectHeader header(
         TrackAlias(0),
         group,
         subgroup,
         object,
-        /*priority=*/0,
-        ObjectStatus::NORMAL,
-        folly::none};
+        /*priority=*/0);
     if (second == 0) {
       forwarder_.objectStream(header, minutePayload(group));
     }

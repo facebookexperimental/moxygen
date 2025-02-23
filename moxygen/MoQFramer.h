@@ -190,7 +190,8 @@ constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
 constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
 constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
 constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp8;
+constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp9;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -289,13 +290,55 @@ inline uint64_t value(const TrackIdentifier& trackIdentifier) {
       },
       trackIdentifier);
 }
+
+struct Extension {
+  uint64_t type{0};
+  uint64_t intValue{0};
+  std::vector<uint8_t> arrayValue;
+};
+
 struct ObjectHeader {
+  ObjectHeader() = default;
+  ObjectHeader(
+      TrackIdentifier i,
+      uint64_t g,
+      uint64_t su,
+      uint64_t inId,
+      uint8_t p = 128,
+      ObjectStatus s = ObjectStatus::NORMAL,
+      std::vector<Extension> ex = std::vector<Extension>(),
+      folly::Optional<uint64_t> l = folly::none)
+      : trackIdentifier(i),
+        group(g),
+        subgroup(su),
+        id(inId),
+        priority(p),
+        status(s),
+        extensions(std::move(ex)),
+        length(std::move(l)) {}
+  ObjectHeader(
+      TrackIdentifier i,
+      uint64_t g,
+      uint64_t su,
+      uint64_t inId,
+      uint8_t p,
+      uint64_t l,
+      std::vector<Extension> ex = std::vector<Extension>())
+      : trackIdentifier(i),
+        group(g),
+        subgroup(su),
+        id(inId),
+        priority(p),
+        status(ObjectStatus::NORMAL),
+        extensions(std::move(ex)),
+        length(l) {}
   TrackIdentifier trackIdentifier;
   uint64_t group;
-  uint64_t subgroup{0}; // meaningless for Track and Datagram
+  uint64_t subgroup{0}; // meaningless for Datagram
   uint64_t id;
   uint8_t priority{kDefaultPriority};
   ObjectStatus status{ObjectStatus::NORMAL};
+  std::vector<Extension> extensions;
   folly::Optional<uint64_t> length{folly::none};
 };
 
