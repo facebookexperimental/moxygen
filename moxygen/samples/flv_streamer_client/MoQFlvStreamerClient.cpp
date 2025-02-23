@@ -64,8 +64,8 @@ class MoQFlvStreamerClient
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
       } else {
         XLOG(INFO) << "Announce error trackNamespace="
-                   << annResp.error().trackNamespace
-                   << " code=" << annResp.error().errorCode
+                   << annResp.error().trackNamespace << " code="
+                   << folly::to_underlying(annResp.error().errorCode)
                    << " reason=" << annResp.error().reasonPhrase;
       }
     } catch (const std::exception& ex) {
@@ -154,7 +154,7 @@ class MoQFlvStreamerClient
     if (subscribeReq.locType != LocationType::LatestObject) {
       co_return folly::makeUnexpected(SubscribeError{
           subscribeReq.subscribeID,
-          403,
+          SubscribeErrorCode::NOT_SUPPORTED,
           "Only location LatestObject mode supported"});
     }
     // Track not available
@@ -167,7 +167,9 @@ class MoQFlvStreamerClient
       audioPub_ = std::move(consumer);
     } else {
       co_return folly::makeUnexpected(SubscribeError{
-          subscribeReq.subscribeID, 404, "Full trackname NOT available"});
+          subscribeReq.subscribeID,
+          SubscribeErrorCode::TRACK_NOT_EXIST,
+          "Full trackname NOT available"});
     }
     // Save subscribe
     auto subscription = std::make_shared<Subscription>(
