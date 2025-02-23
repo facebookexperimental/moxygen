@@ -104,6 +104,7 @@ class MoQForwarder : public TrackConsumer {
           session,
           {subscribeID,
            SubscribeDoneStatusCode::UNSUBSCRIBED,
+           0, // filled in by session
            "",
            forwarder.latest()});
     }
@@ -146,11 +147,41 @@ class MoQForwarder : public TrackConsumer {
     return subscriber;
   }
 
+  folly::Expected<StandaloneFetch, std::string> join(
+      const std::shared_ptr<MoQSession>& session,
+      const JoiningFetch& joining) const {
+    auto subIt = subscribers_.find(session.get());
+    if (subIt == subscribers_.end()) {
+      XLOG(ERR) << "Session not found";
+      return folly::makeUnexpected("Session has no active subscribe");
+    }
+    if (subIt->second->subscribeID != joining.joiningSubscribeID) {
+      XLOG(ERR) << joining.joiningSubscribeID
+                << " does not name a Subscribe "
+                   " for this track";
+      return folly::makeUnexpected("Incorrect SubscribeID for Track");
+    }
+    if (!subIt->second->subscribeOk().latest) {
+      // No content exists, fetch error
+      // Relay caller verifies upstream SubscribeOK has been processed before
+      // calling join()
+      return folly::makeUnexpected("No latest");
+    }
+    auto& latest = *subIt->second->subscribeOk().latest;
+    AbsoluteLocation start{latest};
+    start.group -= (start.group >= joining.precedingGroupOffset)
+        ? joining.precedingGroupOffset
+        : 0;
+    start.object = 0;
+    return StandaloneFetch{start, {latest.group, latest.object + 1}};
+  }
+
   void removeSession(const std::shared_ptr<MoQSession>& session) {
     removeSession(
         session,
         {SubscribeID(0),
          SubscribeDoneStatusCode::GOING_AWAY,
+         0, // filled in by session
          "byebyebye",
          latest_});
   }
@@ -211,6 +242,7 @@ class MoQForwarder : public TrackConsumer {
           sub.session,
           {sub.subscribeID,
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+           0, // filled in by session
            "",
            sub.range.end});
       return false;
@@ -223,6 +255,7 @@ class MoQForwarder : public TrackConsumer {
         sub.session,
         {sub.subscribeID,
          SubscribeDoneStatusCode::INTERNAL_ERROR,
+         0, // filled in by session
          err.what(),
          sub.range.end});
   }
