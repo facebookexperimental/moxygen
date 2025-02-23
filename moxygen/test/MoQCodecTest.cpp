@@ -316,8 +316,9 @@ TEST(MoQCodec, Fetch) {
   obj.length = 5;
   res = writeStreamObject(
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
-  obj.id++;
-  obj.status = ObjectStatus::END_OF_TRACK_AND_GROUP;
+  obj.group++;
+  obj.id = 0;
+  obj.status = ObjectStatus::END_OF_TRACK;
   obj.length = 0;
   res = writeStreamObject(writeBuf, streamType, obj, nullptr);
   obj.id++;
@@ -327,8 +328,7 @@ TEST(MoQCodec, Fetch) {
 
   EXPECT_CALL(callback, onFetchHeader(testing::_));
   EXPECT_CALL(callback, onObjectBegin(2, 3, 4, 5, testing::_, true, false));
-  EXPECT_CALL(
-      callback, onObjectStatus(2, 3, 5, ObjectStatus::END_OF_TRACK_AND_GROUP));
+  EXPECT_CALL(callback, onObjectStatus(3, 3, 0, ObjectStatus::END_OF_TRACK));
   // object after terminal status
   EXPECT_CALL(callback, onConnectionError(ErrorCode::PARSE_ERROR));
   codec.onIngress(writeBuf.move(), false);
