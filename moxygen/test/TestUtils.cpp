@@ -44,7 +44,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
            GroupOrder::Default,
            LocationType::LatestObject,
            folly::none,
-           folly::none,
+           0,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky",
              0},
@@ -59,7 +59,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
       SubscribeUpdate(
           {0,
            {1, 2},
-           {3, 4},
+           3,
            255,
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky",
@@ -82,7 +82,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
              3600000}}}));
   res = writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
   res = writeSubscribeError(
-      writeBuf, SubscribeError({0, 404, "not found", folly::none}));
+      writeBuf,
+      SubscribeError(
+          {0, SubscribeErrorCode::TRACK_NOT_EXIST, "not found", folly::none}));
   res = writeUnsubscribe(
       writeBuf,
       Unsubscribe({
@@ -91,12 +93,17 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   res = writeSubscribeDone(
       writeBuf,
       SubscribeDone(
-          {0, SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, "", folly::none}));
+          {0,
+           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+           7,
+           "",
+           folly::none}));
   res = writeSubscribeDone(
       writeBuf,
       SubscribeDone(
           {0,
            SubscribeDoneStatusCode::INTERNAL_ERROR,
+           0,
            "not found",
            AbsoluteLocation({0, 0})}));
   res = writeAnnounce(
@@ -115,10 +122,16 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   res = writeAnnounceOk(writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
   res = writeAnnounceError(
       writeBuf,
-      AnnounceError({TrackNamespace({"hello"}), 500, "server error"}));
+      AnnounceError(
+          {TrackNamespace({"hello"}),
+           AnnounceErrorCode::INTERNAL_ERROR,
+           "server error"}));
   res = writeAnnounceCancel(
       writeBuf,
-      AnnounceCancel({TrackNamespace({"hello"}), 500, "internal error"}));
+      AnnounceCancel(
+          {TrackNamespace({"hello"}),
+           AnnounceErrorCode::INTERNAL_ERROR,
+           "internal error"}));
   res = writeUnannounce(
       writeBuf,
       Unannounce({
@@ -146,7 +159,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   res = writeSubscribeAnnouncesError(
       writeBuf,
       SubscribeAnnouncesError(
-          {TrackNamespace({"hello"}), 500, "server error"}));
+          {TrackNamespace({"hello"}),
+           SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+           "server error"}));
   res = writeUnsubscribeAnnounces(
       writeBuf, UnsubscribeAnnounces({TrackNamespace({"hello"})}));
   res = writeFetch(
@@ -154,10 +169,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
       Fetch(
           {0,
            FullTrackName({TrackNamespace({"hello"}), "world"}),
-           255,
-           GroupOrder::NewestFirst,
            AbsoluteLocation({0, 0}),
            AbsoluteLocation({1, 1}),
+           255,
+           GroupOrder::NewestFirst,
            {TrackRequestParameter(
                {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
                 "binky",
@@ -176,10 +191,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
                 0})}}));
   res = writeFetchError(
       writeBuf,
-      FetchError(
-          {0,
-           folly::to_underlying(FetchErrorCode::INVALID_RANGE),
-           "Invalid range"}));
+      FetchError({0, FetchErrorCode::INVALID_RANGE, "Invalid range"}));
 
   return writeBuf.move();
 }
@@ -197,17 +209,48 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
           ObjectStatus::NORMAL,
           folly::none,
       }));
-  res = writeObject(
+  res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello world"));
-  res = writeObject(
+  res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       ObjectHeader(
           {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
       nullptr);
+  return writeBuf.move();
+}
+
+std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = writeFetchHeader(writeBuf, SubscribeID(1));
+  res = writeStreamObject(
+      writeBuf,
+      StreamType::FETCH_HEADER,
+      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      folly::IOBuf::copyBuffer("hello world"));
+  res = writeStreamObject(
+      writeBuf,
+      StreamType::FETCH_HEADER,
+      ObjectHeader(
+          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
+      nullptr);
+  return writeBuf.move();
+}
+
+std::unique_ptr<folly::IOBuf> writeAllDatagramMessages() {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = writeDatagramObject(
+      writeBuf,
+      ObjectHeader(
+          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, 0}),
+      nullptr);
+  res = writeDatagramObject(
+      writeBuf,
+      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      folly::IOBuf::copyBuffer("hello world"));
   return writeBuf.move();
 }
 
