@@ -445,11 +445,12 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
     subscribeRequest.start = *location;
   }
   if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    auto location = parseAbsoluteLocation(cursor, length);
-    if (!location) {
-      return folly::makeUnexpected(location.error());
+    auto endGroup = quic::decodeQuicInteger(cursor, length);
+    if (!endGroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeRequest.end = *location;
+    subscribeRequest.endGroup = endGroup->first;
+    length -= endGroup->second;
   }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -479,11 +480,14 @@ folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
     return folly::makeUnexpected(start.error());
   }
   subscribeUpdate.start = start.value();
-  auto end = parseAbsoluteLocation(cursor, length);
-  if (!end) {
-    return folly::makeUnexpected(end.error());
+
+  auto endGroup = quic::decodeQuicInteger(cursor, length);
+  if (!endGroup) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  subscribeUpdate.end = end.value();
+  subscribeUpdate.endGroup = endGroup->first;
+  length -= endGroup->second;
+
   if (length < 2) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
@@ -1339,8 +1343,7 @@ WriteResult writeSubscribeRequest(
     writeVarint(writeBuf, subscribeRequest.start->object, size, error);
   }
   if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    writeVarint(writeBuf, subscribeRequest.end->group, size, error);
-    writeVarint(writeBuf, subscribeRequest.end->object, size, error);
+    writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
   }
   writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
   writeSize(sizePtr, size, error);
@@ -1359,8 +1362,7 @@ WriteResult writeSubscribeUpdate(
   writeVarint(writeBuf, update.subscribeID.value, size, error);
   writeVarint(writeBuf, update.start.group, size, error);
   writeVarint(writeBuf, update.start.object, size, error);
-  writeVarint(writeBuf, update.end.group, size, error);
-  writeVarint(writeBuf, update.end.object, size, error);
+  writeVarint(writeBuf, update.endGroup, size, error);
   writeBuf.append(&update.priority, 1);
   size += 1;
   writeTrackRequestParams(writeBuf, update.params, size, error);

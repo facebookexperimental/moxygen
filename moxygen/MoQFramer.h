@@ -164,7 +164,8 @@ constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
 constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
 constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
 constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp5;
+constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp6;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -456,7 +457,7 @@ struct SubscribeRequest {
   GroupOrder groupOrder;
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
-  folly::Optional<AbsoluteLocation> end;
+  uint64_t endGroup;
   std::vector<TrackRequestParameter> params;
 };
 
@@ -467,7 +468,7 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
 struct SubscribeUpdate {
   SubscribeID subscribeID;
   AbsoluteLocation start;
-  AbsoluteLocation end;
+  uint64_t endGroup;
   uint8_t priority;
   std::vector<TrackRequestParameter> params;
 };
