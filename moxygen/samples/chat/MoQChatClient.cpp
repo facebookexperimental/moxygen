@@ -135,6 +135,7 @@ void MoQChatClient::unsubscribe() {
     publisher_->subscribeDone(
         {*chatSubscribeID_,
          SubscribeDoneStatusCode::UNSUBSCRIBED,
+         0, // filled in by session
          "",
          folly::none});
     publisher_.reset();

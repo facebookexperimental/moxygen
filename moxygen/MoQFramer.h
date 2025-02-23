@@ -122,6 +122,7 @@ enum class FrameType : uint64_t {
 
 enum class StreamType : uint64_t {
   OBJECT_DATAGRAM = 1,
+  OBJECT_DATAGRAM_STATUS = 02,
   SUBGROUP_HEADER = 0x4,
   FETCH_HEADER = 0x5,
 };
@@ -150,14 +151,19 @@ constexpr uint64_t kVersionDraft03 = 0xff000003;
 constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
-constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft06_exp =
     0xff060004; // Draft 6 in progress version
+constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft07_exp = 0xff070001; // Draft 7 FETCH support
 constexpr uint64_t kVersionDraft07_exp2 =
     0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
-constexpr uint64_t kVersionDraft08 = 0xff080001; // Draft 8 no ROLE
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
+constexpr uint64_t kVersionDraft08 = 0xff000008;
+constexpr uint64_t kVersionDraft08_exp1 = 0xff080001; // Draft 8 no ROLE
+// SUBSCRIBE_DONE stream count
+constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
+constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
+constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp4;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -183,7 +189,7 @@ enum class ObjectStatus : uint64_t {
   GROUP_NOT_EXIST = 2,
   END_OF_GROUP = 3,
   END_OF_TRACK_AND_GROUP = 4,
-  END_OF_SUBGROUP = 5,
+  END_OF_TRACK = 5,
 };
 
 std::ostream& operator<<(std::ostream& os, ObjectStatus type);
@@ -269,19 +275,23 @@ struct ObjectHeader {
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 
 // datagram only
-folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
+    StreamType streamType,
     size_t length) noexcept;
 
-folly::Expected<uint64_t, ErrorCode> parseFetchHeader(
+folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
     folly::io::Cursor& cursor) noexcept;
 
 folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
     folly::io::Cursor& cursor) noexcept;
 
-folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
     folly::io::Cursor& cursor,
-    StreamType streamType,
+    const ObjectHeader& headerTemplate) noexcept;
+
+folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
+    folly::io::Cursor& cursor,
     const ObjectHeader& headerTemplate) noexcept;
 
 enum class TrackRequestParamKey : uint64_t {
@@ -489,6 +499,7 @@ folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
 struct SubscribeDone {
   SubscribeID subscribeID;
   SubscribeDoneStatusCode statusCode;
+  uint64_t streamCount;
   std::string reasonPhrase;
   folly::Optional<AbsoluteLocation> finalObject;
 };
@@ -693,7 +704,12 @@ WriteResult writeStreamHeader(
     StreamType streamType,
     const ObjectHeader& objectHeader) noexcept;
 
-WriteResult writeObject(
+WriteResult writeDatagramObject(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+
+WriteResult writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
     const ObjectHeader& objectHeader,
