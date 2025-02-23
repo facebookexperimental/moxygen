@@ -31,14 +31,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
       uint8_t priority = 0)
       : callback_(callback),
         streamType_(StreamType::SUBGROUP_HEADER),
-        header_{
-            TrackAlias(0),
-            groupID,
-            subgroupID,
-            0,
-            priority,
-            ObjectStatus::NORMAL,
-            folly::none} {}
+        header_(TrackAlias(0), groupID, subgroupID, 0, priority) {}
 
   void setFetchGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
     streamType_ = StreamType::FETCH_HEADER;
@@ -160,14 +153,13 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError>
   groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
-    callback_->onObjectStatus(
-        {TrackAlias(0),
-         groupID,
-         subgroup,
-         0,
-         pri,
-         ObjectStatus::END_OF_TRACK_AND_GROUP,
-         0});
+    callback_->onObjectStatus(ObjectHeader(
+        TrackAlias(0),
+        groupID,
+        subgroup,
+        0,
+        pri,
+        ObjectStatus::END_OF_TRACK_AND_GROUP));
     return folly::unit;
   }
 
