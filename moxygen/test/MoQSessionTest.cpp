@@ -125,10 +125,10 @@ Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
   return Fetch(
       SubscribeID(0),
       FullTrackName{TrackNamespace{{"foo"}}, "bar"},
-      0,
-      GroupOrder::OldestFirst,
       start,
-      end);
+      end,
+      0,
+      GroupOrder::OldestFirst);
 }
 } // namespace
 

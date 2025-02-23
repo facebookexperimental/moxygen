@@ -188,10 +188,10 @@ class MoQTextClient : public Subscriber,
                   Fetch(
                       SubscribeID(0),
                       sub.fullTrackName,
-                      sub.priority,
-                      sub.groupOrder,
                       range.start,
-                      fetchEnd),
+                      fetchEnd,
+                      sub.priority,
+                      sub.groupOrder),
                   fetchTextHandler_);
               if (fetchTrack.hasError()) {
                 XLOG(ERR) << "Fetch failed err="
