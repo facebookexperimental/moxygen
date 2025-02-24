@@ -150,14 +150,17 @@ constexpr uint64_t kVersionDraft03 = 0xff000003;
 constexpr uint64_t kVersionDraft04 = 0xff000004;
 constexpr uint64_t kVersionDraft05 = 0xff000005;
 constexpr uint64_t kVersionDraft06 = 0xff000006;
-constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft06_exp =
     0xff060004; // Draft 6 in progress version
+constexpr uint64_t kVersionDraft07 = 0xff000007;
 constexpr uint64_t kVersionDraft07_exp = 0xff070001; // Draft 7 FETCH support
 constexpr uint64_t kVersionDraft07_exp2 =
     0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
-constexpr uint64_t kVersionDraft08 = 0xff080001; // Draft 8 no ROLE
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
+constexpr uint64_t kVersionDraft08 = 0xff000008;
+constexpr uint64_t kVersionDraft08_exp1 = 0xff080001; // Draft 8 no ROLE
+// SUBSCRIBE_DONE stream count
+constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp2;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -489,6 +492,7 @@ folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
 struct SubscribeDone {
   SubscribeID subscribeID;
   SubscribeDoneStatusCode statusCode;
+  uint64_t streamCount;
   std::string reasonPhrase;
   folly::Optional<AbsoluteLocation> finalObject;
 };
