@@ -33,7 +33,7 @@ cd scripts
 
 - Execute text client
 ```
-./_build/bin/moqtextclient --connect_url "https://localhost:4433/moq-date" --track_namespace "moq-date" --track_name "/date"
+./_build/bin/moqtextclient --connect_url "https://localhost:4433/moq-date" --track_namespace "moq-date" --track_name "date"
 ```
 
 - You should see an output like:

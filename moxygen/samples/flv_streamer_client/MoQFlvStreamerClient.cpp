@@ -31,7 +31,7 @@ using namespace moxygen;
 
 class MoQFlvStreamerClient
     : public Publisher,
-      std::enable_shared_from_this<MoQFlvStreamerClient> {
+      public std::enable_shared_from_this<MoQFlvStreamerClient> {
  public:
   MoQFlvStreamerClient(
       folly::EventBase* evb,
@@ -365,7 +365,7 @@ int main(int argc, char* argv[]) {
 
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
-  MoQFlvStreamerClient streamerClient(
+  auto streamerClient = std::make_shared<MoQFlvStreamerClient>(
       &eventBase,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_video_track_name}),
@@ -395,9 +395,9 @@ int main(int argc, char* argv[]) {
 
   // TODO this does NOT work, we do not get the signal
   SigHandler handler(
-      &eventBase, [&streamerClient](int) mutable { streamerClient.stop(); });
+      &eventBase, [&streamerClient](int) mutable { streamerClient->stop(); });
 
-  streamerClient.run({{std::move(ns)}, {}})
+  streamerClient->run({{std::move(ns)}, {}})
       .scheduleOn(&eventBase)
       .start()
       .via(&eventBase)

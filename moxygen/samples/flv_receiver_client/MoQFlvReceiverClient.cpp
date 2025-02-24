@@ -478,7 +478,7 @@ int main(int argc, char* argv[]) {
 
   XLOGF(INFO, "Starting consumer from URL: {}", FLAGS_connect_url);
 
-  MoQFlvReceiverClient flvReceiverClient(
+  auto flvReceiverClient = std::make_shared<MoQFlvReceiverClient>(
       &eventBase, std::move(url), FLAGS_quic_transport, FLAGS_flv_outpath);
 
   class SigHandler : public folly::AsyncSignalHandler {
@@ -502,7 +502,7 @@ int main(int argc, char* argv[]) {
     std::function<void(int)> fn_;
   };
   SigHandler handler(&eventBase, [&flvReceiverClient](int) mutable {
-    flvReceiverClient.stop();
+    flvReceiverClient->stop();
   });
   const auto subscribeIDAudio = 0;
   const auto trackAliasAudio = 1;
@@ -510,7 +510,7 @@ int main(int argc, char* argv[]) {
   const auto trackAliasVideo = 2;
 
   flvReceiverClient
-      .run(
+      ->run(
           {subscribeIDAudio,
            trackAliasAudio,
            moxygen::FullTrackName(
