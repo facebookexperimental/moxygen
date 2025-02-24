@@ -81,7 +81,7 @@ class MoQClient : public proxygen::WebTransportHandler {
       std::shared_ptr<Subscriber> subscribeHandler) noexcept;
 
  private:
-  ClientSetup getClientSetup(folly::Optional<std::string> path);
+  ClientSetup getClientSetup(const folly::Optional<std::string>& path);
 
   void onSessionEnd(folly::Optional<uint32_t>) override;
   void onNewBidiStream(

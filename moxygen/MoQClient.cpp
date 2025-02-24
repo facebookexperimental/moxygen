@@ -139,7 +139,8 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   co_await moqSession_->setup(getClientSetup(pathParam));
 }
 
-ClientSetup MoQClient::getClientSetup(folly::Optional<std::string> path) {
+ClientSetup MoQClient::getClientSetup(
+    const folly::Optional<std::string>& path) {
   // Setup MoQSession parameters
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
