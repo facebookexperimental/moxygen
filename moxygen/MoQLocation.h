@@ -23,7 +23,7 @@ inline SubscribeRange toSubscribeRange(
     folly::Optional<AbsoluteLocation> latest) {
   XLOG(DBG1) << "m=" << uint64_t(locType)
              << (start ? folly::to<std::string>(
-                             "g=", start->group, " o=", start->object)
+                             " g=", start->group, " o=", start->object)
                        : std::string());
   SubscribeRange result;
   result.end = kLocationMax;
@@ -34,33 +34,36 @@ inline SubscribeRange toSubscribeRange(
       break;
     case LocationType::LatestObject:
       result.start.group = latest.value_or(kLocationMin).group;
-      result.start.object = latest.value_or(kLocationMin).object;
+      result.start.object = latest.value_or(kLocationMin).object + 1;
       break;
     case LocationType::AbsoluteRange:
       XCHECK(end);
-      if (end->object == 0) {
-        result.end.group = end->group + 1;
-        result.end.object = 0;
-      } else {
-        // moxygen uses exclusive end objects, so no need to subtract 1 here
-        result.end = *end;
-      }
+      // moxygen uses exclusive end objects, so no need to subtract 1 here
+      result.end = *end;
       FMT_FALLTHROUGH;
     case LocationType::AbsoluteStart:
       XCHECK(start);
       result.start.group = start->group;
       result.start.object = start->object;
+      if (latest && result.start < *latest) {
+        XLOG(DBG2) << "Adjusting past start to latest + 1";
+        result.start = AbsoluteLocation{latest->group, latest->object + 1};
+      }
       break;
   }
   XLOG(DBG1) << "g=" << result.start.group << " o=" << result.start.object
-             << "g=" << result.end.group << " o=" << result.end.object;
+             << " g=" << result.end.group << " o=" << result.end.object;
   return result;
 }
 
 inline SubscribeRange toSubscribeRange(
     const SubscribeRequest& sub,
     folly::Optional<AbsoluteLocation> latest) {
-  return toSubscribeRange(sub.start, sub.end, sub.locType, latest);
+  folly::Optional<AbsoluteLocation> end;
+  if (sub.endGroup > 0) {
+    end = AbsoluteLocation({sub.endGroup, 0});
+  }
+  return toSubscribeRange(sub.start, end, sub.locType, latest);
 }
 
 } // namespace moxygen
