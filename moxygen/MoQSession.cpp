@@ -1828,6 +1828,18 @@ void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
+void MoQSession::onSubscribesBlocked(SubscribesBlocked subscribesBlocked) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+  // Increment the maxSubscribeID_ by the number of pending closed subscribes
+  // and send a new MaxSubscribeId.
+  if (subscribesBlocked.maxSubscribeID >= maxSubscribeID_ &&
+      closedSubscribes_ > 0) {
+    maxSubscribeID_ += closedSubscribes_;
+    closedSubscribes_ = 0;
+    sendMaxSubscribeID(true);
+  }
+}
+
 void MoQSession::onFetch(Fetch fetch) {
   XLOG(DBG1) << __func__ << " ftn=" << fetch.fullTrackName << " sess=" << this;
   const auto subscribeID = fetch.subscribeID;

@@ -72,6 +72,10 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   testUnderflowResult(r4a);
 
   skip(cursor, 1);
+  auto r4b = parseSubscribesBlocked(cursor, frameLength(cursor));
+  testUnderflowResult(r4b);
+
+  skip(cursor, 1);
   auto r5 = parseSubscribeError(cursor, frameLength(cursor));
   testUnderflowResult(r5);
 

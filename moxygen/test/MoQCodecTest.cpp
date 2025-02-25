@@ -50,7 +50,7 @@ void testAll(MoQControlCodec::Direction dir) {
   EXPECT_CALL(callback, onFetchCancel(testing::_));
   EXPECT_CALL(callback, onFetchOk(testing::_));
   EXPECT_CALL(callback, onFetchError(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
 
   codec.onIngress(std::move(allMsgs), true);
 }
@@ -122,7 +122,7 @@ void testUnderflow(MoQControlCodec::Direction dir) {
   EXPECT_CALL(callback, onFetchCancel(testing::_));
   EXPECT_CALL(callback, onFetchOk(testing::_));
   EXPECT_CALL(callback, onFetchError(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
+  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }

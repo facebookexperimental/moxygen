@@ -266,6 +266,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
   void onMaxSubscribeId(MaxSubscribeId maxSubId) override;
+  void onSubscribesBlocked(SubscribesBlocked subscribesBlocked) override;
   void onFetch(Fetch fetch) override;
   void onFetchCancel(FetchCancel fetchCancel) override;
   void onFetchOk(FetchOk fetchOk) override;

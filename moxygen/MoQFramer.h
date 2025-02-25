@@ -116,6 +116,7 @@ enum class FrameType : uint64_t {
   FETCH_CANCEL = 0x17,
   FETCH_OK = 0x18,
   FETCH_ERROR = 0x19,
+  SUBSCRIBES_BLOCKED = 0x1A,
   CLIENT_SETUP = 0x40,
   SERVER_SETUP = 0x41,
 };
@@ -576,6 +577,14 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
     folly::io::Cursor& cursor,
     size_t length) noexcept;
 
+struct SubscribesBlocked {
+  SubscribeID maxSubscribeID;
+};
+
+folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept;
+
 struct Fetch {
   Fetch() = default;
   Fetch(
@@ -731,6 +740,10 @@ WriteResult writeUnsubscribe(
 WriteResult writeMaxSubscribeId(
     folly::IOBufQueue& writeBuf,
     const MaxSubscribeId& maxSubscribeId) noexcept;
+
+WriteResult writeSubscribesBlocked(
+    folly::IOBufQueue& writeBuf,
+    const SubscribesBlocked& subscribesBlocked) noexcept;
 
 WriteResult writeAnnounce(
     folly::IOBufQueue& writeBuf,

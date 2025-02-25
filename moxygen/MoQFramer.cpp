@@ -772,6 +772,19 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
   return maxSubscribeId;
 }
 
+folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
+    folly::io::Cursor& cursor,
+    size_t length) noexcept {
+  SubscribesBlocked subscribesBlocked;
+  auto res = quic::decodeQuicInteger(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  subscribesBlocked.maxSubscribeID = res->first;
+  length -= res->second;
+  return subscribesBlocked;
+}
+
 folly::Expected<Fetch, ErrorCode> parseFetch(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
@@ -1321,6 +1334,21 @@ WriteResult writeMaxSubscribeId(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_SUBSCRIBE_ID, error);
   writeVarint(writeBuf, maxSubscribeId.subscribeID.value, size, error);
+  writeSize(sizePtr, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeSubscribesBlocked(
+    folly::IOBufQueue& writeBuf,
+    const SubscribesBlocked& subscribesBlocked) noexcept {
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr =
+      writeFrameHeader(writeBuf, FrameType::SUBSCRIBES_BLOCKED, error);
+  writeVarint(writeBuf, subscribesBlocked.maxSubscribeID.value, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

@@ -54,6 +54,7 @@ class MoQControlCodec : public MoQCodec {
     virtual void onSubscribeDone(SubscribeDone subscribeDone) = 0;
     virtual void onUnsubscribe(Unsubscribe unsubscribe) = 0;
     virtual void onMaxSubscribeId(MaxSubscribeId maxSubId) = 0;
+    virtual void onSubscribesBlocked(SubscribesBlocked subscribesBlocked) = 0;
     virtual void onFetch(Fetch fetch) = 0;
     virtual void onFetchCancel(FetchCancel fetchCancel) = 0;
     virtual void onFetchOk(FetchOk fetchOk) = 0;
@@ -111,6 +112,7 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
       case FrameType::MAX_SUBSCRIBE_ID:
+      case FrameType::SUBSCRIBES_BLOCKED:
       case FrameType::FETCH:
       case FrameType::FETCH_CANCEL:
       case FrameType::FETCH_OK:

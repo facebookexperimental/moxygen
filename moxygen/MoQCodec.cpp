@@ -411,6 +411,17 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
+    case FrameType::SUBSCRIBES_BLOCKED: {
+      auto res = parseSubscribesBlocked(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onSubscribesBlocked(res.value());
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::FETCH: {
       auto res = parseFetch(cursor, curFrameLength_);
       if (res) {

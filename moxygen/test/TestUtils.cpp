@@ -81,6 +81,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
              "",
              3600000}}}));
   res = writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
+  res = writeSubscribesBlocked(writeBuf, {.maxSubscribeID = 50000});
   res = writeSubscribeError(
       writeBuf, SubscribeError({0, 404, "not found", folly::none}));
   res = writeUnsubscribe(
