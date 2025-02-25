@@ -228,7 +228,7 @@ TEST_F(MoQSessionTest, FetchError) {
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
-    auto res = co_await session->fetch(getFetch({0, 1}, {0, 0}), fetchCallback);
+    auto res = co_await session->fetch(getFetch({0, 2}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
     EXPECT_EQ(
         res.error().errorCode,

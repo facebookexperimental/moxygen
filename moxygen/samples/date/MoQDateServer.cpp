@@ -109,7 +109,8 @@ class MoQDateServer : public MoQServer,
       co_return folly::makeUnexpected(
           FetchError{fetch.subscribeID, 403, "unexpected fetch"});
     }
-    if (fetch.end < fetch.start) {
+    if (fetch.end < fetch.start &&
+        !(fetch.start.group == fetch.end.group && fetch.end.object == 0)) {
       co_return folly::makeUnexpected(
           FetchError{fetch.subscribeID, 400, "No objects"});
     }
@@ -173,7 +174,6 @@ class MoQDateServer : public MoQServer,
       SubscribeRange range,
       AbsoluteLocation now) {
     if (range.start.object > 61) {
-      XLOG(ERR) << "Invalid start object";
       co_return;
     }
     auto token = co_await folly::coro::co_current_cancellation_token;
@@ -229,6 +229,10 @@ class MoQDateServer : public MoQServer,
       fetchPub->reset(ResetStreamErrorCode::CANCELLED);
     } else {
       // TODO - empty range may log an error?
+      XLOG(ERR) << "endOfFetch";
+      XLOG(ERR) << "Range: start=" << range.start.group << "."
+                << range.start.object << " end=" << range.end.group << "."
+                << range.end.object;
       fetchPub->endOfFetch();
     }
   }

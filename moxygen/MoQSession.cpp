@@ -1847,11 +1847,15 @@ void MoQSession::onFetch(Fetch fetch) {
     return;
   }
   if (fetch.end < fetch.start) {
-    fetchError(
-        {fetch.subscribeID,
-         folly::to_underlying(FetchErrorCode::INVALID_RANGE),
-         "End must be after start"});
-    return;
+    // If the end object is zero this indicates a fetch for the entire group,
+    // which is valid as long as the start and end group are the same.
+    if (!(fetch.end.group == fetch.start.group && fetch.end.object == 0)) {
+      fetchError(
+          {fetch.subscribeID,
+           folly::to_underlying(FetchErrorCode::INVALID_RANGE),
+           "End must be after start"});
+      return;
+    }
   }
   auto it = pubTracks_.find(fetch.subscribeID);
   if (it != pubTracks_.end()) {
