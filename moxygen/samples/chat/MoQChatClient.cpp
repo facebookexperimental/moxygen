@@ -7,7 +7,6 @@
 #include "moxygen/samples/chat/MoQChatClient.h"
 #include "moxygen/ObjectReceiver.h"
 
-#include <folly/String.h>
 #include <folly/init/Init.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
