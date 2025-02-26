@@ -2422,11 +2422,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     std::shared_ptr<TrackConsumer> callback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (draining_) {
-    co_return folly::makeUnexpected(SubscribeError{
+    SubscribeError subscribeError = {
         std::numeric_limits<uint64_t>::max(),
         500,
         "Draining session",
-        folly::none});
+        folly::none};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
+    co_return folly::makeUnexpected(subscribeError);
   }
   auto fullTrackName = sub.fullTrackName;
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
@@ -2443,8 +2446,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto wres = writeSubscribeRequest(controlWriteBuf_, std::move(sub));
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
-    co_return folly::makeUnexpected(
-        SubscribeError({subID, 500, "local write failed", folly::none}));
+    SubscribeError subscribeError = {
+        subID, 500, "local write failed", folly::none};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
+    co_return folly::makeUnexpected(subscribeError);
   }
   controlWriteEvent_.signal();
   auto res = subIdToTrackAlias_.emplace(subID, trackAlias);
@@ -2459,8 +2465,13 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " subscribeID=" << subID;
   if (subscribeResult.hasError()) {
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_,
+        onSubscribeError,
+        subscribeResult.error().errorCode);
     co_return folly::makeUnexpected(subscribeResult.error());
   } else {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeSuccess);
     co_return std::make_shared<ReceiverSubscriptionHandle>(
         std::move(subscribeResult.value()), alias, shared_from_this());
   }
@@ -2469,6 +2480,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
 std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
     const SubscribeOk& subOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeSuccess);
   auto it = pubTracks_.find(subOk.subscribeID);
   if (it == pubTracks_.end()) {
     XLOG(ERR) << "Invalid Subscribe OK, id=" << subOk.subscribeID;
@@ -2497,6 +2509,8 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
 
 void MoQSession::subscribeError(const SubscribeError& subErr) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_, onSubscribeError, subErr.errorCode);
   auto it = pubTracks_.find(subErr.subscribeID);
   if (it == pubTracks_.end()) {
     XLOG(ERR) << "Invalid Subscribe OK, id=" << subErr.subscribeID;
@@ -2661,8 +2675,11 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   if (draining_) {
-    co_return folly::makeUnexpected(FetchError{
-        std::numeric_limits<uint64_t>::max(), 500, "Draining session"});
+    FetchError fetchError = {
+        std::numeric_limits<uint64_t>::max(), 500, "Draining session"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+    co_return folly::makeUnexpected(fetchError);
   }
   auto fullTrackName = fetch.fullTrackName;
   if (nextSubscribeID_ >= peerMaxSubscribeID_) {
@@ -2676,8 +2693,10 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto wres = writeFetch(controlWriteBuf_, std::move(fetch));
   if (!wres) {
     XLOG(ERR) << "writeFetch failed sess=" << this;
-    co_return folly::makeUnexpected(
-        FetchError({subID, 500, "local write failed"}));
+    FetchError fetchError = {subID, 500, "local write failed"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+    co_return folly::makeUnexpected(fetchError);
   }
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<FetchTrackReceiveState>(
@@ -2690,8 +2709,11 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
              << " fetchReady trackReceiveState=" << trackReceiveState;
   if (fetchResult.hasError()) {
     XLOG(ERR) << fetchResult.error().reasonPhrase;
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchResult.error().errorCode);
     co_return folly::makeUnexpected(fetchResult.error());
   } else {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onFetchSuccess);
     co_return std::make_shared<ReceiverFetchHandle>(
         std::move(fetchResult.value()), shared_from_this());
   }
@@ -2699,6 +2721,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
 
 void MoQSession::fetchOk(const FetchOk& fetchOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onFetchSuccess);
   auto res = writeFetchOk(controlWriteBuf_, fetchOk);
   if (!res) {
     XLOG(ERR) << "writeFetchOk failed sess=" << this;
@@ -2709,6 +2732,8 @@ void MoQSession::fetchOk(const FetchOk& fetchOk) {
 
 void MoQSession::fetchError(const FetchError& fetchErr) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_, onFetchError, fetchErr.errorCode);
   if (pubTracks_.erase(fetchErr.subscribeID) == 0) {
     // fetchError is called sometimes before adding publisher state, so this
     // is not an error

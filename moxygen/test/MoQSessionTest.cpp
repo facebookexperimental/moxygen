@@ -33,6 +33,18 @@ class MoQSessionTest : public testing::Test,
     serverSession_ =
         std::make_shared<MoQSession>(serverWt_.get(), *this, &eventBase_);
     clientWt_->setPeerHandler(serverSession_.get());
+
+    clientSubscriberStatsCallback_ = std::make_shared<MockSubscriberStats>();
+    clientSession_->setSubscriberStatsCallback(clientSubscriberStatsCallback_);
+
+    clientPublisherStatsCallback_ = std::make_shared<MockPublisherStats>();
+    clientSession_->setPublisherStatsCallback(clientPublisherStatsCallback_);
+
+    serverSubscriberStatsCallback_ = std::make_shared<MockSubscriberStats>();
+    serverSession_->setSubscriberStatsCallback(serverSubscriberStatsCallback_);
+
+    serverPublisherStatsCallback_ = std::make_shared<MockPublisherStats>();
+    serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
   }
 
   void SetUp() override {}
@@ -71,6 +83,10 @@ class MoQSessionTest : public testing::Test,
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
   uint64_t initialMaxSubscribeId_{kTestMaxSubscribeId};
   bool failServerSetup_{false};
+  std::shared_ptr<MockSubscriberStats> clientSubscriberStatsCallback_;
+  std::shared_ptr<MockPublisherStats> clientPublisherStatsCallback_;
+  std::shared_ptr<MockSubscriberStats> serverSubscriberStatsCallback_;
+  std::shared_ptr<MockPublisherStats> serverPublisherStatsCallback_;
 };
 
 namespace {
@@ -134,7 +150,7 @@ Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
 
 TEST_F(MoQSessionTest, Fetch) {
   setupMoQSession();
-  auto f = [](std::shared_ptr<MoQSession> session) mutable
+  auto f = [this](std::shared_ptr<MoQSession> session) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -145,6 +161,7 @@ TEST_F(MoQSessionTest, Fetch) {
           baton.post();
           return folly::unit;
         }));
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess());
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     co_await baton;
@@ -152,8 +169,8 @@ TEST_F(MoQSessionTest, Fetch) {
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](Fetch fetch,
-             auto fetchPub) -> folly::coro::Task<Publisher::FetchResult> {
+          [this](Fetch fetch, auto fetchPub)
+              -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
                 FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
@@ -163,6 +180,7 @@ TEST_F(MoQSessionTest, Fetch) {
                 fetch.start.object,
                 moxygen::test::makeBuf(100),
                 /*finFetch=*/true);
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -177,12 +195,14 @@ TEST_F(MoQSessionTest, Fetch) {
 TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
   setupMoQSession();
   std::shared_ptr<FetchConsumer> fetchPub;
-  auto f = [](std::shared_ptr<MoQSession> session,
-              std::shared_ptr<MoQSession> serverSession,
-              std::shared_ptr<FetchConsumer>& fetchPub) mutable
+  auto f = [this](
+               std::shared_ptr<MoQSession> session,
+               std::shared_ptr<MoQSession> serverSession,
+               std::shared_ptr<FetchConsumer>& fetchPub) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess());
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     // publish here now we know FETCH_OK has been received at client
@@ -205,12 +225,13 @@ TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [&fetchPub](Fetch fetch, auto inFetchPub)
+          [&fetchPub, this](Fetch fetch, auto inFetchPub)
               -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
                 FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
             fetchPub = std::move(inFetchPub);
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -224,10 +245,13 @@ TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
 
 TEST_F(MoQSessionTest, FetchError) {
   setupMoQSession();
-  auto f = [](std::shared_ptr<MoQSession> session) mutable
+  auto f = [this](std::shared_ptr<MoQSession> session) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+    EXPECT_CALL(
+        *clientSubscriberStatsCallback_,
+        onFetchError(folly::to_underlying(FetchErrorCode::INVALID_RANGE)));
     auto res = co_await session->fetch(getFetch({0, 2}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
     EXPECT_EQ(
@@ -235,6 +259,9 @@ TEST_F(MoQSessionTest, FetchError) {
         folly::to_underlying(FetchErrorCode::INVALID_RANGE));
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
+  EXPECT_CALL(
+      *serverPublisherStatsCallback_,
+      onFetchError(folly::to_underlying(FetchErrorCode::INVALID_RANGE)));
   f(clientSession_).scheduleOn(&eventBase_).start();
   eventBase_.loop();
 }
@@ -242,9 +269,10 @@ TEST_F(MoQSessionTest, FetchError) {
 TEST_F(MoQSessionTest, FetchCancel) {
   setupMoQSession();
   std::shared_ptr<FetchConsumer> fetchPub;
-  auto f = [](std::shared_ptr<MoQSession> clientSession,
-              std::shared_ptr<MoQSession> serverSession,
-              std::shared_ptr<FetchConsumer>& fetchPub) mutable
+  auto f = [this](
+               std::shared_ptr<MoQSession> clientSession,
+               std::shared_ptr<MoQSession> serverSession,
+               std::shared_ptr<FetchConsumer>& fetchPub) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -255,6 +283,7 @@ TEST_F(MoQSessionTest, FetchCancel) {
     // TODO: fetchCancel removes the callback - should it also deliver a
     // reset() call to the callback?
     // EXPECT_CALL(*fetchCallback, reset(ResetStreamErrorCode::CANCELLED));
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess());
     auto res =
         co_await clientSession->fetch(getFetch({0, 0}, {0, 2}), fetchCallback);
     EXPECT_FALSE(res.hasError());
@@ -275,7 +304,7 @@ TEST_F(MoQSessionTest, FetchCancel) {
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [&fetchPub](Fetch fetch, auto inFetchPub)
+          [&fetchPub, this](Fetch fetch, auto inFetchPub)
               -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
@@ -288,6 +317,7 @@ TEST_F(MoQSessionTest, FetchCancel) {
                 moxygen::test::makeBuf(100),
                 false);
             // published 1 object
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -301,11 +331,12 @@ TEST_F(MoQSessionTest, FetchCancel) {
 
 TEST_F(MoQSessionTest, FetchEarlyCancel) {
   setupMoQSession();
-  auto f = [](std::shared_ptr<MoQSession> clientSession) mutable
+  auto f = [this](std::shared_ptr<MoQSession> clientSession) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     SubscribeID subscribeID(0);
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess());
     auto res =
         co_await clientSession->fetch(getFetch({0, 0}, {0, 2}), fetchCallback);
     EXPECT_FALSE(res.hasError());
@@ -315,10 +346,12 @@ TEST_F(MoQSessionTest, FetchEarlyCancel) {
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
+          [this](
+              Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
                 FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -332,10 +365,11 @@ TEST_F(MoQSessionTest, FetchEarlyCancel) {
 
 TEST_F(MoQSessionTest, FetchBadLength) {
   setupMoQSession();
-  auto f = [](std::shared_ptr<MoQSession> session) mutable
+  auto f = [this](std::shared_ptr<MoQSession> session) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback =
         std::make_shared<testing::NiceMock<MockFetchConsumer>>();
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess());
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_FALSE(res.hasError());
     // FETCH_OK comes but the FETCH stream is reset and we timeout waiting
@@ -357,8 +391,8 @@ TEST_F(MoQSessionTest, FetchBadLength) {
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](Fetch fetch,
-             auto fetchPub) -> folly::coro::Task<Publisher::FetchResult> {
+          [this](Fetch fetch, auto fetchPub)
+              -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
                 FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
@@ -370,6 +404,7 @@ TEST_F(MoQSessionTest, FetchBadLength) {
                 moxygen::test::makeBuf(10));
             // this should close the session too
             fetchPub->endOfFetch();
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -383,7 +418,7 @@ TEST_F(MoQSessionTest, FetchBadLength) {
 
 TEST_F(MoQSessionTest, FetchOverLimit) {
   setupMoQSession();
-  auto f = [](std::shared_ptr<MoQSession> session) mutable
+  auto f = [this](std::shared_ptr<MoQSession> session) mutable
       -> folly::coro::Task<void> {
     auto fetchCallback1 =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -392,17 +427,21 @@ TEST_F(MoQSessionTest, FetchOverLimit) {
     auto fetchCallback3 =
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     Fetch fetch = getFetch({0, 0}, {0, 1});
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess()).Times(2);
     auto res = co_await session->fetch(fetch, fetchCallback1);
     res = co_await session->fetch(fetch, fetchCallback2);
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchError(500));
     res = co_await session->fetch(fetch, fetchCallback3);
     EXPECT_TRUE(res.hasError());
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
+          [this](
+              Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
                 FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -411,10 +450,12 @@ TEST_F(MoQSessionTest, FetchOverLimit) {
                 {}});
           }))
       .WillOnce(testing::Invoke(
-          [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
+          [this](
+              Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             EXPECT_EQ(
                 fetch.fullTrackName,
                 FullTrackName({TrackNamespace{{"foo"}}, "bar"}));
+            EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
                 GroupOrder::OldestFirst,
@@ -519,7 +560,9 @@ TEST_F(MoQSessionTest, ServerSetupFail) {
 TEST_F(MoQSessionTest, MaxSubscribeID) {
   setupMoQSession();
   [](std::shared_ptr<MoQSession> clientSession,
-     std::shared_ptr<MoQSession> serverSession) -> folly::coro::Task<void> {
+     std::shared_ptr<MoQSession> serverSession,
+     std::shared_ptr<MockSubscriberStats> clientSubscriberStatsCallback)
+      -> folly::coro::Task<void> {
     SubscribeRequest sub{
         SubscribeID(0),
         TrackAlias(0),
@@ -536,6 +579,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
     auto trackPublisher3 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+    EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeError(400));
     auto res = co_await clientSession->subscribe(sub, trackPublisher1);
     co_await folly::coro::co_reschedule_on_current_executor;
     // This is true because initial is 2 in this test case and we grant credit
@@ -546,6 +590,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
     // subscribe again but this time we get a DONE
     EXPECT_CALL(*trackPublisher2, subscribeDone(testing::_))
         .WillOnce(testing::Return(folly::unit));
+    EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeSuccess());
     res = co_await clientSession->subscribe(sub, trackPublisher2);
     co_await folly::coro::co_reschedule_on_current_executor;
     expectedSubId++;
@@ -556,22 +601,28 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
     EXPECT_CALL(*trackPublisher3, subscribeDone(testing::_))
         .WillOnce(testing::Return(folly::unit))
         .WillOnce(testing::Return(folly::unit));
+
+    EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeSuccess()).Times(2);
     res = co_await clientSession->subscribe(sub, trackPublisher3);
     res = co_await clientSession->subscribe(sub, trackPublisher3);
+    EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeError(500));
     res = co_await clientSession->subscribe(sub, trackPublisher3);
     EXPECT_TRUE(res.hasError());
-  }(clientSession_, serverSession_)
-                                                       .scheduleOn(&eventBase_)
-                                                       .start();
+  }(clientSession_, serverSession_, clientSubscriberStatsCallback_)
+             .scheduleOn(&eventBase_)
+             .start();
   EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+          [this](
+              auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeError(400));
             co_return folly::makeUnexpected(
                 SubscribeError{sub.subscribeID, 400, "bad", folly::none});
           }))
       .WillOnce(testing::Invoke(
           [this](auto sub, auto pub)
               -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeSuccess());
             eventBase_.add([pub, sub] {
               pub->subscribeDone(
                   {sub.subscribeID,
@@ -587,7 +638,9 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
                 {}});
           }))
       .WillOnce(testing::Invoke(
-          [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+          [this](
+              auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeSuccess());
             co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
                 sub.subscribeID,
                 std::chrono::milliseconds(0),
@@ -596,7 +649,9 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
                 {}});
           }))
       .WillOnce(testing::Invoke(
-          [](auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+          [this](
+              auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeSuccess());
             co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
                 sub.subscribeID,
                 std::chrono::milliseconds(0),

@@ -4,6 +4,7 @@
 #include <moxygen/MoQCodec.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/stats/MoQStats.h>
 
 namespace moxygen {
 
@@ -213,4 +214,31 @@ class MockPublisher : public Publisher {
       (SubscribeAnnounces),
       (override));
 };
+
+class MockPublisherStats : public MoQPublisherStatsCallback {
+ public:
+  MockPublisherStats() = default;
+
+  MOCK_METHOD(void, onSubscribeSuccess, (), (override));
+
+  MOCK_METHOD(void, onSubscribeError, (uint64_t), (override));
+
+  MOCK_METHOD(void, onFetchSuccess, (), (override));
+
+  MOCK_METHOD(void, onFetchError, (uint64_t), (override));
+};
+
+class MockSubscriberStats : public MoQSubscriberStatsCallback {
+ public:
+  MockSubscriberStats() = default;
+
+  MOCK_METHOD(void, onSubscribeSuccess, (), (override));
+
+  MOCK_METHOD(void, onSubscribeError, (uint64_t), (override));
+
+  MOCK_METHOD(void, onFetchSuccess, (), (override));
+
+  MOCK_METHOD(void, onFetchError, (uint64_t), (override));
+};
+
 } // namespace moxygen
