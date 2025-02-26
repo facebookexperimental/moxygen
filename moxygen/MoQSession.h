@@ -19,6 +19,7 @@
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
+#include <moxygen/stats/MoQStats.h>
 #include "moxygen/util/TimedBaton.h"
 
 #include <boost/variant.hpp>
@@ -130,6 +131,16 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::coro::Task<Subscriber::AnnounceResult> announce(
       Announce ann,
       std::shared_ptr<AnnounceCallback> announceCallback = nullptr) override;
+
+  void setPublisherStatsCallback(
+      std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback) {
+    publisherStatsCallback_ = publisherStatsCallback;
+  }
+
+  void setSubscriberStatsCallback(
+      std::shared_ptr<MoQSubscriberStatsCallback> subscriberStatsCallback) {
+    subscriberStatsCallback_ = subscriberStatsCallback;
+  }
 
   class PublisherImpl {
    public:
@@ -385,5 +396,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   ServerSetupCallback* serverSetupCallback_{nullptr};
   std::shared_ptr<Publisher> publishHandler_;
   std::shared_ptr<Subscriber> subscribeHandler_;
+
+  std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback_{nullptr};
+  std::shared_ptr<MoQSubscriberStatsCallback> subscriberStatsCallback_{nullptr};
 };
 } // namespace moxygen
