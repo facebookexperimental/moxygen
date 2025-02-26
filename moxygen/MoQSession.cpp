@@ -2199,11 +2199,38 @@ void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
   }
 }
 
+folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
+    TrackStatusRequest trackStatusRequest) {
+  XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
+             << "sess=" << this;
+  auto res = writeTrackStatusRequest(controlWriteBuf_, trackStatusRequest);
+  if (!res) {
+    XLOG(ERR) << "writeTrackStatusREquest failed sess=" << this;
+    co_return TrackStatusResult{
+        trackStatusRequest.fullTrackName,
+        TrackStatusCode::UNKNOWN,
+        folly::none};
+  }
+  controlWriteEvent_.signal();
+  auto contract = folly::coro::makePromiseContract<TrackStatus>();
+  trackStatuses_.emplace(
+      trackStatusRequest.fullTrackName, std::move(contract.first));
+  co_return co_await std::move(contract.second);
+}
+
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << " code=" << uint64_t(trackStatus.statusCode)
              << " sess=" << this;
-  // TODO
+  auto trackStatusIt = trackStatuses_.find(trackStatus.fullTrackName);
+  if (trackStatusIt == trackStatuses_.end()) {
+    XLOG(ERR) << __func__
+              << " Couldn't find a pending TrackStatusRequest for ftn="
+              << trackStatus.fullTrackName;
+    return;
+  }
+  trackStatusIt->second.setValue(std::move(trackStatus));
+  trackStatuses_.erase(trackStatusIt);
 }
 
 void MoQSession::onGoaway(Goaway goaway) {

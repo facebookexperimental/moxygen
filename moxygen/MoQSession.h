@@ -115,7 +115,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     return subOrder == GroupOrder::Default ? pubOrder : subOrder;
   }
 
-  // TODO: trackStatus
+  folly::coro::Task<TrackStatusResult> trackStatus(
+      TrackStatusRequest trackStatusRequest) override;
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
@@ -349,6 +350,13 @@ class MoQSession : public MoQControlCodec::ControlCallback,
           folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>,
       TrackNamespace::hash>
       pendingSubscribeAnnounces_;
+
+  // Track Status
+  folly::F14FastMap<
+      FullTrackName,
+      folly::coro::Promise<TrackStatus>,
+      FullTrackName::hash>
+      trackStatuses_;
 
   // Subscriber ID -> metadata about a publish track
   folly::

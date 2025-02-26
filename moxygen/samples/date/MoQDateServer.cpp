@@ -64,6 +64,26 @@ class MoQDateServer : public MoQServer,
     }
   }
 
+  folly::coro::Task<TrackStatusResult> trackStatus(
+      TrackStatusRequest trackStatusRequest) override {
+    XLOG(DBG1) << __func__ << trackStatusRequest.fullTrackName;
+    if (trackStatusRequest.fullTrackName != dateTrackName()) {
+      co_return TrackStatus{
+          trackStatusRequest.fullTrackName,
+          TrackStatusCode::TRACK_NOT_EXIST,
+          folly::none};
+    }
+    // TODO: add other trackSTatus codes
+    // TODO: unify this with subscribe. You can get the same information both
+    // ways
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    co_return TrackStatus{
+        trackStatusRequest.fullTrackName,
+        TrackStatusCode::IN_PROGRESS,
+        AbsoluteLocation{uint64_t(in_time_t / 60), uint64_t(in_time_t % 60)}};
+  }
+
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest subReq,
       std::shared_ptr<TrackConsumer> consumer) override {

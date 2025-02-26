@@ -467,6 +467,29 @@ TEST_F(MoQSessionTest, FetchOverLimit) {
   eventBase_.loop();
 }
 
+TEST_F(MoQSessionTest, TrackStatus) {
+  setupMoQSession();
+  eventBase_.loopOnce();
+  auto f = [](std::shared_ptr<MoQSession> session) mutable
+      -> folly::coro::Task<void> {
+    auto res = co_await session->trackStatus(
+        {FullTrackName{TrackNamespace{{"foo"}}, "bar"}});
+    EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
+    session->close(SessionCloseErrorCode::NO_ERROR);
+  };
+  EXPECT_CALL(*serverPublisher, trackStatus(testing::_))
+      .WillOnce(testing::Invoke(
+          [](TrackStatusRequest request)
+              -> folly::coro::Task<Publisher::TrackStatusResult> {
+            co_return Publisher::TrackStatusResult{
+                request.fullTrackName,
+                TrackStatusCode::IN_PROGRESS,
+                AbsoluteLocation{}};
+          }));
+  f(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
 // Missing Test Cases
 // ===
 // receive bidi stream on client

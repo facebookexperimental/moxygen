@@ -119,6 +119,15 @@ class MoQTextClient : public Subscriber,
       sub.end = folly::none;
       subTextHandler_ = std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE, &textHandler_);
+
+      auto trackStatus =
+          co_await moqClient_.moqSession_->trackStatus({fullTrackName_});
+      if (trackStatus.statusCode != TrackStatusCode::IN_PROGRESS) {
+        XLOG(ERR) << "Track is currently not in progress! TrackStatusCode: "
+                  << std::to_string((uint32_t)trackStatus.statusCode);
+        co_return;
+      }
+
       auto track =
           co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
       if (track.hasValue()) {

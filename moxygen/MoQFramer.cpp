@@ -730,6 +730,7 @@ folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
+  trackStatus.fullTrackName = res.value();
   auto statusCode = quic::decodeQuicInteger(cursor, length);
   if (!statusCode) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
