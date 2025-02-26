@@ -50,4 +50,22 @@ class MoQPublisherStatsCallback : public MoQStatsCallback {};
 
 class MoQSubscriberStatsCallback : public MoQStatsCallback {};
 
+#define MOQ_PUBLISHER_STATS(publisherStatsCallback, method, ...) \
+  if (publisherStatsCallback) {                                  \
+    folly::invoke(                                               \
+        &MoQPublisherStatsCallback::method,                      \
+        publisherStatsCallback,                                  \
+        ##__VA_ARGS__);                                          \
+  }                                                              \
+  static_assert(true, "semicolon required")
+
+#define MOQ_SUBSCRIBER_STATS(subscriberStatsCallback, method, ...) \
+  if (subscriberStatsCallback) {                                   \
+    folly::invoke(                                                 \
+        &MoQSubscriberStatsCallback::method,                       \
+        subscriberStatsCallback,                                   \
+        ##__VA_ARGS__);                                            \
+  }                                                                \
+  static_assert(true, "semicolon required")
+
 } // namespace moxygen
