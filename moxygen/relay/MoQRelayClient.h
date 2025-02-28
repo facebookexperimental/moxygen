@@ -13,8 +13,12 @@ namespace moxygen {
 
 class MoQRelayClient {
  public:
-  MoQRelayClient(folly::EventBase* evb, proxygen::URL url)
-      : moqClient_(evb, std::move(url)) {}
+  MoQRelayClient(
+      folly::EventBase* evb,
+      proxygen::URL url,
+      MoQClient::TransportType ttype =
+          MoQClient::TransportType::H3_WEBTRANSPORT)
+      : moqClient_(evb, std::move(url), ttype) {}
 
   folly::coro::Task<void> run(
       std::shared_ptr<Publisher> publisher,

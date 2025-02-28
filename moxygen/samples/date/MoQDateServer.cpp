@@ -21,6 +21,7 @@ DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_int32(port, 9667, "Server Port");
 DEFINE_bool(stream_per_object, false, "Use one stream for each object");
+DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 
 namespace {
 using namespace moxygen;
@@ -41,6 +42,11 @@ class MoQDateServer : public MoQServer,
       return false;
     }
     relayClient_ = std::make_unique<MoQRelayClient>(evb, url);
+    relayClient_ = std::make_unique<MoQRelayClient>(
+        evb,
+        url,
+        (FLAGS_quic_transport ? MoQClient::TransportType::QUIC
+                              : MoQClient::TransportType::H3_WEBTRANSPORT));
     relayClient_
         ->run(
             /*publisher=*/shared_from_this(),
