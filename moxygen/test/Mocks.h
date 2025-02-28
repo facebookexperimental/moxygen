@@ -165,6 +165,47 @@ class MockFetchConsumer : public FetchConsumer {
       (override));
 };
 
+class MockSubgroupConsumer : public SubgroupConsumer {
+ public:
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      object,
+      (uint64_t, Payload, bool),
+      (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      objectNotExists,
+      (uint64_t, bool),
+      (override));
+  MOCK_METHOD(void, checkpoint, (), (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      beginObject,
+      (uint64_t, uint64_t, Payload),
+      (override));
+  MOCK_METHOD(
+      (folly::Expected<ObjectPublishStatus, MoQPublishError>),
+      objectPayload,
+      (Payload, bool),
+      (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      endOfGroup,
+      (uint64_t),
+      (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      endOfTrackAndGroup,
+      (uint64_t),
+      (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      endOfSubgroup,
+      (),
+      (override));
+  MOCK_METHOD(void, reset, (ResetStreamErrorCode), (override));
+};
+
 class MockSubscriptionHandle : public Publisher::SubscriptionHandle {
  public:
   explicit MockSubscriptionHandle(SubscribeOk ok)

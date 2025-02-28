@@ -104,6 +104,7 @@ class MoQForwarder : public TrackConsumer {
           session,
           {subscribeID,
            SubscribeDoneStatusCode::UNSUBSCRIBED,
+           0, // filled in by session
            "",
            forwarder.latest()});
     }
@@ -151,6 +152,7 @@ class MoQForwarder : public TrackConsumer {
         session,
         {SubscribeID(0),
          SubscribeDoneStatusCode::GOING_AWAY,
+         0, // filled in by session
          "byebyebye",
          latest_});
   }
@@ -211,6 +213,7 @@ class MoQForwarder : public TrackConsumer {
           sub.session,
           {sub.subscribeID,
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+           0, // filled in by session
            "",
            sub.range.end});
       return false;
@@ -223,6 +226,7 @@ class MoQForwarder : public TrackConsumer {
         sub.session,
         {sub.subscribeID,
          SubscribeDoneStatusCode::INTERNAL_ERROR,
+         0, // filled in by session
          err.what(),
          sub.range.end});
   }

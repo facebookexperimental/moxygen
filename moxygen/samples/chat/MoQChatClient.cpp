@@ -134,6 +134,7 @@ void MoQChatClient::unsubscribe() {
     publisher_->subscribeDone(
         {*chatSubscribeID_,
          SubscribeDoneStatusCode::UNSUBSCRIBED,
+         0, // filled in by session
          "",
          folly::none});
     publisher_.reset();
@@ -316,7 +317,7 @@ void MoQChatClient::subscribeDone(SubscribeDone subDone) {
       if (userTrackIt->subscribeId == subDone.subscribeID) {
         if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
             userTrackIt->subscription) {
-          userTrackIt->subscription->unsubscribe();
+          userTrackIt->subscription.reset();
         }
         userTracks.second.erase(userTrackIt);
         break;

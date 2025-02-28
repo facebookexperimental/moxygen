@@ -92,12 +92,17 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   res = writeSubscribeDone(
       writeBuf,
       SubscribeDone(
-          {0, SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, "", folly::none}));
+          {0,
+           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+           7,
+           "",
+           folly::none}));
   res = writeSubscribeDone(
       writeBuf,
       SubscribeDone(
           {0,
            SubscribeDoneStatusCode::INTERNAL_ERROR,
+           0,
            "not found",
            AbsoluteLocation({0, 0})}));
   res = writeAnnounce(
