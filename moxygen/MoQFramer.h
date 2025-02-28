@@ -21,6 +21,7 @@ namespace moxygen {
 //////// Constants ////////
 const size_t kMaxFrameHeaderSize = 32;
 const size_t kMaxNamespaceLength = 32;
+const uint8_t kDefaultPriority = 128;
 
 //////// Types ////////
 
@@ -294,7 +295,7 @@ struct ObjectHeader {
   uint64_t group;
   uint64_t subgroup{0}; // meaningless for Track and Datagram
   uint64_t id;
-  uint8_t priority;
+  uint8_t priority{kDefaultPriority};
   ObjectStatus status{ObjectStatus::NORMAL};
   folly::Optional<uint64_t> length{folly::none};
 };
@@ -478,7 +479,7 @@ struct SubscribeRequest {
   SubscribeID subscribeID;
   TrackAlias trackAlias;
   FullTrackName fullTrackName;
-  uint8_t priority;
+  uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
@@ -494,7 +495,7 @@ struct SubscribeUpdate {
   SubscribeID subscribeID;
   AbsoluteLocation start;
   uint64_t endGroup;
-  uint8_t priority;
+  uint8_t priority{kDefaultPriority};
   std::vector<TrackRequestParameter> params;
 };
 
@@ -657,10 +658,10 @@ struct Fetch {
   Fetch(
       SubscribeID su,
       FullTrackName ftn,
-      uint8_t p,
-      GroupOrder g,
       AbsoluteLocation st,
       AbsoluteLocation e,
+      uint8_t p = kDefaultPriority,
+      GroupOrder g = GroupOrder::Default,
       std::vector<TrackRequestParameter> pa = {})
       : subscribeID(su),
         fullTrackName(std::move(ftn)),
@@ -672,8 +673,8 @@ struct Fetch {
       SubscribeID su,
       SubscribeID jsid,
       uint64_t pgo,
-      uint8_t p,
-      GroupOrder g,
+      uint8_t p = kDefaultPriority,
+      GroupOrder g = GroupOrder::Default,
       std::vector<TrackRequestParameter> pa = {})
       : subscribeID(su),
         priority(p),
@@ -682,7 +683,7 @@ struct Fetch {
         args(JoiningFetch(jsid, pgo)) {}
   SubscribeID subscribeID;
   FullTrackName fullTrackName;
-  uint8_t priority;
+  uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
   std::vector<TrackRequestParameter> params;
   std::variant<StandaloneFetch, JoiningFetch> args;
