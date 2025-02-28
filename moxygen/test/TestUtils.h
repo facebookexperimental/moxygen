@@ -13,10 +13,14 @@ namespace moxygen::test {
 enum class TestControlMessages { CLIENT, SERVER, BOTH };
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in);
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages();
+std::unique_ptr<folly::IOBuf> writeAllFetchMessages();
+std::unique_ptr<folly::IOBuf> writeAllDatagramMessages();
 
 inline std::unique_ptr<folly::IOBuf> writeAllMessages() {
   auto buf = writeAllControlMessages(TestControlMessages::BOTH);
   buf->appendToChain(writeAllObjectMessages());
+  buf->appendToChain(writeAllFetchMessages());
+  buf->appendToChain(writeAllDatagramMessages());
   return buf;
 }
 

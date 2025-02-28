@@ -315,7 +315,7 @@ StreamPublisherImpl::writeCurrentObject(
     bool finStream) {
   header_.id = objectID;
   header_.length = length;
-  (void)writeObject(writeBuf_, streamType_, header_, std::move(payload));
+  (void)writeStreamObject(writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream);
 }
 
@@ -767,10 +767,15 @@ MoQSession::TrackPublisherImpl::datagram(
         MoQPublishError::API_ERROR, "Publish after subscribeDone"));
   }
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  XCHECK(header.length);
-  (void)writeObject(
+  uint64_t headerLength = 0;
+  if (header.length) {
+    headerLength = *header.length;
+  } else if (header.status == ObjectStatus::NORMAL && payload) {
+    headerLength = payload->computeChainDataLength();
+  } // else 0 is fine
+  DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
+  (void)writeDatagramObject(
       writeBuf,
-      StreamType::OBJECT_DATAGRAM,
       ObjectHeader{
           trackAlias_,
           header.group,
@@ -778,7 +783,7 @@ MoQSession::TrackPublisherImpl::datagram(
           header.id,
           header.priority,
           header.status,
-          *header.length},
+          headerLength},
       std::move(payload));
   // TODO: set priority when WT has an API for that
   auto res = wt->sendDatagram(writeBuf.move());
@@ -2893,27 +2898,30 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   readBuf.append(std::move(datagram));
+  size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
   auto type = quic::decodeQuicInteger(cursor);
-  if (!type || StreamType(type->first) != StreamType::OBJECT_DATAGRAM) {
+  if (!type ||
+      (StreamType(type->first) != StreamType::OBJECT_DATAGRAM &&
+       StreamType(type->first) != StreamType::OBJECT_DATAGRAM_STATUS)) {
     XLOG(ERR) << __func__ << " Bad datagram header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto dgLength = readBuf.chainLength();
-  auto res = parseObjectHeader(cursor, dgLength);
+  remainingLength -= type->second;
+  auto res = parseDatagramObjectHeader(
+      cursor, StreamType(type->first), remainingLength);
   if (res.hasError()) {
     XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto remainingLength = cursor.totalLength();
   if (remainingLength != *res->length) {
     XLOG(ERR) << __func__ << " Bad datagram: Length mismatch";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  readBuf.trimStart(dgLength - remainingLength);
+  readBuf.trimStart(readBuf.chainLength() - remainingLength);
   auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
   XCHECK(alias);
   auto state = getSubscribeTrackReceiveState(*alias).get();
