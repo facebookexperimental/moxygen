@@ -834,15 +834,10 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   fetch.subscribeID = res->first;
   length -= res->second;
 
-  auto res2 = parseFullTrackName(cursor, length);
-  if (!res2) {
-    return folly::makeUnexpected(res2.error());
-  }
-  fetch.fullTrackName = std::move(res2.value());
-
-  if (length < 2) {
+  if (length < 3) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
+
   fetch.priority = cursor.readBE<uint8_t>();
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
@@ -851,18 +846,49 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   fetch.groupOrder = static_cast<GroupOrder>(order);
   length -= 2 * sizeof(uint8_t);
 
-  auto res3 = parseAbsoluteLocation(cursor, length);
-  if (!res3) {
-    return folly::makeUnexpected(res3.error());
+  auto fetchType = quic::decodeQuicInteger(cursor, length);
+  if (!fetchType) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetch.start = std::move(res3.value());
-
-  auto res4 = parseAbsoluteLocation(cursor, length);
-  if (!res4) {
-    return folly::makeUnexpected(res4.error());
+  if (fetchType->first == 0 ||
+      fetchType->first > folly::to_underlying(FetchType::JOINING)) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
-  fetch.end = std::move(res4.value());
+  length -= fetchType->second;
 
+  if (FetchType(fetchType->first) == FetchType::STANDALONE) {
+    auto ftn = parseFullTrackName(cursor, length);
+    if (!ftn) {
+      return folly::makeUnexpected(ftn.error());
+    }
+
+    auto start = parseAbsoluteLocation(cursor, length);
+    if (!start) {
+      return folly::makeUnexpected(start.error());
+    }
+
+    auto end = parseAbsoluteLocation(cursor, length);
+    if (!end) {
+      return folly::makeUnexpected(end.error());
+    }
+    fetch.fullTrackName = std::move(ftn.value());
+    fetch.args = StandaloneFetch(start.value(), end.value());
+  } else {
+    // JOINING
+    auto jsid = quic::decodeQuicInteger(cursor, length);
+    if (!jsid) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= jsid->second;
+
+    auto pgo = quic::decodeQuicInteger(cursor, length);
+    if (!pgo) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= pgo->second;
+    // Note fetch.fullTrackName is empty at this point, the session fills it in
+    fetch.args = JoiningFetch(SubscribeID(jsid->first), pgo->first);
+  }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1672,7 +1698,6 @@ WriteResult writeFetch(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
   writeVarint(writeBuf, fetch.subscribeID.value, size, error);
-  writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
 
   writeBuf.append(&fetch.priority, 1);
   size += 1;
@@ -1680,11 +1705,22 @@ WriteResult writeFetch(
   writeBuf.append(&order, 1);
   size += 1;
 
-  writeVarint(writeBuf, fetch.start.group, size, error);
-  writeVarint(writeBuf, fetch.start.object, size, error);
-  writeVarint(writeBuf, fetch.end.group, size, error);
-  writeVarint(writeBuf, fetch.end.object, size, error);
-
+  auto [standalone, joining] = fetchType(fetch);
+  if (standalone) {
+    writeVarint(
+        writeBuf, folly::to_underlying(FetchType::STANDALONE), size, error);
+    writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
+    writeVarint(writeBuf, standalone->start.group, size, error);
+    writeVarint(writeBuf, standalone->start.object, size, error);
+    writeVarint(writeBuf, standalone->end.group, size, error);
+    writeVarint(writeBuf, standalone->end.object, size, error);
+  } else {
+    CHECK(joining);
+    writeVarint(
+        writeBuf, folly::to_underlying(FetchType::JOINING), size, error);
+    writeVarint(writeBuf, joining->joiningSubscribeID.value, size, error);
+    writeVarint(writeBuf, joining->precedingGroupOffset, size, error);
+  }
   writeTrackRequestParams(writeBuf, fetch.params, size, error);
 
   writeSize(sizePtr, size, error);

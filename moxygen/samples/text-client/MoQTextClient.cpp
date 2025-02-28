@@ -25,6 +25,7 @@ DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
+DEFINE_bool(jfetch, false, "Joining fetch");
 
 namespace {
 using namespace moxygen;
@@ -42,15 +43,16 @@ SubParams flags2params() {
     if (soStr.empty()) {
       result.locType = LocationType::LatestObject;
       return result;
-    } else if (auto so = folly::to<uint64_t>(soStr) > 0) {
-      XLOG(ERR) << "Invalid: sg blank, so=" << so;
-      exit(1);
     } else {
-      result.locType = LocationType::LatestGroup;
-      return result;
+      XLOG(ERR) << "Invalid: sg blank, so=" << soStr;
+      exit(1);
     }
   } else if (soStr.empty()) {
     soStr = std::string("0");
+  }
+  if (FLAGS_jfetch) {
+    XLOG(ERR) << "Joining fetch requires empty sg";
+    exit(1);
   }
   result.start.emplace(
       folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(soStr));
@@ -120,6 +122,7 @@ class MoQTextClient : public Subscriber,
       subTextHandler_ = std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE, &textHandler_);
 
+#if 0
       auto trackStatus =
           co_await moqClient_.moqSession_->trackStatus({fullTrackName_});
       if (trackStatus.statusCode != TrackStatusCode::IN_PROGRESS) {
@@ -127,9 +130,33 @@ class MoQTextClient : public Subscriber,
                   << std::to_string((uint32_t)trackStatus.statusCode);
         co_return;
       }
-
-      auto track =
-          co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
+#endif
+      Publisher::SubscribeResult track;
+      Publisher::FetchResult fetchTrack;
+      if (FLAGS_jfetch) {
+        XLOG(DBG1) << "JOINING FETCH pgo=0";
+        fetchTextHandler_ = std::make_shared<ObjectReceiver>(
+            ObjectReceiver::FETCH, &textHandler_);
+        auto joinResult = co_await moqClient_.moqSession_->join(
+            sub,
+            subTextHandler_,
+            /*precedingGroupOffset=*/0,
+            sub.priority,
+            sub.groupOrder,
+            {},
+            fetchTextHandler_);
+        track = joinResult.subscribeResult;
+        fetchTrack = joinResult.fetchResult;
+        if (fetchTrack.hasError()) {
+          XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode
+                    << " reason=" << fetchTrack.error().reasonPhrase;
+        } else {
+          XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
+        }
+      } else {
+        track =
+            co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
+      }
       if (track.hasValue()) {
         subscription_ = std::move(track.value());
         auto subscribeID = subscription_->subscribeOk().subscribeID;
@@ -164,7 +191,7 @@ class MoQTextClient : public Subscriber,
                          << "," << fetchEnd.object << "}";
               fetchTextHandler_ = std::make_shared<ObjectReceiver>(
                   ObjectReceiver::FETCH, &textHandler_);
-              auto fetchTrack = co_await moqClient_.moqSession_->fetch(
+              fetchTrack = co_await moqClient_.moqSession_->fetch(
                   Fetch(
                       SubscribeID(0),
                       sub.fullTrackName,
