@@ -219,7 +219,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= status->second;
-    if (status->first > folly::to_underlying(ObjectStatus::END_OF_SUBGROUP)) {
+    if (status->first > folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
       return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
     }
     objectHeader.status = ObjectStatus(status->first);
@@ -286,7 +286,7 @@ folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     if (objectStatus->first >
-        folly::to_underlying(ObjectStatus::END_OF_SUBGROUP)) {
+        folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
       return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
     }
     objectHeader.status = ObjectStatus(objectStatus->first);
@@ -1811,8 +1811,8 @@ const char* getObjectStatusString(ObjectStatus objectStatus) {
       return "END_OF_GROUP";
     case ObjectStatus::END_OF_TRACK_AND_GROUP:
       return "END_OF_TRACK_AND_GROUP";
-    case ObjectStatus::END_OF_SUBGROUP:
-      return "END_OF_SUBGROUP";
+    case ObjectStatus::END_OF_TRACK:
+      return "END_OF_TRACK";
     default:
       // can happen when type was cast from uint8_t
       return "Unknown";

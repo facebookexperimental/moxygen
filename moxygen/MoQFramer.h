@@ -163,7 +163,8 @@ constexpr uint64_t kVersionDraft08_exp1 = 0xff080001; // Draft 8 no ROLE
 // SUBSCRIBE_DONE stream count
 constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
 constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp3;
+constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp4;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -189,7 +190,7 @@ enum class ObjectStatus : uint64_t {
   GROUP_NOT_EXIST = 2,
   END_OF_GROUP = 3,
   END_OF_TRACK_AND_GROUP = 4,
-  END_OF_SUBGROUP = 5,
+  END_OF_TRACK = 5,
 };
 
 std::ostream& operator<<(std::ostream& os, ObjectStatus type);
