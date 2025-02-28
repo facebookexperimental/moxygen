@@ -100,13 +100,7 @@ class MoQForwarder : public TrackConsumer {
     }
 
     void unsubscribe() override {
-      forwarder.removeSession(
-          session,
-          {subscribeID,
-           SubscribeDoneStatusCode::UNSUBSCRIBED,
-           0, // filled in by session
-           "",
-           forwarder.latest()});
+      forwarder.removeSession(session);
     }
 
     std::shared_ptr<MoQSession> session;
@@ -176,26 +170,15 @@ class MoQForwarder : public TrackConsumer {
     return StandaloneFetch{start, {latest.group, latest.object + 1}};
   }
 
-  void removeSession(const std::shared_ptr<MoQSession>& session) {
-    removeSession(
-        session,
-        {SubscribeID(0),
-         SubscribeDoneStatusCode::GOING_AWAY,
-         0, // filled in by session
-         "byebyebye",
-         latest_});
-  }
-
   void removeSession(
       const std::shared_ptr<MoQSession>& session,
-      SubscribeDone subDone) {
+      folly::Optional<SubscribeDone> subDone = folly::none) {
     auto subIt = subscribers_.find(session.get());
     if (subIt == subscribers_.end()) {
       // ?
       XLOG(ERR) << "Session not found";
       return;
     }
-    subDone.subscribeID = subIt->second->subscribeID;
     subscribeDone(*subIt->second, subDone);
     subscribers_.erase(subIt);
     XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
@@ -204,13 +187,18 @@ class MoQForwarder : public TrackConsumer {
     }
   }
 
-  void subscribeDone(Subscriber& subscriber, SubscribeDone subDone) {
+  void subscribeDone(
+      Subscriber& subscriber,
+      folly::Optional<SubscribeDone> subDone) {
     // TODO: Resetting subgroups here is too aggressive
     XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
     for (auto& subgroup : subscriber.subgroups) {
       subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
     }
-    subscriber.trackConsumer->subscribeDone(subDone);
+    if (subDone) {
+      subDone->subscribeID = subscriber.subscribeID;
+      subscriber.trackConsumer->subscribeDone(*subDone);
+    }
   }
 
   void forEachSubscriber(
@@ -240,11 +228,12 @@ class MoQForwarder : public TrackConsumer {
       // TOOD: maybe this is too early for a relay.
       removeSession(
           sub.session,
-          {sub.subscribeID,
-           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
-           0, // filled in by session
-           "",
-           sub.range.end});
+          SubscribeDone{
+              sub.subscribeID,
+              SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+              0, // filled in by session
+              "",
+              sub.range.end});
       return false;
     }
     return true;
@@ -253,11 +242,12 @@ class MoQForwarder : public TrackConsumer {
   void removeSession(const Subscriber& sub, const MoQPublishError& err) {
     removeSession(
         sub.session,
-        {sub.subscribeID,
-         SubscribeDoneStatusCode::INTERNAL_ERROR,
-         0, // filled in by session
-         err.what(),
-         sub.range.end});
+        SubscribeDone{
+            sub.subscribeID,
+            SubscribeDoneStatusCode::INTERNAL_ERROR,
+            0, // filled in by session
+            err.what(),
+            sub.range.end});
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>

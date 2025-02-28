@@ -583,8 +583,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   void onStreamComplete(const ObjectHeader& finalHeader) override;
 
-  void reset(ResetStreamErrorCode) override {
-    // TBD: reset all subgroups_?  Currently called from cleanup()
+  void reset(ResetStreamErrorCode code) override {
+    while (!subgroups_.empty()) {
+      auto it = subgroups_.begin();
+      // reset will invoke onStreamComplete, which erases from subgroups_
+      it->second->reset(code);
+    }
   }
 
   // TrackConsumer overrides
@@ -1816,14 +1820,17 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   auto trackPublisher =
       dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
   if (!trackPublisher) {
-    XLOG(ERR) << "SubscribeID in Unscubscribe is for a FETCH, id="
+    XLOG(ERR) << "SubscribeID in Unsubscribe is for a FETCH, id="
               << unsubscribe.subscribeID << " sess=" << this;
   } else if (!trackPublisher->getSubscriptionHandle()) {
     XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
               << unsubscribe.subscribeID << " sess=" << this;
   } else {
     trackPublisher->getSubscriptionHandle()->unsubscribe();
-    // Maybe issue SUBSCRIBE_DONE/UNSUBSCRIBED + reset open streams?
+    trackPublisher->reset(ResetStreamErrorCode::CANCELLED);
+    if (pubTracks_.erase(unsubscribe.subscribeID)) {
+      retireSubscribeId(/*signalWriteLoop=*/true);
+    } // else, the caller invoked subscribeDone, which isn't needed but fine
   }
 }
 
@@ -2048,11 +2055,12 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
       XLOG(ERR) << "FETCH_CANCEL on SUBSCRIBE id=" << fetchCancel.subscribeID;
       return;
     }
+    // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
+    // and retireSubscribeId
     fetchPublisher->reset(ResetStreamErrorCode::CANCELLED);
     if (fetchPublisher->getFetchHandle()) {
       fetchPublisher->getFetchHandle()->fetchCancel();
     }
-    retireSubscribeId(/*signalWriteLoop=*/true);
   }
 }
 
@@ -2715,17 +2723,17 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   // no more callbacks after unsubscribe
   XLOG(DBG1) << "unsubscribing from ftn=" << trackIt->second->fullTrackName()
              << " sess=" << this;
-  // if there are open streams for this subscription, we should STOP_SENDING
-  // them?
+  // cancel() should send STOP_SENDING on any open streams for this subscription
   trackIt->second->cancel();
+  subTracks_.erase(trackIt);
+  subIdToTrackAlias_.erase(trackAliasIt);
   auto res = writeUnsubscribe(controlWriteBuf_, unsubscribe);
   if (!res) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
     return;
   }
-  // we rely on receiving subscribeDone after unsubscribe to remove from
-  // subTracks_
   controlWriteEvent_.signal();
+  checkForCloseOnDrain();
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
