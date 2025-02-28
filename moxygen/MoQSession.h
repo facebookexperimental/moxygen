@@ -171,6 +171,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
     virtual void reset(ResetStreamErrorCode error) = 0;
 
+    virtual void onStreamCreated() {}
+
     virtual void onStreamComplete(const ObjectHeader& finalHeader) = 0;
 
     folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
@@ -299,6 +301,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
+  void removeSubscriptionState(TrackAlias alias, SubscribeID id);
   void checkForCloseOnDrain();
 
   void retireSubscribeId(bool signalWriteLoop);
