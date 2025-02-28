@@ -770,9 +770,9 @@ MoQSession::TrackPublisherImpl::datagram(
   uint64_t headerLength = 0;
   if (header.length) {
     headerLength = *header.length;
-  } else {
-    CHECK_NE(header.status, ObjectStatus::NORMAL);
-  }
+  } else if (header.status == ObjectStatus::NORMAL && payload) {
+    headerLength = payload->computeChainDataLength();
+  } // else 0 is fine
   DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
   (void)writeDatagramObject(
       writeBuf,
@@ -2898,6 +2898,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   readBuf.append(std::move(datagram));
+  size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
   auto type = quic::decodeQuicInteger(cursor);
   if (!type ||
@@ -2907,21 +2908,20 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto dgLength = readBuf.chainLength() - type->second;
-  auto res =
-      parseDatagramObjectHeader(cursor, StreamType(type->first), dgLength);
+  remainingLength -= type->second;
+  auto res = parseDatagramObjectHeader(
+      cursor, StreamType(type->first), remainingLength);
   if (res.hasError()) {
     XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto remainingLength = cursor.totalLength();
   if (remainingLength != *res->length) {
     XLOG(ERR) << __func__ << " Bad datagram: Length mismatch";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  readBuf.trimStart(dgLength - remainingLength);
+  readBuf.trimStart(readBuf.chainLength() - remainingLength);
   auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
   XCHECK(alias);
   auto state = getSubscribeTrackReceiveState(*alias).get();

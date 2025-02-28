@@ -188,7 +188,7 @@ folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
 folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
     StreamType streamType,
-    size_t length) noexcept {
+    size_t& length) noexcept {
   ObjectHeader objectHeader;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
   if (!trackAlias) {

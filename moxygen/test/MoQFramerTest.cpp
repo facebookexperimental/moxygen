@@ -185,14 +185,17 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
 
   skip(cursor, 1);
-  auto r24 =
-      parseDatagramObjectHeader(cursor, StreamType::OBJECT_DATAGRAM_STATUS, 5);
+  size_t datagramLength = 6;
+  auto r24 = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
   testUnderflowResult(r24);
   EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
 
   skip(cursor, 1);
+  EXPECT_EQ(datagramLength, 0);
+  datagramLength = cursor.totalLength();
   auto r25 = parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM, cursor.totalLength());
+      cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
   testUnderflowResult(r25);
   EXPECT_EQ(r25.value().id, 4);
   skip(cursor, *r25.value().length);

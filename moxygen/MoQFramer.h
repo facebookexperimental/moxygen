@@ -278,7 +278,7 @@ std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
     StreamType streamType,
-    size_t length) noexcept;
+    size_t& length) noexcept;
 
 folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
     folly::io::Cursor& cursor) noexcept;
