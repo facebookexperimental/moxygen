@@ -206,7 +206,7 @@ TEST_F(MoQSessionTest, JoiningFetch) {
         GroupOrder::OldestFirst,
         LocationType::LatestObject,
         folly::none,
-        folly::none,
+        0,
         {}};
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
@@ -757,7 +757,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
         GroupOrder::OldestFirst,
         LocationType::LatestObject,
         folly::none,
-        folly::none,
+        0,
         {}};
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
@@ -862,7 +862,7 @@ TEST_F(MoQSessionTest, SubscribeDoneStreamCount) {
         GroupOrder::OldestFirst,
         LocationType::LatestObject,
         folly::none,
-        folly::none,
+        0,
         {}};
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
@@ -937,7 +937,7 @@ TEST_F(MoQSessionTest, SubscribeDoneFromSubscribe) {
         GroupOrder::OldestFirst,
         LocationType::LatestObject,
         folly::none,
-        folly::none,
+        0,
         {}};
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
@@ -986,7 +986,7 @@ TEST_F(MoQSessionTest, SubscribeDoneAPIErrors) {
         GroupOrder::OldestFirst,
         LocationType::LatestObject,
         folly::none,
-        folly::none,
+        0,
         {}};
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
@@ -1064,7 +1064,7 @@ TEST_F(MoQSessionTest, Datagrams) {
         GroupOrder::OldestFirst,
         LocationType::LatestObject,
         folly::none,
-        folly::none,
+        0,
         {}};
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
