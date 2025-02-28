@@ -133,6 +133,19 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       Announce ann,
       std::shared_ptr<AnnounceCallback> announceCallback = nullptr) override;
 
+  struct JoinResult {
+    SubscribeResult subscribeResult;
+    FetchResult fetchResult;
+  };
+  folly::coro::Task<JoinResult> join(
+      SubscribeRequest subscribe,
+      std::shared_ptr<TrackConsumer> subscribeCallback,
+      uint64_t precedingGroupOffset,
+      uint8_t fetchPri,
+      GroupOrder fetchOrder,
+      std::vector<TrackRequestParameter> fetchParams,
+      std::shared_ptr<FetchConsumer> fetchCallback);
+
   void setPublisherStatsCallback(
       std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback) {
     publisherStatsCallback_ = publisherStatsCallback;
@@ -147,15 +160,20 @@ class MoQSession : public MoQControlCodec::ControlCallback,
    public:
     PublisherImpl(
         MoQSession* session,
+        FullTrackName ftn,
         SubscribeID subscribeID,
         Priority subPriority,
         GroupOrder groupOrder)
         : session_(session),
+          fullTrackName_(std::move(ftn)),
           subscribeID_(subscribeID),
           subPriority_(subPriority),
           groupOrder_(groupOrder) {}
     virtual ~PublisherImpl() = default;
 
+    const FullTrackName& fullTrackName() const {
+      return fullTrackName_;
+    }
     SubscribeID subscribeID() const {
       return subscribeID_;
     }
@@ -170,6 +188,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     }
 
     virtual void reset(ResetStreamErrorCode error) = 0;
+
+    virtual void onStreamCreated() {}
 
     virtual void onStreamComplete(const ObjectHeader& finalHeader) = 0;
 
@@ -187,6 +207,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
    protected:
     MoQSession* session_{nullptr};
+    FullTrackName fullTrackName_;
     SubscribeID subscribeID_;
     uint8_t subPriority_;
     GroupOrder groupOrder_;
@@ -299,6 +320,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
+  void removeSubscriptionState(TrackAlias alias, SubscribeID id);
   void checkForCloseOnDrain();
 
   void retireSubscribeId(bool signalWriteLoop);
@@ -382,7 +404,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       TrackNamespace::hash>
       subscribeAnnounces_;
 
-  uint64_t nextTrackId_{0};
   uint64_t closedSubscribes_{0};
   // TODO: Make this value configurable. maxConcurrentSubscribes_ represents
   // the maximum number of concurrent subscriptions to a given sessions, set

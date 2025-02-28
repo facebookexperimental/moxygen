@@ -176,18 +176,19 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
   return serverSetup;
 }
 
-folly::Expected<uint64_t, ErrorCode> parseFetchHeader(
+folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
     folly::io::Cursor& cursor) noexcept {
   auto subscribeID = quic::decodeQuicInteger(cursor);
   if (!subscribeID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  return subscribeID->first;
+  return SubscribeID(subscribeID->first);
 }
 
-folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    StreamType streamType,
+    size_t& length) noexcept {
   ObjectHeader objectHeader;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
@@ -211,25 +212,26 @@ folly::Expected<ObjectHeader, ErrorCode> parseObjectHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
-  auto payloadLength = quic::decodeQuicInteger(cursor, length);
-  if (!payloadLength) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= payloadLength->second;
-  objectHeader.length = payloadLength->first;
-  if (objectHeader.length == 0) {
-    auto objectStatus = quic::decodeQuicInteger(cursor, length);
-    if (!objectStatus) {
+  length -= 1;
+  if (streamType == StreamType::OBJECT_DATAGRAM_STATUS) {
+    auto status = quic::decodeQuicInteger(cursor, length);
+    if (!status) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    if (objectStatus->first >
-        folly::to_underlying(ObjectStatus::END_OF_SUBGROUP)) {
+    length -= status->second;
+    if (status->first > folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
       return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
     }
-    length -= objectStatus->second;
-    objectHeader.status = ObjectStatus(objectStatus->first);
+    objectHeader.status = ObjectStatus(status->first);
+    objectHeader.length = 0;
+    if (length != 0) {
+      // MUST consume entire datagram
+      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+    }
   } else {
+    CHECK(streamType == StreamType::OBJECT_DATAGRAM);
     objectHeader.status = ObjectStatus::NORMAL;
+    objectHeader.length = length;
   }
   return objectHeader;
 }
@@ -267,43 +269,10 @@ folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
   return objectHeader;
 }
 
-folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
+folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
-    StreamType streamType,
-    const ObjectHeader& headerTemplate) noexcept {
-  DCHECK(
-      streamType == StreamType::SUBGROUP_HEADER ||
-      streamType == StreamType::FETCH_HEADER);
-  // TODO get rid of this
-  auto length = cursor.totalLength();
-  ObjectHeader objectHeader = headerTemplate;
-  if (streamType == StreamType::FETCH_HEADER) {
-    auto group = quic::decodeQuicInteger(cursor, length);
-    if (!group) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= group->second;
-    objectHeader.group = group->first;
-    auto subgroup = quic::decodeQuicInteger(cursor, length);
-    if (!subgroup) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= subgroup->second;
-    objectHeader.subgroup = subgroup->first;
-  }
-  auto id = quic::decodeQuicInteger(cursor, length);
-  if (!id) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= id->second;
-  objectHeader.id = id->first;
-  if (streamType == StreamType::FETCH_HEADER) {
-    if (length < 2) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    objectHeader.priority = cursor.readBE<uint8_t>();
-    length--;
-  }
+    size_t length,
+    ObjectHeader& objectHeader) {
   auto payloadLength = quic::decodeQuicInteger(cursor, length);
   if (!payloadLength) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -317,7 +286,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     if (objectStatus->first >
-        folly::to_underlying(ObjectStatus::END_OF_SUBGROUP)) {
+        folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
       return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
     }
     objectHeader.status = ObjectStatus(objectStatus->first);
@@ -326,6 +295,67 @@ folly::Expected<ObjectHeader, ErrorCode> parseMultiObjectHeader(
     objectHeader.status = ObjectStatus::NORMAL;
   }
 
+  return folly::unit;
+}
+
+folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
+    folly::io::Cursor& cursor,
+    const ObjectHeader& headerTemplate) noexcept {
+  // TODO get rid of this
+  auto length = cursor.totalLength();
+  ObjectHeader objectHeader = headerTemplate;
+
+  auto group = quic::decodeQuicInteger(cursor, length);
+  if (!group) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= group->second;
+  objectHeader.group = group->first;
+
+  auto subgroup = quic::decodeQuicInteger(cursor, length);
+  if (!subgroup) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= subgroup->second;
+  objectHeader.subgroup = subgroup->first;
+
+  auto id = quic::decodeQuicInteger(cursor, length);
+  if (!id) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= id->second;
+  objectHeader.id = id->first;
+
+  if (length < 2) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  objectHeader.priority = cursor.readBE<uint8_t>();
+  length--;
+
+  auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  return objectHeader;
+}
+
+folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
+    folly::io::Cursor& cursor,
+    const ObjectHeader& headerTemplate) noexcept {
+  // TODO get rid of this
+  auto length = cursor.totalLength();
+  ObjectHeader objectHeader = headerTemplate;
+  auto id = quic::decodeQuicInteger(cursor, length);
+  if (!id) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= id->second;
+  objectHeader.id = id->first;
+
+  auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
   return objectHeader;
 }
 
@@ -415,11 +445,12 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
     subscribeRequest.start = *location;
   }
   if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    auto location = parseAbsoluteLocation(cursor, length);
-    if (!location) {
-      return folly::makeUnexpected(location.error());
+    auto endGroup = quic::decodeQuicInteger(cursor, length);
+    if (!endGroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeRequest.end = *location;
+    subscribeRequest.endGroup = endGroup->first;
+    length -= endGroup->second;
   }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -449,11 +480,14 @@ folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
     return folly::makeUnexpected(start.error());
   }
   subscribeUpdate.start = start.value();
-  auto end = parseAbsoluteLocation(cursor, length);
-  if (!end) {
-    return folly::makeUnexpected(end.error());
+
+  auto endGroup = quic::decodeQuicInteger(cursor, length);
+  if (!endGroup) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  subscribeUpdate.end = end.value();
+  subscribeUpdate.endGroup = endGroup->first;
+  length -= endGroup->second;
+
   if (length < 2) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
@@ -538,7 +572,7 @@ folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= errorCode->second;
-  subscribeError.errorCode = errorCode->first;
+  subscribeError.errorCode = SubscribeErrorCode(errorCode->first);
 
   auto reas = parseFixedString(cursor, length);
   if (!reas) {
@@ -551,8 +585,7 @@ folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= retryAlias->second;
-  if (subscribeError.errorCode ==
-      folly::to_underlying(SubscribeErrorCode::RETRY_TRACK_ALIAS)) {
+  if (subscribeError.errorCode == SubscribeErrorCode::RETRY_TRACK_ALIAS) {
     subscribeError.retryAlias = retryAlias->first;
   }
 
@@ -590,6 +623,13 @@ folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
   }
   length -= statusCode->second;
   subscribeDone.statusCode = SubscribeDoneStatusCode(statusCode->first);
+
+  auto streamCount = quic::decodeQuicInteger(cursor, length);
+  if (!streamCount) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= streamCount->second;
+  subscribeDone.streamCount = streamCount->first;
 
   auto reas = parseFixedString(cursor, length);
   if (!reas) {
@@ -662,7 +702,7 @@ folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= errorCode->second;
-  announceError.errorCode = errorCode->first;
+  announceError.errorCode = AnnounceErrorCode(errorCode->first);
 
   auto res2 = parseFixedString(cursor, length);
   if (!res2) {
@@ -699,7 +739,7 @@ folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
   if (!errorCode) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  announceCancel.errorCode = errorCode->first;
+  announceCancel.errorCode = AnnounceErrorCode(errorCode->first);
   length -= errorCode->second;
 
   auto res2 = parseFixedString(cursor, length);
@@ -797,15 +837,10 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   fetch.subscribeID = res->first;
   length -= res->second;
 
-  auto res2 = parseFullTrackName(cursor, length);
-  if (!res2) {
-    return folly::makeUnexpected(res2.error());
-  }
-  fetch.fullTrackName = std::move(res2.value());
-
-  if (length < 2) {
+  if (length < 3) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
+
   fetch.priority = cursor.readBE<uint8_t>();
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
@@ -814,18 +849,49 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   fetch.groupOrder = static_cast<GroupOrder>(order);
   length -= 2 * sizeof(uint8_t);
 
-  auto res3 = parseAbsoluteLocation(cursor, length);
-  if (!res3) {
-    return folly::makeUnexpected(res3.error());
+  auto fetchType = quic::decodeQuicInteger(cursor, length);
+  if (!fetchType) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetch.start = std::move(res3.value());
-
-  auto res4 = parseAbsoluteLocation(cursor, length);
-  if (!res4) {
-    return folly::makeUnexpected(res4.error());
+  if (fetchType->first == 0 ||
+      fetchType->first > folly::to_underlying(FetchType::JOINING)) {
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
-  fetch.end = std::move(res4.value());
+  length -= fetchType->second;
 
+  if (FetchType(fetchType->first) == FetchType::STANDALONE) {
+    auto ftn = parseFullTrackName(cursor, length);
+    if (!ftn) {
+      return folly::makeUnexpected(ftn.error());
+    }
+
+    auto start = parseAbsoluteLocation(cursor, length);
+    if (!start) {
+      return folly::makeUnexpected(start.error());
+    }
+
+    auto end = parseAbsoluteLocation(cursor, length);
+    if (!end) {
+      return folly::makeUnexpected(end.error());
+    }
+    fetch.fullTrackName = std::move(ftn.value());
+    fetch.args = StandaloneFetch(start.value(), end.value());
+  } else {
+    // JOINING
+    auto jsid = quic::decodeQuicInteger(cursor, length);
+    if (!jsid) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= jsid->second;
+
+    auto pgo = quic::decodeQuicInteger(cursor, length);
+    if (!pgo) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= pgo->second;
+    // Note fetch.fullTrackName is empty at this point, the session fills it in
+    fetch.args = JoiningFetch(SubscribeID(jsid->first), pgo->first);
+  }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -909,7 +975,7 @@ folly::Expected<FetchError, ErrorCode> parseFetchError(
   if (!res2) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetchError.errorCode = res2->first;
+  fetchError.errorCode = FetchErrorCode(res2->first);
   length -= res2->second;
 
   auto res3 = parseFixedString(cursor, length);
@@ -952,7 +1018,7 @@ parseSubscribeAnnouncesError(
   }
   return SubscribeAnnouncesError(
       {std::move(res->trackNamespace),
-       res->errorCode,
+       SubscribeAnnouncesErrorCode(folly::to_underlying(res->errorCode)),
        std::move(res->reasonPhrase)});
 }
 
@@ -1179,7 +1245,7 @@ WriteResult writeSingleObjectStream(
     std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
   auto res = writeSubgroupHeader(writeBuf, objectHeader);
   if (res) {
-    return writeObject(
+    return writeStreamObject(
         writeBuf,
         StreamType::SUBGROUP_HEADER,
         objectHeader,
@@ -1189,27 +1255,64 @@ WriteResult writeSingleObjectStream(
   }
 }
 
-WriteResult writeObject(
+WriteResult writeDatagramObject(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
+  size_t size = 0;
+  bool error = false;
+  bool hasLength = objectHeader.length && *objectHeader.length > 0;
+  CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
+      << "non-zero length objects require NORMAL status";
+  if (objectHeader.status != ObjectStatus::NORMAL || !hasLength) {
+    CHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
+        << "non-empty objectPayload with no header length";
+    writeVarint(
+        writeBuf,
+        folly::to_underlying(StreamType::OBJECT_DATAGRAM_STATUS),
+        size,
+        error);
+    writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
+    writeVarint(writeBuf, objectHeader.group, size, error);
+    writeVarint(writeBuf, objectHeader.id, size, error);
+    writeBuf.append(&objectHeader.priority, 1);
+    size += 1;
+    writeVarint(
+        writeBuf, folly::to_underlying(objectHeader.status), size, error);
+  } else {
+    writeVarint(
+        writeBuf,
+        folly::to_underlying(StreamType::OBJECT_DATAGRAM),
+        size,
+        error);
+    writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
+    writeVarint(writeBuf, objectHeader.group, size, error);
+    writeVarint(writeBuf, objectHeader.id, size, error);
+    writeBuf.append(&objectHeader.priority, 1);
+    size += 1;
+    writeBuf.append(std::move(objectPayload));
+  }
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
   size_t size = 0;
   bool error = false;
-  if (streamType == StreamType::OBJECT_DATAGRAM) {
-    writeVarint(writeBuf, folly::to_underlying(streamType), size, error);
-    writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
-  }
-  if (streamType != StreamType::SUBGROUP_HEADER) {
-    writeVarint(writeBuf, objectHeader.group, size, error);
-  }
   if (streamType == StreamType::FETCH_HEADER) {
+    writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
-  }
-  writeVarint(writeBuf, objectHeader.id, size, error);
-  if (streamType != StreamType::SUBGROUP_HEADER) {
+    writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
+  } else {
+    writeVarint(writeBuf, objectHeader.id, size, error);
   }
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
@@ -1253,8 +1356,7 @@ WriteResult writeSubscribeRequest(
     writeVarint(writeBuf, subscribeRequest.start->object, size, error);
   }
   if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    writeVarint(writeBuf, subscribeRequest.end->group, size, error);
-    writeVarint(writeBuf, subscribeRequest.end->object, size, error);
+    writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
   }
   writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
   writeSize(sizePtr, size, error);
@@ -1273,8 +1375,7 @@ WriteResult writeSubscribeUpdate(
   writeVarint(writeBuf, update.subscribeID.value, size, error);
   writeVarint(writeBuf, update.start.group, size, error);
   writeVarint(writeBuf, update.start.object, size, error);
-  writeVarint(writeBuf, update.end.group, size, error);
-  writeVarint(writeBuf, update.end.object, size, error);
+  writeVarint(writeBuf, update.endGroup, size, error);
   writeBuf.append(&update.priority, 1);
   size += 1;
   writeTrackRequestParams(writeBuf, update.params, size, error);
@@ -1318,7 +1419,8 @@ WriteResult writeSubscribeError(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
   writeVarint(writeBuf, subscribeError.subscribeID.value, size, error);
-  writeVarint(writeBuf, subscribeError.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(subscribeError.errorCode), size, error);
   writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
   writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
   writeSize(sizePtr, size, error);
@@ -1380,6 +1482,7 @@ WriteResult writeSubscribeDone(
   writeVarint(writeBuf, subscribeDone.subscribeID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(subscribeDone.statusCode), size, error);
+  writeVarint(writeBuf, subscribeDone.streamCount, size, error);
   writeFixedString(writeBuf, subscribeDone.reasonPhrase, size, error);
   if (subscribeDone.finalObject) {
     writeVarint(writeBuf, 1, size, error);
@@ -1431,7 +1534,8 @@ WriteResult writeAnnounceError(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_ERROR, error);
   writeTrackNamespace(writeBuf, announceError.trackNamespace, size, error);
-  writeVarint(writeBuf, announceError.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(announceError.errorCode), size, error);
   writeFixedString(writeBuf, announceError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1461,7 +1565,8 @@ WriteResult writeAnnounceCancel(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_CANCEL, error);
   writeTrackNamespace(writeBuf, announceCancel.trackNamespace, size, error);
-  writeVarint(writeBuf, announceCancel.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(announceCancel.errorCode), size, error);
   writeFixedString(writeBuf, announceCancel.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1565,7 +1670,11 @@ WriteResult writeSubscribeAnnouncesError(
       writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_ERROR, error);
   writeTrackNamespace(
       writeBuf, subscribeAnnouncesError.trackNamespacePrefix, size, error);
-  writeVarint(writeBuf, subscribeAnnouncesError.errorCode, size, error);
+  writeVarint(
+      writeBuf,
+      folly::to_underlying(subscribeAnnouncesError.errorCode),
+      size,
+      error);
   writeFixedString(writeBuf, subscribeAnnouncesError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1597,7 +1706,6 @@ WriteResult writeFetch(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
   writeVarint(writeBuf, fetch.subscribeID.value, size, error);
-  writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
 
   writeBuf.append(&fetch.priority, 1);
   size += 1;
@@ -1605,11 +1713,22 @@ WriteResult writeFetch(
   writeBuf.append(&order, 1);
   size += 1;
 
-  writeVarint(writeBuf, fetch.start.group, size, error);
-  writeVarint(writeBuf, fetch.start.object, size, error);
-  writeVarint(writeBuf, fetch.end.group, size, error);
-  writeVarint(writeBuf, fetch.end.object, size, error);
-
+  auto [standalone, joining] = fetchType(fetch);
+  if (standalone) {
+    writeVarint(
+        writeBuf, folly::to_underlying(FetchType::STANDALONE), size, error);
+    writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
+    writeVarint(writeBuf, standalone->start.group, size, error);
+    writeVarint(writeBuf, standalone->start.object, size, error);
+    writeVarint(writeBuf, standalone->end.group, size, error);
+    writeVarint(writeBuf, standalone->end.object, size, error);
+  } else {
+    CHECK(joining);
+    writeVarint(
+        writeBuf, folly::to_underlying(FetchType::JOINING), size, error);
+    writeVarint(writeBuf, joining->joiningSubscribeID.value, size, error);
+    writeVarint(writeBuf, joining->precedingGroupOffset, size, error);
+  }
   writeTrackRequestParams(writeBuf, fetch.params, size, error);
 
   writeSize(sizePtr, size, error);
@@ -1662,7 +1781,8 @@ WriteResult writeFetchError(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
   writeVarint(writeBuf, fetchError.subscribeID.value, size, error);
-  writeVarint(writeBuf, fetchError.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(fetchError.errorCode), size, error);
   writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1736,8 +1856,8 @@ const char* getObjectStatusString(ObjectStatus objectStatus) {
       return "END_OF_GROUP";
     case ObjectStatus::END_OF_TRACK_AND_GROUP:
       return "END_OF_TRACK_AND_GROUP";
-    case ObjectStatus::END_OF_SUBGROUP:
-      return "END_OF_SUBGROUP";
+    case ObjectStatus::END_OF_TRACK:
+      return "END_OF_TRACK";
     default:
       // can happen when type was cast from uint8_t
       return "Unknown";

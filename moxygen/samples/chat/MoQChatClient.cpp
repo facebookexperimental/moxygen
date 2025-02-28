@@ -62,7 +62,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
       subscribeAnnounceHandle_ = std::move(sa.value());
     } else {
       XLOG(INFO) << "SubscribeAnnounces id=" << sa.error().trackNamespacePrefix
-                 << " code=" << sa.error().errorCode
+                 << " code=" << folly::to_underlying(sa.error().errorCode)
                  << " reason=" << sa.error().reasonPhrase;
     }
   } catch (const std::exception& ex) {
@@ -78,15 +78,19 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
   XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
   if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
     if (announce.trackNamespace.size() != 5) {
-      co_return folly::makeUnexpected(
-          AnnounceError{announce.trackNamespace, 400, "Invalid chat announce"});
+      co_return folly::makeUnexpected(AnnounceError{
+          announce.trackNamespace,
+          AnnounceErrorCode::UNINTERESTED,
+          "Invalid chat announce"});
     }
     subscribeToUser(std::move(announce.trackNamespace))
         .scheduleOn(moqClient_.moqSession_->getEventBase())
         .start();
   } else {
-    co_return folly::makeUnexpected(
-        AnnounceError{announce.trackNamespace, 404, "don't care"});
+    co_return folly::makeUnexpected(AnnounceError{
+        announce.trackNamespace,
+        AnnounceErrorCode::UNINTERESTED,
+        "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
       AnnounceOk{announce.trackNamespace}, shared_from_this());
@@ -103,12 +107,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   XLOG(INFO) << "SubscribeRequest";
   if (subscribeReq.fullTrackName.trackNamespace !=
       participantTrackName(username_)) {
-    co_return folly::makeUnexpected(
-        SubscribeError{subscribeReq.subscribeID, 404, "no such track"});
+    co_return folly::makeUnexpected(SubscribeError{
+        subscribeReq.subscribeID,
+        SubscribeErrorCode::TRACK_NOT_EXIST,
+        "no such track"});
   }
   if (publisher_) {
     co_return folly::makeUnexpected(SubscribeError{
-        subscribeReq.subscribeID, 400, "Duplicate subscribe for track"});
+        subscribeReq.subscribeID,
+        SubscribeErrorCode::INTERNAL_ERROR,
+        "Duplicate subscribe for track"});
   }
   chatSubscribeID_.emplace(subscribeReq.subscribeID);
   chatTrackAlias_.emplace(subscribeReq.trackAlias);
@@ -130,14 +138,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
 void MoQChatClient::unsubscribe() {
   // MoQChatClient only publishes a single track at a time.
   XLOG(INFO) << "Unsubscribe id=" << *chatSubscribeID_;
-  if (publisher_) {
-    publisher_->subscribeDone(
-        {*chatSubscribeID_,
-         SubscribeDoneStatusCode::UNSUBSCRIBED,
-         "",
-         folly::none});
-    publisher_.reset();
-  }
+  publisher_.reset();
   chatSubscribeID_.reset();
   chatTrackAlias_.reset();
 }
@@ -286,7 +287,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
        GroupOrder::OldestFirst,
        LocationType::LatestGroup,
        folly::none,
-       folly::none,
+       0,
        {}},
       std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, &handler)));
   if (track.hasException()) {
@@ -296,7 +297,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   }
   if (track.value().hasError()) {
     XLOG(INFO) << "SubscribeError id=" << track->error().subscribeID
-               << " code=" << track->error().errorCode
+               << " code=" << folly::to_underlying(track->error().errorCode)
                << " reason=" << track->error().reasonPhrase;
     co_return;
   }
@@ -314,9 +315,8 @@ void MoQChatClient::subscribeDone(SubscribeDone subDone) {
          userTrackIt != userTracks.second.end();
          ++userTrackIt) {
       if (userTrackIt->subscribeId == subDone.subscribeID) {
-        if (subDone.statusCode != SubscribeDoneStatusCode::UNSUBSCRIBED &&
-            userTrackIt->subscription) {
-          userTrackIt->subscription->unsubscribe();
+        if (userTrackIt->subscription) {
+          userTrackIt->subscription.reset();
         }
         userTracks.second.erase(userTrackIt);
         break;

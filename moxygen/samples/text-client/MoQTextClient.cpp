@@ -20,11 +20,11 @@ DEFINE_string(track_name, "", "Track Name");
 DEFINE_string(sg, "", "Start group, defaults to latest");
 DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or latest");
 DEFINE_string(eg, "", "End group");
-DEFINE_string(eo, "", "End object, leave blank for entire group");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
+DEFINE_bool(jfetch, false, "Joining fetch");
 
 namespace {
 using namespace moxygen;
@@ -32,7 +32,7 @@ using namespace moxygen;
 struct SubParams {
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
-  folly::Optional<AbsoluteLocation> end;
+  uint64_t endGroup;
 };
 
 SubParams flags2params() {
@@ -42,15 +42,16 @@ SubParams flags2params() {
     if (soStr.empty()) {
       result.locType = LocationType::LatestObject;
       return result;
-    } else if (auto so = folly::to<uint64_t>(soStr) > 0) {
-      XLOG(ERR) << "Invalid: sg blank, so=" << so;
-      exit(1);
     } else {
-      result.locType = LocationType::LatestGroup;
-      return result;
+      XLOG(ERR) << "Invalid: sg blank, so=" << soStr;
+      exit(1);
     }
   } else if (soStr.empty()) {
     soStr = std::string("0");
+  }
+  if (FLAGS_jfetch) {
+    XLOG(ERR) << "Joining fetch requires empty sg";
+    exit(1);
   }
   result.start.emplace(
       folly::to<uint64_t>(FLAGS_sg), folly::to<uint64_t>(soStr));
@@ -59,9 +60,7 @@ SubParams flags2params() {
     return result;
   } else {
     result.locType = LocationType::AbsoluteRange;
-    result.end.emplace(
-        folly::to<uint64_t>(FLAGS_eg),
-        (FLAGS_eo.empty() ? 0 : folly::to<uint64_t>(FLAGS_eo) + 1));
+    result.endGroup = folly::to<uint64_t>(FLAGS_eg);
     return result;
   }
   return result;
@@ -113,13 +112,14 @@ class MoQTextClient : public Subscriber,
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
           /*subscribeHandler=*/shared_from_this());
-      SubParams subParams{sub.locType, sub.start, sub.end};
+      SubParams subParams{sub.locType, sub.start, sub.endGroup};
       sub.locType = LocationType::LatestObject;
       sub.start = folly::none;
-      sub.end = folly::none;
+      sub.endGroup = 0;
       subTextHandler_ = std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE, &textHandler_);
 
+#if 0
       auto trackStatus =
           co_await moqClient_.moqSession_->trackStatus({fullTrackName_});
       if (trackStatus.statusCode != TrackStatusCode::IN_PROGRESS) {
@@ -127,9 +127,34 @@ class MoQTextClient : public Subscriber,
                   << std::to_string((uint32_t)trackStatus.statusCode);
         co_return;
       }
-
-      auto track =
-          co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
+#endif
+      Publisher::SubscribeResult track;
+      Publisher::FetchResult fetchTrack;
+      if (FLAGS_jfetch) {
+        XLOG(DBG1) << "JOINING FETCH pgo=0";
+        fetchTextHandler_ = std::make_shared<ObjectReceiver>(
+            ObjectReceiver::FETCH, &textHandler_);
+        auto joinResult = co_await moqClient_.moqSession_->join(
+            sub,
+            subTextHandler_,
+            /*precedingGroupOffset=*/0,
+            sub.priority,
+            sub.groupOrder,
+            {},
+            fetchTextHandler_);
+        track = joinResult.subscribeResult;
+        fetchTrack = joinResult.fetchResult;
+        if (fetchTrack.hasError()) {
+          XLOG(ERR) << "Fetch failed err="
+                    << folly::to_underlying(fetchTrack.error().errorCode)
+                    << " reason=" << fetchTrack.error().reasonPhrase;
+        } else {
+          XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
+        }
+      } else {
+        track =
+            co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
+      }
       if (track.hasValue()) {
         subscription_ = std::move(track.value());
         auto subscribeID = subscription_->subscribeOk().subscribeID;
@@ -141,8 +166,12 @@ class MoQTextClient : public Subscriber,
         }
         if (subParams.start && latest) {
           // There was a specific start and the track has started
+          folly::Optional<AbsoluteLocation> end;
+          if (subParams.endGroup > 0) {
+            end = AbsoluteLocation({subParams.endGroup, 0});
+          }
           auto range = toSubscribeRange(
-              subParams.start, subParams.end, subParams.locType, *latest);
+              subParams.start, end, subParams.locType, *latest);
           if (range.start <= *latest) {
             AbsoluteLocation fetchEnd = *latest;
             // The start was before latest, need to FETCH
@@ -164,38 +193,39 @@ class MoQTextClient : public Subscriber,
                          << "," << fetchEnd.object << "}";
               fetchTextHandler_ = std::make_shared<ObjectReceiver>(
                   ObjectReceiver::FETCH, &textHandler_);
-              auto fetchTrack = co_await moqClient_.moqSession_->fetch(
+              fetchTrack = co_await moqClient_.moqSession_->fetch(
                   Fetch(
                       SubscribeID(0),
                       sub.fullTrackName,
-                      sub.priority,
-                      sub.groupOrder,
                       range.start,
-                      fetchEnd),
+                      fetchEnd,
+                      sub.priority,
+                      sub.groupOrder),
                   fetchTextHandler_);
               if (fetchTrack.hasError()) {
-                XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode
+                XLOG(ERR) << "Fetch failed err="
+                          << folly::to_underlying(fetchTrack.error().errorCode)
                           << " reason=" << fetchTrack.error().reasonPhrase;
               } else {
                 XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
               }
             }
           } // else we started from current or no content - nothing to FETCH
-          if (subParams.end && (!latest || range.end > *latest)) {
+          if (subParams.endGroup > 0 && (!latest || range.end > *latest)) {
             // The end is set but after latest, SUBSCRIBE_UPDATE for the end
             XLOG(DBG1) << "Setting subscribe end={" << range.end.group << ","
                        << range.end.object << "} before latest, update";
             subscription_->subscribeUpdate(
                 {subscribeID,
                  latest.value_or(AbsoluteLocation{0, 0}),
-                 range.end,
+                 range.end.group,
                  sub.priority,
                  sub.params});
           }
         }
       } else {
         XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
-                   << " code=" << track.error().errorCode
+                   << " code=" << folly::to_underlying(track.error().errorCode)
                    << " reason=" << track.error().reasonPhrase;
       }
       if (moqClient_.moqSession_) {
@@ -292,7 +322,7 @@ int main(int argc, char* argv[]) {
            GroupOrder::OldestFirst,
            subParams.locType,
            subParams.start,
-           subParams.end,
+           subParams.endGroup,
            {}})
       .scheduleOn(&eventBase)
       .start()

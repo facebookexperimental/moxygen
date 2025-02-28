@@ -154,13 +154,51 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   auto r19 = parseFetchError(cursor, frameLength(cursor));
   testUnderflowResult(r19);
 
+  skip(cursor, 1);
   auto res = parseSubgroupHeader(cursor);
   testUnderflowResult(res);
+  EXPECT_EQ(res.value().group, 2);
 
-  auto r15 =
-      parseMultiObjectHeader(cursor, StreamType::SUBGROUP_HEADER, res.value());
+  auto r15 = parseSubgroupObjectHeader(cursor, res.value());
   testUnderflowResult(r15);
+  EXPECT_EQ(r15.value().id, 4);
+  skip(cursor, *r15.value().length);
+
+  auto r20 = parseSubgroupObjectHeader(cursor, res.value());
+  testUnderflowResult(r20);
+  EXPECT_EQ(r20.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
+
   skip(cursor, 1);
+  auto r21 = parseFetchHeader(cursor);
+  testUnderflowResult(r21);
+  EXPECT_EQ(r21.value(), SubscribeID(1));
+
+  ObjectHeader obj;
+  obj.trackIdentifier = r21.value();
+  auto r22 = parseFetchObjectHeader(cursor, obj);
+  testUnderflowResult(r22);
+  EXPECT_EQ(r22.value().id, 4);
+  skip(cursor, *r22.value().length);
+
+  auto r23 = parseFetchObjectHeader(cursor, obj);
+  testUnderflowResult(r23);
+  EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
+
+  skip(cursor, 1);
+  size_t datagramLength = 5;
+  auto r24 = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
+  testUnderflowResult(r24);
+  EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
+
+  skip(cursor, 1);
+  EXPECT_EQ(datagramLength, 0);
+  datagramLength = cursor.totalLength();
+  auto r25 = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
+  testUnderflowResult(r25);
+  EXPECT_EQ(r25.value().id, 4);
+  skip(cursor, *r25.value().length);
 }
 } // namespace
 
@@ -173,9 +211,8 @@ TEST(SerializeAndParse, All) {
 TEST(SerializeAndParse, ParseObjectHeader) {
   // Test OBJECT_DATAGRAM with ObjectStatus::OBJECT_NOT_EXIST
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeObject(
+  auto result = writeDatagramObject(
       writeBuf,
-      StreamType::OBJECT_DATAGRAM,
       {TrackAlias(22), // trackAlias
        33,             // group
        0,              // subgroup
@@ -188,9 +225,10 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
+  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
   auto length = cursor.totalLength();
-  auto parseResult = parseObjectHeader(cursor, length);
+  auto parseResult = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -199,11 +237,40 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
+TEST(SerializeAndParse, ParseDatagramNormal) {
+  // Test OBJECT_DATAGRAM
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeDatagramObject(
+      writeBuf,
+      {TrackAlias(22), // trackAlias
+       33,             // group
+       0,              // subgroup
+       44,             // id
+       55,             // priority
+       ObjectStatus::NORMAL,
+       8},
+      folly::IOBuf::copyBuffer("datagram"));
+  EXPECT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
+  auto length = cursor.totalLength();
+  auto parseResult =
+      parseDatagramObjectHeader(cursor, StreamType::OBJECT_DATAGRAM, length);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->priority, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+  EXPECT_EQ(parseResult->length, 8);
+}
+
 TEST(SerializeAndParse, ZeroLengthNormal) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeObject(
+  auto result = writeDatagramObject(
       writeBuf,
-      StreamType::OBJECT_DATAGRAM,
       {TrackAlias(22), // trackAlias
        33,             // group
        0,              // subgroup
@@ -216,9 +283,10 @@ TEST(SerializeAndParse, ZeroLengthNormal) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
+  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
   auto length = cursor.totalLength();
-  auto parseResult = parseObjectHeader(cursor, length);
+  auto parseResult = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -240,7 +308,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeSubgroupHeader(writeBuf, expectedObjectHeader);
   EXPECT_TRUE(result.hasValue());
-  result = writeObject(
+  result = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       expectedObjectHeader,
@@ -250,7 +318,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   // Test ObjectStatus::OBJECT_NOT_EXIST
   expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
   expectedObjectHeader.length = 0;
-  result = writeObject(
+  result = writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER, expectedObjectHeader, nullptr);
   EXPECT_TRUE(result.hasValue());
 
@@ -260,8 +328,8 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
   auto parseStreamHeaderResult = parseSubgroupHeader(cursor);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
-  auto parseResult = parseMultiObjectHeader(
-      cursor, StreamType::SUBGROUP_HEADER, *parseStreamHeaderResult);
+  auto parseResult =
+      parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -271,10 +339,65 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(*parseResult->length, 4);
   cursor.skip(*parseResult->length);
 
-  parseResult = parseMultiObjectHeader(
-      cursor, StreamType::SUBGROUP_HEADER, *parseStreamHeaderResult);
+  parseResult = parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->priority, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
+}
+
+TEST(SerializeAndParse, ParseFetchHeader) {
+  ObjectHeader expectedObjectHeader = {
+      SubscribeID(22), // subID
+      33,              // group
+      0,               // subgroup
+      44,              // id
+      55,              // priority
+      ObjectStatus::NORMAL,
+      4};
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeFetchHeader(
+      writeBuf, std::get<SubscribeID>(expectedObjectHeader.trackIdentifier));
+  EXPECT_TRUE(result.hasValue());
+  result = writeStreamObject(
+      writeBuf,
+      StreamType::FETCH_HEADER,
+      expectedObjectHeader,
+      folly::IOBuf::copyBuffer("EFGH"));
+  EXPECT_TRUE(result.hasValue());
+
+  // Test ObjectStatus::OBJECT_NOT_EXIST
+  expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
+  expectedObjectHeader.length = 0;
+  result = writeStreamObject(
+      writeBuf, StreamType::FETCH_HEADER, expectedObjectHeader, nullptr);
+  EXPECT_TRUE(result.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(parseStreamType(cursor), StreamType::FETCH_HEADER);
+  auto parseStreamHeaderResult = parseFetchHeader(cursor);
+  EXPECT_TRUE(parseStreamHeaderResult.hasValue());
+  ObjectHeader headerTemplate;
+  headerTemplate.trackIdentifier = *parseStreamHeaderResult;
+  auto parseResult = parseFetchObjectHeader(cursor, headerTemplate);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(
+      std::get<SubscribeID>(parseResult->trackIdentifier), SubscribeID(22));
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->priority, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*parseResult->length, 4);
+  cursor.skip(*parseResult->length);
+
+  parseResult = parseFetchObjectHeader(cursor, headerTemplate);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(
+      std::get<SubscribeID>(parseResult->trackIdentifier), SubscribeID(22));
   EXPECT_EQ(parseResult->group, 33);
   EXPECT_EQ(parseResult->id, 44);
   EXPECT_EQ(parseResult->priority, 55);
@@ -338,10 +461,42 @@ TEST(Underflows, All) {
   }
 }
 
+TEST(FramerTests, SingleObjectStream) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeSingleObjectStream(
+      writeBuf,
+      {TrackAlias(22), // trackAlias
+       33,             // group
+       0,              // subgroup
+       44,             // id
+       55,             // priority
+       ObjectStatus::NORMAL,
+       4},
+      folly::IOBuf::copyBuffer("abcd"));
+  EXPECT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
+  auto parseStreamHeaderResult = parseSubgroupHeader(cursor);
+  EXPECT_TRUE(parseStreamHeaderResult.hasValue());
+  auto parseResult =
+      parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
+  EXPECT_EQ(parseResult->group, 33);
+  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->priority, 55);
+  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*parseResult->length, 4);
+  cursor.skip(*parseResult->length);
+}
+
 /* Test cases to add
  *
  * parseStreamHeader (group)
- * parseMultiObjectHeader (group)
+ * parseSubgroupObjectHeader (group)
+ * parseFetchObjectHeader
  * Location relativeNext -- removed in draft-04
  * content-exists = true
  * retry track alias
