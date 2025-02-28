@@ -315,7 +315,7 @@ StreamPublisherImpl::writeCurrentObject(
     bool finStream) {
   header_.id = objectID;
   header_.length = length;
-  (void)writeObject(writeBuf_, streamType_, header_, std::move(payload));
+  (void)writeStreamObject(writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream);
 }
 
@@ -767,10 +767,15 @@ MoQSession::TrackPublisherImpl::datagram(
         MoQPublishError::API_ERROR, "Publish after subscribeDone"));
   }
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  XCHECK(header.length);
-  (void)writeObject(
+  uint64_t headerLength = 0;
+  if (header.length) {
+    headerLength = *header.length;
+  } else {
+    CHECK_NE(header.status, ObjectStatus::NORMAL);
+  }
+  DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
+  (void)writeDatagramObject(
       writeBuf,
-      StreamType::OBJECT_DATAGRAM,
       ObjectHeader{
           trackAlias_,
           header.group,
@@ -778,7 +783,7 @@ MoQSession::TrackPublisherImpl::datagram(
           header.id,
           header.priority,
           header.status,
-          *header.length},
+          headerLength},
       std::move(payload));
   // TODO: set priority when WT has an API for that
   auto res = wt->sendDatagram(writeBuf.move());
@@ -2895,13 +2900,16 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   readBuf.append(std::move(datagram));
   folly::io::Cursor cursor(readBuf.front());
   auto type = quic::decodeQuicInteger(cursor);
-  if (!type || StreamType(type->first) != StreamType::OBJECT_DATAGRAM) {
+  if (!type ||
+      (StreamType(type->first) != StreamType::OBJECT_DATAGRAM &&
+       StreamType(type->first) != StreamType::OBJECT_DATAGRAM_STATUS)) {
     XLOG(ERR) << __func__ << " Bad datagram header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto dgLength = readBuf.chainLength();
-  auto res = parseObjectHeader(cursor, dgLength);
+  auto dgLength = readBuf.chainLength() - type->second;
+  auto res =
+      parseDatagramObjectHeader(cursor, StreamType(type->first), dgLength);
   if (res.hasError()) {
     XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);

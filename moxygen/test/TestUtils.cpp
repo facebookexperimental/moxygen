@@ -203,17 +203,48 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
           ObjectStatus::NORMAL,
           folly::none,
       }));
-  res = writeObject(
+  res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
       folly::IOBuf::copyBuffer("hello world"));
-  res = writeObject(
+  res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       ObjectHeader(
           {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
       nullptr);
+  return writeBuf.move();
+}
+
+std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = writeFetchHeader(writeBuf, SubscribeID(1));
+  res = writeStreamObject(
+      writeBuf,
+      StreamType::FETCH_HEADER,
+      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      folly::IOBuf::copyBuffer("hello world"));
+  res = writeStreamObject(
+      writeBuf,
+      StreamType::FETCH_HEADER,
+      ObjectHeader(
+          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
+      nullptr);
+  return writeBuf.move();
+}
+
+std::unique_ptr<folly::IOBuf> writeAllDatagramMessages() {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = writeDatagramObject(
+      writeBuf,
+      ObjectHeader(
+          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, 0}),
+      nullptr);
+  res = writeDatagramObject(
+      writeBuf,
+      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      folly::IOBuf::copyBuffer("hello world"));
   return writeBuf.move();
 }
 
