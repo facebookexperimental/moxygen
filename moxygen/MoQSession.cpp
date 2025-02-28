@@ -651,8 +651,19 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     handle_ = std::move(handle);
   }
 
-  std::shared_ptr<Publisher::FetchHandle> getFetchHandle() const {
-    return handle_;
+  bool isCancelled() const {
+    return cancelled_;
+  }
+
+  void cancel() {
+    cancelled_ = true;
+    // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
+    // and retireSubscribeId
+    reset(ResetStreamErrorCode::CANCELLED);
+    if (handle_) {
+      handle_->fetchCancel();
+      handle_ = nullptr;
+    }
   }
 
   void reset(ResetStreamErrorCode error) override {
@@ -669,6 +680,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
  private:
   std::shared_ptr<Publisher::FetchHandle> handle_;
   std::shared_ptr<StreamPublisherImpl> streamPublisher_;
+  bool cancelled_{false};
 };
 
 // TrackPublisherImpl
@@ -982,6 +994,7 @@ class MoQSession::FetchTrackReceiveState
 
   void cancel(const std::shared_ptr<MoQSession>& session) {
     cancelSource_.requestCancellation();
+    fetchError({subscribeID_, FetchErrorCode::CANCELLED, "cancelled"});
     resetFetchCallback(session);
   }
 
@@ -2026,14 +2039,13 @@ folly::coro::Task<void> MoQSession::handleFetch(
     auto fetchErr = std::move(fetchResult->error());
     fetchErr.subscribeID = subscribeID; // In case app got it wrong
     fetchError(fetchErr);
-  } else {
-    // What happens if this got cancelled
+  } else if (!fetchPublisher->isCancelled()) {
     auto fetchHandle = std::move(fetchResult->value());
     auto fetchOkMsg = fetchHandle->fetchOk();
     fetchOkMsg.subscribeID = subscribeID;
     fetchOk(fetchOkMsg);
     fetchPublisher->setFetchHandle(std::move(fetchHandle));
-  }
+  } // else, no need to fetchError, state has been removed on both sides already
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
@@ -2055,12 +2067,7 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
       XLOG(ERR) << "FETCH_CANCEL on SUBSCRIBE id=" << fetchCancel.subscribeID;
       return;
     }
-    // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
-    // and retireSubscribeId
-    fetchPublisher->reset(ResetStreamErrorCode::CANCELLED);
-    if (fetchPublisher->getFetchHandle()) {
-      fetchPublisher->getFetchHandle()->fetchCancel();
-    }
+    fetchPublisher->cancel();
   }
 }
 
