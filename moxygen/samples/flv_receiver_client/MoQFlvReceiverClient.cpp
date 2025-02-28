@@ -384,8 +384,8 @@ class MoQFlvReceiverClient
         }
       } else {
         XLOG(WARNING) << "Audio SubscribeError id="
-                      << trackAudio.error().subscribeID
-                      << " code=" << trackAudio.error().errorCode
+                      << trackAudio.error().subscribeID << " code="
+                      << folly::to_underlying(trackAudio.error().errorCode)
                       << " reason=" << trackAudio.error().reasonPhrase;
       }
 
@@ -405,8 +405,8 @@ class MoQFlvReceiverClient
         }
       } else {
         XLOG(WARNING) << "Video SubscribeError id="
-                      << trackVideo.error().subscribeID
-                      << " code=" << trackVideo.error().errorCode
+                      << trackVideo.error().subscribeID << " code="
+                      << folly::to_underlying(trackVideo.error().errorCode)
                       << " reason=" << trackVideo.error().reasonPhrase;
       }
 

@@ -572,7 +572,7 @@ folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= errorCode->second;
-  subscribeError.errorCode = errorCode->first;
+  subscribeError.errorCode = SubscribeErrorCode(errorCode->first);
 
   auto reas = parseFixedString(cursor, length);
   if (!reas) {
@@ -585,8 +585,7 @@ folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= retryAlias->second;
-  if (subscribeError.errorCode ==
-      folly::to_underlying(SubscribeErrorCode::RETRY_TRACK_ALIAS)) {
+  if (subscribeError.errorCode == SubscribeErrorCode::RETRY_TRACK_ALIAS) {
     subscribeError.retryAlias = retryAlias->first;
   }
 
@@ -703,7 +702,7 @@ folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= errorCode->second;
-  announceError.errorCode = errorCode->first;
+  announceError.errorCode = AnnounceErrorCode(errorCode->first);
 
   auto res2 = parseFixedString(cursor, length);
   if (!res2) {
@@ -740,7 +739,7 @@ folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
   if (!errorCode) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  announceCancel.errorCode = errorCode->first;
+  announceCancel.errorCode = AnnounceErrorCode(errorCode->first);
   length -= errorCode->second;
 
   auto res2 = parseFixedString(cursor, length);
@@ -976,7 +975,7 @@ folly::Expected<FetchError, ErrorCode> parseFetchError(
   if (!res2) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetchError.errorCode = res2->first;
+  fetchError.errorCode = FetchErrorCode(res2->first);
   length -= res2->second;
 
   auto res3 = parseFixedString(cursor, length);
@@ -1019,7 +1018,7 @@ parseSubscribeAnnouncesError(
   }
   return SubscribeAnnouncesError(
       {std::move(res->trackNamespace),
-       res->errorCode,
+       SubscribeAnnouncesErrorCode(folly::to_underlying(res->errorCode)),
        std::move(res->reasonPhrase)});
 }
 
@@ -1420,7 +1419,8 @@ WriteResult writeSubscribeError(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
   writeVarint(writeBuf, subscribeError.subscribeID.value, size, error);
-  writeVarint(writeBuf, subscribeError.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(subscribeError.errorCode), size, error);
   writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
   writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
   writeSize(sizePtr, size, error);
@@ -1534,7 +1534,8 @@ WriteResult writeAnnounceError(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_ERROR, error);
   writeTrackNamespace(writeBuf, announceError.trackNamespace, size, error);
-  writeVarint(writeBuf, announceError.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(announceError.errorCode), size, error);
   writeFixedString(writeBuf, announceError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1564,7 +1565,8 @@ WriteResult writeAnnounceCancel(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_CANCEL, error);
   writeTrackNamespace(writeBuf, announceCancel.trackNamespace, size, error);
-  writeVarint(writeBuf, announceCancel.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(announceCancel.errorCode), size, error);
   writeFixedString(writeBuf, announceCancel.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1668,7 +1670,11 @@ WriteResult writeSubscribeAnnouncesError(
       writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_ERROR, error);
   writeTrackNamespace(
       writeBuf, subscribeAnnouncesError.trackNamespacePrefix, size, error);
-  writeVarint(writeBuf, subscribeAnnouncesError.errorCode, size, error);
+  writeVarint(
+      writeBuf,
+      folly::to_underlying(subscribeAnnouncesError.errorCode),
+      size,
+      error);
   writeFixedString(writeBuf, subscribeAnnouncesError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {
@@ -1775,7 +1781,8 @@ WriteResult writeFetchError(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
   writeVarint(writeBuf, fetchError.subscribeID.value, size, error);
-  writeVarint(writeBuf, fetchError.errorCode, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(fetchError.errorCode), size, error);
   writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
   writeSize(sizePtr, size, error);
   if (error) {

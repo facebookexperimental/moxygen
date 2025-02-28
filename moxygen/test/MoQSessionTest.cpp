@@ -359,17 +359,15 @@ TEST_F(MoQSessionTest, FetchError) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     EXPECT_CALL(
         *clientSubscriberStatsCallback_,
-        onFetchError(folly::to_underlying(FetchErrorCode::INVALID_RANGE)));
+        onFetchError(FetchErrorCode::INVALID_RANGE));
     auto res = co_await session->fetch(getFetch({0, 2}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
-    EXPECT_EQ(
-        res.error().errorCode,
-        folly::to_underlying(FetchErrorCode::INVALID_RANGE));
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
   EXPECT_CALL(
       *serverPublisherStatsCallback_,
-      onFetchError(folly::to_underlying(FetchErrorCode::INVALID_RANGE)));
+      onFetchError(FetchErrorCode::INVALID_RANGE));
   f(clientSession_).scheduleOn(&eventBase_).start();
   eventBase_.loop();
 }
@@ -382,9 +380,7 @@ TEST_F(MoQSessionTest, FetchPublisherError) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
-    EXPECT_EQ(
-        res.error().errorCode,
-        folly::to_underlying(FetchErrorCode::TRACK_NOT_EXIST));
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::TRACK_NOT_EXIST);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
@@ -392,7 +388,7 @@ TEST_F(MoQSessionTest, FetchPublisherError) {
           [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             co_return folly::makeUnexpected(FetchError{
                 fetch.subscribeID,
-                folly::to_underlying(FetchErrorCode::TRACK_NOT_EXIST),
+                FetchErrorCode::TRACK_NOT_EXIST,
                 "Bad trackname"});
           }));
   f(clientSession_).scheduleOn(&eventBase_).start();
@@ -407,7 +403,7 @@ TEST_F(MoQSessionTest, FetchPublisherThrow) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     auto res = co_await session->fetch(getFetch({0, 0}, {0, 1}), fetchCallback);
     EXPECT_TRUE(res.hasError());
-    EXPECT_EQ(res.error().errorCode, 500);
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
   EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
@@ -593,7 +589,9 @@ TEST_F(MoQSessionTest, FetchOverLimit) {
     EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess()).Times(2);
     auto res = co_await session->fetch(fetch, fetchCallback1);
     res = co_await session->fetch(fetch, fetchCallback2);
-    EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchError(500));
+    EXPECT_CALL(
+        *clientSubscriberStatsCallback_,
+        onFetchError(FetchErrorCode::INTERNAL_ERROR));
     res = co_await session->fetch(fetch, fetchCallback3);
     EXPECT_TRUE(res.hasError());
   };
@@ -765,7 +763,9 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
     auto trackPublisher3 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
-    EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeError(400));
+    EXPECT_CALL(
+        *clientSubscriberStatsCallback,
+        onSubscribeError(SubscribeErrorCode::UNAUTHORIZED));
     auto res = co_await clientSession->subscribe(sub, trackPublisher1);
     co_await folly::coro::co_reschedule_on_current_executor;
     // This is true because initial is 2 in this test case and we grant credit
@@ -791,7 +791,9 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
     EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeSuccess()).Times(2);
     res = co_await clientSession->subscribe(sub, trackPublisher3);
     res = co_await clientSession->subscribe(sub, trackPublisher3);
-    EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeError(500));
+    EXPECT_CALL(
+        *clientSubscriberStatsCallback,
+        onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
     res = co_await clientSession->subscribe(sub, trackPublisher3);
     EXPECT_TRUE(res.hasError());
   }(clientSession_, serverSession_, clientSubscriberStatsCallback_)
@@ -801,9 +803,14 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
       .WillOnce(testing::Invoke(
           [this](
               auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
-            EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeError(400));
-            co_return folly::makeUnexpected(
-                SubscribeError{sub.subscribeID, 400, "bad", folly::none});
+            EXPECT_CALL(
+                *serverPublisherStatsCallback_,
+                onSubscribeError(SubscribeErrorCode::UNAUTHORIZED));
+            co_return folly::makeUnexpected(SubscribeError{
+                sub.subscribeID,
+                SubscribeErrorCode::UNAUTHORIZED,
+                "bad",
+                folly::none});
           }))
       .WillOnce(testing::Invoke(
           [this](auto sub, auto pub)
