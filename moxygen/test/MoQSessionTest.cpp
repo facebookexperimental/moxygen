@@ -650,6 +650,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
               pub->subscribeDone(
                   {sub.subscribeID,
                    SubscribeDoneStatusCode::TRACK_ENDED,
+                   0,
                    "end of track",
                    folly::none});
             });
@@ -675,6 +676,208 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
           [this](
               auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
             EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeSuccess());
+            co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.subscribeID,
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                folly::none,
+                {}});
+          }));
+
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, SubscribeDoneStreamCount) {
+  setupMoQSession();
+  [](std::shared_ptr<MoQSession> clientSession,
+     std::shared_ptr<MoQSession> serverSession) -> folly::coro::Task<void> {
+    SubscribeRequest sub{
+        SubscribeID(0),
+        TrackAlias(0),
+        FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+        0,
+        GroupOrder::OldestFirst,
+        LocationType::LatestObject,
+        folly::none,
+        folly::none,
+        {}};
+    auto trackPublisher1 =
+        std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+    auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+    auto sg2 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+    EXPECT_CALL(*trackPublisher1, beginSubgroup(0, 0, 0))
+        .WillOnce(testing::Return(sg1));
+    EXPECT_CALL(*trackPublisher1, beginSubgroup(0, 1, 0))
+        .WillOnce(testing::Return(sg2));
+    EXPECT_CALL(*sg1, object(0, testing::_, true))
+        .WillOnce(testing::Return(folly::unit));
+    EXPECT_CALL(*sg2, object(1, testing::_, false))
+        .WillOnce(testing::Return(folly::unit));
+    EXPECT_CALL(*sg2, object(2, testing::_, true))
+        .WillOnce(testing::Return(folly::unit));
+    folly::coro::Baton baton;
+    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+        .WillOnce(testing::Invoke([&] {
+          baton.post();
+          return folly::unit;
+        }));
+    auto res = co_await clientSession->subscribe(sub, trackPublisher1);
+    co_await baton;
+    clientSession->close(SessionCloseErrorCode::NO_ERROR);
+  }(clientSession_, serverSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+      .WillOnce(testing::Invoke(
+          [this](auto sub, auto pub)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            eventBase_.add([pub, sub] {
+              pub->objectStream(
+                  {sub.trackAlias,
+                   0,
+                   0,
+                   0,
+                   0,
+                   ObjectStatus::NORMAL,
+                   folly::none},
+                  moxygen::test::makeBuf(10));
+              auto sgp = pub->beginSubgroup(0, 1, 0).value();
+              sgp->object(1, moxygen::test::makeBuf(10));
+              sgp->object(2, moxygen::test::makeBuf(10), true);
+              pub->subscribeDone(
+                  {sub.subscribeID,
+                   SubscribeDoneStatusCode::TRACK_ENDED,
+                   2, // it's set by the session anyways
+                   "end of track",
+                   folly::none});
+            });
+            co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.subscribeID,
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                folly::none,
+                {}});
+          }));
+
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, SubscribeDoneFromSubscribe) {
+  setupMoQSession();
+  [](std::shared_ptr<MoQSession> clientSession,
+     std::shared_ptr<MoQSession> serverSession) -> folly::coro::Task<void> {
+    SubscribeRequest sub{
+        SubscribeID(0),
+        TrackAlias(0),
+        FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+        0,
+        GroupOrder::OldestFirst,
+        LocationType::LatestObject,
+        folly::none,
+        folly::none,
+        {}};
+    auto trackPublisher1 =
+        std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+    folly::coro::Baton baton;
+    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+        .WillOnce(testing::Invoke([&] {
+          baton.post();
+          return folly::unit;
+        }));
+    auto res = co_await clientSession->subscribe(sub, trackPublisher1);
+    co_await baton;
+    clientSession->close(SessionCloseErrorCode::NO_ERROR);
+  }(clientSession_, serverSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+      .WillOnce(testing::Invoke(
+          [](auto sub,
+             auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
+            pub->subscribeDone(
+                {sub.subscribeID,
+                 SubscribeDoneStatusCode::TRACK_ENDED,
+                 0, // it's set by the session anyways
+                 "end of track",
+                 folly::none});
+            co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.subscribeID,
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                folly::none,
+                {}});
+          }));
+
+  eventBase_.loop();
+}
+
+TEST_F(MoQSessionTest, SubscribeDoneAPIErrors) {
+  setupMoQSession();
+  [](std::shared_ptr<MoQSession> clientSession,
+     std::shared_ptr<MoQSession> serverSession) -> folly::coro::Task<void> {
+    SubscribeRequest sub{
+        SubscribeID(0),
+        TrackAlias(0),
+        FullTrackName{TrackNamespace{{"foo"}}, "bar"},
+        0,
+        GroupOrder::OldestFirst,
+        LocationType::LatestObject,
+        folly::none,
+        folly::none,
+        {}};
+    auto trackPublisher1 =
+        std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+    folly::coro::Baton baton;
+    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+        .WillOnce(testing::Invoke([&] {
+          baton.post();
+          return folly::unit;
+        }));
+    auto res = co_await clientSession->subscribe(sub, trackPublisher1);
+    co_await baton;
+    clientSession->close(SessionCloseErrorCode::NO_ERROR);
+  }(clientSession_, serverSession_)
+                                                       .scheduleOn(&eventBase_)
+                                                       .start();
+  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+      .WillOnce(testing::Invoke(
+          [](auto sub,
+             auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
+            pub->subscribeDone(
+                {sub.subscribeID,
+                 SubscribeDoneStatusCode::TRACK_ENDED,
+                 0, // it's set by the session anyways
+                 "end of track",
+                 folly::none});
+            // All these APIs fail after SUBSCRIBE_DONE
+            EXPECT_EQ(
+                pub->beginSubgroup(1, 1, 1).error().code,
+                MoQPublishError::API_ERROR);
+            EXPECT_EQ(
+                pub->awaitStreamCredit().error().code,
+                MoQPublishError::API_ERROR);
+            EXPECT_EQ(
+                pub->datagram(
+                       {sub.trackAlias,
+                        2,
+                        2,
+                        2,
+                        2,
+                        ObjectStatus::NORMAL,
+                        folly::none},
+                       moxygen::test::makeBuf(10))
+                    .error()
+                    .code,
+                MoQPublishError::API_ERROR);
+            EXPECT_EQ(
+                pub->subscribeDone({sub.subscribeID,
+                                    SubscribeDoneStatusCode::TRACK_ENDED,
+                                    0, // it's set by the session anyways
+                                    "end of track",
+                                    folly::none})
+                    .error()
+                    .code,
+                MoQPublishError::API_ERROR);
             co_return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
                 sub.subscribeID,
                 std::chrono::milliseconds(0),
