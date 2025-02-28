@@ -185,7 +185,7 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
 
   skip(cursor, 1);
-  size_t datagramLength = 6;
+  size_t datagramLength = 5;
   auto r24 = parseDatagramObjectHeader(
       cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
   testUnderflowResult(r24);
