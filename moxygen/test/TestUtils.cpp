@@ -170,10 +170,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
       Fetch(
           {0,
            FullTrackName({TrackNamespace({"hello"}), "world"}),
-           255,
-           GroupOrder::NewestFirst,
            AbsoluteLocation({0, 0}),
            AbsoluteLocation({1, 1}),
+           255,
+           GroupOrder::NewestFirst,
            {TrackRequestParameter(
                {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
                 "binky",
