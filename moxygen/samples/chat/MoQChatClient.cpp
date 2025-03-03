@@ -287,7 +287,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
        GroupOrder::OldestFirst,
        LocationType::LatestGroup,
        folly::none,
-       folly::none,
+       0,
        {}},
       std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, &handler)));
   if (track.hasException()) {
