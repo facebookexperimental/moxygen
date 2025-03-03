@@ -7,7 +7,6 @@
 #pragma once
 
 #include <moxygen/MoQFramer.h>
-#include <cstdint>
 
 namespace moxygen {
 

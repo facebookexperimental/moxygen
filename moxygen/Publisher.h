@@ -26,6 +26,9 @@
 
 namespace moxygen {
 
+class FetchConsumer;
+class TrackConsumer;
+
 // Represents a publisher on which the caller can invoke TRACK_STATUS_REQUEST,
 // SUBSCRIBE, FETCH and SUBSCRIBE_ANNOUNCES.
 class Publisher {

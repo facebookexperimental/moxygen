@@ -9,6 +9,7 @@
 #include "moxygen/MoQLocation.h"
 #include "moxygen/ObjectReceiver.h"
 
+#include <folly/base64.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <signal.h>
@@ -69,7 +70,21 @@ SubParams flags2params() {
 class TextHandler : public ObjectReceiverCallback {
  public:
   ~TextHandler() override = default;
-  FlowControlState onObject(const ObjectHeader&, Payload payload) override {
+  FlowControlState onObject(const ObjectHeader& header, Payload payload)
+      override {
+    for (const auto& ext : header.extensions) {
+      if (ext.type & 0x1) {
+        std::cout << "data extension="
+                  << folly::base64Encode(
+                         {(const char*)(ext.arrayValue.data()),
+                          ext.arrayValue.size()})
+
+                  << std::endl;
+      } else {
+        std::cout << "int extension=" << ext.intValue << std::endl;
+      }
+    }
+
     if (payload) {
       std::cout << payload->moveToFbString() << std::endl;
     }
