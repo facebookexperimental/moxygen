@@ -280,6 +280,27 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     co_return folly::makeUnexpected(
         FetchError({fetch.subscribeID, 400, "namespace required"}));
   }
+
+  auto [standalone, joining] = fetchType(fetch);
+  if (joining) {
+    auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
+    if (subscriptionIt == subscriptions_.end()) {
+      XLOG(ERR) << "No subscription for joining fetch";
+      co_return folly::makeUnexpected(FetchError(
+          {fetch.subscribeID, 400, "No subscription for joining fetch"}));
+    } else if (subscriptionIt->second.promise.isFulfilled()) {
+      auto res = subscriptionIt->second.forwarder->resolveJoiningFetch(
+          session, *joining);
+      if (res.hasError()) {
+        co_return folly::makeUnexpected(res.error());
+      }
+      fetch.args = StandaloneFetch(res.value().start, res.value().end);
+    } else {
+      // Upstream is resolving the subscribe, forward joining fetch
+      joining->joiningSubscribeID = subscriptionIt->second.subscribeID;
+    }
+  }
+
   auto upstreamSession =
       findAnnounceSession(fetch.fullTrackName.trackNamespace);
   if (!upstreamSession) {

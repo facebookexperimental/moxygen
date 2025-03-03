@@ -147,6 +147,38 @@ class MoQForwarder : public TrackConsumer {
     return subscriber;
   }
 
+  folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
+      const std::shared_ptr<MoQSession>& session,
+      const JoiningFetch& joining) const {
+    auto subIt = subscribers_.find(session.get());
+    if (subIt == subscribers_.end()) {
+      XLOG(ERR) << "Session not found";
+      return folly::makeUnexpected(
+          FetchError{SubscribeID(0), 400, "Session has no active subscribe"});
+    }
+    if (subIt->second->subscribeID != joining.joiningSubscribeID) {
+      XLOG(ERR) << joining.joiningSubscribeID
+                << " does not name a Subscribe "
+                   " for this track";
+      return folly::makeUnexpected(
+          FetchError{SubscribeID(0), 500, "Incorrect SubscribeID for Track"});
+    }
+    if (!subIt->second->subscribeOk().latest) {
+      // No content exists, fetch error
+      // Relay caller verifies upstream SubscribeOK has been processed before
+      // calling resolveJoiningFetch()
+      return folly::makeUnexpected(
+          FetchError{SubscribeID(0), 500, "No latest"});
+    }
+    auto& latest = *subIt->second->subscribeOk().latest;
+    AbsoluteLocation start{latest};
+    start.group -= (start.group >= joining.precedingGroupOffset)
+        ? joining.precedingGroupOffset
+        : 0;
+    start.object = 0;
+    return SubscribeRange{start, {latest.group, latest.object + 1}};
+  }
+
   void removeSession(const std::shared_ptr<MoQSession>& session) {
     removeSession(
         session,
