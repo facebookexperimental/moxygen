@@ -59,13 +59,13 @@ enum class SubscribeErrorCode : uint32_t {
 };
 
 enum class SubscribeDoneStatusCode : uint32_t {
-  UNSUBSCRIBED = 0x0,
-  INTERNAL_ERROR = 0x1,
-  UNAUTHORIZED = 0x2,
-  TRACK_ENDED = 0x3,
-  SUBSCRIPTION_ENDED = 0x4,
-  GOING_AWAY = 0x5,
-  EXPIRED = 0x6,
+  INTERNAL_ERROR = 0x0,
+  UNAUTHORIZED = 0x1,
+  TRACK_ENDED = 0x2,
+  SUBSCRIPTION_ENDED = 0x3,
+  GOING_AWAY = 0x4,
+  EXPIRED = 0x5,
+  TOO_FAR_BEHIND = 0x6,
   //
   SESSION_CLOSED = std::numeric_limits<uint32_t>::max()
 };
@@ -187,7 +187,8 @@ constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK
 constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
 constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
 constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp7;
+constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp8;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
