@@ -23,7 +23,7 @@ inline SubscribeRange toSubscribeRange(
     folly::Optional<AbsoluteLocation> latest) {
   XLOG(DBG1) << "m=" << uint64_t(locType)
              << (start ? folly::to<std::string>(
-                             "g=", start->group, " o=", start->object)
+                             " g=", start->group, " o=", start->object)
                        : std::string());
   SubscribeRange result;
   result.end = kLocationMax;
@@ -34,7 +34,7 @@ inline SubscribeRange toSubscribeRange(
       break;
     case LocationType::LatestObject:
       result.start.group = latest.value_or(kLocationMin).group;
-      result.start.object = latest.value_or(kLocationMin).object;
+      result.start.object = latest ? latest->object + 1 : kLocationMin.object;
       break;
     case LocationType::AbsoluteRange:
       XCHECK(end);
@@ -45,10 +45,14 @@ inline SubscribeRange toSubscribeRange(
       XCHECK(start);
       result.start.group = start->group;
       result.start.object = start->object;
+      if (latest && result.start < *latest) {
+        XLOG(DBG2) << "Adjusting past start to latest + 1";
+        result.start = AbsoluteLocation{latest->group, latest->object + 1};
+      }
       break;
   }
   XLOG(DBG1) << "g=" << result.start.group << " o=" << result.start.object
-             << "g=" << result.end.group << " o=" << result.end.object;
+             << " g=" << result.end.group << " o=" << result.end.object;
   return result;
 }
 
