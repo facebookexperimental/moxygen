@@ -67,12 +67,16 @@ class SubgroupConsumer {
   // stream in the middle of a streaming object.
 
   // Deliver the next object on this subgroup.
-  virtual folly::Expected<folly::Unit, MoQPublishError>
-  object(uint64_t objectID, Payload payload, bool finSubgroup = false) = 0;
+  virtual folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions = noExtensions(),
+      bool finSubgroup = false) = 0;
 
   // Deliver Object Status=ObjectNotExists as the given object.
   virtual folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
       uint64_t objectID,
+      Extensions extensions = noExtensions(),
       bool finSubgroup = false) = 0;
 
   // Advance the reliable offset of the subgroup stream to the
@@ -80,8 +84,11 @@ class SubgroupConsumer {
   virtual void checkpoint() {}
 
   // Begin delivering the next object in this subgroup.
-  virtual folly::Expected<folly::Unit, MoQPublishError>
-  beginObject(uint64_t objectID, uint64_t length, Payload initialPayload) = 0;
+  virtual folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions = noExtensions()) = 0;
 
   // Deliver the next chunk of data in the current object.  The return value is
   // IN_PROGRESS if the object is not yet complete, DONE if the payload exactly
@@ -93,12 +100,14 @@ class SubgroupConsumer {
   // Deliver Object Status=EndOfGroup for the given object ID.  This implies
   // endOfSubgroup.
   virtual folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t endOfGroupObjectID) = 0;
+      uint64_t endOfGroupObjectID,
+      Extensions extensions = noExtensions()) = 0;
 
   // Deliver Object Status=EndOfTrackAndGroup for the given object ID.  This
   // implies endOfSubgroup.
   virtual folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t endOfTrackObjectID) = 0;
+      uint64_t endOfTrackObjectID,
+      Extensions extensions = noExtensions()) = 0;
 
   // Inform the consumer the subgroup is complete.  If the consumer is writing,
   // this closes the underlying transport stream.  This can only be called if
@@ -152,8 +161,11 @@ class TrackConsumer {
   // Deliver Object Status=GroupNotExists for the specified group. If the
   // consumer is writing, this consumes an entire transport stream. Can fail
   // with MoQPublishError::BLOCKED when out of stream credit.
-  virtual folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) = 0;
+  virtual folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
+      uint64_t groupID,
+      uint64_t subgroup,
+      Priority pri,
+      Extensions extensions = noExtensions()) = 0;
 
   // Inform the consumer that the publisher will not open any new subgroups or
   // send any new datagrams for this track.
@@ -199,19 +211,22 @@ class FetchConsumer {
       uint64_t subgroupID,
       uint64_t objectID,
       Payload payload,
-      bool finFetch) = 0;
+      Extensions extensions = noExtensions(),
+      bool finFetch = false) = 0;
 
   // Deliver Object Status=ObjectNotExists for the given object.
   virtual folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
+      Extensions extensions = noExtensions(),
       bool finFetch = false) = 0;
 
   // Deliver Object Status=ObjectNotExists for the givenobject.
   virtual folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
       uint64_t groupID,
       uint64_t subgroupID,
+      Extensions extensions = noExtensions(),
       bool finFetch = false) = 0;
 
   // Advance the reliable offset of the fetch stream to the current offset.
@@ -223,7 +238,8 @@ class FetchConsumer {
       uint64_t subgroupID,
       uint64_t objectID,
       uint64_t length,
-      Payload initialPayload) = 0;
+      Payload initialPayload,
+      Extensions extensions = noExtensions()) = 0;
 
   virtual folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
@@ -234,6 +250,7 @@ class FetchConsumer {
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
+      Extensions extensions = noExtensions(),
       bool finFetch = false) = 0;
 
   // Deliver Object Status=EndOfTrackAndGroup for the given object ID.  This
@@ -241,7 +258,8 @@ class FetchConsumer {
   virtual folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
       uint64_t groupID,
       uint64_t subgroupID,
-      uint64_t objectID) = 0;
+      uint64_t objectID,
+      Extensions extensions = noExtensions()) = 0;
 
   // Inform the consumer the fetch is complete.  If the consumer is writing,
   // this closes the underlying transport stream.  This can only be called if

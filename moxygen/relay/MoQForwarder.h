@@ -96,17 +96,11 @@ class MoQForwarder : public TrackConsumer {
       // If it moved end before latest, then the next published object will
       // generate SUBSCRIBE_DONE
       range.start = subscribeUpdate.start;
-      range.end = subscribeUpdate.end;
+      range.end = {subscribeUpdate.endGroup, 0};
     }
 
     void unsubscribe() override {
-      forwarder.removeSession(
-          session,
-          {subscribeID,
-           SubscribeDoneStatusCode::UNSUBSCRIBED,
-           0, // filled in by session
-           "",
-           forwarder.latest()});
+      forwarder.removeSession(session);
     }
 
     std::shared_ptr<MoQSession> session;
@@ -147,26 +141,44 @@ class MoQForwarder : public TrackConsumer {
     return subscriber;
   }
 
-  void removeSession(const std::shared_ptr<MoQSession>& session) {
-    removeSession(
-        session,
-        {SubscribeID(0),
-         SubscribeDoneStatusCode::GOING_AWAY,
-         0, // filled in by session
-         "byebyebye",
-         latest_});
+  folly::Expected<StandaloneFetch, std::string> join(
+      const std::shared_ptr<MoQSession>& session,
+      const JoiningFetch& joining) const {
+    auto subIt = subscribers_.find(session.get());
+    if (subIt == subscribers_.end()) {
+      XLOG(ERR) << "Session not found";
+      return folly::makeUnexpected("Session has no active subscribe");
+    }
+    if (subIt->second->subscribeID != joining.joiningSubscribeID) {
+      XLOG(ERR) << joining.joiningSubscribeID
+                << " does not name a Subscribe "
+                   " for this track";
+      return folly::makeUnexpected("Incorrect SubscribeID for Track");
+    }
+    if (!subIt->second->subscribeOk().latest) {
+      // No content exists, fetch error
+      // Relay caller verifies upstream SubscribeOK has been processed before
+      // calling join()
+      return folly::makeUnexpected("No latest");
+    }
+    auto& latest = *subIt->second->subscribeOk().latest;
+    AbsoluteLocation start{latest};
+    start.group -= (start.group >= joining.precedingGroupOffset)
+        ? joining.precedingGroupOffset
+        : 0;
+    start.object = 0;
+    return StandaloneFetch{start, {latest.group, latest.object + 1}};
   }
 
   void removeSession(
       const std::shared_ptr<MoQSession>& session,
-      SubscribeDone subDone) {
+      folly::Optional<SubscribeDone> subDone = folly::none) {
     auto subIt = subscribers_.find(session.get());
     if (subIt == subscribers_.end()) {
       // ?
       XLOG(ERR) << "Session not found";
       return;
     }
-    subDone.subscribeID = subIt->second->subscribeID;
     subscribeDone(*subIt->second, subDone);
     subscribers_.erase(subIt);
     XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
@@ -175,13 +187,18 @@ class MoQForwarder : public TrackConsumer {
     }
   }
 
-  void subscribeDone(Subscriber& subscriber, SubscribeDone subDone) {
+  void subscribeDone(
+      Subscriber& subscriber,
+      folly::Optional<SubscribeDone> subDone) {
     // TODO: Resetting subgroups here is too aggressive
     XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
     for (auto& subgroup : subscriber.subgroups) {
       subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
     }
-    subscriber.trackConsumer->subscribeDone(subDone);
+    if (subDone) {
+      subDone->subscribeID = subscriber.subscribeID;
+      subscriber.trackConsumer->subscribeDone(*subDone);
+    }
   }
 
   void forEachSubscriber(
@@ -211,11 +228,12 @@ class MoQForwarder : public TrackConsumer {
       // TOOD: maybe this is too early for a relay.
       removeSession(
           sub.session,
-          {sub.subscribeID,
-           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
-           0, // filled in by session
-           "",
-           sub.range.end});
+          SubscribeDone{
+              sub.subscribeID,
+              SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+              0, // filled in by session
+              "",
+              sub.range.end});
       return false;
     }
     return true;
@@ -224,11 +242,12 @@ class MoQForwarder : public TrackConsumer {
   void removeSession(const Subscriber& sub, const MoQPublishError& err) {
     removeSession(
         sub.session,
-        {sub.subscribeID,
-         SubscribeDoneStatusCode::INTERNAL_ERROR,
-         0, // filled in by session
-         err.what(),
-         sub.range.end});
+        SubscribeDone{
+            sub.subscribeID,
+            SubscribeDoneStatusCode::INTERNAL_ERROR,
+            0, // filled in by session
+            err.what(),
+            sub.range.end});
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -273,14 +292,17 @@ class MoQForwarder : public TrackConsumer {
     return folly::unit;
   }
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
+  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
+      uint64_t groupID,
+      uint64_t subgroup,
+      Priority pri,
+      Extensions extensions) override {
     updateLatest(groupID, 0);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       if (!checkRange(*sub)) {
         return;
       }
-      sub->trackConsumer->groupNotExists(groupID, subgroup, pri)
+      sub->trackConsumer->groupNotExists(groupID, subgroup, pri, extensions)
           .onError([this, sub](const auto& err) { removeSession(*sub, err); });
     });
     return folly::unit;
@@ -347,8 +369,11 @@ class MoQForwarder : public TrackConsumer {
           identifier_{group, subgroup},
           priority_(priority) {}
 
-    folly::Expected<folly::Unit, MoQPublishError>
-    object(uint64_t objectID, Payload payload, bool finSubgroup) override {
+    folly::Expected<folly::Unit, MoQPublishError> object(
+        uint64_t objectID,
+        Payload payload,
+        Extensions extensions,
+        bool finSubgroup) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -357,7 +382,8 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->object(objectID, maybeClone(payload), finSubgroup)
+            subgroupConsumer
+                ->object(objectID, maybeClone(payload), extensions, finSubgroup)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -373,6 +399,7 @@ class MoQForwarder : public TrackConsumer {
 
     folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
         uint64_t objectID,
+        Extensions extensions,
         bool finSubgroup = false) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
@@ -382,7 +409,7 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->objectNotExists(objectID, finSubgroup)
+            subgroupConsumer->objectNotExists(objectID, extensions, finSubgroup)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -399,7 +426,8 @@ class MoQForwarder : public TrackConsumer {
     folly::Expected<folly::Unit, MoQPublishError> beginObject(
         uint64_t objectID,
         uint64_t length,
-        Payload initialPayload) override {
+        Payload initialPayload,
+        Extensions extensions) override {
       // TODO: use a shared class for object publish state validation
       forwarder_.updateLatest(identifier_.group, objectID);
       if (currentObjectLength_) {
@@ -415,7 +443,8 @@ class MoQForwarder : public TrackConsumer {
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
             subgroupConsumer
-                ->beginObject(objectID, length, maybeClone(initialPayload))
+                ->beginObject(
+                    objectID, length, maybeClone(initialPayload), extensions)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -424,7 +453,8 @@ class MoQForwarder : public TrackConsumer {
     }
 
     folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-        uint64_t endOfGroupObjectID) override {
+        uint64_t endOfGroupObjectID,
+        Extensions extensions) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -433,7 +463,7 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->endOfGroup(endOfGroupObjectID)
+            subgroupConsumer->endOfGroup(endOfGroupObjectID, extensions)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -444,7 +474,8 @@ class MoQForwarder : public TrackConsumer {
     }
 
     folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-        uint64_t endOfTrackObjectID) override {
+        uint64_t endOfTrackObjectID,
+        Extensions extensions) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -453,7 +484,7 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->endOfTrackAndGroup(endOfTrackObjectID)
+            subgroupConsumer->endOfTrackAndGroup(endOfTrackObjectID, extensions)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });

@@ -164,9 +164,20 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   EXPECT_EQ(r15.value().id, 4);
   skip(cursor, *r15.value().length);
 
+  auto r15a = parseSubgroupObjectHeader(cursor, res.value());
+  testUnderflowResult(r15a);
+  EXPECT_EQ(r15a.value().id, 5);
+  EXPECT_EQ(r15a.value().extensions, test::getTestExtensions());
+  skip(cursor, *r15a.value().length);
+
   auto r20 = parseSubgroupObjectHeader(cursor, res.value());
   testUnderflowResult(r20);
-  EXPECT_EQ(r20.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
+  EXPECT_EQ(r20.value().status, ObjectStatus::OBJECT_NOT_EXIST);
+
+  auto r20a = parseSubgroupObjectHeader(cursor, res.value());
+  testUnderflowResult(r20a);
+  EXPECT_EQ(r20a.value().extensions, test::getTestExtensions());
+  EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
 
   skip(cursor, 1);
   auto r21 = parseFetchHeader(cursor);
@@ -180,25 +191,58 @@ void parseAll(folly::io::Cursor& cursor, bool eom) {
   EXPECT_EQ(r22.value().id, 4);
   skip(cursor, *r22.value().length);
 
+  auto r22a = parseFetchObjectHeader(cursor, obj);
+  testUnderflowResult(r22a);
+  EXPECT_EQ(r22a.value().id, 5);
+  EXPECT_EQ(r22a.value().extensions, test::getTestExtensions());
+  skip(cursor, *r22a.value().length);
+
   auto r23 = parseFetchObjectHeader(cursor, obj);
   testUnderflowResult(r23);
-  EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
+  EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_GROUP);
+
+  auto r23a = parseFetchObjectHeader(cursor, obj);
+  testUnderflowResult(r23a);
+  EXPECT_EQ(r23a.value().extensions, test::getTestExtensions());
+  EXPECT_EQ(r23a.value().status, ObjectStatus::END_OF_GROUP);
 
   skip(cursor, 1);
-  size_t datagramLength = 5;
+  size_t datagramLength = 6;
   auto r24 = parseDatagramObjectHeader(
       cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
   testUnderflowResult(r24);
   EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
+  XLOG(DBG4) << "1";
 
   skip(cursor, 1);
   EXPECT_EQ(datagramLength, 0);
-  datagramLength = cursor.totalLength();
+  datagramLength = 13;
+  auto r24a = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
+  testUnderflowResult(r24a);
+  EXPECT_EQ(r24a.value().extensions, test::getTestExtensions());
+  EXPECT_EQ(r24a.value().status, ObjectStatus::END_OF_GROUP);
+  XLOG(DBG4) << "2";
+
+  skip(cursor, 1);
+  EXPECT_EQ(datagramLength, 0);
+  datagramLength = 16;
   auto r25 = parseDatagramObjectHeader(
       cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
   testUnderflowResult(r25);
-  EXPECT_EQ(r25.value().id, 4);
+  EXPECT_EQ(r25.value().id, 0);
+  XLOG(DBG4) << "3";
+  EXPECT_EQ(datagramLength, *r25.value().length);
   skip(cursor, *r25.value().length);
+
+  skip(cursor, 1);
+  datagramLength = cursor.totalLength();
+  auto r25a = parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
+  testUnderflowResult(r25a);
+  EXPECT_EQ(r25a.value().id, 1);
+  EXPECT_EQ(r25a.value().extensions, test::getTestExtensions());
+  skip(cursor, *r25a.value().length);
 }
 } // namespace
 
@@ -219,6 +263,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
        44,             // id
        55,             // priority
        ObjectStatus::OBJECT_NOT_EXIST,
+       noExtensions(),
        0},
       nullptr);
   EXPECT_TRUE(result.hasValue());
@@ -248,6 +293,7 @@ TEST(SerializeAndParse, ParseDatagramNormal) {
        44,             // id
        55,             // priority
        ObjectStatus::NORMAL,
+       noExtensions(),
        8},
       folly::IOBuf::copyBuffer("datagram"));
   EXPECT_TRUE(result.hasValue());
@@ -277,6 +323,7 @@ TEST(SerializeAndParse, ZeroLengthNormal) {
        44,             // id
        55,             // priority
        ObjectStatus::NORMAL,
+       noExtensions(),
        0},
       nullptr);
   EXPECT_TRUE(result.hasValue());
@@ -304,6 +351,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
       44,             // id
       55,             // priority
       ObjectStatus::NORMAL,
+      noExtensions(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeSubgroupHeader(writeBuf, expectedObjectHeader);
@@ -356,6 +404,7 @@ TEST(SerializeAndParse, ParseFetchHeader) {
       44,              // id
       55,              // priority
       ObjectStatus::NORMAL,
+      noExtensions(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeFetchHeader(
@@ -465,13 +514,13 @@ TEST(FramerTests, SingleObjectStream) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeSingleObjectStream(
       writeBuf,
-      {TrackAlias(22), // trackAlias
-       33,             // group
-       0,              // subgroup
-       44,             // id
-       55,             // priority
-       ObjectStatus::NORMAL,
-       4},
+      ObjectHeader(
+          TrackAlias(22), // trackAlias
+          33,             // group
+          0,              // subgroup
+          44,             // id
+          55,             // priority
+          4),
       folly::IOBuf::copyBuffer("abcd"));
   EXPECT_TRUE(result.hasValue());
   auto serialized = writeBuf.move();

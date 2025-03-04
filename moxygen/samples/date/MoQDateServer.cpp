@@ -26,6 +26,10 @@ DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 namespace {
 using namespace moxygen;
 
+static const Extensions kExtensions{
+    {0xacedecade, 1977, {}},
+    {0xdeadbeef, 0, {1, 2, 3, 4, 5}}};
+
 class MoQDateServer : public MoQServer,
                       public Publisher,
                       public std::enable_shared_from_this<MoQDateServer> {
@@ -99,17 +103,22 @@ class MoQDateServer : public MoQServer,
                << " subscribe id=" << subReq.subscribeID
                << " track alias=" << subReq.trackAlias;
     if (subReq.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(
-          SubscribeError{subReq.subscribeID, 404, "unexpected subscribe"});
+      co_return folly::makeUnexpected(SubscribeError{
+          subReq.subscribeID,
+          SubscribeErrorCode::TRACK_NOT_EXIST,
+          "unexpected subscribe"});
     }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    auto range = toSubscribeRange(subReq, nowLoc);
-    if (range.start < nowLoc) {
+    if (subReq.locType == LocationType::AbsoluteRange &&
+        subReq.endGroup < nowLoc.group) {
       co_return folly::makeUnexpected(SubscribeError{
-          subReq.subscribeID, 400, "start in the past, use FETCH"});
+          subReq.subscribeID,
+          SubscribeErrorCode::INVALID_RANGE,
+          "Range in the past, use FETCH"});
+      // start may be in the past, it will get adjusted forward to latest
     }
     forwarder_.setLatest(nowLoc);
     co_return forwarder_.addSubscriber(
@@ -128,29 +137,46 @@ class MoQDateServer : public MoQServer,
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override {
+    auto clientSession = MoQSession::getRequestSession();
     XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
                << " name=" << fetch.fullTrackName.trackName
                << " subscribe id=" << fetch.subscribeID;
     if (fetch.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.subscribeID, 403, "unexpected fetch"});
+      co_return folly::makeUnexpected(FetchError{
+          fetch.subscribeID,
+          FetchErrorCode::TRACK_NOT_EXIST,
+          "unexpected fetch"});
     }
-    if (fetch.end < fetch.start &&
-        !(fetch.start.group == fetch.end.group && fetch.end.object == 0)) {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.subscribeID, 400, "No objects"});
+    auto [standalone, joining] = fetchType(fetch);
+    StandaloneFetch sf;
+    if (joining) {
+      auto res = forwarder_.join(clientSession, *joining);
+      if (res.hasError()) {
+        XLOG(ERR) << "Bad joining fetch id=" << fetch.subscribeID
+                  << " err=" << res.error();
+        // message error
+        co_return folly::makeUnexpected(FetchError{
+            fetch.subscribeID, FetchErrorCode::INTERNAL_ERROR, res.error()});
+      }
+      sf = res.value();
+      standalone = &sf;
+    }
+    if (standalone->end < standalone->start &&
+        !(standalone->start.group == standalone->end.group &&
+          standalone->end.object == 0)) {
+      co_return folly::makeUnexpected(FetchError{
+          fetch.subscribeID, FetchErrorCode::INVALID_RANGE, "No objects"});
     }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    auto range = toSubscribeRange(
-        fetch.start, fetch.end, LocationType::AbsoluteRange, nowLoc);
-    if (range.start > nowLoc) {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.subscribeID, 400, "fetch starts in future"});
+    if (standalone->start > nowLoc) {
+      co_return folly::makeUnexpected(FetchError{
+          fetch.subscribeID,
+          FetchErrorCode::INVALID_RANGE,
+          "fetch starts in future"});
     }
-    range.end = std::min(range.end, nowLoc);
 
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
         fetch.subscribeID,
@@ -159,10 +185,10 @@ class MoQDateServer : public MoQServer,
         0, // not end of track
         nowLoc,
         {}});
-    auto clientSession = MoQSession::getRequestSession();
     folly::coro::co_withCancellation(
         fetchHandle->cancelSource.getToken(),
-        catchup(std::move(consumer), range, nowLoc))
+        catchup(
+            std::move(consumer), {standalone->start, standalone->end}, nowLoc))
         .scheduleOn(clientSession->getEventBase())
         .start();
     co_return fetchHandle;
@@ -203,7 +229,7 @@ class MoQDateServer : public MoQServer,
       co_return;
     }
     auto token = co_await folly::coro::co_current_cancellation_token;
-    while (!token.isCancellationRequested() && range.start < now &&
+    while (!token.isCancellationRequested() && range.start <= now &&
            range.start < range.end) {
       uint64_t subgroup = streamPerObject_ ? range.start.object : 0;
       folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
@@ -213,20 +239,16 @@ class MoQDateServer : public MoQServer,
             subgroup,
             range.start.object,
             minutePayload(range.start.group),
-            false);
+            kExtensions);
       } else if (range.start.object <= 60) {
         res = fetchPub->object(
             range.start.group,
             subgroup,
             range.start.object,
-            secondPayload(range.start.object),
-            false);
+            secondPayload(range.start.object));
       } else {
         res = fetchPub->endOfGroup(
-            range.start.group,
-            subgroup,
-            range.start.object,
-            /*finFetch=*/false);
+            range.start.group, subgroup, range.start.object);
       }
       if (!res) {
         XLOG(ERR) << "catchup error: " << res.error().what();
@@ -294,10 +316,11 @@ class MoQDateServer : public MoQServer,
           forwarder_.beginSubgroup(group, subgroup, /*priority=*/0).value();
     }
     if (object == 0) {
-      subgroupPublisher->object(0, minutePayload(group), false);
+      subgroupPublisher->object(0, minutePayload(group), kExtensions, false);
     }
     object++;
-    subgroupPublisher->object(object, secondPayload(object), false);
+    subgroupPublisher->object(
+        object, secondPayload(object), noExtensions(), false);
     if (object >= 60) {
       object++;
       subgroupPublisher->endOfGroup(object);
@@ -316,6 +339,7 @@ class MoQDateServer : public MoQServer,
         object,
         /*priority=*/0,
         ObjectStatus::NORMAL,
+        noExtensions(),
         folly::none};
     if (second == 0) {
       forwarder_.objectStream(header, minutePayload(group));

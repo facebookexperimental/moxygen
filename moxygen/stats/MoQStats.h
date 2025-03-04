@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <cstdint>
+#include <moxygen/MoQFramer.h>
 
 namespace moxygen {
 
@@ -29,7 +29,7 @@ class MoQStatsCallback {
    * Publisher: Responded to a SUBSCRIBE request with a SUBSCRIBE_ERROR
    * Subscriber: Received a SUBSCRIBE_ERROR from the publisher
    */
-  virtual void onSubscribeError(uint64_t errorCode) = 0;
+  virtual void onSubscribeError(SubscribeErrorCode errorCode) = 0;
 
   /*
    * Publisher: Responded to a FETCH request with a FETCH_OK
@@ -41,7 +41,7 @@ class MoQStatsCallback {
    * Publisher: Responded to a FETCH request with a FETCH_ERROR
    * Subscriber: Received a FETCH_ERROR from the publisher
    */
-  virtual void onFetchError(uint64_t errorCode) = 0;
+  virtual void onFetchError(FetchErrorCode errorCode) = 0;
 
   // TODO: Add more stats
 };
