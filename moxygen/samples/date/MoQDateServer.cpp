@@ -99,8 +99,10 @@ class MoQDateServer : public MoQServer,
                << " subscribe id=" << subReq.subscribeID
                << " track alias=" << subReq.trackAlias;
     if (subReq.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(
-          SubscribeError{subReq.subscribeID, 404, "unexpected subscribe"});
+      co_return folly::makeUnexpected(SubscribeError{
+          subReq.subscribeID,
+          SubscribeErrorCode::TRACK_NOT_EXIST,
+          "unexpected subscribe"});
     }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
@@ -109,7 +111,9 @@ class MoQDateServer : public MoQServer,
     auto range = toSubscribeRange(subReq, nowLoc);
     if (range.start < nowLoc) {
       co_return folly::makeUnexpected(SubscribeError{
-          subReq.subscribeID, 400, "start in the past, use FETCH"});
+          subReq.subscribeID,
+          SubscribeErrorCode::INVALID_RANGE,
+          "start in the past, use FETCH"});
     }
     forwarder_.setLatest(nowLoc);
     co_return forwarder_.addSubscriber(
@@ -133,8 +137,10 @@ class MoQDateServer : public MoQServer,
                << " name=" << fetch.fullTrackName.trackName
                << " subscribe id=" << fetch.subscribeID;
     if (fetch.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.subscribeID, 403, "unexpected fetch"});
+      co_return folly::makeUnexpected(FetchError{
+          fetch.subscribeID,
+          FetchErrorCode::TRACK_NOT_EXIST,
+          "unexpected fetch"});
     }
     auto [standalone, joining] = fetchType(fetch);
     StandaloneFetch sf;
@@ -151,8 +157,8 @@ class MoQDateServer : public MoQServer,
     if (standalone->end < standalone->start &&
         !(standalone->start.group == standalone->end.group &&
           standalone->end.object == 0)) {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.subscribeID, 400, "No objects"});
+      co_return folly::makeUnexpected(FetchError{
+          fetch.subscribeID, FetchErrorCode::INVALID_RANGE, "No objects"});
     }
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
@@ -164,8 +170,10 @@ class MoQDateServer : public MoQServer,
         LocationType::AbsoluteRange,
         nowLoc);
     if (range.start > nowLoc) {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.subscribeID, 400, "fetch starts in future"});
+      co_return folly::makeUnexpected(FetchError{
+          fetch.subscribeID,
+          FetchErrorCode::INVALID_RANGE,
+          "fetch starts in future"});
     }
 
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{

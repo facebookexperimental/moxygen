@@ -136,7 +136,8 @@ class MoQTextClient : public Subscriber,
         track = joinResult.subscribeResult;
         fetchTrack = joinResult.fetchResult;
         if (fetchTrack.hasError()) {
-          XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode
+          XLOG(ERR) << "Fetch failed err="
+                    << folly::to_underlying(fetchTrack.error().errorCode)
                     << " reason=" << fetchTrack.error().reasonPhrase;
         } else {
           XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
@@ -193,7 +194,8 @@ class MoQTextClient : public Subscriber,
                       fetchEnd),
                   fetchTextHandler_);
               if (fetchTrack.hasError()) {
-                XLOG(ERR) << "Fetch failed err=" << fetchTrack.error().errorCode
+                XLOG(ERR) << "Fetch failed err="
+                          << folly::to_underlying(fetchTrack.error().errorCode)
                           << " reason=" << fetchTrack.error().reasonPhrase;
               } else {
                 XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
@@ -214,7 +216,7 @@ class MoQTextClient : public Subscriber,
         }
       } else {
         XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
-                   << " code=" << track.error().errorCode
+                   << " code=" << folly::to_underlying(track.error().errorCode)
                    << " reason=" << track.error().reasonPhrase;
       }
       if (moqClient_.moqSession_) {
