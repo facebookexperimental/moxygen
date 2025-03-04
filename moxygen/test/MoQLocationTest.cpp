@@ -14,7 +14,7 @@ namespace {
 SubscribeRequest getRequest(
     LocationType locType,
     folly::Optional<AbsoluteLocation> start = folly::none,
-    folly::Optional<AbsoluteLocation> end = folly::none) {
+    uint64_t endGroup = 0) {
   return SubscribeRequest{
       0,
       0,
@@ -23,7 +23,7 @@ SubscribeRequest getRequest(
       GroupOrder::OldestFirst,
       locType,
       start,
-      end,
+      endGroup,
       {}};
 }
 } // namespace
@@ -55,15 +55,12 @@ TEST(Location, AbsoluteStart) {
 
 TEST(Location, AbsoluteRange) {
   auto range = toSubscribeRange(
-      getRequest(
-          LocationType::AbsoluteRange,
-          AbsoluteLocation({1, 2}),
-          AbsoluteLocation({3, 4})),
+      getRequest(LocationType::AbsoluteRange, AbsoluteLocation({1, 2}), 3),
       AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 1);
   EXPECT_EQ(range.start.object, 2);
   EXPECT_EQ(range.end.group, 3);
-  EXPECT_EQ(range.end.object, 4);
+  EXPECT_EQ(range.end.object, 0);
 }
 
 TEST(Location, Compare) {

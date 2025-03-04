@@ -96,7 +96,7 @@ class MoQForwarder : public TrackConsumer {
       // If it moved end before latest, then the next published object will
       // generate SUBSCRIBE_DONE
       range.start = subscribeUpdate.start;
-      range.end = subscribeUpdate.end;
+      range.end = {subscribeUpdate.endGroup, 0};
     }
 
     void unsubscribe() override {
