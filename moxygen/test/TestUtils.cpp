@@ -12,6 +12,11 @@
 
 namespace moxygen::test {
 
+std::vector<Extension> getTestExtensions() {
+  static std::vector<Extension> extensions = {{10, 10, {}}, {11, 0, {1, 2, 3}}};
+  return extensions;
+}
+
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   WriteResult res;
@@ -198,60 +203,88 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
 }
 
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
+  // writes a subgroup header, object without extensions, object with
+  // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeSubgroupHeader(
-      writeBuf,
-      ObjectHeader({
-          TrackAlias(1),
-          2,
-          3,
-          4,
-          5,
-          ObjectStatus::NORMAL,
-          folly::none,
-      }));
+  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5);
+  auto res = writeSubgroupHeader(writeBuf, obj);
+  obj.length = 11;
   res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      obj,
       folly::IOBuf::copyBuffer("hello world"));
+  obj.id++;
+  obj.extensions = getTestExtensions();
+  obj.length = 15;
   res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
-      ObjectHeader(
-          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
-      nullptr);
+      obj,
+      folly::IOBuf::copyBuffer("hello world ext"));
+  obj.id++;
+  obj.length = folly::none;
+  obj.status = ObjectStatus::OBJECT_NOT_EXIST;
+  obj.extensions.clear();
+  res = writeStreamObject(writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
+  obj.id++;
+  obj.status = ObjectStatus::END_OF_TRACK_AND_GROUP;
+  obj.extensions = getTestExtensions();
+  res = writeStreamObject(writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
   return writeBuf.move();
 }
 
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
+  // writes a fetch header, object without extensions, object with
+  // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = writeFetchHeader(writeBuf, SubscribeID(1));
+  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, 11);
   res = writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      obj,
       folly::IOBuf::copyBuffer("hello world"));
+  obj.id++;
+  obj.extensions = getTestExtensions();
+  obj.length = 15;
   res = writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
-      ObjectHeader(
-          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::END_OF_TRACK_AND_GROUP, 0}),
-      nullptr);
+      obj,
+      folly::IOBuf::copyBuffer("hello world ext"));
+  obj.id++;
+  obj.length = folly::none;
+  obj.extensions.clear();
+  obj.status = ObjectStatus::END_OF_GROUP;
+  res = writeStreamObject(writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+  obj.group++;
+  obj.id = 0;
+  obj.extensions = getTestExtensions();
+  res = writeStreamObject(writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
   return writeBuf.move();
 }
 
 std::unique_ptr<folly::IOBuf> writeAllDatagramMessages() {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeDatagramObject(
-      writeBuf,
-      ObjectHeader(
-          {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, 0}),
-      nullptr);
+  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST);
+  auto res = writeDatagramObject(writeBuf, obj, nullptr);
+  obj.id++;
+  obj.extensions = getTestExtensions();
+  obj.status = ObjectStatus::END_OF_GROUP;
+  res = writeDatagramObject(writeBuf, obj, nullptr);
+  obj.group++;
+  obj.id = 0;
+  obj.extensions.clear();
+  obj.status = ObjectStatus::NORMAL;
+  obj.length = 11;
   res = writeDatagramObject(
-      writeBuf,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
-      folly::IOBuf::copyBuffer("hello world"));
+      writeBuf, obj, folly::IOBuf::copyBuffer("hello world"));
+  obj.id++;
+  obj.extensions = getTestExtensions();
+  obj.length = 15;
+  res = writeDatagramObject(
+      writeBuf, obj, folly::IOBuf::copyBuffer("hello world ext"));
   return writeBuf.move();
 }
 

@@ -191,7 +191,8 @@ constexpr uint64_t kVersionDraft08_exp5 = 0xff080005; // Draft 8 Joining FETCH
 constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
 constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
 constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp8;
+constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp9;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -290,13 +291,66 @@ inline uint64_t value(const TrackIdentifier& trackIdentifier) {
       },
       trackIdentifier);
 }
+
+struct Extension {
+  // Even type => holds value in intValue
+  // Odd type => holds value in arrayValue
+  uint64_t type{0};
+  uint64_t intValue{0};
+  std::vector<uint8_t> arrayValue;
+
+  bool operator==(const Extension& other) const {
+    return type == other.type &&
+        (((type & 0x1) && arrayValue == other.arrayValue) ||
+         ((type & 0x1) == 0 && intValue == other.intValue));
+  }
+};
+using Extensions = std::vector<Extension>;
+inline Extensions noExtensions() {
+  return Extensions();
+}
 struct ObjectHeader {
+  ObjectHeader() = default;
+  ObjectHeader(
+      TrackIdentifier trackIdentifierIn,
+      uint64_t groupIn,
+      uint64_t subgroupIn,
+      uint64_t idIn,
+      uint8_t priorityIn = 128,
+      ObjectStatus statusIn = ObjectStatus::NORMAL,
+      std::vector<Extension> extensionsIn = noExtensions(),
+      folly::Optional<uint64_t> lengthIn = folly::none)
+      : trackIdentifier(trackIdentifierIn),
+        group(groupIn),
+        subgroup(subgroupIn),
+        id(idIn),
+        priority(priorityIn),
+        status(statusIn),
+        extensions(std::move(extensionsIn)),
+        length(std::move(lengthIn)) {}
+  ObjectHeader(
+      TrackIdentifier trackIdentifierIn,
+      uint64_t groupIn,
+      uint64_t subgroupIn,
+      uint64_t idIn,
+      uint8_t priorityIn,
+      uint64_t lengthIn,
+      std::vector<Extension> extensionsIn = noExtensions())
+      : trackIdentifier(trackIdentifierIn),
+        group(groupIn),
+        subgroup(subgroupIn),
+        id(idIn),
+        priority(priorityIn),
+        status(ObjectStatus::NORMAL),
+        extensions(std::move(extensionsIn)),
+        length(lengthIn) {}
   TrackIdentifier trackIdentifier;
   uint64_t group;
-  uint64_t subgroup{0}; // meaningless for Track and Datagram
+  uint64_t subgroup{0}; // meaningless for Datagram
   uint64_t id;
   uint8_t priority{kDefaultPriority};
   ObjectStatus status{ObjectStatus::NORMAL};
+  std::vector<Extension> extensions;
   folly::Optional<uint64_t> length{folly::none};
 };
 

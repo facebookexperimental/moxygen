@@ -212,6 +212,7 @@ void MoQObjectStreamCodec::onIngress(
                 curObjectHeader_.group,
                 curObjectHeader_.subgroup,
                 curObjectHeader_.id,
+                std::move(curObjectHeader_.extensions),
                 *curObjectHeader_.length,
                 std::move(payload),
                 endOfObject,
@@ -234,7 +235,9 @@ void MoQObjectStreamCodec::onIngress(
                 curObjectHeader_.group,
                 curObjectHeader_.subgroup,
                 curObjectHeader_.id,
-                curObjectHeader_.status);
+                curObjectHeader_.priority,
+                curObjectHeader_.status,
+                std::move(curObjectHeader_.extensions));
           }
           if (curObjectHeader_.status == ObjectStatus::END_OF_TRACK_AND_GROUP ||
               curObjectHeader_.status == ObjectStatus::END_OF_TRACK ||

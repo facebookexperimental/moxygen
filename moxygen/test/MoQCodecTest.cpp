@@ -11,6 +11,8 @@
 #include <folly/portability/GTest.h>
 
 namespace moxygen::test {
+using testing::_;
+
 TestControlMessages fromDir(MoQControlCodec::Direction dir) {
   // The control messages to write are the opposite of dir
   return dir == MoQControlCodec::Direction::CLIENT
@@ -75,15 +77,20 @@ TEST(MoQCodec, AllObject) {
           testing::_,
           testing::_,
           testing::_,
+          testing::_,
           true,
-          false));
+          false))
+      .Times(2);
   EXPECT_CALL(
       callback,
       onObjectStatus(
           testing::_,
           testing::_,
           testing::_,
-          ObjectStatus::END_OF_TRACK_AND_GROUP));
+          testing::_,
+          testing::_,
+          testing::_))
+      .Times(2);
   codec.onIngress(std::move(allMsgs), true);
 }
 
@@ -153,9 +160,11 @@ TEST(MoQCodec, UnderflowObjects) {
           testing::_,
           testing::_,
           testing::_,
-          testing::_));
+          testing::_,
+          testing::_))
+      .Times(2);
   EXPECT_CALL(callback, onObjectPayload(testing::_, testing::_))
-      .Times(strlen("hello world"));
+      .Times(strlen("hello world") + strlen("hello world ext"));
   while (!readBuf.empty()) {
     codec.onIngress(readBuf.split(1), false);
   }
@@ -166,14 +175,15 @@ TEST(MoQCodec, ObjectStreamPayloadFin) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11},
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
 
   EXPECT_CALL(callback, onSubgroup(TrackAlias(1), 2, 3, 5));
   EXPECT_CALL(
-      callback, onObjectBegin(2, 3, 4, testing::_, testing::_, true, true));
+      callback,
+      onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, true));
 
   codec.onIngress(writeBuf.move(), true);
 }
@@ -182,14 +192,14 @@ TEST(MoQCodec, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11},
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
 
   EXPECT_CALL(callback, onSubgroup(TrackAlias(1), 2, 3, 5));
   EXPECT_CALL(
-      callback, onObjectBegin(2, 3, 4, testing::_, testing::_, true, false));
+      callback, onObjectBegin(2, 3, 4, testing::_, testing::_, _, true, false));
 
   codec.onIngress(writeBuf.move(), false);
   EXPECT_CALL(callback, onEndOfStream());
@@ -200,14 +210,14 @@ TEST(MoQCodec, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeSingleObjectStream(
       writeBuf,
-      {TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, folly::none},
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
       nullptr);
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
 
   EXPECT_CALL(callback, onSubgroup(TrackAlias(1), 2, 3, 5));
   EXPECT_CALL(
-      callback, onObjectStatus(2, 3, 4, ObjectStatus::OBJECT_NOT_EXIST));
+      callback, onObjectStatus(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, _));
   EXPECT_CALL(callback, onEndOfStream());
   // extra coverage of underflow in header
   codec.onIngress(writeBuf.split(3), false);
@@ -217,21 +227,12 @@ TEST(MoQCodec, EmptyObjectPayload) {
 
 TEST(MoQCodec, TruncatedObject) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeSubgroupHeader(
-      writeBuf,
-      ObjectHeader({
-          TrackAlias(1),
-          2,
-          3,
-          4,
-          5,
-          ObjectStatus::NORMAL,
-          folly::none,
-      }));
+  auto res =
+      writeSubgroupHeader(writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
   res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
@@ -245,21 +246,12 @@ TEST(MoQCodec, TruncatedObject) {
 
 TEST(MoQCodec, TruncatedObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeSubgroupHeader(
-      writeBuf,
-      ObjectHeader({
-          TrackAlias(1),
-          2,
-          3,
-          4,
-          5,
-          ObjectStatus::NORMAL,
-          folly::none,
-      }));
+  auto res =
+      writeSubgroupHeader(writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
   res = writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
-      ObjectHeader({TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, 11}),
+      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       nullptr);
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
@@ -268,7 +260,8 @@ TEST(MoQCodec, TruncatedObjectPayload) {
       callback, onSubgroup(testing::_, testing::_, testing::_, testing::_));
 
   EXPECT_CALL(
-      callback, onObjectBegin(2, 3, 4, testing::_, testing::_, false, false));
+      callback,
+      onObjectBegin(2, 3, 4, testing::_, testing::_, _, false, false));
   codec.onIngress(writeBuf.move(), false);
   EXPECT_CALL(callback, onConnectionError(testing::_));
   writeBuf.append(std::string("hello"));
@@ -302,15 +295,7 @@ TEST(MoQCodec, Fetch) {
   MoQObjectStreamCodec codec(&callback);
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   SubscribeID subscribeId(1);
-  ObjectHeader obj{
-      subscribeId,
-      2,
-      3,
-      4,
-      5,
-      ObjectStatus::NORMAL,
-      folly::none,
-  };
+  ObjectHeader obj(subscribeId, 2, 3, 4, 5);
   StreamType streamType = StreamType::FETCH_HEADER;
   auto res = writeFetchHeader(writeBuf, subscribeId);
   obj.length = 5;
@@ -327,8 +312,9 @@ TEST(MoQCodec, Fetch) {
   res = writeStreamObject(writeBuf, streamType, obj, nullptr);
 
   EXPECT_CALL(callback, onFetchHeader(testing::_));
-  EXPECT_CALL(callback, onObjectBegin(2, 3, 4, 5, testing::_, true, false));
-  EXPECT_CALL(callback, onObjectStatus(3, 3, 0, ObjectStatus::END_OF_TRACK));
+  EXPECT_CALL(callback, onObjectBegin(2, 3, 4, testing::_, 5, _, true, false));
+  EXPECT_CALL(
+      callback, onObjectStatus(3, 3, 0, 5, ObjectStatus::END_OF_TRACK, _));
   // object after terminal status
   EXPECT_CALL(callback, onConnectionError(ErrorCode::PARSE_ERROR));
   codec.onIngress(writeBuf.move(), false);
