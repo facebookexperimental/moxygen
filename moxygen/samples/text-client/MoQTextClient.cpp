@@ -69,6 +69,7 @@ SubParams flags2params() {
 
 class TextHandler : public ObjectReceiverCallback {
  public:
+  explicit TextHandler(bool fetch) : fetch_(fetch) {}
   ~TextHandler() override = default;
   FlowControlState onObject(const ObjectHeader& header, Payload payload)
       override {
@@ -93,17 +94,26 @@ class TextHandler : public ObjectReceiverCallback {
   void onObjectStatus(const ObjectHeader& objHeader) override {
     std::cout << "ObjectStatus=" << uint32_t(objHeader.status) << std::endl;
   }
-  void onEndOfStream() override {}
+  void onEndOfStream() override {
+    if (fetch_) {
+      std::cout << __func__ << std::endl;
+      baton.post();
+    }
+  }
   void onError(ResetStreamErrorCode error) override {
     std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;
   }
 
   void onSubscribeDone(SubscribeDone) override {
+    CHECK(!fetch_);
     std::cout << __func__ << std::endl;
     baton.post();
   }
 
   folly::coro::Baton baton;
+
+ private:
+  bool fetch_{false};
 };
 
 class MoQTextClient : public Subscriber,
@@ -127,40 +137,27 @@ class MoQTextClient : public Subscriber,
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
           /*subscribeHandler=*/shared_from_this());
-      SubParams subParams{sub.locType, sub.start, sub.endGroup};
-      sub.locType = LocationType::LatestObject;
-      sub.start = folly::none;
-      sub.endGroup = 0;
-      subTextHandler_ = std::make_shared<ObjectReceiver>(
-          ObjectReceiver::SUBSCRIBE, &textHandler_);
 
       Publisher::SubscribeResult track;
-      Publisher::FetchResult fetchTrack;
       if (FLAGS_jfetch) {
-        XLOG(DBG1) << "JOINING FETCH pgo=0";
-        fetchTextHandler_ = std::make_shared<ObjectReceiver>(
-            ObjectReceiver::FETCH, &textHandler_);
+        // Call join() for joining fetch
+        fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
+            ObjectReceiver::FETCH, &fetchTextHandler_);
         auto joinResult = co_await moqClient_.moqSession_->join(
             sub,
-            subTextHandler_,
-            /*precedingGroupOffset=*/0,
+            subTextReceiver_,
+            0,
             sub.priority,
             sub.groupOrder,
             {},
-            fetchTextHandler_);
+            fetchTextReceiver_);
         track = joinResult.subscribeResult;
-        fetchTrack = joinResult.fetchResult;
-        if (fetchTrack.hasError()) {
-          XLOG(ERR) << "Fetch failed err="
-                    << folly::to_underlying(fetchTrack.error().errorCode)
-                    << " reason=" << fetchTrack.error().reasonPhrase;
-        } else {
-          XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
-        }
       } else {
         track =
-            co_await moqClient_.moqSession_->subscribe(sub, subTextHandler_);
+            co_await moqClient_.moqSession_->subscribe(sub, subTextReceiver_);
       }
+      bool needFetch = false;
+      AbsoluteLocation fetchEnd{sub.endGroup + 1, 0};
       if (track.hasValue()) {
         subscription_ = std::move(track.value());
         auto subscribeID = subscription_->subscribeOk().subscribeID;
@@ -170,69 +167,44 @@ class MoQTextClient : public Subscriber,
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
                      << "}";
         }
-        if (subParams.start && latest) {
-          // There was a specific start and the track has started
-          folly::Optional<AbsoluteLocation> end;
-          if (subParams.endGroup > 0) {
-            end = AbsoluteLocation({subParams.endGroup, 0});
-          }
-          auto range = toSubscribeRange(
-              subParams.start, end, subParams.locType, *latest);
-          if (range.start <= *latest) {
-            AbsoluteLocation fetchEnd = *latest;
-            // The start was before latest, need to FETCH
-            if (range.end < *latest) {
-              // The end is before latest, UNSUBSCRIBE
-              XLOG(DBG1) << "end={" << range.end.group << ","
-                         << range.end.object << "} before latest, unsubscribe";
-              textHandler_.baton.post();
-              subscription_->unsubscribe();
-              subscription_.reset();
-              fetchEnd = range.end;
-              if (fetchEnd.object == 0) {
-                fetchEnd.group--;
-              }
-            }
-            if (FLAGS_fetch) {
-              XLOG(DBG1) << "FETCH start={" << range.start.group << ","
-                         << range.start.object << "} end={" << fetchEnd.group
-                         << "," << fetchEnd.object << "}";
-              fetchTextHandler_ = std::make_shared<ObjectReceiver>(
-                  ObjectReceiver::FETCH, &textHandler_);
-              fetchTrack = co_await moqClient_.moqSession_->fetch(
-                  Fetch(
-                      SubscribeID(0),
-                      sub.fullTrackName,
-                      range.start,
-                      fetchEnd,
-                      sub.priority,
-                      sub.groupOrder),
-                  fetchTextHandler_);
-              if (fetchTrack.hasError()) {
-                XLOG(ERR) << "Fetch failed err="
-                          << folly::to_underlying(fetchTrack.error().errorCode)
-                          << " reason=" << fetchTrack.error().reasonPhrase;
-              } else {
-                XLOG(DBG1) << "subscribeID=" << fetchTrack.value();
-              }
-            }
-          } // else we started from current or no content - nothing to FETCH
-          if (subParams.endGroup > 0 && (!latest || range.end > *latest)) {
-            // The end is set but after latest, SUBSCRIBE_UPDATE for the end
-            XLOG(DBG1) << "Setting subscribe end={" << range.end.group << ","
-                       << range.end.object << "} before latest, update";
-            subscription_->subscribeUpdate(
-                {subscribeID,
-                 latest.value_or(AbsoluteLocation{0, 0}),
-                 range.end.group,
-                 sub.priority,
-                 sub.params});
-          }
+        if ((sub.locType == LocationType::AbsoluteStart ||
+             sub.locType == LocationType::AbsoluteRange) &&
+            subscription_ && subscription_->subscribeOk().latest &&
+            *sub.start < *subscription_->subscribeOk().latest) {
+          XLOG(INFO) << "Start before latest, need FETCH";
+          needFetch = true;
+          fetchEnd = AbsoluteLocation{
+              subscription_->subscribeOk().latest->group,
+              subscription_->subscribeOk().latest->object + 1};
         }
       } else {
         XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
                    << " code=" << folly::to_underlying(track.error().errorCode)
                    << " reason=" << track.error().reasonPhrase;
+        subTextReceiver_.reset();
+        if (track.error().errorCode == SubscribeErrorCode::INVALID_RANGE) {
+          XLOG(INFO) << "End before latest, need FETCH";
+          needFetch = true;
+        }
+      }
+      if (needFetch) {
+        fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
+            ObjectReceiver::FETCH, &fetchTextHandler_);
+        auto fetchTrack = co_await moqClient_.moqSession_->fetch(
+            Fetch(
+                SubscribeID(0),
+                sub.fullTrackName,
+                *sub.start,
+                fetchEnd,
+                sub.priority,
+                sub.groupOrder),
+            fetchTextReceiver_);
+        if (fetchTrack.hasError()) {
+          XLOG(ERR) << "Fetch failed err="
+                    << folly::to_underlying(fetchTrack.error().errorCode)
+                    << " reason=" << fetchTrack.error().reasonPhrase;
+          fetchTextReceiver_.reset();
+        }
       }
       if (moqClient_.moqSession_) {
         moqClient_.moqSession_->drain();
@@ -241,7 +213,14 @@ class MoQTextClient : public Subscriber,
       XLOG(ERR) << folly::exceptionStr(ex);
       co_return;
     }
-    co_await textHandler_.baton;
+
+    if (subTextReceiver_) {
+      co_await subTextHandler_.baton;
+    }
+    if (fetchTextReceiver_) {
+      co_await fetchTextHandler_.baton;
+    }
+
     XLOG(INFO) << __func__ << " done";
   }
 
@@ -261,21 +240,28 @@ class MoQTextClient : public Subscriber,
   }
 
   void stop() {
-    textHandler_.baton.post();
-    // TODO: maybe need fetchCancel + fetchTextHandler_.baton.post()
+    subTextHandler_.baton.post();
+    fetchTextHandler_.baton.post();
+    // TODO: maybe need fetchCancel
     if (subscription_) {
       subscription_->unsubscribe();
       subscription_.reset();
     }
-    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    if (moqClient_.moqSession_) {
+      moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    }
   }
 
   MoQClient moqClient_;
   FullTrackName fullTrackName_;
   std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
-  TextHandler textHandler_;
-  std::shared_ptr<ObjectReceiver> subTextHandler_;
-  std::shared_ptr<ObjectReceiver> fetchTextHandler_;
+  TextHandler subTextHandler_{/*fetch=*/false};
+  TextHandler fetchTextHandler_{/*fetch=*/true};
+  std::shared_ptr<ObjectReceiver> subTextReceiver_{
+      std::make_shared<ObjectReceiver>(
+          ObjectReceiver::SUBSCRIBE,
+          &subTextHandler_)};
+  std::shared_ptr<ObjectReceiver> fetchTextReceiver_;
 };
 } // namespace
 
