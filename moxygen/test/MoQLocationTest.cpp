@@ -32,7 +32,7 @@ TEST(Location, LatestObject) {
   auto range = toSubscribeRange(
       getRequest(LocationType::LatestObject), AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 19);
-  EXPECT_EQ(range.start.object, 77);
+  EXPECT_EQ(range.start.object, 78);
   EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
 }
 
@@ -47,18 +47,37 @@ TEST(Location, LatestGroup) {
 TEST(Location, AbsoluteStart) {
   auto range = toSubscribeRange(
       getRequest(LocationType::AbsoluteStart, AbsoluteLocation({1, 2})),
-      AbsoluteLocation({19, 77}));
+      AbsoluteLocation({1, 1}));
   EXPECT_EQ(range.start.group, 1);
   EXPECT_EQ(range.start.object, 2);
+  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+}
+
+TEST(Location, AbsoluteStartBehindLatest) {
+  auto range = toSubscribeRange(
+      getRequest(LocationType::AbsoluteStart, AbsoluteLocation({1, 2})),
+      AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 19);
+  EXPECT_EQ(range.start.object, 78);
   EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
 }
 
 TEST(Location, AbsoluteRange) {
   auto range = toSubscribeRange(
       getRequest(LocationType::AbsoluteRange, AbsoluteLocation({1, 2}), 3),
-      AbsoluteLocation({19, 77}));
+      AbsoluteLocation({1, 1}));
   EXPECT_EQ(range.start.group, 1);
   EXPECT_EQ(range.start.object, 2);
+  EXPECT_EQ(range.end.group, 3);
+  EXPECT_EQ(range.end.object, 0);
+}
+
+TEST(Location, AbsoluteRangeBehindLatest) {
+  auto range = toSubscribeRange(
+      getRequest(LocationType::AbsoluteRange, AbsoluteLocation({1, 2}), 3),
+      AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 19);
+  EXPECT_EQ(range.start.object, 78);
   EXPECT_EQ(range.end.group, 3);
   EXPECT_EQ(range.end.object, 0);
 }

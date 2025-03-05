@@ -277,6 +277,15 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       // because subscriptionIt will be invalid
       co_await subscriptionIt->second.promise.getFuture();
     }
+    auto& forwarder = subscriptionIt->second.forwarder;
+    if (forwarder->latest() && subReq.locType == LocationType::AbsoluteRange &&
+        subReq.endGroup < forwarder->latest()->group) {
+      co_return folly::makeUnexpected(SubscribeError{
+          subReq.subscribeID,
+          SubscribeErrorCode::INVALID_RANGE,
+          "Range in the past, use FETCH"});
+      // start may be in the past, it will get adjusted forward to latest
+    }
     co_return subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
   }

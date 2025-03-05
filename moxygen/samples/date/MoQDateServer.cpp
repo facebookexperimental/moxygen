@@ -112,12 +112,13 @@ class MoQDateServer : public MoQServer,
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    auto range = toSubscribeRange(subReq, nowLoc);
-    if (range.start < nowLoc) {
+    if (subReq.locType == LocationType::AbsoluteRange &&
+        subReq.endGroup < nowLoc.group) {
       co_return folly::makeUnexpected(SubscribeError{
           subReq.subscribeID,
           SubscribeErrorCode::INVALID_RANGE,
-          "start in the past, use FETCH"});
+          "Range in the past, use FETCH"});
+      // start may be in the past, it will get adjusted forward to latest
     }
     forwarder_.setLatest(nowLoc);
     co_return forwarder_.addSubscriber(
@@ -168,12 +169,7 @@ class MoQDateServer : public MoQServer,
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     AbsoluteLocation nowLoc(
         {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    auto range = toSubscribeRange(
-        standalone->start,
-        standalone->end,
-        LocationType::AbsoluteRange,
-        nowLoc);
-    if (range.start > nowLoc) {
+    if (standalone->start > nowLoc) {
       co_return folly::makeUnexpected(FetchError{
           fetch.subscribeID,
           FetchErrorCode::INVALID_RANGE,
@@ -189,7 +185,8 @@ class MoQDateServer : public MoQServer,
         {}});
     folly::coro::co_withCancellation(
         fetchHandle->cancelSource.getToken(),
-        catchup(std::move(consumer), range, nowLoc))
+        catchup(
+            std::move(consumer), {standalone->start, standalone->end}, nowLoc))
         .scheduleOn(clientSession->getEventBase())
         .start();
     co_return fetchHandle;
