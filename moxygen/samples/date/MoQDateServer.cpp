@@ -80,24 +80,43 @@ class MoQDateServer : public MoQServer,
     }
   }
 
+  std::pair<uint64_t, uint64_t> now() {
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    // +1 is because object two objects are published at second=0
+    return {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60)};
+  }
+
+  AbsoluteLocation nowLocation() {
+    auto [minute, second] = now();
+    // +1 is because object two objects are published at second=0
+    return {minute, second + 1};
+  }
+
+  AbsoluteLocation updateLatest() {
+    if (!loopRunning_) {
+      forwarder_.setLatest(nowLocation());
+    }
+    return *forwarder_.latest();
+  }
+
   folly::coro::Task<TrackStatusResult> trackStatus(
       TrackStatusRequest trackStatusRequest) override {
     XLOG(DBG1) << __func__ << trackStatusRequest.fullTrackName;
     if (trackStatusRequest.fullTrackName != dateTrackName()) {
       co_return TrackStatus{
-          trackStatusRequest.fullTrackName,
+          std::move(trackStatusRequest.fullTrackName),
           TrackStatusCode::TRACK_NOT_EXIST,
           folly::none};
     }
     // TODO: add other trackSTatus codes
     // TODO: unify this with subscribe. You can get the same information both
     // ways
-    auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    auto latest = updateLatest();
     co_return TrackStatus{
-        trackStatusRequest.fullTrackName,
+        std::move(trackStatusRequest.fullTrackName),
         TrackStatusCode::IN_PROGRESS,
-        AbsoluteLocation{uint64_t(in_time_t / 60), uint64_t(in_time_t % 60)}};
+        latest};
   }
 
   folly::coro::Task<SubscribeResult> subscribe(
@@ -114,19 +133,15 @@ class MoQDateServer : public MoQServer,
           SubscribeErrorCode::TRACK_NOT_EXIST,
           "unexpected subscribe"});
     }
-    auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
-    AbsoluteLocation nowLoc(
-        {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
+    auto latest = updateLatest();
     if (subReq.locType == LocationType::AbsoluteRange &&
-        subReq.endGroup < nowLoc.group) {
+        subReq.endGroup < latest.group) {
       co_return folly::makeUnexpected(SubscribeError{
           subReq.subscribeID,
           SubscribeErrorCode::INVALID_RANGE,
           "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to latest
     }
-    forwarder_.setLatest(nowLoc);
     co_return forwarder_.addSubscriber(
         MoQSession::getRequestSession(), subReq, std::move(consumer));
   }
@@ -153,6 +168,7 @@ class MoQDateServer : public MoQServer,
           FetchErrorCode::TRACK_NOT_EXIST,
           "unexpected fetch"});
     }
+    auto latest = updateLatest();
     auto [standalone, joining] = fetchType(fetch);
     StandaloneFetch sf;
     if (joining) {
@@ -164,6 +180,9 @@ class MoQDateServer : public MoQServer,
       }
       sf = StandaloneFetch(res.value().start, res.value().end);
       standalone = &sf;
+    } else if (standalone->end > latest) {
+      standalone->end = latest;
+      standalone->end.object++; // exclusive range, include latest
     }
     if (standalone->end < standalone->start &&
         !(standalone->start.group == standalone->end.group &&
@@ -171,11 +190,7 @@ class MoQDateServer : public MoQServer,
       co_return folly::makeUnexpected(FetchError{
           fetch.subscribeID, FetchErrorCode::INVALID_RANGE, "No objects"});
     }
-    auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
-    AbsoluteLocation nowLoc(
-        {uint64_t(in_time_t / 60), uint64_t(in_time_t % 60) + 1});
-    if (standalone->start > nowLoc) {
+    if (standalone->start > latest) {
       co_return folly::makeUnexpected(FetchError{
           fetch.subscribeID,
           FetchErrorCode::INVALID_RANGE,
@@ -187,12 +202,11 @@ class MoQDateServer : public MoQServer,
         MoQSession::resolveGroupOrder(
             GroupOrder::OldestFirst, fetch.groupOrder),
         0, // not end of track
-        nowLoc,
+        latest,
         {}});
     folly::coro::co_withCancellation(
         fetchHandle->cancelSource.getToken(),
-        catchup(
-            std::move(consumer), {standalone->start, standalone->end}, nowLoc))
+        catchup(std::move(consumer), {standalone->start, standalone->end}))
         .scheduleOn(clientSession->getEventBase())
         .start();
     co_return fetchHandle;
@@ -227,14 +241,15 @@ class MoQDateServer : public MoQServer,
 
   folly::coro::Task<void> catchup(
       std::shared_ptr<FetchConsumer> fetchPub,
-      SubscribeRange range,
-      AbsoluteLocation now) {
+      SubscribeRange range) {
     if (range.start.object > 61) {
       co_return;
     }
+    XLOG(ERR) << "Range: start=" << range.start.group << "."
+              << range.start.object << " end=" << range.end.group << "."
+              << range.end.object;
     auto token = co_await folly::coro::co_current_cancellation_token;
-    while (!token.isCancellationRequested() && range.start <= now &&
-           range.start < range.end) {
+    while (!token.isCancellationRequested() && range.start < range.end) {
       uint64_t subgroup =
           mode_ == Mode::STREAM_PER_OBJECT ? range.start.object : 0;
       folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
@@ -294,21 +309,19 @@ class MoQDateServer : public MoQServer,
     auto cancelToken = co_await folly::coro::co_current_cancellation_token;
     std::shared_ptr<SubgroupConsumer> subgroupPublisher;
     while (!cancelToken.isCancellationRequested()) {
-      if (!forwarder_.empty()) {
-        auto now = std::chrono::system_clock::now();
-        auto in_time_t = std::chrono::system_clock::to_time_t(now);
+      if (forwarder_.empty()) {
+        forwarder_.setLatest(nowLocation());
+      } else {
+        auto [minute, second] = now();
         switch (mode_) {
           case Mode::STREAM_PER_GROUP:
-            subgroupPublisher = publishDate(
-                subgroupPublisher,
-                uint64_t(in_time_t / 60),
-                uint64_t(in_time_t % 60));
+            subgroupPublisher = publishDate(subgroupPublisher, minute, second);
             break;
           case Mode::STREAM_PER_OBJECT:
-            publishDate(uint64_t(in_time_t / 60), uint64_t(in_time_t % 60));
+            publishDate(minute, second);
             break;
           case Mode::DATAGRAM:
-            publishDategram(uint64_t(in_time_t / 60), uint64_t(in_time_t % 60));
+            publishDategram(minute, second);
             break;
         }
       }
