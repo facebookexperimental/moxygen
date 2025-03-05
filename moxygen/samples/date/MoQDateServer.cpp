@@ -20,7 +20,11 @@ DEFINE_int32(relay_transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_int32(port, 9667, "Server Port");
-DEFINE_bool(stream_per_object, false, "Use one stream for each object");
+DEFINE_string(
+    mode,
+    "spg",
+    "Transmission mode for track: stream-per-group (spg), "
+    "stream-per-object(spo), datagram");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 
 namespace {
@@ -34,10 +38,12 @@ class MoQDateServer : public MoQServer,
                       public Publisher,
                       public std::enable_shared_from_this<MoQDateServer> {
  public:
-  explicit MoQDateServer(bool streamPerObject)
+  enum class Mode { STREAM_PER_GROUP, STREAM_PER_OBJECT, DATAGRAM };
+
+  explicit MoQDateServer(Mode mode)
       : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, "/moq-date"),
         forwarder_(dateTrackName()),
-        streamPerObject_(streamPerObject) {}
+        mode_(mode) {}
 
   bool startRelayClient(folly::EventBase* evb) {
     proxygen::URL url(FLAGS_relay_url);
@@ -229,7 +235,8 @@ class MoQDateServer : public MoQServer,
     auto token = co_await folly::coro::co_current_cancellation_token;
     while (!token.isCancellationRequested() && range.start <= now &&
            range.start < range.end) {
-      uint64_t subgroup = streamPerObject_ ? range.start.object : 0;
+      uint64_t subgroup =
+          mode_ == Mode::STREAM_PER_OBJECT ? range.start.object : 0;
       folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
       if (range.start.object == 0) {
         res = fetchPub->object(
@@ -290,13 +297,19 @@ class MoQDateServer : public MoQServer,
       if (!forwarder_.empty()) {
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
-        if (streamPerObject_) {
-          publishDate(uint64_t(in_time_t / 60), uint64_t(in_time_t % 60));
-        } else {
-          subgroupPublisher = publishDate(
-              subgroupPublisher,
-              uint64_t(in_time_t / 60),
-              uint64_t(in_time_t % 60));
+        switch (mode_) {
+          case Mode::STREAM_PER_GROUP:
+            subgroupPublisher = publishDate(
+                subgroupPublisher,
+                uint64_t(in_time_t / 60),
+                uint64_t(in_time_t % 60));
+            break;
+          case Mode::STREAM_PER_OBJECT:
+            publishDate(uint64_t(in_time_t / 60), uint64_t(in_time_t % 60));
+            break;
+          case Mode::DATAGRAM:
+            publishDategram(uint64_t(in_time_t / 60), uint64_t(in_time_t % 60));
+            break;
         }
       }
       co_await folly::coro::sleep(std::chrono::seconds(1));
@@ -353,6 +366,30 @@ class MoQDateServer : public MoQServer,
     }
   }
 
+  void publishDategram(uint64_t group, uint64_t second) {
+    uint64_t object = second;
+    ObjectHeader header{
+        TrackAlias(0),
+        group,
+        0, // subgroup unused for datagrams
+        object,
+        /*p=*/0, // priority
+        ObjectStatus::NORMAL,
+        kExtensions,
+        folly::none};
+    if (second == 0) {
+      forwarder_.datagram(header, minutePayload(group));
+    }
+    header.id++;
+    header.extensions.clear();
+    forwarder_.datagram(header, secondPayload(header.id));
+    if (header.id >= 60) {
+      header.id++;
+      header.status = ObjectStatus::END_OF_GROUP;
+      forwarder_.datagram(header, nullptr);
+    }
+  }
+
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << __func__;
     forwarder_.removeSession(session);
@@ -364,14 +401,25 @@ class MoQDateServer : public MoQServer,
   }
   MoQForwarder forwarder_;
   std::unique_ptr<MoQRelayClient> relayClient_;
-  bool streamPerObject_{false};
+  Mode mode_{Mode::STREAM_PER_GROUP};
   bool loopRunning_{false};
 };
 } // namespace
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
   folly::EventBase evb;
-  auto server = std::make_shared<MoQDateServer>(FLAGS_stream_per_object);
+  MoQDateServer::Mode mode;
+  if (FLAGS_mode == "spg") {
+    mode = MoQDateServer::Mode::STREAM_PER_GROUP;
+  } else if (FLAGS_mode == "spo") {
+    mode = MoQDateServer::Mode::STREAM_PER_OBJECT;
+  } else if (FLAGS_mode == "datagram") {
+    mode = MoQDateServer::Mode::DATAGRAM;
+  } else {
+    XLOG(ERR) << "Invalid mode: " << FLAGS_mode;
+    return 1;
+  }
+  auto server = std::make_shared<MoQDateServer>(mode);
   if (!FLAGS_relay_url.empty() && !server->startRelayClient(&evb)) {
     return 1;
   }
