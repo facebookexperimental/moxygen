@@ -82,22 +82,29 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
   // SubgroupConsumer overrides
   // Note where the interface uses finSubgroup, this class uses finStream,
   // since it is used for fetch and subgroups
-  folly::Expected<folly::Unit, MoQPublishError>
-  object(uint64_t objectID, Payload payload, bool finStream) override;
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions,
+      bool finStream) override;
   folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
       uint64_t objectID,
+      Extensions extensions,
       bool finStream) override;
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
       uint64_t objectId,
       uint64_t length,
-      Payload initialPayload) override;
+      Payload initialPayload,
+      Extensions extensions) override;
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finStream) override;
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t endOfGroupObjectId) override;
+      uint64_t endOfGroupObjectId,
+      Extensions extensions) override;
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t endOfTrackObjectId) override;
+      uint64_t endOfTrackObjectId,
+      Extensions extensions) override;
   folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override;
   void reset(ResetStreamErrorCode error) override;
 
@@ -107,36 +114,41 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
       uint64_t subgroupID,
       uint64_t objectID,
       Payload payload,
+      Extensions extensions,
       bool finFetch) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
     header_.status = ObjectStatus::NORMAL;
-    return object(objectID, std::move(payload), finFetch);
+    return object(
+        objectID, std::move(payload), std::move(extensions), finFetch);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
+      Extensions extensions,
       bool finFetch) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
-    return objectNotExists(objectID, finFetch);
+    return objectNotExists(objectID, std::move(extensions), finFetch);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
       uint64_t groupID,
       uint64_t subgroupID,
+      Extensions extensions,
       bool finFetch) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
-    return publishStatus(0, ObjectStatus::GROUP_NOT_EXIST, finFetch);
+    return publishStatus(
+        0, ObjectStatus::GROUP_NOT_EXIST, extensions, finFetch);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
@@ -144,35 +156,40 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
       uint64_t subgroupID,
       uint64_t objectID,
       uint64_t length,
-      Payload initialPayload) override {
+      Payload initialPayload,
+      Extensions extensions) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
     header_.status = ObjectStatus::NORMAL;
-    return beginObject(objectID, length, std::move(initialPayload));
+    return beginObject(
+        objectID, length, std::move(initialPayload), std::move(extensions));
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
+      Extensions extensions,
       bool finFetch) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
-    return publishStatus(objectID, ObjectStatus::END_OF_GROUP, finFetch);
+    return publishStatus(
+        objectID, ObjectStatus::END_OF_GROUP, extensions, finFetch);
   }
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
       uint64_t groupID,
       uint64_t subgroupID,
-      uint64_t objectID) override {
+      uint64_t objectID,
+      Extensions extensions) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
-    return endOfTrackAndGroup(objectID);
+    return endOfTrackAndGroup(objectID, std::move(extensions));
   }
   folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
     if (!writeHandle_) {
@@ -185,8 +202,11 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitReadyToConsume() override;
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  publishStatus(uint64_t objectID, ObjectStatus status, bool finStream);
+  folly::Expected<folly::Unit, MoQPublishError> publishStatus(
+      uint64_t objectID,
+      ObjectStatus status,
+      const Extensions& extensions,
+      bool finStream);
 
  private:
   bool setGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
@@ -214,6 +234,7 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
       uint64_t objectID,
       uint64_t length,
       Payload payload,
+      const Extensions& extensions,
       bool finStream);
   folly::Expected<folly::Unit, MoQPublishError> writeToStream(bool finStream);
 
@@ -233,14 +254,13 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
 StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
-      header_{
+      header_(
           publisher->subscribeID(),
           0,
           0,
           std::numeric_limits<uint64_t>::max(),
           0,
-          ObjectStatus::NORMAL,
-          folly::none} {
+          ObjectStatus::NORMAL) {
   (void)writeFetchHeader(writeBuf_, publisher->subscribeID());
 }
 
@@ -313,9 +333,12 @@ StreamPublisherImpl::writeCurrentObject(
     uint64_t objectID,
     uint64_t length,
     Payload payload,
+    const Extensions& extensions,
     bool finStream) {
   header_.id = objectID;
   header_.length = length;
+  // copy is gratuitous
+  header_.extensions = extensions;
   (void)writeStreamObject(writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream);
 }
@@ -377,24 +400,31 @@ StreamPublisherImpl::validateObjectPublishAndUpdateState(
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     uint64_t objectID,
     Payload payload,
+    Extensions extensions,
     bool finStream) {
   auto validateRes = validatePublish(objectID);
   if (!validateRes) {
     return validateRes;
   }
   auto length = payload ? payload->computeChainDataLength() : 0;
-  return writeCurrentObject(objectID, length, std::move(payload), finStream);
+  return writeCurrentObject(
+      objectID, length, std::move(payload), extensions, finStream);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
-StreamPublisherImpl::objectNotExists(uint64_t objectID, bool finStream) {
-  return publishStatus(objectID, ObjectStatus::OBJECT_NOT_EXIST, finStream);
+StreamPublisherImpl::objectNotExists(
+    uint64_t objectID,
+    Extensions extensions,
+    bool finStream) {
+  return publishStatus(
+      objectID, ObjectStatus::OBJECT_NOT_EXIST, extensions, finStream);
 }
 
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     uint64_t objectID,
     uint64_t length,
-    Payload initialPayload) {
+    Payload initialPayload,
+    Extensions extensions) {
   auto validateRes = validatePublish(objectID);
   if (!validateRes) {
     return validateRes;
@@ -407,7 +437,11 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     return folly::makeUnexpected(validateObjectPublishRes.error());
   }
   return writeCurrentObject(
-      objectID, length, std::move(initialPayload), /*finStream=*/false);
+      objectID,
+      length,
+      std::move(initialPayload),
+      extensions,
+      /*finStream=*/false);
 }
 
 folly::Expected<ObjectPublishStatus, MoQPublishError>
@@ -427,16 +461,23 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
 }
 
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::endOfGroup(
-    uint64_t endOfGroupObjectId) {
+    uint64_t endOfGroupObjectId,
+    Extensions extensions) {
   return publishStatus(
-      endOfGroupObjectId, ObjectStatus::END_OF_GROUP, /*finStream=*/true);
+      endOfGroupObjectId,
+      ObjectStatus::END_OF_GROUP,
+      extensions,
+      /*finStream=*/true);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
-StreamPublisherImpl::endOfTrackAndGroup(uint64_t endOfTrackObjectId) {
+StreamPublisherImpl::endOfTrackAndGroup(
+    uint64_t endOfTrackObjectId,
+    Extensions extensions) {
   return publishStatus(
       endOfTrackObjectId,
       ObjectStatus::END_OF_TRACK_AND_GROUP,
+      extensions,
       /*finStream=*/true);
 }
 
@@ -444,6 +485,7 @@ folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::publishStatus(
     uint64_t objectID,
     ObjectStatus status,
+    const Extensions& extensions,
     bool finStream) {
   auto validateRes = validatePublish(objectID);
   if (!validateRes) {
@@ -451,7 +493,11 @@ StreamPublisherImpl::publishStatus(
   }
   header_.status = status;
   return writeCurrentObject(
-      objectID, /*length=*/0, /*payload=*/nullptr, finStream);
+      objectID,
+      /*length=*/0,
+      /*payload=*/nullptr,
+      extensions,
+      finStream);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -603,8 +649,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       const ObjectHeader& header,
       Payload payload) override;
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
+  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
+      uint64_t groupID,
+      uint64_t subgroup,
+      Priority pri,
+      Extensions extensions) override;
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
@@ -748,15 +797,21 @@ MoQSession::TrackPublisherImpl::objectStream(
   switch (objHeader.status) {
     case ObjectStatus::NORMAL:
       return subgroup.value()->object(
-          objHeader.id, std::move(payload), /*finSubgroup=*/true);
+          objHeader.id,
+          std::move(payload),
+          objHeader.extensions,
+          /*finSubgroup=*/true);
     case ObjectStatus::OBJECT_NOT_EXIST:
       return subgroup.value()->objectNotExists(
-          objHeader.id, /*finSubgroup=*/true);
+          objHeader.id, objHeader.extensions, /*finSubgroup=*/true);
     case ObjectStatus::GROUP_NOT_EXIST: {
       auto& subgroupPublisherImpl =
           static_cast<StreamPublisherImpl&>(*subgroup.value());
       return subgroupPublisherImpl.publishStatus(
-          objHeader.id, objHeader.status, /*finStream=*/true);
+          objHeader.id,
+          objHeader.status,
+          objHeader.extensions,
+          /*finStream=*/true);
     }
     case ObjectStatus::END_OF_GROUP:
       return subgroup.value()->endOfGroup(objHeader.id);
@@ -774,15 +829,17 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::groupNotExists(
     uint64_t groupID,
     uint64_t subgroupID,
-    Priority priority) {
+    Priority priority,
+    Extensions extensions) {
   return objectStream(
-      {trackAlias_,
-       groupID,
-       subgroupID,
-       0,
-       priority,
-       ObjectStatus::GROUP_NOT_EXIST,
-       0},
+      ObjectHeader(
+          trackAlias_,
+          groupID,
+          subgroupID,
+          0,
+          priority,
+          ObjectStatus::GROUP_NOT_EXIST,
+          std::move(extensions)),
       nullptr);
 }
 
@@ -806,14 +863,15 @@ MoQSession::TrackPublisherImpl::datagram(
   DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
   (void)writeDatagramObject(
       writeBuf,
-      ObjectHeader{
+      ObjectHeader(
           trackAlias_,
           header.group,
           header.id,
           header.id,
           header.priority,
           header.status,
-          headerLength},
+          header.extensions,
+          headerLength),
       std::move(payload));
   // TODO: set priority when WT has an API for that
   auto res = wt->sendDatagram(writeBuf.move());
@@ -1457,6 +1515,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t group,
       uint64_t subgroup,
       uint64_t objectID,
+      Extensions extensions,
       uint64_t length,
       Payload initialPayload,
       bool objectComplete,
@@ -1474,6 +1533,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
           subgroup,
           objectID,
           std::move(initialPayload),
+          std::move(extensions),
           streamComplete);
       if (streamComplete) {
         endOfSubgroup();
@@ -1486,7 +1546,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
           subgroup,
           objectID,
           length,
-          std::move(initialPayload));
+          std::move(initialPayload),
+          std::move(extensions));
     }
     if (!res) {
       error_ = std::move(res.error());
@@ -1515,7 +1576,9 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t group,
       uint64_t subgroup,
       uint64_t objectID,
-      ObjectStatus status) override {
+      Priority pri,
+      ObjectStatus status,
+      Extensions extensions) override {
     if (isCancelled()) {
       return;
     }
@@ -1530,16 +1593,17 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
             group,
             subgroup,
             objectID,
+            std::move(extensions),
             false);
         break;
       case ObjectStatus::GROUP_NOT_EXIST:
         // groupNotExists is on the TrackConsumer not SubgroupConsumer
         if (fetchState_) {
           res = fetchState_->getFetchCallback()->groupNotExists(
-              group, subgroup, false);
+              group, subgroup, std::move(extensions), false);
         } else {
           res = subscribeState_->getSubscribeCallback()->groupNotExists(
-              group, subgroup, true);
+              group, subgroup, pri, std::move(extensions));
           endOfSubgroup();
         }
         break;
@@ -1550,9 +1614,10 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
               group,
               subgroup,
               objectID,
+              std::move(extensions),
               /*finFetch=*/false);
         } else {
-          res = subgroupCallback_->endOfGroup(objectID);
+          res = subgroupCallback_->endOfGroup(objectID, std::move(extensions));
           endOfSubgroup();
         }
         break;
@@ -1563,7 +1628,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
             &FetchConsumer::endOfTrackAndGroup,
             group,
             subgroup,
-            objectID);
+            objectID,
+            std::move(extensions));
         endOfSubgroup();
         break;
     }

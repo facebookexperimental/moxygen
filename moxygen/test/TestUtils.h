@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/io/IOBuf.h>
+#include <moxygen/MoQFramer.h>
 
 namespace moxygen::test {
 
@@ -25,5 +26,7 @@ inline std::unique_ptr<folly::IOBuf> writeAllMessages() {
 }
 
 std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size = 10);
+
+std::vector<Extension> getTestExtensions();
 
 } // namespace moxygen::test

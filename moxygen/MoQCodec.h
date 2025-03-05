@@ -153,6 +153,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t group,
         uint64_t subgroup,
         uint64_t objectID,
+        Extensions extensions,
         uint64_t length,
         Payload initialPayload,
         bool objectComplete,
@@ -161,7 +162,9 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t group,
         uint64_t subgroup,
         uint64_t objectID,
-        ObjectStatus status) = 0;
+        Priority pri,
+        ObjectStatus status,
+        Extensions extensions) = 0;
     virtual void onObjectPayload(Payload payload, bool objectComplete) = 0;
     virtual void onEndOfStream() = 0;
   };

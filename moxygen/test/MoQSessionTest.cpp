@@ -18,6 +18,7 @@ using namespace moxygen;
 
 namespace {
 using namespace moxygen;
+using testing::_;
 
 const size_t kTestMaxSubscribeId = 2;
 
@@ -156,7 +157,7 @@ TEST_F(MoQSessionTest, Fetch) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     folly::coro::Baton baton;
     EXPECT_CALL(
-        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), true))
+        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
         .WillOnce(testing::Invoke([&] {
           baton.post();
           return folly::unit;
@@ -167,7 +168,7 @@ TEST_F(MoQSessionTest, Fetch) {
     co_await baton;
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [this](Fetch fetch, auto fetchPub)
               -> folly::coro::Task<Publisher::FetchResult> {
@@ -181,6 +182,7 @@ TEST_F(MoQSessionTest, Fetch) {
                 /*subgroupID=*/0,
                 standalone->start.object,
                 moxygen::test::makeBuf(100),
+                noExtensions(),
                 /*finFetch=*/true);
             EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
             co_return std::make_shared<MockFetchHandle>(FetchOk{
@@ -211,12 +213,12 @@ TEST_F(MoQSessionTest, JoiningFetch) {
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
     folly::coro::Baton subBaton;
-    EXPECT_CALL(*trackPublisher1, datagram(testing::_, testing::_))
+    EXPECT_CALL(*trackPublisher1, datagram(_, _))
         .WillOnce(testing::Invoke([&](auto header, auto) {
           EXPECT_EQ(header.length, 11);
           return folly::unit;
         }));
-    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher1, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           subBaton.post();
           return folly::unit;
@@ -225,7 +227,7 @@ TEST_F(MoQSessionTest, JoiningFetch) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     folly::coro::Baton fetchBaton;
     EXPECT_CALL(
-        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), true))
+        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
         .WillOnce(testing::Invoke([&] {
           fetchBaton.post();
           return folly::unit;
@@ -238,12 +240,19 @@ TEST_F(MoQSessionTest, JoiningFetch) {
     co_await fetchBaton;
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce(testing::Invoke(
           [](auto sub,
              auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
             pub->datagram(
-                {sub.trackAlias, 0, 0, 1, 0, ObjectStatus::NORMAL, 11},
+                {sub.trackAlias,
+                 0,
+                 0,
+                 1,
+                 0,
+                 ObjectStatus::NORMAL,
+                 noExtensions(),
+                 11},
                 folly::IOBuf::copyBuffer("hello world"));
             pub->subscribeDone(
                 {sub.subscribeID,
@@ -258,7 +267,7 @@ TEST_F(MoQSessionTest, JoiningFetch) {
                 AbsoluteLocation{0, 0},
                 {}});
           }));
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [](Fetch fetch,
              auto fetchPub) -> folly::coro::Task<Publisher::FetchResult> {
@@ -272,6 +281,7 @@ TEST_F(MoQSessionTest, JoiningFetch) {
                 /*subgroupID=*/0,
                 /*objectID=*/0,
                 moxygen::test::makeBuf(100),
+                noExtensions(),
                 /*finFetch=*/true);
             co_return std::make_shared<MockFetchHandle>(FetchOk{
                 fetch.subscribeID,
@@ -320,10 +330,11 @@ TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
         /*subgroupID=*/0,
         /*objectID=*/0,
         moxygen::test::makeBuf(100),
+        noExtensions(),
         /*finFetch=*/true);
     folly::coro::Baton baton;
     EXPECT_CALL(
-        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), true))
+        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
         .WillOnce(testing::Invoke([&] {
           baton.post();
           return folly::unit;
@@ -331,7 +342,7 @@ TEST_F(MoQSessionTest, FetchCleanupFromStreamFin) {
     co_await baton;
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [&fetchPub, this](Fetch fetch, auto inFetchPub)
               -> folly::coro::Task<Publisher::FetchResult> {
@@ -383,7 +394,7 @@ TEST_F(MoQSessionTest, FetchPublisherError) {
     EXPECT_EQ(res.error().errorCode, FetchErrorCode::TRACK_NOT_EXIST);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             co_return folly::makeUnexpected(FetchError{
@@ -406,7 +417,7 @@ TEST_F(MoQSessionTest, FetchPublisherThrow) {
     EXPECT_EQ(res.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [](Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
             throw std::runtime_error("panic!");
@@ -433,7 +444,7 @@ TEST_F(MoQSessionTest, FetchCancel) {
         std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     SubscribeID subscribeID(0);
     EXPECT_CALL(
-        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), false))
+        *fetchCallback, object(0, 0, 0, HasChainDataLengthOf(100), _, false))
         .WillOnce(testing::Return(folly::unit));
     // TODO: fetchCancel removes the callback - should it also deliver a
     // reset() call to the callback?
@@ -452,12 +463,13 @@ TEST_F(MoQSessionTest, FetchCancel) {
         /*subgroupID=*/0,
         /*objectID=*/1,
         moxygen::test::makeBuf(100),
+        noExtensions(),
         /*finFetch=*/true);
     // publish after fetchCancel fails
     EXPECT_TRUE(res2.hasError());
     clientSession->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [&fetchPub, this](Fetch fetch, auto inFetchPub)
               -> folly::coro::Task<Publisher::FetchResult> {
@@ -472,6 +484,7 @@ TEST_F(MoQSessionTest, FetchCancel) {
                 /*subgroupID=*/0,
                 standalone->start.object,
                 moxygen::test::makeBuf(100),
+                noExtensions(),
                 false);
             // published 1 object
             EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess());
@@ -501,7 +514,7 @@ TEST_F(MoQSessionTest, FetchEarlyCancel) {
     res.value()->fetchCancel();
     clientSession->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [this](
               Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
@@ -532,13 +545,10 @@ TEST_F(MoQSessionTest, FetchBadLength) {
     // FETCH_OK comes but the FETCH stream is reset and we timeout waiting
     // for a new object.
     auto contract = folly::coro::makePromiseContract<folly::Unit>();
-    ON_CALL(
-        *fetchCallback,
-        beginObject(testing::_, testing::_, testing::_, testing::_, testing::_))
-        .WillByDefault([&] {
-          contract.first.setValue();
-          return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
-        });
+    ON_CALL(*fetchCallback, beginObject(_, _, _, _, _, _)).WillByDefault([&] {
+      contract.first.setValue();
+      return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+    });
     folly::EventBaseThreadTimekeeper tk(*session->getEventBase());
     EXPECT_THROW(
         co_await folly::coro::timeout(
@@ -546,7 +556,7 @@ TEST_F(MoQSessionTest, FetchBadLength) {
         folly::FutureTimeout);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [this](Fetch fetch, auto fetchPub)
               -> folly::coro::Task<Publisher::FetchResult> {
@@ -595,7 +605,7 @@ TEST_F(MoQSessionTest, FetchOverLimit) {
     res = co_await session->fetch(fetch, fetchCallback3);
     EXPECT_TRUE(res.hasError());
   };
-  EXPECT_CALL(*serverPublisher, fetch(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce(testing::Invoke(
           [this](
               Fetch fetch, auto) -> folly::coro::Task<Publisher::FetchResult> {
@@ -638,7 +648,7 @@ TEST_F(MoQSessionTest, TrackStatus) {
     EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, trackStatus(testing::_))
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
           [](TrackStatusRequest request)
               -> folly::coro::Task<Publisher::TrackStatusResult> {
@@ -774,7 +784,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
     EXPECT_EQ(serverSession->maxSubscribeID(), expectedSubId);
 
     // subscribe again but this time we get a DONE
-    EXPECT_CALL(*trackPublisher2, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher2, subscribeDone(_))
         .WillOnce(testing::Return(folly::unit));
     EXPECT_CALL(*clientSubscriberStatsCallback, onSubscribeSuccess());
     res = co_await clientSession->subscribe(sub, trackPublisher2);
@@ -784,7 +794,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
 
     // subscribe three more times, last one should fail, the first two will get
     // subscribeDone via the session closure
-    EXPECT_CALL(*trackPublisher3, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher3, subscribeDone(_))
         .WillOnce(testing::Return(folly::unit))
         .WillOnce(testing::Return(folly::unit));
 
@@ -799,7 +809,7 @@ TEST_F(MoQSessionTest, MaxSubscribeID) {
   }(clientSession_, serverSession_, clientSubscriberStatsCallback_)
              .scheduleOn(&eventBase_)
              .start();
-  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce(testing::Invoke(
           [this](
               auto sub, auto) -> folly::coro::Task<Publisher::SubscribeResult> {
@@ -879,14 +889,14 @@ TEST_F(MoQSessionTest, SubscribeDoneStreamCount) {
         .WillOnce(testing::Return(sg1));
     EXPECT_CALL(*trackPublisher1, beginSubgroup(0, 1, 0))
         .WillOnce(testing::Return(sg2));
-    EXPECT_CALL(*sg1, object(0, testing::_, true))
+    EXPECT_CALL(*sg1, object(0, _, _, true))
         .WillOnce(testing::Return(folly::unit));
-    EXPECT_CALL(*sg2, object(1, testing::_, false))
+    EXPECT_CALL(*sg2, object(1, _, _, false))
         .WillOnce(testing::Return(folly::unit));
-    EXPECT_CALL(*sg2, object(2, testing::_, true))
+    EXPECT_CALL(*sg2, object(2, _, _, true))
         .WillOnce(testing::Return(folly::unit));
     folly::coro::Baton baton;
-    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher1, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           baton.post();
           return folly::unit;
@@ -897,7 +907,7 @@ TEST_F(MoQSessionTest, SubscribeDoneStreamCount) {
   }(clientSession_, serverSession_)
                                                        .scheduleOn(&eventBase_)
                                                        .start();
-  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce(testing::Invoke(
           [this](auto sub, auto pub)
               -> folly::coro::Task<Publisher::SubscribeResult> {
@@ -909,11 +919,12 @@ TEST_F(MoQSessionTest, SubscribeDoneStreamCount) {
                    0,
                    0,
                    ObjectStatus::NORMAL,
+                   noExtensions(),
                    folly::none},
                   moxygen::test::makeBuf(10));
               auto sgp = pub->beginSubgroup(0, 1, 0).value();
               sgp->object(1, moxygen::test::makeBuf(10));
-              sgp->object(2, moxygen::test::makeBuf(10), true);
+              sgp->object(2, moxygen::test::makeBuf(10), noExtensions(), true);
               pub->subscribeDone(
                   {sub.subscribeID,
                    SubscribeDoneStatusCode::TRACK_ENDED,
@@ -949,7 +960,7 @@ TEST_F(MoQSessionTest, SubscribeDoneFromSubscribe) {
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
     folly::coro::Baton baton;
-    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher1, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           baton.post();
           return folly::unit;
@@ -960,7 +971,7 @@ TEST_F(MoQSessionTest, SubscribeDoneFromSubscribe) {
   }(clientSession_, serverSession_)
                                                        .scheduleOn(&eventBase_)
                                                        .start();
-  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce(testing::Invoke(
           [](auto sub,
              auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
@@ -998,7 +1009,7 @@ TEST_F(MoQSessionTest, SubscribeDoneAPIErrors) {
     auto trackPublisher1 =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
     folly::coro::Baton baton;
-    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher1, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           baton.post();
           return folly::unit;
@@ -1009,7 +1020,7 @@ TEST_F(MoQSessionTest, SubscribeDoneAPIErrors) {
   }(clientSession_, serverSession_)
                                                        .scheduleOn(&eventBase_)
                                                        .start();
-  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce(testing::Invoke(
           [](auto sub,
              auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
@@ -1034,6 +1045,7 @@ TEST_F(MoQSessionTest, SubscribeDoneAPIErrors) {
                         2,
                         2,
                         ObjectStatus::NORMAL,
+                        noExtensions(),
                         folly::none},
                        moxygen::test::makeBuf(10))
                     .error()
@@ -1078,18 +1090,18 @@ TEST_F(MoQSessionTest, Datagrams) {
     folly::coro::Baton subBaton;
     {
       testing::InSequence enforceOrder;
-      EXPECT_CALL(*trackPublisher1, datagram(testing::_, testing::_))
+      EXPECT_CALL(*trackPublisher1, datagram(_, _))
           .WillOnce(testing::Invoke([&](auto header, auto) {
             EXPECT_EQ(header.length, 11);
             return folly::unit;
           }));
-      EXPECT_CALL(*trackPublisher1, datagram(testing::_, testing::_))
+      EXPECT_CALL(*trackPublisher1, datagram(_, _))
           .WillOnce(testing::Invoke([&](auto header, auto) {
             EXPECT_EQ(header.status, ObjectStatus::OBJECT_NOT_EXIST);
             return folly::unit;
           }));
     }
-    EXPECT_CALL(*trackPublisher1, subscribeDone(testing::_))
+    EXPECT_CALL(*trackPublisher1, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           subBaton.post();
           return folly::unit;
@@ -1099,12 +1111,19 @@ TEST_F(MoQSessionTest, Datagrams) {
     co_await subBaton;
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
-  EXPECT_CALL(*serverPublisher, subscribe(testing::_, testing::_))
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce(testing::Invoke(
           [](auto sub,
              auto pub) -> folly::coro::Task<Publisher::SubscribeResult> {
             pub->datagram(
-                {sub.trackAlias, 0, 0, 1, 0, ObjectStatus::NORMAL, 11},
+                {sub.trackAlias,
+                 0,
+                 0,
+                 1,
+                 0,
+                 ObjectStatus::NORMAL,
+                 noExtensions(),
+                 11},
                 folly::IOBuf::copyBuffer("hello world"));
             pub->datagram(
                 {sub.trackAlias,
@@ -1113,6 +1132,7 @@ TEST_F(MoQSessionTest, Datagrams) {
                  2,
                  0,
                  ObjectStatus::OBJECT_NOT_EXIST,
+                 noExtensions(),
                  folly::none},
                 nullptr);
             pub->subscribeDone(

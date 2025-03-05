@@ -26,6 +26,10 @@ DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 namespace {
 using namespace moxygen;
 
+static const Extensions kExtensions{
+    {0xacedecade, 1977, {}},
+    {0xdeadbeef, 0, {1, 2, 3, 4, 5}}};
+
 class MoQDateServer : public MoQServer,
                       public Publisher,
                       public std::enable_shared_from_this<MoQDateServer> {
@@ -236,20 +240,16 @@ class MoQDateServer : public MoQServer,
             subgroup,
             range.start.object,
             minutePayload(range.start.group),
-            false);
+            kExtensions);
       } else if (range.start.object <= 60) {
         res = fetchPub->object(
             range.start.group,
             subgroup,
             range.start.object,
-            secondPayload(range.start.object),
-            false);
+            secondPayload(range.start.object));
       } else {
         res = fetchPub->endOfGroup(
-            range.start.group,
-            subgroup,
-            range.start.object,
-            /*finFetch=*/false);
+            range.start.group, subgroup, range.start.object);
       }
       if (!res) {
         XLOG(ERR) << "catchup error: " << res.error().what();
@@ -317,10 +317,11 @@ class MoQDateServer : public MoQServer,
           forwarder_.beginSubgroup(group, subgroup, /*priority=*/0).value();
     }
     if (object == 0) {
-      subgroupPublisher->object(0, minutePayload(group), false);
+      subgroupPublisher->object(0, minutePayload(group), kExtensions, false);
     }
     object++;
-    subgroupPublisher->object(object, secondPayload(object), false);
+    subgroupPublisher->object(
+        object, secondPayload(object), noExtensions(), false);
     if (object >= 60) {
       object++;
       subgroupPublisher->endOfGroup(object);
@@ -339,6 +340,7 @@ class MoQDateServer : public MoQServer,
         object,
         /*priority=*/0,
         ObjectStatus::NORMAL,
+        noExtensions(),
         folly::none};
     if (second == 0) {
       forwarder_.objectStream(header, minutePayload(group));

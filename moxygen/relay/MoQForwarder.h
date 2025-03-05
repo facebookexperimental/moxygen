@@ -299,14 +299,17 @@ class MoQForwarder : public TrackConsumer {
     return folly::unit;
   }
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
+  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
+      uint64_t groupID,
+      uint64_t subgroup,
+      Priority pri,
+      Extensions extensions) override {
     updateLatest(groupID, 0);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       if (!checkRange(*sub)) {
         return;
       }
-      sub->trackConsumer->groupNotExists(groupID, subgroup, pri)
+      sub->trackConsumer->groupNotExists(groupID, subgroup, pri, extensions)
           .onError([this, sub](const auto& err) { removeSession(*sub, err); });
     });
     return folly::unit;
@@ -373,8 +376,11 @@ class MoQForwarder : public TrackConsumer {
           identifier_{group, subgroup},
           priority_(priority) {}
 
-    folly::Expected<folly::Unit, MoQPublishError>
-    object(uint64_t objectID, Payload payload, bool finSubgroup) override {
+    folly::Expected<folly::Unit, MoQPublishError> object(
+        uint64_t objectID,
+        Payload payload,
+        Extensions extensions,
+        bool finSubgroup) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -383,7 +389,8 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->object(objectID, maybeClone(payload), finSubgroup)
+            subgroupConsumer
+                ->object(objectID, maybeClone(payload), extensions, finSubgroup)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -399,6 +406,7 @@ class MoQForwarder : public TrackConsumer {
 
     folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
         uint64_t objectID,
+        Extensions extensions,
         bool finSubgroup = false) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
@@ -408,7 +416,7 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->objectNotExists(objectID, finSubgroup)
+            subgroupConsumer->objectNotExists(objectID, extensions, finSubgroup)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -425,7 +433,8 @@ class MoQForwarder : public TrackConsumer {
     folly::Expected<folly::Unit, MoQPublishError> beginObject(
         uint64_t objectID,
         uint64_t length,
-        Payload initialPayload) override {
+        Payload initialPayload,
+        Extensions extensions) override {
       // TODO: use a shared class for object publish state validation
       forwarder_.updateLatest(identifier_.group, objectID);
       if (currentObjectLength_) {
@@ -441,7 +450,8 @@ class MoQForwarder : public TrackConsumer {
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
             subgroupConsumer
-                ->beginObject(objectID, length, maybeClone(initialPayload))
+                ->beginObject(
+                    objectID, length, maybeClone(initialPayload), extensions)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -450,7 +460,8 @@ class MoQForwarder : public TrackConsumer {
     }
 
     folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-        uint64_t endOfGroupObjectID) override {
+        uint64_t endOfGroupObjectID,
+        Extensions extensions) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -459,7 +470,7 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->endOfGroup(endOfGroupObjectID)
+            subgroupConsumer->endOfGroup(endOfGroupObjectID, extensions)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
@@ -470,7 +481,8 @@ class MoQForwarder : public TrackConsumer {
     }
 
     folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-        uint64_t endOfTrackObjectID) override {
+        uint64_t endOfTrackObjectID,
+        Extensions extensions) override {
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -479,7 +491,7 @@ class MoQForwarder : public TrackConsumer {
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-            subgroupConsumer->endOfTrackAndGroup(endOfTrackObjectID)
+            subgroupConsumer->endOfTrackAndGroup(endOfTrackObjectID, extensions)
                 .onError([this, sub](const auto& err) {
                   forwarder_.removeSession(*sub, err);
                 });
