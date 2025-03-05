@@ -39,6 +39,7 @@ folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   if (itemCount->first > kMaxNamespaceLength) {
+    XLOG(ERR) << "tuple length > kMaxNamespaceLength =" << itemCount->first;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   length -= itemCount->second;
@@ -138,6 +139,7 @@ folly::Expected<folly::Unit, ErrorCode> parseExtensions(
   }
   length -= numExt->second;
   if (numExt->first > kMaxExtensions) {
+    XLOG(ERR) << "numExt > kMaxExtensions =" << numExt->first;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   for (auto i = 0u; i < numExt->first; i++) {
@@ -158,6 +160,7 @@ folly::Expected<folly::Unit, ErrorCode> parseExtensions(
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
       if (extLen->first > kMaxExtensionLength) {
+        XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
         return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
       }
       ext.arrayValue.resize(extLen->first);
@@ -278,13 +281,15 @@ folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
     }
     length -= status->second;
     if (status->first > folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
-      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+      XLOG(ERR) << "status > END_OF_TRACK =" << status->first;
+      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
     }
     objectHeader.status = ObjectStatus(status->first);
     objectHeader.length = 0;
     if (length != 0) {
       // MUST consume entire datagram
-      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+      XLOG(ERR) << "Non-zero length payload in OBJECT_DATAGRAM_STATUS";
+      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
     }
   } else {
     CHECK(streamType == StreamType::OBJECT_DATAGRAM);
@@ -345,7 +350,8 @@ folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
     }
     if (objectStatus->first >
         folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
-      return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+      XLOG(ERR) << "status > END_OF_TRACK =" << objectStatus->first;
+      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
     }
     objectHeader.status = ObjectStatus(objectStatus->first);
     length -= objectStatus->second;
@@ -491,6 +497,7 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
   subscribeRequest.priority = cursor.readBE<uint8_t>();
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
+    XLOG(ERR) << "order > NewestFirst =" << order;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   length -= 2;
@@ -500,7 +507,8 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   if (locType->first > folly::to_underlying(LocationType::AbsoluteRange)) {
-    return folly::makeUnexpected(ErrorCode::PARSE_ERROR);
+    XLOG(ERR) << "locType > AbsoluteRange =" << locType->first;
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   length -= locType->second;
   subscribeRequest.locType = LocationType(locType->first);
@@ -597,6 +605,7 @@ folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
   }
   auto order = cursor.readBE<uint8_t>();
   if (order == 0 || order > folly::to_underlying(GroupOrder::NewestFirst)) {
+    XLOG(ERR) << "order > NewestFirst or order==0 =" << order;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   length -= sizeof(uint8_t);
@@ -844,6 +853,7 @@ folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   if (statusCode->first > folly::to_underlying(TrackStatusCode::UNKNOWN)) {
+    XLOG(ERR) << "statusCode > UNKNOWN =" << statusCode->first;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   trackStatus.statusCode = TrackStatusCode(statusCode->first);
@@ -912,6 +922,7 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   fetch.priority = cursor.readBE<uint8_t>();
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
+    XLOG(ERR) << "order > NewestFirst =" << order;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   fetch.groupOrder = static_cast<GroupOrder>(order);
@@ -923,6 +934,7 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   }
   if (fetchType->first == 0 ||
       fetchType->first > folly::to_underlying(FetchType::JOINING)) {
+    XLOG(ERR) << "fetchType = 0 or fetchType > JONING =" << fetchType->first;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   length -= fetchType->second;
@@ -1002,6 +1014,7 @@ folly::Expected<FetchOk, ErrorCode> parseFetchOk(
   }
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
+    XLOG(ERR) << "order = 0 or order > NewestFirst =" << order;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   fetchOk.groupOrder = static_cast<GroupOrder>(order);

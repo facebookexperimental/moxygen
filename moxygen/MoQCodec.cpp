@@ -203,6 +203,7 @@ void MoQObjectStreamCodec::onIngress(
           auto chunkLen = cursor.cloneAtMost(payload, *curObjectHeader_.length);
           auto endOfObject = chunkLen == *curObjectHeader_.length;
           if (endOfStream && !endOfObject) {
+            XLOG(ERR) << "End of stream before end of object";
             connError_ = ErrorCode::PARSE_ERROR;
             XLOG(DBG4) << __func__ << " " << uint32_t(*connError_);
             break;
@@ -264,8 +265,9 @@ void MoQObjectStreamCodec::onIngress(
         }
         *curObjectHeader_.length -= chunkLen;
         if (endOfStream && *curObjectHeader_.length != 0) {
+          XLOG(ERR) << "End of stream before end of object remaining length="
+                    << *curObjectHeader_.length;
           connError_ = ErrorCode::PARSE_ERROR;
-          XLOG(DBG4) << __func__ << " " << uint32_t(*connError_);
           break;
         }
         bool endOfObject = (*curObjectHeader_.length == 0);
