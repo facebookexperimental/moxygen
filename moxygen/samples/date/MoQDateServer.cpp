@@ -45,13 +45,13 @@ class MoQDateServer : public MoQServer,
         forwarder_(dateTrackName()),
         mode_(mode) {}
 
-  bool startRelayClient(folly::EventBase* evb) {
+  bool startRelayClient() {
     proxygen::URL url(FLAGS_relay_url);
     if (!url.isValid() || !url.hasHost()) {
       XLOG(ERR) << "Invalid url: " << FLAGS_relay_url;
       return false;
     }
-    relayClient_ = std::make_unique<MoQRelayClient>(evb, url);
+    auto evb = getWorkerEvbs()[0];
     relayClient_ = std::make_unique<MoQRelayClient>(
         evb,
         url,
@@ -66,18 +66,11 @@ class MoQDateServer : public MoQServer,
             std::chrono::seconds(FLAGS_relay_transaction_timeout))
         .scheduleOn(evb)
         .start();
-    loopRunning_ = true;
-    publishDateLoop().scheduleOn(evb).start();
     return true;
   }
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
-    if (!loopRunning_) {
-      // start date loop on first server connect
-      loopRunning_ = true;
-      publishDateLoop().scheduleOn(clientSession->getEventBase()).start();
-    }
   }
 
   std::pair<uint64_t, uint64_t> now() {
@@ -142,8 +135,15 @@ class MoQDateServer : public MoQServer,
           "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to latest
     }
+
+    auto session = MoQSession::getRequestSession();
+    if (!loopRunning_) {
+      loopRunning_ = true;
+      publishDateLoop().scheduleOn(session->getEventBase()).start();
+    }
+
     co_return forwarder_.addSubscriber(
-        MoQSession::getRequestSession(), subReq, std::move(consumer));
+        std::move(session), subReq, std::move(consumer));
   }
 
   class FetchHandle : public Publisher::FetchHandle {
@@ -433,7 +433,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   auto server = std::make_shared<MoQDateServer>(mode);
-  if (!FLAGS_relay_url.empty() && !server->startRelayClient(&evb)) {
+  if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
     return 1;
   }
   evb.loopForever();

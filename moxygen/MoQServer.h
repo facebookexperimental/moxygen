@@ -32,6 +32,10 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   virtual void terminateClientSession(std::shared_ptr<MoQSession> /*session*/) {
   }
 
+  std::vector<folly::EventBase*> getWorkerEvbs() const noexcept {
+    return hqServer_->getWorkerEvbs();
+  }
+
  private:
   folly::coro::Task<void> handleClientSession(
       std::shared_ptr<MoQSession> clientSession);
