@@ -236,6 +236,10 @@ class MockFetchHandle : public Publisher::FetchHandle {
 class MockSubscribeAnnouncesHandle
     : public Publisher::SubscribeAnnouncesHandle {
  public:
+  MockSubscribeAnnouncesHandle() = default;
+  explicit MockSubscribeAnnouncesHandle(SubscribeAnnouncesOk ok) {
+    this->setSubscribeAnnouncesOk(ok);
+  }
   MOCK_METHOD(void, unsubscribeAnnounces, (), (override));
 };
 

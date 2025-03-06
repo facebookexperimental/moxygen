@@ -661,6 +661,33 @@ TEST_F(MoQSessionTest, TrackStatus) {
   eventBase_.loop();
 }
 
+TEST_F(MoQSessionTest, SubscribeAnnouncesOk) {
+  setupMoQSession();
+  eventBase_.loopOnce();
+  auto performSubscribeAnnounce =
+      [](std::shared_ptr<MoQSession> session) mutable
+      -> folly::coro::Task<void> {
+    auto announceResult =
+        co_await session->subscribeAnnounces({TrackNamespace{{"foo"}}, {}});
+    EXPECT_TRUE(announceResult.hasValue());
+    EXPECT_EQ(
+        announceResult.value()->subscribeAnnouncesOk().trackNamespacePrefix,
+        TrackNamespace{{"foo"}});
+    session->close(SessionCloseErrorCode::NO_ERROR);
+  };
+  EXPECT_CALL(*serverPublisher, subscribeAnnounces(testing::_))
+      .WillOnce(testing::Invoke(
+          [](SubscribeAnnounces subAnnounces)
+              -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
+            EXPECT_EQ(
+                subAnnounces.trackNamespacePrefix, TrackNamespace{{"foo"}});
+            co_return std::make_shared<MockSubscribeAnnouncesHandle>(
+                SubscribeAnnouncesOk{TrackNamespace{{"foo"}}});
+          }));
+  performSubscribeAnnounce(clientSession_).scheduleOn(&eventBase_).start();
+  eventBase_.loop();
+}
+
 // Missing Test Cases
 // ===
 // receive bidi stream on client
@@ -673,7 +700,8 @@ TEST_F(MoQSessionTest, TrackStatus) {
 // onSubscribeOk/Error/Done with unknown ID
 // onMaxSubscribeID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
-// announce/unannounce/announceCancel/announceError/announceOk
+// trackstatus
+// announce/unannounce/announceCancel/announceError
 // subscribeAnnounces/unsubscribeAnnounces
 // GOAWAY
 // onConnectionError
