@@ -6,7 +6,6 @@
 
 #include <folly/portability/GFlags.h>
 #include "moxygen/MoQClient.h"
-#include "moxygen/MoQLocation.h"
 #include "moxygen/ObjectReceiver.h"
 
 #include <folly/base64.h>
@@ -231,7 +230,8 @@ class MoQTextClient : public Subscriber,
     // text client doesn't expect server or relay to announce anything,
     // but announce OK anyways
     return folly::coro::makeTask<AnnounceResult>(
-        std::make_shared<AnnounceHandle>(AnnounceOk{announce.trackNamespace}));
+        std::make_shared<AnnounceHandle>(
+            AnnounceOk{std::move(announce.trackNamespace)}));
   }
 
   void goaway(Goaway goaway) override {
