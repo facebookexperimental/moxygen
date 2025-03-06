@@ -192,7 +192,7 @@ constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
 constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
 constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
 constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08_exp9;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
