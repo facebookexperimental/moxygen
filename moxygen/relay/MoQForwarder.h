@@ -22,6 +22,10 @@ class MoQForwarder : public TrackConsumer {
       folly::Optional<AbsoluteLocation> latest = folly::none)
       : fullTrackName_(std::move(ftn)), latest_(std::move(latest)) {}
 
+  const FullTrackName& fullTrackName() const {
+    return fullTrackName_;
+  }
+
   void setGroupOrder(GroupOrder order) {
     groupOrder_ = order;
   }
