@@ -13,12 +13,8 @@ namespace moxygen {
 
 class MoQRelayClient {
  public:
-  MoQRelayClient(
-      folly::EventBase* evb,
-      proxygen::URL url,
-      MoQClient::TransportType ttype =
-          MoQClient::TransportType::H3_WEBTRANSPORT)
-      : moqClient_(evb, std::move(url), ttype) {}
+  explicit MoQRelayClient(std::unique_ptr<MoQClient> client)
+      : moqClient_(std::move(client)) {}
 
   folly::coro::Task<void> run(
       std::shared_ptr<Publisher> publisher,
@@ -28,20 +24,20 @@ class MoQRelayClient {
       std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60)) {
     try {
       bool isPublisher = bool(publisher);
-      co_await moqClient_.setupMoQSession(
+      co_await moqClient_->setupMoQSession(
           connectTimeout,
           transactionTimeout,
           std::move(publisher),
           std::move(subscriber));
       // could parallelize
-      if (!moqClient_.moqSession_) {
+      if (!moqClient_->moqSession_) {
         XLOG(ERR) << "Session is dead now #sad";
         co_return;
       }
       for (auto& ns : namespaces) {
         Announce ann;
         ann.trackNamespace = std::move(ns);
-        auto res = co_await moqClient_.moqSession_->announce(std::move(ann));
+        auto res = co_await moqClient_->moqSession_->announce(std::move(ann));
         if (!res) {
           XLOG(ERR) << "AnnounceError namespace=" << res.error().trackNamespace
                     << " code=" << folly::to_underlying(res.error().errorCode)
@@ -51,14 +47,14 @@ class MoQRelayClient {
         }
       }
       if (isPublisher) {
-        while (moqClient_.moqSession_) {
+        while (moqClient_->moqSession_) {
           co_await folly::coro::sleep(std::chrono::seconds(30));
-          if (!moqClient_.moqSession_) {
+          if (!moqClient_->moqSession_) {
             break;
           }
           Announce ann;
           ann.trackNamespace.trackNamespace.push_back("ping");
-          auto handle = co_await moqClient_.moqSession_->announce(ann);
+          auto handle = co_await moqClient_->moqSession_->announce(ann);
           if (handle.hasError()) {
             break;
           }
@@ -72,7 +68,7 @@ class MoQRelayClient {
   }
 
   std::shared_ptr<MoQSession> getSession() const {
-    return moqClient_.moqSession_;
+    return moqClient_->moqSession_;
   }
 
   void shutdown() {
@@ -83,7 +79,7 @@ class MoQRelayClient {
   }
 
  private:
-  MoQClient moqClient_;
+  std::unique_ptr<MoQClient> moqClient_;
   std::vector<std::shared_ptr<Subscriber::AnnounceHandle>> announceHandles_;
 };
 

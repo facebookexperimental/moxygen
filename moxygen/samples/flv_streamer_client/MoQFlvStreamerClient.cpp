@@ -9,7 +9,7 @@
 #include <folly/portability/GFlags.h>
 #include <signal.h>
 #include <filesystem>
-#include "moxygen/MoQClient.h"
+#include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/flv_parser/FlvSequentialReader.h"
 #include "moxygen/moq_mi/MoQMi.h"
 
@@ -38,11 +38,7 @@ class MoQFlvStreamerClient
       proxygen::URL url,
       FullTrackName fvtn,
       FullTrackName fatn)
-      : moqClient_(
-            evb,
-            std::move(url),
-            (FLAGS_quic_transport ? MoQClient::TransportType::QUIC
-                                  : MoQClient::TransportType::H3_WEBTRANSPORT)),
+      : moqClient_(makeMoQClient(evb, std::move(url), /*useQuic=*/false)),
         fullVideoTrackName_(std::move(fvtn)),
         fullAudioTrackName_(std::move(fatn)) {}
 
@@ -52,13 +48,13 @@ class MoQFlvStreamerClient
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
       // Create session
-      co_await moqClient_.setupMoQSession(
+      co_await moqClient_->setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/shared_from_this(),
           /*subscribeHandler=*/nullptr);
       // Announce
-      auto annResp = co_await moqClient_.moqSession_->announce(std::move(ann));
+      auto annResp = co_await moqClient_->moqSession_->announce(std::move(ann));
       if (annResp.hasValue()) {
         announceHandle_ = std::move(annResp.value());
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
@@ -80,8 +76,8 @@ class MoQFlvStreamerClient
     if (announceHandle_) {
       announceHandle_->unannounce();
     }
-    if (moqClient_.moqSession_) {
-      moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    if (moqClient_->moqSession_) {
+      moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
     }
   }
 
@@ -89,9 +85,9 @@ class MoQFlvStreamerClient
     XLOG(INFO) << __func__;
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    folly::Executor::KeepAlive keepAlive(moqClient_.getEventBase());
+    folly::Executor::KeepAlive keepAlive(moqClient_->getEventBase());
     flv::FlvSequentialReader flvSeqReader(FLAGS_input_flv_file);
-    while (moqClient_.moqSession_) {
+    while (moqClient_->moqSession_) {
       auto item = flvSeqReader.getNextItem();
       if (item == nullptr) {
         XLOG(ERR) << "Error reading FLV file";
@@ -111,7 +107,7 @@ class MoQFlvStreamerClient
             // Send audio data in a thread (stream per object). Clone it since
             // we can have multiple subscribers
             auto itemClone = item->clone();
-            moqClient_.getEventBase()->runInEventBaseThread(
+            moqClient_->getEventBase()->runInEventBaseThread(
                 [self(this), itemClone(std::move(itemClone))]() mutable {
                   self->publishVideo(std::move(itemClone));
                 });
@@ -125,7 +121,7 @@ class MoQFlvStreamerClient
             // Send audio data in a thread (stream per object). Clone it since
             // we can have multiple subscribers
             auto itemClone = item->clone();
-            moqClient_.getEventBase()->runInEventBaseThread(
+            moqClient_->getEventBase()->runInEventBaseThread(
                 [self(this),
                  trackAlias(sub.second->trackAlias),
                  itemClone(std::move(itemClone))]() mutable {
@@ -271,7 +267,7 @@ class MoQFlvStreamerClient
   static const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
   static const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
-  MoQClient moqClient_;
+  std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   FullTrackName fullVideoTrackName_;
   FullTrackName fullAudioTrackName_;

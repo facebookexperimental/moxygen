@@ -6,6 +6,7 @@
 
 #include <folly/portability/GFlags.h>
 #include "moxygen/MoQClient.h"
+#include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/ObjectReceiver.h"
 
 #include <folly/init/Init.h>
@@ -344,11 +345,7 @@ class MoQFlvReceiverClient
       proxygen::URL url,
       bool useQuic,
       const std::string& flvOutPath)
-      : moqClient_(
-            evb,
-            std::move(url),
-            (useQuic ? MoQClient::TransportType::QUIC
-                     : MoQClient::TransportType::H3_WEBTRANSPORT)),
+      : moqClient_(makeMoQClient(evb, std::move(url), useQuic)),
         flvOutPath_(flvOutPath) {}
 
   folly::coro::Task<void> run(
@@ -358,7 +355,7 @@ class MoQFlvReceiverClient
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      co_await moqClient_.setupMoQSession(
+      co_await moqClient_->setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
@@ -371,7 +368,7 @@ class MoQFlvReceiverClient
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE, &trackReceiverHandlerAudio_);
-      auto trackAudio = co_await moqClient_.moqSession_->subscribe(
+      auto trackAudio = co_await moqClient_->moqSession_->subscribe(
           subAudio, subRxHandlerAudio_);
       if (trackAudio.hasValue()) {
         audioSubscribeHandle_ = std::move(trackAudio.value());
@@ -392,7 +389,7 @@ class MoQFlvReceiverClient
       // Subscribe to video
       subRxHandlerVideo_ = std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE, &trackReceiverHandlerVideo_);
-      auto trackVideo = co_await moqClient_.moqSession_->subscribe(
+      auto trackVideo = co_await moqClient_->moqSession_->subscribe(
           subVideo, subRxHandlerVideo_);
       if (trackVideo.hasValue()) {
         videoSubscribeHandle_ = std::move(trackVideo.value());
@@ -410,7 +407,7 @@ class MoQFlvReceiverClient
                       << " reason=" << trackVideo.error().reasonPhrase;
       }
 
-      moqClient_.moqSession_->drain();
+      moqClient_->moqSession_->drain();
     } catch (const std::exception& ex) {
       XLOG(ERR) << ex.what();
       co_return;
@@ -446,11 +443,11 @@ class MoQFlvReceiverClient
       videoSubscribeHandle_->unsubscribe();
       videoSubscribeHandle_.reset();
     }
-    moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
 
  private:
-  MoQClient moqClient_;
+  std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<Publisher::SubscriptionHandle> audioSubscribeHandle_;
   std::shared_ptr<Publisher::SubscriptionHandle> videoSubscribeHandle_;
   std::string flvOutPath_;

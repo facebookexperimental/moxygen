@@ -4,10 +4,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "moxygen/samples/chat/MoQChatClient.h"
-#include "moxygen/ObjectReceiver.h"
+#include <moxygen/ObjectReceiver.h>
+#include <moxygen/samples/chat/MoQChatClient.h>
 
 #include <folly/init/Init.h>
+#include <folly/io/async/EventBase.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(chat_id, "", "ID for the chat to join");

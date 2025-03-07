@@ -5,8 +5,9 @@
  */
 
 #include <folly/portability/GFlags.h>
-#include "moxygen/MoQClient.h"
-#include "moxygen/ObjectReceiver.h"
+#include <moxygen/MoQClient.h>
+#include <moxygen/MoQWebTransportClient.h>
+#include <moxygen/ObjectReceiver.h>
 
 #include <folly/base64.h>
 #include <folly/init/Init.h>
@@ -120,10 +121,9 @@ class MoQTextClient : public Subscriber,
  public:
   MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
       : moqClient_(
-            evb,
-            std::move(url),
-            (FLAGS_quic_transport ? MoQClient::TransportType::QUIC
-                                  : MoQClient::TransportType::H3_WEBTRANSPORT)),
+            FLAGS_quic_transport
+                ? std::make_unique<MoQClient>(evb, std::move(url))
+                : std::make_unique<MoQWebTransportClient>(evb, std::move(url))),
         fullTrackName_(std::move(ftn)) {}
 
   folly::coro::Task<void> run(SubscribeRequest sub) noexcept {
@@ -131,7 +131,7 @@ class MoQTextClient : public Subscriber,
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      co_await moqClient_.setupMoQSession(
+      co_await moqClient_->setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
@@ -142,7 +142,7 @@ class MoQTextClient : public Subscriber,
         // Call join() for joining fetch
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
             ObjectReceiver::FETCH, &fetchTextHandler_);
-        auto joinResult = co_await moqClient_.moqSession_->join(
+        auto joinResult = co_await moqClient_->moqSession_->join(
             sub,
             subTextReceiver_,
             0,
@@ -153,7 +153,7 @@ class MoQTextClient : public Subscriber,
         track = joinResult.subscribeResult;
       } else {
         track =
-            co_await moqClient_.moqSession_->subscribe(sub, subTextReceiver_);
+            co_await moqClient_->moqSession_->subscribe(sub, subTextReceiver_);
       }
       bool needFetch = false;
       AbsoluteLocation fetchEnd{sub.endGroup + 1, 0};
@@ -189,7 +189,7 @@ class MoQTextClient : public Subscriber,
       if (needFetch) {
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
             ObjectReceiver::FETCH, &fetchTextHandler_);
-        auto fetchTrack = co_await moqClient_.moqSession_->fetch(
+        auto fetchTrack = co_await moqClient_->moqSession_->fetch(
             Fetch(
                 SubscribeID(0),
                 sub.fullTrackName,
@@ -205,8 +205,8 @@ class MoQTextClient : public Subscriber,
           fetchTextReceiver_.reset();
         }
       }
-      if (moqClient_.moqSession_) {
-        moqClient_.moqSession_->drain();
+      if (moqClient_->moqSession_) {
+        moqClient_->moqSession_->drain();
       }
     } catch (const std::exception& ex) {
       XLOG(ERR) << folly::exceptionStr(ex);
@@ -247,12 +247,12 @@ class MoQTextClient : public Subscriber,
       subscription_->unsubscribe();
       subscription_.reset();
     }
-    if (moqClient_.moqSession_) {
-      moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    if (moqClient_->moqSession_) {
+      moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
     }
   }
 
-  MoQClient moqClient_;
+  std::unique_ptr<MoQClient> moqClient_;
   FullTrackName fullTrackName_;
   std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
   TextHandler subTextHandler_{/*fetch=*/false};

@@ -5,11 +5,12 @@
  */
 
 #include <folly/coro/Sleep.h>
+#include <moxygen/MoQLocation.h>
+#include <moxygen/MoQServer.h>
+#include <moxygen/MoQWebTransportClient.h>
+#include <moxygen/relay/MoQForwarder.h>
+#include <moxygen/relay/MoQRelayClient.h>
 #include <iomanip>
-#include "moxygen/MoQLocation.h"
-#include "moxygen/MoQServer.h"
-#include "moxygen/relay/MoQForwarder.h"
-#include "moxygen/relay/MoQRelayClient.h"
 
 using namespace quic::samples;
 using namespace proxygen;
@@ -53,10 +54,9 @@ class MoQDateServer : public MoQServer,
     }
     auto evb = getWorkerEvbs()[0];
     relayClient_ = std::make_unique<MoQRelayClient>(
-        evb,
-        url,
-        (FLAGS_quic_transport ? MoQClient::TransportType::QUIC
-                              : MoQClient::TransportType::H3_WEBTRANSPORT));
+        (FLAGS_quic_transport
+             ? std::make_unique<MoQClient>(evb, url)
+             : std::make_unique<MoQWebTransportClient>(evb, url)));
     relayClient_
         ->run(
             /*publisher=*/shared_from_this(),
