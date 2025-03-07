@@ -203,6 +203,7 @@ void MoQVideoPublisher::publishFrameImpl(
       (flags & folly::to_underlying(BufferFlags::CODEC_CONFIG))) {
     savedMetadata_ = convertMetadata(std::move(payload));
     payload = savedMetadata_->clone();
+    savedMetadata_ = payload->clone();
   }
   if (forwarder_.empty()) {
     XLOG(ERR) << "No subscriber for track " << forwarder_.fullTrackName();
