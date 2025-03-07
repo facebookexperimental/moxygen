@@ -8,9 +8,34 @@
 
 #include <moxygen/util/QuicConnector.h>
 
-#include <proxygen/httpserver/samples/hq/InsecureVerifierDangerousDoNotUseInProduction.h>
 #include <quic/api/QuicSocket.h>
 #include <quic/client/QuicClientTransport.h>
+
+#include <fizz/protocol/CertificateVerifier.h>
+
+// TODO: clean this up.
+namespace proxygen {
+
+// This is an insecure certificate verifier and is not meant to be
+// used in production. Using it in production would mean that this will
+// leave everyone insecure.
+class InsecureVerifierDangerousDoNotUseInProduction
+    : public fizz::CertificateVerifier {
+ public:
+  ~InsecureVerifierDangerousDoNotUseInProduction() override = default;
+
+  std::shared_ptr<const folly::AsyncTransportCertificate> verify(
+      const std::vector<std::shared_ptr<const fizz::PeerCert>>& certs)
+      const override {
+    return certs.front();
+  }
+
+  std::vector<fizz::Extension> getCertificateRequestExtensions()
+      const override {
+    return std::vector<fizz::Extension>();
+  }
+};
+} // namespace proxygen
 
 namespace moxygen {
 folly::coro::Task<void> MoQClient::setupMoQSession(
