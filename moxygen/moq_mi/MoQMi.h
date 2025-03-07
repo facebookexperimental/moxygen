@@ -9,6 +9,7 @@
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/IOBufQueue.h>
+#include <moxygen/moq_mi/MediaItem.h>
 #include <cstdint>
 #include <variant>
 #include "moxygen/flv_parser/FlvCommon.h"
@@ -168,6 +169,36 @@ class MoQMi {
 
   static MoqMiTag fromObjectPayload(
       std::unique_ptr<folly::IOBuf> data) noexcept;
+
+  static std::unique_ptr<folly::IOBuf> encodeToMoQMi(
+      std::unique_ptr<MediaItem> item) {
+    if (item->type == MediaType::VIDEO) {
+      auto dataToEncode = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
+          item->id,
+          item->pts,
+          item->timescale,
+          item->duration,
+          item->wallclock,
+          std::move(item->data),
+          std::move(item->metadata),
+          item->dts);
+
+      return MoQMi::toObjectPayload(std::move(dataToEncode));
+
+    } else if (item->type == MediaType::AUDIO) {
+      auto dataToEncode = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
+          item->id,
+          item->pts,
+          item->timescale,
+          item->duration,
+          item->wallclock,
+          std::move(item->data),
+          item->sampleFreq,
+          item->numChannels);
+      return MoQMi::toObjectPayload(std::move(dataToEncode));
+    }
+    return nullptr;
+  }
 
  private:
   static const size_t kMaxQuicIntSize = 32;

@@ -196,7 +196,7 @@ class MoQFlvStreamerClient
       XLOG(INFO) << "FLV audio received EOF";
       return;
     }
-    auto objPayload = encodeToMoQMi(std::move(item));
+    auto objPayload = MoQMi::encodeToMoQMi(std::move(item));
     if (!objPayload) {
       XLOG(ERR) << "Failed to encode audio frame";
       return;
@@ -233,7 +233,7 @@ class MoQFlvStreamerClient
     }
 
     auto isIdr = item->isIdr;
-    auto objPayload = encodeToMoQMi(std::move(item));
+    auto objPayload = MoQMi::encodeToMoQMi(std::move(item));
     if (!objPayload) {
       XLOG(ERR) << "Failed to encode video frame";
       return;
@@ -270,36 +270,6 @@ class MoQFlvStreamerClient
  private:
   static const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
   static const uint8_t VIDEO_STREAM_PRIORITY = 200;
-
-  static std::unique_ptr<folly::IOBuf> encodeToMoQMi(
-      std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
-    if (item->type == flv::FlvSequentialReader::MediaType::VIDEO) {
-      auto dataToEncode = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
-          item->id,
-          item->pts,
-          item->timescale,
-          item->duration,
-          item->wallclock,
-          std::move(item->data),
-          std::move(item->metadata),
-          item->dts);
-
-      return MoQMi::toObjectPayload(std::move(dataToEncode));
-
-    } else if (item->type == flv::FlvSequentialReader::MediaType::AUDIO) {
-      auto dataToEncode = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
-          item->id,
-          item->pts,
-          item->timescale,
-          item->duration,
-          item->wallclock,
-          std::move(item->data),
-          item->sampleFreq,
-          item->numChannels);
-      return MoQMi::toObjectPayload(std::move(dataToEncode));
-    }
-    return nullptr;
-  }
 
   MoQClient moqClient_;
   std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
