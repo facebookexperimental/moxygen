@@ -3119,10 +3119,15 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
   auto type = quic::decodeQuicInteger(cursor);
-  if (!type ||
-      (StreamType(type->first) != StreamType::OBJECT_DATAGRAM &&
-       StreamType(type->first) != StreamType::OBJECT_DATAGRAM_STATUS)) {
-    XLOG(ERR) << __func__ << " Bad datagram header";
+  if (!type) {
+    XLOG(ERR) << __func__ << " Bad datagram header failed to parse type l="
+              << readBuf.chainLength() << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  if (StreamType(type->first) != StreamType::OBJECT_DATAGRAM &&
+      StreamType(type->first) != StreamType::OBJECT_DATAGRAM_STATUS) {
+    XLOG(ERR) << __func__ << " Bad datagram header type=" << type->first;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
