@@ -27,7 +27,7 @@ target_link_libraries(
   Folly::folly
   flvparser
   moqmi
-  moxygen
+  moxygenwtclient
 )
 
 install(

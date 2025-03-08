@@ -25,7 +25,7 @@ target_compile_options(
 target_link_libraries(
   moqchatclient PUBLIC
   Folly::folly
-  moxygen
+  moxygenclient
 )
 
 install(

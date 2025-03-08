@@ -9,9 +9,7 @@ add_library(moxygen
     MoQFramer.cpp
     MoQCodec.cpp
     MoQSession.cpp
-    MoQServer.cpp
-    MoQClient.cpp
-    util/QuicConnector.cpp)
+)
 
 target_include_directories(
     moxygen PUBLIC
@@ -26,8 +24,6 @@ target_link_libraries(
     Folly::folly
     wangle::wangle
     proxygen::proxygen
-    proxygen::proxygenhqserver
-    proxygen::quicwebtransport
 )
 
 install(
@@ -36,6 +32,69 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
+
+add_library(moxygenserver
+    MoQServer.cpp)
+
+target_include_directories(
+    moxygenserver PUBLIC
+    $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+
+target_compile_options(
+    moxygenserver PRIVATE
+    ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+
+target_link_libraries(
+    moxygenserver PUBLIC
+    moxygen
+    proxygen::proxygenhqserver
+    proxygen::quicwebtransport
+)
+
+add_library(moxygenclient
+    MoQClient.cpp
+    util/QuicConnector.cpp
+)
+
+target_include_directories(
+    moxygenclient PUBLIC
+    $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+
+target_compile_options(
+    moxygenclient PRIVATE
+    ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+
+target_link_libraries(
+    moxygenclient PUBLIC
+    moxygen
+    proxygen::proxygenhqserver
+    proxygen::quicwebtransport
+)
+
+add_library(moxygenwtclient
+    MoQWebTransportClient.cpp
+)
+
+target_include_directories(
+    moxygenwtclient PUBLIC
+    $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+
+target_compile_options(
+    moxygenwtclient PRIVATE
+    ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+
+target_link_libraries(
+    moxygenwtclient PUBLIC
+    moxygenclient
+    proxygen::proxygenhqserver
+)
+
 
 add_subdirectory(relay)
 # TODO: Fails with compiler error in ubuntu P1361252588
