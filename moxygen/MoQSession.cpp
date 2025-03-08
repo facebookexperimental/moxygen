@@ -339,6 +339,7 @@ StreamPublisherImpl::writeCurrentObject(
   header_.length = length;
   // copy is gratuitous
   header_.extensions = extensions;
+  XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
   (void)writeStreamObject(writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream);
 }
@@ -407,6 +408,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     return validateRes;
   }
   auto length = payload ? payload->computeChainDataLength() : 0;
+  header_.status = ObjectStatus::NORMAL;
   return writeCurrentObject(
       objectID, length, std::move(payload), extensions, finStream);
 }
@@ -436,6 +438,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
   if (!validateObjectPublishRes) {
     return folly::makeUnexpected(validateObjectPublishRes.error());
   }
+  header_.status = ObjectStatus::NORMAL;
   return writeCurrentObject(
       objectID,
       length,
@@ -492,6 +495,7 @@ StreamPublisherImpl::publishStatus(
     return validateRes;
   }
   header_.status = status;
+  header_.length = folly::none;
   return writeCurrentObject(
       objectID,
       /*length=*/0,

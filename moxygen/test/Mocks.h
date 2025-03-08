@@ -237,9 +237,9 @@ class MockSubscribeAnnouncesHandle
     : public Publisher::SubscribeAnnouncesHandle {
  public:
   MockSubscribeAnnouncesHandle() = default;
-  explicit MockSubscribeAnnouncesHandle(SubscribeAnnouncesOk ok) {
-    this->setSubscribeAnnouncesOk(ok);
-  }
+  explicit MockSubscribeAnnouncesHandle(SubscribeAnnouncesOk ok)
+      : Publisher::SubscribeAnnouncesHandle(std::move(ok)) {}
+
   MOCK_METHOD(void, unsubscribeAnnounces, (), (override));
 };
 

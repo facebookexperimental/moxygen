@@ -415,8 +415,8 @@ struct AbsoluteLocation {
 
 constexpr AbsoluteLocation kLocationMin;
 constexpr AbsoluteLocation kLocationMax{
-    std::numeric_limits<uint64_t>::max(),
-    std::numeric_limits<uint64_t>::max()};
+    quic::kEightByteLimit,
+    quic::kEightByteLimit};
 
 struct TrackNamespace {
   std::vector<std::string> trackNamespace;
