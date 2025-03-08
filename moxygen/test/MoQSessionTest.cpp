@@ -147,6 +147,14 @@ Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
       0,
       GroupOrder::OldestFirst);
 }
+
+TrackStatusRequest getTrackStatusRequest() {
+  return TrackStatusRequest{FullTrackName{TrackNamespace{{"foo"}}, "bar"}};
+}
+
+moxygen::SubscribeAnnounces getSubscribeAnnounces() {
+  return SubscribeAnnounces{TrackNamespace{{"foo"}}, {}};
+}
 } // namespace
 
 TEST_F(MoQSessionTest, Fetch) {
@@ -643,8 +651,7 @@ TEST_F(MoQSessionTest, TrackStatus) {
   eventBase_.loopOnce();
   auto f = [](std::shared_ptr<MoQSession> session) mutable
       -> folly::coro::Task<void> {
-    auto res = co_await session->trackStatus(
-        {FullTrackName{TrackNamespace{{"foo"}}, "bar"}});
+    auto res = co_await session->trackStatus(getTrackStatusRequest());
     EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
     session->close(SessionCloseErrorCode::NO_ERROR);
   };
@@ -668,7 +675,7 @@ TEST_F(MoQSessionTest, SubscribeAnnouncesOk) {
       [](std::shared_ptr<MoQSession> session) mutable
       -> folly::coro::Task<void> {
     auto announceResult =
-        co_await session->subscribeAnnounces({TrackNamespace{{"foo"}}, {}});
+        co_await session->subscribeAnnounces(getSubscribeAnnounces());
     EXPECT_TRUE(announceResult.hasValue());
     EXPECT_EQ(
         announceResult.value()->subscribeAnnouncesOk().trackNamespacePrefix,

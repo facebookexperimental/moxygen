@@ -26,6 +26,8 @@ target_link_libraries(
   moqdateserver PUBLIC
   Folly::folly
   moqrelay
+  moxygenserver
+  moxygenwtclient
 )
 
 install(

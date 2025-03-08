@@ -53,6 +53,7 @@ target_link_libraries(
   moqrelayserver PUBLIC
   Folly::folly
   moqrelay
+  moxygenserver
 )
 
 install(
