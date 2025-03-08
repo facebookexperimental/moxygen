@@ -355,7 +355,9 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
       continue;
     }
     XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-    subscription.handle->unsubscribe();
+    if (subscription.handle) {
+      subscription.handle->unsubscribe();
+    }
     subscriptionIt = subscriptions_.erase(subscriptionIt);
     return;
   }
