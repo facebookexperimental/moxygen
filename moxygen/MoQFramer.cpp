@@ -31,30 +31,6 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
   return res;
 }
 
-folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
-    folly::io::Cursor& cursor,
-    size_t& length) {
-  auto itemCount = quic::decodeQuicInteger(cursor, length);
-  if (!itemCount) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  if (itemCount->first > kMaxNamespaceLength) {
-    XLOG(ERR) << "tuple length > kMaxNamespaceLength =" << itemCount->first;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
-  }
-  length -= itemCount->second;
-  std::vector<std::string> items;
-  items.reserve(itemCount->first);
-  for (auto i = 0u; i < itemCount->first; i++) {
-    auto res = parseFixedString(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
-    }
-    items.emplace_back(std::move(res.value()));
-  }
-  return items;
-}
-
 folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -86,95 +62,6 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
       p.asString = std::move(res.value());
     }
     params.emplace_back(std::move(p));
-  }
-  return folly::unit;
-}
-
-folly::Expected<FullTrackName, ErrorCode> parseFullTrackName(
-    folly::io::Cursor& cursor,
-    size_t& length) {
-  FullTrackName fullTrackName;
-  auto res = parseFixedTuple(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
-  }
-  fullTrackName.trackNamespace = TrackNamespace(std::move(res.value()));
-
-  auto res2 = parseFixedString(cursor, length);
-  if (!res2) {
-    return folly::makeUnexpected(res2.error());
-  }
-  fullTrackName.trackName = std::move(res2.value());
-  return fullTrackName;
-}
-
-folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
-    folly::io::Cursor& cursor,
-    size_t& length) {
-  AbsoluteLocation location;
-  auto group = quic::decodeQuicInteger(cursor, length);
-  if (!group) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  location.group = group->first;
-  length -= group->second;
-
-  auto object = quic::decodeQuicInteger(cursor, length);
-  if (!object) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  location.object = object->first;
-  length -= object->second;
-
-  return location;
-}
-
-folly::Expected<folly::Unit, ErrorCode> parseExtensions(
-    folly::io::Cursor& cursor,
-    size_t& length,
-    ObjectHeader& objectHeader) {
-  auto numExt = quic::decodeQuicInteger(cursor, length);
-  if (!numExt) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= numExt->second;
-  if (numExt->first > kMaxExtensions) {
-    XLOG(ERR) << "numExt > kMaxExtensions =" << numExt->first;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
-  }
-  for (auto i = 0u; i < numExt->first; i++) {
-    auto type = quic::decodeQuicInteger(cursor, length);
-    if (!type) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= type->second;
-    Extension ext;
-    ext.type = type->first;
-    if (ext.type & 0x1) {
-      auto extLen = quic::decodeQuicInteger(cursor, length);
-      if (!extLen) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= extLen->second;
-      if (length < extLen->first) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      if (extLen->first > kMaxExtensionLength) {
-        XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
-        return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
-      }
-      ext.arrayValue.resize(extLen->first);
-      cursor.pull(ext.arrayValue.data(), extLen->first);
-      length -= extLen->first;
-    } else {
-      auto iVal = quic::decodeQuicInteger(cursor, length);
-      if (!iVal) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= iVal->second;
-      ext.intValue = iVal->first;
-    }
-    objectHeader.extensions.emplace_back(std::move(ext));
   }
   return folly::unit;
 }
@@ -232,7 +119,7 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
   return serverSetup;
 }
 
-folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
+folly::Expected<SubscribeID, ErrorCode> MoQFrameParser::parseFetchHeader(
     folly::io::Cursor& cursor) noexcept {
   auto subscribeID = quic::decodeQuicInteger(cursor);
   if (!subscribeID) {
@@ -241,7 +128,8 @@ folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
   return SubscribeID(subscribeID->first);
 }
 
-folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode>
+MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
     StreamType streamType,
     size_t& length) noexcept {
@@ -299,7 +187,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
   return objectHeader;
 }
 
-folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
+folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor) noexcept {
   auto length = cursor.totalLength();
   ObjectHeader objectHeader;
@@ -332,7 +220,8 @@ folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
   return objectHeader;
 }
 
-folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
+folly::Expected<folly::Unit, ErrorCode>
+MoQFrameParser::parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
     size_t length,
     ObjectHeader& objectHeader) {
@@ -362,7 +251,7 @@ folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
   return folly::unit;
 }
 
-folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
     folly::io::Cursor& cursor,
     const ObjectHeader& headerTemplate) noexcept {
   // TODO get rid of this
@@ -408,7 +297,8 @@ folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
   return objectHeader;
 }
 
-folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
+folly::Expected<ObjectHeader, ErrorCode>
+MoQFrameParser::parseSubgroupObjectHeader(
     folly::io::Cursor& cursor,
     const ObjectHeader& headerTemplate) noexcept {
   // TODO get rid of this
@@ -433,7 +323,7 @@ folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
   return objectHeader;
 }
 
-folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
+folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     folly::io::Cursor& cursor,
     size_t length,
     size_t numParams,
@@ -470,7 +360,8 @@ folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
   return folly::unit;
 }
 
-folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
+folly::Expected<SubscribeRequest, ErrorCode>
+MoQFrameParser::parseSubscribeRequest(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   SubscribeRequest subscribeRequest;
@@ -541,7 +432,8 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
   return subscribeRequest;
 }
 
-folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
+folly::Expected<SubscribeUpdate, ErrorCode>
+MoQFrameParser::parseSubscribeUpdate(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   SubscribeUpdate subscribeUpdate;
@@ -583,7 +475,7 @@ folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
   return subscribeUpdate;
 }
 
-folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
+folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   SubscribeOk subscribeOk;
@@ -633,7 +525,7 @@ folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
   return subscribeOk;
 }
 
-folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
+folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   SubscribeError subscribeError;
@@ -669,7 +561,7 @@ folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
   return subscribeError;
 }
 
-folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
+folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   Unsubscribe unsubscribe;
@@ -683,7 +575,7 @@ folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
   return unsubscribe;
 }
 
-folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
+folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   SubscribeDone subscribeDone;
@@ -730,7 +622,7 @@ folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
   return subscribeDone;
 }
 
-folly::Expected<Announce, ErrorCode> parseAnnounce(
+folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   Announce announce;
@@ -752,7 +644,7 @@ folly::Expected<Announce, ErrorCode> parseAnnounce(
   return announce;
 }
 
-folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
+folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   AnnounceOk announceOk;
@@ -764,7 +656,7 @@ folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
   return announceOk;
 }
 
-folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
+folly::Expected<AnnounceError, ErrorCode> MoQFrameParser::parseAnnounceError(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   AnnounceError announceError;
@@ -790,7 +682,7 @@ folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
   return announceError;
 }
 
-folly::Expected<Unannounce, ErrorCode> parseUnannounce(
+folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   Unannounce unannounce;
@@ -802,7 +694,7 @@ folly::Expected<Unannounce, ErrorCode> parseUnannounce(
   return unannounce;
 }
 
-folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
+folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   AnnounceCancel announceCancel;
@@ -827,7 +719,8 @@ folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
   return announceCancel;
 }
 
-folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
+folly::Expected<TrackStatusRequest, ErrorCode>
+MoQFrameParser::parseTrackStatusRequest(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   TrackStatusRequest trackStatusRequest;
@@ -839,7 +732,7 @@ folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
   return trackStatusRequest;
 }
 
-folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
+folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   TrackStatus trackStatus;
@@ -866,7 +759,7 @@ folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
   return trackStatus;
 }
 
-folly::Expected<Goaway, ErrorCode> parseGoaway(
+folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   Goaway goaway;
@@ -878,7 +771,7 @@ folly::Expected<Goaway, ErrorCode> parseGoaway(
   return goaway;
 }
 
-folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
+folly::Expected<MaxSubscribeId, ErrorCode> MoQFrameParser::parseMaxSubscribeId(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   MaxSubscribeId maxSubscribeId;
@@ -891,7 +784,8 @@ folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
   return maxSubscribeId;
 }
 
-folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
+folly::Expected<SubscribesBlocked, ErrorCode>
+MoQFrameParser::parseSubscribesBlocked(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   SubscribesBlocked subscribesBlocked;
@@ -904,7 +798,7 @@ folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
   return subscribesBlocked;
 }
 
-folly::Expected<Fetch, ErrorCode> parseFetch(
+folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   Fetch fetch;
@@ -985,7 +879,7 @@ folly::Expected<Fetch, ErrorCode> parseFetch(
   return fetch;
 }
 
-folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
+folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   FetchCancel fetchCancel;
@@ -997,7 +891,7 @@ folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
   return fetchCancel;
 }
 
-folly::Expected<FetchOk, ErrorCode> parseFetchOk(
+folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   FetchOk fetchOk;
@@ -1041,7 +935,7 @@ folly::Expected<FetchOk, ErrorCode> parseFetchOk(
   return fetchOk;
 }
 
-folly::Expected<FetchError, ErrorCode> parseFetchError(
+folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   FetchError fetchError;
@@ -1068,7 +962,8 @@ folly::Expected<FetchError, ErrorCode> parseFetchError(
   return fetchError;
 }
 
-folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
+folly::Expected<SubscribeAnnounces, ErrorCode>
+MoQFrameParser::parseSubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounce(cursor, length);
@@ -1079,7 +974,8 @@ folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
       {std::move(res->trackNamespace), std::move(res->params)});
 }
 
-folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
+folly::Expected<SubscribeAnnouncesOk, ErrorCode>
+MoQFrameParser::parseSubscribeAnnouncesOk(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounceOk(cursor, length);
@@ -1090,7 +986,7 @@ folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
 }
 
 folly::Expected<SubscribeAnnouncesError, ErrorCode>
-parseSubscribeAnnouncesError(
+MoQFrameParser::parseSubscribeAnnouncesError(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounceError(cursor, length);
@@ -1103,7 +999,8 @@ parseSubscribeAnnouncesError(
        std::move(res->reasonPhrase)});
 }
 
-folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
+folly::Expected<UnsubscribeAnnounces, ErrorCode>
+MoQFrameParser::parseUnsubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   auto res = parseAnnounceOk(cursor, length);
@@ -1111,6 +1008,119 @@ folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
     return folly::makeUnexpected(res.error());
   }
   return UnsubscribeAnnounces({std::move(res->trackNamespace)});
+}
+
+folly::Expected<FullTrackName, ErrorCode> MoQFrameParser::parseFullTrackName(
+    folly::io::Cursor& cursor,
+    size_t& length) {
+  FullTrackName fullTrackName;
+  auto res = parseFixedTuple(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  fullTrackName.trackNamespace = TrackNamespace(std::move(res.value()));
+
+  auto res2 = parseFixedString(cursor, length);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
+  fullTrackName.trackName = std::move(res2.value());
+  return fullTrackName;
+}
+
+folly::Expected<AbsoluteLocation, ErrorCode>
+MoQFrameParser::parseAbsoluteLocation(
+    folly::io::Cursor& cursor,
+    size_t& length) {
+  AbsoluteLocation location;
+  auto group = quic::decodeQuicInteger(cursor, length);
+  if (!group) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  location.group = group->first;
+  length -= group->second;
+
+  auto object = quic::decodeQuicInteger(cursor, length);
+  if (!object) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  location.object = object->first;
+  length -= object->second;
+
+  return location;
+}
+
+folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
+    folly::io::Cursor& cursor,
+    size_t& length,
+    ObjectHeader& objectHeader) {
+  auto numExt = quic::decodeQuicInteger(cursor, length);
+  if (!numExt) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numExt->second;
+  if (numExt->first > kMaxExtensions) {
+    XLOG(ERR) << "numExt > kMaxExtensions =" << numExt->first;
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  }
+  for (auto i = 0u; i < numExt->first; i++) {
+    auto type = quic::decodeQuicInteger(cursor, length);
+    if (!type) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= type->second;
+    Extension ext;
+    ext.type = type->first;
+    if (ext.type & 0x1) {
+      auto extLen = quic::decodeQuicInteger(cursor, length);
+      if (!extLen) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= extLen->second;
+      if (length < extLen->first) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      if (extLen->first > kMaxExtensionLength) {
+        XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
+        return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      }
+      ext.arrayValue.resize(extLen->first);
+      cursor.pull(ext.arrayValue.data(), extLen->first);
+      length -= extLen->first;
+    } else {
+      auto iVal = quic::decodeQuicInteger(cursor, length);
+      if (!iVal) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= iVal->second;
+      ext.intValue = iVal->first;
+    }
+    objectHeader.extensions.emplace_back(std::move(ext));
+  }
+  return folly::unit;
+}
+
+folly::Expected<std::vector<std::string>, ErrorCode>
+MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length) {
+  auto itemCount = quic::decodeQuicInteger(cursor, length);
+  if (!itemCount) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (itemCount->first > kMaxNamespaceLength) {
+    XLOG(ERR) << "tuple length > kMaxNamespaceLength =" << itemCount->first;
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  }
+  length -= itemCount->second;
+  std::vector<std::string> items;
+  items.reserve(itemCount->first);
+  for (auto i = 0u; i < itemCount->first; i++) {
+    auto res = parseFixedString(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    items.emplace_back(std::move(res.value()));
+  }
+  return items;
 }
 
 //// Egress ////

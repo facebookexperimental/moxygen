@@ -356,26 +356,6 @@ struct ObjectHeader {
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 
-// datagram only
-folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
-    folly::io::Cursor& cursor,
-    StreamType streamType,
-    size_t& length) noexcept;
-
-folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
-    folly::io::Cursor& cursor) noexcept;
-
-folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
-    folly::io::Cursor& cursor) noexcept;
-
-folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
-    folly::io::Cursor& cursor,
-    const ObjectHeader& headerTemplate) noexcept;
-
-folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
-    folly::io::Cursor& cursor,
-    const ObjectHeader& headerTemplate) noexcept;
-
 enum class TrackRequestParamKey : uint64_t {
   AUTHORIZATION = 2,
   DELIVERY_TIMEOUT = 3,
@@ -541,10 +521,6 @@ struct SubscribeRequest {
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct SubscribeUpdate {
   SubscribeID subscribeID;
   AbsoluteLocation start;
@@ -552,10 +528,6 @@ struct SubscribeUpdate {
   uint8_t priority{kDefaultPriority};
   std::vector<TrackRequestParameter> params;
 };
-
-folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct SubscribeOk {
   SubscribeID subscribeID;
@@ -566,10 +538,6 @@ struct SubscribeOk {
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct SubscribeError {
   SubscribeID subscribeID;
   SubscribeErrorCode errorCode;
@@ -577,17 +545,9 @@ struct SubscribeError {
   folly::Optional<uint64_t> retryAlias{folly::none};
 };
 
-folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct Unsubscribe {
   SubscribeID subscribeID;
 };
-
-folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct SubscribeDone {
   SubscribeID subscribeID;
@@ -597,26 +557,14 @@ struct SubscribeDone {
   folly::Optional<AbsoluteLocation> finalObject;
 };
 
-folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct Announce {
   TrackNamespace trackNamespace;
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<Announce, ErrorCode> parseAnnounce(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct AnnounceOk {
   TrackNamespace trackNamespace;
 };
-
-folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct AnnounceError {
   TrackNamespace trackNamespace;
@@ -624,17 +572,9 @@ struct AnnounceError {
   std::string reasonPhrase;
 };
 
-folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct Unannounce {
   TrackNamespace trackNamespace;
 };
-
-folly::Expected<Unannounce, ErrorCode> parseUnannounce(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct AnnounceCancel {
   TrackNamespace trackNamespace;
@@ -642,17 +582,9 @@ struct AnnounceCancel {
   std::string reasonPhrase;
 };
 
-folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct TrackStatusRequest {
   FullTrackName fullTrackName;
 };
-
-folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct TrackStatus {
   FullTrackName fullTrackName;
@@ -660,33 +592,17 @@ struct TrackStatus {
   folly::Optional<AbsoluteLocation> latestGroupAndObject;
 };
 
-folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct Goaway {
   std::string newSessionUri;
 };
-
-folly::Expected<Goaway, ErrorCode> parseGoaway(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct MaxSubscribeId {
   SubscribeID subscribeID;
 };
 
-folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct SubscribesBlocked {
   SubscribeID maxSubscribeID;
 };
-
-folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 enum class FetchType : uint8_t {
   STANDALONE = 0x1,
@@ -756,17 +672,9 @@ inline std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
   return {standalone, joining};
 }
 
-folly::Expected<Fetch, ErrorCode> parseFetch(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct FetchCancel {
   SubscribeID subscribeID;
 };
-
-folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct FetchOk {
   SubscribeID subscribeID;
@@ -776,36 +684,20 @@ struct FetchOk {
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<FetchOk, ErrorCode> parseFetchOk(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct FetchError {
   SubscribeID subscribeID;
   FetchErrorCode errorCode;
   std::string reasonPhrase;
 };
 
-folly::Expected<FetchError, ErrorCode> parseFetchError(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct SubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
   std::vector<TrackRequestParameter> params;
 };
 
-folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
 struct SubscribeAnnouncesOk {
   TrackNamespace trackNamespacePrefix;
 };
-
-folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 struct SubscribeAnnouncesError {
   TrackNamespace trackNamespacePrefix;
@@ -813,16 +705,160 @@ struct SubscribeAnnouncesError {
   std::string reasonPhrase;
 };
 
-folly::Expected<SubscribeAnnouncesError, ErrorCode>
-parseSubscribeAnnouncesError(folly::io::Cursor& cursor, size_t length) noexcept;
-
 struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
 
-folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
+// parseClientSetup and parseServerSetup are version-agnostic, so we're leaving
+// them out of the MoQFrameParser.
+class MoQFrameParser {
+ public:
+  // datagram only
+  folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
+      folly::io::Cursor& cursor,
+      StreamType streamType,
+      size_t& length) noexcept;
+
+  folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
+      folly::io::Cursor& cursor) noexcept;
+
+  folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
+      folly::io::Cursor& cursor) noexcept;
+
+  folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
+      folly::io::Cursor& cursor,
+      const ObjectHeader& headerTemplate) noexcept;
+
+  folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
+      folly::io::Cursor& cursor,
+      const ObjectHeader& headerTemplate) noexcept;
+
+  folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<Announce, ErrorCode> parseAnnounce(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<Unannounce, ErrorCode> parseUnannounce(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<Goaway, ErrorCode> parseGoaway(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<Fetch, ErrorCode> parseFetch(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<FetchOk, ErrorCode> parseFetchOk(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<FetchError, ErrorCode> parseFetchError(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<SubscribeAnnouncesError, ErrorCode>
+  parseSubscribeAnnouncesError(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+ private:
+  folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
+      folly::io::Cursor& cursor,
+      size_t length,
+      ObjectHeader& objectHeader);
+
+  folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
+      folly::io::Cursor& cursor,
+      size_t length,
+      size_t numParams,
+      std::vector<TrackRequestParameter>& params);
+
+  folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
+      folly::io::Cursor& cursor,
+      size_t& length);
+
+  folly::Expected<FullTrackName, ErrorCode> parseFullTrackName(
+      folly::io::Cursor& cursor,
+      size_t& length);
+
+  folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
+      folly::io::Cursor& cursor,
+      size_t& length);
+
+  folly::Expected<folly::Unit, ErrorCode> parseExtensions(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      ObjectHeader& objectHeader);
+};
 
 //// Egress ////
 

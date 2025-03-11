@@ -3132,7 +3132,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     return;
   }
   remainingLength -= type->second;
-  auto res = parseDatagramObjectHeader(
+  MoQFrameParser parser;
+  auto res = parser.parseDatagramObjectHeader(
       cursor, StreamType(type->first), remainingLength);
   if (res.hasError()) {
     XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";

@@ -13,252 +13,260 @@ using namespace moxygen;
 namespace {
 class TestUnderflow : public std::exception {};
 
-StreamType parseStreamType(folly::io::Cursor& cursor) {
-  auto frameType = quic::decodeQuicInteger(cursor);
-  if (!frameType) {
-    throw std::runtime_error("Failed to decode frame type");
+class MoQFramerTest : public ::testing::Test {
+ public:
+  StreamType parseStreamType(folly::io::Cursor& cursor) {
+    auto frameType = quic::decodeQuicInteger(cursor);
+    if (!frameType) {
+      throw std::runtime_error("Failed to decode frame type");
+    }
+    return StreamType(frameType->first);
   }
-  return StreamType(frameType->first);
-}
 
-void skip(folly::io::Cursor& cursor, size_t i) {
-  if (!cursor.canAdvance(i)) {
-    throw TestUnderflow();
+  void skip(folly::io::Cursor& cursor, size_t i) {
+    if (!cursor.canAdvance(i)) {
+      throw TestUnderflow();
+    }
+    cursor.skip(i);
   }
-  cursor.skip(i);
-}
 
-template <class T>
-void testUnderflowResult(folly::Expected<T, ErrorCode> result) {
-  EXPECT_TRUE(result || result.error() == ErrorCode::PARSE_UNDERFLOW);
-  if (!result) {
-    throw TestUnderflow();
+  template <class T>
+  void testUnderflowResult(folly::Expected<T, ErrorCode> result) {
+    EXPECT_TRUE(result || result.error() == ErrorCode::PARSE_UNDERFLOW);
+    if (!result) {
+      throw TestUnderflow();
+    }
   }
-}
 
-size_t frameLength(folly::io::Cursor& cursor) {
-  auto res = quic::decodeQuicInteger(cursor);
-  if (res && cursor.canAdvance(res->first)) {
-    return res->first;
-  } else {
-    throw TestUnderflow();
+  size_t frameLength(folly::io::Cursor& cursor) {
+    auto res = quic::decodeQuicInteger(cursor);
+    if (res && cursor.canAdvance(res->first)) {
+      return res->first;
+    } else {
+      throw TestUnderflow();
+    }
   }
-}
 
-void parseAll(folly::io::Cursor& cursor, bool eom) {
-  skip(cursor, 2);
-  auto r1 = parseClientSetup(cursor, frameLength(cursor));
-  testUnderflowResult(r1);
+  void parseAll(folly::io::Cursor& cursor, bool eom) {
+    skip(cursor, 2);
+    auto r1 = parseClientSetup(cursor, frameLength(cursor));
+    testUnderflowResult(r1);
 
-  skip(cursor, 2);
-  auto r2 = parseServerSetup(cursor, frameLength(cursor));
-  testUnderflowResult(r2);
+    skip(cursor, 2);
+    auto r2 = parseServerSetup(cursor, frameLength(cursor));
+    testUnderflowResult(r2);
 
-  skip(cursor, 1);
-  auto r3 = parseSubscribeRequest(cursor, frameLength(cursor));
-  testUnderflowResult(r3);
+    skip(cursor, 1);
+    auto r3 = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+    testUnderflowResult(r3);
 
-  skip(cursor, 1);
-  auto r3a = parseSubscribeUpdate(cursor, frameLength(cursor));
-  testUnderflowResult(r3a);
+    skip(cursor, 1);
+    auto r3a = parser_.parseSubscribeUpdate(cursor, frameLength(cursor));
+    testUnderflowResult(r3a);
 
-  skip(cursor, 1);
-  auto r4 = parseSubscribeOk(cursor, frameLength(cursor));
-  testUnderflowResult(r4);
+    skip(cursor, 1);
+    auto r4 = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+    testUnderflowResult(r4);
 
-  skip(cursor, 1);
-  auto r4a = parseMaxSubscribeId(cursor, frameLength(cursor));
-  testUnderflowResult(r4a);
+    skip(cursor, 1);
+    auto r4a = parser_.parseMaxSubscribeId(cursor, frameLength(cursor));
+    testUnderflowResult(r4a);
 
-  skip(cursor, 1);
-  auto r4b = parseSubscribesBlocked(cursor, frameLength(cursor));
-  testUnderflowResult(r4b);
+    skip(cursor, 1);
+    auto r4b = parser_.parseSubscribesBlocked(cursor, frameLength(cursor));
+    testUnderflowResult(r4b);
 
-  skip(cursor, 1);
-  auto r5 = parseSubscribeError(cursor, frameLength(cursor));
-  testUnderflowResult(r5);
+    skip(cursor, 1);
+    auto r5 = parser_.parseSubscribeError(cursor, frameLength(cursor));
+    testUnderflowResult(r5);
 
-  skip(cursor, 1);
-  auto r6 = parseUnsubscribe(cursor, frameLength(cursor));
-  testUnderflowResult(r6);
+    skip(cursor, 1);
+    auto r6 = parser_.parseUnsubscribe(cursor, frameLength(cursor));
+    testUnderflowResult(r6);
 
-  skip(cursor, 1);
-  auto r7 = parseSubscribeDone(cursor, frameLength(cursor));
-  testUnderflowResult(r7);
+    skip(cursor, 1);
+    auto r7 = parser_.parseSubscribeDone(cursor, frameLength(cursor));
+    testUnderflowResult(r7);
 
-  skip(cursor, 1);
-  auto r8 = parseSubscribeDone(cursor, frameLength(cursor));
-  testUnderflowResult(r8);
+    skip(cursor, 1);
+    auto r8 = parser_.parseSubscribeDone(cursor, frameLength(cursor));
+    testUnderflowResult(r8);
 
-  skip(cursor, 1);
-  auto r9 = parseAnnounce(cursor, frameLength(cursor));
-  testUnderflowResult(r9);
+    skip(cursor, 1);
+    auto r9 = parser_.parseAnnounce(cursor, frameLength(cursor));
+    testUnderflowResult(r9);
 
-  skip(cursor, 1);
-  auto r10 = parseAnnounceOk(cursor, frameLength(cursor));
-  testUnderflowResult(r10);
+    skip(cursor, 1);
+    auto r10 = parser_.parseAnnounceOk(cursor, frameLength(cursor));
+    testUnderflowResult(r10);
 
-  skip(cursor, 1);
-  auto r11 = parseAnnounceError(cursor, frameLength(cursor));
-  testUnderflowResult(r11);
+    skip(cursor, 1);
+    auto r11 = parser_.parseAnnounceError(cursor, frameLength(cursor));
+    testUnderflowResult(r11);
 
-  skip(cursor, 1);
-  auto r12 = parseAnnounceCancel(cursor, frameLength(cursor));
-  testUnderflowResult(r12);
+    skip(cursor, 1);
+    auto r12 = parser_.parseAnnounceCancel(cursor, frameLength(cursor));
+    testUnderflowResult(r12);
 
-  skip(cursor, 1);
-  auto r13 = parseUnannounce(cursor, frameLength(cursor));
-  testUnderflowResult(r13);
+    skip(cursor, 1);
+    auto r13 = parser_.parseUnannounce(cursor, frameLength(cursor));
+    testUnderflowResult(r13);
 
-  skip(cursor, 1);
-  auto r14a = parseTrackStatusRequest(cursor, frameLength(cursor));
-  testUnderflowResult(r14a);
+    skip(cursor, 1);
+    auto r14a = parser_.parseTrackStatusRequest(cursor, frameLength(cursor));
+    testUnderflowResult(r14a);
 
-  skip(cursor, 1);
-  auto r14b = parseTrackStatus(cursor, frameLength(cursor));
-  testUnderflowResult(r14b);
+    skip(cursor, 1);
+    auto r14b = parser_.parseTrackStatus(cursor, frameLength(cursor));
+    testUnderflowResult(r14b);
 
-  skip(cursor, 1);
-  auto r14 = parseGoaway(cursor, frameLength(cursor));
-  testUnderflowResult(r14);
+    skip(cursor, 1);
+    auto r14 = parser_.parseGoaway(cursor, frameLength(cursor));
+    testUnderflowResult(r14);
 
-  skip(cursor, 1);
-  auto r9a = parseSubscribeAnnounces(cursor, frameLength(cursor));
-  testUnderflowResult(r9a);
+    skip(cursor, 1);
+    auto r9a = parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+    testUnderflowResult(r9a);
 
-  skip(cursor, 1);
-  auto r10a = parseSubscribeAnnouncesOk(cursor, frameLength(cursor));
-  testUnderflowResult(r10a);
+    skip(cursor, 1);
+    auto r10a = parser_.parseSubscribeAnnouncesOk(cursor, frameLength(cursor));
+    testUnderflowResult(r10a);
 
-  skip(cursor, 1);
-  auto r11a = parseSubscribeAnnouncesError(cursor, frameLength(cursor));
-  testUnderflowResult(r11a);
+    skip(cursor, 1);
+    auto r11a =
+        parser_.parseSubscribeAnnouncesError(cursor, frameLength(cursor));
+    testUnderflowResult(r11a);
 
-  skip(cursor, 1);
-  auto r13a = parseUnsubscribeAnnounces(cursor, frameLength(cursor));
-  testUnderflowResult(r13a);
+    skip(cursor, 1);
+    auto r13a = parser_.parseUnsubscribeAnnounces(cursor, frameLength(cursor));
+    testUnderflowResult(r13a);
 
-  skip(cursor, 1);
-  auto r16 = parseFetch(cursor, frameLength(cursor));
-  testUnderflowResult(r16);
+    skip(cursor, 1);
+    auto r16 = parser_.parseFetch(cursor, frameLength(cursor));
+    testUnderflowResult(r16);
 
-  skip(cursor, 1);
-  auto r17 = parseFetchCancel(cursor, frameLength(cursor));
-  testUnderflowResult(r17);
+    skip(cursor, 1);
+    auto r17 = parser_.parseFetchCancel(cursor, frameLength(cursor));
+    testUnderflowResult(r17);
 
-  skip(cursor, 1);
-  auto r18 = parseFetchOk(cursor, frameLength(cursor));
-  testUnderflowResult(r18);
+    skip(cursor, 1);
+    auto r18 = parser_.parseFetchOk(cursor, frameLength(cursor));
+    testUnderflowResult(r18);
 
-  skip(cursor, 1);
-  auto r19 = parseFetchError(cursor, frameLength(cursor));
-  testUnderflowResult(r19);
+    skip(cursor, 1);
+    auto r19 = parser_.parseFetchError(cursor, frameLength(cursor));
+    testUnderflowResult(r19);
 
-  skip(cursor, 1);
-  auto res = parseSubgroupHeader(cursor);
-  testUnderflowResult(res);
-  EXPECT_EQ(res.value().group, 2);
+    skip(cursor, 1);
+    auto res = parser_.parseSubgroupHeader(cursor);
+    testUnderflowResult(res);
+    EXPECT_EQ(res.value().group, 2);
 
-  auto r15 = parseSubgroupObjectHeader(cursor, res.value());
-  testUnderflowResult(r15);
-  EXPECT_EQ(r15.value().id, 4);
-  skip(cursor, *r15.value().length);
+    auto r15 = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    testUnderflowResult(r15);
+    EXPECT_EQ(r15.value().id, 4);
+    skip(cursor, *r15.value().length);
 
-  auto r15a = parseSubgroupObjectHeader(cursor, res.value());
-  testUnderflowResult(r15a);
-  EXPECT_EQ(r15a.value().id, 5);
-  EXPECT_EQ(r15a.value().extensions, test::getTestExtensions());
-  skip(cursor, *r15a.value().length);
+    auto r15a = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    testUnderflowResult(r15a);
+    EXPECT_EQ(r15a.value().id, 5);
+    EXPECT_EQ(r15a.value().extensions, test::getTestExtensions());
+    skip(cursor, *r15a.value().length);
 
-  auto r20 = parseSubgroupObjectHeader(cursor, res.value());
-  testUnderflowResult(r20);
-  EXPECT_EQ(r20.value().status, ObjectStatus::OBJECT_NOT_EXIST);
+    auto r20 = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    testUnderflowResult(r20);
+    EXPECT_EQ(r20.value().status, ObjectStatus::OBJECT_NOT_EXIST);
 
-  auto r20a = parseSubgroupObjectHeader(cursor, res.value());
-  testUnderflowResult(r20a);
-  EXPECT_EQ(r20a.value().extensions, test::getTestExtensions());
-  EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
+    auto r20a = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    testUnderflowResult(r20a);
+    EXPECT_EQ(r20a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
 
-  skip(cursor, 1);
-  auto r21 = parseFetchHeader(cursor);
-  testUnderflowResult(r21);
-  EXPECT_EQ(r21.value(), SubscribeID(1));
+    skip(cursor, 1);
+    auto r21 = parser_.parseFetchHeader(cursor);
+    testUnderflowResult(r21);
+    EXPECT_EQ(r21.value(), SubscribeID(1));
 
-  ObjectHeader obj;
-  obj.trackIdentifier = r21.value();
-  auto r22 = parseFetchObjectHeader(cursor, obj);
-  testUnderflowResult(r22);
-  EXPECT_EQ(r22.value().id, 4);
-  skip(cursor, *r22.value().length);
+    ObjectHeader obj;
+    obj.trackIdentifier = r21.value();
+    auto r22 = parser_.parseFetchObjectHeader(cursor, obj);
+    testUnderflowResult(r22);
+    EXPECT_EQ(r22.value().id, 4);
+    skip(cursor, *r22.value().length);
 
-  auto r22a = parseFetchObjectHeader(cursor, obj);
-  testUnderflowResult(r22a);
-  EXPECT_EQ(r22a.value().id, 5);
-  EXPECT_EQ(r22a.value().extensions, test::getTestExtensions());
-  skip(cursor, *r22a.value().length);
+    auto r22a = parser_.parseFetchObjectHeader(cursor, obj);
+    testUnderflowResult(r22a);
+    EXPECT_EQ(r22a.value().id, 5);
+    EXPECT_EQ(r22a.value().extensions, test::getTestExtensions());
+    skip(cursor, *r22a.value().length);
 
-  auto r23 = parseFetchObjectHeader(cursor, obj);
-  testUnderflowResult(r23);
-  EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_GROUP);
+    auto r23 = parser_.parseFetchObjectHeader(cursor, obj);
+    testUnderflowResult(r23);
+    EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_GROUP);
 
-  auto r23a = parseFetchObjectHeader(cursor, obj);
-  testUnderflowResult(r23a);
-  EXPECT_EQ(r23a.value().extensions, test::getTestExtensions());
-  EXPECT_EQ(r23a.value().status, ObjectStatus::END_OF_GROUP);
+    auto r23a = parser_.parseFetchObjectHeader(cursor, obj);
+    testUnderflowResult(r23a);
+    EXPECT_EQ(r23a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(r23a.value().status, ObjectStatus::END_OF_GROUP);
 
-  skip(cursor, 1);
-  size_t datagramLength = std::min(6lu, cursor.totalLength());
-  auto r24 = parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
-  testUnderflowResult(r24);
-  EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
+    skip(cursor, 1);
+    size_t datagramLength = std::min(6lu, cursor.totalLength());
+    auto r24 = parser_.parseDatagramObjectHeader(
+        cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
+    testUnderflowResult(r24);
+    EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
 
-  skip(cursor, 1);
-  EXPECT_EQ(datagramLength, 0);
-  datagramLength = std::min(13lu, cursor.totalLength());
-  auto r24a = parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
-  testUnderflowResult(r24a);
-  EXPECT_EQ(r24a.value().extensions, test::getTestExtensions());
-  EXPECT_EQ(r24a.value().status, ObjectStatus::END_OF_GROUP);
+    skip(cursor, 1);
+    EXPECT_EQ(datagramLength, 0);
+    datagramLength = std::min(13lu, cursor.totalLength());
+    auto r24a = parser_.parseDatagramObjectHeader(
+        cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
+    testUnderflowResult(r24a);
+    EXPECT_EQ(r24a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(r24a.value().status, ObjectStatus::END_OF_GROUP);
 
-  skip(cursor, 1);
-  EXPECT_EQ(datagramLength, 0);
-  datagramLength = std::min(16lu, cursor.totalLength());
-  bool underflowPayload = datagramLength < 16lu;
-  auto r25 = parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
-  testUnderflowResult(r25);
-  EXPECT_EQ(r25.value().id, 0);
-  if (underflowPayload) {
-    throw TestUnderflow();
+    skip(cursor, 1);
+    EXPECT_EQ(datagramLength, 0);
+    datagramLength = std::min(16lu, cursor.totalLength());
+    bool underflowPayload = datagramLength < 16lu;
+    auto r25 = parser_.parseDatagramObjectHeader(
+        cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
+    testUnderflowResult(r25);
+    EXPECT_EQ(r25.value().id, 0);
+    if (underflowPayload) {
+      throw TestUnderflow();
+    }
+    EXPECT_EQ(datagramLength, *r25.value().length);
+    skip(cursor, *r25.value().length);
+
+    skip(cursor, 1);
+    datagramLength = cursor.totalLength();
+    underflowPayload = datagramLength < 27lu;
+    auto r25a = parser_.parseDatagramObjectHeader(
+        cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
+    testUnderflowResult(r25a);
+    EXPECT_EQ(r25a.value().id, 1);
+    EXPECT_EQ(r25a.value().extensions, test::getTestExtensions());
+    if (underflowPayload) {
+      throw TestUnderflow();
+    }
+    EXPECT_EQ(r25a.value().length, 15);
+    skip(cursor, *r25a.value().length);
   }
-  EXPECT_EQ(datagramLength, *r25.value().length);
-  skip(cursor, *r25.value().length);
 
-  skip(cursor, 1);
-  datagramLength = cursor.totalLength();
-  underflowPayload = datagramLength < 27lu;
-  auto r25a = parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
-  testUnderflowResult(r25a);
-  EXPECT_EQ(r25a.value().id, 1);
-  EXPECT_EQ(r25a.value().extensions, test::getTestExtensions());
-  if (underflowPayload) {
-    throw TestUnderflow();
-  }
-  EXPECT_EQ(r25a.value().length, 15);
-  skip(cursor, *r25a.value().length);
-}
+ protected:
+  MoQFrameParser parser_;
+};
+
 } // namespace
 
-TEST(SerializeAndParse, All) {
+TEST_F(MoQFramerTest, SerializeAndParseAll) {
   auto allMsgs = moxygen::test::writeAllMessages();
   folly::io::Cursor cursor(allMsgs.get());
   parseAll(cursor, true);
 }
 
-TEST(SerializeAndParse, ParseObjectHeader) {
+TEST_F(MoQFramerTest, ParseObjectHeader) {
   // Test OBJECT_DATAGRAM with ObjectStatus::OBJECT_NOT_EXIST
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeDatagramObject(
@@ -278,7 +286,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
   auto length = cursor.totalLength();
-  auto parseResult = parseDatagramObjectHeader(
+  auto parseResult = parser_.parseDatagramObjectHeader(
       cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
@@ -288,7 +296,7 @@ TEST(SerializeAndParse, ParseObjectHeader) {
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
-TEST(SerializeAndParse, ParseDatagramNormal) {
+TEST_F(MoQFramerTest, ParseDatagramNormal) {
   // Test OBJECT_DATAGRAM
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeDatagramObject(
@@ -308,8 +316,8 @@ TEST(SerializeAndParse, ParseDatagramNormal) {
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
   auto length = cursor.totalLength();
-  auto parseResult =
-      parseDatagramObjectHeader(cursor, StreamType::OBJECT_DATAGRAM, length);
+  auto parseResult = parser_.parseDatagramObjectHeader(
+      cursor, StreamType::OBJECT_DATAGRAM, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -319,7 +327,7 @@ TEST(SerializeAndParse, ParseDatagramNormal) {
   EXPECT_EQ(parseResult->length, 8);
 }
 
-TEST(SerializeAndParse, ZeroLengthNormal) {
+TEST_F(MoQFramerTest, ZeroLengthNormal) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeDatagramObject(
       writeBuf,
@@ -338,7 +346,7 @@ TEST(SerializeAndParse, ZeroLengthNormal) {
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
   auto length = cursor.totalLength();
-  auto parseResult = parseDatagramObjectHeader(
+  auto parseResult = parser_.parseDatagramObjectHeader(
       cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
@@ -349,7 +357,7 @@ TEST(SerializeAndParse, ZeroLengthNormal) {
   EXPECT_EQ(*parseResult->length, 0);
 }
 
-TEST(SerializeAndParse, ParseStreamHeader) {
+TEST_F(MoQFramerTest, ParseStreamHeader) {
   ObjectHeader expectedObjectHeader = {
       TrackAlias(22), // trackAlias
       33,             // group
@@ -380,10 +388,10 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   folly::io::Cursor cursor(serialized.get());
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
-  auto parseStreamHeaderResult = parseSubgroupHeader(cursor);
+  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult =
-      parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+      parser_.parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -393,7 +401,8 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(*parseResult->length, 4);
   cursor.skip(*parseResult->length);
 
-  parseResult = parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+  parseResult =
+      parser_.parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -402,7 +411,7 @@ TEST(SerializeAndParse, ParseStreamHeader) {
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
-TEST(SerializeAndParse, ParseFetchHeader) {
+TEST_F(MoQFramerTest, ParseFetchHeader) {
   ObjectHeader expectedObjectHeader = {
       SubscribeID(22), // subID
       33,              // group
@@ -434,11 +443,11 @@ TEST(SerializeAndParse, ParseFetchHeader) {
   folly::io::Cursor cursor(serialized.get());
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::FETCH_HEADER);
-  auto parseStreamHeaderResult = parseFetchHeader(cursor);
+  auto parseStreamHeaderResult = parser_.parseFetchHeader(cursor);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   ObjectHeader headerTemplate;
   headerTemplate.trackIdentifier = *parseStreamHeaderResult;
-  auto parseResult = parseFetchObjectHeader(cursor, headerTemplate);
+  auto parseResult = parser_.parseFetchObjectHeader(cursor, headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(
       std::get<SubscribeID>(parseResult->trackIdentifier), SubscribeID(22));
@@ -449,7 +458,7 @@ TEST(SerializeAndParse, ParseFetchHeader) {
   EXPECT_EQ(*parseResult->length, 4);
   cursor.skip(*parseResult->length);
 
-  parseResult = parseFetchObjectHeader(cursor, headerTemplate);
+  parseResult = parser_.parseFetchObjectHeader(cursor, headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(
       std::get<SubscribeID>(parseResult->trackIdentifier), SubscribeID(22));
@@ -459,7 +468,7 @@ TEST(SerializeAndParse, ParseFetchHeader) {
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
-TEST(SerializeAndParse, ParseClientSetupForMaxSubscribeId) {
+TEST_F(MoQFramerTest, ParseClientSetupForMaxSubscribeId) {
   // Test different values for MAX_SUBSCRIBE_ID
   const std::vector<uint64_t> kTestMaxSubscribeIds = {
       0,
@@ -500,7 +509,7 @@ TEST(SerializeAndParse, ParseClientSetupForMaxSubscribeId) {
   }
 }
 
-TEST(Underflows, All) {
+TEST_F(MoQFramerTest, All) {
   auto allMsgs = moxygen::test::writeAllMessages();
   allMsgs->coalesce();
   auto len = allMsgs->computeChainDataLength();
@@ -516,7 +525,7 @@ TEST(Underflows, All) {
   }
 }
 
-TEST(FramerTests, SingleObjectStream) {
+TEST_F(MoQFramerTest, SingleObjectStream) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeSingleObjectStream(
       writeBuf,
@@ -533,10 +542,10 @@ TEST(FramerTests, SingleObjectStream) {
   folly::io::Cursor cursor(serialized.get());
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
-  auto parseStreamHeaderResult = parseSubgroupHeader(cursor);
+  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult =
-      parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+      parser_.parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);

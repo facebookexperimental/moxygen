@@ -36,6 +36,7 @@ class MoQCodec {
 
   folly::Optional<ErrorCode> connError_;
   ObjectHeader curObjectHeader_;
+  MoQFrameParser moqFrameParser_;
 };
 
 class MoQControlCodec : public MoQCodec {

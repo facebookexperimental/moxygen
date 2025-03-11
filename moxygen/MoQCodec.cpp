@@ -140,7 +140,7 @@ void MoQObjectStreamCodec::onIngress(
       }
       case ParseState::FETCH_HEADER: {
         auto newCursor = cursor;
-        auto res = parseFetchHeader(newCursor);
+        auto res = moqFrameParser_.parseFetchHeader(newCursor);
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
@@ -158,7 +158,7 @@ void MoQObjectStreamCodec::onIngress(
       }
       case ParseState::OBJECT_STREAM: {
         auto newCursor = cursor;
-        auto res = parseSubgroupHeader(newCursor);
+        auto res = moqFrameParser_.parseSubgroupHeader(newCursor);
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
@@ -183,10 +183,12 @@ void MoQObjectStreamCodec::onIngress(
         auto newCursor = cursor;
         folly::Expected<ObjectHeader, ErrorCode> res;
         if (streamType_ == StreamType::FETCH_HEADER) {
-          res = parseFetchObjectHeader(newCursor, curObjectHeader_);
+          res = moqFrameParser_.parseFetchObjectHeader(
+              newCursor, curObjectHeader_);
         } else {
           DCHECK(streamType_ == StreamType::SUBGROUP_HEADER);
-          res = parseSubgroupObjectHeader(newCursor, curObjectHeader_);
+          res = moqFrameParser_.parseSubgroupObjectHeader(
+              newCursor, curObjectHeader_);
         }
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
@@ -346,7 +348,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       XLOG(ERR) << "Duplicate setup frame";
       return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
     case FrameType::SUBSCRIBE: {
-      auto res = parseSubscribeRequest(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseSubscribeRequest(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribe(std::move(res.value()));
@@ -357,7 +359,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_UPDATE: {
-      auto res = parseSubscribeUpdate(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseSubscribeUpdate(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeUpdate(std::move(res.value()));
@@ -368,7 +370,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_OK: {
-      auto res = parseSubscribeOk(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseSubscribeOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeOk(std::move(res.value()));
@@ -379,7 +381,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_ERROR: {
-      auto res = parseSubscribeError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseSubscribeError(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeError(std::move(res.value()));
@@ -390,7 +392,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::UNSUBSCRIBE: {
-      auto res = parseUnsubscribe(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseUnsubscribe(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onUnsubscribe(std::move(res.value()));
@@ -401,7 +403,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_DONE: {
-      auto res = parseSubscribeDone(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseSubscribeDone(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeDone(std::move(res.value()));
@@ -412,7 +414,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::MAX_SUBSCRIBE_ID: {
-      auto res = parseMaxSubscribeId(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseMaxSubscribeId(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onMaxSubscribeId(std::move(res.value()));
@@ -423,7 +425,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBES_BLOCKED: {
-      auto res = parseSubscribesBlocked(cursor, curFrameLength_);
+      auto res =
+          moqFrameParser_.parseSubscribesBlocked(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribesBlocked(res.value());
@@ -434,7 +437,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH: {
-      auto res = parseFetch(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseFetch(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onFetch(std::move(res.value()));
@@ -445,7 +448,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH_CANCEL: {
-      auto res = parseFetchCancel(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseFetchCancel(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onFetchCancel(std::move(res.value()));
@@ -456,7 +459,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH_OK: {
-      auto res = parseFetchOk(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseFetchOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onFetchOk(std::move(res.value()));
@@ -467,7 +470,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH_ERROR: {
-      auto res = parseFetchError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseFetchError(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onFetchError(std::move(res.value()));
@@ -478,7 +481,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::ANNOUNCE: {
-      auto res = parseAnnounce(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseAnnounce(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onAnnounce(std::move(res.value()));
@@ -489,7 +492,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::ANNOUNCE_OK: {
-      auto res = parseAnnounceOk(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseAnnounceOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onAnnounceOk(std::move(res.value()));
@@ -500,7 +503,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::ANNOUNCE_ERROR: {
-      auto res = parseAnnounceError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseAnnounceError(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onAnnounceError(std::move(res.value()));
@@ -511,7 +514,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::UNANNOUNCE: {
-      auto res = parseUnannounce(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseUnannounce(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onUnannounce(std::move(res.value()));
@@ -522,7 +525,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::ANNOUNCE_CANCEL: {
-      auto res = parseAnnounceCancel(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseAnnounceCancel(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onAnnounceCancel(std::move(res.value()));
@@ -533,7 +536,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_ANNOUNCES: {
-      auto res = parseSubscribeAnnounces(cursor, curFrameLength_);
+      auto res =
+          moqFrameParser_.parseSubscribeAnnounces(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeAnnounces(std::move(res.value()));
@@ -544,7 +548,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_ANNOUNCES_OK: {
-      auto res = parseSubscribeAnnouncesOk(cursor, curFrameLength_);
+      auto res =
+          moqFrameParser_.parseSubscribeAnnouncesOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeAnnouncesOk(std::move(res.value()));
@@ -555,7 +560,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_ANNOUNCES_ERROR: {
-      auto res = parseSubscribeAnnouncesError(cursor, curFrameLength_);
+      auto res =
+          moqFrameParser_.parseSubscribeAnnouncesError(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeAnnouncesError(std::move(res.value()));
@@ -566,7 +572,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::UNSUBSCRIBE_ANNOUNCES: {
-      auto res = parseUnsubscribeAnnounces(cursor, curFrameLength_);
+      auto res =
+          moqFrameParser_.parseUnsubscribeAnnounces(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onUnsubscribeAnnounces(std::move(res.value()));
@@ -577,7 +584,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::TRACK_STATUS_REQUEST: {
-      auto res = parseTrackStatusRequest(cursor, curFrameLength_);
+      auto res =
+          moqFrameParser_.parseTrackStatusRequest(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onTrackStatusRequest(std::move(res.value()));
@@ -588,7 +596,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::TRACK_STATUS: {
-      auto res = parseTrackStatus(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseTrackStatus(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onTrackStatus(std::move(res.value()));
@@ -599,7 +607,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::GOAWAY: {
-      auto res = parseGoaway(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseGoaway(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
           callback_->onGoaway(std::move(res.value()));
