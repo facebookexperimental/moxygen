@@ -13,8 +13,13 @@
 namespace moxygen::test {
 using testing::_;
 
-class MoQCodecTest : public ::testing::Test {
+// The parameter is the MoQ version
+class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
  public:
+  void SetUp() override {
+    moqFrameWriter_.initializeVersion(GetParam());
+  }
+
   void testAll(MoQControlCodec::Direction dir) {
     auto allMsgs =
         moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
@@ -107,12 +112,12 @@ class MoQCodecTest : public ::testing::Test {
   MoQFrameWriter moqFrameWriter_;
 };
 
-TEST_F(MoQCodecTest, All) {
+TEST_P(MoQCodecTest, All) {
   testAll(MoQControlCodec::Direction::CLIENT);
   testAll(MoQControlCodec::Direction::SERVER);
 }
 
-TEST_F(MoQCodecTest, AllObject) {
+TEST_P(MoQCodecTest, AllObject) {
   auto allMsgs = moxygen::test::writeAllObjectMessages(moqFrameWriter_);
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
@@ -144,12 +149,12 @@ TEST_F(MoQCodecTest, AllObject) {
   codec.onIngress(std::move(allMsgs), true);
 }
 
-TEST_F(MoQCodecTest, Underflow) {
+TEST_P(MoQCodecTest, Underflow) {
   testUnderflow(MoQControlCodec::Direction::CLIENT);
   testUnderflow(MoQControlCodec::Direction::SERVER);
 }
 
-TEST_F(MoQCodecTest, UnderflowObjects) {
+TEST_P(MoQCodecTest, UnderflowObjects) {
   auto allMsgs = moxygen::test::writeAllObjectMessages(moqFrameWriter_);
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
@@ -179,7 +184,7 @@ TEST_F(MoQCodecTest, UnderflowObjects) {
   codec.onIngress(nullptr, true);
 }
 
-TEST_F(MoQCodecTest, ObjectStreamPayloadFin) {
+TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
@@ -196,7 +201,7 @@ TEST_F(MoQCodecTest, ObjectStreamPayloadFin) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST_F(MoQCodecTest, ObjectStreamPayload) {
+TEST_P(MoQCodecTest, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
@@ -214,7 +219,7 @@ TEST_F(MoQCodecTest, ObjectStreamPayload) {
   codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
 }
 
-TEST_F(MoQCodecTest, EmptyObjectPayload) {
+TEST_P(MoQCodecTest, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
@@ -233,7 +238,7 @@ TEST_F(MoQCodecTest, EmptyObjectPayload) {
   codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
 }
 
-TEST_F(MoQCodecTest, TruncatedObject) {
+TEST_P(MoQCodecTest, TruncatedObject) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
       writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
@@ -252,7 +257,7 @@ TEST_F(MoQCodecTest, TruncatedObject) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST_F(MoQCodecTest, TruncatedObjectPayload) {
+TEST_P(MoQCodecTest, TruncatedObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
       writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
@@ -276,7 +281,7 @@ TEST_F(MoQCodecTest, TruncatedObjectPayload) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST_F(MoQCodecTest, StreamTypeUnderflow) {
+TEST_P(MoQCodecTest, StreamTypeUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint8_t big = 0xff;
   writeBuf.append(&big, 1);
@@ -287,7 +292,7 @@ TEST_F(MoQCodecTest, StreamTypeUnderflow) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST_F(MoQCodecTest, UnknownStreamType) {
+TEST_P(MoQCodecTest, UnknownStreamType) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint8_t bad = 0x12;
   writeBuf.append(&bad, 1);
@@ -298,7 +303,7 @@ TEST_F(MoQCodecTest, UnknownStreamType) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST_F(MoQCodecTest, Fetch) {
+TEST_P(MoQCodecTest, Fetch) {
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -328,7 +333,7 @@ TEST_F(MoQCodecTest, Fetch) {
   codec.onIngress(writeBuf.move(), false);
 }
 
-TEST_F(MoQCodecTest, FetchHeaderUnderflow) {
+TEST_P(MoQCodecTest, FetchHeaderUnderflow) {
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -339,7 +344,7 @@ TEST_F(MoQCodecTest, FetchHeaderUnderflow) {
   codec.onIngress(writeBuf.splitAtMost(2), true);
 }
 
-TEST_F(MoQCodecTest, InvalidFrame) {
+TEST_P(MoQCodecTest, InvalidFrame) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeBuf.append(std::string(" "));
   testing::NiceMock<MockMoQCodecCallback> callback;
@@ -350,7 +355,7 @@ TEST_F(MoQCodecTest, InvalidFrame) {
   codec.onIngress(writeBuf.move(), false);
 }
 
-TEST_F(MoQCodecTest, InvalidSetups) {
+TEST_P(MoQCodecTest, InvalidSetups) {
   testing::NiceMock<MockMoQCodecCallback> callback;
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
@@ -406,4 +411,9 @@ TEST_F(MoQCodecTest, InvalidSetups) {
     serverCodec.onIngress(serverSetup->clone(), false);
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQCodecTest,
+    MoQCodecTest,
+    ::testing::Values(kVersionDraftCurrent));
 } // namespace moxygen::test
