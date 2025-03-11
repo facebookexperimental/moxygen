@@ -11,10 +11,13 @@
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/utils/Logging.h>
 
-using namespace moxygen;
+namespace moxygen {
 
-const auto kTestData = folly::IOBuf::copyBuffer("Data: Hello world");
-const auto kTestMetadata = folly::IOBuf::copyBuffer("Metadata: Hello world");
+using namespace testing;
+
+const auto kTestData =
+    folly::IOBuf::copyBuffer("Data: Hello world"); // Length 17
+const auto kTestExtradata = folly::IOBuf::copyBuffer("Metadata: Hello world");
 
 uint8_t idrNaluBuff[5] = {0x00, 0x00, 0x00, 0x01, 0x05};
 const auto kTestVideoDataIDR =
@@ -23,131 +26,201 @@ uint8_t noIdrNaluBuff[5] = {0x00, 0x00, 0x00, 0x01, 0x01};
 const auto kTestVideoDataNoIDR =
     folly::IOBuf::copyBuffer(noIdrNaluBuff, sizeof(noIdrNaluBuff));
 
-TEST(MoQMi, EncodeVideoH264TestNoMetadata) {
-  // Expected wire format:
-  uint8_t expectedWire[67] = {
-      0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0x02, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0x05, 0x00, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c,
-      0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+uint8_t expectedh264AVCCMetadataExtensionWire[48] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x05};
+const auto kTestExpectedh264AVCCMetadataExtensionWire =
+    folly::IOBuf::copyBuffer(
+        expectedh264AVCCMetadataExtensionWire,
+        sizeof(expectedh264AVCCMetadataExtensionWire));
 
-  // Test VideoH264AVCCWCPData without metadata
-  auto dataToEncode = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
-      0x3FFFFFFFFFFFFF00, // SeqId
-      0x3FFFFFFFFFFFFF01, // Pts
-      0x3FFFFFFFFFFFFF04, // Timescale
-      0x3FFFFFFFFFFFFF03, // Duration
-      0x3FFFFFFFFFFFFF05, // Wallclock
-      kTestData->clone(), // Data
-      nullptr,            // Metadata
-      0x3FFFFFFFFFFFFF02  // Dts
-  );
-  // Total: 1+8+8+8+8+8+8+1+17 = 67 bytes
+uint8_t expectedAACLCMetadataExtensionWire[56] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x05,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x06};
+const auto kTestExpectedhAACLCMetadataExtensionWire = folly::IOBuf::copyBuffer(
+    expectedAACLCMetadataExtensionWire,
+    sizeof(expectedAACLCMetadataExtensionWire));
 
-  XLOG(INFO) << "dataToEncode->data->computeChainDataLength()="
-             << dataToEncode->data->computeChainDataLength();
+TEST(MoQMiTest, EncodeVideoH264TestNoMetadata) {
+  auto item = std::make_unique<moxygen::MediaItem>(
+      kTestData->clone(),
+      nullptr /* metadata */,
+      MediaType::VIDEO,
+      0x3FFFFFFFFFFFFF00 /* id */,
+      0x3FFFFFFFFFFFFF01 /* pts*/,
+      0x3FFFFFFFFFFFFF02 /* dts*/,
+      0x3FFFFFFFFFFFFF04 /* timescale */,
+      0x3FFFFFFFFFFFFF03 /* duration */,
+      0x3FFFFFFFFFFFFF05 /* wallclock*/,
+      false /* isIDR */,
+      false /* EOF*/);
 
-  auto mi = MoQMi::toObjectPayload(std::move(dataToEncode));
-
-  EXPECT_NE(mi, nullptr);
-  EXPECT_EQ(mi->computeChainDataLength(), 67);
-
-  folly::IOBufEqualTo eq;
-  EXPECT_TRUE(eq(mi, folly::IOBuf::copyBuffer(expectedWire, 67)));
-}
-
-TEST(MoQMi, EncodeVideoH264TestWithMetadata) {
-  // Expected wire format:
-  uint8_t expectedWire[88] = {
-      0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0x02, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x05, 0x15, 0x4d, 0x65, 0x74, 0x61, 0x64,
-      0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20,
-      0x77, 0x6f, 0x72, 0x6c, 0x64, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20,
-      0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
-
-  // Test VideoH264AVCCWCPData with metadata
-  auto dataToEncode = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
-      0x3FFFFFFFFFFFFF00,     // SeqId
-      0x3FFFFFFFFFFFFF01,     // Pts
-      0x3FFFFFFFFFFFFF04,     // Timescale
-      0x3FFFFFFFFFFFFF03,     // Duration
-      0x3FFFFFFFFFFFFF05,     // Wallclock
-      kTestData->clone(),     // Data
-      kTestMetadata->clone(), // Metadata
-      0x3FFFFFFFFFFFFF02      // Dts
-  );
-  // Total: 1+8+8+8+8+8+8+21+1+17 = 88 bytes
-
-  XLOG(INFO) << "dataToEncode->metadata->computeChainDataLength()="
-             << dataToEncode->metadata->computeChainDataLength();
-  XLOG(INFO) << "dataToEncode->data->computeChainDataLength()="
-             << dataToEncode->data->computeChainDataLength();
-
-  auto mi = MoQMi::toObjectPayload(std::move(dataToEncode));
+  auto mi = MoQMi::encodeToMoQMi(item->clone());
 
   EXPECT_NE(mi, nullptr);
-  EXPECT_EQ(mi->computeChainDataLength(), 88);
-
+  // Check extensions
+  EXPECT_EQ(mi->extensions.size(), 2);
+  EXPECT_EQ(
+      mi->extensions[0].type,
+      folly::to_underlying(MoQMi::HeaderExtensionsTypeIDs::
+                               MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+  EXPECT_EQ(
+      mi->extensions[0].intValue,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC));
+  EXPECT_EQ(
+      mi->extensions[1].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA));
+  auto h264AVCCMetadataBuff =
+      MoQMi::VectorToIOBuf(mi->extensions[1].arrayValue);
+  XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA: "
+             << proxygen::IOBufPrinter::printHexFolly(
+                    h264AVCCMetadataBuff.get(), true);
   folly::IOBufEqualTo eq;
-  EXPECT_TRUE(eq(mi, folly::IOBuf::copyBuffer(expectedWire, 88)));
+  EXPECT_TRUE(
+      eq(h264AVCCMetadataBuff, kTestExpectedh264AVCCMetadataExtensionWire));
+
+  // Check payload
+  EXPECT_NE(mi->payload, nullptr);
+  EXPECT_EQ(mi->payload->computeChainDataLength(), 17);
+  EXPECT_TRUE(eq(mi->payload, kTestData->clone()));
 }
 
-TEST(MoQMi, EncodeAudioAAC) {
-  // Expected wire format:
-  uint8_t expectedWire[74] = {
-      0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x06,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0x05, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c,
-      0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+TEST(MoQMiTest, EncodeVideoH264TestWithMetadata) {
+  auto item = std::make_unique<moxygen::MediaItem>(
+      kTestData->clone(),
+      kTestExtradata->clone() /* extradata */,
+      MediaType::VIDEO,
+      0x3FFFFFFFFFFFFF00 /* id */,
+      0x3FFFFFFFFFFFFF01 /* pts*/,
+      0x3FFFFFFFFFFFFF02 /* dts*/,
+      0x3FFFFFFFFFFFFF04 /* timescale */,
+      0x3FFFFFFFFFFFFF03 /* duration */,
+      0x3FFFFFFFFFFFFF05 /* wallclock*/,
+      true /* isIDR */,
+      false /* EOF*/);
 
-  // Test AudioAACMP4LCWCPData
-  auto dataToEncode = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
-      0x3FFFFFFFFFFFFF00, // SeqId
-      0x3FFFFFFFFFFFFF01, // Pts
-      0x3FFFFFFFFFFFFF04, // Timescale
-      0x3FFFFFFFFFFFFF03, // Duration
-      0x3FFFFFFFFFFFFF05, // Wallclock
-      kTestData->clone(), // Data
-      0x3FFFFFFFFFFFFF06, // SampleFreq
-      0x3FFFFFFFFFFFFF07  // NumChannels
-  );
-  // Total: 1+8+8+8+8+8+8+8+17 = 74 bytes
-
-  XLOG(INFO) << "dataToEncode->data->computeChainDataLength()="
-             << dataToEncode->data->computeChainDataLength();
-
-  auto mi = MoQMi::toObjectPayload(std::move(dataToEncode));
+  auto mi = MoQMi::encodeToMoQMi(item->clone());
 
   EXPECT_NE(mi, nullptr);
-  EXPECT_EQ(mi->computeChainDataLength(), 74);
+  // Check extensions
+  EXPECT_EQ(mi->extensions.size(), 3);
+  EXPECT_EQ(
+      mi->extensions[0].type,
+      folly::to_underlying(MoQMi::HeaderExtensionsTypeIDs::
+                               MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+  EXPECT_EQ(
+      mi->extensions[0].intValue,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC));
 
+  EXPECT_EQ(
+      mi->extensions[1].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA));
+
+  auto h264AVCCMetadataBuff =
+      MoQMi::VectorToIOBuf(mi->extensions[1].arrayValue);
+  XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA: "
+             << proxygen::IOBufPrinter::printHexFolly(
+                    h264AVCCMetadataBuff.get(), true);
   folly::IOBufEqualTo eq;
-  EXPECT_TRUE(eq(mi, folly::IOBuf::copyBuffer(expectedWire, 74)));
+  EXPECT_TRUE(
+      eq(h264AVCCMetadataBuff, kTestExpectedh264AVCCMetadataExtensionWire));
+
+  EXPECT_EQ(
+      mi->extensions[2].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA));
+  auto h264AVCCExtradataBuff =
+      MoQMi::VectorToIOBuf(mi->extensions[2].arrayValue);
+  XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA: "
+             << proxygen::IOBufPrinter::printHexFolly(
+                    h264AVCCExtradataBuff.get(), true);
+  EXPECT_TRUE(eq(h264AVCCExtradataBuff, kTestExtradata));
 }
 
-TEST(MoQMi, DecodeVideoH264TestWithMetadata) {
-  uint8_t fromWire[88] = {
-      0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0x02, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x05, 0x15, 0x4d, 0x65, 0x74, 0x61, 0x64,
-      0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20,
-      0x77, 0x6f, 0x72, 0x6c, 0x64, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20,
-      0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+TEST(MoQMiTest, EncodeAudioAAC) {
+  auto item = std::make_unique<moxygen::MediaItem>(
+      kTestData->clone(),
+      MediaType::AUDIO,
+      0x3FFFFFFFFFFFFF00 /* id */,
+      0x3FFFFFFFFFFFFF01 /* pts*/,
+      0x3FFFFFFFFFFFFF02 /* timescale */,
+      0x3FFFFFFFFFFFFF05 /* duration */,
+      0x3FFFFFFFFFFFFF06 /* wallclock */,
+      0x3FFFFFFFFFFFFF03 /* sampleFreq */,
+      0x3FFFFFFFFFFFFF04 /* NumChannels */,
+      false /* EOF*/);
 
-  auto buff = folly::IOBuf::copyBuffer(fromWire, sizeof(fromWire));
+  auto mi = MoQMi::encodeToMoQMi(item->clone());
 
-  // Test VideoH264AVCCWCPData with metadata
-  auto res = MoQMi::fromObjectPayload(buff->clone());
+  EXPECT_NE(mi, nullptr);
+  // Check extensions
+  EXPECT_EQ(mi->extensions.size(), 2);
+  EXPECT_EQ(
+      mi->extensions[0].type,
+      folly::to_underlying(MoQMi::HeaderExtensionsTypeIDs::
+                               MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+  EXPECT_EQ(
+      mi->extensions[0].intValue,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4));
+
+  EXPECT_EQ(
+      mi->extensions[1].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA));
+
+  auto aacLcMetadataBuff = MoQMi::VectorToIOBuf(mi->extensions[1].arrayValue);
+  XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA: "
+             << proxygen::IOBufPrinter::printHexFolly(
+                    aacLcMetadataBuff.get(), true);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(aacLcMetadataBuff, kTestExpectedhAACLCMetadataExtensionWire));
+}
+
+TEST(MoQMiTest, DecodeVideoH264TestWithExtradata) {
+  std::vector<Extension> extensions;
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC),
+      {}}); // MOQMI_MEDIA_TYPE
+
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA),
+      0,
+      MoQMi::IOBufToVector(kTestExpectedh264AVCCMetadataExtensionWire
+                               ->clone())}); // MOQMI_AVCC_METADATA
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA),
+      0,
+      MoQMi::IOBufToVector(kTestExtradata->clone())}); // MOQMI_AVCC_EXTRADATA
+
+  auto obj =
+      std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());
+
+  auto res = MoQMi::decodeMoQMi(std::move(obj));
 
   EXPECT_NE(std::get<0>(res), nullptr);
   EXPECT_EQ(std::get<0>(res)->seqId, 0x3FFFFFFFFFFFFF00);
@@ -158,22 +231,31 @@ TEST(MoQMi, DecodeVideoH264TestWithMetadata) {
   EXPECT_EQ(std::get<0>(res)->dts, 0x3FFFFFFFFFFFFF02);
   folly::IOBufEqualTo eq;
   EXPECT_TRUE(eq(std::get<0>(res)->data, kTestData));
-  EXPECT_TRUE(eq(std::get<0>(res)->metadata, kTestMetadata));
+  EXPECT_TRUE(eq(std::get<0>(res)->metadata, kTestExtradata));
 }
 
-TEST(MoQMi, DecodeVideoH264TestNoMetadata) {
-  uint8_t fromWire[67] = {
-      0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0x02, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x04, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0x05, 0x00, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c, 0x6c,
-      0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+TEST(MoQMiTest, DecodeVideoH264TestNoMetadata) {
+  std::vector<Extension> extensions;
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC),
+      {}}); // MOQMI_MEDIA_TYPE
 
-  auto buff = folly::IOBuf::copyBuffer(fromWire, sizeof(fromWire));
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA),
+      0,
+      MoQMi::IOBufToVector(kTestExpectedh264AVCCMetadataExtensionWire
+                               ->clone())}); // MOQMI_AVCC_METADATA
 
-  // Test VideoH264AVCCWCPData without metadata
-  auto res = MoQMi::fromObjectPayload(buff->clone());
+  auto obj =
+      std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());
+
+  auto res = MoQMi::decodeMoQMi(std::move(obj));
 
   EXPECT_NE(std::get<0>(res), nullptr);
   EXPECT_EQ(std::get<0>(res)->seqId, 0x3FFFFFFFFFFFFF00);
@@ -182,34 +264,42 @@ TEST(MoQMi, DecodeVideoH264TestNoMetadata) {
   EXPECT_EQ(std::get<0>(res)->duration, 0x3FFFFFFFFFFFFF03);
   EXPECT_EQ(std::get<0>(res)->wallclock, 0x3FFFFFFFFFFFFF05);
   EXPECT_EQ(std::get<0>(res)->dts, 0x3FFFFFFFFFFFFF02);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(std::get<0>(res)->data, kTestData));
   EXPECT_EQ(std::get<0>(res)->metadata, nullptr);
-  folly::IOBufEqualTo eq;
-  EXPECT_TRUE(eq(std::get<0>(res)->data, kTestData));
 }
 
-TEST(MoQMi, DecodeAudioAAC) {
-  uint8_t fromWire[74] = {
-      0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x06,
-      0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0xff, 0xff, 0xff,
-      0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-      0xff, 0x05, 0x44, 0x61, 0x74, 0x61, 0x3a, 0x20, 0x48, 0x65, 0x6c,
-      0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64};
+TEST(MoQMiTest, DecodeAudioAAC) {
+  std::vector<Extension> extensions;
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4),
+      {}}); // MOQMI_MEDIA_TYPE
 
-  auto buff = folly::IOBuf::copyBuffer(fromWire, sizeof(fromWire));
+  extensions.push_back(Extension{
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA),
+      0,
+      MoQMi::IOBufToVector(kTestExpectedhAACLCMetadataExtensionWire
+                               ->clone())}); // MOQMI_AACLC_METADATA
 
-  // Test AudioAACMP4LCWCPData
-  auto res = MoQMi::fromObjectPayload(buff->clone());
+  auto obj =
+      std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());
+
+  auto res = MoQMi::decodeMoQMi(std::move(obj));
 
   EXPECT_NE(std::get<1>(res), nullptr);
   EXPECT_EQ(std::get<1>(res)->seqId, 0x3FFFFFFFFFFFFF00);
   EXPECT_EQ(std::get<1>(res)->pts, 0x3FFFFFFFFFFFFF01);
-  EXPECT_EQ(std::get<1>(res)->timescale, 0x3FFFFFFFFFFFFF04);
-  EXPECT_EQ(std::get<1>(res)->duration, 0x3FFFFFFFFFFFFF03);
-  EXPECT_EQ(std::get<1>(res)->wallclock, 0x3FFFFFFFFFFFFF05);
-  EXPECT_EQ(std::get<1>(res)->sampleFreq, 0x3FFFFFFFFFFFFF06);
-  EXPECT_EQ(std::get<1>(res)->numChannels, 0x3FFFFFFFFFFFFF07);
+  EXPECT_EQ(std::get<1>(res)->timescale, 0x3FFFFFFFFFFFFF02);
+  EXPECT_EQ(std::get<1>(res)->duration, 0x3FFFFFFFFFFFFF05);
+  EXPECT_EQ(std::get<1>(res)->wallclock, 0x3FFFFFFFFFFFFF06);
+  EXPECT_EQ(std::get<1>(res)->sampleFreq, 0x3FFFFFFFFFFFFF03);
+  EXPECT_EQ(std::get<1>(res)->numChannels, 0x3FFFFFFFFFFFFF04);
   folly::IOBufEqualTo eq;
   EXPECT_TRUE(eq(std::get<1>(res)->data, kTestData));
 }
@@ -219,14 +309,14 @@ TEST(MoQMi, OverrideStreamOpVideoH264) {
       "VideoH264. id: 1, pts: 2, dts: 6, timescale: 3, duration: 4, wallclock: 5, metadata length: 21, data length: 17";
 
   auto dataVideo = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
-      1,                      // SeqId
-      2,                      // Pts
-      3,                      // Timescale
-      4,                      // Duration
-      5,                      // Wallclock
-      kTestData->clone(),     // Data
-      kTestMetadata->clone(), // Metadata
-      6                       // Dts
+      1,                       // SeqId
+      2,                       // Pts
+      3,                       // Timescale
+      4,                       // Duration
+      5,                       // Wallclock
+      kTestData->clone(),      // Data
+      kTestExtradata->clone(), // Extradata
+      6                        // Dts
   );
 
   std::stringstream ss;
@@ -264,7 +354,7 @@ TEST(MoQMi, IsIdr) {
       4,                          // Duration
       5,                          // Wallclock
       kTestVideoDataIDR->clone(), // Data
-      kTestMetadata->clone(),     // Metadata
+      kTestExtradata->clone(),    // Extradata
       6                           // Dts
   );
   auto dataVideoNoIdr = std::make_unique<MoQMi::VideoH264AVCCWCPData>(
@@ -274,7 +364,7 @@ TEST(MoQMi, IsIdr) {
       10,                           // Duration
       5,                            // Wallclock
       kTestVideoDataNoIDR->clone(), // Data
-      kTestMetadata->clone(),       // Metadata
+      kTestExtradata->clone(),      // Extradata
       6                             // Dts
   );
 
@@ -315,3 +405,5 @@ TEST(MoQMi, AscAudioHeader) {
 
   EXPECT_TRUE(ascHeaderDataDecoded == expectedAsc);
 }
+
+} // namespace moxygen

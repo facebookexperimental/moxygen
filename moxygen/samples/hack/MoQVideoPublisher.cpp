@@ -273,8 +273,8 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
     return;
   }
 
-  auto objPayload = MoQMi::encodeToMoQMi(std::move(item));
-  if (!objPayload) {
+  auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
+  if (!moqMiObj) {
     XLOG(ERR) << "Failed to encode video frame";
     return;
   }
@@ -292,9 +292,12 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
   // Send video data
   if (videoSgPub_) {
     XLOG(DBG1) << "Sending video frame. grp-obj: " << latestVideo_.group << "-"
-               << latestVideo_.object
-               << ". Payload size: " << objPayload->computeChainDataLength();
-    videoSgPub_->object(latestVideo_.object++, std::move(objPayload));
+               << latestVideo_.object << ". Payload size: "
+               << moqMiObj->payload->computeChainDataLength();
+    videoSgPub_->object(
+        latestVideo_.object++,
+        std::move(moqMiObj->payload),
+        std::move(moqMiObj->extensions));
   } else {
     XLOG(ERR) << "Should not happen";
   }

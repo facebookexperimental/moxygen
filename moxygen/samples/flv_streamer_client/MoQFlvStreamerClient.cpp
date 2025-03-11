@@ -192,8 +192,8 @@ class MoQFlvStreamerClient
       XLOG(INFO) << "FLV audio received EOF";
       return;
     }
-    auto objPayload = MoQMi::encodeToMoQMi(std::move(item));
-    if (!objPayload) {
+    auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
+    if (!moqMiObj) {
       XLOG(ERR) << "Failed to encode audio frame";
       return;
     }
@@ -203,11 +203,12 @@ class MoQFlvStreamerClient
         /*subgroup=*/0,
         latestAudio_.object,
         AUDIO_STREAM_PRIORITY,
-        ObjectStatus::NORMAL};
+        ObjectStatus::NORMAL,
+        std::move(moqMiObj->extensions)};
 
-    XLOG(DBG1) << "Sending audio frame" << objHeader
-               << ", payload size: " << objPayload->computeChainDataLength();
-    audioPub_->objectStream(objHeader, std::move(objPayload));
+    XLOG(DBG1) << "Sending audio frame" << objHeader << ", payload size: "
+               << moqMiObj->payload->computeChainDataLength();
+    audioPub_->objectStream(objHeader, std::move(moqMiObj->payload));
   }
 
   void publishVideo(std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
@@ -229,8 +230,8 @@ class MoQFlvStreamerClient
     }
 
     auto isIdr = item->isIdr;
-    auto objPayload = MoQMi::encodeToMoQMi(std::move(item));
-    if (!objPayload) {
+    auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
+    if (!moqMiObj) {
       XLOG(ERR) << "Failed to encode video frame";
       return;
     }
@@ -255,9 +256,12 @@ class MoQFlvStreamerClient
     // Send video data
     if (videoSgPub_) {
       XLOG(DBG1) << "Sending video frame. grp-obj: " << latestVideo_.group
-                 << "-" << latestVideo_.object
-                 << ". Payload size: " << objPayload->computeChainDataLength();
-      videoSgPub_->object(latestVideo_.object++, std::move(objPayload));
+                 << "-" << latestVideo_.object << ". Payload size: "
+                 << moqMiObj->payload->computeChainDataLength();
+      videoSgPub_->object(
+          latestVideo_.object++,
+          std::move(moqMiObj->payload),
+          std::move(moqMiObj->extensions));
     } else {
       XLOG(ERR) << "Should not happen";
     }

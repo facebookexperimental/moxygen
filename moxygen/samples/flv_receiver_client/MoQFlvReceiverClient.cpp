@@ -65,17 +65,18 @@ class FlvWriterShared : flv::FlvWriter {
   explicit FlvWriterShared(const std::string& flvOutPath)
       : flv::FlvWriter(flvOutPath) {}
 
-  bool writeMoqMiPayload(MoQMi::MoqMiTag moqMiTag) {
+  bool writeMoqMiPayload(MoQMi::MoqMiItem moqMiItem) {
     bool ret = false;
-    if (moqMiTag.index() == MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_READCMD) {
+    if (moqMiItem.index() ==
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_READCMD) {
       return ret;
     }
 
-    if (moqMiTag.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC) {
+    if (moqMiItem.index() ==
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC) {
       auto moqv = std::move(
-          std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
-              moqMiTag));
+          std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC>(
+              moqMiItem));
 
       uint32_t pts = static_cast<uint32_t>(moqv->pts);
       if (moqv->pts > std::numeric_limits<uint32_t>::max()) {
@@ -117,11 +118,11 @@ class FlvWriterShared : flv::FlvWriter {
         }
       }
     } else if (
-        moqMiTag.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
+        moqMiItem.index() ==
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC) {
       auto moqa = std::move(
-          std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
-              moqMiTag));
+          std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC>(
+              moqMiItem));
       if (!audioHeaderWritten_) {
         XLOG(INFO) << "Writing audio header";
         auto ascHeader = moqa->getAscHeader();
@@ -163,26 +164,29 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
       : trackMediaType_(TrackType(mediaType)),
         dejitterBufferSizeMs_(dejitterBufferSizeMs) {}
   ~TrackReceiverHandler() override = default;
-  FlowControlState onObject(const ObjectHeader&, Payload payload) override {
+  FlowControlState onObject(const ObjectHeader& objHeader, Payload payload)
+      override {
     if (payload) {
       std::tuple<
-          folly::Optional<MoQMi::MoqMiTag>,
-          dejitter::DeJitter<MoQMi::MoqMiTag>::GapInfo>
+          folly::Optional<MoQMi::MoqMiItem>,
+          dejitter::DeJitter<MoQMi::MoqMiItem>::GapInfo>
           deJitterData;
 
       auto payloadSize = payload->computeChainDataLength();
       XLOG(DBG1) << trackMediaType_.toStr()
                  << " Received payload. Size=" << payloadSize;
 
-      auto payloadDecodedData = MoQMi::fromObjectPayload(std::move(payload));
+      auto payloadDecodedData =
+          MoQMi::decodeMoQMi(std::make_unique<MoQMi::MoqMiObject>(
+              objHeader.extensions, std::move(payload)));
       logData(payloadDecodedData);
       if (payloadDecodedData.index() ==
-              MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC ||
+              MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC ||
           payloadDecodedData.index() ==
-              MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
+              MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC) {
         // Create deJitter if not already created
         if (!deJitter_) {
-          deJitter_ = std::make_unique<dejitter::DeJitter<MoQMi::MoqMiTag>>(
+          deJitter_ = std::make_unique<dejitter::DeJitter<MoQMi::MoqMiItem>>(
               dejitterBufferSizeMs_);
         }
 
@@ -201,25 +205,25 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
           deJitterData = deJitter_->insertItem(
               seqId.value(), sDurMs.value_or(0), std::move(payloadDecodedData));
           if (std::get<1>(deJitterData).gapType ==
-              dejitter::DeJitter<MoQMi::MoqMiTag>::GapType::FILLING_BUFFER) {
+              dejitter::DeJitter<MoQMi::MoqMiItem>::GapType::FILLING_BUFFER) {
             XLOG(DBG1) << trackMediaType_.toStr()
                        << " Filling buffer for seqId: " << seqId.value();
           } else if (
               std::get<1>(deJitterData).gapType ==
-              dejitter::DeJitter<MoQMi::MoqMiTag>::GapType::ARRIVED_LATE) {
+              dejitter::DeJitter<MoQMi::MoqMiItem>::GapType::ARRIVED_LATE) {
             XLOG(WARN) << trackMediaType_.toStr()
                        << " Dropped, because arrived late. seqId: "
                        << seqId.value();
           } else if (
               std::get<1>(deJitterData).gapType ==
-              dejitter::DeJitter<MoQMi::MoqMiTag>::GapType::GAP) {
+              dejitter::DeJitter<MoQMi::MoqMiItem>::GapType::GAP) {
             XLOG(WARN) << trackMediaType_.toStr()
                        << " GAP PASSED to decoder, size: "
                        << std::get<1>(deJitterData).gapSize
                        << ", seqId: " << seqId.value();
           } else if (
               std::get<1>(deJitterData).gapType ==
-              dejitter::DeJitter<MoQMi::MoqMiTag>::GapType::INTERNAL_ERROR) {
+              dejitter::DeJitter<MoQMi::MoqMiItem>::GapType::INTERNAL_ERROR) {
             XLOG(ERR) << trackMediaType_.toStr()
                       << " INTERNAL ERROR dejittering, seqId: "
                       << seqId.value();
@@ -264,35 +268,37 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   }
 
  private:
-  void logData(const MoQMi::MoqMiTag& payloadDecodedData) const {
+  void logData(const MoQMi::MoqMiItem& payloadDecodedData) const {
     if (payloadDecodedData.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC) {
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC) {
       XLOG(DBG1)
           << trackMediaType_.toStr() << " payloadDecodedData: "
           << *std::get<
-                 MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
+                 MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC>(
                  payloadDecodedData);
     } else if (
         payloadDecodedData.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC) {
       XLOG(DBG1)
           << trackMediaType_.toStr() << " payloadDecodedData: "
-          << *std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
+          << *std::get<
+                 MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC>(
                  payloadDecodedData);
     }
   }
 
   folly::Optional<uint64_t> getSeqId(
-      const MoQMi::MoqMiTag& payloadDecodedData) const {
+      const MoQMi::MoqMiItem& payloadDecodedData) const {
     if (payloadDecodedData.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC) {
-      return std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC) {
+      return std::get<
+                 MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC>(
                  payloadDecodedData)
           ->seqId;
     } else if (
         payloadDecodedData.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
-      return std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC) {
+      return std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC>(
                  payloadDecodedData)
           ->seqId;
     }
@@ -300,27 +306,28 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
   }
 
   folly::Optional<uint64_t> getDurationMs(
-      const MoQMi::MoqMiTag& payloadDecodedData) const {
+      const MoQMi::MoqMiItem& payloadDecodedData) const {
     folly::Optional<uint64_t> dur;
     folly::Optional<uint64_t> timeScale;
 
     if (payloadDecodedData.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC) {
-      dur = std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
-                payloadDecodedData)
-                ->duration;
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC) {
+      dur =
+          std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC>(
+              payloadDecodedData)
+              ->duration;
       timeScale =
-          std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_VIDEO_H264_AVC>(
+          std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC>(
               payloadDecodedData)
               ->timescale;
     } else if (
         payloadDecodedData.index() ==
-        MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC) {
-      dur = std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
+        MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC) {
+      dur = std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC>(
                 payloadDecodedData)
                 ->duration;
       timeScale =
-          std::get<MoQMi::MoqMITagTypeIndex::MOQMI_TAG_INDEX_AUDIO_AAC_LC>(
+          std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_AUDIO_AAC_LC>(
               payloadDecodedData)
               ->timescale;
     }
@@ -332,7 +339,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
 
   std::shared_ptr<FlvWriterShared> flvw_;
   TrackType trackMediaType_;
-  std::unique_ptr<dejitter::DeJitter<MoQMi::MoqMiTag>> deJitter_;
+  std::unique_ptr<dejitter::DeJitter<MoQMi::MoqMiItem>> deJitter_;
   uint32_t dejitterBufferSizeMs_;
 };
 

@@ -9,169 +9,292 @@
 
 namespace moxygen {
 
-std::unique_ptr<folly::IOBuf> MoQMi::toObjectPayload(
-    std::unique_ptr<VideoH264AVCCWCPData> videoData) noexcept {
-  folly::IOBufQueue buffQueue{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
+std::unique_ptr<MoQMi::MoqMiObject> MoQMi::encodeToMoQMi(
+    std::unique_ptr<MediaItem> item) noexcept {
+  if (!item) {
+    return nullptr;
+  }
+  auto ret = std::make_unique<MoQMi::MoqMiObject>(std::move(item->data));
+  if (item->type == MediaType::VIDEO) {
+    // Specify media type
+    ret->extensions.emplace_back(Extension{
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+        folly::to_underlying(
+            HeaderExtensionMediaTypeValues::
+                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC),
+        {}});
 
-  writeVarint(
-      buffQueue,
-      folly::to_underlying(PayloadType::VideoH264AVCCWCP),
-      size,
-      error);
-  writeVarint(buffQueue, videoData->seqId, size, error);
-  writeVarint(buffQueue, videoData->pts, size, error);
-  writeVarint(buffQueue, videoData->dts, size, error);
-  writeVarint(buffQueue, videoData->timescale, size, error);
-  writeVarint(buffQueue, videoData->duration, size, error);
-  writeVarint(buffQueue, videoData->wallclock, size, error);
-  if (videoData->metadata) {
-    writeVarint(
-        buffQueue, videoData->metadata->computeChainDataLength(), size, error);
-    writeBuffer(buffQueue, std::move(videoData->metadata), size, error);
+    // Add metadata
+    auto extBuff = encodeMoqMiAVCCMetadata(*item);
+    ret->extensions.emplace_back(Extension{
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::
+                MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA),
+        0,
+        IOBufToVector(std::move(extBuff))});
+
+    if (item->metadata) {
+      // Add extradata (AVCDecoderConfigurationRecord)
+      ret->extensions.emplace_back(Extension{
+          folly::to_underlying(
+              HeaderExtensionsTypeIDs::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA),
+          0,
+          IOBufToVector(std::move(item->metadata))});
+    }
+  } else if (item->type == MediaType::AUDIO) {
+    // Specify media type
+    ret->extensions.emplace_back(Extension{
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+        folly::to_underlying(
+            HeaderExtensionMediaTypeValues::
+                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4),
+        {}});
+
+    // Add metadata
+    auto extBuff = encodeMoqMiAACLCMetadata(*item);
+    ret->extensions.emplace_back(Extension{
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::
+                MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA),
+        0,
+        IOBufToVector(std::move(extBuff))});
   } else {
-    writeVarint(buffQueue, 0, size, error);
-  }
-  writeBuffer(buffQueue, std::move(videoData->data), size, error);
-
-  if (error) {
+    // Unknown media type
     return nullptr;
   }
-  return buffQueue.move();
+  return ret;
 }
 
-std::unique_ptr<folly::IOBuf> MoQMi::toObjectPayload(
-    std::unique_ptr<AudioAACMP4LCWCPData> audioData) noexcept {
-  folly::IOBufQueue buffQueue{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-
-  writeVarint(
-      buffQueue,
-      folly::to_underlying(PayloadType::AudioAACMP4LCWCP),
-      size,
-      error);
-  writeVarint(buffQueue, audioData->seqId, size, error);
-  writeVarint(buffQueue, audioData->pts, size, error);
-  writeVarint(buffQueue, audioData->timescale, size, error);
-  writeVarint(buffQueue, audioData->sampleFreq, size, error);
-  writeVarint(buffQueue, audioData->numChannels, size, error);
-  writeVarint(buffQueue, audioData->duration, size, error);
-  writeVarint(buffQueue, audioData->wallclock, size, error);
-  writeBuffer(buffQueue, std::move(audioData->data), size, error);
-
-  if (error) {
-    return nullptr;
+MoQMi::MoqMiItem MoQMi::decodeMoQMi(
+    std::unique_ptr<MoQMi::MoqMiObject> obj) noexcept {
+  if (!obj) {
+    return MoQMi::MoqMiReadCmd::MOQMI_UNKNOWN;
   }
-  return buffQueue.move();
-}
+  HeaderExtensionMediaTypeValues mediaType = HeaderExtensionMediaTypeValues::
+      MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_UNKNOWN;
+  std::unique_ptr<folly::IOBuf> extradata;
+  std::unique_ptr<VideoH264AVCCWCPData> videoH264AVCCWCPData;
+  std::unique_ptr<AudioAACMP4LCWCPData> audioAACMP4LCWCPData;
 
-MoQMi::MoqMiTag MoQMi::fromObjectPayload(
-    std::unique_ptr<folly::IOBuf> payload) noexcept {
-  folly::io::Cursor cursor(payload.get());
-
-  auto mediaType = quic::decodeQuicInteger(cursor);
-  if (!mediaType) {
-    return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-  }
-
-  if (mediaType->first == folly::to_underlying(PayloadType::VideoH264AVCCWCP)) {
-    VideoH264AVCCWCPData videoData;
-    auto seqId = quic::decodeQuicInteger(cursor);
-    if (!seqId) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto pts = quic::decodeQuicInteger(cursor);
-    if (!pts) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto dts = quic::decodeQuicInteger(cursor);
-    if (!dts) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto timescale = quic::decodeQuicInteger(cursor);
-    if (!timescale) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto duration = quic::decodeQuicInteger(cursor);
-    if (!duration) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto wallclock = quic::decodeQuicInteger(cursor);
-    if (!wallclock) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto metadataSize = quic::decodeQuicInteger(cursor);
-    if (!metadataSize) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    std::unique_ptr<folly::IOBuf> metadata;
-    if (metadataSize->first > 0) {
-      if (!cursor.canAdvance(metadataSize->first)) {
+  // Parse extensions
+  for (const Extension& ext : obj->extensions) {
+    // Media type
+    if (ext.type ==
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE)) {
+      if (mediaType !=
+          HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_UNKNOWN) {
+        // Multiple media types
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
       }
-      cursor.clone(metadata, metadataSize->first);
+      if (ext.intValue ==
+          folly::to_underlying(
+              HeaderExtensionMediaTypeValues::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC)) {
+        mediaType = HeaderExtensionMediaTypeValues::
+            MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC;
+      } else if (
+          ext.intValue ==
+          folly::to_underlying(
+              HeaderExtensionMediaTypeValues::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4)) {
+        mediaType = HeaderExtensionMediaTypeValues::
+            MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4;
+      } else {
+        // Unknown media type
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
     }
-    std::unique_ptr<folly::IOBuf> data;
-    cursor.clone(data, cursor.totalLength());
-    return std::make_unique<VideoH264AVCCWCPData>(
-        seqId->first,
-        pts->first,
-        timescale->first,
-        duration->first,
-        wallclock->first,
-        std::move(data),
-        std::move(metadata),
-        dts->first);
+
+    // Extradata
+    if (ext.type ==
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::
+                MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA)) {
+      if (extradata) {
+        // Multiple extradata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      extradata = VectorToIOBuf(ext.arrayValue);
+    }
+
+    // Metadata AVCC
+    if (ext.type ==
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::
+                MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA)) {
+      if (videoH264AVCCWCPData) {
+        // Multiple AVCC metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      videoH264AVCCWCPData = MoQMi::decodeMoqMiAVCCMetadata(ext.arrayValue);
+      if (!videoH264AVCCWCPData) {
+        // Error parsing h264 AVCC metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+    }
+
+    // Metadata AAC
+    if (ext.type ==
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::
+                MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA)) {
+      if (audioAACMP4LCWCPData) {
+        // Multiple AACLC metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      audioAACMP4LCWCPData = decodeMoqMiAACLCMetadata(ext.arrayValue);
+      if (!audioAACMP4LCWCPData) {
+        // Error parsing AACLC metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+    }
   }
 
-  if (mediaType->first == folly::to_underlying(PayloadType::AudioAACMP4LCWCP)) {
-    AudioAACMP4LCWCPData audioData;
-
-    auto seqId = quic::decodeQuicInteger(cursor);
-    if (!seqId) {
+  // Compose return value
+  if (mediaType ==
+      HeaderExtensionMediaTypeValues::
+          MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC) {
+    if (!videoH264AVCCWCPData) {
       return MoQMi::MoqMiReadCmd::MOQMI_ERR;
     }
-    auto pts = quic::decodeQuicInteger(cursor);
-    if (!pts) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto timescale = quic::decodeQuicInteger(cursor);
-    if (!timescale) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto sampleFreq = quic::decodeQuicInteger(cursor);
-    if (!sampleFreq) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto numChannels = quic::decodeQuicInteger(cursor);
-    if (!numChannels) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto duration = quic::decodeQuicInteger(cursor);
-    if (!duration) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    auto wallclock = quic::decodeQuicInteger(cursor);
-    if (!wallclock) {
-      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
-    }
-    std::unique_ptr<folly::IOBuf> data;
-    cursor.clone(data, cursor.totalLength());
-    return std::make_unique<AudioAACMP4LCWCPData>(
-        seqId->first,
-        pts->first,
-        timescale->first,
-        duration->first,
-        wallclock->first,
-        std::move(data),
-        sampleFreq->first,
-        numChannels->first);
+    videoH264AVCCWCPData->data = std::move(obj->payload);
+    videoH264AVCCWCPData->metadata = std::move(extradata);
+    return videoH264AVCCWCPData;
   }
+  if (mediaType ==
+      HeaderExtensionMediaTypeValues::
+          MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4) {
+    if (!audioAACMP4LCWCPData) {
+      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+    }
+    audioAACMP4LCWCPData->data = std::move(obj->payload);
+    return audioAACMP4LCWCPData;
+  }
+  return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+}
 
-  // Not implemented payload type
-  return MoQMi::MoqMiReadCmd::MOQMI_UNKNOWN;
+std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiAVCCMetadata(
+    const MediaItem& item) noexcept {
+  folly::IOBufQueue buffQueue{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  writeVarint(buffQueue, item.id, size, error);
+  writeVarint(buffQueue, item.pts, size, error);
+  writeVarint(buffQueue, item.dts, size, error);
+  writeVarint(buffQueue, item.timescale, size, error);
+  writeVarint(buffQueue, item.duration, size, error);
+  writeVarint(buffQueue, item.wallclock, size, error);
+  if (error) {
+    return nullptr;
+  }
+  return buffQueue.move();
+}
+
+std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiAACLCMetadata(
+    const MediaItem& item) noexcept {
+  folly::IOBufQueue buffQueue{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  writeVarint(buffQueue, item.id, size, error);
+  writeVarint(buffQueue, item.pts, size, error);
+  writeVarint(buffQueue, item.timescale, size, error);
+  writeVarint(buffQueue, item.sampleFreq, size, error);
+  writeVarint(buffQueue, item.numChannels, size, error);
+  writeVarint(buffQueue, item.duration, size, error);
+  writeVarint(buffQueue, item.wallclock, size, error);
+  if (error) {
+    return nullptr;
+  }
+  return buffQueue.move();
+}
+
+std::unique_ptr<MoQMi::VideoH264AVCCWCPData> MoQMi::decodeMoqMiAVCCMetadata(
+    const std::vector<uint8_t>& extValue) noexcept {
+  auto b = VectorToIOBuf(extValue);
+  folly::io::Cursor cursor(b.get());
+  auto seqId = quic::decodeQuicInteger(cursor);
+  if (!seqId) {
+    return nullptr;
+  }
+  auto pts = quic::decodeQuicInteger(cursor);
+  if (!pts) {
+    return nullptr;
+  }
+  auto dts = quic::decodeQuicInteger(cursor);
+  if (!dts) {
+    return nullptr;
+  }
+  auto timescale = quic::decodeQuicInteger(cursor);
+  if (!timescale) {
+    return nullptr;
+  }
+  auto duration = quic::decodeQuicInteger(cursor);
+  if (!duration) {
+    return nullptr;
+  }
+  auto wallclock = quic::decodeQuicInteger(cursor);
+  if (!wallclock) {
+    return nullptr;
+  }
+  return std::make_unique<VideoH264AVCCWCPData>(
+      seqId->first,
+      pts->first,
+      timescale->first,
+      duration->first,
+      wallclock->first,
+      nullptr,
+      nullptr,
+      dts->first);
+}
+
+std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> MoQMi::decodeMoqMiAACLCMetadata(
+    const std::vector<uint8_t>& extValue) noexcept {
+  auto b = VectorToIOBuf(extValue);
+  folly::io::Cursor cursor(b.get());
+  auto seqId = quic::decodeQuicInteger(cursor);
+  if (!seqId) {
+    return nullptr;
+  }
+  auto pts = quic::decodeQuicInteger(cursor);
+  if (!pts) {
+    return nullptr;
+  }
+  auto timescale = quic::decodeQuicInteger(cursor);
+  if (!timescale) {
+    return nullptr;
+  }
+  auto sampleFreq = quic::decodeQuicInteger(cursor);
+  if (!sampleFreq) {
+    return nullptr;
+  }
+  auto numChannels = quic::decodeQuicInteger(cursor);
+  if (!numChannels) {
+    return nullptr;
+  }
+  auto duration = quic::decodeQuicInteger(cursor);
+  if (!duration) {
+    return nullptr;
+  }
+  auto wallclock = quic::decodeQuicInteger(cursor);
+  if (!wallclock) {
+    return nullptr;
+  }
+  return std::make_unique<AudioAACMP4LCWCPData>(
+      seqId->first,
+      pts->first,
+      timescale->first,
+      duration->first,
+      wallclock->first,
+      nullptr,
+      sampleFreq->first,
+      numChannels->first);
 }
 
 void MoQMi::writeBuffer(
@@ -204,6 +327,25 @@ void MoQMi::writeVarint(
   } else {
     size += *res;
   }
+}
+
+// TODO: Any efficient way to convert IOBuf to vector<uint8_t> ?
+// TODO: Should we use IOBuf instead of vector<uint8_t> for extension
+std::vector<uint8_t> MoQMi::IOBufToVector(
+    std::unique_ptr<folly::IOBuf> data) noexcept {
+  std::vector<uint8_t> ret{};
+  if (data) {
+    data->coalesce();
+    ret.assign(data->data(), data->data() + data->length());
+  }
+  return ret;
+}
+
+// TODO: Should we use IOBuf instead of vector<uint8_t> for extension
+std::unique_ptr<folly::IOBuf> MoQMi::VectorToIOBuf(
+    const std::vector<uint8_t>& data) noexcept {
+  return std::make_unique<folly::IOBuf>(folly::IOBuf::COPY_BUFFER, data);
+  ;
 }
 
 std::ostream& operator<<(
