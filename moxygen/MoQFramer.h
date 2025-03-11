@@ -830,6 +830,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) noexcept;
 
+  void initializeVersion(uint64_t versionIn) {
+    CHECK(!version_) << "Version already initialized";
+    version_ = versionIn;
+  }
+
  private:
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
@@ -858,6 +863,8 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length,
       ObjectHeader& objectHeader);
+
+  folly::Optional<uint64_t> version_;
 };
 
 //// Egress ////
@@ -999,12 +1006,19 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const FetchError& fetchError) noexcept;
 
+  void initializeVersion(uint64_t versionIn) {
+    CHECK(!version_) << "Version already initialized";
+    version_ = versionIn;
+  }
+
  private:
   void writeExtensions(
       folly::IOBufQueue& writeBuf,
       const std::vector<Extension>& extensions,
       size_t& size,
       bool& error);
+
+  folly::Optional<uint64_t> version_;
 };
 
 } // namespace moxygen
