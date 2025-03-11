@@ -79,14 +79,13 @@ TEST(MoQMiTest, EncodeVideoH264TestNoMetadata) {
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA));
-  auto h264AVCCMetadataBuff =
-      MoQMi::VectorToIOBuf(mi->extensions[1].arrayValue);
   XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA: "
              << proxygen::IOBufPrinter::printHexFolly(
-                    h264AVCCMetadataBuff.get(), true);
+                    mi->extensions[1].arrayValue.get(), true);
   folly::IOBufEqualTo eq;
   EXPECT_TRUE(
-      eq(h264AVCCMetadataBuff, kTestExpectedh264AVCCMetadataExtensionWire));
+      eq(mi->extensions[1].arrayValue,
+         kTestExpectedh264AVCCMetadataExtensionWire));
 
   // Check payload
   EXPECT_NE(mi->payload, nullptr);
@@ -129,26 +128,23 @@ TEST(MoQMiTest, EncodeVideoH264TestWithMetadata) {
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA));
 
-  auto h264AVCCMetadataBuff =
-      MoQMi::VectorToIOBuf(mi->extensions[1].arrayValue);
   XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA: "
              << proxygen::IOBufPrinter::printHexFolly(
-                    h264AVCCMetadataBuff.get(), true);
+                    mi->extensions[1].arrayValue.get(), true);
   folly::IOBufEqualTo eq;
   EXPECT_TRUE(
-      eq(h264AVCCMetadataBuff, kTestExpectedh264AVCCMetadataExtensionWire));
+      eq(mi->extensions[1].arrayValue,
+         kTestExpectedh264AVCCMetadataExtensionWire));
 
   EXPECT_EQ(
       mi->extensions[2].type,
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA));
-  auto h264AVCCExtradataBuff =
-      MoQMi::VectorToIOBuf(mi->extensions[2].arrayValue);
   XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA: "
              << proxygen::IOBufPrinter::printHexFolly(
-                    h264AVCCExtradataBuff.get(), true);
-  EXPECT_TRUE(eq(h264AVCCExtradataBuff, kTestExtradata));
+                    mi->extensions[2].arrayValue.get(), true);
+  EXPECT_TRUE(eq(mi->extensions[2].arrayValue, kTestExtradata));
 }
 
 TEST(MoQMiTest, EncodeAudioAAC) {
@@ -185,37 +181,34 @@ TEST(MoQMiTest, EncodeAudioAAC) {
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA));
 
-  auto aacLcMetadataBuff = MoQMi::VectorToIOBuf(mi->extensions[1].arrayValue);
   XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA: "
              << proxygen::IOBufPrinter::printHexFolly(
-                    aacLcMetadataBuff.get(), true);
+                    mi->extensions[1].arrayValue.get(), true);
   folly::IOBufEqualTo eq;
-  EXPECT_TRUE(eq(aacLcMetadataBuff, kTestExpectedhAACLCMetadataExtensionWire));
+  EXPECT_TRUE(eq(
+      mi->extensions[1].arrayValue, kTestExpectedhAACLCMetadataExtensionWire));
 }
 
 TEST(MoQMiTest, DecodeVideoH264TestWithExtradata) {
   std::vector<Extension> extensions;
-  extensions.push_back(Extension{
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
       folly::to_underlying(
           MoQMi::HeaderExtensionMediaTypeValues::
-              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC),
-      {}}); // MOQMI_MEDIA_TYPE
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC)); // MOQMI_MEDIA_TYPE
 
-  extensions.push_back(Extension{
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA),
-      0,
-      MoQMi::IOBufToVector(kTestExpectedh264AVCCMetadataExtensionWire
-                               ->clone())}); // MOQMI_AVCC_METADATA
-  extensions.push_back(Extension{
+      kTestExpectedh264AVCCMetadataExtensionWire
+          ->clone()); // MOQMI_AVCC_METADATA
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA),
-      0,
-      MoQMi::IOBufToVector(kTestExtradata->clone())}); // MOQMI_AVCC_EXTRADATA
+      kTestExtradata->clone()); // MOQMI_AVCC_EXTRADATA
 
   auto obj =
       std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());
@@ -236,21 +229,19 @@ TEST(MoQMiTest, DecodeVideoH264TestWithExtradata) {
 
 TEST(MoQMiTest, DecodeVideoH264TestNoMetadata) {
   std::vector<Extension> extensions;
-  extensions.push_back(Extension{
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
       folly::to_underlying(
           MoQMi::HeaderExtensionMediaTypeValues::
-              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC),
-      {}}); // MOQMI_MEDIA_TYPE
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC)); // MOQMI_MEDIA_TYPE
 
-  extensions.push_back(Extension{
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA),
-      0,
-      MoQMi::IOBufToVector(kTestExpectedh264AVCCMetadataExtensionWire
-                               ->clone())}); // MOQMI_AVCC_METADATA
+      kTestExpectedh264AVCCMetadataExtensionWire
+          ->clone()); // MOQMI_AVCC_METADATA
 
   auto obj =
       std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());
@@ -271,21 +262,19 @@ TEST(MoQMiTest, DecodeVideoH264TestNoMetadata) {
 
 TEST(MoQMiTest, DecodeAudioAAC) {
   std::vector<Extension> extensions;
-  extensions.push_back(Extension{
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
       folly::to_underlying(
           MoQMi::HeaderExtensionMediaTypeValues::
-              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4),
-      {}}); // MOQMI_MEDIA_TYPE
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4)); // MOQMI_MEDIA_TYPE
 
-  extensions.push_back(Extension{
+  extensions.emplace_back(
       folly::to_underlying(
           MoQMi::HeaderExtensionsTypeIDs::
               MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA),
-      0,
-      MoQMi::IOBufToVector(kTestExpectedhAACLCMetadataExtensionWire
-                               ->clone())}); // MOQMI_AACLC_METADATA
+      kTestExpectedhAACLCMetadataExtensionWire
+          ->clone()); // MOQMI_AACLC_METADATA
 
   auto obj =
       std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());

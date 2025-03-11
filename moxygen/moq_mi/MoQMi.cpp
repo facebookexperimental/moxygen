@@ -17,50 +17,45 @@ std::unique_ptr<MoQMi::MoqMiObject> MoQMi::encodeToMoQMi(
   auto ret = std::make_unique<MoQMi::MoqMiObject>(std::move(item->data));
   if (item->type == MediaType::VIDEO) {
     // Specify media type
-    ret->extensions.emplace_back(Extension{
+    ret->extensions.emplace_back(
         folly::to_underlying(
             HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
         folly::to_underlying(
             HeaderExtensionMediaTypeValues::
-                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC),
-        {}});
+                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC));
 
     // Add metadata
     auto extBuff = encodeMoqMiAVCCMetadata(*item);
-    ret->extensions.emplace_back(Extension{
+    ret->extensions.emplace_back(
         folly::to_underlying(
             HeaderExtensionsTypeIDs::
                 MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_METADATA),
-        0,
-        IOBufToVector(std::move(extBuff))});
+        std::move(extBuff));
 
     if (item->metadata) {
       // Add extradata (AVCDecoderConfigurationRecord)
-      ret->extensions.emplace_back(Extension{
+      ret->extensions.emplace_back(
           folly::to_underlying(
               HeaderExtensionsTypeIDs::
                   MOQ_EXT_HEADER_TYPE_MOQMI_VIDEO_H264_IN_AVCC_EXTRADATA),
-          0,
-          IOBufToVector(std::move(item->metadata))});
+          std::move(item->metadata));
     }
   } else if (item->type == MediaType::AUDIO) {
     // Specify media type
-    ret->extensions.emplace_back(Extension{
+    ret->extensions.emplace_back(
         folly::to_underlying(
             HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
         folly::to_underlying(
             HeaderExtensionMediaTypeValues::
-                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4),
-        {}});
+                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4));
 
     // Add metadata
     auto extBuff = encodeMoqMiAACLCMetadata(*item);
-    ret->extensions.emplace_back(Extension{
+    ret->extensions.emplace_back(
         folly::to_underlying(
             HeaderExtensionsTypeIDs::
                 MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA),
-        0,
-        IOBufToVector(std::move(extBuff))});
+        std::move(extBuff));
   } else {
     // Unknown media type
     return nullptr;
@@ -119,7 +114,11 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
         // Multiple extradata
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
       }
-      extradata = VectorToIOBuf(ext.arrayValue);
+      if (!ext.arrayValue) {
+        // AVCC extradata empty
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      extradata = ext.arrayValue->clone();
     }
 
     // Metadata AVCC
@@ -131,7 +130,11 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
         // Multiple AVCC metadata
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
       }
-      videoH264AVCCWCPData = MoQMi::decodeMoqMiAVCCMetadata(ext.arrayValue);
+      if (ext.arrayValue == nullptr) {
+        // Empty AVCC metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      videoH264AVCCWCPData = MoQMi::decodeMoqMiAVCCMetadata(*ext.arrayValue);
       if (!videoH264AVCCWCPData) {
         // Error parsing h264 AVCC metadata
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
@@ -147,7 +150,11 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
         // Multiple AACLC metadata
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
       }
-      audioAACMP4LCWCPData = decodeMoqMiAACLCMetadata(ext.arrayValue);
+      if (ext.arrayValue == nullptr) {
+        // Empty AACLC metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      audioAACMP4LCWCPData = decodeMoqMiAACLCMetadata(*ext.arrayValue);
       if (!audioAACMP4LCWCPData) {
         // Error parsing AACLC metadata
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
@@ -216,9 +223,8 @@ std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiAACLCMetadata(
 }
 
 std::unique_ptr<MoQMi::VideoH264AVCCWCPData> MoQMi::decodeMoqMiAVCCMetadata(
-    const std::vector<uint8_t>& extValue) noexcept {
-  auto b = VectorToIOBuf(extValue);
-  folly::io::Cursor cursor(b.get());
+    const folly::IOBuf& extValue) noexcept {
+  folly::io::Cursor cursor(&extValue);
   auto seqId = quic::decodeQuicInteger(cursor);
   if (!seqId) {
     return nullptr;
@@ -255,9 +261,8 @@ std::unique_ptr<MoQMi::VideoH264AVCCWCPData> MoQMi::decodeMoqMiAVCCMetadata(
 }
 
 std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> MoQMi::decodeMoqMiAACLCMetadata(
-    const std::vector<uint8_t>& extValue) noexcept {
-  auto b = VectorToIOBuf(extValue);
-  folly::io::Cursor cursor(b.get());
+    const folly::IOBuf& extValue) noexcept {
+  folly::io::Cursor cursor(&extValue);
   auto seqId = quic::decodeQuicInteger(cursor);
   if (!seqId) {
     return nullptr;
@@ -327,25 +332,6 @@ void MoQMi::writeVarint(
   } else {
     size += *res;
   }
-}
-
-// TODO: Any efficient way to convert IOBuf to vector<uint8_t> ?
-// TODO: Should we use IOBuf instead of vector<uint8_t> for extension
-std::vector<uint8_t> MoQMi::IOBufToVector(
-    std::unique_ptr<folly::IOBuf> data) noexcept {
-  std::vector<uint8_t> ret{};
-  if (data) {
-    data->coalesce();
-    ret.assign(data->data(), data->data() + data->length());
-  }
-  return ret;
-}
-
-// TODO: Should we use IOBuf instead of vector<uint8_t> for extension
-std::unique_ptr<folly::IOBuf> MoQMi::VectorToIOBuf(
-    const std::vector<uint8_t>& data) noexcept {
-  return std::make_unique<folly::IOBuf>(folly::IOBuf::COPY_BUFFER, data);
-  ;
 }
 
 std::ostream& operator<<(

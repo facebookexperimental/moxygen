@@ -31,9 +31,10 @@ DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 namespace {
 using namespace moxygen;
 
+uint8_t extTestBuff[5] = {0x01, 0x02, 0x03, 0x04, 0x05};
 static const Extensions kExtensions{
-    {0xacedecade, 1977, {}},
-    {0xdeadbeef, 0, {1, 2, 3, 4, 5}}};
+    {0xacedecade, 1977},
+    {0xdeadbeef, folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}};
 
 class MoQDateServer : public MoQServer,
                       public Publisher,

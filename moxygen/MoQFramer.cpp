@@ -1084,8 +1084,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
         XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
         return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
       }
-      ext.arrayValue.resize(extLen->first);
-      cursor.pull(ext.arrayValue.data(), extLen->first);
+      cursor.clone(ext.arrayValue, extLen->first);
       length -= extLen->first;
     } else {
       auto iVal = quic::decodeQuicInteger(cursor, length);
@@ -1354,10 +1353,15 @@ void MoQFrameWriter::writeExtensions(
   writeVarint(writeBuf, extensions.size(), size, error);
   for (const auto& ext : extensions) {
     writeVarint(writeBuf, ext.type, size, error);
-    if (ext.type & 0x1) {
+    if (ext.isOddType()) {
       // odd = length prefix
-      writeVarint(writeBuf, ext.arrayValue.size(), size, error);
-      writeBuf.append(ext.arrayValue.data(), ext.arrayValue.size());
+      if (ext.arrayValue) {
+        writeVarint(
+            writeBuf, ext.arrayValue->computeChainDataLength(), size, error);
+        writeBuf.append(ext.arrayValue->clone());
+      } else {
+        writeVarint(writeBuf, 0, size, error);
+      }
     } else {
       // even = single varint
       writeVarint(writeBuf, ext.intValue, size, error);

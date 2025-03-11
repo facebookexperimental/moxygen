@@ -13,7 +13,10 @@
 namespace moxygen::test {
 
 std::vector<Extension> getTestExtensions() {
-  static std::vector<Extension> extensions = {{10, 10, {}}, {11, 0, {1, 2, 3}}};
+  static uint8_t extTestBuff[3] = {0x01, 0x02, 0x03};
+  static std::vector<Extension> extensions = {
+      {10, 10},
+      {11, folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}};
   return extensions;
 }
 

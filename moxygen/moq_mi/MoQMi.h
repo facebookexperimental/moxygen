@@ -201,9 +201,9 @@ class MoQMi {
       const MediaItem& item) noexcept;
 
   static std::unique_ptr<MoQMi::VideoH264AVCCWCPData> decodeMoqMiAVCCMetadata(
-      const std::vector<uint8_t>& extValue) noexcept;
+      const folly::IOBuf& extValue) noexcept;
   static std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> decodeMoqMiAACLCMetadata(
-      const std::vector<uint8_t>& extValue) noexcept;
+      const folly::IOBuf& extValue) noexcept;
 
   static void writeVarint(
       folly::IOBufQueue& buf,
@@ -216,11 +216,6 @@ class MoQMi {
       std::unique_ptr<folly::IOBuf> data,
       size_t& size,
       bool& error) noexcept;
-
-  static std::vector<uint8_t> IOBufToVector(
-      std::unique_ptr<folly::IOBuf> data) noexcept;
-  static std::unique_ptr<folly::IOBuf> VectorToIOBuf(
-      const std::vector<uint8_t>& data) noexcept;
 
   FRIEND_TEST(MoQMiTest, EncodeVideoH264TestNoMetadata);
   FRIEND_TEST(MoQMiTest, EncodeVideoH264TestWithMetadata);

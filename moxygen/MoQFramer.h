@@ -295,16 +295,63 @@ inline uint64_t value(const TrackIdentifier& trackIdentifier) {
 struct Extension {
   // Even type => holds value in intValue
   // Odd type => holds value in arrayValue
-  uint64_t type{0};
-  uint64_t intValue{0};
-  std::vector<uint8_t> arrayValue;
+  uint64_t type;
+  uint64_t intValue;
+  std::unique_ptr<folly::IOBuf> arrayValue;
 
-  bool operator==(const Extension& other) const {
-    return type == other.type &&
-        (((type & 0x1) && arrayValue == other.arrayValue) ||
-         ((type & 0x1) == 0 && intValue == other.intValue));
+  Extension() noexcept : Extension(0, 0) {}
+  Extension(uint64_t type, uint64_t intValue) noexcept
+      : type(type), intValue(intValue), arrayValue(nullptr) {}
+  Extension(uint64_t type, std::unique_ptr<folly::IOBuf> arrayValue) noexcept
+      : type(type), intValue(0), arrayValue(std::move(arrayValue)) {}
+
+  Extension(const Extension& other) noexcept {
+    copyFrom(other);
+  }
+
+  Extension& operator=(const Extension& other) noexcept {
+    copyFrom(other);
+    return *this;
+  }
+
+  Extension(Extension&& other) noexcept {
+    moveFrom(std::move(other));
+  }
+
+  Extension& operator=(Extension&& other) noexcept {
+    moveFrom(std::move(other));
+    return *this;
+  }
+
+  bool operator==(const Extension& other) const noexcept {
+    if (type == other.type) {
+      if (isOddType()) {
+        folly::IOBufEqualTo eq;
+        return eq(arrayValue, other.arrayValue);
+      } else {
+        return intValue == other.intValue;
+      }
+    }
+    return false;
+  }
+
+  bool isOddType() const {
+    return type & 0x1;
+  }
+
+ private:
+  void copyFrom(const Extension& other) {
+    type = other.type;
+    intValue = other.intValue;
+    arrayValue = other.arrayValue ? other.arrayValue->clone() : nullptr;
+  };
+  void moveFrom(Extension&& other) {
+    type = other.type;
+    intValue = other.intValue;
+    arrayValue = std::move(other.arrayValue);
   }
 };
+
 using Extensions = std::vector<Extension>;
 inline Extensions noExtensions() {
   return Extensions();

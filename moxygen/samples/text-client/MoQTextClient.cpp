@@ -75,10 +75,11 @@ class TextHandler : public ObjectReceiverCallback {
       override {
     for (const auto& ext : header.extensions) {
       if (ext.type & 0x1) {
+        ext.arrayValue->coalesce();
         std::cout << "data extension="
                   << folly::base64Encode(
-                         {(const char*)(ext.arrayValue.data()),
-                          ext.arrayValue.size()})
+                         {(const char*)(ext.arrayValue->data()),
+                          ext.arrayValue->length()})
 
                   << std::endl;
       } else {
