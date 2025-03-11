@@ -12,16 +12,22 @@
 namespace moxygen::test {
 
 enum class TestControlMessages { CLIENT, SERVER, BOTH };
-std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in);
-std::unique_ptr<folly::IOBuf> writeAllObjectMessages();
-std::unique_ptr<folly::IOBuf> writeAllFetchMessages();
-std::unique_ptr<folly::IOBuf> writeAllDatagramMessages();
+std::unique_ptr<folly::IOBuf> writeAllControlMessages(
+    TestControlMessages in,
+    MoQFrameWriter& moqFrameWriter);
+std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
+    MoQFrameWriter& moqFrameWriter);
+std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
+    MoQFrameWriter& moqFrameWriter);
+std::unique_ptr<folly::IOBuf> writeAllDatagramMessages(
+    MoQFrameWriter& moqFrameWriter);
 
-inline std::unique_ptr<folly::IOBuf> writeAllMessages() {
-  auto buf = writeAllControlMessages(TestControlMessages::BOTH);
-  buf->appendToChain(writeAllObjectMessages());
-  buf->appendToChain(writeAllFetchMessages());
-  buf->appendToChain(writeAllDatagramMessages());
+inline std::unique_ptr<folly::IOBuf> writeAllMessages(
+    MoQFrameWriter& moqFrameWriter) {
+  auto buf = writeAllControlMessages(TestControlMessages::BOTH, moqFrameWriter);
+  buf->appendToChain(writeAllObjectMessages(moqFrameWriter));
+  buf->appendToChain(writeAllFetchMessages(moqFrameWriter));
+  buf->appendToChain(writeAllDatagramMessages(moqFrameWriter));
   return buf;
 }
 

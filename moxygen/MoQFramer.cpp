@@ -1298,7 +1298,7 @@ WriteResult writeServerSetup(
   return size;
 }
 
-WriteResult writeSubgroupHeader(
+WriteResult MoQFrameWriter::writeSubgroupHeader(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader) noexcept {
   size_t size = 0;
@@ -1316,7 +1316,7 @@ WriteResult writeSubgroupHeader(
   return size;
 }
 
-WriteResult writeFetchHeader(
+WriteResult MoQFrameWriter::writeFetchHeader(
     folly::IOBufQueue& writeBuf,
     SubscribeID subscribeID) noexcept {
   size_t size = 0;
@@ -1330,7 +1330,7 @@ WriteResult writeFetchHeader(
   return size;
 }
 
-WriteResult writeSingleObjectStream(
+WriteResult MoQFrameWriter::writeSingleObjectStream(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
@@ -1346,7 +1346,7 @@ WriteResult writeSingleObjectStream(
   }
 }
 
-void writeExtensions(
+void MoQFrameWriter::writeExtensions(
     folly::IOBufQueue& writeBuf,
     const std::vector<Extension>& extensions,
     size_t& size,
@@ -1365,7 +1365,7 @@ void writeExtensions(
   }
 }
 
-WriteResult writeDatagramObject(
+WriteResult MoQFrameWriter::writeDatagramObject(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
@@ -1410,7 +1410,7 @@ WriteResult writeDatagramObject(
   return size;
 }
 
-WriteResult writeStreamObject(
+WriteResult MoQFrameWriter::writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
     const ObjectHeader& objectHeader,
@@ -1447,7 +1447,7 @@ WriteResult writeStreamObject(
   return size;
 }
 
-WriteResult writeSubscribeRequest(
+WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) noexcept {
   size_t size = 0;
@@ -1479,7 +1479,7 @@ WriteResult writeSubscribeRequest(
   return size;
 }
 
-WriteResult writeSubscribeUpdate(
+WriteResult MoQFrameWriter::writeSubscribeUpdate(
     folly::IOBufQueue& writeBuf,
     const SubscribeUpdate& update) noexcept {
   size_t size = 0;
@@ -1499,7 +1499,7 @@ WriteResult writeSubscribeUpdate(
   return size;
 }
 
-WriteResult writeSubscribeOk(
+WriteResult MoQFrameWriter::writeSubscribeOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeOk& subscribeOk) noexcept {
   size_t size = 0;
@@ -1525,7 +1525,7 @@ WriteResult writeSubscribeOk(
   return size;
 }
 
-WriteResult writeSubscribeError(
+WriteResult MoQFrameWriter::writeSubscribeError(
     folly::IOBufQueue& writeBuf,
     const SubscribeError& subscribeError) noexcept {
   size_t size = 0;
@@ -1543,7 +1543,7 @@ WriteResult writeSubscribeError(
   return size;
 }
 
-WriteResult writeMaxSubscribeId(
+WriteResult MoQFrameWriter::writeMaxSubscribeId(
     folly::IOBufQueue& writeBuf,
     const MaxSubscribeId& maxSubscribeId) noexcept {
   size_t size = 0;
@@ -1557,7 +1557,7 @@ WriteResult writeMaxSubscribeId(
   return size;
 }
 
-WriteResult writeSubscribesBlocked(
+WriteResult MoQFrameWriter::writeSubscribesBlocked(
     folly::IOBufQueue& writeBuf,
     const SubscribesBlocked& subscribesBlocked) noexcept {
   size_t size = 0;
@@ -1572,7 +1572,7 @@ WriteResult writeSubscribesBlocked(
   return size;
 }
 
-WriteResult writeUnsubscribe(
+WriteResult MoQFrameWriter::writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
     const Unsubscribe& unsubscribe) noexcept {
   size_t size = 0;
@@ -1586,7 +1586,7 @@ WriteResult writeUnsubscribe(
   return size;
 }
 
-WriteResult writeSubscribeDone(
+WriteResult MoQFrameWriter::writeSubscribeDone(
     folly::IOBufQueue& writeBuf,
     const SubscribeDone& subscribeDone) noexcept {
   size_t size = 0;
@@ -1611,7 +1611,7 @@ WriteResult writeSubscribeDone(
   return size;
 }
 
-WriteResult writeAnnounce(
+WriteResult MoQFrameWriter::writeAnnounce(
     folly::IOBufQueue& writeBuf,
     const Announce& announce) noexcept {
   size_t size = 0;
@@ -1626,7 +1626,7 @@ WriteResult writeAnnounce(
   return size;
 }
 
-WriteResult writeAnnounceOk(
+WriteResult MoQFrameWriter::writeAnnounceOk(
     folly::IOBufQueue& writeBuf,
     const AnnounceOk& announceOk) noexcept {
   size_t size = 0;
@@ -1640,7 +1640,7 @@ WriteResult writeAnnounceOk(
   return size;
 }
 
-WriteResult writeAnnounceError(
+WriteResult MoQFrameWriter::writeAnnounceError(
     folly::IOBufQueue& writeBuf,
     const AnnounceError& announceError) noexcept {
   size_t size = 0;
@@ -1657,7 +1657,7 @@ WriteResult writeAnnounceError(
   return size;
 }
 
-WriteResult writeUnannounce(
+WriteResult MoQFrameWriter::writeUnannounce(
     folly::IOBufQueue& writeBuf,
     const Unannounce& unannounce) noexcept {
   size_t size = 0;
@@ -1671,7 +1671,7 @@ WriteResult writeUnannounce(
   return size;
 }
 
-WriteResult writeAnnounceCancel(
+WriteResult MoQFrameWriter::writeAnnounceCancel(
     folly::IOBufQueue& writeBuf,
     const AnnounceCancel& announceCancel) noexcept {
   size_t size = 0;
@@ -1688,7 +1688,7 @@ WriteResult writeAnnounceCancel(
   return size;
 }
 
-WriteResult writeTrackStatusRequest(
+WriteResult MoQFrameWriter::writeTrackStatusRequest(
     folly::IOBufQueue& writeBuf,
     const TrackStatusRequest& trackStatusRequest) noexcept {
   size_t size = 0;
@@ -1703,7 +1703,7 @@ WriteResult writeTrackStatusRequest(
   return size;
 }
 
-WriteResult writeTrackStatus(
+WriteResult MoQFrameWriter::writeTrackStatus(
     folly::IOBufQueue& writeBuf,
     const TrackStatus& trackStatus) noexcept {
   size_t size = 0;
@@ -1727,7 +1727,7 @@ WriteResult writeTrackStatus(
   return size;
 }
 
-WriteResult writeGoaway(
+WriteResult MoQFrameWriter::writeGoaway(
     folly::IOBufQueue& writeBuf,
     const Goaway& goaway) noexcept {
   size_t size = 0;
@@ -1741,7 +1741,7 @@ WriteResult writeGoaway(
   return size;
 }
 
-WriteResult writeSubscribeAnnounces(
+WriteResult MoQFrameWriter::writeSubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnounces& subscribeAnnounces) noexcept {
   size_t size = 0;
@@ -1758,7 +1758,7 @@ WriteResult writeSubscribeAnnounces(
   return size;
 }
 
-WriteResult writeSubscribeAnnouncesOk(
+WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept {
   size_t size = 0;
@@ -1774,7 +1774,7 @@ WriteResult writeSubscribeAnnouncesOk(
   return size;
 }
 
-WriteResult writeSubscribeAnnouncesError(
+WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept {
   size_t size = 0;
@@ -1796,7 +1796,7 @@ WriteResult writeSubscribeAnnouncesError(
   return size;
 }
 
-WriteResult writeUnsubscribeAnnounces(
+WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept {
   size_t size = 0;
@@ -1812,7 +1812,7 @@ WriteResult writeUnsubscribeAnnounces(
   return size;
 }
 
-WriteResult writeFetch(
+WriteResult MoQFrameWriter::writeFetch(
     folly::IOBufQueue& writeBuf,
     const Fetch& fetch) noexcept {
   size_t size = 0;
@@ -1851,7 +1851,7 @@ WriteResult writeFetch(
   return size;
 }
 
-WriteResult writeFetchCancel(
+WriteResult MoQFrameWriter::writeFetchCancel(
     folly::IOBufQueue& writeBuf,
     const FetchCancel& fetchCancel) noexcept {
   size_t size = 0;
@@ -1865,7 +1865,7 @@ WriteResult writeFetchCancel(
   return size;
 }
 
-WriteResult writeFetchOk(
+WriteResult MoQFrameWriter::writeFetchOk(
     folly::IOBufQueue& writeBuf,
     const FetchOk& fetchOk) noexcept {
   size_t size = 0;
@@ -1887,7 +1887,7 @@ WriteResult writeFetchOk(
   return size;
 }
 
-WriteResult writeFetchError(
+WriteResult MoQFrameWriter::writeFetchError(
     folly::IOBufQueue& writeBuf,
     const FetchError& fetchError) noexcept {
   size_t size = 0;

@@ -256,12 +256,13 @@ class MoQFramerTest : public ::testing::Test {
 
  protected:
   MoQFrameParser parser_;
+  MoQFrameWriter writer_;
 };
 
 } // namespace
 
 TEST_F(MoQFramerTest, SerializeAndParseAll) {
-  auto allMsgs = moxygen::test::writeAllMessages();
+  auto allMsgs = moxygen::test::writeAllMessages(writer_);
   folly::io::Cursor cursor(allMsgs.get());
   parseAll(cursor, true);
 }
@@ -269,7 +270,7 @@ TEST_F(MoQFramerTest, SerializeAndParseAll) {
 TEST_F(MoQFramerTest, ParseObjectHeader) {
   // Test OBJECT_DATAGRAM with ObjectStatus::OBJECT_NOT_EXIST
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeDatagramObject(
+  auto result = writer_.writeDatagramObject(
       writeBuf,
       {TrackAlias(22), // trackAlias
        33,             // group
@@ -299,7 +300,7 @@ TEST_F(MoQFramerTest, ParseObjectHeader) {
 TEST_F(MoQFramerTest, ParseDatagramNormal) {
   // Test OBJECT_DATAGRAM
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeDatagramObject(
+  auto result = writer_.writeDatagramObject(
       writeBuf,
       {TrackAlias(22), // trackAlias
        33,             // group
@@ -329,7 +330,7 @@ TEST_F(MoQFramerTest, ParseDatagramNormal) {
 
 TEST_F(MoQFramerTest, ZeroLengthNormal) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeDatagramObject(
+  auto result = writer_.writeDatagramObject(
       writeBuf,
       {TrackAlias(22), // trackAlias
        33,             // group
@@ -368,9 +369,9 @@ TEST_F(MoQFramerTest, ParseStreamHeader) {
       noExtensions(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeSubgroupHeader(writeBuf, expectedObjectHeader);
+  auto result = writer_.writeSubgroupHeader(writeBuf, expectedObjectHeader);
   EXPECT_TRUE(result.hasValue());
-  result = writeStreamObject(
+  result = writer_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       expectedObjectHeader,
@@ -380,7 +381,7 @@ TEST_F(MoQFramerTest, ParseStreamHeader) {
   // Test ObjectStatus::OBJECT_NOT_EXIST
   expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
   expectedObjectHeader.length = 0;
-  result = writeStreamObject(
+  result = writer_.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER, expectedObjectHeader, nullptr);
   EXPECT_TRUE(result.hasValue());
 
@@ -422,10 +423,10 @@ TEST_F(MoQFramerTest, ParseFetchHeader) {
       noExtensions(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeFetchHeader(
+  auto result = writer_.writeFetchHeader(
       writeBuf, std::get<SubscribeID>(expectedObjectHeader.trackIdentifier));
   EXPECT_TRUE(result.hasValue());
-  result = writeStreamObject(
+  result = writer_.writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
       expectedObjectHeader,
@@ -435,7 +436,7 @@ TEST_F(MoQFramerTest, ParseFetchHeader) {
   // Test ObjectStatus::OBJECT_NOT_EXIST
   expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
   expectedObjectHeader.length = 0;
-  result = writeStreamObject(
+  result = writer_.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, expectedObjectHeader, nullptr);
   EXPECT_TRUE(result.hasValue());
 
@@ -510,7 +511,7 @@ TEST_F(MoQFramerTest, ParseClientSetupForMaxSubscribeId) {
 }
 
 TEST_F(MoQFramerTest, All) {
-  auto allMsgs = moxygen::test::writeAllMessages();
+  auto allMsgs = moxygen::test::writeAllMessages(writer_);
   allMsgs->coalesce();
   auto len = allMsgs->computeChainDataLength();
   for (size_t i = 0; i < len; i++) {
@@ -527,7 +528,7 @@ TEST_F(MoQFramerTest, All) {
 
 TEST_F(MoQFramerTest, SingleObjectStream) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeSingleObjectStream(
+  auto result = writer_.writeSingleObjectStream(
       writeBuf,
       ObjectHeader(
           TrackAlias(22), // trackAlias

@@ -211,6 +211,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     SubscribeID subscribeID_;
     uint8_t subPriority_;
     GroupOrder groupOrder_;
+    MoQFrameWriter moqFrameWriter_;
   };
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
@@ -428,5 +429,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback_{nullptr};
   std::shared_ptr<MoQSubscriberStatsCallback> subscriberStatsCallback_{nullptr};
+
+  MoQFrameWriter moqFrameWriter_;
 };
 } // namespace moxygen

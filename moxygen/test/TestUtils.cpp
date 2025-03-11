@@ -17,7 +17,9 @@ std::vector<Extension> getTestExtensions() {
   return extensions;
 }
 
-std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
+std::unique_ptr<folly::IOBuf> writeAllControlMessages(
+    TestControlMessages in,
+    MoQFrameWriter& moqFrameWriter) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   WriteResult res;
   if (in != TestControlMessages::SERVER) {
@@ -39,7 +41,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
                  {folly::to_underlying(SetupKey::PATH), "/foo", 0},
              }}));
   }
-  res = writeSubscribeRequest(
+  res = moqFrameWriter.writeSubscribeRequest(
       writeBuf,
       SubscribeRequest(
           {0,
@@ -59,7 +61,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
             {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
              "",
              3600000}}}));
-  res = writeSubscribeUpdate(
+  res = moqFrameWriter.writeSubscribeUpdate(
       writeBuf,
       SubscribeUpdate(
           {0,
@@ -75,7 +77,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
             {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
              "",
              3600000}}}));
-  res = writeSubscribeOk(
+  res = moqFrameWriter.writeSubscribeOk(
       writeBuf,
       SubscribeOk(
           {0,
@@ -85,18 +87,19 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
            {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
              "",
              3600000}}}));
-  res = writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
-  res = writeSubscribesBlocked(writeBuf, {.maxSubscribeID = 50000});
-  res = writeSubscribeError(
+  res = moqFrameWriter.writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
+  res = moqFrameWriter.writeSubscribesBlocked(
+      writeBuf, {.maxSubscribeID = 50000});
+  res = moqFrameWriter.writeSubscribeError(
       writeBuf,
       SubscribeError(
           {0, SubscribeErrorCode::TRACK_NOT_EXIST, "not found", folly::none}));
-  res = writeUnsubscribe(
+  res = moqFrameWriter.writeUnsubscribe(
       writeBuf,
       Unsubscribe({
           0,
       }));
-  res = writeSubscribeDone(
+  res = moqFrameWriter.writeSubscribeDone(
       writeBuf,
       SubscribeDone(
           {0,
@@ -104,7 +107,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
            7,
            "",
            folly::none}));
-  res = writeSubscribeDone(
+  res = moqFrameWriter.writeSubscribeDone(
       writeBuf,
       SubscribeDone(
           {0,
@@ -112,7 +115,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
            0,
            "not found",
            AbsoluteLocation({0, 0})}));
-  res = writeAnnounce(
+  res = moqFrameWriter.writeAnnounce(
       writeBuf,
       Announce(
           {TrackNamespace({"hello"}),
@@ -125,52 +128,53 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
             {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
              "",
              3600000}}}));
-  res = writeAnnounceOk(writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
-  res = writeAnnounceError(
+  res = moqFrameWriter.writeAnnounceOk(
+      writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
+  res = moqFrameWriter.writeAnnounceError(
       writeBuf,
       AnnounceError(
           {TrackNamespace({"hello"}),
            AnnounceErrorCode::INTERNAL_ERROR,
            "server error"}));
-  res = writeAnnounceCancel(
+  res = moqFrameWriter.writeAnnounceCancel(
       writeBuf,
       AnnounceCancel(
           {TrackNamespace({"hello"}),
            AnnounceErrorCode::INTERNAL_ERROR,
            "internal error"}));
-  res = writeUnannounce(
+  res = moqFrameWriter.writeUnannounce(
       writeBuf,
       Unannounce({
           TrackNamespace({"hello"}),
       }));
-  res = writeTrackStatusRequest(
+  res = moqFrameWriter.writeTrackStatusRequest(
       writeBuf,
       TrackStatusRequest(
           {FullTrackName({TrackNamespace({"hello"}), "world"})}));
-  res = writeTrackStatus(
+  res = moqFrameWriter.writeTrackStatus(
       writeBuf,
       TrackStatus(
           {FullTrackName({TrackNamespace({"hello"}), "world"}),
            TrackStatusCode::IN_PROGRESS,
            AbsoluteLocation({19, 77})}));
-  res = writeGoaway(writeBuf, Goaway({"new uri"}));
-  res = writeSubscribeAnnounces(
+  res = moqFrameWriter.writeGoaway(writeBuf, Goaway({"new uri"}));
+  res = moqFrameWriter.writeSubscribeAnnounces(
       writeBuf,
       SubscribeAnnounces(
           {TrackNamespace({"hello"}),
            {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
              "binky"}}}));
-  res = writeSubscribeAnnouncesOk(
+  res = moqFrameWriter.writeSubscribeAnnouncesOk(
       writeBuf, SubscribeAnnouncesOk({TrackNamespace({"hello"})}));
-  res = writeSubscribeAnnouncesError(
+  res = moqFrameWriter.writeSubscribeAnnouncesError(
       writeBuf,
       SubscribeAnnouncesError(
           {TrackNamespace({"hello"}),
            SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
            "server error"}));
-  res = writeUnsubscribeAnnounces(
+  res = moqFrameWriter.writeUnsubscribeAnnounces(
       writeBuf, UnsubscribeAnnounces({TrackNamespace({"hello"})}));
-  res = writeFetch(
+  res = moqFrameWriter.writeFetch(
       writeBuf,
       Fetch(
           {0,
@@ -183,8 +187,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
                {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
                 "binky",
                 0})}}));
-  res = writeFetchCancel(writeBuf, FetchCancel({0}));
-  res = writeFetchOk(
+  res = moqFrameWriter.writeFetchCancel(writeBuf, FetchCancel({0}));
+  res = moqFrameWriter.writeFetchOk(
       writeBuf,
       FetchOk(
           {0,
@@ -195,21 +199,22 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(TestControlMessages in) {
                {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
                 "binky",
                 0})}}));
-  res = writeFetchError(
+  res = moqFrameWriter.writeFetchError(
       writeBuf,
       FetchError({0, FetchErrorCode::INVALID_RANGE, "Invalid range"}));
 
   return writeBuf.move();
 }
 
-std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
+std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
+    MoQFrameWriter& moqFrameWriter) {
   // writes a subgroup header, object without extensions, object with
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5);
-  auto res = writeSubgroupHeader(writeBuf, obj);
+  auto res = moqFrameWriter.writeSubgroupHeader(writeBuf, obj);
   obj.length = 11;
-  res = writeStreamObject(
+  res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       obj,
@@ -217,7 +222,7 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
   obj.id++;
   obj.extensions = getTestExtensions();
   obj.length = 15;
-  res = writeStreamObject(
+  res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       obj,
@@ -226,21 +231,24 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages() {
   obj.length = folly::none;
   obj.status = ObjectStatus::OBJECT_NOT_EXIST;
   obj.extensions.clear();
-  res = writeStreamObject(writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
+  res = moqFrameWriter.writeStreamObject(
+      writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
   obj.id++;
   obj.status = ObjectStatus::END_OF_TRACK_AND_GROUP;
   obj.extensions = getTestExtensions();
-  res = writeStreamObject(writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
+  res = moqFrameWriter.writeStreamObject(
+      writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
   return writeBuf.move();
 }
 
-std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
+std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
+    MoQFrameWriter& moqFrameWriter) {
   // writes a fetch header, object without extensions, object with
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = writeFetchHeader(writeBuf, SubscribeID(1));
+  auto res = moqFrameWriter.writeFetchHeader(writeBuf, SubscribeID(1));
   ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, 11);
-  res = writeStreamObject(
+  res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
       obj,
@@ -248,7 +256,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
   obj.id++;
   obj.extensions = getTestExtensions();
   obj.length = 15;
-  res = writeStreamObject(
+  res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
       obj,
@@ -257,33 +265,36 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages() {
   obj.length = folly::none;
   obj.extensions.clear();
   obj.status = ObjectStatus::END_OF_GROUP;
-  res = writeStreamObject(writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+  res = moqFrameWriter.writeStreamObject(
+      writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
   obj.group++;
   obj.id = 0;
   obj.extensions = getTestExtensions();
-  res = writeStreamObject(writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+  res = moqFrameWriter.writeStreamObject(
+      writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
   return writeBuf.move();
 }
 
-std::unique_ptr<folly::IOBuf> writeAllDatagramMessages() {
+std::unique_ptr<folly::IOBuf> writeAllDatagramMessages(
+    MoQFrameWriter& moqFrameWriter) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST);
-  auto res = writeDatagramObject(writeBuf, obj, nullptr);
+  auto res = moqFrameWriter.writeDatagramObject(writeBuf, obj, nullptr);
   obj.id++;
   obj.extensions = getTestExtensions();
   obj.status = ObjectStatus::END_OF_GROUP;
-  res = writeDatagramObject(writeBuf, obj, nullptr);
+  res = moqFrameWriter.writeDatagramObject(writeBuf, obj, nullptr);
   obj.group++;
   obj.id = 0;
   obj.extensions.clear();
   obj.status = ObjectStatus::NORMAL;
   obj.length = 11;
-  res = writeDatagramObject(
+  res = moqFrameWriter.writeDatagramObject(
       writeBuf, obj, folly::IOBuf::copyBuffer("hello world"));
   obj.id++;
   obj.extensions = getTestExtensions();
   obj.length = 15;
-  res = writeDatagramObject(
+  res = moqFrameWriter.writeDatagramObject(
       writeBuf, obj, folly::IOBuf::copyBuffer("hello world ext"));
   return writeBuf.move();
 }

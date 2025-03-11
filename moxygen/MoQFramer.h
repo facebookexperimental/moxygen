@@ -870,129 +870,141 @@ WriteResult writeServerSetup(
     folly::IOBufQueue& writeBuf,
     const ServerSetup& serverSetup) noexcept;
 
-WriteResult writeSubgroupHeader(
-    folly::IOBufQueue& writeBuf,
-    const ObjectHeader& objectHeader) noexcept;
+// writeClientSetup and writeServerSetup are the only two functions that
+// are version-agnostic, so we are leaving them out of the MoQFrameWriter.
+class MoQFrameWriter {
+ public:
+  WriteResult writeSubgroupHeader(
+      folly::IOBufQueue& writeBuf,
+      const ObjectHeader& objectHeader) noexcept;
 
-WriteResult writeFetchHeader(
-    folly::IOBufQueue& writeBuf,
-    SubscribeID subscribeID) noexcept;
+  WriteResult writeFetchHeader(
+      folly::IOBufQueue& writeBuf,
+      SubscribeID subscribeID) noexcept;
 
-WriteResult writeStreamHeader(
-    folly::IOBufQueue& writeBuf,
-    StreamType streamType,
-    const ObjectHeader& objectHeader) noexcept;
+  WriteResult writeStreamHeader(
+      folly::IOBufQueue& writeBuf,
+      StreamType streamType,
+      const ObjectHeader& objectHeader) noexcept;
 
-WriteResult writeDatagramObject(
-    folly::IOBufQueue& writeBuf,
-    const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+  WriteResult writeDatagramObject(
+      folly::IOBufQueue& writeBuf,
+      const ObjectHeader& objectHeader,
+      std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
 
-WriteResult writeStreamObject(
-    folly::IOBufQueue& writeBuf,
-    StreamType streamType,
-    const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+  WriteResult writeStreamObject(
+      folly::IOBufQueue& writeBuf,
+      StreamType streamType,
+      const ObjectHeader& objectHeader,
+      std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
 
-WriteResult writeSingleObjectStream(
-    folly::IOBufQueue& writeBuf,
-    const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+  WriteResult writeSingleObjectStream(
+      folly::IOBufQueue& writeBuf,
+      const ObjectHeader& objectHeader,
+      std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
 
-WriteResult writeSubscribeRequest(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeRequest& subscribeRequest) noexcept;
+  WriteResult writeSubscribeRequest(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeRequest& subscribeRequest) noexcept;
 
-WriteResult writeSubscribeUpdate(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeUpdate& update) noexcept;
+  WriteResult writeSubscribeUpdate(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeUpdate& update) noexcept;
 
-WriteResult writeSubscribeOk(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeOk& subscribeOk) noexcept;
+  WriteResult writeSubscribeOk(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeOk& subscribeOk) noexcept;
 
-WriteResult writeSubscribeError(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeError& subscribeError) noexcept;
+  WriteResult writeSubscribeError(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeError& subscribeError) noexcept;
 
-WriteResult writeSubscribeDone(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeDone& subscribeDone) noexcept;
+  WriteResult writeSubscribeDone(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeDone& subscribeDone) noexcept;
 
-WriteResult writeUnsubscribe(
-    folly::IOBufQueue& writeBuf,
-    const Unsubscribe& unsubscribe) noexcept;
+  WriteResult writeUnsubscribe(
+      folly::IOBufQueue& writeBuf,
+      const Unsubscribe& unsubscribe) noexcept;
 
-WriteResult writeMaxSubscribeId(
-    folly::IOBufQueue& writeBuf,
-    const MaxSubscribeId& maxSubscribeId) noexcept;
+  WriteResult writeMaxSubscribeId(
+      folly::IOBufQueue& writeBuf,
+      const MaxSubscribeId& maxSubscribeId) noexcept;
 
-WriteResult writeSubscribesBlocked(
-    folly::IOBufQueue& writeBuf,
-    const SubscribesBlocked& subscribesBlocked) noexcept;
+  WriteResult writeSubscribesBlocked(
+      folly::IOBufQueue& writeBuf,
+      const SubscribesBlocked& subscribesBlocked) noexcept;
 
-WriteResult writeAnnounce(
-    folly::IOBufQueue& writeBuf,
-    const Announce& announce) noexcept;
+  WriteResult writeAnnounce(
+      folly::IOBufQueue& writeBuf,
+      const Announce& announce) noexcept;
 
-WriteResult writeAnnounceOk(
-    folly::IOBufQueue& writeBuf,
-    const AnnounceOk& announceOk) noexcept;
+  WriteResult writeAnnounceOk(
+      folly::IOBufQueue& writeBuf,
+      const AnnounceOk& announceOk) noexcept;
 
-WriteResult writeAnnounceError(
-    folly::IOBufQueue& writeBuf,
-    const AnnounceError& announceError) noexcept;
+  WriteResult writeAnnounceError(
+      folly::IOBufQueue& writeBuf,
+      const AnnounceError& announceError) noexcept;
 
-WriteResult writeUnannounce(
-    folly::IOBufQueue& writeBuf,
-    const Unannounce& unannounce) noexcept;
+  WriteResult writeUnannounce(
+      folly::IOBufQueue& writeBuf,
+      const Unannounce& unannounce) noexcept;
 
-WriteResult writeAnnounceCancel(
-    folly::IOBufQueue& writeBuf,
-    const AnnounceCancel& announceCancel) noexcept;
+  WriteResult writeAnnounceCancel(
+      folly::IOBufQueue& writeBuf,
+      const AnnounceCancel& announceCancel) noexcept;
 
-WriteResult writeTrackStatusRequest(
-    folly::IOBufQueue& writeBuf,
-    const TrackStatusRequest& trackStatusRequest) noexcept;
+  WriteResult writeTrackStatusRequest(
+      folly::IOBufQueue& writeBuf,
+      const TrackStatusRequest& trackStatusRequest) noexcept;
 
-WriteResult writeTrackStatus(
-    folly::IOBufQueue& writeBuf,
-    const TrackStatus& trackStatus) noexcept;
+  WriteResult writeTrackStatus(
+      folly::IOBufQueue& writeBuf,
+      const TrackStatus& trackStatus) noexcept;
 
-WriteResult writeGoaway(
-    folly::IOBufQueue& writeBuf,
-    const Goaway& goaway) noexcept;
+  WriteResult writeGoaway(
+      folly::IOBufQueue& writeBuf,
+      const Goaway& goaway) noexcept;
 
-WriteResult writeSubscribeAnnounces(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeAnnounces& subscribeAnnounces) noexcept;
+  WriteResult writeSubscribeAnnounces(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeAnnounces& subscribeAnnounces) noexcept;
 
-WriteResult writeSubscribeAnnouncesOk(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept;
+  WriteResult writeSubscribeAnnouncesOk(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept;
 
-WriteResult writeSubscribeAnnouncesError(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept;
+  WriteResult writeSubscribeAnnouncesError(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept;
 
-WriteResult writeUnsubscribeAnnounces(
-    folly::IOBufQueue& writeBuf,
-    const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept;
+  WriteResult writeUnsubscribeAnnounces(
+      folly::IOBufQueue& writeBuf,
+      const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept;
 
-WriteResult writeFetch(
-    folly::IOBufQueue& writeBuf,
-    const Fetch& fetch) noexcept;
+  WriteResult writeFetch(
+      folly::IOBufQueue& writeBuf,
+      const Fetch& fetch) noexcept;
 
-WriteResult writeFetchCancel(
-    folly::IOBufQueue& writeBuf,
-    const FetchCancel& fetchCancel) noexcept;
+  WriteResult writeFetchCancel(
+      folly::IOBufQueue& writeBuf,
+      const FetchCancel& fetchCancel) noexcept;
 
-WriteResult writeFetchOk(
-    folly::IOBufQueue& writeBuf,
-    const FetchOk& fetchOk) noexcept;
+  WriteResult writeFetchOk(
+      folly::IOBufQueue& writeBuf,
+      const FetchOk& fetchOk) noexcept;
 
-WriteResult writeFetchError(
-    folly::IOBufQueue& writeBuf,
-    const FetchError& fetchError) noexcept;
+  WriteResult writeFetchError(
+      folly::IOBufQueue& writeBuf,
+      const FetchError& fetchError) noexcept;
+
+ private:
+  void writeExtensions(
+      folly::IOBufQueue& writeBuf,
+      const std::vector<Extension>& extensions,
+      size_t& size,
+      bool& error);
+};
 
 } // namespace moxygen

@@ -247,6 +247,7 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
   ObjectHeader header_;
   folly::Optional<uint64_t> currentLengthRemaining_;
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter moqFrameWriter_;
 };
 
 // StreamPublisherImpl
@@ -261,7 +262,7 @@ StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
           std::numeric_limits<uint64_t>::max(),
           0,
           ObjectStatus::NORMAL) {
-  (void)writeFetchHeader(writeBuf_, publisher->subscribeID());
+  (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->subscribeID());
 }
 
 StreamPublisherImpl::StreamPublisherImpl(
@@ -276,7 +277,7 @@ StreamPublisherImpl::StreamPublisherImpl(
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
   writeBuf_.move(); // clear FETCH_HEADER
-  (void)writeSubgroupHeader(writeBuf_, header_);
+  (void)moqFrameWriter_.writeSubgroupHeader(writeBuf_, header_);
 }
 
 // Private methods
@@ -340,7 +341,8 @@ StreamPublisherImpl::writeCurrentObject(
   // copy is gratuitous
   header_.extensions = extensions;
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
-  (void)writeStreamObject(writeBuf_, streamType_, header_, std::move(payload));
+  (void)moqFrameWriter_.writeStreamObject(
+      writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream);
 }
 
@@ -865,7 +867,7 @@ MoQSession::TrackPublisherImpl::datagram(
     headerLength = payload->computeChainDataLength();
   } // else 0 is fine
   DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
-  (void)writeDatagramObject(
+  (void)moqFrameWriter_.writeDatagramObject(
       writeBuf,
       ObjectHeader(
           trackAlias_,
@@ -1229,7 +1231,7 @@ void MoQSession::drain() {
 
 void MoQSession::goaway(Goaway goaway) {
   if (!draining_) {
-    writeGoaway(controlWriteBuf_, goaway);
+    moqFrameWriter_.writeGoaway(controlWriteBuf_, goaway);
     controlWriteEvent_.signal();
     drain();
   }
@@ -2257,7 +2259,7 @@ void MoQSession::onUnannounce(Unannounce unAnn) {
 }
 
 void MoQSession::announceCancel(const AnnounceCancel& annCan) {
-  auto res = writeAnnounceCancel(controlWriteBuf_, annCan);
+  auto res = moqFrameWriter_.writeAnnounceCancel(controlWriteBuf_, annCan);
   if (!res) {
     XLOG(ERR) << "writeAnnounceCancel failed sess=" << this;
   }
@@ -2406,7 +2408,7 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
 }
 
 void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
-  auto res = moxygen::writeTrackStatus(controlWriteBuf_, trackStatus);
+  auto res = moqFrameWriter_.writeTrackStatus(controlWriteBuf_, trackStatus);
   if (!res) {
     XLOG(ERR) << "writeTrackStatus failed sess=" << this;
   } else {
@@ -2418,7 +2420,8 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
     TrackStatusRequest trackStatusRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << "sess=" << this;
-  auto res = writeTrackStatusRequest(controlWriteBuf_, trackStatusRequest);
+  auto res = moqFrameWriter_.writeTrackStatusRequest(
+      controlWriteBuf_, trackStatusRequest);
   if (!res) {
     XLOG(ERR) << "writeTrackStatusREquest failed sess=" << this;
     co_return TrackStatusResult{
@@ -2489,7 +2492,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     std::shared_ptr<AnnounceCallback> announceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   auto trackNamespace = ann.trackNamespace;
-  auto res = writeAnnounce(controlWriteBuf_, std::move(ann));
+  auto res = moqFrameWriter_.writeAnnounce(controlWriteBuf_, ann);
   if (!res) {
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
     co_return folly::makeUnexpected(AnnounceError(
@@ -2514,7 +2517,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
 
 void MoQSession::announceOk(const AnnounceOk& annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
-  auto res = writeAnnounceOk(controlWriteBuf_, annOk);
+  auto res = moqFrameWriter_.writeAnnounceOk(controlWriteBuf_, annOk);
   if (!res) {
     XLOG(ERR) << "writeAnnounceOk failed sess=" << this;
     return;
@@ -2525,7 +2528,8 @@ void MoQSession::announceOk(const AnnounceOk& annOk) {
 void MoQSession::announceError(const AnnounceError& announceError) {
   XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
              << " sess=" << this;
-  auto res = writeAnnounceError(controlWriteBuf_, announceError);
+  auto res =
+      moqFrameWriter_.writeAnnounceError(controlWriteBuf_, announceError);
   if (!res) {
     XLOG(ERR) << "writeAnnounceError failed sess=" << this;
     return;
@@ -2541,7 +2545,7 @@ void MoQSession::unannounce(const Unannounce& unann) {
     return;
   }
   auto trackNamespace = unann.trackNamespace;
-  auto res = writeUnannounce(controlWriteBuf_, unann);
+  auto res = moqFrameWriter_.writeUnannounce(controlWriteBuf_, unann);
   if (!res) {
     XLOG(ERR) << "writeUnannounce failed sess=" << this;
   }
@@ -2581,7 +2585,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   auto trackNamespace = sa.trackNamespacePrefix;
-  auto res = writeSubscribeAnnounces(controlWriteBuf_, sa);
+  auto res = moqFrameWriter_.writeSubscribeAnnounces(controlWriteBuf_, sa);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
     co_return folly::makeUnexpected(SubscribeAnnouncesError(
@@ -2606,7 +2610,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
 void MoQSession::subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk) {
   XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
              << " sess=" << this;
-  auto res = writeSubscribeAnnouncesOk(controlWriteBuf_, saOk);
+  auto res = moqFrameWriter_.writeSubscribeAnnouncesOk(controlWriteBuf_, saOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnouncesOk failed sess=" << this;
     return;
@@ -2619,8 +2623,8 @@ void MoQSession::subscribeAnnouncesError(
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
              << " sess=" << this;
-  auto res =
-      writeSubscribeAnnouncesError(controlWriteBuf_, subscribeAnnouncesError);
+  auto res = moqFrameWriter_.writeSubscribeAnnouncesError(
+      controlWriteBuf_, subscribeAnnouncesError);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
     return;
@@ -2631,7 +2635,8 @@ void MoQSession::subscribeAnnouncesError(
 void MoQSession::unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn) {
   XLOG(DBG1) << __func__ << " prefix=" << unsubAnn.trackNamespacePrefix
              << " sess=" << this;
-  auto res = writeUnsubscribeAnnounces(controlWriteBuf_, unsubAnn);
+  auto res =
+      moqFrameWriter_.writeUnsubscribeAnnounces(controlWriteBuf_, unsubAnn);
   if (!res) {
     XLOG(ERR) << "writeUnsubscribeAnnounces failed sess=" << this;
     return;
@@ -2695,7 +2700,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   TrackAlias alias = subID.value;
   sub.trackAlias = alias;
   TrackAlias trackAlias = sub.trackAlias;
-  auto wres = writeSubscribeRequest(controlWriteBuf_, std::move(sub));
+  auto wres = moqFrameWriter_.writeSubscribeRequest(controlWriteBuf_, sub);
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
     SubscribeError subscribeError = {
@@ -2753,7 +2758,7 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
     return nullptr;
   }
   trackPublisher->setGroupOrder(subOk.groupOrder);
-  auto res = writeSubscribeOk(controlWriteBuf_, subOk);
+  auto res = moqFrameWriter_.writeSubscribeOk(controlWriteBuf_, subOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
     return nullptr;
@@ -2772,7 +2777,7 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
     return;
   }
   pubTracks_.erase(it);
-  auto res = writeSubscribeError(controlWriteBuf_, subErr);
+  auto res = moqFrameWriter_.writeSubscribeError(controlWriteBuf_, subErr);
   retireSubscribeId(/*signalWriteLoop=*/false);
   if (!res) {
     XLOG(ERR) << "writeSubscribeError failed sess=" << this;
@@ -2804,7 +2809,7 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   trackIt->second->cancel();
   subTracks_.erase(trackIt);
   subIdToTrackAlias_.erase(trackAliasIt);
-  auto res = writeUnsubscribe(controlWriteBuf_, unsubscribe);
+  auto res = moqFrameWriter_.writeUnsubscribe(controlWriteBuf_, unsubscribe);
   if (!res) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
     return;
@@ -2830,7 +2835,7 @@ void MoQSession::subscribeDone(const SubscribeDone& subDone) {
     return;
   }
   pubTracks_.erase(it);
-  auto res = writeSubscribeDone(controlWriteBuf_, subDone);
+  auto res = moqFrameWriter_.writeSubscribeDone(controlWriteBuf_, subDone);
   if (!res) {
     XLOG(ERR) << "writeSubscribeDone failed sess=" << this;
     // TODO: any control write failure should probably result in close()
@@ -2854,8 +2859,8 @@ void MoQSession::retireSubscribeId(bool signalWriteLoop) {
 void MoQSession::sendMaxSubscribeID(bool signalWriteLoop) {
   XLOG(DBG1) << "Issuing new maxSubscribeID=" << maxSubscribeID_
              << " sess=" << this;
-  auto res =
-      writeMaxSubscribeId(controlWriteBuf_, {.subscribeID = maxSubscribeID_});
+  auto res = moqFrameWriter_.writeMaxSubscribeId(
+      controlWriteBuf_, {.subscribeID = maxSubscribeID_});
   if (!res) {
     XLOG(ERR) << "writeMaxSubscribeId failed sess=" << this;
     return;
@@ -2899,7 +2904,7 @@ void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
               << " sess=" << this;
     return;
   }
-  auto res = writeSubscribeUpdate(controlWriteBuf_, subUpdate);
+  auto res = moqFrameWriter_.writeSubscribeUpdate(controlWriteBuf_, subUpdate);
   if (!res) {
     XLOG(ERR) << "writeSubscribeUpdate failed sess=" << this;
     return;
@@ -2977,7 +2982,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   }
   auto subID = nextSubscribeID_++;
   fetch.subscribeID = subID;
-  auto wres = writeFetch(controlWriteBuf_, std::move(fetch));
+  auto wres = moqFrameWriter_.writeFetch(controlWriteBuf_, fetch);
   if (!wres) {
     XLOG(ERR) << "writeFetch failed sess=" << this;
     FetchError fetchError = {
@@ -3010,7 +3015,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
 void MoQSession::fetchOk(const FetchOk& fetchOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onFetchSuccess);
-  auto res = writeFetchOk(controlWriteBuf_, fetchOk);
+  auto res = moqFrameWriter_.writeFetchOk(controlWriteBuf_, fetchOk);
   if (!res) {
     XLOG(ERR) << "writeFetchOk failed sess=" << this;
     return;
@@ -3028,7 +3033,7 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
     XLOG(DBG1) << "fetchErr for invalid id=" << fetchErr.subscribeID
                << " sess=" << this;
   }
-  auto res = writeFetchError(controlWriteBuf_, fetchErr);
+  auto res = moqFrameWriter_.writeFetchError(controlWriteBuf_, fetchErr);
   if (!res) {
     XLOG(ERR) << "writeFetchError failed sess=" << this;
     return;
@@ -3045,7 +3050,7 @@ void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
     return;
   }
   trackIt->second->cancel(shared_from_this());
-  auto res = writeFetchCancel(controlWriteBuf_, fetchCan);
+  auto res = moqFrameWriter_.writeFetchCancel(controlWriteBuf_, fetchCan);
   if (!res) {
     XLOG(ERR) << "writeFetchCancel failed sess=" << this;
     return;

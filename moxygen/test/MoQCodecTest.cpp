@@ -13,57 +13,107 @@
 namespace moxygen::test {
 using testing::_;
 
-TestControlMessages fromDir(MoQControlCodec::Direction dir) {
-  // The control messages to write are the opposite of dir
-  return dir == MoQControlCodec::Direction::CLIENT
-      ? TestControlMessages::SERVER
-      : TestControlMessages::CLIENT;
-}
+class MoQCodecTest : public ::testing::Test {
+ public:
+  void testAll(MoQControlCodec::Direction dir) {
+    auto allMsgs =
+        moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
+    testing::NiceMock<MockMoQCodecCallback> callback;
+    MoQControlCodec codec(dir, &callback);
 
-void testAll(MoQControlCodec::Direction dir) {
-  auto allMsgs = moxygen::test::writeAllControlMessages(fromDir(dir));
-  testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQControlCodec codec(dir, &callback);
+    if (dir == MoQControlCodec::Direction::SERVER) {
+      EXPECT_CALL(callback, onClientSetup(testing::_));
+    } else {
+      EXPECT_CALL(callback, onServerSetup(testing::_));
+    }
+    EXPECT_CALL(callback, onSubscribe(testing::_));
+    EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
+    EXPECT_CALL(callback, onSubscribeOk(testing::_));
+    EXPECT_CALL(callback, onSubscribeError(testing::_));
+    EXPECT_CALL(callback, onUnsubscribe(testing::_));
+    EXPECT_CALL(callback, onSubscribeDone(testing::_)).Times(2);
+    EXPECT_CALL(callback, onAnnounce(testing::_));
+    EXPECT_CALL(callback, onAnnounceOk(testing::_));
+    EXPECT_CALL(callback, onAnnounceError(testing::_));
+    EXPECT_CALL(callback, onUnannounce(testing::_));
+    EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
+    EXPECT_CALL(callback, onTrackStatus(testing::_));
+    EXPECT_CALL(callback, onGoaway(testing::_));
+    EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
+    EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
+    EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
+    EXPECT_CALL(callback, onSubscribeAnnouncesError(testing::_));
+    EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
+    EXPECT_CALL(callback, onFetch(testing::_));
+    EXPECT_CALL(callback, onFetchCancel(testing::_));
+    EXPECT_CALL(callback, onFetchOk(testing::_));
+    EXPECT_CALL(callback, onFetchError(testing::_));
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
 
-  if (dir == MoQControlCodec::Direction::SERVER) {
-    EXPECT_CALL(callback, onClientSetup(testing::_));
-  } else {
-    EXPECT_CALL(callback, onServerSetup(testing::_));
+    codec.onIngress(std::move(allMsgs), true);
   }
-  EXPECT_CALL(callback, onSubscribe(testing::_));
-  EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
-  EXPECT_CALL(callback, onSubscribeOk(testing::_));
-  EXPECT_CALL(callback, onSubscribeError(testing::_));
-  EXPECT_CALL(callback, onUnsubscribe(testing::_));
-  EXPECT_CALL(callback, onSubscribeDone(testing::_)).Times(2);
-  EXPECT_CALL(callback, onAnnounce(testing::_));
-  EXPECT_CALL(callback, onAnnounceOk(testing::_));
-  EXPECT_CALL(callback, onAnnounceError(testing::_));
-  EXPECT_CALL(callback, onUnannounce(testing::_));
-  EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
-  EXPECT_CALL(callback, onTrackStatus(testing::_));
-  EXPECT_CALL(callback, onGoaway(testing::_));
-  EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
-  EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
-  EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
-  EXPECT_CALL(callback, onSubscribeAnnouncesError(testing::_));
-  EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
-  EXPECT_CALL(callback, onFetch(testing::_));
-  EXPECT_CALL(callback, onFetchCancel(testing::_));
-  EXPECT_CALL(callback, onFetchOk(testing::_));
-  EXPECT_CALL(callback, onFetchError(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
 
-  codec.onIngress(std::move(allMsgs), true);
-}
+  void testUnderflow(MoQControlCodec::Direction dir) {
+    auto allMsgs =
+        moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
+    testing::NiceMock<MockMoQCodecCallback> callback;
+    MoQControlCodec codec(dir, &callback);
 
-TEST(MoQCodec, All) {
+    folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+    readBuf.append(std::move(allMsgs));
+
+    if (dir == MoQControlCodec::Direction::SERVER) {
+      EXPECT_CALL(callback, onClientSetup(testing::_));
+    } else {
+      EXPECT_CALL(callback, onServerSetup(testing::_));
+    }
+    EXPECT_CALL(callback, onSubscribe(testing::_));
+    EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
+    EXPECT_CALL(callback, onSubscribeOk(testing::_));
+    EXPECT_CALL(callback, onSubscribeError(testing::_));
+    EXPECT_CALL(callback, onUnsubscribe(testing::_));
+    EXPECT_CALL(callback, onSubscribeDone(testing::_)).Times(2);
+    EXPECT_CALL(callback, onAnnounce(testing::_));
+    EXPECT_CALL(callback, onAnnounceOk(testing::_));
+    EXPECT_CALL(callback, onAnnounceError(testing::_));
+    EXPECT_CALL(callback, onUnannounce(testing::_));
+    EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
+    EXPECT_CALL(callback, onTrackStatus(testing::_));
+    EXPECT_CALL(callback, onGoaway(testing::_));
+    EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
+    EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
+    EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
+    EXPECT_CALL(callback, onSubscribeAnnouncesError(testing::_));
+    EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
+    EXPECT_CALL(callback, onFetch(testing::_));
+    EXPECT_CALL(callback, onFetchCancel(testing::_));
+    EXPECT_CALL(callback, onFetchOk(testing::_));
+    EXPECT_CALL(callback, onFetchError(testing::_));
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
+    while (!readBuf.empty()) {
+      codec.onIngress(readBuf.split(1), false);
+    }
+    codec.onIngress(nullptr, true);
+  }
+
+  TestControlMessages fromDir(MoQControlCodec::Direction dir) {
+    // The control messages to write are the opposite of dir
+    return dir == MoQControlCodec::Direction::CLIENT
+        ? TestControlMessages::SERVER
+        : TestControlMessages::CLIENT;
+  }
+
+ protected:
+  MoQFrameWriter moqFrameWriter_;
+};
+
+TEST_F(MoQCodecTest, All) {
   testAll(MoQControlCodec::Direction::CLIENT);
   testAll(MoQControlCodec::Direction::SERVER);
 }
 
-TEST(MoQCodec, AllObject) {
-  auto allMsgs = moxygen::test::writeAllObjectMessages();
+TEST_F(MoQCodecTest, AllObject) {
+  auto allMsgs = moxygen::test::writeAllObjectMessages(moqFrameWriter_);
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
 
@@ -94,55 +144,13 @@ TEST(MoQCodec, AllObject) {
   codec.onIngress(std::move(allMsgs), true);
 }
 
-void testUnderflow(MoQControlCodec::Direction dir) {
-  auto allMsgs = moxygen::test::writeAllControlMessages(fromDir(dir));
-  testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQControlCodec codec(dir, &callback);
-
-  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
-  readBuf.append(std::move(allMsgs));
-
-  if (dir == MoQControlCodec::Direction::SERVER) {
-    EXPECT_CALL(callback, onClientSetup(testing::_));
-  } else {
-    EXPECT_CALL(callback, onServerSetup(testing::_));
-  }
-  EXPECT_CALL(callback, onSubscribe(testing::_));
-  EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
-  EXPECT_CALL(callback, onSubscribeOk(testing::_));
-  EXPECT_CALL(callback, onSubscribeError(testing::_));
-  EXPECT_CALL(callback, onUnsubscribe(testing::_));
-  EXPECT_CALL(callback, onSubscribeDone(testing::_)).Times(2);
-  EXPECT_CALL(callback, onAnnounce(testing::_));
-  EXPECT_CALL(callback, onAnnounceOk(testing::_));
-  EXPECT_CALL(callback, onAnnounceError(testing::_));
-  EXPECT_CALL(callback, onUnannounce(testing::_));
-  EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
-  EXPECT_CALL(callback, onTrackStatus(testing::_));
-  EXPECT_CALL(callback, onGoaway(testing::_));
-  EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
-  EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
-  EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
-  EXPECT_CALL(callback, onSubscribeAnnouncesError(testing::_));
-  EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
-  EXPECT_CALL(callback, onFetch(testing::_));
-  EXPECT_CALL(callback, onFetchCancel(testing::_));
-  EXPECT_CALL(callback, onFetchOk(testing::_));
-  EXPECT_CALL(callback, onFetchError(testing::_));
-  EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
-  while (!readBuf.empty()) {
-    codec.onIngress(readBuf.split(1), false);
-  }
-  codec.onIngress(nullptr, true);
-}
-
-TEST(MoQCodec, Underflow) {
+TEST_F(MoQCodecTest, Underflow) {
   testUnderflow(MoQControlCodec::Direction::CLIENT);
   testUnderflow(MoQControlCodec::Direction::SERVER);
 }
 
-TEST(MoQCodec, UnderflowObjects) {
-  auto allMsgs = moxygen::test::writeAllObjectMessages();
+TEST_F(MoQCodecTest, UnderflowObjects) {
+  auto allMsgs = moxygen::test::writeAllObjectMessages(moqFrameWriter_);
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
 
@@ -171,9 +179,9 @@ TEST(MoQCodec, UnderflowObjects) {
   codec.onIngress(nullptr, true);
 }
 
-TEST(MoQCodec, ObjectStreamPayloadFin) {
+TEST_F(MoQCodecTest, ObjectStreamPayloadFin) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  writeSingleObjectStream(
+  moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
@@ -188,9 +196,9 @@ TEST(MoQCodec, ObjectStreamPayloadFin) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST(MoQCodec, ObjectStreamPayload) {
+TEST_F(MoQCodecTest, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  writeSingleObjectStream(
+  moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
@@ -206,9 +214,9 @@ TEST(MoQCodec, ObjectStreamPayload) {
   codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
 }
 
-TEST(MoQCodec, EmptyObjectPayload) {
+TEST_F(MoQCodecTest, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  writeSingleObjectStream(
+  moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
       nullptr);
@@ -225,11 +233,11 @@ TEST(MoQCodec, EmptyObjectPayload) {
   codec.onIngress(std::unique_ptr<folly::IOBuf>(), true);
 }
 
-TEST(MoQCodec, TruncatedObject) {
+TEST_F(MoQCodecTest, TruncatedObject) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res =
-      writeSubgroupHeader(writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
-  res = writeStreamObject(
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
+  res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
@@ -244,11 +252,11 @@ TEST(MoQCodec, TruncatedObject) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST(MoQCodec, TruncatedObjectPayload) {
+TEST_F(MoQCodecTest, TruncatedObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res =
-      writeSubgroupHeader(writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
-  res = writeStreamObject(
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
+  res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
@@ -268,7 +276,7 @@ TEST(MoQCodec, TruncatedObjectPayload) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST(MoQCodec, StreamTypeUnderflow) {
+TEST_F(MoQCodecTest, StreamTypeUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint8_t big = 0xff;
   writeBuf.append(&big, 1);
@@ -279,7 +287,7 @@ TEST(MoQCodec, StreamTypeUnderflow) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST(MoQCodec, UnknownStreamType) {
+TEST_F(MoQCodecTest, UnknownStreamType) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint8_t bad = 0x12;
   writeBuf.append(&bad, 1);
@@ -290,26 +298,26 @@ TEST(MoQCodec, UnknownStreamType) {
   codec.onIngress(writeBuf.move(), true);
 }
 
-TEST(MoQCodec, Fetch) {
+TEST_F(MoQCodecTest, Fetch) {
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   SubscribeID subscribeId(1);
   ObjectHeader obj(subscribeId, 2, 3, 4, 5);
   StreamType streamType = StreamType::FETCH_HEADER;
-  auto res = writeFetchHeader(writeBuf, subscribeId);
+  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, subscribeId);
   obj.length = 5;
-  res = writeStreamObject(
+  res = moqFrameWriter_.writeStreamObject(
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
   obj.group++;
   obj.id = 0;
   obj.status = ObjectStatus::END_OF_TRACK;
   obj.length = 0;
-  res = writeStreamObject(writeBuf, streamType, obj, nullptr);
+  res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
   obj.id++;
   obj.status = ObjectStatus::GROUP_NOT_EXIST;
   obj.length = 0;
-  res = writeStreamObject(writeBuf, streamType, obj, nullptr);
+  res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
 
   EXPECT_CALL(callback, onFetchHeader(testing::_));
   EXPECT_CALL(callback, onObjectBegin(2, 3, 4, testing::_, 5, _, true, false));
@@ -320,18 +328,18 @@ TEST(MoQCodec, Fetch) {
   codec.onIngress(writeBuf.move(), false);
 }
 
-TEST(MoQCodec, FetchHeaderUnderflow) {
+TEST_F(MoQCodecTest, FetchHeaderUnderflow) {
   testing::StrictMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   SubscribeID subscribeId(0xffffffffffffff);
-  writeFetchHeader(writeBuf, subscribeId);
+  moqFrameWriter_.writeFetchHeader(writeBuf, subscribeId);
   // only deliver first byte of fetch header
   EXPECT_CALL(callback, onConnectionError(ErrorCode::PARSE_UNDERFLOW));
   codec.onIngress(writeBuf.splitAtMost(2), true);
 }
 
-TEST(MoQCodec, InvalidFrame) {
+TEST_F(MoQCodecTest, InvalidFrame) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeBuf.append(std::string(" "));
   testing::NiceMock<MockMoQCodecCallback> callback;
@@ -342,7 +350,7 @@ TEST(MoQCodec, InvalidFrame) {
   codec.onIngress(writeBuf.move(), false);
 }
 
-TEST(MoQCodec, InvalidSetups) {
+TEST_F(MoQCodecTest, InvalidSetups) {
   testing::NiceMock<MockMoQCodecCallback> callback;
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
@@ -362,7 +370,7 @@ TEST(MoQCodec, InvalidSetups) {
   }
 
   // codec gets non-setup first
-  writeUnsubscribe(
+  moqFrameWriter_.writeUnsubscribe(
       writeBuf,
       Unsubscribe({
           0,
