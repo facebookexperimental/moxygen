@@ -911,6 +911,10 @@ class MoQFrameParser {
       size_t& length,
       ObjectHeader& objectHeader);
 
+  folly::Expected<Extension, ErrorCode> parseExtension(
+      folly::io::Cursor& cursor,
+      size_t& length);
+
   folly::Optional<uint64_t> version_;
 };
 

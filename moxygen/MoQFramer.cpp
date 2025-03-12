@@ -1064,39 +1064,49 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   for (auto i = 0u; i < numExt->first; i++) {
-    auto type = quic::decodeQuicInteger(cursor, length);
-    if (!type) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    auto maybeExtension = parseExtension(cursor, length);
+    if (maybeExtension.hasError()) {
+      return folly::makeUnexpected(maybeExtension.error());
     }
-    length -= type->second;
-    Extension ext;
-    ext.type = type->first;
-    if (ext.type & 0x1) {
-      auto extLen = quic::decodeQuicInteger(cursor, length);
-      if (!extLen) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= extLen->second;
-      if (length < extLen->first) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      if (extLen->first > kMaxExtensionLength) {
-        XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
-        return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
-      }
-      cursor.clone(ext.arrayValue, extLen->first);
-      length -= extLen->first;
-    } else {
-      auto iVal = quic::decodeQuicInteger(cursor, length);
-      if (!iVal) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= iVal->second;
-      ext.intValue = iVal->first;
-    }
-    objectHeader.extensions.emplace_back(std::move(ext));
+    objectHeader.extensions.emplace_back(std::move(*maybeExtension));
   }
   return folly::unit;
+}
+
+folly::Expected<Extension, ErrorCode> MoQFrameParser::parseExtension(
+    folly::io::Cursor& cursor,
+    size_t& length) {
+  auto type = quic::decodeQuicInteger(cursor, length);
+  if (!type) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= type->second;
+  Extension ext;
+  ext.type = type->first;
+  if (ext.type & 0x1) {
+    auto extLen = quic::decodeQuicInteger(cursor, length);
+    if (!extLen) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= extLen->second;
+    if (length < extLen->first) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    if (extLen->first > kMaxExtensionLength) {
+      XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
+      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    }
+    cursor.clone(ext.arrayValue, extLen->first);
+    length -= extLen->first;
+  } else {
+    auto iVal = quic::decodeQuicInteger(cursor, length);
+    if (!iVal) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= iVal->second;
+    ext.intValue = iVal->first;
+  }
+  return ext;
 }
 
 folly::Expected<std::vector<std::string>, ErrorCode>
