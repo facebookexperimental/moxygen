@@ -158,7 +158,7 @@ bool MoQVideoPublisher::setup(const std::string& connectURL) {
       ->run(
           /*publisher=*/shared_from_this(),
           /*subscriber=*/nullptr,
-          {forwarder_.fullTrackName().trackNamespace},
+          {videoForwarder_.fullTrackName().trackNamespace},
           kConnectTimeout,
           kTransactionTimeout)
       .scheduleOn(evbThread_->getEventBase())
@@ -169,23 +169,24 @@ bool MoQVideoPublisher::setup(const std::string& connectURL) {
 folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
-  if (sub.fullTrackName != forwarder_.fullTrackName()) {
+  if (sub.fullTrackName != videoForwarder_.fullTrackName()) {
     XLOG(ERR) << "Unknown track " << sub.fullTrackName;
     co_return folly::makeUnexpected(SubscribeError{
         sub.subscribeID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
   }
-  if (!forwarder_.empty()) {
-    XLOG(ERR) << "Already subscribed to track " << forwarder_.fullTrackName();
+  if (!videoForwarder_.empty()) {
+    XLOG(ERR) << "Already subscribed to track "
+              << videoForwarder_.fullTrackName();
     co_return folly::makeUnexpected(SubscribeError{
         sub.subscribeID,
         SubscribeErrorCode::INTERNAL_ERROR,
         "Already subscribed"});
   }
-  co_return forwarder_.addSubscriber(
+  co_return videoForwarder_.addSubscriber(
       MoQSession::getRequestSession(), sub, std::move(callback));
 }
 
-void MoQVideoPublisher::publishFrame(
+void MoQVideoPublisher::publishVideoFrame(
     std::chrono::microseconds ptsUs,
     uint64_t flags,
     Payload payload) {
@@ -205,19 +206,19 @@ void MoQVideoPublisher::publishFrameImpl(
     payload = savedMetadata_->clone();
     savedMetadata_ = payload->clone();
   }
-  if (forwarder_.empty()) {
-    XLOG(ERR) << "No subscriber for track " << forwarder_.fullTrackName();
+  if (videoForwarder_.empty()) {
+    XLOG(ERR) << "No subscriber for track " << videoForwarder_.fullTrackName();
     return;
   }
 
   auto item = std::make_unique<MediaItem>();
   item->type = MediaType::VIDEO;
-  item->id = seqId_++;
+  item->id = videoSeqId_++;
   item->pts = (ptsUs.count() * timescale_) / 1000000;
   item->dts = item->pts; // wrong if B-frames are used
   item->timescale = timescale_;
-  if (lastPts_) {
-    item->duration = item->pts - *lastPts_;
+  if (lastVideoPts_) {
+    item->duration = item->pts - *lastVideoPts_;
   } else {
     item->duration = 1;
   }
@@ -237,14 +238,14 @@ void MoQVideoPublisher::publishFrameImpl(
   } else {
     // video data
     item->data = std::move(payload);
-    lastPts_ = item->pts;
+    lastVideoPts_ = item->pts;
   }
   publishFrameToMoQ(std::move(item));
 }
 
 void MoQVideoPublisher::endPublish() {
   evbThread_->getEventBase()->runInEventBaseThread([this] {
-    forwarder_.subscribeDone(
+    videoForwarder_.subscribeDone(
         {0,
          SubscribeDoneStatusCode::TRACK_ENDED,
          0,
@@ -282,7 +283,7 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
   if (!videoSgPub_) {
     // Open new subgroup
     auto res =
-        forwarder_.beginSubgroup(latestVideo_.group, 0, kDefaultPriority);
+        videoForwarder_.beginSubgroup(latestVideo_.group, 0, kDefaultPriority);
     if (!res) {
       XLOG(ERR) << "Error creating subgroup";
     }
