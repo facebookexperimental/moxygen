@@ -566,7 +566,14 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraftCurrent));
+    ::testing::Values(kVersionDraftCurrent, kVersionDraft09));
+
+TEST(MoQFramerTestUtils, DraftMajorVersion) {
+  EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);
+  EXPECT_EQ(getDraftMajorVersion(0xffff0001), 0xff);
+  EXPECT_EQ(getDraftMajorVersion(0xff000008), 0x8);
+  EXPECT_EQ(getDraftMajorVersion(0xff00ffff), 0xffff);
+}
 
 /* Test cases to add
  *

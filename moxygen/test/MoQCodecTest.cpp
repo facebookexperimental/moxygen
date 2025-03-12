@@ -429,5 +429,5 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(kVersionDraftCurrent));
+    ::testing::Values(kVersionDraftCurrent, kVersionDraft09));
 } // namespace moxygen::test

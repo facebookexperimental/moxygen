@@ -193,6 +193,12 @@ constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
 constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
 constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
+constexpr uint64_t kVersionDraft09 = 0xff000009;
+
+// In the terminology I'm using for this function, each draft has a "major"
+// and a "minor" version. For example, kVersionDraft08_exp2 has the major
+// version 8 and minor version 2.
+uint64_t getDraftMajorVersion(uint64_t version);
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
@@ -756,8 +762,8 @@ struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
 
-// parseClientSetup and parseServerSetup are version-agnostic, so we're leaving
-// them out of the MoQFrameParser.
+// parseClientSetup and parseServerSetup are version-agnostic, so we're
+// leaving them out of the MoQFrameParser.
 class MoQFrameParser {
  public:
   // datagram only
@@ -1068,6 +1074,9 @@ class MoQFrameWriter {
       const std::vector<Extension>& extensions,
       size_t& size,
       bool& error);
+
+  size_t getExtensionSize(const std::vector<Extension>& extensions, bool& error)
+      const;
 
   folly::Optional<uint64_t> version_;
 };
