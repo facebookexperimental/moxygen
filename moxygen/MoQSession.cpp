@@ -262,6 +262,7 @@ StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
           std::numeric_limits<uint64_t>::max(),
           0,
           ObjectStatus::NORMAL) {
+  moqFrameWriter_.initializeVersion(publisher->getVersion());
   (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->subscribeID());
 }
 
@@ -602,13 +603,15 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       SubscribeID subscribeID,
       TrackAlias trackAlias,
       Priority subPriority,
-      GroupOrder groupOrder)
+      GroupOrder groupOrder,
+      uint64_t version)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
             subscribeID,
             subPriority,
-            groupOrder),
+            groupOrder,
+            version),
         trackAlias_(trackAlias) {}
 
   void setSubscriptionHandle(
@@ -688,13 +691,15 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
       FullTrackName fullTrackName,
       SubscribeID subscribeID,
       Priority subPriority,
-      GroupOrder groupOrder)
+      GroupOrder groupOrder,
+      uint64_t version)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
             subscribeID,
             subPriority,
-            groupOrder) {
+            groupOrder,
+            version) {
     streamPublisher_ = std::make_shared<StreamPublisherImpl>(this);
   }
 
@@ -1304,7 +1309,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
       folly::coro::makePromiseContract<ServerSetup>();
 
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
-  auto res = writeClientSetup(controlWriteBuf_, std::move(setup));
+  auto res = writeClientSetup(controlWriteBuf_, setup);
   if (!res) {
     XLOG(ERR) << "writeClientSetup failed sess=" << this;
     co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
@@ -1328,7 +1333,17 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
   }
+  if (std::find(
+          setup.supportedVersions.begin(),
+          setup.supportedVersions.end(),
+          serverSetup->selectedVersion) == setup.supportedVersions.end()) {
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    XLOG(ERR) << "Server chose a version that the client doesn't support";
+    co_yield folly::coro::co_error(serverSetup.exception());
+  }
+
   setupComplete_ = true;
+  initializeNegotiatedVersion(serverSetup->selectedVersion);
   co_return *serverSetup;
 }
 
@@ -1360,6 +1375,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
+  initializeNegotiatedVersion(kVersionDraftCurrent);
   peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
   auto serverSetup =
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
@@ -1387,9 +1403,8 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     XLOG(DBG1) << "exit " << func << " sess=" << this;
   });
   co_await folly::coro::co_safe_point;
-  MoQControlCodec codec(dir_, this);
   auto streamId = readHandle->getID();
-  codec.setStreamId(streamId);
+  controlCodec_.setStreamId(streamId);
 
   bool fin = false;
   auto token = co_await folly::coro::co_current_cancellation_token;
@@ -1403,7 +1418,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     } else {
       if (streamData->data || streamData->fin) {
         try {
-          codec.onIngress(std::move(streamData->data), streamData->fin);
+          controlCodec_.onIngress(std::move(streamData->data), streamData->fin);
         } catch (const std::exception& ex) {
           XLOG(FATAL) << "exception thrown from onIngress ex="
                       << folly::exceptionStr(ex);
@@ -1719,6 +1734,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   co_await folly::coro::co_safe_point;
   auto token = co_await folly::coro::co_current_cancellation_token;
   MoQObjectStreamCodec codec(nullptr);
+  codec.initializeVersion(*negotiatedVersion_);
   ObjectStreamCallback dcb(session, /*by ref*/ token);
   codec.setCallback(&dcb);
   codec.setStreamId(id);
@@ -1803,7 +1819,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       subscribeRequest.subscribeID,
       subscribeRequest.trackAlias,
       subscribeRequest.priority,
-      subscribeRequest.groupOrder);
+      subscribeRequest.groupOrder,
+      *negotiatedVersion_);
   pubTracks_.emplace(subscribeID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
@@ -2074,7 +2091,8 @@ void MoQSession::onFetch(Fetch fetch) {
       fetch.fullTrackName,
       fetch.subscribeID,
       fetch.priority,
-      fetch.groupOrder);
+      fetch.groupOrder,
+      *negotiatedVersion_);
   pubTracks_.emplace(fetch.subscribeID, fetchPublisher);
   handleFetch(std::move(fetch), std::move(fetchPublisher))
       .scheduleOn(evb_)
@@ -3119,6 +3137,11 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
 
 void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (!setupComplete_) {
+    XLOG(ERR) << "Datagram before setup complete sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   readBuf.append(std::move(datagram));
   size_t remainingLength = readBuf.chainLength();
@@ -3138,6 +3161,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
   remainingLength -= type->second;
   MoQFrameParser parser;
+  parser.initializeVersion(*negotiatedVersion_);
   auto res = parser.parseDatagramObjectHeader(
       cursor, StreamType(type->first), remainingLength);
   if (res.hasError()) {
@@ -3169,6 +3193,12 @@ bool MoQSession::closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID) {
     return true;
   }
   return false;
+}
+
+void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
+  negotiatedVersion_ = negotiatedVersion;
+  moqFrameWriter_.initializeVersion(*negotiatedVersion_);
+  controlCodec_.initializeVersion(*negotiatedVersion_);
 }
 
 /*static*/

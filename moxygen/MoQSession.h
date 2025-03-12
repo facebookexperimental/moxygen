@@ -60,7 +60,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       folly::EventBase* evb)
-      : dir_(MoQControlCodec::Direction::CLIENT), wt_(wt), evb_(evb) {}
+      : dir_(MoQControlCodec::Direction::CLIENT),
+        wt_(wt),
+        evb_(evb),
+        controlCodec_(dir_, this) {}
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
@@ -69,7 +72,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       : dir_(MoQControlCodec::Direction::SERVER),
         wt_(wt),
         evb_(evb),
-        serverSetupCallback_(&serverSetupCallback) {}
+        serverSetupCallback_(&serverSetupCallback),
+        controlCodec_(dir_, this) {}
 
   void setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
     publishHandler_ = std::move(publishHandler);
@@ -163,12 +167,16 @@ class MoQSession : public MoQControlCodec::ControlCallback,
         FullTrackName ftn,
         SubscribeID subscribeID,
         Priority subPriority,
-        GroupOrder groupOrder)
+        GroupOrder groupOrder,
+        uint64_t version)
         : session_(session),
           fullTrackName_(std::move(ftn)),
           subscribeID_(subscribeID),
           subPriority_(subPriority),
-          groupOrder_(groupOrder) {}
+          groupOrder_(groupOrder),
+          version_(version) {
+      moqFrameWriter_.initializeVersion(version);
+    }
     virtual ~PublisherImpl() = default;
 
     const FullTrackName& fullTrackName() const {
@@ -205,6 +213,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       return nullptr;
     }
 
+    uint64_t getVersion() const {
+      return version_;
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -212,6 +224,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     uint8_t subPriority_;
     GroupOrder groupOrder_;
     MoQFrameWriter moqFrameWriter_;
+    uint64_t version_;
   };
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
@@ -339,6 +352,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   //  TODO: Add this to all messages that have subscribeId
   bool closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID);
 
+  void initializeNegotiatedVersion(uint64_t negotiatedVersion);
+
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
   folly::EventBase* evb_{nullptr}; // keepalive?
@@ -431,5 +446,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   std::shared_ptr<MoQSubscriberStatsCallback> subscriberStatsCallback_{nullptr};
 
   MoQFrameWriter moqFrameWriter_;
+  folly::Optional<uint64_t> negotiatedVersion_{0};
+  MoQControlCodec controlCodec_;
 };
 } // namespace moxygen

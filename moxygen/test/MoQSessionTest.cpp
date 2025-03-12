@@ -294,6 +294,16 @@ CO_TEST_F_X(MoQSessionTest, ServerSetupFail) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_F_X(MoQSessionTest, ServerSetupUnsupportedVersion) {
+  negotiatedVersion_ = kVersionDraftCurrent - 1;
+  clientSession_->start();
+  ClientSetup setup;
+  setup.supportedVersions.push_back(kVersionDraftCurrent);
+  auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
+  EXPECT_TRUE(serverSetup.hasException());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // === FETCH tests ===
 
 CO_TEST_F_X(MoQSessionTest, Fetch) {
@@ -823,6 +833,14 @@ CO_TEST_F_X(MoQSessionTest, Datagrams) {
   EXPECT_FALSE(res.hasError());
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_F_X(MoQSessionTest, DatagramBeforeSessionSetup) {
+  clientSession_->start();
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  clientSession_->onDatagram(folly::IOBuf::copyBuffer("hello world"));
+  EXPECT_TRUE(clientWt_->isSessionClosed());
+  co_return;
 }
 
 // SUBSCRIBE DONE tests

@@ -25,6 +25,10 @@ class MoQCodec {
     streamId_ = streamId;
   }
 
+  void initializeVersion(uint64_t version) {
+    moqFrameParser_.initializeVersion(version);
+  }
+
   virtual void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) = 0;
 
  protected:
