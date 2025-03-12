@@ -438,6 +438,10 @@ struct AbsoluteLocation {
       return std::strong_ordering::greater;
     }
   }
+
+  bool operator==(const AbsoluteLocation& other) const {
+    return group == other.group && object == other.object;
+  }
 };
 
 constexpr AbsoluteLocation kLocationMin;

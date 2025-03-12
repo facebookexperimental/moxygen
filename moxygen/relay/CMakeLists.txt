@@ -5,7 +5,28 @@
 # LICENSE file in the root directory of this source tree.
 
 # Relay
-add_library(moqrelay MoQRelay.cpp)
+add_library(moqcache MoQCache.cpp)
+target_include_directories(
+  moqcache PUBLIC
+  $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+target_compile_options(
+  moqcache PRIVATE
+  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+target_link_libraries(
+  moqcache PUBLIC
+  moxygen
+)
+
+install(
+    TARGETS moqcache
+    EXPORT moxygen-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+)
+
+add_library(moqrelay MoQRelay.cpp MoQCache.cpp)
 target_include_directories(
   moqrelay PUBLIC
   $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
@@ -62,3 +83,5 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
+
+add_subdirectory(test)

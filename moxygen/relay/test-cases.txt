@@ -1,0 +1,23 @@
+fetch with complete cache miss [no track]
+fetch with a complete cache miss [track has cached data but disjoint range]
+
+subscribe + writeback populates cache
+
+fetch + writeback
+fetch populates OBJECT_NOT_EXIST, TRACK_NOT_EXIST
+
+non-live track, fetch completely satisifed by cache
+partial fetch hits:
+  1. Missing beginning -> wait for missing beginning before fetchimpl
+     needs fetch OK/doen't need fetchOK
+  2. Missing middle, multiple misses
+  3. Missing end
+
+fetch on a live track
+fetch end beyond end of track
+fetch waits for a fetch in progress
+upstream fetch error
+upstream reset the stream
+consumer->object BLOCKED
+await fails
+consumer->object fails for another reason (cancel?)
