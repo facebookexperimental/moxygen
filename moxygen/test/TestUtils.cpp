@@ -22,7 +22,7 @@ std::vector<Extension> getTestExtensions() {
 
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     TestControlMessages in,
-    MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   WriteResult res;
   if (in != TestControlMessages::SERVER) {
@@ -210,7 +210,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
 }
 
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
-    MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter) {
   // writes a subgroup header, object without extensions, object with
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -245,7 +245,7 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
 }
 
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
-    MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter) {
   // writes a fetch header, object without extensions, object with
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -279,7 +279,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
 }
 
 std::unique_ptr<folly::IOBuf> writeAllDatagramMessages(
-    MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST);
   auto res = moqFrameWriter.writeDatagramObject(writeBuf, obj, nullptr);

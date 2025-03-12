@@ -132,7 +132,7 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
 }
 
 folly::Expected<SubscribeID, ErrorCode> MoQFrameParser::parseFetchHeader(
-    folly::io::Cursor& cursor) noexcept {
+    folly::io::Cursor& cursor) const noexcept {
   auto subscribeID = quic::decodeQuicInteger(cursor);
   if (!subscribeID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -144,7 +144,7 @@ folly::Expected<ObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
     StreamType streamType,
-    size_t& length) noexcept {
+    size_t& length) const noexcept {
   ObjectHeader objectHeader;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
@@ -200,7 +200,7 @@ MoQFrameParser::parseDatagramObjectHeader(
 }
 
 folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
-    folly::io::Cursor& cursor) noexcept {
+    folly::io::Cursor& cursor) const noexcept {
   auto length = cursor.totalLength();
   ObjectHeader objectHeader;
   objectHeader.group = std::numeric_limits<uint64_t>::max(); // unset
@@ -236,7 +236,7 @@ folly::Expected<folly::Unit, ErrorCode>
 MoQFrameParser::parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
     size_t length,
-    ObjectHeader& objectHeader) {
+    ObjectHeader& objectHeader) const noexcept {
   auto payloadLength = quic::decodeQuicInteger(cursor, length);
   if (!payloadLength) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -265,7 +265,7 @@ MoQFrameParser::parseObjectStatusAndLength(
 
 folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
     folly::io::Cursor& cursor,
-    const ObjectHeader& headerTemplate) noexcept {
+    const ObjectHeader& headerTemplate) const noexcept {
   // TODO get rid of this
   auto length = cursor.totalLength();
   ObjectHeader objectHeader = headerTemplate;
@@ -312,7 +312,7 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
 folly::Expected<ObjectHeader, ErrorCode>
 MoQFrameParser::parseSubgroupObjectHeader(
     folly::io::Cursor& cursor,
-    const ObjectHeader& headerTemplate) noexcept {
+    const ObjectHeader& headerTemplate) const noexcept {
   // TODO get rid of this
   auto length = cursor.totalLength();
   ObjectHeader objectHeader = headerTemplate;
@@ -339,7 +339,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     folly::io::Cursor& cursor,
     size_t length,
     size_t numParams,
-    std::vector<TrackRequestParameter>& params) {
+    std::vector<TrackRequestParameter>& params) const noexcept {
   for (auto i = 0u; i < numParams; i++) {
     TrackRequestParameter p;
     auto key = quic::decodeQuicInteger(cursor, length);
@@ -373,9 +373,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
 }
 
 folly::Expected<SubscribeRequest, ErrorCode>
-MoQFrameParser::parseSubscribeRequest(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept {
+MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
   SubscribeRequest subscribeRequest;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -445,9 +444,8 @@ MoQFrameParser::parseSubscribeRequest(
 }
 
 folly::Expected<SubscribeUpdate, ErrorCode>
-MoQFrameParser::parseSubscribeUpdate(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept {
+MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
   SubscribeUpdate subscribeUpdate;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -489,7 +487,7 @@ MoQFrameParser::parseSubscribeUpdate(
 
 folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   SubscribeOk subscribeOk;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -539,7 +537,7 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
 
 folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   SubscribeError subscribeError;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -575,7 +573,7 @@ folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
 
 folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   Unsubscribe unsubscribe;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -589,7 +587,7 @@ folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
 
 folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   SubscribeDone subscribeDone;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -636,7 +634,7 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
 
 folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   Announce announce;
   auto res = parseFixedTuple(cursor, length);
   if (!res) {
@@ -658,7 +656,7 @@ folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
 
 folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   AnnounceOk announceOk;
   auto res = parseFixedTuple(cursor, length);
   if (!res) {
@@ -670,7 +668,7 @@ folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
 
 folly::Expected<AnnounceError, ErrorCode> MoQFrameParser::parseAnnounceError(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   AnnounceError announceError;
   auto res = parseFixedTuple(cursor, length);
   if (!res) {
@@ -696,7 +694,7 @@ folly::Expected<AnnounceError, ErrorCode> MoQFrameParser::parseAnnounceError(
 
 folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   Unannounce unannounce;
   auto res = parseFixedTuple(cursor, length);
   if (!res) {
@@ -708,7 +706,7 @@ folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
 
 folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   AnnounceCancel announceCancel;
   auto res = parseFixedTuple(cursor, length);
   if (!res) {
@@ -734,7 +732,7 @@ folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
 folly::Expected<TrackStatusRequest, ErrorCode>
 MoQFrameParser::parseTrackStatusRequest(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   TrackStatusRequest trackStatusRequest;
   auto res = parseFullTrackName(cursor, length);
   if (!res) {
@@ -746,7 +744,7 @@ MoQFrameParser::parseTrackStatusRequest(
 
 folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   TrackStatus trackStatus;
   auto res = parseFullTrackName(cursor, length);
   if (!res) {
@@ -773,7 +771,7 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
 
 folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   Goaway goaway;
   auto res = parseFixedString(cursor, length);
   if (!res) {
@@ -785,7 +783,7 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
 
 folly::Expected<MaxSubscribeId, ErrorCode> MoQFrameParser::parseMaxSubscribeId(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   MaxSubscribeId maxSubscribeId;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -797,9 +795,8 @@ folly::Expected<MaxSubscribeId, ErrorCode> MoQFrameParser::parseMaxSubscribeId(
 }
 
 folly::Expected<SubscribesBlocked, ErrorCode>
-MoQFrameParser::parseSubscribesBlocked(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept {
+MoQFrameParser::parseSubscribesBlocked(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
   SubscribesBlocked subscribesBlocked;
   auto res = quic::decodeQuicInteger(cursor, length);
   if (!res) {
@@ -812,7 +809,7 @@ MoQFrameParser::parseSubscribesBlocked(
 
 folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   Fetch fetch;
   auto res = quic::decodeQuicInteger(cursor, length);
   if (!res) {
@@ -893,7 +890,7 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
 
 folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   FetchCancel fetchCancel;
   auto res = quic::decodeQuicInteger(cursor, length);
   if (!res) {
@@ -905,7 +902,7 @@ folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
 
 folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   FetchOk fetchOk;
   auto res = quic::decodeQuicInteger(cursor, length);
   if (!res) {
@@ -949,7 +946,7 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
 
 folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   FetchError fetchError;
   auto res = quic::decodeQuicInteger(cursor, length);
   if (!res) {
@@ -977,7 +974,7 @@ folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
 folly::Expected<SubscribeAnnounces, ErrorCode>
 MoQFrameParser::parseSubscribeAnnounces(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   auto res = parseAnnounce(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
@@ -989,7 +986,7 @@ MoQFrameParser::parseSubscribeAnnounces(
 folly::Expected<SubscribeAnnouncesOk, ErrorCode>
 MoQFrameParser::parseSubscribeAnnouncesOk(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   auto res = parseAnnounceOk(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
@@ -1000,7 +997,7 @@ MoQFrameParser::parseSubscribeAnnouncesOk(
 folly::Expected<SubscribeAnnouncesError, ErrorCode>
 MoQFrameParser::parseSubscribeAnnouncesError(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   auto res = parseAnnounceError(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
@@ -1014,7 +1011,7 @@ MoQFrameParser::parseSubscribeAnnouncesError(
 folly::Expected<UnsubscribeAnnounces, ErrorCode>
 MoQFrameParser::parseUnsubscribeAnnounces(
     folly::io::Cursor& cursor,
-    size_t length) noexcept {
+    size_t length) const noexcept {
   auto res = parseAnnounceOk(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
@@ -1024,7 +1021,7 @@ MoQFrameParser::parseUnsubscribeAnnounces(
 
 folly::Expected<FullTrackName, ErrorCode> MoQFrameParser::parseFullTrackName(
     folly::io::Cursor& cursor,
-    size_t& length) {
+    size_t& length) const noexcept {
   FullTrackName fullTrackName;
   auto res = parseFixedTuple(cursor, length);
   if (!res) {
@@ -1041,9 +1038,8 @@ folly::Expected<FullTrackName, ErrorCode> MoQFrameParser::parseFullTrackName(
 }
 
 folly::Expected<AbsoluteLocation, ErrorCode>
-MoQFrameParser::parseAbsoluteLocation(
-    folly::io::Cursor& cursor,
-    size_t& length) {
+MoQFrameParser::parseAbsoluteLocation(folly::io::Cursor& cursor, size_t& length)
+    const noexcept {
   AbsoluteLocation location;
   auto group = quic::decodeQuicInteger(cursor, length);
   if (!group) {
@@ -1065,7 +1061,7 @@ MoQFrameParser::parseAbsoluteLocation(
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
     folly::io::Cursor& cursor,
     size_t& length,
-    ObjectHeader& objectHeader) {
+    ObjectHeader& objectHeader) const noexcept {
   CHECK(version_.hasValue())
       << "The version must be set before parsing extensions";
 
@@ -1118,7 +1114,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
 
 folly::Expected<Extension, ErrorCode> MoQFrameParser::parseExtension(
     folly::io::Cursor& cursor,
-    size_t& length) {
+    size_t& length) const noexcept {
   auto type = quic::decodeQuicInteger(cursor, length);
   if (!type) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1153,7 +1149,8 @@ folly::Expected<Extension, ErrorCode> MoQFrameParser::parseExtension(
 }
 
 folly::Expected<std::vector<std::string>, ErrorCode>
-MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length) {
+MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length)
+    const noexcept {
   auto itemCount = quic::decodeQuicInteger(cursor, length);
   if (!itemCount) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1352,7 +1349,7 @@ WriteResult writeServerSetup(
 
 WriteResult MoQFrameWriter::writeSubgroupHeader(
     folly::IOBufQueue& writeBuf,
-    const ObjectHeader& objectHeader) noexcept {
+    const ObjectHeader& objectHeader) const noexcept {
   size_t size = 0;
   bool error = false;
   writeVarint(
@@ -1370,7 +1367,7 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
 
 WriteResult MoQFrameWriter::writeFetchHeader(
     folly::IOBufQueue& writeBuf,
-    SubscribeID subscribeID) noexcept {
+    SubscribeID subscribeID) const noexcept {
   size_t size = 0;
   bool error = false;
   writeVarint(
@@ -1385,7 +1382,7 @@ WriteResult MoQFrameWriter::writeFetchHeader(
 WriteResult MoQFrameWriter::writeSingleObjectStream(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
+    std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
   auto res = writeSubgroupHeader(writeBuf, objectHeader);
   if (res) {
     return writeStreamObject(
@@ -1402,7 +1399,7 @@ void MoQFrameWriter::writeExtensions(
     folly::IOBufQueue& writeBuf,
     const std::vector<Extension>& extensions,
     size_t& size,
-    bool& error) {
+    bool& error) const noexcept {
   if (getDraftMajorVersion(*version_) <= 8) {
     // Not draft 9 or any of its sub-versions. Write out the number of
     // extensions
@@ -1437,7 +1434,7 @@ void MoQFrameWriter::writeExtensions(
 
 size_t MoQFrameWriter::getExtensionSize(
     const std::vector<Extension>& extensions,
-    bool& error) const {
+    bool& error) const noexcept {
   size_t size = 0;
   if (error) {
     return 0;
@@ -1474,7 +1471,7 @@ size_t MoQFrameWriter::getExtensionSize(
 WriteResult MoQFrameWriter::writeDatagramObject(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
+    std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
   size_t size = 0;
   bool error = false;
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
@@ -1520,7 +1517,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
     const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) noexcept {
+    std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
   size_t size = 0;
   bool error = false;
   if (streamType == StreamType::FETCH_HEADER) {
@@ -1555,7 +1552,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
 
 WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
-    const SubscribeRequest& subscribeRequest) noexcept {
+    const SubscribeRequest& subscribeRequest) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
@@ -1587,7 +1584,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
 
 WriteResult MoQFrameWriter::writeSubscribeUpdate(
     folly::IOBufQueue& writeBuf,
-    const SubscribeUpdate& update) noexcept {
+    const SubscribeUpdate& update) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);
@@ -1607,7 +1604,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
 
 WriteResult MoQFrameWriter::writeSubscribeOk(
     folly::IOBufQueue& writeBuf,
-    const SubscribeOk& subscribeOk) noexcept {
+    const SubscribeOk& subscribeOk) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
@@ -1633,7 +1630,7 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
 
 WriteResult MoQFrameWriter::writeSubscribeError(
     folly::IOBufQueue& writeBuf,
-    const SubscribeError& subscribeError) noexcept {
+    const SubscribeError& subscribeError) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
@@ -1651,7 +1648,7 @@ WriteResult MoQFrameWriter::writeSubscribeError(
 
 WriteResult MoQFrameWriter::writeMaxSubscribeId(
     folly::IOBufQueue& writeBuf,
-    const MaxSubscribeId& maxSubscribeId) noexcept {
+    const MaxSubscribeId& maxSubscribeId) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_SUBSCRIBE_ID, error);
@@ -1665,7 +1662,7 @@ WriteResult MoQFrameWriter::writeMaxSubscribeId(
 
 WriteResult MoQFrameWriter::writeSubscribesBlocked(
     folly::IOBufQueue& writeBuf,
-    const SubscribesBlocked& subscribesBlocked) noexcept {
+    const SubscribesBlocked& subscribesBlocked) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1680,7 +1677,7 @@ WriteResult MoQFrameWriter::writeSubscribesBlocked(
 
 WriteResult MoQFrameWriter::writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
-    const Unsubscribe& unsubscribe) noexcept {
+    const Unsubscribe& unsubscribe) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE, error);
@@ -1694,7 +1691,7 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
 
 WriteResult MoQFrameWriter::writeSubscribeDone(
     folly::IOBufQueue& writeBuf,
-    const SubscribeDone& subscribeDone) noexcept {
+    const SubscribeDone& subscribeDone) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_DONE, error);
@@ -1719,7 +1716,7 @@ WriteResult MoQFrameWriter::writeSubscribeDone(
 
 WriteResult MoQFrameWriter::writeAnnounce(
     folly::IOBufQueue& writeBuf,
-    const Announce& announce) noexcept {
+    const Announce& announce) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE, error);
@@ -1734,7 +1731,7 @@ WriteResult MoQFrameWriter::writeAnnounce(
 
 WriteResult MoQFrameWriter::writeAnnounceOk(
     folly::IOBufQueue& writeBuf,
-    const AnnounceOk& announceOk) noexcept {
+    const AnnounceOk& announceOk) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_OK, error);
@@ -1748,7 +1745,7 @@ WriteResult MoQFrameWriter::writeAnnounceOk(
 
 WriteResult MoQFrameWriter::writeAnnounceError(
     folly::IOBufQueue& writeBuf,
-    const AnnounceError& announceError) noexcept {
+    const AnnounceError& announceError) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_ERROR, error);
@@ -1765,7 +1762,7 @@ WriteResult MoQFrameWriter::writeAnnounceError(
 
 WriteResult MoQFrameWriter::writeUnannounce(
     folly::IOBufQueue& writeBuf,
-    const Unannounce& unannounce) noexcept {
+    const Unannounce& unannounce) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNANNOUNCE, error);
@@ -1779,7 +1776,7 @@ WriteResult MoQFrameWriter::writeUnannounce(
 
 WriteResult MoQFrameWriter::writeAnnounceCancel(
     folly::IOBufQueue& writeBuf,
-    const AnnounceCancel& announceCancel) noexcept {
+    const AnnounceCancel& announceCancel) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_CANCEL, error);
@@ -1796,7 +1793,7 @@ WriteResult MoQFrameWriter::writeAnnounceCancel(
 
 WriteResult MoQFrameWriter::writeTrackStatusRequest(
     folly::IOBufQueue& writeBuf,
-    const TrackStatusRequest& trackStatusRequest) noexcept {
+    const TrackStatusRequest& trackStatusRequest) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1811,7 +1808,7 @@ WriteResult MoQFrameWriter::writeTrackStatusRequest(
 
 WriteResult MoQFrameWriter::writeTrackStatus(
     folly::IOBufQueue& writeBuf,
-    const TrackStatus& trackStatus) noexcept {
+    const TrackStatus& trackStatus) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS, error);
@@ -1835,7 +1832,7 @@ WriteResult MoQFrameWriter::writeTrackStatus(
 
 WriteResult MoQFrameWriter::writeGoaway(
     folly::IOBufQueue& writeBuf,
-    const Goaway& goaway) noexcept {
+    const Goaway& goaway) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
@@ -1849,7 +1846,7 @@ WriteResult MoQFrameWriter::writeGoaway(
 
 WriteResult MoQFrameWriter::writeSubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
-    const SubscribeAnnounces& subscribeAnnounces) noexcept {
+    const SubscribeAnnounces& subscribeAnnounces) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1866,7 +1863,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
 
 WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
     folly::IOBufQueue& writeBuf,
-    const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept {
+    const SubscribeAnnouncesOk& subscribeAnnouncesOk) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1882,7 +1879,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
 
 WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
     folly::IOBufQueue& writeBuf,
-    const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept {
+    const SubscribeAnnouncesError& subscribeAnnouncesError) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1904,7 +1901,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
 
 WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
-    const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept {
+    const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1920,7 +1917,7 @@ WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
 
 WriteResult MoQFrameWriter::writeFetch(
     folly::IOBufQueue& writeBuf,
-    const Fetch& fetch) noexcept {
+    const Fetch& fetch) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
@@ -1959,7 +1956,7 @@ WriteResult MoQFrameWriter::writeFetch(
 
 WriteResult MoQFrameWriter::writeFetchCancel(
     folly::IOBufQueue& writeBuf,
-    const FetchCancel& fetchCancel) noexcept {
+    const FetchCancel& fetchCancel) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_CANCEL, error);
@@ -1973,7 +1970,7 @@ WriteResult MoQFrameWriter::writeFetchCancel(
 
 WriteResult MoQFrameWriter::writeFetchOk(
     folly::IOBufQueue& writeBuf,
-    const FetchOk& fetchOk) noexcept {
+    const FetchOk& fetchOk) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
@@ -1995,7 +1992,7 @@ WriteResult MoQFrameWriter::writeFetchOk(
 
 WriteResult MoQFrameWriter::writeFetchError(
     folly::IOBufQueue& writeBuf,
-    const FetchError& fetchError) noexcept {
+    const FetchError& fetchError) const noexcept {
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);

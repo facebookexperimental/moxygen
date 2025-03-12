@@ -770,118 +770,117 @@ class MoQFrameParser {
   folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
       folly::io::Cursor& cursor,
       StreamType streamType,
-      size_t& length) noexcept;
+      size_t& length) const noexcept;
 
   folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
-      folly::io::Cursor& cursor) noexcept;
+      folly::io::Cursor& cursor) const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
-      folly::io::Cursor& cursor) noexcept;
+      folly::io::Cursor& cursor) const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
       folly::io::Cursor& cursor,
-      const ObjectHeader& headerTemplate) noexcept;
+      const ObjectHeader& headerTemplate) const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
       folly::io::Cursor& cursor,
-      const ObjectHeader& headerTemplate) noexcept;
+      const ObjectHeader& headerTemplate) const noexcept;
 
   folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeOk, ErrorCode> parseSubscribeOk(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<Announce, ErrorCode> parseAnnounce(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<Unannounce, ErrorCode> parseUnannounce(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<Goaway, ErrorCode> parseGoaway(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<Fetch, ErrorCode> parseFetch(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<FetchCancel, ErrorCode> parseFetchCancel(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<FetchOk, ErrorCode> parseFetchOk(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<FetchError, ErrorCode> parseFetchError(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   folly::Expected<SubscribeAnnouncesError, ErrorCode>
-  parseSubscribeAnnouncesError(
-      folly::io::Cursor& cursor,
-      size_t length) noexcept;
+  parseSubscribeAnnouncesError(folly::io::Cursor& cursor, size_t length)
+      const noexcept;
 
   folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
       folly::io::Cursor& cursor,
-      size_t length) noexcept;
+      size_t length) const noexcept;
 
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";
@@ -892,34 +891,34 @@ class MoQFrameParser {
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
       size_t length,
-      ObjectHeader& objectHeader);
+      ObjectHeader& objectHeader) const noexcept;
 
   folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
       folly::io::Cursor& cursor,
       size_t length,
       size_t numParams,
-      std::vector<TrackRequestParameter>& params);
+      std::vector<TrackRequestParameter>& params) const noexcept;
 
   folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
       folly::io::Cursor& cursor,
-      size_t& length);
+      size_t& length) const noexcept;
 
   folly::Expected<FullTrackName, ErrorCode> parseFullTrackName(
       folly::io::Cursor& cursor,
-      size_t& length);
+      size_t& length) const noexcept;
 
   folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
       folly::io::Cursor& cursor,
-      size_t& length);
+      size_t& length) const noexcept;
 
   folly::Expected<folly::Unit, ErrorCode> parseExtensions(
       folly::io::Cursor& cursor,
       size_t& length,
-      ObjectHeader& objectHeader);
+      ObjectHeader& objectHeader) const noexcept;
 
   folly::Expected<Extension, ErrorCode> parseExtension(
       folly::io::Cursor& cursor,
-      size_t& length);
+      size_t& length) const noexcept;
 
   folly::Optional<uint64_t> version_;
 };
@@ -940,128 +939,125 @@ class MoQFrameWriter {
  public:
   WriteResult writeSubgroupHeader(
       folly::IOBufQueue& writeBuf,
-      const ObjectHeader& objectHeader) noexcept;
+      const ObjectHeader& objectHeader) const noexcept;
 
   WriteResult writeFetchHeader(
       folly::IOBufQueue& writeBuf,
-      SubscribeID subscribeID) noexcept;
+      SubscribeID subscribeID) const noexcept;
 
   WriteResult writeStreamHeader(
       folly::IOBufQueue& writeBuf,
       StreamType streamType,
-      const ObjectHeader& objectHeader) noexcept;
+      const ObjectHeader& objectHeader) const noexcept;
 
   WriteResult writeDatagramObject(
       folly::IOBufQueue& writeBuf,
       const ObjectHeader& objectHeader,
-      std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+      std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
 
   WriteResult writeStreamObject(
       folly::IOBufQueue& writeBuf,
       StreamType streamType,
       const ObjectHeader& objectHeader,
-      std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+      std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
 
   WriteResult writeSingleObjectStream(
       folly::IOBufQueue& writeBuf,
       const ObjectHeader& objectHeader,
-      std::unique_ptr<folly::IOBuf> objectPayload) noexcept;
+      std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
 
   WriteResult writeSubscribeRequest(
       folly::IOBufQueue& writeBuf,
-      const SubscribeRequest& subscribeRequest) noexcept;
+      const SubscribeRequest& subscribeRequest) const noexcept;
 
   WriteResult writeSubscribeUpdate(
       folly::IOBufQueue& writeBuf,
-      const SubscribeUpdate& update) noexcept;
+      const SubscribeUpdate& update) const noexcept;
 
   WriteResult writeSubscribeOk(
       folly::IOBufQueue& writeBuf,
-      const SubscribeOk& subscribeOk) noexcept;
+      const SubscribeOk& subscribeOk) const noexcept;
 
   WriteResult writeSubscribeError(
       folly::IOBufQueue& writeBuf,
-      const SubscribeError& subscribeError) noexcept;
+      const SubscribeError& subscribeError) const noexcept;
 
   WriteResult writeSubscribeDone(
       folly::IOBufQueue& writeBuf,
-      const SubscribeDone& subscribeDone) noexcept;
+      const SubscribeDone& subscribeDone) const noexcept;
 
   WriteResult writeUnsubscribe(
       folly::IOBufQueue& writeBuf,
-      const Unsubscribe& unsubscribe) noexcept;
+      const Unsubscribe& unsubscribe) const noexcept;
 
   WriteResult writeMaxSubscribeId(
       folly::IOBufQueue& writeBuf,
-      const MaxSubscribeId& maxSubscribeId) noexcept;
+      const MaxSubscribeId& maxSubscribeId) const noexcept;
 
   WriteResult writeSubscribesBlocked(
       folly::IOBufQueue& writeBuf,
-      const SubscribesBlocked& subscribesBlocked) noexcept;
+      const SubscribesBlocked& subscribesBlocked) const noexcept;
 
   WriteResult writeAnnounce(
       folly::IOBufQueue& writeBuf,
-      const Announce& announce) noexcept;
+      const Announce& announce) const noexcept;
 
   WriteResult writeAnnounceOk(
       folly::IOBufQueue& writeBuf,
-      const AnnounceOk& announceOk) noexcept;
+      const AnnounceOk& announceOk) const noexcept;
 
   WriteResult writeAnnounceError(
       folly::IOBufQueue& writeBuf,
-      const AnnounceError& announceError) noexcept;
+      const AnnounceError& announceError) const noexcept;
 
   WriteResult writeUnannounce(
       folly::IOBufQueue& writeBuf,
-      const Unannounce& unannounce) noexcept;
+      const Unannounce& unannounce) const noexcept;
 
   WriteResult writeAnnounceCancel(
       folly::IOBufQueue& writeBuf,
-      const AnnounceCancel& announceCancel) noexcept;
+      const AnnounceCancel& announceCancel) const noexcept;
 
   WriteResult writeTrackStatusRequest(
       folly::IOBufQueue& writeBuf,
-      const TrackStatusRequest& trackStatusRequest) noexcept;
+      const TrackStatusRequest& trackStatusRequest) const noexcept;
 
   WriteResult writeTrackStatus(
       folly::IOBufQueue& writeBuf,
-      const TrackStatus& trackStatus) noexcept;
+      const TrackStatus& trackStatus) const noexcept;
 
-  WriteResult writeGoaway(
-      folly::IOBufQueue& writeBuf,
-      const Goaway& goaway) noexcept;
+  WriteResult writeGoaway(folly::IOBufQueue& writeBuf, const Goaway& goaway)
+      const noexcept;
 
   WriteResult writeSubscribeAnnounces(
       folly::IOBufQueue& writeBuf,
-      const SubscribeAnnounces& subscribeAnnounces) noexcept;
+      const SubscribeAnnounces& subscribeAnnounces) const noexcept;
 
   WriteResult writeSubscribeAnnouncesOk(
       folly::IOBufQueue& writeBuf,
-      const SubscribeAnnouncesOk& subscribeAnnouncesOk) noexcept;
+      const SubscribeAnnouncesOk& subscribeAnnouncesOk) const noexcept;
 
   WriteResult writeSubscribeAnnouncesError(
       folly::IOBufQueue& writeBuf,
-      const SubscribeAnnouncesError& subscribeAnnouncesError) noexcept;
+      const SubscribeAnnouncesError& subscribeAnnouncesError) const noexcept;
 
   WriteResult writeUnsubscribeAnnounces(
       folly::IOBufQueue& writeBuf,
-      const UnsubscribeAnnounces& unsubscribeAnnounces) noexcept;
+      const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept;
 
-  WriteResult writeFetch(
-      folly::IOBufQueue& writeBuf,
-      const Fetch& fetch) noexcept;
+  WriteResult writeFetch(folly::IOBufQueue& writeBuf, const Fetch& fetch)
+      const noexcept;
 
   WriteResult writeFetchCancel(
       folly::IOBufQueue& writeBuf,
-      const FetchCancel& fetchCancel) noexcept;
+      const FetchCancel& fetchCancel) const noexcept;
 
-  WriteResult writeFetchOk(
-      folly::IOBufQueue& writeBuf,
-      const FetchOk& fetchOk) noexcept;
+  WriteResult writeFetchOk(folly::IOBufQueue& writeBuf, const FetchOk& fetchOk)
+      const noexcept;
 
   WriteResult writeFetchError(
       folly::IOBufQueue& writeBuf,
-      const FetchError& fetchError) noexcept;
+      const FetchError& fetchError) const noexcept;
 
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";
@@ -1073,10 +1069,10 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const std::vector<Extension>& extensions,
       size_t& size,
-      bool& error);
+      bool& error) const noexcept;
 
   size_t getExtensionSize(const std::vector<Extension>& extensions, bool& error)
-      const;
+      const noexcept;
 
   folly::Optional<uint64_t> version_;
 };
