@@ -169,21 +169,44 @@ bool MoQVideoPublisher::setup(const std::string& connectURL) {
 folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
-  if (sub.fullTrackName != videoForwarder_.fullTrackName()) {
+  if (sub.fullTrackName == videoForwarder_.fullTrackName()) {
+    co_return videoForwarder_.addSubscriber(
+        MoQSession::getRequestSession(), sub, std::move(callback));
+  }
+
+  if (sub.fullTrackName == audioForwarder_.fullTrackName()) {
+    co_return audioForwarder_.addSubscriber(
+        MoQSession::getRequestSession(), sub, std::move(callback));
+  }
+
+  if ((sub.fullTrackName != videoForwarder_.fullTrackName()) &&
+      (sub.fullTrackName != audioForwarder_.fullTrackName())) {
     XLOG(ERR) << "Unknown track " << sub.fullTrackName;
     co_return folly::makeUnexpected(SubscribeError{
         sub.subscribeID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
   }
-  if (!videoForwarder_.empty()) {
-    XLOG(ERR) << "Already subscribed to track "
+  if ((sub.fullTrackName == videoForwarder_.fullTrackName()) &&
+      !videoForwarder_.empty()) {
+    XLOG(ERR) << "Already subscribed to video track "
               << videoForwarder_.fullTrackName();
     co_return folly::makeUnexpected(SubscribeError{
         sub.subscribeID,
         SubscribeErrorCode::INTERNAL_ERROR,
         "Already subscribed"});
   }
-  co_return videoForwarder_.addSubscriber(
-      MoQSession::getRequestSession(), sub, std::move(callback));
+
+  if ((sub.fullTrackName == audioForwarder_.fullTrackName()) &&
+      !audioForwarder_.empty()) {
+    XLOG(ERR) << "Already subscribed to audio track "
+              << audioForwarder_.fullTrackName();
+    co_return folly::makeUnexpected(SubscribeError{
+        sub.subscribeID,
+        SubscribeErrorCode::INTERNAL_ERROR,
+        "Already subscribed"});
+  }
+
+  co_return folly::makeUnexpected(SubscribeError{
+      sub.subscribeID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
 }
 
 void MoQVideoPublisher::publishVideoFrame(
@@ -214,9 +237,10 @@ void MoQVideoPublisher::publishFrameImpl(
   auto item = std::make_unique<MediaItem>();
   item->type = MediaType::VIDEO;
   item->id = videoSeqId_++;
-  item->pts = (ptsUs.count() * timescale_) / 1000000;
+  item->pts = ptsUs.count();
+  // item->pts = (ptsUs.count() * timescale_) / 1000000;
   item->dts = item->pts; // wrong if B-frames are used
-  item->timescale = timescale_;
+  item->timescale = 1000000;
   if (lastVideoPts_) {
     item->duration = item->pts - *lastVideoPts_;
   } else {
@@ -303,4 +327,69 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
     XLOG(ERR) << "Should not happen";
   }
 }
+
+void MoQVideoPublisher::publishAudioFrame(
+    std::chrono::microseconds ptsUs,
+    uint64_t flags,
+    Payload payload) {
+  evbThread_->getEventBase()->runInEventBaseThread(
+      [this, ptsUs, flags, payload = std::move(payload)]() mutable {
+        publishAudioFrameImpl(ptsUs, flags, std::move(payload));
+      });
+}
+
+void MoQVideoPublisher::publishAudioFrameImpl(
+    std::chrono::microseconds ptsUs,
+    uint64_t flags,
+    Payload payload) {
+  if (audioForwarder_.empty()) {
+    XLOG(ERR) << "No subscriber for audio track ";
+    return;
+  }
+
+  auto item = std::make_unique<MediaItem>();
+  item->type = MediaType::AUDIO;
+  item->id = audioSeqId_++;
+
+  item->timescale = 1000000;
+  item->pts = ptsUs.count();
+  // item->pts = (ptsUs.count() * 44100) / 1000000;
+  item->dts = item->pts;
+  item->sampleFreq = 44100;
+  item->numChannels = 1;
+
+  if (lastAudioPts_) {
+    item->duration = item->pts - *lastAudioPts_;
+  } else {
+    item->duration = 1;
+  }
+  lastAudioPts_ = item->pts;
+  item->wallclock = currentTimeMilliseconds();
+  item->isIdr = false;
+  item->isEOF = false;
+  item->data = std::move(payload);
+
+  publishAudioFrameToMoQ(std::move(item));
+}
+
+void MoQVideoPublisher::publishAudioFrameToMoQ(
+    std::unique_ptr<MediaItem> item) {
+  auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
+  if (!moqMiObj) {
+    XLOG(ERR) << "Failed to encode audio frame";
+    return;
+  }
+
+  audioForwarder_.objectStream(
+      ObjectHeader(
+          TrackAlias(0),
+          0,
+          0,
+          audioSeqId_,
+          0,
+          moqMiObj->payload->computeChainDataLength(),
+          moqMiObj->extensions),
+      std::move(moqMiObj->payload));
+}
+
 } // namespace moxygen
