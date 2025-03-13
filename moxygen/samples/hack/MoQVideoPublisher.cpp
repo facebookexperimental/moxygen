@@ -254,11 +254,8 @@ void MoQVideoPublisher::publishFrameImpl(
   } else if (item->isIdr && savedMetadata_) {
     // New IDR frame, send saved metadata
     item->metadata = savedMetadata_->clone();
-    publishFrameToMoQ(std::move(item));
-    auto md = std::move(savedMetadata_);
-    publishFrameImpl(ptsUs, flags, std::move(payload));
-    savedMetadata_ = std::move(md);
-    return;
+    item->data = std::move(payload);
+    lastVideoPts_ = item->pts;
   } else {
     // video data
     item->data = std::move(payload);
