@@ -78,18 +78,24 @@ class FlvWriterShared : flv::FlvWriter {
           std::get<MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC>(
               moqMiItem));
 
-      uint32_t pts = static_cast<uint32_t>(moqv->pts);
-      if (moqv->pts > std::numeric_limits<uint32_t>::max()) {
-        XLOG_EVERY_N(WARNING, 1000) << "PTS truncated! Rolling over. From "
-                                    << moqv->pts << ", to: " << pts;
+      // Since PTS >= DTS lets check 1st PTS for rollover
+      uint32_t pts =
+          static_cast<int32_t>(moqv->pts & 0x7FFFFFFF); // 31 lower bits
+      uint32_t dts =
+          static_cast<int32_t>(moqv->dts & 0x7FFFFFFF); // 31 lower bits
+      // This already handles the case where PTS rolled over and DTS NOT yet
+      int32_t compositionTime = pts - dts;
+      if (moqv->pts > std::numeric_limits<int32_t>::max()) {
+        XLOG_EVERY_N(WARNING, 1000)
+            << "PTS video truncated! Rolling over. From " << moqv->pts
+            << ", to: " << pts << ", compositionTime: " << compositionTime;
       }
-      CHECK_GE(moqv->pts, moqv->dts);
-      uint32_t compositionTime = moqv->pts - moqv->dts;
+      CHECK_GE(compositionTime, 0);
 
       if (moqv->metadata != nullptr && !videoHeaderWritten_) {
         XLOG(INFO) << "Writing video header";
         auto vhtag = flv::createVideoTag(
-            moqv->pts, 1, 7, 0, compositionTime, std::move(moqv->metadata));
+            pts, 1, 7, 0, compositionTime, std::move(moqv->metadata));
         ret = writeTag(std::move(vhtag));
         if (!ret) {
           return ret;
@@ -126,8 +132,15 @@ class FlvWriterShared : flv::FlvWriter {
       if (!audioHeaderWritten_) {
         XLOG(INFO) << "Writing audio header";
         auto ascHeader = moqa->getAscHeader();
-        auto ahtag = flv::createAudioTag(
-            moqa->pts, 10, 3, 1, 1, 0, std::move(ascHeader));
+        uint32_t pts =
+            static_cast<int32_t>(moqa->pts & 0x7FFFFFFF); // 31 lower bits
+        if (moqa->pts > std::numeric_limits<int32_t>::max()) {
+          XLOG_EVERY_N(WARNING, 1000)
+              << "PTS audio truncated! Rolling over. From " << moqa->pts
+              << ", to: " << pts;
+        }
+        auto ahtag =
+            flv::createAudioTag(pts, 10, 3, 1, 1, 0, std::move(ascHeader));
         ret = writeTag(std::move(ahtag));
         if (!ret) {
           return ret;
