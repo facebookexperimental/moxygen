@@ -142,7 +142,7 @@ class MoQTextClient : public Subscriber,
       if (FLAGS_jfetch) {
         // Call join() for joining fetch
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
-            ObjectReceiver::FETCH, &fetchTextHandler_);
+            ObjectReceiver::FETCH, fetchTextHandler_);
         auto joinResult = co_await moqClient_->moqSession_->join(
             sub,
             subTextReceiver_,
@@ -189,7 +189,7 @@ class MoQTextClient : public Subscriber,
       }
       if (needFetch) {
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
-            ObjectReceiver::FETCH, &fetchTextHandler_);
+            ObjectReceiver::FETCH, fetchTextHandler_);
         auto fetchTrack = co_await moqClient_->moqSession_->fetch(
             Fetch(
                 SubscribeID(0),
@@ -215,10 +215,10 @@ class MoQTextClient : public Subscriber,
     }
 
     if (subTextReceiver_) {
-      co_await subTextHandler_.baton;
+      co_await subTextHandler_->baton;
     }
     if (fetchTextReceiver_) {
-      co_await fetchTextHandler_.baton;
+      co_await fetchTextHandler_->baton;
     }
 
     XLOG(INFO) << __func__ << " done";
@@ -241,8 +241,8 @@ class MoQTextClient : public Subscriber,
   }
 
   void stop() {
-    subTextHandler_.baton.post();
-    fetchTextHandler_.baton.post();
+    subTextHandler_->baton.post();
+    fetchTextHandler_->baton.post();
     // TODO: maybe need fetchCancel
     if (subscription_) {
       subscription_->unsubscribe();
@@ -256,12 +256,14 @@ class MoQTextClient : public Subscriber,
   std::unique_ptr<MoQClient> moqClient_;
   FullTrackName fullTrackName_;
   std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
-  TextHandler subTextHandler_{/*fetch=*/false};
-  TextHandler fetchTextHandler_{/*fetch=*/true};
+  std::shared_ptr<TextHandler> subTextHandler_{
+      std::make_shared<TextHandler>(/*fetch=*/false)};
+  std::shared_ptr<TextHandler> fetchTextHandler_{
+      std::make_shared<TextHandler>(/*fetch=*/true)};
   std::shared_ptr<ObjectReceiver> subTextReceiver_{
       std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE,
-          &subTextHandler_)};
+          subTextHandler_)};
   std::shared_ptr<ObjectReceiver> fetchTextReceiver_;
 };
 } // namespace

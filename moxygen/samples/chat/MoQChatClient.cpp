@@ -278,7 +278,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     MoQChatClient& client_;
     std::string username_;
   };
-  ChatObjectHandler handler(*this, username);
+  auto handler = std::make_shared<ChatObjectHandler>(*this, username);
 
   auto track = co_await co_awaitTry(moqClient_.moqSession_->subscribe(
       {0,
@@ -290,7 +290,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
        folly::none,
        0,
        {}},
-      std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, &handler)));
+      std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, handler)));
   if (track.hasException()) {
     // subscribe failed
     XLOG(ERR) << track.exception();
@@ -307,7 +307,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   userTrackPtr->subscribeId =
       userTrackPtr->subscription->subscribeOk().subscribeID;
   userTrackPtr->timestamp = timestamp;
-  co_await handler.baton;
+  co_await handler->baton;
 }
 
 void MoQChatClient::subscribeDone(SubscribeDone subDone) {

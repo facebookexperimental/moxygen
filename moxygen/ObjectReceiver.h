@@ -18,14 +18,14 @@ class ObjectReceiverCallback {
 };
 
 class ObjectSubgroupReceiver : public SubgroupConsumer {
-  ObjectReceiverCallback* callback_{nullptr};
+  std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
   StreamType streamType_;
   ObjectHeader header_;
   folly::IOBufQueue payload_{folly::IOBufQueue::cacheChainLength()};
 
  public:
   explicit ObjectSubgroupReceiver(
-      ObjectReceiverCallback* callback,
+      std::shared_ptr<ObjectReceiverCallback> callback,
       uint64_t groupID = 0,
       uint64_t subgroupID = 0,
       uint8_t priority = 0)
@@ -126,12 +126,14 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
 };
 
 class ObjectReceiver : public TrackConsumer, public FetchConsumer {
-  ObjectReceiverCallback* callback_{nullptr};
+  std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
   folly::Optional<ObjectSubgroupReceiver> fetchPublisher_;
 
  public:
   enum Type { SUBSCRIBE, FETCH };
-  explicit ObjectReceiver(Type t, ObjectReceiverCallback* callback)
+  explicit ObjectReceiver(
+      Type t,
+      std::shared_ptr<ObjectReceiverCallback> callback)
       : callback_(callback) {
     if (t == FETCH) {
       fetchPublisher_.emplace(callback);

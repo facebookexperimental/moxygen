@@ -369,12 +369,12 @@ class MoQFlvReceiverClient
           /*subscribeHandler=*/shared_from_this());
       // Create output file
       flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
-      trackReceiverHandlerAudio_.setFlvWriterShared(flvw_);
-      trackReceiverHandlerVideo_.setFlvWriterShared(flvw_);
+      trackReceiverHandlerAudio_->setFlvWriterShared(flvw_);
+      trackReceiverHandlerVideo_->setFlvWriterShared(flvw_);
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(
-          ObjectReceiver::SUBSCRIBE, &trackReceiverHandlerAudio_);
+          ObjectReceiver::SUBSCRIBE, trackReceiverHandlerAudio_);
       auto trackAudio = co_await moqClient_->moqSession_->subscribe(
           subAudio, subRxHandlerAudio_);
       if (trackAudio.hasValue()) {
@@ -395,7 +395,7 @@ class MoQFlvReceiverClient
 
       // Subscribe to video
       subRxHandlerVideo_ = std::make_shared<ObjectReceiver>(
-          ObjectReceiver::SUBSCRIBE, &trackReceiverHandlerVideo_);
+          ObjectReceiver::SUBSCRIBE, trackReceiverHandlerVideo_);
       auto trackVideo = co_await moqClient_->moqSession_->subscribe(
           subVideo, subRxHandlerVideo_);
       if (trackVideo.hasValue()) {
@@ -421,8 +421,8 @@ class MoQFlvReceiverClient
     }
     // TODO: should we co_await collectAll(trackReceiverHandlerAudio_.baton,
     // trackReceiverHandlerVideo_.baton);
-    co_await trackReceiverHandlerAudio_.baton;
-    co_await trackReceiverHandlerVideo_.baton;
+    co_await trackReceiverHandlerAudio_->baton;
+    co_await trackReceiverHandlerVideo_->baton;
     XLOG(INFO) << __func__ << " done";
   }
 
@@ -459,13 +459,15 @@ class MoQFlvReceiverClient
   std::shared_ptr<Publisher::SubscriptionHandle> videoSubscribeHandle_;
   std::string flvOutPath_;
   std::shared_ptr<FlvWriterShared> flvw_;
-  TrackReceiverHandler trackReceiverHandlerAudio_ = TrackReceiverHandler(
-      TrackType::MediaType::Audio,
-      FLAGS_dejitter_buffer_size_ms);
+  std::shared_ptr<TrackReceiverHandler> trackReceiverHandlerAudio_ =
+      std::make_shared<TrackReceiverHandler>(
+          TrackType::MediaType::Audio,
+          FLAGS_dejitter_buffer_size_ms);
   std::shared_ptr<ObjectReceiver> subRxHandlerAudio_;
-  TrackReceiverHandler trackReceiverHandlerVideo_ = TrackReceiverHandler(
-      TrackType::MediaType::Video,
-      FLAGS_dejitter_buffer_size_ms);
+  std::shared_ptr<TrackReceiverHandler> trackReceiverHandlerVideo_ =
+      std::make_shared<TrackReceiverHandler>(
+          TrackType::MediaType::Video,
+          FLAGS_dejitter_buffer_size_ms);
   std::shared_ptr<ObjectReceiver> subRxHandlerVideo_;
 };
 } // namespace
