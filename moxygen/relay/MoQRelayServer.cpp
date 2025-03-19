@@ -15,6 +15,7 @@ DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_string(endpoint, "/moq-relay", "End point");
 DEFINE_int32(port, 9668, "Relay Server Port");
+DEFINE_bool(enable_cache, false, "Enable relay cache");
 
 namespace {
 using namespace moxygen;
@@ -34,7 +35,8 @@ class MoQRelayServer : MoQServer {
   }
 
  private:
-  std::shared_ptr<MoQRelay> relay_{std::make_shared<MoQRelay>()};
+  std::shared_ptr<MoQRelay> relay_{
+      std::make_shared<MoQRelay>(FLAGS_enable_cache)};
 };
 } // namespace
 
