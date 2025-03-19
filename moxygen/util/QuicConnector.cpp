@@ -84,6 +84,10 @@ QuicConnector::connectQuic(
           .build(),
       /*connectionIdSize=*/0);
   quic::TransportSettings ts;
+  ts.copaDeltaParam = 0.05;
+  ts.defaultCongestionController = quic::CongestionControlType::Copa;
+  ts.pacingEnabled = true;
+  ts.experimentalPacer = true;
   ts.datagramConfig.enabled = true;
   quicClient->setTransportSettings(ts);
   quicClient->addNewPeerAddress(connectAddr);
