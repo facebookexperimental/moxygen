@@ -145,6 +145,10 @@ std::unique_ptr<folly::IOBuf> convertMetadata(
 } // namespace
 
 namespace moxygen {
+
+const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
+const uint8_t VIDEO_STREAM_PRIORITY = 200;
+
 // Implementation of setup function
 bool MoQVideoPublisher::setup(const std::string& connectURL) {
   proxygen::URL url(connectURL);
@@ -303,8 +307,8 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
 
   if (!videoSgPub_) {
     // Open new subgroup
-    auto res =
-        videoForwarder_.beginSubgroup(latestVideo_.group, 0, kDefaultPriority);
+    auto res = videoForwarder_.beginSubgroup(
+        latestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
     if (!res) {
       XLOG(ERR) << "Error creating subgroup";
     }
@@ -347,7 +351,6 @@ void MoQVideoPublisher::publishAudioFrameImpl(
   auto item = std::make_unique<MediaItem>();
   item->type = MediaType::AUDIO;
   item->id = audioSeqId_++;
-
   item->timescale = 1000000;
   item->pts = ptsUs.count();
   item->dts = item->pts;
@@ -382,22 +385,23 @@ void MoQVideoPublisher::publishAudioFrameImpl(
 
 void MoQVideoPublisher::publishAudioFrameToMoQ(
     std::unique_ptr<MediaItem> item) {
+  auto id = item->id;
   auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
   if (!moqMiObj) {
     XLOG(ERR) << "Failed to encode audio frame";
     return;
   }
 
-  audioForwarder_.objectStream(
-      ObjectHeader(
-          TrackAlias(0),
-          0,
-          0,
-          audioSeqId_,
-          0,
-          moqMiObj->payload->computeChainDataLength(),
-          moqMiObj->extensions),
-      std::move(moqMiObj->payload));
+  ObjectHeader objHeader = ObjectHeader{
+      TrackAlias(0),
+      /*groupIn=*/id,
+      /*subgroupIn=*/0,
+      /*idIn=*/0,
+      AUDIO_STREAM_PRIORITY,
+      ObjectStatus::NORMAL,
+      std::move(moqMiObj->extensions)};
+
+  audioForwarder_.objectStream(objHeader, std::move(moqMiObj->payload));
 }
 
 } // namespace moxygen
