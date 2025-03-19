@@ -350,16 +350,27 @@ void MoQVideoPublisher::publishAudioFrameImpl(
 
   item->timescale = 1000000;
   item->pts = ptsUs.count();
-  // item->pts = (ptsUs.count() * 44100) / 1000000;
   item->dts = item->pts;
   item->sampleFreq = 44100;
   item->numChannels = 1;
 
+  // Calculate duration dynamically based on previous frame
   if (lastAudioPts_) {
     item->duration = item->pts - *lastAudioPts_;
+
+    // Sanity check: if duration is unreasonably large or zero, use a default
+    if (item->duration <= 0 || item->duration > 100000) {
+      // Default frame duration for AAC at 44.1kHz (approximately 23.2ms per
+      // frame) = (1024 samples per AAC frame) * 1000000 / 44100 sample rate
+      item->duration = 23220;
+      XLOG(WARN) << "Invalid audio duration: " << item->duration
+                 << ", using default instead";
+    }
   } else {
-    item->duration = 1;
+    // For first frame, use a reasonable default based on AAC frame size
+    item->duration = 23220; // 23.22ms - standard for AAC frame at 44.1kHz
   }
+
   lastAudioPts_ = item->pts;
   item->wallclock = currentTimeMilliseconds();
   item->isIdr = false;
