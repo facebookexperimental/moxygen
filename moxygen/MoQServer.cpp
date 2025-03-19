@@ -41,6 +41,12 @@ MoQServer::MoQServer(
 void MoQServer::createMoQQuicSession(
     std::shared_ptr<quic::QuicSocket> quicSocket) {
   auto qevb = quicSocket->getEventBase();
+  auto ts = quicSocket->getTransportSettings();
+  // TODO make this configurable, also have a shared pacing timer per thread.
+  ts.defaultCongestionController = quic::CongestionControlType::Copa;
+  ts.copaDeltaParam = 0.05;
+  ts.pacingEnabled = true;
+  ts.experimentalPacer = true;
   auto quicWebTransport =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
   auto qWtPtr = quicWebTransport.get();
