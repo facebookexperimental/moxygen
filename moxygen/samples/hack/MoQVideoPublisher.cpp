@@ -13,7 +13,7 @@ constexpr std::chrono::seconds kTransactionTimeout = std::chrono::seconds(60);
 
 namespace {
 uint64_t currentTimeMilliseconds() {
-  auto now = std::chrono::high_resolution_clock::now();
+  auto now = std::chrono::system_clock::now();
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              now.time_since_epoch())
       .count();
