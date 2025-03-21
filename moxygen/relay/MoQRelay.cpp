@@ -247,7 +247,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     // Add subscriber first in case objects come before subscribe OK.
     auto subscriber = forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
-    auto subRes = co_await upstreamSession->subscribe(subReq, forwarder);
+    auto subRes = co_await upstreamSession->subscribe(
+        subReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
     if (subRes.hasError()) {
       co_return folly::makeUnexpected(SubscribeError(
           {subReq.subscribeID,
@@ -342,7 +343,19 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
         {fetch.subscribeID, FetchErrorCode::INTERNAL_ERROR, "self fetch"}));
   }
   fetch.priority = kDefaultUpstreamPriority;
-  co_return co_await upstreamSession->fetch(fetch, std::move(consumer));
+  if (!cache_ || joining) {
+    // We can't use the cache on an unresolved joining fetch - we don't know
+    // which objects are being requested.  However, once we have that resolved,
+    // we SHOULD be able to serve from cache.
+    if (standalone) {
+      XLOG(DBG1) << "Upstream fetch {" << standalone->start.group << ","
+                 << standalone->start.object << "}.." << standalone->end.group
+                 << "," << standalone->end.object << "}";
+    }
+    co_return co_await upstreamSession->fetch(fetch, std::move(consumer));
+  }
+  co_return co_await cache_->fetch(
+      fetch, std::move(consumer), std::move(upstreamSession));
 }
 
 void MoQRelay::onEmpty(MoQForwarder* forwarder) {
