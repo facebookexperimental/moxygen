@@ -223,8 +223,12 @@ class StreamPublisherImpl
   }
 
  private:
-  void onByteEventCommon(quic::StreamId /* id */, uint64_t /* offset */) {
-    XCHECK_GT(refCountForCallbacks_, 0);
+  void onByteEventCommon(quic::StreamId id, uint64_t offset) {
+    uint64_t bytesDeliveredOrCanceled = offset + 1;
+    if (bytesDeliveredOrCanceled > bytesDeliveredOrCanceled_) {
+      bytesDeliveredOrCanceled_ = bytesDeliveredOrCanceled;
+    }
+
     refCountForCallbacks_--;
     if (refCountForCallbacks_ == 0) {
       keepaliveForDeliveryCallbacks_.reset();
@@ -273,6 +277,9 @@ class StreamPublisherImpl
 
   std::shared_ptr<StreamPublisherImpl> keepaliveForDeliveryCallbacks_{nullptr};
   uint32_t refCountForCallbacks_{0};
+
+  uint32_t bytesWritten_{0};
+  uint32_t bytesDeliveredOrCanceled_{0};
 };
 
 // StreamPublisherImpl
@@ -382,6 +389,7 @@ StreamPublisherImpl::writeToStream(bool finStream) {
   proxygen::WebTransport::ByteEventCallback* deliveryCallback = nullptr;
   if (!writeBuf_.empty() || finStream) {
     deliveryCallback = this;
+    bytesWritten_ += writeBuf_.chainLength();
     if (refCountForCallbacks_ == 0) {
       keepaliveForDeliveryCallbacks_ = shared_from_this();
     }
