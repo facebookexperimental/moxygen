@@ -160,7 +160,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     subscriberStatsCallback_ = subscriberStatsCallback;
   }
 
-  class PublisherImpl {
+  class PublisherImpl : public std::enable_shared_from_this<PublisherImpl> {
    public:
     PublisherImpl(
         MoQSession* session,

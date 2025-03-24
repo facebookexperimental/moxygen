@@ -73,11 +73,12 @@ class StreamPublisherImpl
 
   // Fetch constructor - we defer creating the stream/writeHandle until the
   // first published object.
-  explicit StreamPublisherImpl(MoQSession::PublisherImpl* publisher);
+  explicit StreamPublisherImpl(
+      std::shared_ptr<MoQSession::PublisherImpl> publisher);
 
   // Subscribe constructor
   StreamPublisherImpl(
-      MoQSession::PublisherImpl* publisher,
+      std::shared_ptr<MoQSession::PublisherImpl> publisher,
       proxygen::WebTransport::StreamWriteHandle* writeHandle,
       TrackAlias alias,
       uint64_t groupID,
@@ -261,7 +262,7 @@ class StreamPublisherImpl
 
   void onStreamComplete();
 
-  MoQSession::PublisherImpl* publisher_{nullptr};
+  std::shared_ptr<MoQSession::PublisherImpl> publisher_{nullptr};
   folly::Optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   StreamType streamType_;
@@ -276,7 +277,8 @@ class StreamPublisherImpl
 
 // StreamPublisherImpl
 
-StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
+StreamPublisherImpl::StreamPublisherImpl(
+    std::shared_ptr<MoQSession::PublisherImpl> publisher)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
@@ -291,7 +293,7 @@ StreamPublisherImpl::StreamPublisherImpl(MoQSession::PublisherImpl* publisher)
 }
 
 StreamPublisherImpl::StreamPublisherImpl(
-    MoQSession::PublisherImpl* publisher,
+    std::shared_ptr<MoQSession::PublisherImpl> publisher,
     proxygen::WebTransport::StreamWriteHandle* writeHandle,
     TrackAlias alias,
     uint64_t groupID,
@@ -731,8 +733,11 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
             subscribeID,
             subPriority,
             groupOrder,
-            version) {
-    streamPublisher_ = std::make_shared<StreamPublisherImpl>(this);
+            version) {}
+
+  void initialize() {
+    streamPublisher_ =
+        std::make_shared<StreamPublisherImpl>(shared_from_this());
   }
 
   std::shared_ptr<StreamPublisherImpl> getStreamPublisher() const {
@@ -805,7 +810,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
           groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
       false);
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
-      this, *stream, trackAlias_, groupID, subgroupID);
+      shared_from_this(), *stream, trackAlias_, groupID, subgroupID);
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
@@ -2125,6 +2130,7 @@ void MoQSession::onFetch(Fetch fetch) {
       fetch.priority,
       fetch.groupOrder,
       *negotiatedVersion_);
+  fetchPublisher->initialize();
   pubTracks_.emplace(fetch.subscribeID, fetchPublisher);
   handleFetch(std::move(fetch), std::move(fetchPublisher))
       .scheduleOn(evb_)
@@ -2146,6 +2152,16 @@ folly::coro::Task<void> MoQSession::handleFetch(
       cancellationSource_.getToken(),
       publishHandler_->fetch(
           std::move(fetch), fetchPublisher->getStreamPublisher())));
+  if (fetchResult.hasException() || fetchResult->hasError()) {
+    // We need to call reset() in order to ensure that the StreamPublisherImpl
+    // is destructed, otherwise there could be memory leaks, since the
+    // StreamPublisherImpl and the PublisherImpl hold references to each other.
+    // This doesn't actually reset the stream unless the user wrote something to
+    // it within the fetch handler, because the stream creation is deferred
+    // until the user actually writes something to a stream.
+    fetchPublisher->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+  }
+
   if (fetchResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << fetchResult.exception().what();
