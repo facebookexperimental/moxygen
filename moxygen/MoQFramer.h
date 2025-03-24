@@ -192,6 +192,9 @@ constexpr uint64_t kVersionDraft08_exp6 = 0xff080006; // Draft 8 End Group
 constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
 constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
 constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
+
+// kVersionDraftCurrent is only used in test cases. Elsewhere, we use the more
+// specific constants.
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 constexpr uint64_t kVersionDraft09 = 0xff000009;
 

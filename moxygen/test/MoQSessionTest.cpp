@@ -89,6 +89,10 @@ class MoQSessionTest : public testing::Test,
   void SetUp() override {}
 
   folly::Try<ServerSetup> onClientSetup(ClientSetup setup) override {
+    if (invalidVersion_) {
+      return folly::Try<ServerSetup>(std::runtime_error("invalid version"));
+    }
+
     EXPECT_EQ(setup.supportedVersions[0], kVersionDraftCurrent);
     if (!setup.params.empty()) {
       EXPECT_EQ(
@@ -180,6 +184,7 @@ class MoQSessionTest : public testing::Test,
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
   uint64_t initialMaxSubscribeId_{kTestMaxSubscribeId};
   bool failServerSetup_{false};
+  bool invalidVersion_{false};
   std::shared_ptr<testing::StrictMock<MockFetchConsumer>> fetchCallback_;
   std::shared_ptr<testing::StrictMock<MockTrackConsumer>> subscribeCallback_;
   folly::coro::Baton subscribeDone_;
@@ -264,6 +269,7 @@ CO_TEST_F_X(MoQSessionTest, SetupTimeout) {
 }
 
 CO_TEST_F_X(MoQSessionTest, InvalidVersion) {
+  invalidVersion_ = true;
   clientSession_->start();
   co_await folly::coro::co_reschedule_on_current_executor;
   ClientSetup setup;

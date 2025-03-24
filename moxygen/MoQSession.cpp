@@ -1398,13 +1398,6 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 void MoQSession::onServerSetup(ServerSetup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (serverSetup.selectedVersion != kVersionDraftCurrent) {
-    XLOG(ERR) << "Invalid version = " << serverSetup.selectedVersion
-              << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    setupPromise_.setException(std::runtime_error("Invalid version"));
-    return;
-  }
   peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(serverSetup.params);
   setupPromise_.setValue(std::move(serverSetup));
 }
@@ -1412,18 +1405,6 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 void MoQSession::onClientSetup(ClientSetup clientSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (std::find(
-          clientSetup.supportedVersions.begin(),
-          clientSetup.supportedVersions.end(),
-          kVersionDraftCurrent) == clientSetup.supportedVersions.end()) {
-    XLOG(ERR) << "No matching versions sess=" << this;
-    for (auto v : clientSetup.supportedVersions) {
-      XLOG(ERR) << "client sent=" << v << " sess=" << this;
-    }
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-  initializeNegotiatedVersion(kVersionDraftCurrent);
   peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
   auto serverSetup =
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
@@ -1432,7 +1413,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     close(SessionCloseErrorCode::INTERNAL_ERROR);
     return;
   }
-
+  initializeNegotiatedVersion(serverSetup->selectedVersion);
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(serverSetup->params);
   auto res = writeServerSetup(controlWriteBuf_, std::move(*serverSetup));
   if (!res) {
