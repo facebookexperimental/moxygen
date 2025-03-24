@@ -217,6 +217,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       return version_;
     }
 
+    void onBytesBuffered(uint64_t amount) {
+      bytesBuffered_ += amount;
+    }
+
+    void onBytesUnbuffered(uint64_t amount) {
+      bytesBuffered_ -= amount;
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -225,6 +233,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     GroupOrder groupOrder_;
     MoQFrameWriter moqFrameWriter_;
     uint64_t version_;
+    uint64_t bytesBuffered_{0};
   };
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;

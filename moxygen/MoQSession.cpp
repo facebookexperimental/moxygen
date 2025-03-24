@@ -226,6 +226,8 @@ class StreamPublisherImpl
   void onByteEventCommon(quic::StreamId id, uint64_t offset) {
     uint64_t bytesDeliveredOrCanceled = offset + 1;
     if (bytesDeliveredOrCanceled > bytesDeliveredOrCanceled_) {
+      publisher_->onBytesUnbuffered(
+          bytesDeliveredOrCanceled - bytesDeliveredOrCanceled_);
       bytesDeliveredOrCanceled_ = bytesDeliveredOrCanceled;
     }
 
@@ -390,6 +392,7 @@ StreamPublisherImpl::writeToStream(bool finStream) {
   if (!writeBuf_.empty() || finStream) {
     deliveryCallback = this;
     bytesWritten_ += writeBuf_.chainLength();
+    publisher_->onBytesBuffered(writeBuf_.chainLength());
     if (refCountForCallbacks_ == 0) {
       keepaliveForDeliveryCallbacks_ = shared_from_this();
     }
