@@ -63,7 +63,11 @@ uint64_t getStreamPriority(
 // or a Fetch response.  It's of course illegal to mix-and-match the APIs, but
 // the object is only handed to the application as either a SubgroupConsumer
 // or a FetchConsumer
-class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
+class StreamPublisherImpl
+    : public SubgroupConsumer,
+      public FetchConsumer,
+      public std::enable_shared_from_this<StreamPublisherImpl>,
+      public proxygen::WebTransport::ByteEventCallback {
  public:
   StreamPublisherImpl() = delete;
 
@@ -208,7 +212,24 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
       const Extensions& extensions,
       bool finStream);
 
+  void onByteEvent(quic::StreamId id, uint64_t offset) noexcept override {
+    onByteEventCommon(id, offset);
+  }
+
+  void onByteEventCanceled(quic::StreamId id, uint64_t offset) noexcept
+      override {
+    onByteEventCommon(id, offset);
+  }
+
  private:
+  void onByteEventCommon(quic::StreamId /* id */, uint64_t /* offset */) {
+    XCHECK_GT(refCountForCallbacks_, 0);
+    refCountForCallbacks_--;
+    if (refCountForCallbacks_ == 0) {
+      keepaliveForDeliveryCallbacks_.reset();
+    }
+  }
+
   bool setGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
     if (groupID < header_.group) {
       return false;
@@ -248,6 +269,9 @@ class StreamPublisherImpl : public SubgroupConsumer, public FetchConsumer {
   folly::Optional<uint64_t> currentLengthRemaining_;
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
   MoQFrameWriter moqFrameWriter_;
+
+  std::shared_ptr<StreamPublisherImpl> keepaliveForDeliveryCallbacks_{nullptr};
+  uint32_t refCountForCallbacks_{0};
 };
 
 // StreamPublisherImpl
@@ -353,8 +377,16 @@ StreamPublisherImpl::writeToStream(bool finStream) {
   if (finStream) {
     writeHandle_ = nullptr;
   }
-  auto writeRes =
-      writeHandle->writeStreamData(writeBuf_.move(), finStream, nullptr);
+  proxygen::WebTransport::ByteEventCallback* deliveryCallback = nullptr;
+  if (!writeBuf_.empty() || finStream) {
+    deliveryCallback = this;
+    if (refCountForCallbacks_ == 0) {
+      keepaliveForDeliveryCallbacks_ = shared_from_this();
+    }
+    refCountForCallbacks_++;
+  }
+  auto writeRes = writeHandle->writeStreamData(
+      writeBuf_.move(), finStream, deliveryCallback);
   if (writeRes.hasValue()) {
     if (finStream) {
       onStreamComplete();
