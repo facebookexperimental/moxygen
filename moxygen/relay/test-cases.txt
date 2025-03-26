@@ -1,0 +1,41 @@
+x fetch with complete cache miss [no track]
+x fetch with a complete cache miss [track has cached data but disjoint range]
+
+x subscribe + writeback populates cache
+
+x fetch + writeback
+x fetch populates OBJECT_NOT_EXIST, GROUP_NOT_EXIST
+
+x non-live track, fetch completely satisifed by cache
+partial fetch hits:
+  1. x Missing beginning -> wait for missing beginning before fetchimpl
+     x needs fetch OK
+     doen't need fetchOK
+  2. x Missing middle, multiple misses
+  3. x Missing end
+  4. x Ask for complete group but not known end-of-group
+
+fetch on a live track
+1. x No objects - forward upstream
+2. x End > latest - fetch ok has latest, no upstream
+
+x fetch end beyond end of track
+fetch waits for a fetch in progress
+1. x Success
+2. x fetch in progress errors
+
+x upstream fetch error
+upstream fetch error tail
+upstream fetch tail needs fetch ok
+
+x upstream reset the stream
+
+consumer->object BLOCKED
+1. x await succeeds
+2. x await fails
+
+x consumer->object fails for another reason (cancel?)
+
+Fetching an object that is not complete
+
+Malformed track (duplicate end_of_track)
