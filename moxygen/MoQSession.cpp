@@ -269,6 +269,7 @@ class StreamPublisherImpl
   void onStreamComplete();
 
   std::shared_ptr<MoQSession::PublisherImpl> publisher_{nullptr};
+  bool streamComplete_{false};
   folly::Optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   StreamType streamType_;
@@ -321,6 +322,7 @@ StreamPublisherImpl::StreamPublisherImpl(
 void StreamPublisherImpl::setWriteHandle(
     proxygen::WebTransport::StreamWriteHandle* writeHandle) {
   XCHECK(publisher_);
+  XCHECK(!streamComplete_);
   XCHECK(!writeHandle_);
   writeHandle_ = writeHandle;
   cancelCallback_.emplace(writeHandle_->getCancelToken(), [this] {
@@ -339,10 +341,9 @@ void StreamPublisherImpl::setWriteHandle(
 
 void StreamPublisherImpl::onStreamComplete() {
   XCHECK_EQ(writeHandle_, nullptr);
-  auto publisher = publisher_;
-  publisher_ = nullptr;
-  if (publisher) {
-    publisher->onStreamComplete(header_);
+  streamComplete_ = true;
+  if (publisher_) {
+    publisher_->onStreamComplete(header_);
   }
 }
 
@@ -608,10 +609,11 @@ StreamPublisherImpl::ensureWriteHandle() {
   if (writeHandle_) {
     return folly::unit;
   }
-  if (!publisher_) {
+  if (streamComplete_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Write after stream complete"));
   }
+  XCHECK(publisher_) << "publisher_ has not been set";
   // This has to be FETCH, subscribe is created with a writeHandle_ and
   // publisher_ is cleared when the stream FIN's or resets.
   auto wt = publisher_->getWebTransport();
@@ -858,6 +860,11 @@ MoQSession::TrackPublisherImpl::awaitStreamCredit() {
 
 void MoQSession::TrackPublisherImpl::onStreamComplete(
     const ObjectHeader& finalHeader) {
+  // The reason we need the keepalive is that when we call subgroups_.erase(),
+  // we might end up erasing the last SubgroupPublisherImpl that has a
+  // shared_ptr reference to this TrackPublisherImpl, causing the destruction of
+  // the map while erasing from it.
+  auto keepalive = shared_from_this();
   subgroups_.erase({finalHeader.group, finalHeader.subgroup});
 }
 

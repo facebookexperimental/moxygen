@@ -1082,6 +1082,42 @@ CO_TEST_F_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_F_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
+  co_await setupMoQSession();
+  folly::coro::Baton barricade;
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  expectSubscribe(
+      [this, &subgroupConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        eventBase_.add([pub, sub, &subgroupConsumer] {
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
+          sgp->object(0, moxygen::test::makeBuf(10), Extensions(), false);
+          subgroupConsumer = sgp;
+        });
+        co_return makeSubscribeOkResult(sub);
+      });
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Invoke([&] {
+        eventBase_.add([&] {
+          serverWt_->writeHandles[2]->setImmediateDelivery(false);
+          subgroupConsumer->object(
+              1, moxygen::test::makeBuf(10), Extensions(), true);
+          barricade.post();
+        });
+        return sg;
+      }));
+  EXPECT_CALL(*sg, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*sg, reset(_));
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await barricade;
+  serverWt_->writeHandles[2]->deliverInflightData();
+  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // receive bidi stream on client
