@@ -59,7 +59,7 @@ Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
 class MoQSessionTest : public testing::Test,
                        public MoQSession::ServerSetupCallback {
  public:
-  MoQSessionTest() {
+  void SetUp() override {
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
     clientSession_ = std::make_shared<MoQSession>(clientWt_.get(), &eventBase_);
@@ -86,8 +86,6 @@ class MoQSessionTest : public testing::Test,
     serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
   }
 
-  void SetUp() override {}
-
   folly::Try<ServerSetup> onClientSetup(ClientSetup setup) override {
     if (invalidVersion_) {
       return folly::Try<ServerSetup>(std::runtime_error("invalid version"));
@@ -111,7 +109,7 @@ class MoQSessionTest : public testing::Test,
               .asUint64 = initialMaxSubscribeId_}}}});
   }
 
-  folly::coro::Task<void> setupMoQSession();
+  virtual folly::coro::Task<void> setupMoQSession();
 
   folly::DrivableExecutor* getExecutor() {
     return &eventBase_;
@@ -943,6 +941,144 @@ CO_TEST_F_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
 
   announceResult.value()->unsubscribeAnnounces();
   co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_F_X(MoQSessionTest, TooFarBehindOneSubgroup) {
+  co_await setupMoQSession();
+
+  MoQSettings moqSettings;
+  moqSettings.bufferingThresholds.perSubscription = 100;
+  serverSession_->setMoqSettings(moqSettings);
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add(
+        [pub, sub, serverWt = serverWt_.get(), eventBase = &eventBase_] {
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
+          auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
+          EXPECT_TRUE(objectResult.hasValue());
+
+          // Run this stuff later on, otherwise the test will hang because of
+          // the discrepancy in the stream count because the stream would have
+          // been reset before the subgroup header got across.
+          eventBase->add([pub, sub, serverWt, sgp] {
+            // Start buffering data
+            serverWt->writeHandles[2]->setImmediateDelivery(false);
+            auto objectResult2 = sgp->object(1, moxygen::test::makeBuf(101));
+            EXPECT_TRUE(objectResult2.hasError());
+          });
+        });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  expectSubscribeDone();
+  auto mockSubgroupConsumer =
+      std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(mockSubgroupConsumer));
+  EXPECT_CALL(*mockSubgroupConsumer, object(0, _, _, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*mockSubgroupConsumer, reset(_));
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_F_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
+  co_await setupMoQSession();
+
+  MoQSettings moqSettings;
+  moqSettings.bufferingThresholds.perSubscription = 100;
+  serverSession_->setMoqSettings(moqSettings);
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub, sub, serverWt = serverWt_.get()] {
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
+      EXPECT_TRUE(objectResult.hasValue());
+
+      // Start buffering data
+      serverWt->writeHandles[2]->setImmediateDelivery(false);
+      for (uint32_t i = 0; i < 10; i++) {
+        // Run this stuff later on, otherwise the test will hang because of
+        // the discrepancy in the stream count because the stream would have
+        // been reset before the subgroup header got across.
+        objectResult = sgp->object(i + 1, moxygen::test::makeBuf(50));
+        serverWt->writeHandles[2]->deliverInflightData();
+        EXPECT_FALSE(objectResult.hasError());
+      }
+      pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  expectSubscribeDone();
+  auto mockSubgroupConsumer =
+      std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(mockSubgroupConsumer));
+  EXPECT_CALL(*mockSubgroupConsumer, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*mockSubgroupConsumer, reset(_));
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_F_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
+  co_await setupMoQSession();
+
+  MoQSettings moqSettings;
+  moqSettings.bufferingThresholds.perSubscription = 100;
+  serverSession_->setMoqSettings(moqSettings);
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add(
+        [pub, sub, serverWt = serverWt_.get(), eventBase = &eventBase_] {
+          std::vector<std::shared_ptr<SubgroupConsumer>> subgroupConsumers;
+
+          for (uint32_t subgroupId = 0; subgroupId < 3; subgroupId++) {
+            subgroupConsumers.push_back(
+                pub->beginSubgroup(0, subgroupId, 0).value());
+            auto objectResult = subgroupConsumers[subgroupId]->object(
+                0, moxygen::test::makeBuf(10));
+            EXPECT_TRUE(objectResult.hasValue());
+          }
+
+          // Run this stuff later on, otherwise the test will hang because of
+          // the discrepancy in the stream count because the stream would have
+          // been reset before the subgroup header got across.
+          eventBase->add([pub, sub, serverWt, subgroupConsumers] {
+            for (uint32_t subgroupId = 0; subgroupId < 2; subgroupId++) {
+              serverWt->writeHandles[2 + subgroupId * 4]->setImmediateDelivery(
+                  false);
+              auto objectResult = subgroupConsumers[subgroupId]->object(
+                  1, moxygen::test::makeBuf(30));
+              EXPECT_TRUE(objectResult.hasValue());
+            }
+
+            serverWt->writeHandles[10]->setImmediateDelivery(false);
+            auto objectResult =
+                subgroupConsumers[2]->object(1, moxygen::test::makeBuf(40));
+            EXPECT_TRUE(objectResult.hasError());
+          });
+        });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  expectSubscribeDone();
+  auto mockSubgroupConsumer =
+      std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(_, _, _))
+      .WillRepeatedly(testing::Return(mockSubgroupConsumer));
+  EXPECT_CALL(*mockSubgroupConsumer, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*mockSubgroupConsumer, reset(_)).Times(3);
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

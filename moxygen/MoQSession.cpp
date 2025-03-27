@@ -384,6 +384,13 @@ StreamPublisherImpl::writeCurrentObject(
 
 folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::writeToStream(bool finStream) {
+  if (streamType_ == StreamType::SUBGROUP_HEADER &&
+      !publisher_->canBufferBytes(writeBuf_.chainLength())) {
+    publisher_->onTooManyBytesBuffered();
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::TOO_FAR_BEHIND));
+  }
+
   auto writeHandle = writeHandle_;
   if (finStream) {
     writeHandle_ = nullptr;
@@ -649,14 +656,16 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       TrackAlias trackAlias,
       Priority subPriority,
       GroupOrder groupOrder,
-      uint64_t version)
+      uint64_t version,
+      uint64_t bytesBufferedThreshold)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
             subscribeID,
             subPriority,
             groupOrder,
-            version),
+            version,
+            bytesBufferedThreshold),
         trackAlias_(trackAlias) {}
 
   void setSubscriptionHandle(
@@ -682,6 +691,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   }
 
   void onStreamComplete(const ObjectHeader& finalHeader) override;
+
+  void onTooManyBytesBuffered() override;
 
   void reset(ResetStreamErrorCode code) override {
     while (!subgroups_.empty()) {
@@ -737,14 +748,16 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
       SubscribeID subscribeID,
       Priority subPriority,
       GroupOrder groupOrder,
-      uint64_t version)
+      uint64_t version,
+      uint64_t bytesBufferedThreshold)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
             subscribeID,
             subPriority,
             groupOrder,
-            version) {}
+            version,
+            bytesBufferedThreshold) {}
 
   void initialize() {
     streamPublisher_ =
@@ -783,6 +796,11 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   void onStreamComplete(const ObjectHeader&) override {
     streamPublisher_.reset();
     PublisherImpl::fetchComplete();
+  }
+
+  void onTooManyBytesBuffered() override {
+    // Right now, we don't do anything when we buffer too many bytes for a
+    // FETCH.
   }
 
  private:
@@ -841,6 +859,25 @@ MoQSession::TrackPublisherImpl::awaitStreamCredit() {
 void MoQSession::TrackPublisherImpl::onStreamComplete(
     const ObjectHeader& finalHeader) {
   subgroups_.erase({finalHeader.group, finalHeader.subgroup});
+}
+
+void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
+  // Note: There is one case in which this reset can be problematic. If some
+  // streams have been created, but have been reset before the subgroup header
+  // is sent out, then there can be a stream count discrepancy. We could, some
+  // time in the future, change this to a reliable reset so that we're ensured
+  // that the stream counts are consistent. We can also add in a timeout for the
+  // stream count discrepancy so that the peer doesn't hang indefinitely waiting
+  // for the stream counts to equalize.
+  reset(ResetStreamErrorCode::INTERNAL_ERROR);
+  SubscribeDone subscribeDoneMessage{
+      subscribeID_,
+      SubscribeDoneStatusCode::TOO_FAR_BEHIND,
+      streamCount_,
+      "peer is too far behind",
+      folly::none /* finalObject */
+  };
+  subscribeDone(subscribeDoneMessage);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -1849,7 +1886,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       subscribeRequest.trackAlias,
       subscribeRequest.priority,
       subscribeRequest.groupOrder,
-      *negotiatedVersion_);
+      *negotiatedVersion_,
+      moqSettings_.bufferingThresholds.perSubscription);
   pubTracks_.emplace(subscribeID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
@@ -2121,7 +2159,8 @@ void MoQSession::onFetch(Fetch fetch) {
       fetch.subscribeID,
       fetch.priority,
       fetch.groupOrder,
-      *negotiatedVersion_);
+      *negotiatedVersion_,
+      moqSettings_.bufferingThresholds.perSubscription);
   fetchPublisher->initialize();
   pubTracks_.emplace(fetch.subscribeID, fetchPublisher);
   handleFetch(std::move(fetch), std::move(fetchPublisher))

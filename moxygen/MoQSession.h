@@ -26,6 +26,16 @@
 
 namespace moxygen {
 
+struct BufferingThresholds {
+  // A value of 0 means no threshold
+  uint64_t perSubscription{0};
+  uint64_t perSession{0}; // Currently unused
+};
+
+struct MoQSettings {
+  BufferingThresholds bufferingThresholds{};
+};
+
 class MoQSession : public MoQControlCodec::ControlCallback,
                    public proxygen::WebTransportHandler,
                    public Publisher,
@@ -74,6 +84,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
         evb_(evb),
         serverSetupCallback_(&serverSetupCallback),
         controlCodec_(dir_, this) {}
+
+  void setMoqSettings(MoQSettings settings) {
+    moqSettings_ = settings;
+  }
 
   void setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
     publishHandler_ = std::move(publishHandler);
@@ -168,15 +182,18 @@ class MoQSession : public MoQControlCodec::ControlCallback,
         SubscribeID subscribeID,
         Priority subPriority,
         GroupOrder groupOrder,
-        uint64_t version)
+        uint64_t version,
+        uint64_t bytesBufferedThreshold)
         : session_(session),
           fullTrackName_(std::move(ftn)),
           subscribeID_(subscribeID),
           subPriority_(subPriority),
           groupOrder_(groupOrder),
-          version_(version) {
+          version_(version),
+          bytesBufferedThreshold_(bytesBufferedThreshold) {
       moqFrameWriter_.initializeVersion(version);
     }
+
     virtual ~PublisherImpl() = default;
 
     const FullTrackName& fullTrackName() const {
@@ -200,6 +217,15 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     virtual void onStreamCreated() {}
 
     virtual void onStreamComplete(const ObjectHeader& finalHeader) = 0;
+
+    virtual void onTooManyBytesBuffered() = 0;
+
+    bool canBufferBytes(uint64_t numBytes) {
+      if (bytesBufferedThreshold_ == 0) {
+        return true;
+      }
+      return (bytesBuffered_ + numBytes <= bytesBufferedThreshold_);
+    }
 
     folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
         SubscribeDone subDone);
@@ -234,6 +260,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     MoQFrameWriter moqFrameWriter_;
     uint64_t version_;
     uint64_t bytesBuffered_{0};
+    uint64_t bytesBufferedThreshold_{0};
   };
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
@@ -350,9 +377,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void sendMaxSubscribeID(bool signalWriteLoop);
   void fetchComplete(SubscribeID subscribeID);
 
-  // Get the max subscribe id from the setup params. If MAX_SUBSCRIBE_ID key is
-  // not present, we default to 0 as specified. 0 means that the peer MUST NOT
-  // create any subscriptions
+  // Get the max subscribe id from the setup params. If MAX_SUBSCRIBE_ID key
+  // is not present, we default to 0 as specified. 0 means that the peer
+  // MUST NOT create any subscriptions
   static uint64_t getMaxSubscribeIdIfPresent(
       const std::vector<SetupParameter>& params);
 
@@ -448,6 +475,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   uint64_t maxSubscribeID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};
+  MoQSettings moqSettings_;
   std::shared_ptr<Publisher> publishHandler_;
   std::shared_ptr<Subscriber> subscribeHandler_;
 
