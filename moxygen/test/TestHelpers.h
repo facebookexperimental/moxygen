@@ -29,7 +29,7 @@
    private:                                                                    \
     void TestBody() override;                                                  \
     folly::coro::Task<void> co_TestBody();                                     \
-    static ::testing::TestInfo* const test_info_ GTEST_ATTRIBUTE_UNUSED_;      \
+    static ::testing::TestInfo* const test_info_ [[maybe_unused]];             \
   };                                                                           \
                                                                                \
   ::testing::TestInfo* const GTEST_TEST_CLASS_NAME_(                           \
@@ -90,7 +90,7 @@
               ::testing::internal::CodeLocation(__FILE__, __LINE__));          \
       return 0;                                                                \
     }                                                                          \
-    static int gtest_registering_dummy_ GTEST_ATTRIBUTE_UNUSED_;               \
+    static int gtest_registering_dummy_ [[maybe_unused]];                      \
     GTEST_TEST_CLASS_NAME_(test_suite_name, test_name)                         \
     (const GTEST_TEST_CLASS_NAME_(test_suite_name, test_name) &) = delete;     \
     GTEST_TEST_CLASS_NAME_(test_suite_name, test_name) & operator=(            \
