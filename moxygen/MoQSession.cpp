@@ -505,6 +505,10 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
 
 folly::Expected<ObjectPublishStatus, MoQPublishError>
 StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
+  if (!writeHandle_) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "Cancelled"));
+  }
   auto validateObjectPublishRes =
       validateObjectPublishAndUpdateState(payload.get(), finStream);
   if (!validateObjectPublishRes) {

@@ -170,6 +170,13 @@ class MoQSessionTest : public testing::Test,
         }));
   }
 
+  using TestLogicFn = std::function<void(
+      const SubscribeRequest& sub,
+      std::shared_ptr<TrackConsumer> pub,
+      std::shared_ptr<SubgroupConsumer> sgp,
+      std::shared_ptr<MockSubgroupConsumer> sgc)>;
+  folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
+
   folly::EventBase eventBase_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt_;
@@ -406,12 +413,11 @@ CO_TEST_F_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   co_await setupMoQSession();
 
   std::shared_ptr<FetchConsumer> fetchPub;
-  expectFetch(
-      [&fetchPub, this](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
-        EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
-        fetchPub = std::move(inFetchPub);
-        co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
-      });
+  expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub = std::move(inFetchPub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
 
   expectFetchSuccess();
   auto res =
@@ -487,20 +493,19 @@ CO_TEST_F_X(MoQSessionTest, FetchPublisherThrow) {
 CO_TEST_F_X(MoQSessionTest, FetchCancel) {
   co_await setupMoQSession();
   std::shared_ptr<FetchConsumer> fetchPub;
-  expectFetch(
-      [&fetchPub, this](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
-        auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
-        EXPECT_NE(standalone, nullptr);
-        EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
-        fetchPub = std::move(inFetchPub);
-        fetchPub->object(
-            standalone->start.group,
-            /*subgroupID=*/0,
-            standalone->start.object,
-            moxygen::test::makeBuf(100));
-        // published 1 object
-        co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
-      });
+  expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+    EXPECT_NE(standalone, nullptr);
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub = std::move(inFetchPub);
+    fetchPub->object(
+        standalone->start.group,
+        /*subgroupID=*/0,
+        standalone->start.object,
+        moxygen::test::makeBuf(100));
+    // published 1 object
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
   EXPECT_CALL(
       *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false))
       .WillOnce(testing::Return(folly::unit));
@@ -669,47 +674,89 @@ CO_TEST_F_X(MoQSessionTest, FetchOutOfOrder) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, ObjectValidationErrors) {
+folly::coro::Task<void> MoQSessionTest::publishValidationTest(
+    TestLogicFn testLogic) {
   co_await setupMoQSession();
-  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    // Begin an object with length 100
-    auto sgp = pub->beginSubgroup(0, 0, 0).value();
-    sgp->objectNotExists(0);
-    co_await folly::coro::co_reschedule_on_current_executor;
-    eventBase_.add([sub, pub, sgp]() {
-      auto objPub = sgp->beginObject(1, 100, test::makeBuf(10));
-      EXPECT_TRUE(objPub);
-
-      // Attempt to begin another object, which should fail
-      auto objPubFail = sgp->beginObject(2, 100, test::makeBuf(10));
-      EXPECT_EQ(objPubFail.error().code, MoQPublishError::API_ERROR);
-
-      // Attempt to send an object payload with length 200, which should fail
-      auto payloadFail =
-          sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(200, 'x')));
-      EXPECT_EQ(payloadFail.error().code, MoQPublishError::API_ERROR);
-
-      // Attempt to send an object payload with length 20 and fin=true, which
-      // should fail
-      auto payloadFinFail = sgp->objectPayload(
-          folly::IOBuf::copyBuffer(std::string(20, 'x')), true);
-      EXPECT_EQ(payloadFinFail.error().code, MoQPublishError::API_ERROR);
-      pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
-    });
-    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
-  });
-
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  expectSubscribe(
+      [this, testLogic, sg1](auto sub, auto pub) -> TaskSubscribeResult {
+        auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        eventBase_.add([testLogic, sub, pub, sgp, sg1]() {
+          testLogic(sub, pub, sgp, sg1);
+        });
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
       .WillOnce(testing::Return(sg1));
-  EXPECT_CALL(*sg1, objectNotExists(0, _, _))
-      .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::INTERNAL_ERROR));
   expectSubscribeDone();
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_F_X(MoQSessionTest, DoubleBeginObject) {
+  co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
+    EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
+        .WillOnce(testing::Return(
+            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)));
+    EXPECT_EQ(
+        sgp->beginObject(2, 100, test::makeBuf(10)).error().code,
+        MoQPublishError::API_ERROR);
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+  });
+}
+
+CO_TEST_F_X(MoQSessionTest, ObjectPayloadTooLong) {
+  co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
+    EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
+        .WillOnce(testing::Return(
+            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)).hasValue());
+    auto payloadFail =
+        sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(200, 'x')));
+    EXPECT_EQ(payloadFail.error().code, MoQPublishError::API_ERROR);
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+  });
+}
+
+CO_TEST_F_X(MoQSessionTest, ObjectPayloadEarlyFin) {
+  co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
+    EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
+        .WillOnce(testing::Return(
+            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)).hasValue());
+
+    // Attempt to send an object payload with length 20 and fin=true, which
+    // should fail
+    auto payloadFinFail = sgp->objectPayload(
+        folly::IOBuf::copyBuffer(std::string(20, 'x')), true);
+    EXPECT_EQ(payloadFinFail.error().code, MoQPublishError::API_ERROR);
+
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+  });
+}
+
+CO_TEST_F_X(MoQSessionTest, PublisherResetAfterBeginObject) {
+  co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
+    EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
+        .WillOnce(testing::Return(
+            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)));
+
+    // Call reset after beginObject
+    sgp->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+
+    // Attempt to send an object payload after reset, which should fail
+    auto payloadFail =
+        sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(20, 'x')));
+    EXPECT_EQ(payloadFail.error().code, MoQPublishError::CANCELLED);
+
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+  });
 }
 
 // === TRACK STATUS tests ===
