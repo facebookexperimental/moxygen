@@ -8,6 +8,7 @@
 
 #include <folly/coro/SharedPromise.h>
 #include "moxygen/MoQSession.h"
+#include "moxygen/relay/MoQCache.h"
 #include "moxygen/relay/MoQForwarder.h"
 
 #include <folly/container/F14Set.h>
@@ -19,6 +20,12 @@ class MoQRelay : public Publisher,
                  public std::enable_shared_from_this<MoQRelay>,
                  public MoQForwarder::Callback {
  public:
+  explicit MoQRelay(bool enableCache) {
+    if (enableCache) {
+      cache_ = std::make_unique<MoQCache>();
+    }
+  }
+
   void setAllowedNamespacePrefix(TrackNamespace allowed) {
     allowedNamespacePrefix_ = std::move(allowed);
   }
@@ -103,6 +110,14 @@ class MoQRelay : public Publisher,
   TrackNamespace allowedNamespacePrefix_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>
       subscriptions_;
+
+  std::shared_ptr<TrackConsumer> getSubscribeWriteback(
+      const FullTrackName& ftn,
+      std::shared_ptr<TrackConsumer> consumer) {
+    return cache_ ? cache_->getSubscribeWriteback(ftn, std::move(consumer))
+                  : consumer;
+  }
+  std::unique_ptr<MoQCache> cache_;
 };
 
 } // namespace moxygen
