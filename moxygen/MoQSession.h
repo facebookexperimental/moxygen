@@ -212,7 +212,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       groupOrder_ = groupOrder;
     }
 
-    virtual void reset(ResetStreamErrorCode error) = 0;
+    virtual void terminatePublish(
+        SubscribeDone subDone,
+        ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
 
     virtual void onStreamCreated() {}
 

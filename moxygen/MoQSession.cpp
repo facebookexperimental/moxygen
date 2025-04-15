@@ -687,10 +687,6 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     }
   }
 
-  std::shared_ptr<Publisher::SubscriptionHandle> getSubscriptionHandle() const {
-    return handle_;
-  }
-
   // PublisherImpl overrides
   void onStreamCreated() override {
     streamCount_++;
@@ -700,7 +696,34 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   void onTooManyBytesBuffered() override;
 
-  void reset(ResetStreamErrorCode code) override {
+  void subscribeUpdate(SubscribeUpdate subscribeUpdate) {
+    if (!handle_) {
+      XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
+                << subscribeID_ << " trackPub=" << this;
+      // TODO: I think we need to buffer it?
+    } else {
+      handle_->subscribeUpdate(std::move(subscribeUpdate));
+    }
+  }
+
+  void unsubscribe() {
+    if (!handle_) {
+      XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
+                << subscribeID_ << " trackPub=" << this;
+      // TODO: cancel handleSubscribe?
+    } else {
+      handle_->unsubscribe();
+    }
+    resetAllSubgroups(ResetStreamErrorCode::CANCELLED);
+  }
+
+  void terminatePublish(SubscribeDone subDone, ResetStreamErrorCode code)
+      override {
+    resetAllSubgroups(code);
+    subscribeDone(std::move(subDone));
+  }
+
+  void resetAllSubgroups(ResetStreamErrorCode code) {
     while (!subgroups_.empty()) {
       auto it = subgroups_.begin();
       // reset will invoke onStreamComplete, which erases from subgroups_
@@ -793,7 +816,11 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     }
   }
 
-  void reset(ResetStreamErrorCode error) override {
+  void terminatePublish(SubscribeDone, ResetStreamErrorCode error) override {
+    reset(error);
+  }
+
+  void reset(ResetStreamErrorCode error) {
     if (streamPublisher_) {
       streamPublisher_->reset(error);
     }
@@ -880,15 +907,14 @@ void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
   // that the stream counts are consistent. We can also add in a timeout for the
   // stream count discrepancy so that the peer doesn't hang indefinitely waiting
   // for the stream counts to equalize.
-  reset(ResetStreamErrorCode::INTERNAL_ERROR);
-  SubscribeDone subscribeDoneMessage{
-      subscribeID_,
-      SubscribeDoneStatusCode::TOO_FAR_BEHIND,
-      streamCount_,
-      "peer is too far behind",
-      folly::none /* finalObject */
-  };
-  subscribeDone(subscribeDoneMessage);
+  terminatePublish(
+      SubscribeDone(
+          {subscribeID_,
+           SubscribeDoneStatusCode::TOO_FAR_BEHIND,
+           streamCount_,
+           "peer is too far behind",
+           folly::none /* finalObject */}),
+      ResetStreamErrorCode::INTERNAL_ERROR);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -1250,10 +1276,17 @@ void MoQSession::cleanup() {
     }
   }
   publisherAnnounces_.clear();
-  for (auto& pubTrack : pubTracks_) {
-    pubTrack.second->reset(ResetStreamErrorCode::SESSION_CLOSED);
+  while (!pubTracks_.empty()) {
+    auto pubTrack = pubTracks_.begin();
+    pubTrack->second->terminatePublish(
+        SubscribeDone(
+            {pubTrack->first,
+             SubscribeDoneStatusCode::SESSION_CLOSED,
+             0,
+             "Session Closed",
+             folly::none}),
+        ResetStreamErrorCode::SESSION_CLOSED);
   }
-  pubTracks_.clear();
   for (auto& subTrack : subTracks_) {
     subTrack.second->subscribeError(
         {/*TrackReceiveState fills in subId*/ 0,
@@ -1973,12 +2006,8 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   if (!trackPublisher) {
     XLOG(ERR) << "SubscribeID in SubscribeUpdate is for a FETCH, id="
               << subscribeID << " sess=" << this;
-  } else if (!trackPublisher->getSubscriptionHandle()) {
-    XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
-              << subscribeID << " sess=" << this;
   } else {
-    trackPublisher->getSubscriptionHandle()->subscribeUpdate(
-        std::move(subscribeUpdate));
+    trackPublisher->subscribeUpdate(std::move(subscribeUpdate));
   }
 }
 
@@ -2002,12 +2031,8 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   if (!trackPublisher) {
     XLOG(ERR) << "SubscribeID in Unsubscribe is for a FETCH, id="
               << unsubscribe.subscribeID << " sess=" << this;
-  } else if (!trackPublisher->getSubscriptionHandle()) {
-    XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
-              << unsubscribe.subscribeID << " sess=" << this;
   } else {
-    trackPublisher->getSubscriptionHandle()->unsubscribe();
-    trackPublisher->reset(ResetStreamErrorCode::CANCELLED);
+    trackPublisher->unsubscribe();
     if (pubTracks_.erase(unsubscribe.subscribeID)) {
       retireSubscribeId(/*signalWriteLoop=*/true);
     } // else, the caller invoked subscribeDone, which isn't needed but fine
