@@ -197,6 +197,7 @@ constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
 // specific constants.
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 constexpr uint64_t kVersionDraft09 = 0xff000009;
+constexpr uint64_t kVersionDraft10 = 0xff00000A;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -610,7 +611,6 @@ struct SubscribeDone {
   SubscribeDoneStatusCode statusCode;
   uint64_t streamCount;
   std::string reasonPhrase;
-  folly::Optional<AbsoluteLocation> finalObject;
 };
 
 struct Announce {
