@@ -271,11 +271,7 @@ void MoQVideoPublisher::publishFrameImpl(
 void MoQVideoPublisher::endPublish() {
   evbThread_->getEventBase()->runInEventBaseThread([this] {
     videoForwarder_.subscribeDone(
-        {0,
-         SubscribeDoneStatusCode::TRACK_ENDED,
-         0,
-         "end of track",
-         folly::none});
+        {0, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"});
   });
 }
 

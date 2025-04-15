@@ -415,8 +415,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
           {SubscribeID(0),
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
            0, // filled in by session
-           "upstream disconnect",
-           subscription.forwarder->latest()});
+           "upstream disconnect"});
     } else {
       subscription.forwarder->removeSession(session);
     }

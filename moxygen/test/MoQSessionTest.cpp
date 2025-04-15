@@ -228,10 +228,8 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       {}};
 }
 
-SubscribeDone getTrackEndedSubscribeDone(
-    SubscribeID id,
-    const folly::Optional<AbsoluteLocation>& largest = folly::none) {
-  return {id, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track", largest};
+SubscribeDone getTrackEndedSubscribeDone(SubscribeID id) {
+  return {id, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"};
 }
 
 TrackStatusRequest getTrackStatusRequest() {
@@ -355,8 +353,7 @@ CO_TEST_F_X(MoQSessionTest, JoiningFetch) {
     pub->datagram(
         ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
         folly::IOBuf::copyBuffer("hello world"));
-    pub->subscribeDone(
-        getTrackEndedSubscribeDone(sub.subscribeID, AbsoluteLocation{0, 1}));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -861,8 +858,7 @@ CO_TEST_F_X(MoQSessionTest, Datagrams) {
         ObjectHeader(
             sub.trackAlias, 0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST),
         nullptr);
-    pub->subscribeDone(
-        getTrackEndedSubscribeDone(sub.subscribeID, AbsoluteLocation{0, 2}));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   {
