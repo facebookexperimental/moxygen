@@ -197,6 +197,8 @@ constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
 // specific constants.
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 constexpr uint64_t kVersionDraft09 = 0xff000009;
+constexpr uint64_t kVersionDraft10 = 0xff000010;
+constexpr uint64_t kVersionDraft11 = 0xff000011;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -640,12 +642,14 @@ struct AnnounceCancel {
 
 struct TrackStatusRequest {
   FullTrackName fullTrackName;
+  std::vector<TrackRequestParameter> params; // draft-11 and later
 };
 
 struct TrackStatus {
   FullTrackName fullTrackName;
   TrackStatusCode statusCode;
   folly::Optional<AbsoluteLocation> latestGroupAndObject;
+  std::vector<TrackRequestParameter> params; // draft-11 and later
 };
 
 struct Goaway {

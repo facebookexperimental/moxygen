@@ -20,6 +20,15 @@ std::vector<Extension> getTestExtensions() {
   return extensions;
 }
 
+std::vector<TrackRequestParameter> getTestTrackRequestParameters() {
+  return {
+      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION), "binky", 0},
+      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), "", 1000},
+      {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+       "",
+       3600000}};
+}
+
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     TestControlMessages in,
     const MoQFrameWriter& moqFrameWriter) {
@@ -55,31 +64,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            LocationType::LatestObject,
            folly::none,
            0,
-           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             "binky",
-             0},
-            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-             "",
-             1000},
-            {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-             "",
-             3600000}}}));
+           getTestTrackRequestParameters()}));
   res = moqFrameWriter.writeSubscribeUpdate(
       writeBuf,
-      SubscribeUpdate(
-          {0,
-           {1, 2},
-           3,
-           255,
-           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             "binky",
-             0},
-            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-             "",
-             1000},
-            {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-             "",
-             3600000}}}));
+      SubscribeUpdate({0, {1, 2}, 3, 255, getTestTrackRequestParameters()}));
   res = moqFrameWriter.writeSubscribeOk(
       writeBuf,
       SubscribeOk(
@@ -150,16 +138,22 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       Unannounce({
           TrackNamespace({"hello"}),
       }));
-  res = moqFrameWriter.writeTrackStatusRequest(
-      writeBuf,
-      TrackStatusRequest(
-          {FullTrackName({TrackNamespace({"hello"}), "world"})}));
-  res = moqFrameWriter.writeTrackStatus(
-      writeBuf,
-      TrackStatus(
-          {FullTrackName({TrackNamespace({"hello"}), "world"}),
-           TrackStatusCode::IN_PROGRESS,
-           AbsoluteLocation({19, 77})}));
+  TrackStatusRequest trackStatusRequest;
+  trackStatusRequest.fullTrackName =
+      FullTrackName({TrackNamespace({"hello"}), "world"});
+  // Params will be ignored for draft-11 and below
+  trackStatusRequest.params = getTestTrackRequestParameters();
+  res = moqFrameWriter.writeTrackStatusRequest(writeBuf, trackStatusRequest);
+
+  TrackStatus trackStatus;
+  trackStatus.fullTrackName =
+      FullTrackName({TrackNamespace({"hello"}), "world"});
+  trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatus.latestGroupAndObject = AbsoluteLocation({19, 77});
+  // Params will be ignored for draft-11 and below
+  trackStatus.params = getTestTrackRequestParameters();
+
+  res = moqFrameWriter.writeTrackStatus(writeBuf, trackStatus);
   res = moqFrameWriter.writeGoaway(writeBuf, Goaway({"new uri"}));
   res = moqFrameWriter.writeSubscribeAnnounces(
       writeBuf,

@@ -28,6 +28,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
         moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
     testing::NiceMock<MockMoQCodecCallback> callback;
     MoQControlCodec codec(dir, &callback);
+    codec.initializeVersion(GetParam());
 
     if (dir == MoQControlCodec::Direction::SERVER) {
       EXPECT_CALL(callback, onClientSetup(testing::_));
@@ -66,6 +67,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
         moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
     testing::NiceMock<MockMoQCodecCallback> callback;
     MoQControlCodec codec(dir, &callback);
+    codec.initializeVersion(GetParam());
 
     folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
     readBuf.append(std::move(allMsgs));
@@ -429,5 +431,5 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(kVersionDraftCurrent, kVersionDraft09));
+    ::testing::Values(kVersionDraftCurrent, kVersionDraft09, kVersionDraft11));
 } // namespace moxygen::test

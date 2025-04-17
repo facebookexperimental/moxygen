@@ -563,10 +563,102 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   cursor.skip(*parseResult->length);
 }
 
+TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  TrackStatusRequest tsr;
+  tsr.fullTrackName = FullTrackName({TrackNamespace({"hello"}), "world"});
+  std::vector<TrackRequestParameter> params;
+  if (getDraftMajorVersion(GetParam()) >= 11) {
+    // Add some parameters to the TrackStatusRequest.
+    params.push_back(
+        {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+         "stampolli",
+         0});
+    params.push_back(
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         "",
+         999});
+  }
+  tsr.params = params;
+  auto writeResult = writer_.writeTrackStatusRequest(writeBuf, tsr);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_REQUEST));
+  auto parseResult =
+      parser_.parseTrackStatusRequest(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
+  EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
+  EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
+  if (getDraftMajorVersion(GetParam()) >= 11) {
+    EXPECT_EQ(parseResult->params.size(), 2);
+    EXPECT_EQ(
+        parseResult->params[0].key,
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION));
+    EXPECT_EQ(parseResult->params[0].asString, "stampolli");
+    EXPECT_EQ(
+        parseResult->params[1].key,
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+    EXPECT_EQ(parseResult->params[1].asUint64, 999);
+  }
+}
+
+TEST_P(MoQFramerTest, ParseTrackStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  TrackStatus trackStatus;
+  trackStatus.fullTrackName =
+      FullTrackName({TrackNamespace({"hello"}), "world"});
+  trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatus.latestGroupAndObject = AbsoluteLocation({19, 77});
+  std::vector<TrackRequestParameter> params;
+  if (getDraftMajorVersion(GetParam()) >= 11) {
+    // Add some parameters to the TrackStatusRequest.
+    params.push_back(
+        {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
+         "stampolli",
+         0});
+    params.push_back(
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         "",
+         999});
+  }
+  trackStatus.params = params;
+  auto writeResult = writer_.writeTrackStatus(writeBuf, trackStatus);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS));
+  auto parseResult = parser_.parseTrackStatus(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
+  EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
+  EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
+  EXPECT_EQ(parseResult->latestGroupAndObject->group, 19);
+  EXPECT_EQ(parseResult->latestGroupAndObject->object, 77);
+  EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
+  if (getDraftMajorVersion(GetParam()) >= 11) {
+    EXPECT_EQ(parseResult->params.size(), 2);
+    EXPECT_EQ(
+        parseResult->params[0].key,
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION));
+    EXPECT_EQ(parseResult->params[0].asString, "stampolli");
+    EXPECT_EQ(
+        parseResult->params[1].key,
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+    EXPECT_EQ(parseResult->params[1].asUint64, 999);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraftCurrent, kVersionDraft09));
+    ::testing::Values(kVersionDraftCurrent, kVersionDraft09, kVersionDraft11));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);
