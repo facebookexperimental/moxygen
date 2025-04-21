@@ -666,7 +666,8 @@ struct SubscribesBlocked {
 
 enum class FetchType : uint8_t {
   STANDALONE = 0x1,
-  JOINING = 0x2,
+  RELATIVE_JOINING = 0x2,
+  ABSOLUTE_JOINING = 0x3,
 };
 
 struct StandaloneFetch {
@@ -677,14 +678,26 @@ struct StandaloneFetch {
 };
 
 struct JoiningFetch {
-  JoiningFetch(SubscribeID jsid, uint64_t pgo)
-      : joiningSubscribeID(jsid), precedingGroupOffset(pgo) {}
+  JoiningFetch(SubscribeID jsid, uint64_t joiningStartIn, FetchType fetchTypeIn)
+      : joiningSubscribeID(jsid),
+        joiningStart(joiningStartIn),
+        fetchType(fetchTypeIn) {
+    CHECK(
+        fetchType == FetchType::RELATIVE_JOINING ||
+        fetchType == FetchType::ABSOLUTE_JOINING);
+  }
   SubscribeID joiningSubscribeID;
-  uint64_t precedingGroupOffset;
+  // For absolute joining, this is the starting group id. For relative joining,
+  // this is the group offset prior and relative to the current group of the
+  // corresponding subscribe.
+  uint64_t joiningStart;
+  FetchType fetchType; // Can be either RELATIVE_JOINING or ABSOLUTE_JOINING
 };
 
 struct Fetch {
   Fetch() : args(StandaloneFetch()) {}
+
+  // Used for standalone fetches
   Fetch(
       SubscribeID su,
       FullTrackName ftn,
@@ -699,10 +712,13 @@ struct Fetch {
         groupOrder(g),
         params(std::move(pa)),
         args(StandaloneFetch(st, e)) {}
+
+  // Used for absolute or relative joining fetches
   Fetch(
       SubscribeID su,
       SubscribeID jsid,
-      uint64_t pgo,
+      uint64_t joiningStart,
+      FetchType fetchType,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
       std::vector<TrackRequestParameter> pa = {})
@@ -710,7 +726,11 @@ struct Fetch {
         priority(p),
         groupOrder(g),
         params(std::move(pa)),
-        args(JoiningFetch(jsid, pgo)) {}
+        args(JoiningFetch(jsid, joiningStart, fetchType)) {
+    CHECK(
+        fetchType == FetchType::RELATIVE_JOINING ||
+        fetchType == FetchType::ABSOLUTE_JOINING);
+  }
   SubscribeID subscribeID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};

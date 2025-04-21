@@ -91,7 +91,7 @@ class MoQSessionTest : public testing::Test,
       return folly::Try<ServerSetup>(std::runtime_error("invalid version"));
     }
 
-    EXPECT_EQ(setup.supportedVersions[0], kVersionDraftCurrent);
+    EXPECT_EQ(setup.supportedVersions[0], getClientSupportedVersions()[0]);
     if (!setup.params.empty()) {
       EXPECT_EQ(
           setup.params.at(0).key,
@@ -103,7 +103,7 @@ class MoQSessionTest : public testing::Test,
           []() -> ServerSetup { throw std::runtime_error("failed"); });
     }
     return folly::Try<ServerSetup>(ServerSetup{
-        .selectedVersion = negotiatedVersion_,
+        .selectedVersion = getServerSelectedVersion(),
         .params = {
             {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
               .asUint64 = initialMaxSubscribeId_}}}});
@@ -170,6 +170,24 @@ class MoQSessionTest : public testing::Test,
         }));
   }
 
+  // GCC barfs when using struct brace initializers inside a coroutine?
+  // Helper function to make ClientSetup with MAX_SUBSCRIBE_ID
+  ClientSetup getClientSetup(uint64_t initialMaxSubscribeId) {
+    return ClientSetup{
+        .supportedVersions = getClientSupportedVersions(),
+        .params = {
+            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+              .asUint64 = initialMaxSubscribeId}}}};
+  }
+
+  virtual std::vector<uint64_t> getClientSupportedVersions() {
+    return {kVersionDraftCurrent};
+  }
+
+  virtual uint64_t getServerSelectedVersion() {
+    return negotiatedVersion_;
+  }
+
   using TestLogicFn = std::function<void(
       const SubscribeRequest& sub,
       std::shared_ptr<TrackConsumer> pub,
@@ -198,16 +216,6 @@ class MoQSessionTest : public testing::Test,
   std::shared_ptr<MockSubscriberStats> serverSubscriberStatsCallback_;
   std::shared_ptr<MockPublisherStats> serverPublisherStatsCallback_;
 };
-
-// GCC barfs when using struct brace initializers inside a coroutine?
-// Helper function to make ClientSetup with MAX_SUBSCRIBE_ID
-ClientSetup getClientSetup(uint64_t initialMaxSubscribeId) {
-  return ClientSetup{
-      .supportedVersions = {kVersionDraftCurrent},
-      .params = {
-          {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-            .asUint64 = initialMaxSubscribeId}}}};
-}
 
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
@@ -250,7 +258,7 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxSubscribeId_));
 
-  EXPECT_EQ(serverSetup.selectedVersion, kVersionDraftCurrent);
+  EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
   EXPECT_EQ(
       serverSetup.params.at(0).key,
       folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
@@ -349,7 +357,7 @@ CO_TEST_F_X(MoQSessionTest, Fetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, JoiningFetch) {
+CO_TEST_F_X(MoQSessionTest, RelativeJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
@@ -392,7 +400,8 @@ CO_TEST_F_X(MoQSessionTest, JoiningFetch) {
       129,
       GroupOrder::Default,
       {},
-      fetchCallback_);
+      fetchCallback_,
+      FetchType::RELATIVE_JOINING);
   EXPECT_FALSE(res.subscribeResult.hasError());
   EXPECT_FALSE(res.fetchResult.hasError());
   co_await subscribeDone_;
@@ -400,10 +409,102 @@ CO_TEST_F_X(MoQSessionTest, JoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, BadJoiningFetch) {
+CO_TEST_F_X(MoQSessionTest, BadRelativeJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
-      Fetch(SubscribeID(0), SubscribeID(17), 1, 128, GroupOrder::Default),
+      Fetch(
+          SubscribeID(0),
+          SubscribeID(17),
+          1,
+          FetchType::RELATIVE_JOINING,
+          128,
+          GroupOrder::Default),
+      fetchCallback_);
+  EXPECT_TRUE(res.hasError());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+class MoQSessionTestWithVersion11 : public MoQSessionTest {
+ protected:
+  std::vector<uint64_t> getClientSupportedVersions() override {
+    return {kVersionDraft11};
+  }
+
+  uint64_t getServerSelectedVersion() override {
+    return kVersionDraft11;
+  }
+};
+
+CO_TEST_F_X(MoQSessionTestWithVersion11, AbsoluteJoiningFetch) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    for (uint32_t group = 6; group < 10; group++) {
+      pub->datagram(
+          ObjectHeader(sub.trackAlias, group, 0, 0, 0, 11),
+          folly::IOBuf::copyBuffer("hello world"));
+    }
+    pub->subscribeDone(
+        getTrackEndedSubscribeDone(sub.subscribeID, AbsoluteLocation{0, 1}));
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    auto joining = std::get_if<JoiningFetch>(&fetch.args);
+    EXPECT_NE(joining, nullptr);
+    EXPECT_EQ(fetch.fullTrackName, FullTrackName(kTestTrackName));
+    for (uint32_t group = 2; group < 6; group++) {
+      auto objectPubResult = fetchPub->object(
+          /*groupID=*/group,
+          /*subgroupID=*/0,
+          /*objectID=*/0,
+          moxygen::test::makeBuf(100),
+          noExtensions(),
+          /*finFetch=*/(group == 5));
+      EXPECT_TRUE(objectPubResult.hasValue());
+    }
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _))
+      .WillRepeatedly(testing::Invoke([&](const auto& header, auto) {
+        EXPECT_EQ(header.length, 11);
+        return folly::unit;
+      }));
+  expectSubscribeDone();
+  folly::coro::Baton fetchBaton;
+  for (uint32_t group = 2; group < 6; group++) {
+    EXPECT_CALL(
+        *fetchCallback_, object(group, 0, 0, HasChainDataLengthOf(100), _, _))
+        .WillRepeatedly(testing::Invoke([&] {
+          fetchBaton.post();
+          return folly::unit;
+        }));
+  }
+  auto res = co_await clientSession_->join(
+      getSubscribe(kTestTrackName),
+      subscribeCallback_,
+      2 /* joiningStart */,
+      129 /* fetchPri */,
+      GroupOrder::Default,
+      {},
+      fetchCallback_,
+      FetchType::ABSOLUTE_JOINING);
+  EXPECT_FALSE(res.subscribeResult.hasError());
+  EXPECT_FALSE(res.fetchResult.hasError());
+  co_await subscribeDone_;
+  co_await fetchBaton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Subscribe id passed into fetch() doesn't correspond to a subscription.
+CO_TEST_F_X(MoQSessionTestWithVersion11, BadAbsoluteJoiningFetch) {
+  co_await setupMoQSession();
+  auto res = co_await clientSession_->fetch(
+      Fetch(
+          SubscribeID(0),
+          SubscribeID(17),
+          1,
+          FetchType::ABSOLUTE_JOINING,
+          128,
+          GroupOrder::Default),
       fetchCallback_);
   EXPECT_TRUE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

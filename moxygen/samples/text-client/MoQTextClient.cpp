@@ -23,9 +23,14 @@ DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or latest");
 DEFINE_string(eg, "", "End group");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
+DEFINE_int32(
+    join_start,
+    0,
+    "Joining start, only used if either jrfetch or jafetch is true");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
-DEFINE_bool(jfetch, false, "Joining fetch");
+DEFINE_bool(jrfetch, false, "Joining relative fetch");
+DEFINE_bool(jafetch, false, "Joining absolute fetch");
 
 namespace {
 using namespace moxygen;
@@ -50,7 +55,7 @@ SubParams flags2params() {
   } else if (soStr.empty()) {
     soStr = std::string("0");
   }
-  if (FLAGS_jfetch) {
+  if (FLAGS_jafetch || FLAGS_jrfetch) {
     XLOG(ERR) << "Joining fetch requires empty sg";
     exit(1);
   }
@@ -139,18 +144,22 @@ class MoQTextClient : public Subscriber,
           /*subscribeHandler=*/shared_from_this());
 
       Publisher::SubscribeResult track;
-      if (FLAGS_jfetch) {
+      if (FLAGS_jafetch || FLAGS_jrfetch) {
+        FetchType fetchType = FLAGS_jafetch ? FetchType::ABSOLUTE_JOINING
+                                            : FetchType::RELATIVE_JOINING;
+
         // Call join() for joining fetch
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
             ObjectReceiver::FETCH, fetchTextHandler_);
         auto joinResult = co_await moqClient_->moqSession_->join(
             sub,
             subTextReceiver_,
-            0,
+            FLAGS_join_start,
             sub.priority,
             sub.groupOrder,
             {},
-            fetchTextReceiver_);
+            fetchTextReceiver_,
+            fetchType);
         track = joinResult.subscribeResult;
       } else {
         track =
@@ -277,6 +286,10 @@ int main(int argc, char* argv[]) {
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
   }
+  int sumFetchCount =
+      int(FLAGS_jafetch) + int(FLAGS_jrfetch) + int(FLAGS_fetch);
+  CHECK(sumFetchCount <= 1)
+      << "Can specify at most one of jafetch or jrfetch or fetch";
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   auto textClient = std::make_shared<MoQTextClient>(

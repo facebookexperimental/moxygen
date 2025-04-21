@@ -172,13 +172,21 @@ class MoQForwarder : public TrackConsumer {
       return folly::makeUnexpected(FetchError{
           SubscribeID(0), FetchErrorCode::INTERNAL_ERROR, "No latest"});
     }
+    CHECK(
+        joining.fetchType == FetchType::RELATIVE_JOINING ||
+        joining.fetchType == FetchType::ABSOLUTE_JOINING);
     auto& latest = *subIt->second->subscribeOk().latest;
-    AbsoluteLocation start{latest};
-    start.group -= (start.group >= joining.precedingGroupOffset)
-        ? joining.precedingGroupOffset
-        : 0;
-    start.object = 0;
-    return SubscribeRange{start, {latest.group, latest.object + 1}};
+    if (joining.fetchType == FetchType::RELATIVE_JOINING) {
+      AbsoluteLocation start{latest};
+      start.group -=
+          (start.group >= joining.joiningStart) ? joining.joiningStart : 0;
+      start.object = 0;
+      return SubscribeRange{start, {latest.group, latest.object + 1}};
+    } else {
+      // ABSOLUTE_JOINING
+      AbsoluteLocation start{joining.joiningStart, 0};
+      return SubscribeRange{start, {latest.group, latest.object + 1}};
+    }
   }
 
   void removeSession(

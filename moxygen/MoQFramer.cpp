@@ -868,13 +868,19 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   if (fetchType->first == 0 ||
-      fetchType->first > folly::to_underlying(FetchType::JOINING)) {
+      fetchType->first > folly::to_underlying(FetchType::ABSOLUTE_JOINING)) {
     XLOG(ERR) << "fetchType = 0 or fetchType > JONING =" << fetchType->first;
+    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+  } else if (
+      fetchType->first == folly::to_underlying(FetchType::ABSOLUTE_JOINING) &&
+      getDraftMajorVersion(*version_) < 11) {
+    // Absolute joining is only supported in draft-11 and later
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
   length -= fetchType->second;
 
-  if (FetchType(fetchType->first) == FetchType::STANDALONE) {
+  FetchType fetchTypeEnum(static_cast<FetchType>(fetchType->first));
+  if (fetchTypeEnum == FetchType::STANDALONE) {
     auto ftn = parseFullTrackName(cursor, length);
     if (!ftn) {
       return folly::makeUnexpected(ftn.error());
@@ -892,20 +898,21 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     fetch.fullTrackName = std::move(ftn.value());
     fetch.args = StandaloneFetch(start.value(), end.value());
   } else {
-    // JOINING
+    // Relative or absolute join
     auto jsid = quic::decodeQuicInteger(cursor, length);
     if (!jsid) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= jsid->second;
 
-    auto pgo = quic::decodeQuicInteger(cursor, length);
-    if (!pgo) {
+    auto joiningStart = quic::decodeQuicInteger(cursor, length);
+    if (!joiningStart) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    length -= pgo->second;
+    length -= joiningStart->second;
     // Note fetch.fullTrackName is empty at this point, the session fills it in
-    fetch.args = JoiningFetch(SubscribeID(jsid->first), pgo->first);
+    fetch.args = JoiningFetch(
+        SubscribeID(jsid->first), joiningStart->first, fetchTypeEnum);
   }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1983,10 +1990,17 @@ WriteResult MoQFrameWriter::writeFetch(
     writeVarint(writeBuf, standalone->end.object, size, error);
   } else {
     CHECK(joining);
+
+    if (joining->fetchType == FetchType::ABSOLUTE_JOINING &&
+        getDraftMajorVersion(*version_) < 11) {
+      // Absolute joining is only supported in draft-11 and above
+      return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+    }
+
     writeVarint(
-        writeBuf, folly::to_underlying(FetchType::JOINING), size, error);
+        writeBuf, folly::to_underlying(joining->fetchType), size, error);
     writeVarint(writeBuf, joining->joiningSubscribeID.value, size, error);
-    writeVarint(writeBuf, joining->precedingGroupOffset, size, error);
+    writeVarint(writeBuf, joining->joiningStart, size, error);
   }
   writeTrackRequestParams(writeBuf, fetch.params, size, error);
 

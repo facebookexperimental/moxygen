@@ -158,11 +158,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   folly::coro::Task<JoinResult> join(
       SubscribeRequest subscribe,
       std::shared_ptr<TrackConsumer> subscribeCallback,
-      uint64_t precedingGroupOffset,
+      uint64_t joiningStart,
       uint8_t fetchPri,
       GroupOrder fetchOrder,
       std::vector<TrackRequestParameter> fetchParams,
-      std::shared_ptr<FetchConsumer> fetchCallback);
+      std::shared_ptr<FetchConsumer> fetchCallback,
+      FetchType fetchType);
 
   void setPublisherStatsCallback(
       std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback) {

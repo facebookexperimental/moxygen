@@ -3194,15 +3194,17 @@ void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
 folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> subscribeCallback,
-    uint64_t precedingGroupOffset,
+    uint64_t joiningStart,
     uint8_t fetchPri,
     GroupOrder fetchOrder,
     std::vector<TrackRequestParameter> fetchParams,
-    std::shared_ptr<FetchConsumer> fetchCallback) {
+    std::shared_ptr<FetchConsumer> fetchCallback,
+    FetchType fetchType) {
   Fetch fetchReq(
       0,                // will be picked by fetch()
       nextSubscribeID_, // this will be the ID for subscribe()
-      precedingGroupOffset,
+      joiningStart,
+      fetchType,
       fetchPri,
       fetchOrder,
       std::move(fetchParams));
