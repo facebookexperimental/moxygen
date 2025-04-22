@@ -26,21 +26,26 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
   void testAll(MoQControlCodec::Direction dir) {
     auto allMsgs =
         moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
-    testing::NiceMock<MockMoQCodecCallback> callback;
-    MoQControlCodec codec(dir, &callback);
-    codec.initializeVersion(GetParam());
+    testing::NiceMock<MockMoQCodecCallback>* callbackPtr = nullptr;
+    MoQControlCodec* codecPtr = nullptr;
 
     if (dir == MoQControlCodec::Direction::SERVER) {
-      EXPECT_CALL(callback, onClientSetup(testing::_));
+      codecPtr = &serverControlCodec_;
+      callbackPtr = &serverControlCodecCallback_;
+      EXPECT_CALL(*callbackPtr, onClientSetup(testing::_));
     } else {
-      EXPECT_CALL(callback, onServerSetup(testing::_));
+      codecPtr = &clientControlCodec_;
+      callbackPtr = &clientControlCodecCallback_;
+      EXPECT_CALL(*callbackPtr, onServerSetup(testing::_));
     }
+    MoQControlCodec& codec = *codecPtr;
+    auto& callback = *callbackPtr;
     EXPECT_CALL(callback, onSubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
     EXPECT_CALL(callback, onSubscribeError(testing::_));
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
-    EXPECT_CALL(callback, onSubscribeDone(testing::_)).Times(2);
+    EXPECT_CALL(callback, onSubscribeDone(testing::_));
     EXPECT_CALL(callback, onAnnounce(testing::_));
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
     EXPECT_CALL(callback, onAnnounceError(testing::_));
@@ -57,7 +62,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
     EXPECT_CALL(callback, onFetchError(testing::_));
-    EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
 
     codec.onIngress(std::move(allMsgs), true);
   }
@@ -65,24 +70,29 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
   void testUnderflow(MoQControlCodec::Direction dir) {
     auto allMsgs =
         moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
-    testing::NiceMock<MockMoQCodecCallback> callback;
-    MoQControlCodec codec(dir, &callback);
-    codec.initializeVersion(GetParam());
+    testing::NiceMock<MockMoQCodecCallback>* callbackPtr = nullptr;
+    MoQControlCodec* codecPtr = nullptr;
 
     folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
     readBuf.append(std::move(allMsgs));
 
     if (dir == MoQControlCodec::Direction::SERVER) {
-      EXPECT_CALL(callback, onClientSetup(testing::_));
+      codecPtr = &serverControlCodec_;
+      callbackPtr = &serverControlCodecCallback_;
+      EXPECT_CALL(*callbackPtr, onClientSetup(testing::_));
     } else {
-      EXPECT_CALL(callback, onServerSetup(testing::_));
+      codecPtr = &clientControlCodec_;
+      callbackPtr = &clientControlCodecCallback_;
+      EXPECT_CALL(*callbackPtr, onServerSetup(testing::_));
     }
+    MoQControlCodec& codec = *codecPtr;
+    auto& callback = *callbackPtr;
     EXPECT_CALL(callback, onSubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
     EXPECT_CALL(callback, onSubscribeError(testing::_));
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
-    EXPECT_CALL(callback, onSubscribeDone(testing::_)).Times(2);
+    EXPECT_CALL(callback, onSubscribeDone(testing::_));
     EXPECT_CALL(callback, onAnnounce(testing::_));
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
     EXPECT_CALL(callback, onAnnounceError(testing::_));
@@ -99,7 +109,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
     EXPECT_CALL(callback, onFetchError(testing::_));
-    EXPECT_CALL(callback, onFrame(testing::_)).Times(26);
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
     while (!readBuf.empty()) {
       codec.onIngress(readBuf.split(1), false);
     }
@@ -431,5 +441,9 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(kVersionDraftCurrent, kVersionDraft09, kVersionDraft11));
+    ::testing::Values(
+        kVersionDraft08,
+        kVersionDraft09,
+        kVersionDraft10,
+        kVersionDraft11));
 } // namespace moxygen::test

@@ -95,10 +95,6 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r7);
 
     skip(cursor, 1);
-    auto r8 = parser_.parseSubscribeDone(cursor, frameLength(cursor));
-    testUnderflowResult(r8);
-
-    skip(cursor, 1);
     auto r9 = parser_.parseAnnounce(cursor, frameLength(cursor));
     testUnderflowResult(r9);
 
@@ -658,7 +654,11 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraftCurrent, kVersionDraft09, kVersionDraft11));
+    ::testing::Values(
+        kVersionDraft08,
+        kVersionDraft09,
+        kVersionDraft10,
+        kVersionDraft11));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);

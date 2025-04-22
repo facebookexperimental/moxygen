@@ -912,8 +912,7 @@ void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
           {subscribeID_,
            SubscribeDoneStatusCode::TOO_FAR_BEHIND,
            streamCount_,
-           "peer is too far behind",
-           folly::none /* finalObject */}),
+           "peer is too far behind"}),
       ResetStreamErrorCode::INTERNAL_ERROR);
 }
 
@@ -1107,8 +1106,7 @@ class MoQSession::SubscribeTrackReceiveState
           {subscribeID_,
            SubscribeDoneStatusCode::SESSION_CLOSED,
            0, // forces immediately invoking the callback
-           "closed locally",
-           folly::none});
+           "closed locally"});
     }
   }
 
@@ -1283,8 +1281,7 @@ void MoQSession::cleanup() {
             {pubTrack->first,
              SubscribeDoneStatusCode::SESSION_CLOSED,
              0,
-             "Session Closed",
-             folly::none}),
+             "Session Closed"}),
         ResetStreamErrorCode::SESSION_CLOSED);
   }
   for (auto& subTrack : subTracks_) {

@@ -251,8 +251,7 @@ class MoQForwarder : public TrackConsumer {
               sub.subscribeID,
               SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
               0, // filled in by session
-              "",
-              sub.range.end});
+              ""});
       return false;
     }
     return true;
@@ -265,8 +264,7 @@ class MoQForwarder : public TrackConsumer {
             sub.subscribeID,
             SubscribeDoneStatusCode::INTERNAL_ERROR,
             0, // filled in by session
-            err.what(),
-            sub.range.end});
+            err.what()});
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>

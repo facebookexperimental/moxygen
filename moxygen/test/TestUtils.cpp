@@ -92,20 +92,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       }));
   res = moqFrameWriter.writeSubscribeDone(
       writeBuf,
-      SubscribeDone(
-          {0,
-           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
-           7,
-           "",
-           folly::none}));
-  res = moqFrameWriter.writeSubscribeDone(
-      writeBuf,
-      SubscribeDone(
-          {0,
-           SubscribeDoneStatusCode::INTERNAL_ERROR,
-           0,
-           "not found",
-           AbsoluteLocation({0, 0})}));
+      SubscribeDone({0, SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 7, ""}));
   res = moqFrameWriter.writeAnnounce(
       writeBuf,
       Announce(

@@ -616,19 +616,21 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
   }
   subscribeDone.reasonPhrase = std::move(reas.value());
 
-  if (length == 0) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  auto contentExists = cursor.readBE<uint8_t>();
-  length -= sizeof(uint8_t);
-  if (contentExists) {
-    auto res = parseAbsoluteLocation(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
+  CHECK(version_.hasValue())
+      << "The version must be set before parsing SUBSCRIBE_DONE";
+  if (getDraftMajorVersion(*version_) <= 9) {
+    if (length == 0) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeDone.finalObject = *res;
+    auto contentExists = cursor.readBE<uint8_t>();
+    length -= sizeof(uint8_t);
+    if (contentExists) {
+      auto res = parseAbsoluteLocation(cursor, length);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
+    }
   }
-
   return subscribeDone;
 }
 
@@ -1739,11 +1741,7 @@ WriteResult MoQFrameWriter::writeSubscribeDone(
       writeBuf, folly::to_underlying(subscribeDone.statusCode), size, error);
   writeVarint(writeBuf, subscribeDone.streamCount, size, error);
   writeFixedString(writeBuf, subscribeDone.reasonPhrase, size, error);
-  if (subscribeDone.finalObject) {
-    writeVarint(writeBuf, 1, size, error);
-    writeVarint(writeBuf, subscribeDone.finalObject->group, size, error);
-    writeVarint(writeBuf, subscribeDone.finalObject->object, size, error);
-  } else {
+  if (getDraftMajorVersion(*version_) <= 9) {
     writeVarint(writeBuf, 0, size, error);
   }
   writeSize(sizePtr, size, error);
