@@ -663,7 +663,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       Priority subPriority,
       GroupOrder groupOrder,
       uint64_t version,
-      uint64_t bytesBufferedThreshold)
+      uint64_t bytesBufferedThreshold,
+      bool forward)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
@@ -672,7 +673,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
             groupOrder,
             version,
             bytesBufferedThreshold),
-        trackAlias_(trackAlias) {}
+        trackAlias_(trackAlias),
+        forward_(forward) {}
 
   void setSubscriptionHandle(
       std::shared_ptr<Publisher::SubscriptionHandle> handle) {
@@ -767,6 +769,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   uint64_t streamCount_{0};
   enum class State { OPEN, DONE };
   State state_{State::OPEN};
+  bool forward_;
 };
 
 class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
@@ -849,6 +852,12 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
     Priority pubPriority) {
+  if (!forward_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR,
+        "Cannot create subgroups for subscriptions with forward flag set to false"));
+  }
+
   auto wt = getWebTransport();
   if (!wt || state_ != State::OPEN) {
     XLOG(ERR) << "Trying to publish after subscribeDone";
@@ -963,6 +972,11 @@ MoQSession::TrackPublisherImpl::groupNotExists(
     uint64_t subgroupID,
     Priority priority,
     Extensions extensions) {
+  if (!forward_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR,
+        "Cannot send status for subscriptions with forward flag set to false"));
+  }
   return objectStream(
       ObjectHeader(
           trackAlias_,
@@ -979,6 +993,11 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::datagram(
     const ObjectHeader& header,
     Payload payload) {
+  if (!forward_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR,
+        "Cannot send datagrams for subscriptions with forward flag set to false"));
+  }
   auto wt = getWebTransport();
   if (!wt || state_ != State::OPEN) {
     XLOG(ERR) << "Trying to publish after subscribeDone";
@@ -1920,6 +1939,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     return;
   }
   // TODO: Check for duplicate alias
+  bool forward = (getDraftMajorVersion(*negotiatedVersion_) < 11) ||
+      subscribeRequest.forward;
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
       subscribeRequest.fullTrackName,
@@ -1928,7 +1949,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       subscribeRequest.priority,
       subscribeRequest.groupOrder,
       *negotiatedVersion_,
-      moqSettings_.bufferingThresholds.perSubscription);
+      moqSettings_.bufferingThresholds.perSubscription,
+      forward);
   pubTracks_.emplace(subscribeID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error

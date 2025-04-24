@@ -375,6 +375,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
 folly::Expected<SubscribeRequest, ErrorCode>
 MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     const noexcept {
+  CHECK(version_.hasValue())
+      << "The version must be set before parsing a subscribe request";
   SubscribeRequest subscribeRequest;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -402,8 +404,19 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     XLOG(ERR) << "order > NewestFirst =" << order;
     return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
   }
-  length -= 2;
   subscribeRequest.groupOrder = static_cast<GroupOrder>(order);
+  length -= 2;
+  if (getDraftMajorVersion(*version_) >= 11) {
+    if (length < 1) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    uint8_t forwardFlag = cursor.readBE<uint8_t>();
+    if (forwardFlag > 1) {
+      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    }
+    subscribeRequest.forward = (forwardFlag == 1);
+    length--;
+  }
   auto locType = quic::decodeQuicInteger(cursor, length);
   if (!locType) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1594,6 +1607,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
 WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) const noexcept {
+  CHECK(version_) << "Version must be set before writing a subscribe request";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
@@ -1605,6 +1619,11 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
   uint8_t order = folly::to_underlying(subscribeRequest.groupOrder);
   writeBuf.append(&order, 1);
   size += 1;
+  if (getDraftMajorVersion(*version_) >= 11) {
+    uint8_t forwardFlag = (subscribeRequest.forward) ? 1 : 0;
+    writeBuf.append(&forwardFlag, 1);
+    size += 1;
+  }
   writeVarint(
       writeBuf, folly::to_underlying(subscribeRequest.locType), size, error);
   if (subscribeRequest.locType == LocationType::AbsoluteStart ||

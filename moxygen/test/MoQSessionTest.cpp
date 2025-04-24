@@ -230,6 +230,7 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       ftn,
       0,
       GroupOrder::OldestFirst,
+      true,
       LocationType::LatestObject,
       folly::none,
       0,
@@ -988,6 +989,35 @@ CO_TEST_F_X(MoQSessionTest, DatagramBeforeSessionSetup) {
   clientSession_->onDatagram(folly::IOBuf::copyBuffer("hello world"));
   EXPECT_TRUE(clientWt_->isSessionClosed());
   co_return;
+}
+
+// Checks to see that we return errors if we receive a subscribe request with
+// forward == false and try to send data.
+CO_TEST_F_X(MoQSessionTestWithVersion11, ForwardingFalse) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    auto pubResult1 = pub->datagram(
+        ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
+        folly::IOBuf::copyBuffer("hello world"));
+    EXPECT_TRUE(pubResult1.hasError());
+    auto pubResult2 = pub->objectStream(
+        ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11), nullptr);
+    EXPECT_TRUE(pubResult2.hasError());
+    auto pubResult3 = pub->beginSubgroup(0, 0, 0);
+    EXPECT_TRUE(pubResult3.hasError());
+    auto pubResult4 = pub->groupNotExists(0, 0, 0, noExtensions());
+    EXPECT_TRUE(pubResult4.hasError());
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  expectSubscribeDone();
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  subscribeRequest.forward = false;
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
 // SUBSCRIBE DONE tests

@@ -573,6 +573,7 @@ struct SubscribeRequest {
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
+  bool forward{true}; // Only used in draft-11 and above
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   uint64_t endGroup;

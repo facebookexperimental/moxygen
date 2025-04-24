@@ -21,6 +21,7 @@ SubscribeRequest getRequest(
       FullTrackName(),
       0,
       GroupOrder::OldestFirst,
+      true,
       locType,
       start,
       endGroup,

@@ -31,6 +31,7 @@ DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
 DEFINE_bool(jrfetch, false, "Joining relative fetch");
 DEFINE_bool(jafetch, false, "Joining absolute fetch");
+DEFINE_bool(forward, true, "Forward flag for subscriptions");
 
 namespace {
 using namespace moxygen;
@@ -328,6 +329,7 @@ int main(int argc, char* argv[]) {
            moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
            0,
            GroupOrder::OldestFirst,
+           FLAGS_forward,
            subParams.locType,
            subParams.start,
            subParams.endGroup,

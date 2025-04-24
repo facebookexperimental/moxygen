@@ -74,14 +74,16 @@ class MoQForwarder : public TrackConsumer {
         SubscribeID sid,
         TrackAlias ta,
         SubscribeRange r,
-        std::shared_ptr<TrackConsumer> tc)
+        std::shared_ptr<TrackConsumer> tc,
+        bool shouldForwardIn)
         : SubscriptionHandle(std::move(ok)),
           session(std::move(s)),
           subscribeID(sid),
           trackAlias(ta),
           range(r),
           trackConsumer(std::move(tc)),
-          forwarder(f) {}
+          forwarder(f),
+          shouldForward(shouldForwardIn) {}
 
     // This method is for a relay to fixup the publisher group order of the
     // first subscriber if it was added before the upstream SubscribeOK.
@@ -107,6 +109,13 @@ class MoQForwarder : public TrackConsumer {
       forwarder.removeSession(session);
     }
 
+    bool checkShouldForward() {
+      if (!shouldForward) {
+        XLOG(DBG6) << "shouldForward is false of subscribeID " << subscribeID;
+      }
+      return shouldForward;
+    }
+
     std::shared_ptr<MoQSession> session;
     SubscribeID subscribeID;
     TrackAlias trackAlias;
@@ -117,6 +126,7 @@ class MoQForwarder : public TrackConsumer {
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
     MoQForwarder& forwarder;
+    bool shouldForward;
   };
 
   [[nodiscard]] bool empty() const {
@@ -140,7 +150,8 @@ class MoQForwarder : public TrackConsumer {
         subReq.subscribeID,
         subReq.trackAlias,
         toSubscribeRange(subReq, latest_),
-        std::move(consumer));
+        std::move(consumer),
+        subReq.forward);
     subscribers_.emplace(sessionPtr, subscriber);
     return subscriber;
   }
@@ -275,7 +286,7 @@ class MoQForwarder : public TrackConsumer {
         *this, groupID, subgroupID, priority);
     SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-      if (!checkRange(*sub)) {
+      if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
       }
       auto res =
@@ -300,7 +311,7 @@ class MoQForwarder : public TrackConsumer {
       Payload payload) override {
     updateLatest(header.group, header.id);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-      if (!checkRange(*sub)) {
+      if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
       }
       sub->trackConsumer->objectStream(header, maybeClone(payload))
@@ -316,7 +327,7 @@ class MoQForwarder : public TrackConsumer {
       Extensions extensions) override {
     updateLatest(groupID, 0);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-      if (!checkRange(*sub)) {
+      if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
       }
       sub->trackConsumer->groupNotExists(groupID, subgroup, pri, extensions)
@@ -330,7 +341,7 @@ class MoQForwarder : public TrackConsumer {
       Payload payload) override {
     updateLatest(header.group, header.id);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-      if (!checkRange(*sub)) {
+      if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
       }
       sub->trackConsumer->datagram(header, maybeClone(payload))
@@ -358,6 +369,11 @@ class MoQForwarder : public TrackConsumer {
             const std::shared_ptr<Subscriber>& sub,
             const std::shared_ptr<SubgroupConsumer>&)> fn) {
       forwarder_.forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
+        if (!sub->checkShouldForward()) {
+          // If shouldForward == false, there shouldn't be any subgroups.
+          return;
+        }
+
         if (forwarder_.latest_ && forwarder_.checkRange(*sub)) {
           auto subgroupConsumerIt = sub->subgroups.find(identifier_);
           if (subgroupConsumerIt == sub->subgroups.end()) {

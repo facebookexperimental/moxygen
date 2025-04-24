@@ -286,6 +286,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
        FullTrackName({trackNamespace, "chat"}),
        0,
        GroupOrder::OldestFirst,
+       true,
        LocationType::LatestGroup,
        folly::none,
        0,

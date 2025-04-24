@@ -247,6 +247,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     // Add subscriber first in case objects come before subscribe OK.
     auto subscriber = forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
+    // As per the spec, we must set forward = true in the subscribe request
+    // to the upstream.
+    subReq.forward = true;
     auto subRes = co_await upstreamSession->subscribe(subReq, forwarder);
     if (subRes.hasError()) {
       co_return folly::makeUnexpected(SubscribeError(

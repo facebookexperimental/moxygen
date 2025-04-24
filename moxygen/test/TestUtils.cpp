@@ -61,6 +61,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            FullTrackName({TrackNamespace({"hello"}), "world"}),
            255,
            GroupOrder::Default,
+           true,
            LocationType::LatestObject,
            folly::none,
            0,
