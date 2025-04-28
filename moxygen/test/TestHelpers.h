@@ -51,7 +51,7 @@
     try {                                                                      \
       folly::coro::blockingWait(co_TestBody(), getExecutor());                 \
     } catch (const std::exception& ex) {                                       \
-      LOG_ASYNC_TEST_EXCEPTION                                                 \
+      folly::detail::gtestLogCurrentException(GTEST_LOG_(ERROR));              \
       throw;                                                                   \
     }                                                                          \
   }                                                                            \
@@ -104,7 +104,7 @@
     try {                                                                      \
       folly::coro::blockingWait(co_TestBody(), getExecutor());                 \
     } catch (const std::exception& ex) {                                       \
-      LOG_ASYNC_TEST_EXCEPTION                                                 \
+      folly::detail::gtestLogCurrentException(GTEST_LOG_(ERROR));              \
       throw;                                                                   \
     }                                                                          \
   }                                                                            \
