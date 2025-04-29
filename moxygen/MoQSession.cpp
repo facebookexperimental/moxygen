@@ -1793,7 +1793,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
   void onConnectionError(ErrorCode error) override {
     XLOG(ERR) << "Parse error=" << folly::to_underlying(error);
-    session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    session_->close(error);
   }
 
   // Called by read loop on read error (eg: RESET_STREAM)
@@ -3325,7 +3325,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
 bool MoQSession::closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID) {
   if (maxSubscribeID_ <= subscribeID.value) {
     XLOG(ERR) << "Invalid subscribeID: " << subscribeID << " sess=" << this;
-    close(SessionCloseErrorCode::TOO_MANY_SUBSCRIBES);
+    close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
     return true;
   }
   return false;

@@ -36,7 +36,7 @@ void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
           XLOG(DBG4) << "Frame not allowed: 0x" << std::setfill('0')
                      << std::setw(sizeof(uint64_t) * 2) << std::hex
                      << (uint64_t)curFrameType_ << " on streamID=" << streamId_;
-          connError_.emplace(ErrorCode::PARSE_ERROR);
+          connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
           break;
         }
         if (callback_) {
@@ -68,7 +68,7 @@ void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           if (res.error() == ErrorCode::PARSE_UNDERFLOW) {
             XLOG(ERR) << "Frame underflow -> parse error";
-            connError_ = ErrorCode::PARSE_ERROR;
+            connError_ = ErrorCode::PROTOCOL_VIOLATION;
           } else {
             connError_ = res.error();
           }
@@ -133,7 +133,7 @@ void MoQObjectStreamCodec::onIngress(
             XLOG(DBG4) << "Stream not allowed: 0x" << std::setfill('0')
                        << std::setw(sizeof(uint64_t) * 2) << std::hex
                        << (uint64_t)streamType_ << " on streamID=" << streamId_;
-            connError_.emplace(ErrorCode::PARSE_ERROR);
+            connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
             break;
         }
         break;
@@ -206,7 +206,7 @@ void MoQObjectStreamCodec::onIngress(
           auto endOfObject = chunkLen == *curObjectHeader_.length;
           if (endOfStream && !endOfObject) {
             XLOG(ERR) << "End of stream before end of object";
-            connError_ = ErrorCode::PARSE_ERROR;
+            connError_ = ErrorCode::PROTOCOL_VIOLATION;
             XLOG(DBG4) << __func__ << " " << uint32_t(*connError_);
             break;
           }
@@ -269,7 +269,7 @@ void MoQObjectStreamCodec::onIngress(
         if (endOfStream && *curObjectHeader_.length != 0) {
           XLOG(ERR) << "End of stream before end of object remaining length="
                     << *curObjectHeader_.length;
-          connError_ = ErrorCode::PARSE_ERROR;
+          connError_ = ErrorCode::PROTOCOL_VIOLATION;
           break;
         }
         bool endOfObject = (*curObjectHeader_.length == 0);
@@ -284,7 +284,7 @@ void MoQObjectStreamCodec::onIngress(
       case ParseState::STREAM_FIN_DELIVERED: {
         XLOG(DBG2) << "Bytes=" << cursor.totalLength()
                    << " remaining in STREAM_FIN_DELIVERED";
-        connError_ = ErrorCode::PARSE_ERROR;
+        connError_ = ErrorCode::PROTOCOL_VIOLATION;
         break;
       }
     }
@@ -307,7 +307,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     switch (curFrameType_) {
       case FrameType::CLIENT_SETUP: {
         if (dir_ == Direction::CLIENT) {
-          return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+          return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
         seenSetup_ = true;
         auto res = parseClientSetup(cursor, curFrameLength_);
@@ -322,7 +322,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       case FrameType::SERVER_SETUP: {
         if (dir_ == Direction::SERVER) {
-          return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+          return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
         seenSetup_ = true;
         auto res = parseServerSetup(cursor, curFrameLength_);
@@ -337,7 +337,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       default:
         XLOG(ERR) << "Invalid message before setup type=" << curFrameType_;
-        return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     return folly::unit;
   }
@@ -346,7 +346,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::CLIENT_SETUP:
     case FrameType::SERVER_SETUP:
       XLOG(ERR) << "Duplicate setup frame";
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     case FrameType::SUBSCRIBE: {
       auto res = moqFrameParser_.parseSubscribeRequest(cursor, curFrameLength_);
       if (res) {

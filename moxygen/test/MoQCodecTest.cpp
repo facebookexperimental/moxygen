@@ -318,7 +318,8 @@ TEST_P(MoQCodecTest, UnknownStreamType) {
   writeBuf.append(&bad, 1);
 
   EXPECT_CALL(
-      objectStreamCodecCallback_, onConnectionError(ErrorCode::PARSE_ERROR));
+      objectStreamCodecCallback_,
+      onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
   objectStreamCodec_.onIngress(writeBuf.move(), true);
 }
 
@@ -350,7 +351,8 @@ TEST_P(MoQCodecTest, Fetch) {
       onObjectStatus(3, 3, 0, 5, ObjectStatus::END_OF_TRACK, _));
   // object after terminal status
   EXPECT_CALL(
-      objectStreamCodecCallback_, onConnectionError(ErrorCode::PARSE_ERROR));
+      objectStreamCodecCallback_,
+      onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
   objectStreamCodec_.onIngress(writeBuf.move(), false);
 }
 

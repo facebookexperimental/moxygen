@@ -182,14 +182,14 @@ MoQFrameParser::parseDatagramObjectHeader(
     length -= status->second;
     if (status->first > folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
       XLOG(ERR) << "status > END_OF_TRACK =" << status->first;
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     objectHeader.status = ObjectStatus(status->first);
     objectHeader.length = 0;
     if (length != 0) {
       // MUST consume entire datagram
       XLOG(ERR) << "Non-zero length payload in OBJECT_DATAGRAM_STATUS";
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
   } else {
     CHECK(streamType == StreamType::OBJECT_DATAGRAM);
@@ -252,7 +252,7 @@ MoQFrameParser::parseObjectStatusAndLength(
     if (objectStatus->first >
         folly::to_underlying(ObjectStatus::END_OF_TRACK)) {
       XLOG(ERR) << "status > END_OF_TRACK =" << objectStatus->first;
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     objectHeader.status = ObjectStatus(objectStatus->first);
     length -= objectStatus->second;
@@ -402,7 +402,7 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
     XLOG(ERR) << "order > NewestFirst =" << order;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   subscribeRequest.groupOrder = static_cast<GroupOrder>(order);
   length -= 2;
@@ -412,7 +412,7 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     }
     uint8_t forwardFlag = cursor.readBE<uint8_t>();
     if (forwardFlag > 1) {
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     subscribeRequest.forward = (forwardFlag == 1);
     length--;
@@ -423,7 +423,7 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   }
   if (locType->first > folly::to_underlying(LocationType::AbsoluteRange)) {
     XLOG(ERR) << "locType > AbsoluteRange =" << locType->first;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   length -= locType->second;
   subscribeRequest.locType = LocationType(locType->first);
@@ -521,7 +521,7 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   auto order = cursor.readBE<uint8_t>();
   if (order == 0 || order > folly::to_underlying(GroupOrder::NewestFirst)) {
     XLOG(ERR) << "order > NewestFirst or order==0 =" << order;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   length -= sizeof(uint8_t);
   subscribeOk.groupOrder = static_cast<GroupOrder>(order);
@@ -790,7 +790,7 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
   }
   if (statusCode->first > folly::to_underlying(TrackStatusCode::UNKNOWN)) {
     XLOG(ERR) << "statusCode > UNKNOWN =" << statusCode->first;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   trackStatus.statusCode = TrackStatusCode(statusCode->first);
   length -= statusCode->second;
@@ -873,7 +873,7 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
     XLOG(ERR) << "order > NewestFirst =" << order;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   fetch.groupOrder = static_cast<GroupOrder>(order);
   length -= 2 * sizeof(uint8_t);
@@ -885,12 +885,12 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   if (fetchType->first == 0 ||
       fetchType->first > folly::to_underlying(FetchType::ABSOLUTE_JOINING)) {
     XLOG(ERR) << "fetchType = 0 or fetchType > JONING =" << fetchType->first;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   } else if (
       fetchType->first == folly::to_underlying(FetchType::ABSOLUTE_JOINING) &&
       getDraftMajorVersion(*version_) < 11) {
     // Absolute joining is only supported in draft-11 and later
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   length -= fetchType->second;
 
@@ -972,7 +972,7 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   auto order = cursor.readBE<uint8_t>();
   if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
     XLOG(ERR) << "order = 0 or order > NewestFirst =" << order;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   fetchOk.groupOrder = static_cast<GroupOrder>(order);
   fetchOk.endOfTrack = cursor.readBE<uint8_t>();
@@ -1129,7 +1129,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
     length -= numExt->second;
     if (numExt->first > kMaxExtensions) {
       XLOG(ERR) << "numExt > kMaxExtensions =" << numExt->first;
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     // Parse the extensions
     for (auto i = 0u; i < numExt->first; i++) {
@@ -1187,7 +1187,7 @@ folly::Expected<Extension, ErrorCode> MoQFrameParser::parseExtension(
     }
     if (extLen->first > kMaxExtensionLength) {
       XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
-      return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     cursor.clone(ext.arrayValue, extLen->first);
     length -= extLen->first;
@@ -1211,7 +1211,7 @@ MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length)
   }
   if (itemCount->first > kMaxNamespaceLength) {
     XLOG(ERR) << "tuple length > kMaxNamespaceLength =" << itemCount->first;
-    return folly::makeUnexpected(ErrorCode::INVALID_MESSAGE);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   length -= itemCount->second;
   std::vector<std::string> items;

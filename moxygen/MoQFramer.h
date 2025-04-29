@@ -28,26 +28,28 @@ const uint8_t kDefaultPriority = 128;
 using Payload = std::unique_ptr<folly::IOBuf>;
 using Priority = uint8_t;
 
-enum class ErrorCode : uint32_t {
-  UNKNOWN = 0,
-  PARSE_ERROR = 1,
-  PARSE_UNDERFLOW = 2,
-  INVALID_MESSAGE = 3,
-  UNSUPPORTED_VERSION = 4
-};
-
 enum class SessionCloseErrorCode : uint32_t {
   NO_ERROR = 0,
   INTERNAL_ERROR = 1,
   UNAUTHORIZED = 2,
   PROTOCOL_VIOLATION = 3,
-  DUPLICATE_TRACK_ALIAS = 4,
-  PARAMETER_LENGTH_MISMATCH = 5,
-  TOO_MANY_SUBSCRIBES = 0x6,
+  INVALID_REQUEST_ID = 4,
+  DUPLICATE_TRACK_ALIAS = 5,
+  KEY_VALUE_FORMATTING_ERROR = 6,
+  TOO_MANY_REQUESTS = 7,
+  INVALID_PATH = 8,
+  MALFORMED_PATH = 9,
   GOAWAY_TIMEOUT = 0x10,
   CONTROL_MESSAGE_TIMEOUT = 0x11,
   DATA_STREAM_TIMEOUT = 0x12,
+  AUTH_TOKEN_CACHE_OVERFLOW = 0x13,
+  DUPLICATE_AUTH_TOKEN_ALIAS = 0x14,
+  VERSION_NEGOTIATION_FAILED = 0x15,
+
+  PARSE_UNDERFLOW = std::numeric_limits<uint32_t>::max(),
 };
+
+using ErrorCode = SessionCloseErrorCode;
 
 enum class SubscribeErrorCode : uint32_t {
   INTERNAL_ERROR = 0,
