@@ -186,6 +186,14 @@ class MoQTextClient : public Subscriber,
           fetchEnd = AbsoluteLocation{
               subscription_->subscribeOk().latest->group,
               subscription_->subscribeOk().latest->object + 1};
+          if (sub.locType == LocationType::AbsoluteRange &&
+              fetchEnd.group >= sub.endGroup) {
+            fetchEnd.group = sub.endGroup + 1;
+            fetchEnd.object = 0;
+            subscription_->unsubscribe();
+            subscription_.reset();
+            subTextReceiver_.reset();
+          }
         }
       } else {
         XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
