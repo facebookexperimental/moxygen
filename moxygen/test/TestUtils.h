@@ -14,7 +14,8 @@ namespace moxygen::test {
 enum class TestControlMessages { CLIENT, SERVER, BOTH };
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     TestControlMessages in,
-    const MoQFrameWriter& moqFrameWriter);
+    const MoQFrameWriter& moqFrameWriter,
+    uint64_t version);
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
     const MoQFrameWriter& moqFrameWriter);
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
@@ -23,8 +24,10 @@ std::unique_ptr<folly::IOBuf> writeAllDatagramMessages(
     const MoQFrameWriter& moqFrameWriter);
 
 inline std::unique_ptr<folly::IOBuf> writeAllMessages(
-    const MoQFrameWriter& moqFrameWriter) {
-  auto buf = writeAllControlMessages(TestControlMessages::BOTH, moqFrameWriter);
+    const MoQFrameWriter& moqFrameWriter,
+    uint64_t version) {
+  auto buf = writeAllControlMessages(
+      TestControlMessages::BOTH, moqFrameWriter, version);
   buf->appendToChain(writeAllObjectMessages(moqFrameWriter));
   buf->appendToChain(writeAllFetchMessages(moqFrameWriter));
   buf->appendToChain(writeAllDatagramMessages(moqFrameWriter));

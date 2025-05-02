@@ -142,8 +142,10 @@ enum class FrameType : uint64_t {
   FETCH_OK = 0x18,
   FETCH_ERROR = 0x19,
   SUBSCRIBES_BLOCKED = 0x1A,
-  CLIENT_SETUP = 0x40,
-  SERVER_SETUP = 0x41,
+  CLIENT_SETUP = 0x20,
+  SERVER_SETUP = 0x21,
+  LEGACY_CLIENT_SETUP = 0x40,
+  LEGACY_SERVER_SETUP = 0x41,
 };
 
 enum class StreamType : uint64_t {
@@ -916,6 +918,10 @@ class MoQFrameParser {
     version_ = versionIn;
   }
 
+  folly::Optional<uint64_t> getVersion() const {
+    return version_;
+  }
+
  private:
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
@@ -956,11 +962,13 @@ class MoQFrameParser {
 
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
-    const ClientSetup& clientSetup) noexcept;
+    const ClientSetup& clientSetup,
+    uint64_t version) noexcept;
 
 WriteResult writeServerSetup(
     folly::IOBufQueue& writeBuf,
-    const ServerSetup& serverSetup) noexcept;
+    const ServerSetup& serverSetup,
+    uint64_t version) noexcept;
 
 // writeClientSetup and writeServerSetup are the only two functions that
 // are version-agnostic, so we are leaving them out of the MoQFrameWriter.

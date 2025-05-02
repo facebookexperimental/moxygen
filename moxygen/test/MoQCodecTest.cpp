@@ -24,8 +24,8 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   void testAll(MoQControlCodec::Direction dir) {
-    auto allMsgs =
-        moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
+    auto allMsgs = moxygen::test::writeAllControlMessages(
+        fromDir(dir), moqFrameWriter_, GetParam());
     testing::NiceMock<MockMoQCodecCallback>* callbackPtr = nullptr;
     MoQControlCodec* codecPtr = nullptr;
 
@@ -68,8 +68,8 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   void testUnderflow(MoQControlCodec::Direction dir) {
-    auto allMsgs =
-        moxygen::test::writeAllControlMessages(fromDir(dir), moqFrameWriter_);
+    auto allMsgs = moxygen::test::writeAllControlMessages(
+        fromDir(dir), moqFrameWriter_, GetParam());
     testing::NiceMock<MockMoQCodecCallback>* callbackPtr = nullptr;
     MoQControlCodec* codecPtr = nullptr;
 
@@ -369,7 +369,7 @@ TEST_P(MoQCodecTest, FetchHeaderUnderflow) {
 
 TEST_P(MoQCodecTest, InvalidFrame) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  writeBuf.append(std::string(" "));
+  writeBuf.append(std::string("\x23"));
   EXPECT_CALL(clientControlCodecCallback_, onConnectionError(testing::_));
   clientControlCodec_.onIngress(writeBuf.move(), false);
 }
@@ -385,7 +385,8 @@ TEST_P(MoQCodecTest, ClientGetsClientSetup) {
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
                {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
-           }}));
+           }}),
+      GetParam());
 
   EXPECT_CALL(clientControlCodecCallback_, onConnectionError(testing::_));
   clientControlCodec_.onIngress(writeBuf.move(), false);
@@ -414,7 +415,8 @@ TEST_P(MoQCodecTest, TwoSetups) {
           {1,
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-           }}));
+           }}),
+      GetParam());
   auto serverSetup = writeBuf.front()->clone();
   // This is legal, to setup next test
   EXPECT_CALL(clientControlCodecCallback_, onServerSetup(testing::_));
@@ -433,7 +435,8 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
           {1,
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-           }}));
+           }}),
+      GetParam());
   auto serverSetup = writeBuf.front()->clone();
   // Server gets server setup = error
   EXPECT_CALL(serverControlCodecCallback_, onConnectionError(testing::_));

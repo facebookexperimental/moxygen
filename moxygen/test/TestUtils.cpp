@@ -31,7 +31,8 @@ std::vector<TrackRequestParameter> getTestTrackRequestParameters() {
 
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     TestControlMessages in,
-    const MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter,
+    uint64_t version) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   WriteResult res;
   if (in != TestControlMessages::SERVER) {
@@ -42,7 +43,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
              {
                  {folly::to_underlying(SetupKey::PATH), "/foo", 0},
                  {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
-             }}));
+             }}),
+        version);
   }
   if (in != TestControlMessages::CLIENT) {
     res = writeServerSetup(
@@ -51,7 +53,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
             {1,
              {
                  {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-             }}));
+             }}),
+        version);
   }
   res = moqFrameWriter.writeSubscribeRequest(
       writeBuf,

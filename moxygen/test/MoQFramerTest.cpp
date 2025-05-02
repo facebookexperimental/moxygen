@@ -45,20 +45,31 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   size_t frameLength(folly::io::Cursor& cursor) {
-    auto res = quic::decodeQuicInteger(cursor);
-    if (res && cursor.canAdvance(res->first)) {
-      return res->first;
+    if (getDraftMajorVersion(GetParam()) >= 11) {
+      if (!cursor.canAdvance(2)) {
+        throw TestUnderflow();
+      }
+      size_t res = cursor.readBE<uint16_t>();
+      if (!cursor.canAdvance(res)) {
+        throw TestUnderflow();
+      }
+      return res;
     } else {
-      throw TestUnderflow();
+      auto res = quic::decodeQuicInteger(cursor);
+      if (res && cursor.canAdvance(res->first)) {
+        return res->first;
+      } else {
+        throw TestUnderflow();
+      }
     }
   }
 
   void parseAll(folly::io::Cursor& cursor, bool eom) {
-    skip(cursor, 2);
+    skip(cursor, (getDraftMajorVersion(GetParam()) >= 11) ? 1 : 2);
     auto r1 = parseClientSetup(cursor, frameLength(cursor));
     testUnderflowResult(r1);
 
-    skip(cursor, 2);
+    skip(cursor, (getDraftMajorVersion(GetParam()) >= 11) ? 1 : 2);
     auto r2 = parseServerSetup(cursor, frameLength(cursor));
     testUnderflowResult(r2);
 
@@ -264,7 +275,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
 } // namespace
 
 TEST_P(MoQFramerTest, SerializeAndParseAll) {
-  auto allMsgs = moxygen::test::writeAllMessages(writer_);
+  auto allMsgs = moxygen::test::writeAllMessages(writer_, GetParam());
   folly::io::Cursor cursor(allMsgs.get());
   parseAll(cursor, true);
 }
@@ -492,12 +503,16 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxSubscribeId) {
     };
 
     folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-    auto result = writeClientSetup(writeBuf, clientSetup);
+    auto result = writeClientSetup(writeBuf, clientSetup, GetParam());
     EXPECT_TRUE(result.hasValue())
         << "Failed to write client setup for maxSubscribeId:" << maxSubscribeId;
     auto buffer = writeBuf.move();
     auto cursor = folly::io::Cursor(buffer.get());
-    skip(cursor, 2);
+    auto frameType = quic::decodeQuicInteger(cursor);
+    uint64_t expectedFrameType = (getDraftMajorVersion(GetParam()) >= 11)
+        ? folly::to_underlying(FrameType::CLIENT_SETUP)
+        : folly::to_underlying(FrameType::LEGACY_CLIENT_SETUP);
+    EXPECT_EQ(frameType->first, expectedFrameType);
     auto parseClientSetupResult = parseClientSetup(cursor, frameLength(cursor));
     EXPECT_TRUE(parseClientSetupResult.hasValue())
         << "Failed to parse client setup for maxSubscribeId:" << maxSubscribeId;
@@ -513,7 +528,7 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxSubscribeId) {
 }
 
 TEST_P(MoQFramerTest, All) {
-  auto allMsgs = moxygen::test::writeAllMessages(writer_);
+  auto allMsgs = moxygen::test::writeAllMessages(writer_, GetParam());
   allMsgs->coalesce();
   auto len = allMsgs->computeChainDataLength();
   for (size_t i = 0; i < len; i++) {

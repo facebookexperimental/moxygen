@@ -46,14 +46,49 @@ void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         [[fallthrough]];
       }
       case ParseState::FRAME_LENGTH: {
-        auto length = quic::decodeQuicInteger(cursor);
-        if (!length) {
-          XLOG(DBG6) << __func__ << " underflow";
-          connError_ = ErrorCode::PARSE_UNDERFLOW;
+        uint64_t length = 0;
+        size_t bytesParsed = 0;
+
+        bool parseFrameLengthAs16bit = false;
+        if (curFrameType_ == FrameType::CLIENT_SETUP ||
+            curFrameType_ == FrameType::SERVER_SETUP) {
+          parseFrameLengthAs16bit = true;
+        } else if (
+            curFrameType_ == FrameType::LEGACY_CLIENT_SETUP ||
+            curFrameType_ == FrameType::LEGACY_SERVER_SETUP) {
+          parseFrameLengthAs16bit = false;
+        } else if (!moqFrameParser_.getVersion().hasValue()) {
+          XLOG(DBG4)
+              << "Received a non-setup frame before knowing the negotiated version";
+          connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
           break;
+        } else {
+          parseFrameLengthAs16bit =
+              (getDraftMajorVersion(*moqFrameParser_.getVersion()) >= 11);
         }
-        curFrameLength_ = length->first;
-        remainingLength -= length->second;
+
+        if (parseFrameLengthAs16bit) {
+          if (remainingLength < 2) {
+            XLOG(DBG6) << __func__ << " underflow";
+            connError_ = ErrorCode::PARSE_UNDERFLOW;
+            break;
+          }
+          // Parse the length as a 16 bit integer
+          length = cursor.readBE<uint16_t>();
+          bytesParsed = 2;
+        } else {
+          // Parse the length as a varint
+          auto decodeResult = quic::decodeQuicInteger(cursor);
+          if (!decodeResult) {
+            XLOG(DBG6) << __func__ << " underflow";
+            connError_ = ErrorCode::PARSE_UNDERFLOW;
+            break;
+          }
+          length = decodeResult->first;
+          bytesParsed = decodeResult->second;
+        }
+        curFrameLength_ = length;
+        remainingLength -= bytesParsed;
         parseState_ = ParseState::FRAME_PAYLOAD;
         [[fallthrough]];
       }
@@ -305,7 +340,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
   XLOG(DBG4) << "parsing frame type=" << folly::to_underlying(curFrameType_);
   if (!seenSetup_) {
     switch (curFrameType_) {
-      case FrameType::CLIENT_SETUP: {
+      case FrameType::CLIENT_SETUP:
+      case FrameType::LEGACY_CLIENT_SETUP: {
         if (dir_ == Direction::CLIENT) {
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
@@ -320,7 +356,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
         }
         break;
       }
-      case FrameType::SERVER_SETUP: {
+      case FrameType::SERVER_SETUP:
+      case FrameType::LEGACY_SERVER_SETUP: {
         if (dir_ == Direction::SERVER) {
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
@@ -343,7 +380,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
   }
   XCHECK(seenSetup_);
   switch (curFrameType_) {
+    case FrameType::LEGACY_CLIENT_SETUP:
     case FrameType::CLIENT_SETUP:
+    case FrameType::LEGACY_SERVER_SETUP:
     case FrameType::SERVER_SETUP:
       XLOG(ERR) << "Duplicate setup frame";
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);

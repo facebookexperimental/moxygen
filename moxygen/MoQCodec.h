@@ -116,6 +116,8 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::UNSUBSCRIBE_ANNOUNCES:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
+      case FrameType::LEGACY_CLIENT_SETUP:
+      case FrameType::LEGACY_SERVER_SETUP:
       case FrameType::MAX_SUBSCRIBE_ID:
       case FrameType::SUBSCRIBES_BLOCKED:
       case FrameType::FETCH:

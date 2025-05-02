@@ -1454,7 +1454,19 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
       folly::coro::makePromiseContract<ServerSetup>();
 
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
-  auto res = writeClientSetup(controlWriteBuf_, setup);
+
+  // TODO: Potentially rethink what we're doing here. If the client
+  // supports any version < 11, we send a < 11 setup.
+  uint64_t setupSerializationVersion = kVersionDraft11;
+  for (auto supportedVersion : setup.supportedVersions) {
+    if (getDraftMajorVersion(supportedVersion) < 11) {
+      setupSerializationVersion = supportedVersion;
+      break;
+    }
+  }
+
+  auto res =
+      writeClientSetup(controlWriteBuf_, setup, setupSerializationVersion);
   if (!res) {
     XLOG(ERR) << "writeClientSetup failed sess=" << this;
     co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
@@ -1473,7 +1485,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
   }
   if (serverSetup.hasException()) {
-    close(SessionCloseErrorCode::INTERNAL_ERROR);
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     XLOG(ERR) << "Setup Failed: "
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
@@ -1482,7 +1494,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
           setup.supportedVersions.begin(),
           setup.supportedVersions.end(),
           serverSetup->selectedVersion) == setup.supportedVersions.end()) {
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     XLOG(ERR) << "Server chose a version that the client doesn't support";
     co_yield folly::coro::co_error(serverSetup.exception());
   }
@@ -1507,14 +1519,16 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
   if (!serverSetup.hasValue()) {
     XLOG(ERR) << "Server setup callback failed sess=" << this;
-    close(SessionCloseErrorCode::INTERNAL_ERROR);
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
   initializeNegotiatedVersion(serverSetup->selectedVersion);
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(serverSetup->params);
-  auto res = writeServerSetup(controlWriteBuf_, std::move(*serverSetup));
+  auto res = writeServerSetup(
+      controlWriteBuf_, *serverSetup, serverSetup->selectedVersion);
   if (!res) {
     XLOG(ERR) << "writeServerSetup failed sess=" << this;
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
   maxSubscribeID_ = maxConcurrentSubscribes_ = maxSubscribeId;

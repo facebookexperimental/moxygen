@@ -1293,13 +1293,25 @@ uint16_t* writeFrameHeader(
   return static_cast<uint16_t*>(res.first);
 }
 
-void writeSize(uint16_t* sizePtr, size_t size, bool& error) {
-  if (size > 1 << 14) {
+void writeSize(
+    uint16_t* sizePtr,
+    size_t size,
+    bool& error,
+    uint64_t versionIn) {
+  if (getDraftMajorVersion(versionIn) < 11 && (size > 1 << 14)) {
+    // Size check for versions < 11
+    LOG(ERROR) << "Control message size exceeds max sz=" << size;
+    error = true;
+    return;
+  } else if (
+      getDraftMajorVersion(versionIn) >= 11 && (size > ((1 << 16) - 1))) {
+    // Size check for versions >= 11
     LOG(ERROR) << "Control message size exceeds max sz=" << size;
     error = true;
     return;
   }
-  uint16_t sizeVal = folly::Endian::big(uint16_t(0x4000 | size));
+  size_t bitmask = (getDraftMajorVersion(versionIn) >= 11) ? 0 : 0x4000;
+  uint16_t sizeVal = folly::Endian::big(uint16_t(bitmask | size));
   memcpy(sizePtr, &sizeVal, 2);
 }
 
@@ -1340,10 +1352,14 @@ void writeTrackRequestParams(
 
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
-    const ClientSetup& clientSetup) noexcept {
+    const ClientSetup& clientSetup,
+    uint64_t version) noexcept {
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::CLIENT_SETUP, error);
+  FrameType frameType = (getDraftMajorVersion(version) >= 11)
+      ? FrameType::CLIENT_SETUP
+      : FrameType::LEGACY_CLIENT_SETUP;
+  auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
   for (auto version : clientSetup.supportedVersions) {
@@ -1365,7 +1381,7 @@ WriteResult writeClientSetup(
       writeFixedString(writeBuf, param.asString, size, error);
     }
   }
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, version);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1374,10 +1390,14 @@ WriteResult writeClientSetup(
 
 WriteResult writeServerSetup(
     folly::IOBufQueue& writeBuf,
-    const ServerSetup& serverSetup) noexcept {
+    const ServerSetup& serverSetup,
+    uint64_t version) noexcept {
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::SERVER_SETUP, error);
+  FrameType frameType = (getDraftMajorVersion(version) >= 11)
+      ? FrameType::SERVER_SETUP
+      : FrameType::LEGACY_SERVER_SETUP;
+  auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
   writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
   writeVarint(writeBuf, serverSetup.params.size(), size, error);
   for (auto& param : serverSetup.params) {
@@ -1394,7 +1414,7 @@ WriteResult writeServerSetup(
       writeFixedString(writeBuf, param.asString, size, error);
     }
   }
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, version);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1607,7 +1627,8 @@ WriteResult MoQFrameWriter::writeStreamObject(
 WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) const noexcept {
-  CHECK(version_) << "Version must be set before writing a subscribe request";
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe request";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
@@ -1635,7 +1656,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
     writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
   }
   writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1645,6 +1666,8 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
 WriteResult MoQFrameWriter::writeSubscribeUpdate(
     folly::IOBufQueue& writeBuf,
     const SubscribeUpdate& update) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe update";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);
@@ -1655,7 +1678,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   writeBuf.append(&update.priority, 1);
   size += 1;
   writeTrackRequestParams(writeBuf, update.params, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1665,6 +1688,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
 WriteResult MoQFrameWriter::writeSubscribeOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeOk& subscribeOk) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write subscribe ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
@@ -1681,7 +1705,7 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
     writeVarint(writeBuf, subscribeOk.latest->object, size, error);
   }
   writeTrackRequestParams(writeBuf, subscribeOk.params, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1691,6 +1715,8 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
 WriteResult MoQFrameWriter::writeSubscribeError(
     folly::IOBufQueue& writeBuf,
     const SubscribeError& subscribeError) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe error";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
@@ -1699,7 +1725,7 @@ WriteResult MoQFrameWriter::writeSubscribeError(
       writeBuf, folly::to_underlying(subscribeError.errorCode), size, error);
   writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
   writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1709,11 +1735,13 @@ WriteResult MoQFrameWriter::writeSubscribeError(
 WriteResult MoQFrameWriter::writeMaxSubscribeId(
     folly::IOBufQueue& writeBuf,
     const MaxSubscribeId& maxSubscribeId) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write max subscribe id";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_SUBSCRIBE_ID, error);
   writeVarint(writeBuf, maxSubscribeId.subscribeID.value, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1723,12 +1751,14 @@ WriteResult MoQFrameWriter::writeMaxSubscribeId(
 WriteResult MoQFrameWriter::writeSubscribesBlocked(
     folly::IOBufQueue& writeBuf,
     const SubscribesBlocked& subscribesBlocked) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribes blocked";
   size_t size = 0;
   bool error = false;
   auto sizePtr =
       writeFrameHeader(writeBuf, FrameType::SUBSCRIBES_BLOCKED, error);
   writeVarint(writeBuf, subscribesBlocked.maxSubscribeID.value, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1738,11 +1768,12 @@ WriteResult MoQFrameWriter::writeSubscribesBlocked(
 WriteResult MoQFrameWriter::writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
     const Unsubscribe& unsubscribe) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write unsubscribe";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE, error);
   writeVarint(writeBuf, unsubscribe.subscribeID.value, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1752,6 +1783,8 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
 WriteResult MoQFrameWriter::writeSubscribeDone(
     folly::IOBufQueue& writeBuf,
     const SubscribeDone& subscribeDone) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe done";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_DONE, error);
@@ -1763,7 +1796,7 @@ WriteResult MoQFrameWriter::writeSubscribeDone(
   if (getDraftMajorVersion(*version_) <= 9) {
     writeVarint(writeBuf, 0, size, error);
   }
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1773,12 +1806,13 @@ WriteResult MoQFrameWriter::writeSubscribeDone(
 WriteResult MoQFrameWriter::writeAnnounce(
     folly::IOBufQueue& writeBuf,
     const Announce& announce) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write announce";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE, error);
   writeTrackNamespace(writeBuf, announce.trackNamespace, size, error);
   writeTrackRequestParams(writeBuf, announce.params, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1788,11 +1822,12 @@ WriteResult MoQFrameWriter::writeAnnounce(
 WriteResult MoQFrameWriter::writeAnnounceOk(
     folly::IOBufQueue& writeBuf,
     const AnnounceOk& announceOk) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write announce ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_OK, error);
   writeTrackNamespace(writeBuf, announceOk.trackNamespace, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1802,6 +1837,8 @@ WriteResult MoQFrameWriter::writeAnnounceOk(
 WriteResult MoQFrameWriter::writeAnnounceError(
     folly::IOBufQueue& writeBuf,
     const AnnounceError& announceError) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write announce error";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_ERROR, error);
@@ -1809,7 +1846,7 @@ WriteResult MoQFrameWriter::writeAnnounceError(
   writeVarint(
       writeBuf, folly::to_underlying(announceError.errorCode), size, error);
   writeFixedString(writeBuf, announceError.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1819,11 +1856,12 @@ WriteResult MoQFrameWriter::writeAnnounceError(
 WriteResult MoQFrameWriter::writeUnannounce(
     folly::IOBufQueue& writeBuf,
     const Unannounce& unannounce) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write unannounce";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNANNOUNCE, error);
   writeTrackNamespace(writeBuf, unannounce.trackNamespace, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1833,6 +1871,8 @@ WriteResult MoQFrameWriter::writeUnannounce(
 WriteResult MoQFrameWriter::writeAnnounceCancel(
     folly::IOBufQueue& writeBuf,
     const AnnounceCancel& announceCancel) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write announce cancel";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_CANCEL, error);
@@ -1840,7 +1880,7 @@ WriteResult MoQFrameWriter::writeAnnounceCancel(
   writeVarint(
       writeBuf, folly::to_underlying(announceCancel.errorCode), size, error);
   writeFixedString(writeBuf, announceCancel.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1861,7 +1901,7 @@ WriteResult MoQFrameWriter::writeTrackStatusRequest(
   if (getDraftMajorVersion(*version_) >= 11) {
     writeTrackRequestParams(writeBuf, trackStatusRequest.params, size, error);
   }
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1890,7 +1930,7 @@ WriteResult MoQFrameWriter::writeTrackStatus(
   if (getDraftMajorVersion(*version_) >= 11) {
     writeTrackRequestParams(writeBuf, trackStatus.params, size, error);
   }
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1900,11 +1940,12 @@ WriteResult MoQFrameWriter::writeTrackStatus(
 WriteResult MoQFrameWriter::writeGoaway(
     folly::IOBufQueue& writeBuf,
     const Goaway& goaway) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write Goaway";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
   writeFixedString(writeBuf, goaway.newSessionUri, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1914,6 +1955,8 @@ WriteResult MoQFrameWriter::writeGoaway(
 WriteResult MoQFrameWriter::writeSubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnounces& subscribeAnnounces) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe announces";
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1921,7 +1964,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
   writeTrackNamespace(
       writeBuf, subscribeAnnounces.trackNamespacePrefix, size, error);
   writeTrackRequestParams(writeBuf, subscribeAnnounces.params, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1931,13 +1974,15 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
 WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnouncesOk& subscribeAnnouncesOk) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe announces ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr =
       writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_OK, error);
   writeTrackNamespace(
       writeBuf, subscribeAnnouncesOk.trackNamespacePrefix, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1947,6 +1992,8 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
 WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnouncesError& subscribeAnnouncesError) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write subscribe announces error";
   size_t size = 0;
   bool error = false;
   auto sizePtr =
@@ -1959,7 +2006,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
       size,
       error);
   writeFixedString(writeBuf, subscribeAnnouncesError.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1969,13 +2016,15 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
 WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write unsubscribe announces";
   size_t size = 0;
   bool error = false;
   auto sizePtr =
       writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE_ANNOUNCES, error);
   writeTrackNamespace(
       writeBuf, unsubscribeAnnounces.trackNamespacePrefix, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -1985,6 +2034,7 @@ WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
 WriteResult MoQFrameWriter::writeFetch(
     folly::IOBufQueue& writeBuf,
     const Fetch& fetch) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write fetch";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
@@ -2021,7 +2071,7 @@ WriteResult MoQFrameWriter::writeFetch(
   }
   writeTrackRequestParams(writeBuf, fetch.params, size, error);
 
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -2031,11 +2081,12 @@ WriteResult MoQFrameWriter::writeFetch(
 WriteResult MoQFrameWriter::writeFetchCancel(
     folly::IOBufQueue& writeBuf,
     const FetchCancel& fetchCancel) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write fetch cancel";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_CANCEL, error);
   writeVarint(writeBuf, fetchCancel.subscribeID.value, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -2045,6 +2096,7 @@ WriteResult MoQFrameWriter::writeFetchCancel(
 WriteResult MoQFrameWriter::writeFetchOk(
     folly::IOBufQueue& writeBuf,
     const FetchOk& fetchOk) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write fetch ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
@@ -2057,7 +2109,7 @@ WriteResult MoQFrameWriter::writeFetchOk(
   writeVarint(writeBuf, fetchOk.latestGroupAndObject.group, size, error);
   writeVarint(writeBuf, fetchOk.latestGroupAndObject.object, size, error);
   writeTrackRequestParams(writeBuf, fetchOk.params, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -2067,6 +2119,7 @@ WriteResult MoQFrameWriter::writeFetchOk(
 WriteResult MoQFrameWriter::writeFetchError(
     folly::IOBufQueue& writeBuf,
     const FetchError& fetchError) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write fetch error";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
@@ -2074,7 +2127,7 @@ WriteResult MoQFrameWriter::writeFetchError(
   writeVarint(
       writeBuf, folly::to_underlying(fetchError.errorCode), size, error);
   writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error);
+  writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -2084,10 +2137,10 @@ WriteResult MoQFrameWriter::writeFetchError(
 namespace {
 const char* getFrameTypeString(FrameType type) {
   switch (type) {
-    case FrameType::CLIENT_SETUP:
-      return "CLIENT_SETUP";
-    case FrameType::SERVER_SETUP:
-      return "SERVER_SETUP";
+    case FrameType::LEGACY_CLIENT_SETUP:
+      return "LEGACY_CLIENT_SETUP";
+    case FrameType::LEGACY_SERVER_SETUP:
+      return "LEGACY_SERVER_SETUP";
     case FrameType::SUBSCRIBE:
       return "SUBSCRIBE";
     case FrameType::SUBSCRIBE_OK:
