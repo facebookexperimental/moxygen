@@ -71,7 +71,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            getTestTrackRequestParameters()}));
   res = moqFrameWriter.writeSubscribeUpdate(
       writeBuf,
-      SubscribeUpdate({0, {1, 2}, 3, 255, getTestTrackRequestParameters()}));
+      SubscribeUpdate(
+          {0, {1, 2}, 3, 255, true, getTestTrackRequestParameters()}));
   res = moqFrameWriter.writeSubscribeOk(
       writeBuf,
       SubscribeOk(

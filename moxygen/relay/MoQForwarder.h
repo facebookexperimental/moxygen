@@ -103,6 +103,7 @@ class MoQForwarder : public TrackConsumer {
       // generate SUBSCRIBE_DONE
       range.start = subscribeUpdate.start;
       range.end = {subscribeUpdate.endGroup, 0};
+      shouldForward = subscribeUpdate.forward;
     }
 
     void unsubscribe() override {
@@ -369,14 +370,14 @@ class MoQForwarder : public TrackConsumer {
             const std::shared_ptr<Subscriber>& sub,
             const std::shared_ptr<SubgroupConsumer>&)> fn) {
       forwarder_.forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-        if (!sub->checkShouldForward()) {
-          // If shouldForward == false, there shouldn't be any subgroups.
-          return;
-        }
-
         if (forwarder_.latest_ && forwarder_.checkRange(*sub)) {
           auto subgroupConsumerIt = sub->subgroups.find(identifier_);
           if (subgroupConsumerIt == sub->subgroups.end()) {
+            if (!sub->checkShouldForward()) {
+              // If shouldForward == false, we shouldn't be creating any
+              // subgroups.
+              return;
+            }
             auto res = sub->trackConsumer->beginSubgroup(
                 identifier_.group, identifier_.subgroup, priority_);
             if (res.hasError()) {
@@ -387,7 +388,18 @@ class MoQForwarder : public TrackConsumer {
               subgroupConsumerIt = emplaceRes.first;
             }
           }
-          fn(sub, subgroupConsumerIt->second);
+          if (!sub->checkShouldForward()) {
+            // If we're attempting to send anything on an existing subgroup when
+            // forward == false, then we reset the stream, so that we don't end
+            // up with "holes" in the subgroup. If, at some point in the future,
+            // we set forward = true, then we'll create a new stream for the
+            // subgroup.
+            subgroupConsumerIt->second->reset(
+                ResetStreamErrorCode::INTERNAL_ERROR);
+            sub->subgroups.erase(identifier_);
+          } else {
+            fn(sub, subgroupConsumerIt->second);
+          }
         }
       });
     }

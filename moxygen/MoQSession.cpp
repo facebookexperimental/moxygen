@@ -222,6 +222,10 @@ class StreamPublisherImpl
     onByteEventCommon(id, offset);
   }
 
+  void setForward(bool forwardIn) {
+    forward_ = forwardIn;
+  }
+
  private:
   void onByteEventCommon(quic::StreamId id, uint64_t offset) {
     uint64_t bytesDeliveredOrCanceled = offset + 1;
@@ -283,6 +287,8 @@ class StreamPublisherImpl
 
   uint32_t bytesWritten_{0};
   uint32_t bytesDeliveredOrCanceled_{0};
+
+  bool forward_{true};
 };
 
 // StreamPublisherImpl
@@ -459,6 +465,11 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     Payload payload,
     Extensions extensions,
     bool finStream) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   auto validateRes = validatePublish(objectID);
   if (!validateRes) {
     return validateRes;
@@ -474,6 +485,11 @@ StreamPublisherImpl::objectNotExists(
     uint64_t objectID,
     Extensions extensions,
     bool finStream) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   return publishStatus(
       objectID, ObjectStatus::OBJECT_NOT_EXIST, extensions, finStream);
 }
@@ -483,6 +499,11 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     uint64_t length,
     Payload initialPayload,
     Extensions extensions) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   auto validateRes = validatePublish(objectID);
   if (!validateRes) {
     return validateRes;
@@ -505,6 +526,11 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
 
 folly::Expected<ObjectPublishStatus, MoQPublishError>
 StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   if (!writeHandle_) {
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::CANCELLED, "Cancelled"));
@@ -526,6 +552,11 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::endOfGroup(
     uint64_t endOfGroupObjectId,
     Extensions extensions) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   return publishStatus(
       endOfGroupObjectId,
       ObjectStatus::END_OF_GROUP,
@@ -537,6 +568,11 @@ folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::endOfTrackAndGroup(
     uint64_t endOfTrackObjectId,
     Extensions extensions) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   return publishStatus(
       endOfTrackObjectId,
       ObjectStatus::END_OF_TRACK_AND_GROUP,
@@ -550,6 +586,11 @@ StreamPublisherImpl::publishStatus(
     ObjectStatus status,
     const Extensions& extensions,
     bool finStream) {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   auto validateRes = validatePublish(objectID);
   if (!validateRes) {
     return validateRes;
@@ -566,6 +607,11 @@ StreamPublisherImpl::publishStatus(
 
 folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::endOfSubgroup() {
+  if (!forward_) {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+  }
   if (currentLengthRemaining_) {
     XLOG(ERR) << "Still publishing previous object sgp=" << this;
     reset(ResetStreamErrorCode::INTERNAL_ERROR);
@@ -704,6 +750,10 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
                 << subscribeID_ << " trackPub=" << this;
       // TODO: I think we need to buffer it?
     } else {
+      forward_ = subscribeUpdate.forward;
+      for (auto [_, subgroupPublisher] : subgroups_) {
+        subgroupPublisher->setForward(forward_);
+      }
       handle_->subscribeUpdate(std::move(subscribeUpdate));
     }
   }

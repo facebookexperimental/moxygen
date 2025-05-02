@@ -993,7 +993,7 @@ CO_TEST_F_X(MoQSessionTest, DatagramBeforeSessionSetup) {
 
 // Checks to see that we return errors if we receive a subscribe request with
 // forward == false and try to send data.
-CO_TEST_F_X(MoQSessionTestWithVersion11, ForwardingFalse) {
+CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeForwardingFalse) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     auto pubResult1 = pub->datagram(
@@ -1017,6 +1017,48 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, ForwardingFalse) {
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
   co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Checks to see that we return errors if we receive a subscribe update with
+// forward == false and try to send data.
+CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeUpdateForwardingFalse) {
+  co_await setupMoQSession();
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  expectSubscribe(
+      [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        auto pubResult = pub->beginSubgroup(0, 0, 0);
+        EXPECT_FALSE(pubResult.hasError());
+        subgroupConsumer = pubResult.value();
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+  expectSubscribeDone();
+
+  SubscribeUpdate subscribeUpdate{
+      subscribeRequest.subscribeID,
+      AbsoluteLocation{0, 0},
+      10,
+      kDefaultPriority,
+      false,
+      {}};
+  subscribeHandler->subscribeUpdate(subscribeUpdate);
+  folly::coro::Baton subscribeUpdateInvoked;
+  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
+      .WillOnce(testing::Invoke(
+          [&](auto /*blag*/) { subscribeUpdateInvoked.post(); }));
+  co_await subscribeUpdateInvoked;
+  auto pubResult = subgroupConsumer->object(1, moxygen::test::makeBuf(10));
+  EXPECT_TRUE(pubResult.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

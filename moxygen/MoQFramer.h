@@ -590,6 +590,7 @@ struct SubscribeUpdate {
   AbsoluteLocation start;
   uint64_t endGroup;
   uint8_t priority{kDefaultPriority};
+  bool forward{true}; // Only used in draft-11 and above
   std::vector<TrackRequestParameter> params;
 };
 

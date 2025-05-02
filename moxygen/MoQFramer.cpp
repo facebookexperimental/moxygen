@@ -503,6 +503,9 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
 folly::Expected<SubscribeUpdate, ErrorCode>
 MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     const noexcept {
+  CHECK(version_.hasValue())
+      << "The version must be set before parsing a subscribe update";
+
   SubscribeUpdate subscribeUpdate;
   auto subscribeID = quic::decodeQuicInteger(cursor, length);
   if (!subscribeID) {
@@ -528,6 +531,19 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
   }
   subscribeUpdate.priority = cursor.readBE<uint8_t>();
   length--;
+
+  if (getDraftMajorVersion(*version_) >= 11) {
+    if (length < 2) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    uint8_t forwardFlag = cursor.readBE<uint8_t>();
+    if (forwardFlag > 1) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    subscribeUpdate.forward = (forwardFlag == 1);
+    length--;
+  }
+
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1777,6 +1793,11 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   writeVarint(writeBuf, update.endGroup, size, error);
   writeBuf.append(&update.priority, 1);
   size += 1;
+  if (getDraftMajorVersion(*version_) >= 11) {
+    uint8_t forwardFlag = (update.forward) ? 1 : 0;
+    writeBuf.append(&forwardFlag, 1);
+    size += 1;
+  }
   writeTrackRequestParams(writeBuf, update.params, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
