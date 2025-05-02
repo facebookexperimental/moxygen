@@ -77,11 +77,13 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
+      length -= res->second;
       res = quic::decodeQuicInteger(cursor, res->first);
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
       p.asUint64 = res->first;
+      length -= res->second;
     } else {
       auto res = parseFixedString(cursor, length);
       if (!res) {
@@ -90,6 +92,9 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
       p.asString = std::move(res.value());
     }
     params.emplace_back(std::move(p));
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return folly::unit;
 }
@@ -121,6 +126,9 @@ folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return clientSetup;
 }
 
@@ -143,6 +151,9 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
       parseSetupParams(cursor, length, numParams->first, serverSetup.params);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return serverSetup;
 }
@@ -353,7 +364,7 @@ MoQFrameParser::parseSubgroupObjectHeader(
 
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     folly::io::Cursor& cursor,
-    size_t length,
+    size_t& length,
     size_t numParams,
     std::vector<TrackRequestParameter>& params) const noexcept {
   for (auto i = 0u; i < numParams; i++) {
@@ -483,6 +494,9 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return subscribeRequest;
 }
 
@@ -524,6 +538,9 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
       cursor, length, numParams->first, subscribeUpdate.params);
   if (!res2) {
     return folly::makeUnexpected(res2.error());
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return subscribeUpdate;
 }
@@ -574,7 +591,9 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
-
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return subscribeOk;
 }
 
@@ -610,7 +629,9 @@ folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
   if (subscribeError.errorCode == SubscribeErrorCode::RETRY_TRACK_ALIAS) {
     subscribeError.retryAlias = retryAlias->first;
   }
-
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return subscribeError;
 }
 
@@ -624,7 +645,9 @@ folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
   }
   length -= subscribeID->second;
   unsubscribe.subscribeID = subscribeID->first;
-
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return unsubscribe;
 }
 
@@ -674,6 +697,9 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
       }
     }
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return subscribeDone;
 }
 
@@ -696,6 +722,9 @@ folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return announce;
 }
 
@@ -708,6 +737,9 @@ folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
     return folly::makeUnexpected(res.error());
   }
   announceOk.trackNamespace = TrackNamespace(std::move(res.value()));
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return announceOk;
 }
 
@@ -734,6 +766,9 @@ folly::Expected<AnnounceError, ErrorCode> MoQFrameParser::parseAnnounceError(
   }
   announceError.reasonPhrase = std::move(res2.value());
 
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return announceError;
 }
 
@@ -771,6 +806,9 @@ folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
     return folly::makeUnexpected(res2.error());
   }
   announceCancel.reasonPhrase = std::move(res2.value());
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return announceCancel;
 }
 
@@ -799,6 +837,9 @@ MoQFrameParser::parseTrackStatusRequest(
     if (!parseParamsResult) {
       return folly::makeUnexpected(parseParamsResult.error());
     }
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return trackStatusRequest;
 }
@@ -842,6 +883,9 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
       return folly::makeUnexpected(parseParamsResult.error());
     }
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
 
   return trackStatus;
 }
@@ -855,6 +899,9 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     return folly::makeUnexpected(res.error());
   }
   goaway.newSessionUri = std::move(res.value());
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return goaway;
 }
 
@@ -868,6 +915,9 @@ folly::Expected<MaxSubscribeId, ErrorCode> MoQFrameParser::parseMaxSubscribeId(
   }
   length -= subscribeID->second;
   maxSubscribeId.subscribeID = subscribeID->first;
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return maxSubscribeId;
 }
 
@@ -881,6 +931,9 @@ MoQFrameParser::parseSubscribesBlocked(folly::io::Cursor& cursor, size_t length)
   }
   subscribesBlocked.maxSubscribeID = res->first;
   length -= res->second;
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return subscribesBlocked;
 }
 
@@ -969,6 +1022,9 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   if (!res5) {
     return folly::makeUnexpected(res5.error());
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return fetch;
 }
 
@@ -981,6 +1037,10 @@ folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   fetchCancel.subscribeID = res->first;
+  length -= res->second;
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return fetchCancel;
 }
 
@@ -1024,6 +1084,9 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   if (!res3) {
     return folly::makeUnexpected(res3.error());
   }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
 
   return fetchOk;
 }
@@ -1051,6 +1114,9 @@ folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
     return folly::makeUnexpected(res3.error());
   }
   fetchError.reasonPhrase = std::move(res3.value());
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
 
   return fetchError;
 }

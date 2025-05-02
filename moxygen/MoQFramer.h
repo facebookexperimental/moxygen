@@ -931,7 +931,7 @@ class MoQFrameParser {
 
   folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
       folly::io::Cursor& cursor,
-      size_t length,
+      size_t& length,
       size_t numParams,
       std::vector<TrackRequestParameter>& params) const noexcept;
 
