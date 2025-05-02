@@ -65,22 +65,18 @@ void MoQServer::createMoQQuicSession(
 folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
   XLOG(INFO) << "ClientSetup";
   uint64_t negotiatedVersion = 0;
-  if (std::find(
-          setup.supportedVersions.begin(),
-          setup.supportedVersions.end(),
-          kVersionDraft08) != setup.supportedVersions.end()) {
-    // If the client supports draft-08, we will use it.
-    negotiatedVersion = kVersionDraft08;
-  } else if (
-      std::find(
-          setup.supportedVersions.begin(),
-          setup.supportedVersions.end(),
-          kVersionDraft09) != setup.supportedVersions.end()) {
-    // Otherwise, if the client supports draft-09, we will use it.
+  // Pick the highest available version of 8, 9, and 10
+  folly::F14FastSet<uint64_t> negotiatedVersionSet(
+      setup.supportedVersions.begin(), setup.supportedVersions.end());
+  if (negotiatedVersionSet.contains(kVersionDraft10)) {
+    negotiatedVersion = kVersionDraft10;
+  } else if (negotiatedVersionSet.contains(kVersionDraft09)) {
     negotiatedVersion = kVersionDraft09;
+  } else if (negotiatedVersionSet.contains(kVersionDraft08)) {
+    negotiatedVersion = kVersionDraft08;
   } else {
     return folly::Try<ServerSetup>(
-        std::runtime_error("Client does not support draft-08 or draft-09"));
+        std::runtime_error("Client does not support draft-09 or draft-10"));
   }
 
   // TODO: Make the default MAX_SUBSCRIBE_ID configurable and

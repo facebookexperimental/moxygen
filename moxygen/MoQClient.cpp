@@ -86,7 +86,7 @@ ClientSetup MoQClient::getClientSetup(
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxSubscribeId = 100;
   ClientSetup clientSetup{
-      {kVersionDraft08, kVersionDraft09},
+      {kVersionDraft08, kVersionDraft09, kVersionDraft10},
       {{folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
         kDefaultMaxSubscribeId}}};

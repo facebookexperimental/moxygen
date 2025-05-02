@@ -37,6 +37,14 @@ TEST(Location, LatestObject) {
   EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
 }
 
+TEST(Location, NextGroupStart) {
+  auto range = toSubscribeRange(
+      getRequest(LocationType::NextGroupStart), AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 20);
+  EXPECT_EQ(range.start.object, 0);
+  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+}
+
 TEST(Location, LatestGroup) {
   auto range = toSubscribeRange(
       getRequest(LocationType::LatestGroup), AbsoluteLocation({19, 77}));

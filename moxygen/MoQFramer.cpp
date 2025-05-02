@@ -15,6 +15,22 @@ constexpr uint64_t kMaxExtensionLength = 1024;
 bool isDraftVariant(uint64_t version) {
   return (version & 0x00ff0000);
 }
+
+uint64_t getLocationTypeValue(
+    moxygen::LocationType locationType,
+    uint64_t version) {
+  if (locationType != moxygen::LocationType::LatestGroup) {
+    return folly::to_underlying(locationType);
+  }
+
+  if (moxygen::getDraftMajorVersion(version) < 11) {
+    // In draft < 11, LatestGroup maps to 1
+    return 1;
+  } else {
+    return folly::to_underlying(locationType);
+  }
+}
+
 } // namespace
 
 namespace moxygen {
@@ -421,9 +437,23 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   if (!locType) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  if (locType->first > folly::to_underlying(LocationType::AbsoluteRange)) {
-    XLOG(ERR) << "locType > AbsoluteRange =" << locType->first;
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  // LocationType == 1 was present in draft 8 and below as LatestGroup. Draft 11
+  // and above have LocationType::NextGroupStart. Draft 9 and 10 don't have
+  // LocationType == 1, but we treat it as LatestGroup.
+  if (locType->first == folly::to_underlying(LocationType::NextGroupStart) &&
+      getDraftMajorVersion(*version_) < 11) {
+    locType->first = folly::to_underlying(LocationType::LatestGroup);
+  }
+  switch (locType->first) {
+    case folly::to_underlying(LocationType::LatestObject):
+    case folly::to_underlying(LocationType::LatestGroup):
+    case folly::to_underlying(LocationType::AbsoluteStart):
+    case folly::to_underlying(LocationType::AbsoluteRange):
+    case folly::to_underlying(LocationType::NextGroupStart):
+      break;
+    default:
+      XLOG(ERR) << "Invalid locType =" << locType->first;
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   length -= locType->second;
   subscribeRequest.locType = LocationType(locType->first);
@@ -1646,7 +1676,11 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
     size += 1;
   }
   writeVarint(
-      writeBuf, folly::to_underlying(subscribeRequest.locType), size, error);
+      writeBuf,
+      getLocationTypeValue(
+          subscribeRequest.locType, getDraftMajorVersion(*version_)),
+      size,
+      error);
   if (subscribeRequest.locType == LocationType::AbsoluteStart ||
       subscribeRequest.locType == LocationType::AbsoluteRange) {
     writeVarint(writeBuf, subscribeRequest.start->group, size, error);

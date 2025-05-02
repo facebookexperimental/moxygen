@@ -28,8 +28,9 @@ inline SubscribeRange toSubscribeRange(
   SubscribeRange result;
   result.end = kLocationMax;
   switch (locType) {
-    case LocationType::LatestGroup:
-      result.start.group = latest.value_or(kLocationMin).group;
+    case LocationType::NextGroupStart:
+      result.start.group =
+          (latest.has_value() ? latest->group + 1 : kLocationMin.group);
       result.start.object = 0;
       break;
     case LocationType::LatestObject:
@@ -49,6 +50,10 @@ inline SubscribeRange toSubscribeRange(
         XLOG(DBG2) << "Adjusting past start to latest + 1";
         result.start = AbsoluteLocation{latest->group, latest->object + 1};
       }
+      break;
+    case LocationType::LatestGroup:
+      result.start.group = latest.value_or(kLocationMin).group;
+      result.start.object = 0;
       break;
   }
   XLOG(DBG1) << "g=" << result.start.group << " o=" << result.start.object

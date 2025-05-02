@@ -425,10 +425,11 @@ enum class TrackRequestParamKey : uint64_t {
 };
 
 enum class LocationType : uint8_t {
-  LatestGroup = 1,
+  NextGroupStart = 1,
   LatestObject = 2,
   AbsoluteStart = 3,
-  AbsoluteRange = 4
+  AbsoluteRange = 4,
+  LatestGroup = 250,
 };
 
 struct AbsoluteLocation {
