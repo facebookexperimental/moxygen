@@ -88,6 +88,7 @@ enum class FetchErrorCode : uint32_t {
   NOT_SUPPORTED = 3,
   TRACK_NOT_EXIST = 4,
   INVALID_RANGE = 5,
+  NO_OBJECTS = 6,
   //
   CANCELLED = std::numeric_limits<uint32_t>::max()
 };

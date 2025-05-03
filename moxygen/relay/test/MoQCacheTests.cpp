@@ -890,4 +890,52 @@ CO_TEST_F(MoQCacheTest, TestPopulateCacheWithBeginSubgroupAndFetch) {
       res.value()->fetchOk().latestGroupAndObject, (AbsoluteLocation{0, 1}));
 }
 
+CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsError) {
+  // Insert one object in the cache
+  populateCacheRange({0, 0}, {0, 1});
+
+  // Expect upstream fetch to return FetchError::NO_OBJECTS
+  expectUpstreamFetch(FetchError{0, FetchErrorCode::NO_OBJECTS, "no objects"});
+
+  // Perform the fetch
+  auto res =
+      co_await cache_.fetch(getFetch({0, 1}, {0, 2}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().errorCode, FetchErrorCode::NO_OBJECTS);
+}
+
+CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsTail) {
+  // Insert one object in the cache
+  populateCacheRange({0, 0}, {0, 1});
+
+  // Expect upstream fetch to return FetchError::NO_OBJECTS
+  expectUpstreamFetch(FetchError{0, FetchErrorCode::NO_OBJECTS, "no objects"});
+
+  expectFetchObjects({0, 0}, {0, 1}, true);
+  // Perform the fetch
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(
+      res.value()->fetchOk().latestGroupAndObject, (AbsoluteLocation{0, 1}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchWithCacheGapAndUpstreamNoObjects) {
+  // Populate the cache with a gap {0,0}, {0,2}
+  populateCacheRange({0, 0}, {0, 3}, 10, 2);
+
+  // Expect upstream fetch to return FetchError::NO_OBJECTS for the gap
+  expectUpstreamFetch(FetchError{0, FetchErrorCode::NO_OBJECTS, "no objects"});
+
+  // Expect the consumer to receive the objects from the cache
+  expectFetchObjects({0, 0}, {0, 3}, false, 10, 2);
+
+  // Perform the fetch
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 3}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(
+      res.value()->fetchOk().latestGroupAndObject, (AbsoluteLocation{0, 2}));
+}
+
 } // namespace moxygen::test

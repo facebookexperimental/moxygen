@@ -12,6 +12,11 @@ bool isEndOfTrack(ObjectStatus status) {
       status == ObjectStatus::END_OF_TRACK_AND_GROUP;
 }
 
+bool exists(ObjectStatus status) {
+  return status != ObjectStatus::OBJECT_NOT_EXIST &&
+      status != ObjectStatus::GROUP_NOT_EXIST;
+}
+
 folly::Expected<folly::Unit, MoQPublishError> publishObject(
     ObjectStatus status,
     std::shared_ptr<FetchConsumer> consumer,
@@ -481,6 +486,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     }
   }
 
+  void noObjects() {
+    cacheMissing(end_);
+  }
+
   folly::Expected<folly::Unit, MoQPublishError> object(
       uint64_t gID,
       uint64_t sgID,
@@ -800,6 +809,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   auto token = co_await folly::coro::co_current_cancellation_token;
   folly::Optional<AbsoluteLocation> fetchStart;
   auto current = standalone->start;
+  bool servedOneObject = false;
   folly::CancellationCallback cancelCallback(token, [consumer] {
     XLOG(DBG1) << "Fetch cancelled";
     consumer->reset(ResetStreamErrorCode::CANCELLED);
@@ -857,7 +867,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
           consumer,
           upstream);
       if (res.hasError()) {
-        co_return folly::makeUnexpected(res.error());
+        if (res.error().errorCode != FetchErrorCode::NO_OBJECTS) {
+          co_return folly::makeUnexpected(res.error());
+        }
       } else if (!fetchHandle) {
         // fetchUpstream starts another fetchImpl to complete the fetch if
         // needed
@@ -895,6 +907,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
                 "Consumer error on object=", res.error().msg)});
       }
     } // else publish success
+    servedOneObject |= exists(object->status);
     current = next;
   }
   if (fetchStart) {
@@ -906,9 +919,19 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         /*lastObject=*/true,
         fetch,
         track,
-        std::move(consumer),
+        consumer,
         std::move(upstream));
     if (res.hasError()) {
+      if (servedOneObject &&
+          res.error().errorCode == FetchErrorCode::NO_OBJECTS) {
+        consumer->endOfFetch();
+        co_return std::make_shared<FetchHandle>(FetchOk(
+            fetch.subscribeID,
+            GroupOrder::OldestFirst,
+            track.endOfTrack,
+            *track.latestGroupAndObject,
+            {}));
+      }
       co_return folly::makeUnexpected(res.error());
     } else if (!fetchHandle) {
       XCHECK(res.value());
@@ -920,12 +943,17 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   if (!fetchHandle) {
     XLOG(DBG1) << "Fetch completed entirely from cache";
     // test for empty range with no latest group and object?
-    co_return std::make_shared<FetchHandle>(FetchOk(
-        fetch.subscribeID,
-        GroupOrder::OldestFirst,
-        track.endOfTrack,
-        *track.latestGroupAndObject,
-        {}));
+    if (servedOneObject) {
+      co_return std::make_shared<FetchHandle>(FetchOk(
+          fetch.subscribeID,
+          GroupOrder::OldestFirst,
+          track.endOfTrack,
+          *track.latestGroupAndObject,
+          {}));
+    } else {
+      co_return folly::makeUnexpected(
+          FetchError{fetch.subscribeID, FetchErrorCode::NO_OBJECTS, ""});
+    }
   }
   co_return nullptr;
 }
@@ -954,6 +982,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
           fetch.groupOrder),
       writeback);
   if (res.hasError()) {
+    if (res.error().errorCode == FetchErrorCode::NO_OBJECTS) {
+      writeback->noObjects();
+      co_return folly::makeUnexpected(res.error());
+    }
     XLOG(ERR) << "upstream fetch failed err=" << res.error().reasonPhrase;
     consumer->reset(ResetStreamErrorCode::CANCELLED);
     co_return folly::makeUnexpected(FetchError{
