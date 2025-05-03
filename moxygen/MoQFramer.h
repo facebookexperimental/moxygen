@@ -454,6 +454,21 @@ struct AbsoluteLocation {
       return std::strong_ordering::greater;
     }
   }
+
+  bool operator==(const AbsoluteLocation& other) const {
+    return group == other.group && object == other.object;
+  }
+
+  friend std::ostream& operator<<(
+      std::ostream& os,
+      const AbsoluteLocation& loc) {
+    os << loc.describe();
+    return os;
+  }
+
+  std::string describe() const {
+    return folly::to<std::string>("{", group, ",", object, "}");
+  }
 };
 
 constexpr AbsoluteLocation kLocationMin;

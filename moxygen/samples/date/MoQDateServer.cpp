@@ -197,6 +197,9 @@ class MoQDateServer : public MoQServer,
           FetchErrorCode::INVALID_RANGE,
           "fetch starts in future"});
     }
+    XLOG(DBG1) << "Fetch {" << standalone->start.group << ","
+               << standalone->start.object << "}.." << standalone->end.group
+               << "," << standalone->end.object << "}";
 
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
         fetch.subscribeID,
