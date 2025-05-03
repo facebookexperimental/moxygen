@@ -503,6 +503,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     if (!res) {
       return res;
     }
+    XLOG(DBG1) << "forward object " << AbsoluteLocation(gID, objID);
     return consumer_->object(
         gID, sgID, objID, std::move(payload), std::move(ext), fin && proxyFin_);
   }
@@ -624,6 +625,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     updateInProgress();
     complete_.post();
     if (proxyFin_) {
+      XLOG(DBG1) << "Forward End of Fetch";
       return consumer_->endOfFetch();
     }
     return folly::unit;
@@ -698,16 +700,16 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       bool finFetch) {
     cacheMissing({groupID, objectID});
     auto& group = track_.getOrCreateGroup(groupID);
-    auto res = track_.updateLatest({groupID, objectID}, isEndOfTrack(status));
-    if (!res) {
-      updateInProgress();
-      return res;
-    }
     auto cacheRes = group.cacheObject(
         subgroupID, objectID, status, extensions, std::move(payload), complete);
     if (cacheRes.hasError()) {
       updateInProgress();
       return cacheRes;
+    }
+    auto res = track_.updateLatest({groupID, objectID}, isEndOfTrack(status));
+    if (!res) {
+      updateInProgress();
+      return res;
     }
     if (complete) {
       start_ = AbsoluteLocation{groupID, objectID + 1};
@@ -756,21 +758,32 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
   AbsoluteLocation last = standalone->end;
   if (last.object > 0) {
     last.object--;
-  } // if end is 2,0, that means all of group 1
+  } else {
+    // if end is 1,0, that means all of group 1
+    last.object = std::numeric_limits<uint64_t>::max();
+    standalone->end.group++;
+    // TODO: handle case where track.largestGroupAndObject is an END_OF_GROUP
+    // or END_OF_TRACK
+  }
   if (track.latestGroupAndObject &&
       (track.isLive || last <= *track.latestGroupAndObject)) {
     // we can immediately return fetch OK
     XLOG(DBG1) << "Live track or known past data, return FetchOK";
-    AbsoluteLocation largestInFetch = *track.latestGroupAndObject;
+    AbsoluteLocation largestInFetch = standalone->end;
+    bool isEndOfTrack = false;
     if (standalone->end >= *track.latestGroupAndObject) {
-      largestInFetch = *track.latestGroupAndObject;
-      // fetchImpl range inclusive of end
-      standalone->end = {largestInFetch.group, largestInFetch.object + 1};
+      standalone->end = *track.latestGroupAndObject;
+      standalone->end.object++;
+      largestInFetch = standalone->end;
+      isEndOfTrack = track.endOfTrack;
+      // fetchImpl range exclusive of end
+    } else if (largestInFetch.object == 0) {
+      largestInFetch.group--;
     }
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk(
         {fetch.subscribeID,
          GroupOrder::OldestFirst,
-         track.endOfTrack,
+         isEndOfTrack,
          largestInFetch,
          {}}));
     folly::coro::co_withCancellation(
@@ -866,16 +879,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
           track,
           consumer,
           upstream);
-      if (res.hasError()) {
-        if (res.error().errorCode != FetchErrorCode::NO_OBJECTS) {
-          co_return folly::makeUnexpected(res.error());
-        }
-      } else if (!fetchHandle) {
-        // fetchUpstream starts another fetchImpl to complete the fetch if
-        // needed
-        XCHECK(res.value());
-        co_return std::move(res.value());
-      } // else continue
+      if (res.hasError() &&
+          res.error().errorCode != FetchErrorCode::NO_OBJECTS) {
+        co_return folly::makeUnexpected(res.error());
+      } // else success but only returns FetchOk on lastObject
       fetchStart.reset();
     }
     XLOG(DBG1) << "Publish object from cache";
@@ -928,8 +935,8 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         co_return std::make_shared<FetchHandle>(FetchOk(
             fetch.subscribeID,
             GroupOrder::OldestFirst,
-            track.endOfTrack,
-            *track.latestGroupAndObject,
+            false, // standalone->end can't be the end of track
+            standalone->end,
             {}));
       }
       co_return folly::makeUnexpected(res.error());
@@ -944,12 +951,19 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     XLOG(DBG1) << "Fetch completed entirely from cache";
     // test for empty range with no latest group and object?
     if (servedOneObject) {
+      if (standalone->end.object == 0) {
+        standalone->end.group--;
+      }
+      bool endOfTrack = false;
+      if (track.endOfTrack && standalone->end >= *track.latestGroupAndObject) {
+        endOfTrack = true;
+        standalone->end = *track.latestGroupAndObject;
+      }
       co_return std::make_shared<FetchHandle>(FetchOk(
           fetch.subscribeID,
           GroupOrder::OldestFirst,
-          track.endOfTrack,
-          *track.latestGroupAndObject,
-          {}));
+          endOfTrack,
+          standalone->end));
     } else {
       co_return folly::makeUnexpected(
           FetchError{fetch.subscribeID, FetchErrorCode::NO_OBJECTS, ""});
@@ -970,14 +984,18 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
   XLOG(DBG1) << "Fetching upstream for {" << fetchStart.group << ","
              << fetchStart.object << "}, {" << fetchEnd.group << ","
              << fetchEnd.object << "}";
+  auto adjFetchEnd = fetchEnd;
+  if (adjFetchEnd.object == 0) {
+    adjFetchEnd.group--;
+  }
   auto writeback = std::make_shared<FetchWriteback>(
-      fetchStart, fetchEnd, lastObject, consumer, track);
+      fetchStart, adjFetchEnd, lastObject, consumer, track);
   auto res = co_await upstream->fetch(
       Fetch(
           0,
           fetch.fullTrackName,
           fetchStart,
-          fetchEnd,
+          adjFetchEnd,
           fetch.priority,
           fetch.groupOrder),
       writeback);
@@ -990,58 +1008,26 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
     consumer->reset(ResetStreamErrorCode::CANCELLED);
     co_return folly::makeUnexpected(FetchError{
         fetch.subscribeID, res.error().errorCode, res.error().reasonPhrase});
-  } else if (!fetchHandle) {
-    XLOG(DBG1) << "upstream success and no fetchHandle";
-    fetchHandle = std::make_shared<FetchHandle>(FetchOk(
-        {fetch.subscribeID,
-         GroupOrder::OldestFirst,
-         res.value()->fetchOk().endOfTrack,
-         res.value()->fetchOk().latestGroupAndObject,
-         res.value()->fetchOk().params}));
-    fetchHandle->setUpstreamFetchHandle(res.value());
-    if (!lastObject) {
-      folly::coro::co_withCancellation(
-          fetchHandle->getToken(),
-          folly::coro::co_invoke(
-              [this,
-               fetchHandle,
-               writeback,
-               current = fetchEnd,
-               fetch,
-               &track,
-               consumer,
-               upstream]() mutable -> folly::coro::Task<void> {
-                XLOG(DBG1) << "Waiting for writeback complete";
-                co_await writeback->complete();
-                if (writeback->wasReset()) {
-                  // writeback was reset, can't continue
-                  XLOG(ERR) << "Fetch was reset, returning";
-                  co_return;
-                }
-                writeback.reset();
-                co_await folly::coro::co_safe_point;
-                auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
-                standalone->start = current;
-                XLOG(DBG1) << "Invoking fetchImpl";
-                co_await fetchImpl(
-                    fetchHandle,
-                    fetch,
-                    track,
-                    std::move(consumer),
-                    std::move(upstream));
-              }))
-          .scheduleOn(co_await folly::coro::co_current_executor)
-          .start();
-    }
-    co_return fetchHandle;
-  } else {
-    fetchHandle->setUpstreamFetchHandle(res.value());
   }
-  // upstream FetchOK but not needed
+
+  XLOG(DBG1) << "upstream success";
   if (lastObject) {
-    // don't need to wait
-    co_return nullptr;
+    if (!fetchHandle) {
+      XLOG(DBG1) << "no fetchHandle and last object";
+      fetchHandle = std::make_shared<FetchHandle>(FetchOk(
+          {fetch.subscribeID,
+           GroupOrder::OldestFirst,
+           res.value()->fetchOk().endOfTrack,
+           res.value()->fetchOk().endLocation,
+           res.value()->fetchOk().params}));
+    }
+    fetchHandle->setUpstreamFetchHandle(res.value());
+    co_return fetchHandle;
+  } else if (fetchHandle) {
+    XLOG(DBG1) << "fetchHandle and not last object";
+    fetchHandle->setUpstreamFetchHandle(res.value());
   }
+  // not the last object, wait for writeback
   co_await writeback->complete();
   if (writeback->wasReset()) {
     // FetchOk but fetch stream was reset, can't continue

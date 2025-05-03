@@ -1128,7 +1128,7 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
-  fetchOk.latestGroupAndObject = std::move(res2.value());
+  fetchOk.endLocation = std::move(res2.value());
 
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -2267,8 +2267,8 @@ WriteResult MoQFrameWriter::writeFetchOk(
   size += 1;
   writeBuf.append(&fetchOk.endOfTrack, 1);
   size += 1;
-  writeVarint(writeBuf, fetchOk.latestGroupAndObject.group, size, error);
-  writeVarint(writeBuf, fetchOk.latestGroupAndObject.object, size, error);
+  writeVarint(writeBuf, fetchOk.endLocation.group, size, error);
+  writeVarint(writeBuf, fetchOk.endLocation.object, size, error);
   writeTrackRequestParams(writeBuf, fetchOk.params, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {

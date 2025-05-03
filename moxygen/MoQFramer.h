@@ -782,7 +782,7 @@ struct FetchOk {
   SubscribeID subscribeID;
   GroupOrder groupOrder;
   uint8_t endOfTrack;
-  AbsoluteLocation latestGroupAndObject;
+  AbsoluteLocation endLocation;
   std::vector<TrackRequestParameter> params;
 };
 
