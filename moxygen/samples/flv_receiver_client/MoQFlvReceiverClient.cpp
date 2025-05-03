@@ -390,8 +390,6 @@ class MoQFlvReceiverClient
 
       uint64_t negotiatedVersion =
           *(moqClient_->moqSession_->getNegotiatedVersion());
-      uint64_t authorizationParamKey =
-          getAuthorizationParamKey(negotiatedVersion);
 
       SubscribeRequest subAudio{
           subscribeIDAudio,
@@ -406,7 +404,7 @@ class MoQFlvReceiverClient
           LocationType::LatestObject,
           folly::none,
           0,
-          {{authorizationParamKey, FLAGS_auth, 0}}};
+          {getAuthParam(negotiatedVersion, FLAGS_auth)}};
       SubscribeRequest subVideo{
           subscribeIDVideo,
           trackAliasVideo,
@@ -420,7 +418,7 @@ class MoQFlvReceiverClient
           LocationType::LatestObject,
           folly::none,
           0,
-          {{authorizationParamKey, FLAGS_auth, 0}}};
+          {getAuthParam(negotiatedVersion, FLAGS_auth)}};
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(

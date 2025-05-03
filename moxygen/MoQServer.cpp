@@ -82,11 +82,17 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
   // TODO: Make the default MAX_SUBSCRIBE_ID configurable and
   // take in the value from ClientSetup
   static constexpr size_t kDefaultMaxSubscribeId = 100;
+  static constexpr size_t kMaxAuthTokenCacheSize = 1024;
   return folly::Try<ServerSetup>(ServerSetup({
       negotiatedVersion,
       {{folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
-        kDefaultMaxSubscribeId}},
+        kDefaultMaxSubscribeId,
+        {}},
+       {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+        "",
+        kMaxAuthTokenCacheSize,
+        {}}},
   }));
 }
 

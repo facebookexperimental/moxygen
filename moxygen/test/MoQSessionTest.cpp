@@ -96,6 +96,9 @@ class MoQSessionTest : public testing::Test,
       EXPECT_EQ(
           setup.params.at(0).key,
           folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+      EXPECT_EQ(
+          setup.params.at(1).key,
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
       EXPECT_EQ(setup.params.at(0).asUint64, initialMaxSubscribeId_);
     }
     if (failServerSetup_) {
@@ -105,8 +108,16 @@ class MoQSessionTest : public testing::Test,
     return folly::Try<ServerSetup>(ServerSetup{
         .selectedVersion = getServerSelectedVersion(),
         .params = {
-            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = initialMaxSubscribeId_}}}});
+            SetupParameter{
+                folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+                "",
+                initialMaxSubscribeId_,
+                {}},
+            SetupParameter{
+                folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+                "",
+                16,
+                {}}}});
   }
 
   virtual folly::coro::Task<void> setupMoQSession();
@@ -176,8 +187,16 @@ class MoQSessionTest : public testing::Test,
     return ClientSetup{
         .supportedVersions = getClientSupportedVersions(),
         .params = {
-            {{.key = folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
-              .asUint64 = initialMaxSubscribeId}}}};
+            SetupParameter{
+                folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+                "",
+                initialMaxSubscribeId,
+                {}},
+            SetupParameter{
+                folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+                "",
+                16,
+                {}}}};
   }
 
   virtual std::vector<uint64_t> getClientSupportedVersions() {
@@ -1330,6 +1349,51 @@ CO_TEST_F_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   serverWt_->writeHandles[2]->deliverInflightData();
   EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
       .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_F_X(MoQSessionTestWithVersion11, TrackStatusWithAuthorizationToken) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .WillOnce(testing::Invoke(
+          [this](TrackStatusRequest request)
+              -> folly::coro::Task<Publisher::TrackStatusResult> {
+            EXPECT_EQ(request.params.size(), 5);
+            auto verifyParam = [this](
+                                   const auto& param,
+                                   const std::string& expectedTokenValue) {
+              return param.key ==
+                  getAuthorizationParamKey(getServerSelectedVersion()) &&
+                  param.asAuthToken.tokenType == 0 &&
+                  param.asAuthToken.tokenValue == expectedTokenValue;
+            };
+
+            EXPECT_TRUE(verifyParam(request.params.at(0), "abc"));
+            EXPECT_TRUE(
+                verifyParam(request.params.at(1), std::string(20, 'x')));
+            EXPECT_TRUE(verifyParam(request.params.at(2), "abcd"));
+            EXPECT_TRUE(verifyParam(request.params.at(3), "abcd"));
+            EXPECT_TRUE(verifyParam(request.params.at(4), "xyzw"))
+                << "'" << request.params.at(4).asAuthToken.tokenValue;
+            co_return Publisher::TrackStatusResult{
+                request.fullTrackName,
+                TrackStatusCode::IN_PROGRESS,
+                AbsoluteLocation{},
+                {}};
+          }));
+  TrackStatusRequest request = getTrackStatusRequest();
+  auto addAuthToken = [this](auto& params, const AuthToken& token) {
+    params.push_back(
+        {getAuthorizationParamKey(getServerSelectedVersion()), "", 0, token});
+  };
+
+  addAuthToken(request.params, {0, "abc", AuthToken::DontRegister});
+  addAuthToken(request.params, {0, std::string(20, 'x'), AuthToken::Register});
+  addAuthToken(request.params, {0, "abcd", AuthToken::Register});
+  addAuthToken(request.params, {0, "abcd", AuthToken::Register});
+  addAuthToken(request.params, {0, "xyzw", AuthToken::Register});
+  auto res = co_await clientSession_->trackStatus(request);
+  EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

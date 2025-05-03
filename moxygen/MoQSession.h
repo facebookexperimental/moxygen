@@ -389,6 +389,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   // MUST NOT create any subscriptions
   static uint64_t getMaxSubscribeIdIfPresent(
       const std::vector<SetupParameter>& params);
+  static uint64_t getMaxAuthTokenCacheSizeIfPresent(
+      const std::vector<SetupParameter>& params);
 
   //  Closes the session if the subscribeID is invalid, that is,
   //  subscribeID <= maxSubscribeID_;
@@ -396,6 +398,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   bool closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID);
 
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
+  void aliasifyAuthTokens(std::vector<TrackRequestParameter>& params);
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
@@ -492,5 +495,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   MoQFrameWriter moqFrameWriter_;
   folly::Optional<uint64_t> negotiatedVersion_{0};
   MoQControlCodec controlCodec_;
+  MoQTokenCache tokenCache_; // sending tokens
 };
 } // namespace moxygen

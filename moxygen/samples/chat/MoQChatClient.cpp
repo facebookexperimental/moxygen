@@ -57,7 +57,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     // subscribe to the catalog track from the beginning of the latest group
     auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
         {TrackNamespace(chatPrefix()),
-         {{getAuthorizationParamKey(negotiatedVersion), username_}}});
+         {getAuthParam(negotiatedVersion, username_)}});
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });

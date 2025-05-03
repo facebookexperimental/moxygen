@@ -40,7 +40,7 @@ enum class LegacyTrackRequestParamKey : uint64_t {
 
 // Used in draft 11 and above
 enum class TrackRequestParamKey : uint64_t {
-  AUTHORIZATION = 1,
+  AUTHORIZATION_TOKEN = 1,
   DELIVERY_TIMEOUT = 2,
   MAX_CACHE_DURATION = 4,
 };
@@ -58,7 +58,7 @@ uint64_t getDraftMajorVersion(uint64_t version) {
 
 uint64_t getAuthorizationParamKey(uint64_t version) {
   if (getDraftMajorVersion(version) >= 11) {
-    return folly::to_underlying(TrackRequestParamKey::AUTHORIZATION);
+    return folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
   } else {
     return folly::to_underlying(LegacyTrackRequestParamKey::AUTHORIZATION);
   }
@@ -109,7 +109,8 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     length -= key->second;
     SetupParameter p;
     p.key = key->first;
-    if (p.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (p.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID) ||
+        p.key == folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
       auto res = quic::decodeQuicInteger(cursor);
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -228,7 +229,7 @@ MoQFrameParser::parseDatagramObjectHeader(
   }
   length -= id->second;
   objectHeader.id = id->first;
-  if (!cursor.canAdvance(1)) {
+  if (length == 0 || !cursor.canAdvance(1)) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
@@ -287,7 +288,7 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
   }
   objectHeader.subgroup = subgroup->first;
   length -= subgroup->second;
-  if (cursor.canAdvance(1)) {
+  if (length > 0 || cursor.canAdvance(1)) {
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
@@ -399,6 +400,105 @@ MoQFrameParser::parseSubgroupObjectHeader(
   return objectHeader;
 }
 
+folly::Expected<folly::Optional<AuthToken>, ErrorCode>
+MoQFrameParser::parseToken(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
+  folly::Optional<AuthToken> token;
+  token.emplace(); // plan for success
+  auto aliasType = quic::decodeQuicInteger(cursor, length);
+  if (!aliasType) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (aliasType->first > folly::to_underlying(AliasType::USE_VALUE)) {
+    XLOG(ERR) << "aliasType > USE_VALUE =" << aliasType->first;
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto aliasTypeVal = static_cast<AliasType>(aliasType->first);
+  length -= aliasType->second;
+
+  switch (aliasTypeVal) {
+    case AliasType::DELETE:
+    case AliasType::USE_ALIAS: {
+      auto tokenAlias = quic::decodeQuicInteger(cursor, length);
+      if (!tokenAlias) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= tokenAlias->second;
+      token->alias = tokenAlias->first;
+
+      if (aliasTypeVal == AliasType::DELETE) {
+        auto deleteRes = tokenCache_.deleteToken(*token->alias);
+        if (!deleteRes) {
+          return folly::makeUnexpected(ErrorCode::UNKNOWN_AUTH_TOKEN_ALIAS);
+        }
+        token.reset();
+      } else {
+        auto lookupRes = tokenCache_.getTokenForAlias(*token->alias);
+        if (!lookupRes) {
+          return folly::makeUnexpected(ErrorCode::UNKNOWN_AUTH_TOKEN_ALIAS);
+        }
+        token->tokenType = lookupRes->tokenType;
+        token->tokenValue = std::move(lookupRes->tokenValue);
+      }
+    } break;
+    case AliasType::REGISTER: {
+      auto tokenAlias = quic::decodeQuicInteger(cursor, length);
+      if (!tokenAlias) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= tokenAlias->second;
+      token->alias = tokenAlias->first;
+
+      auto tokenType = quic::decodeQuicInteger(cursor, length);
+      if (!tokenType) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= tokenType->second;
+      token->tokenType = tokenType->first;
+
+      auto tokenValue = parseFixedString(cursor, length);
+      if (!tokenValue) {
+        return folly::makeUnexpected(tokenValue.error());
+      }
+      token->tokenValue = std::move(tokenValue.value());
+      auto registerRes = tokenCache_.registerToken(
+          *token->alias, token->tokenType, token->tokenValue);
+      if (!registerRes) {
+        if (registerRes.error() == MoQTokenCache::ErrorCode::DUPLICATE_ALIAS) {
+          return folly::makeUnexpected(ErrorCode::DUPLICATE_AUTH_TOKEN_ALIAS);
+        } else if (
+            registerRes.error() == MoQTokenCache::ErrorCode::LIMIT_EXCEEDED) {
+          return folly::makeUnexpected(ErrorCode::AUTH_TOKEN_CACHE_OVERFLOW);
+        } else {
+          return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+        }
+      }
+    } break;
+    case AliasType::USE_VALUE: {
+      auto tokenType = quic::decodeQuicInteger(cursor, length);
+      if (!tokenType) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= tokenType->second;
+      token->tokenType = tokenType->first;
+
+      auto tokenValue = parseFixedString(cursor, length);
+      if (!tokenValue) {
+        return folly::makeUnexpected(tokenValue.error());
+      }
+      token->tokenValue = std::move(tokenValue.value());
+    } break;
+    default:
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  return token;
+}
+
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -415,12 +515,36 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     length -= key->second;
     p.key = key->first;
 
-    if (p.key == getAuthorizationParamKey(*version_)) {
+    if (p.key ==
+            folly::to_underlying(LegacyTrackRequestParamKey::AUTHORIZATION) &&
+        getDraftMajorVersion(*version_) < 11) {
       auto res = parseFixedString(cursor, length);
       if (!res) {
-        return folly::makeUnexpected(res.error());
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
       p.asString = std::move(res.value());
+    } else if (
+        p.key ==
+            folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN) &&
+        getDraftMajorVersion(*version_) >= 11) {
+      auto res = quic::decodeQuicInteger(cursor, length);
+      if (!res) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= res->second;
+      if (res->first > length || !cursor.canAdvance(res->first)) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      auto tokenRes = parseToken(cursor, res->first);
+      if (!tokenRes) {
+        return folly::makeUnexpected(tokenRes.error());
+      }
+      length -= res->first;
+      if (!tokenRes.value().has_value()) {
+        // it was delete, don't export
+        continue;
+      }
+      p.asAuthToken = std::move(*tokenRes.value());
     } else {
       auto res = quic::decodeQuicInteger(cursor, length);
       if (!res) {
@@ -435,6 +559,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       p.asUint64 = res->first;
     }
     params.emplace_back(std::move(p));
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return folly::unit;
 }
@@ -1476,6 +1603,64 @@ void writeFullTrackName(
   writeFixedString(writeBuf, fullTrackName.trackName, size, error);
 }
 
+std::string MoQFrameWriter::encodeUseAlias(uint64_t alias) const {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(
+      writeBuf, folly::to_underlying(AliasType::USE_ALIAS), size, error);
+  writeVarint(writeBuf, alias, size, error);
+  XCHECK(!error) << "Alias too large";
+  return writeBuf.move()->moveToFbString().toStdString();
+}
+
+std::string MoQFrameWriter::encodeDeleteTokenAlias(uint64_t alias) const {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, folly::to_underlying(AliasType::DELETE), size, error);
+  writeVarint(writeBuf, alias, size, error);
+  XCHECK(!error) << "Alias too large";
+  return writeBuf.move()->moveToFbString().toStdString();
+}
+
+std::string MoQFrameWriter::encodeRegisterToken(
+    uint64_t alias,
+    uint64_t tokenType,
+    const std::string& tokenValue) const {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, folly::to_underlying(AliasType::REGISTER), size, error);
+  writeVarint(writeBuf, alias, size, error);
+  writeVarint(writeBuf, tokenType, size, error);
+  writeFixedString(writeBuf, tokenValue, size, error);
+  XCHECK(!error) << "Error encoding register token";
+  return writeBuf.move()->moveToFbString().toStdString();
+}
+
+std::string MoQFrameWriter::encodeTokenValue(
+    uint64_t tokenType,
+    const std::string& tokenValue) const {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  if (getDraftMajorVersion(*version_) >= 11) {
+    writeVarint(
+        writeBuf, folly::to_underlying(AliasType::USE_VALUE), size, error);
+    writeVarint(writeBuf, tokenType, size, error);
+  }
+  writeFixedString(writeBuf, tokenValue, size, error);
+  XCHECK(!error) << "Error encoding token value";
+  return writeBuf.move()->moveToFbString().toStdString();
+}
+
+bool includeParam(uint64_t version, uint64_t key) {
+  return key == getAuthorizationParamKey(version) ||
+      key == getMaxCacheDurationParamKey(version) ||
+      key == getDeliveryTimeoutParamKey(version);
+}
+
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
     const ClientSetup& clientSetup,
@@ -1488,14 +1673,32 @@ WriteResult writeClientSetup(
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
+  bool v11Plus = true;
   for (auto version : clientSetup.supportedVersions) {
+    if (getDraftMajorVersion(version) < 11) {
+      v11Plus = false;
+    }
     writeVarint(writeBuf, version, size, error);
   }
 
-  writeVarint(writeBuf, clientSetup.params.size(), size, error);
+  // Count the number of params, excluding !v11Plus MAX_AUTH_TOKEN_CACHE_SIZE
+  size_t paramCount = 0;
+  for (const auto& param : clientSetup.params) {
+    if (includeParam(v11Plus ? kVersionDraft11 : kVersionDraft10, param.key)) {
+      ++paramCount;
+    }
+  }
+  // TODO: bug here - the count is wrong for unknown params (which we don't
+  // serizlize)
+  writeVarint(writeBuf, paramCount, size, error);
   for (auto& param : clientSetup.params) {
+    if (!includeParam(v11Plus ? kVersionDraft11 : kVersionDraft10, param.key)) {
+      continue;
+    }
     writeVarint(writeBuf, param.key, size, error);
-    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID) ||
+        param.key ==
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
       auto ret = quic::getQuicIntegerSize(param.asUint64);
       if (ret.hasError()) {
         XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
@@ -1525,10 +1728,25 @@ WriteResult writeServerSetup(
       : FrameType::LEGACY_SERVER_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
   writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
-  writeVarint(writeBuf, serverSetup.params.size(), size, error);
+
+  // Count the number of params, excluding !v11Plus MAX_AUTH_TOKEN_CACHE_SIZE
+  size_t paramCount = 0;
+  for (const auto& param : serverSetup.params) {
+    if (includeParam(serverSetup.selectedVersion, param.key)) {
+      ++paramCount;
+    }
+  }
+  // TODO: bug here - the count is wrong for unknown params (which we don't
+  // serizlize)
+  writeVarint(writeBuf, paramCount, size, error);
   for (auto& param : serverSetup.params) {
+    if (!includeParam(serverSetup.selectedVersion, param.key)) {
+      continue;
+    }
     writeVarint(writeBuf, param.key, size, error);
-    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID) ||
+        (param.key ==
+         folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE))) {
       auto ret = quic::getQuicIntegerSize(param.asUint64);
       if (ret.hasError()) {
         XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
@@ -1666,6 +1884,18 @@ size_t MoQFrameWriter::getExtensionSize(
     }
   }
   return size;
+}
+
+TrackRequestParameter getAuthParam(
+    uint64_t version,
+    std::string token,
+    uint64_t tokenType,
+    folly::Optional<uint64_t> registerToken) {
+  return TrackRequestParameter(
+      {getAuthorizationParamKey(version),
+       getDraftMajorVersion(version) < 11 ? token : "",
+       0,
+       {tokenType, std::move(token), registerToken}});
 }
 
 void MoQFrameWriter::writeTrackRequestParams(

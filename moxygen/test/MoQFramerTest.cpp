@@ -44,19 +44,19 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     }
   }
 
-  size_t frameLength(folly::io::Cursor& cursor) {
+  size_t frameLength(folly::io::Cursor& cursor, bool checkAdvance = true) {
     if (getDraftMajorVersion(GetParam()) >= 11) {
       if (!cursor.canAdvance(2)) {
         throw TestUnderflow();
       }
       size_t res = cursor.readBE<uint16_t>();
-      if (!cursor.canAdvance(res)) {
+      if (checkAdvance && !cursor.canAdvance(res)) {
         throw TestUnderflow();
       }
       return res;
     } else {
       auto res = quic::decodeQuicInteger(cursor);
-      if (res && cursor.canAdvance(res->first)) {
+      if (res && (!checkAdvance || cursor.canAdvance(res->first))) {
         return res->first;
       } else {
         throw TestUnderflow();
@@ -581,8 +581,12 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   std::vector<TrackRequestParameter> params;
   if (getDraftMajorVersion(GetParam()) >= 11) {
     // Add some parameters to the TrackStatusRequest.
-    params.push_back({getAuthorizationParamKey(GetParam()), "stampolli", 0});
-    params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999});
+    params.push_back(
+        {getAuthorizationParamKey(GetParam()),
+         writer_.encodeTokenValue(0, "stampolli"),
+         0,
+         {}});
+    params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
   }
   tsr.params = params;
   auto writeResult = writer_.writeTrackStatusRequest(writeBuf, tsr);
@@ -602,7 +606,8 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   if (getDraftMajorVersion(GetParam()) >= 11) {
     EXPECT_EQ(parseResult->params.size(), 2);
     EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
-    EXPECT_EQ(parseResult->params[0].asString, "stampolli");
+    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
+    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
     EXPECT_EQ(
         parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
     EXPECT_EQ(parseResult->params[1].asUint64, 999);
@@ -617,11 +622,13 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
   trackStatus.latestGroupAndObject = AbsoluteLocation({19, 77});
   std::vector<TrackRequestParameter> params;
-  if (getDraftMajorVersion(GetParam()) >= 11) {
-    // Add some parameters to the TrackStatusRequest.
-    params.push_back({getAuthorizationParamKey(GetParam()), "stampolli", 0});
-    params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999});
-  }
+  // Add some parameters to the TrackStatusRequest.
+  params.push_back(
+      {getAuthorizationParamKey(GetParam()),
+       writer_.encodeTokenValue(0, "stampolli"),
+       0,
+       {}});
+  params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
   trackStatus.params = params;
   auto writeResult = writer_.writeTrackStatus(writeBuf, trackStatus);
   EXPECT_TRUE(writeResult.hasValue());
@@ -641,10 +648,270 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   if (getDraftMajorVersion(GetParam()) >= 11) {
     EXPECT_EQ(parseResult->params.size(), 2);
     EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
-    EXPECT_EQ(parseResult->params[0].asString, "stampolli");
+    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
+    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
     EXPECT_EQ(
         parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
     EXPECT_EQ(parseResult->params[1].asUint64, 999);
+  }
+}
+
+std::string encodeToken(
+    MoQFrameWriter& writer,
+    AliasType aliasType,
+    uint64_t alias,
+    uint64_t tokenType,
+    const std::string& tokenValue) {
+  switch (aliasType) {
+    case AliasType::USE_VALUE:
+      return writer.encodeTokenValue(tokenType, tokenValue);
+    case AliasType::REGISTER:
+      return writer.encodeRegisterToken(alias, tokenType, tokenValue);
+    case AliasType::USE_ALIAS:
+      return writer.encodeUseAlias(alias);
+    case AliasType::DELETE:
+      return writer.encodeDeleteTokenAlias(alias);
+    default:
+      throw std::invalid_argument("Invalid alias type");
+  }
+}
+
+size_t writeSubscribeRequestWithAuthToken(
+    folly::IOBufQueue& writeBuf,
+    MoQFrameWriter& writer,
+    AliasType aliasType,
+    uint64_t alias,
+    uint64_t tokenType,
+    const std::string& tokenValue) {
+  SubscribeRequest req{
+      SubscribeID(0),
+      TrackAlias(1),
+      FullTrackName({TrackNamespace({"test"}), "track"}),
+      kDefaultPriority,
+      GroupOrder::OldestFirst,
+      true,
+      LocationType::LatestObject,
+      folly::none,
+      0,
+      {}};
+
+  auto encodedToken =
+      encodeToken(writer, aliasType, alias, tokenType, tokenValue);
+  req.params.push_back(
+      {getAuthorizationParamKey(*writer.getVersion()), encodedToken, 0, {}});
+  auto writeResult = writer.writeSubscribeRequest(writeBuf, req);
+  EXPECT_TRUE(writeResult.hasValue());
+  return encodedToken.size();
+}
+
+using MoQFramerAuthTest = MoQFramerTest;
+
+TEST_P(MoQFramerAuthTest, AuthTokenTest) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  parser_.setTokenCacheMaxSize(100);
+
+  // Register token with type=0, value="abc"
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::REGISTER, 0, 0, "abc");
+
+  // Register token with type=1, value="def"
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::REGISTER, 1, 1, "def");
+
+  // Delete alias=0
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::DELETE, 0, 0, "");
+
+  // Use alias=1
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::USE_ALIAS, 1, 0, "");
+
+  // Use value with type=2, value="xyz"
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::USE_VALUE, 0, 2, "xyz");
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Parse and verify each token
+  std::vector<uint64_t> expectedTokenType = {0, 1, 19, 1, 2};
+  std::vector<std::string> expectedTokenValue = {
+      "abc", "def", "", "def", "xyz"};
+  for (int i = 0; i < 5; ++i) {
+    auto frameType = quic::decodeQuicInteger(cursor);
+    EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+    auto parseResult =
+        parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+    EXPECT_TRUE(parseResult.hasValue());
+    EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
+    EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "test");
+    EXPECT_EQ(parseResult->fullTrackName.trackName, "track");
+    if (i == 2) {
+      EXPECT_EQ(parseResult->params.size(), 0);
+    } else {
+      EXPECT_EQ(parseResult->params.size(), 1);
+      EXPECT_EQ(
+          parseResult->params[0].asAuthToken.tokenType, expectedTokenType[i])
+          << i;
+      EXPECT_EQ(
+          parseResult->params[0].asAuthToken.tokenValue, expectedTokenValue[i])
+          << i;
+    }
+  }
+}
+
+TEST_P(MoQFramerAuthTest, AuthTokenErrorCases) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  parser_.setTokenCacheMaxSize(22); // Set a small cache size for testing
+
+  // Register token with alias=0, type=0, value="abc"
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::REGISTER, 0, 0, "abc");
+
+  // Attempt to register another token with the same alias=0
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::REGISTER, 0, 1, "def");
+
+  // Attempt to use an alias that doesn't exist (alias=2)
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::USE_ALIAS, 2, 0, "");
+
+  // Attempt to delete an alias that doesn't exist (alias=3)
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::DELETE, 3, 0, "");
+
+  // Register a token that exceeds the max token cache size
+  writeSubscribeRequestWithAuthToken(
+      writeBuf, writer_, AliasType::REGISTER, 1, 3, "jklmnop");
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  std::vector expectedErrors = {
+      ErrorCode::NO_ERROR,
+      ErrorCode::DUPLICATE_AUTH_TOKEN_ALIAS,
+      ErrorCode::UNKNOWN_AUTH_TOKEN_ALIAS,
+      ErrorCode::UNKNOWN_AUTH_TOKEN_ALIAS,
+      ErrorCode::AUTH_TOKEN_CACHE_OVERFLOW};
+  // Parse and verify each token
+  for (int i = 0; i < 5; ++i) {
+    auto frameType = quic::decodeQuicInteger(cursor);
+    EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+    auto parseResult =
+        parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+    if (i > 0) {
+      // Expect errors for these cases
+      EXPECT_FALSE(parseResult.hasValue()) << i;
+      EXPECT_EQ(parseResult.error(), expectedErrors[i]) << i;
+    } else {
+      EXPECT_TRUE(parseResult.hasValue());
+    }
+  }
+}
+
+TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  parser_.setTokenCacheMaxSize(100);
+
+  std::vector<size_t> tokenLengths;
+  folly::IOBufQueue writeBufs[4] = {
+      folly::IOBufQueue{folly::IOBufQueue::cacheChainLength()},
+      folly::IOBufQueue{folly::IOBufQueue::cacheChainLength()},
+      folly::IOBufQueue{folly::IOBufQueue::cacheChainLength()},
+      folly::IOBufQueue{folly::IOBufQueue::cacheChainLength()}};
+
+  auto len = writeSubscribeRequestWithAuthToken(
+      writeBufs[0],
+      writer_,
+      AliasType::REGISTER,
+      0xff,
+      0xff,
+      std::string(65, 'a'));
+  tokenLengths.push_back(len);
+
+  len = writeSubscribeRequestWithAuthToken(
+      writeBufs[1], writer_, AliasType::USE_ALIAS, 0xff, 0, "");
+  tokenLengths.push_back(len);
+
+  len = writeSubscribeRequestWithAuthToken(
+      writeBufs[2],
+      writer_,
+      AliasType::USE_VALUE,
+      0xff,
+      0xff,
+      std::string(65, 'b'));
+  tokenLengths.push_back(len);
+
+  len = writeSubscribeRequestWithAuthToken(
+      writeBufs[3], writer_, AliasType::DELETE, 0xff, 0, "");
+  tokenLengths.push_back(len);
+
+  for (int j = 0; j < 4; ++j) {
+    auto frameHeader = writeBufs[j].split(3);
+    auto front = writeBufs[j].split(20);
+    auto origTokenLengthBytes = tokenLengths[j] > 64 ? 2 : 1;
+    auto tokenLengthBuf = writeBufs[j].split(origTokenLengthBytes);
+    auto tail = writeBufs[j].move();
+    folly::io::Cursor cursor(frameHeader.get());
+
+    auto frameType = quic::decodeQuicInteger(cursor);
+    EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+
+    len = frameLength(cursor, false);
+    for (auto i = 0; i < tokenLengths[j] - 1; ++i) {
+      auto toParse = front->clone();
+      auto shortTokenLengthBuf = folly::IOBuf::create(2);
+      uint8_t tokenLengthBytes = 0;
+      quic::encodeQuicInteger(i, [&](auto val) {
+        if (sizeof(val) == 1) {
+          shortTokenLengthBuf->writableData()[0] = val;
+        } else {
+          val = folly::Endian::big(val);
+          memcpy(shortTokenLengthBuf->writableData(), &val, 2);
+        }
+        shortTokenLengthBuf->append(sizeof(val));
+        tokenLengthBytes = sizeof(val);
+      });
+      toParse->appendToChain(std::move(shortTokenLengthBuf));
+      toParse->appendToChain(tail->clone());
+      folly::io::Cursor tmpCursor(toParse.get());
+      cursor.reset(toParse.get());
+      auto parseResult = parser_.parseSubscribeRequest(
+          cursor, len - (origTokenLengthBytes - tokenLengthBytes));
+      EXPECT_FALSE(parseResult.hasValue());
+    }
+    if (j == 1 || j == 2) { // register / delete mutate cache state
+      auto toParse = front->clone();
+      auto shortTokenLengthBuf = folly::IOBuf::create(2);
+      uint8_t tokenLengthBytes = 0;
+      quic::encodeQuicInteger(tokenLengths[j] + 1, [&](auto val) {
+        if (sizeof(val) == 1) {
+          shortTokenLengthBuf->writableData()[0] = val;
+        } else {
+          val = folly::Endian::big(val);
+          memcpy(shortTokenLengthBuf->writableData(), &val, 2);
+        }
+        shortTokenLengthBuf->append(sizeof(val));
+        tokenLengthBytes = sizeof(val);
+      });
+      toParse->appendToChain(std::move(shortTokenLengthBuf));
+      toParse->appendToChain(tail->clone());
+      toParse->appendToChain(folly::IOBuf::copyBuffer("a"));
+      folly::io::Cursor tmpCursor(toParse.get());
+      cursor.reset(toParse.get());
+      auto parseResult = parser_.parseSubscribeRequest(
+          cursor, len - (origTokenLengthBytes - tokenLengthBytes) + 1);
+      EXPECT_FALSE(parseResult.hasValue()) << j;
+    }
+    auto toParse = front->clone();
+    toParse->appendToChain(std::move(tokenLengthBuf));
+    toParse->appendToChain(std::move(tail));
+    cursor.reset(toParse.get());
+    auto parseResult = parser_.parseSubscribeRequest(cursor, len);
+    EXPECT_TRUE(parseResult.hasValue()) << j;
+    if (parseResult.hasError()) {
+      EXPECT_EQ(parseResult.error(), ErrorCode::NO_ERROR) << j;
+    }
   }
 }
 
@@ -656,6 +923,11 @@ INSTANTIATE_TEST_SUITE_P(
         kVersionDraft09,
         kVersionDraft10,
         kVersionDraft11));
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQFramerAuthTest,
+    MoQFramerAuthTest,
+    ::testing::Values(kVersionDraft11));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);

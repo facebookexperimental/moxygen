@@ -29,6 +29,10 @@ class MoQCodec {
     moqFrameParser_.initializeVersion(version);
   }
 
+  void setMaxAuthTokenCacheSize(size_t size) {
+    moqFrameParser_.setTokenCacheMaxSize(size);
+  }
+
   virtual void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) = 0;
 
  protected:

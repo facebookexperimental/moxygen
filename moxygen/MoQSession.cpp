@@ -15,6 +15,7 @@
 namespace {
 using namespace moxygen;
 constexpr std::chrono::seconds kSetupTimeout(5);
+constexpr uint64_t kMaxSendTokenCacheSize(1024);
 
 constexpr uint32_t IdMask = 0x1FFFFF;
 uint32_t groupPriorityBits(GroupOrder groupOrder, uint64_t group) {
@@ -1514,6 +1515,9 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
       break;
     }
   }
+  // TODO: clamp egressmax auth token cache size
+  controlCodec_.setMaxAuthTokenCacheSize(
+      getMaxAuthTokenCacheSizeIfPresent(setup.params));
 
   auto res =
       writeClientSetup(controlWriteBuf_, setup, setupSerializationVersion);
@@ -1558,6 +1562,9 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
   peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(serverSetup.params);
+  tokenCache_.setMaxSize(std::min(
+      kMaxSendTokenCacheSize,
+      getMaxAuthTokenCacheSizeIfPresent(serverSetup.params)));
   setupPromise_.setValue(std::move(serverSetup));
 }
 
@@ -1565,6 +1572,9 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
   XLOG(DBG1) << __func__ << " sess=" << this;
   peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
+  tokenCache_.setMaxSize(std::min(
+      kMaxSendTokenCacheSize,
+      getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)));
   auto serverSetup =
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
   if (!serverSetup.hasValue()) {
@@ -1574,6 +1584,9 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
   initializeNegotiatedVersion(serverSetup->selectedVersion);
   auto maxSubscribeId = getMaxSubscribeIdIfPresent(serverSetup->params);
+  // TODO: clamp egress max auth token cache size
+  controlCodec_.setMaxAuthTokenCacheSize(
+      getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
   auto res = writeServerSetup(
       controlWriteBuf_, *serverSetup, serverSetup->selectedVersion);
   if (!res) {
@@ -2636,6 +2649,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
     TrackStatusRequest trackStatusRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << "sess=" << this;
+  aliasifyAuthTokens(trackStatusRequest.params);
   auto res = moqFrameWriter_.writeTrackStatusRequest(
       controlWriteBuf_, trackStatusRequest);
   if (!res) {
@@ -2708,6 +2722,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     std::shared_ptr<AnnounceCallback> announceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   auto trackNamespace = ann.trackNamespace;
+  aliasifyAuthTokens(ann.params);
   auto res = moqFrameWriter_.writeAnnounce(controlWriteBuf_, ann);
   if (!res) {
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
@@ -2801,6 +2816,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   auto trackNamespace = sa.trackNamespacePrefix;
+  aliasifyAuthTokens(sa.params);
   auto res = moqFrameWriter_.writeSubscribeAnnounces(controlWriteBuf_, sa);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
@@ -2916,6 +2932,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   TrackAlias alias = subID.value;
   sub.trackAlias = alias;
   TrackAlias trackAlias = sub.trackAlias;
+  aliasifyAuthTokens(sub.params);
   auto wres = moqFrameWriter_.writeSubscribeRequest(controlWriteBuf_, sub);
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
@@ -3198,6 +3215,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   }
   auto subID = nextSubscribeID_++;
   fetch.subscribeID = subID;
+  aliasifyAuthTokens(fetch.params);
   auto wres = moqFrameWriter_.writeFetch(controlWriteBuf_, fetch);
   if (!wres) {
     XLOG(ERR) << "writeFetch failed sess=" << this;
@@ -3410,5 +3428,59 @@ uint64_t MoQSession::getMaxSubscribeIdIfPresent(
     }
   }
   return 0;
+}
+
+uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
+    const std::vector<SetupParameter>& params) {
+  for (const auto& param : params) {
+    if (param.key ==
+        folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
+      return param.asUint64;
+    }
+  }
+  return 0;
+}
+
+void MoQSession::aliasifyAuthTokens(
+    std::vector<TrackRequestParameter>& params) {
+  auto version = getNegotiatedVersion();
+  if (!version || *version < 11) {
+    return;
+  }
+  auto authParamKey = getAuthorizationParamKey(*version);
+  for (auto it = params.begin(); it != params.end(); ++it) {
+    if (it->key == authParamKey) {
+      const auto& token = it->asAuthToken;
+      if (token.alias && token.tokenValue.size() < tokenCache_.maxTokenSize()) {
+        auto lookupRes =
+            tokenCache_.getAliasForToken(token.tokenType, token.tokenValue);
+        if (lookupRes) {
+          it->asString = moqFrameWriter_.encodeUseAlias(*lookupRes);
+          continue;
+        } // else, evict tokens and register this one
+        auto tokenCopy = token;
+        it = params.erase(it);
+        while (!tokenCache_.canRegister(token.tokenType, token.tokenValue)) {
+          auto aliasToEvict = tokenCache_.evictOne();
+          TrackRequestParameter p;
+          p.key = authParamKey;
+          p.asString = moqFrameWriter_.encodeDeleteTokenAlias(aliasToEvict);
+          it = params.insert(it, std::move(p));
+          ++it;
+        }
+        auto alias =
+            tokenCache_.registerToken(tokenCopy.tokenType, tokenCopy.tokenValue)
+                .value();
+        TrackRequestParameter p;
+        p.key = authParamKey;
+        p.asString = moqFrameWriter_.encodeRegisterToken(
+            alias, tokenCopy.tokenType, tokenCopy.tokenValue);
+        it = params.insert(it, std::move(p));
+      } else {
+        it->asString =
+            moqFrameWriter_.encodeTokenValue(token.tokenType, token.tokenValue);
+      }
+    }
+  }
 }
 } // namespace moxygen

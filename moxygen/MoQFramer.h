@@ -12,6 +12,7 @@
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/logging/xlog.h>
+#include <moxygen/MoQTokenCache.h>
 
 #include <quic/codec/QuicInteger.h>
 #include <vector>
@@ -46,6 +47,7 @@ enum class SessionCloseErrorCode : uint32_t {
   DUPLICATE_AUTH_TOKEN_ALIAS = 0x14,
   VERSION_NEGOTIATION_FAILED = 0x15,
 
+  UNKNOWN_AUTH_TOKEN_ALIAS = std::numeric_limits<uint32_t>::max() - 1,
   PARSE_UNDERFLOW = std::numeric_limits<uint32_t>::max(),
 };
 
@@ -163,12 +165,32 @@ std::ostream& operator<<(std::ostream& os, StreamType type);
 enum class SetupKey : uint64_t {
   PATH = 1,
   MAX_SUBSCRIBE_ID = 2,
+  MAX_AUTH_TOKEN_CACHE_SIZE = 4,
+};
+
+enum class AliasType : uint8_t {
+  DELETE = 0x0,
+  REGISTER = 0x1,
+  USE_ALIAS = 0x2,
+  USE_VALUE = 0x3
+};
+
+struct AuthToken {
+  uint64_t tokenType;
+  std::string tokenValue;
+  folly::Optional<uint64_t> alias;
+  // Set alias to one of these constants when sending an AuthToken parameter
+  // Register: Will attempt to save the token in the cache, there is space
+  // DontRegister: Will not attempt to save the token in the cache
+  static constexpr uint64_t Register = 1;
+  static constexpr folly::Optional<uint64_t> DontRegister = folly::none;
 };
 
 struct Parameter {
   uint64_t key;
   std::string asString;
   uint64_t asUint64;
+  AuthToken asAuthToken;
 };
 
 struct SetupParameter : public Parameter {};
@@ -940,6 +962,10 @@ class MoQFrameParser {
     return version_;
   }
 
+  void setTokenCacheMaxSize(size_t size) {
+    tokenCache_.setMaxSize(size);
+  }
+
  private:
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
@@ -951,6 +977,10 @@ class MoQFrameParser {
       size_t& length,
       size_t numParams,
       std::vector<TrackRequestParameter>& params) const noexcept;
+
+  folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
 
   folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
       folly::io::Cursor& cursor,
@@ -974,9 +1004,15 @@ class MoQFrameParser {
       size_t& length) const noexcept;
 
   folly::Optional<uint64_t> version_;
+  mutable MoQTokenCache tokenCache_;
 };
 
 //// Egress ////
+TrackRequestParameter getAuthParam(
+    uint64_t version,
+    std::string token,
+    uint64_t tokenType = 0,
+    folly::Optional<uint64_t> registerToken = AuthToken::Register);
 
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
@@ -1114,9 +1150,26 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const FetchError& fetchError) const noexcept;
 
+  std::string encodeUseAlias(uint64_t alias) const;
+
+  std::string encodeDeleteTokenAlias(uint64_t alias) const;
+
+  std::string encodeRegisterToken(
+      uint64_t alias,
+      uint64_t tokenType,
+      const std::string& tokenValue) const;
+
+  std::string encodeTokenValue(
+      uint64_t tokenType,
+      const std::string& tokenValue) const;
+
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";
     version_ = versionIn;
+  }
+
+  folly::Optional<uint64_t> getVersion() const {
+    return version_;
   }
 
  private:

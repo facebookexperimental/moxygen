@@ -85,11 +85,17 @@ ClientSetup MoQClient::getClientSetup(
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxSubscribeId = 100;
+  const uint32_t kMaxAuthTokenCacheSize = 1024;
   ClientSetup clientSetup{
       {kVersionDraft08, kVersionDraft09, kVersionDraft10},
       {{folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
         "",
-        kDefaultMaxSubscribeId}}};
+        kDefaultMaxSubscribeId,
+        {}},
+       {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+        "",
+        kMaxAuthTokenCacheSize,
+        {}}}};
   if (path) {
     clientSetup.params.emplace_back(
         SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0}));
