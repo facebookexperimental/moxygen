@@ -368,9 +368,7 @@ class MoQFlvReceiverClient
       : moqClient_(makeMoQClient(evb, std::move(url), useQuic)),
         flvOutPath_(flvOutPath) {}
 
-  folly::coro::Task<void> run(
-      SubscribeRequest subAudio,
-      SubscribeRequest subVideo) noexcept {
+  folly::coro::Task<void> run() noexcept {
     XLOG(INFO) << __func__;
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
@@ -384,6 +382,45 @@ class MoQFlvReceiverClient
       flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
       trackReceiverHandlerAudio_->setFlvWriterShared(flvw_);
       trackReceiverHandlerVideo_->setFlvWriterShared(flvw_);
+
+      const auto subscribeIDAudio = 0;
+      const auto trackAliasAudio = 1;
+      const auto subscribeIDVideo = 1;
+      const auto trackAliasVideo = 2;
+
+      uint64_t negotiatedVersion =
+          *(moqClient_->moqSession_->getNegotiatedVersion());
+      uint64_t authorizationParamKey =
+          getAuthorizationParamKey(negotiatedVersion);
+
+      SubscribeRequest subAudio{
+          subscribeIDAudio,
+          trackAliasAudio,
+          moxygen::FullTrackName(
+              {{TrackNamespace(
+                   FLAGS_track_namespace, FLAGS_track_namespace_delimiter)},
+               FLAGS_audio_track_name}),
+          0,
+          GroupOrder::OldestFirst,
+          true,
+          LocationType::LatestObject,
+          folly::none,
+          0,
+          {{authorizationParamKey, FLAGS_auth, 0}}};
+      SubscribeRequest subVideo{
+          subscribeIDVideo,
+          trackAliasVideo,
+          moxygen::FullTrackName(
+              {TrackNamespace(
+                   FLAGS_track_namespace, FLAGS_track_namespace_delimiter),
+               FLAGS_video_track_name}),
+          0,
+          GroupOrder::OldestFirst,
+          true,
+          LocationType::LatestObject,
+          folly::none,
+          0,
+          {{authorizationParamKey, FLAGS_auth, 0}}};
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(
@@ -523,43 +560,8 @@ int main(int argc, char* argv[]) {
   SigHandler handler(&eventBase, [&flvReceiverClient](int) mutable {
     flvReceiverClient->stop();
   });
-  const auto subscribeIDAudio = 0;
-  const auto trackAliasAudio = 1;
-  const auto subscribeIDVideo = 1;
-  const auto trackAliasVideo = 2;
 
-  flvReceiverClient
-      ->run(
-          {subscribeIDAudio,
-           trackAliasAudio,
-           moxygen::FullTrackName(
-               {{TrackNamespace(
-                    FLAGS_track_namespace, FLAGS_track_namespace_delimiter)},
-                FLAGS_audio_track_name}),
-           0,
-           GroupOrder::OldestFirst,
-           true,
-           LocationType::LatestObject,
-           folly::none,
-           0,
-           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             FLAGS_auth,
-             0}}},
-          {subscribeIDVideo,
-           trackAliasVideo,
-           moxygen::FullTrackName(
-               {TrackNamespace(
-                    FLAGS_track_namespace, FLAGS_track_namespace_delimiter),
-                FLAGS_video_track_name}),
-           0,
-           GroupOrder::OldestFirst,
-           true,
-           LocationType::LatestObject,
-           folly::none,
-           0,
-           {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-             FLAGS_auth,
-             0}}})
+  flvReceiverClient->run()
       .scheduleOn(&eventBase)
       .start()
       .via(&eventBase)

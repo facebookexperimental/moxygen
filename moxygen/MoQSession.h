@@ -97,6 +97,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     subscribeHandler_ = std::move(subscribeHandler);
   }
 
+  folly::Optional<uint64_t> getNegotiatedVersion() const {
+    return negotiatedVersion_;
+  }
+
   [[nodiscard]] folly::EventBase* getEventBase() const {
     return evb_;
   }

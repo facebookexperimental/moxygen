@@ -581,14 +581,8 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   std::vector<TrackRequestParameter> params;
   if (getDraftMajorVersion(GetParam()) >= 11) {
     // Add some parameters to the TrackStatusRequest.
-    params.push_back(
-        {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-         "stampolli",
-         0});
-    params.push_back(
-        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         "",
-         999});
+    params.push_back({getAuthorizationParamKey(GetParam()), "stampolli", 0});
+    params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999});
   }
   tsr.params = params;
   auto writeResult = writer_.writeTrackStatusRequest(writeBuf, tsr);
@@ -607,13 +601,10 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
   if (getDraftMajorVersion(GetParam()) >= 11) {
     EXPECT_EQ(parseResult->params.size(), 2);
-    EXPECT_EQ(
-        parseResult->params[0].key,
-        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION));
+    EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
     EXPECT_EQ(parseResult->params[0].asString, "stampolli");
     EXPECT_EQ(
-        parseResult->params[1].key,
-        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+        parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
     EXPECT_EQ(parseResult->params[1].asUint64, 999);
   }
 }
@@ -628,14 +619,8 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   std::vector<TrackRequestParameter> params;
   if (getDraftMajorVersion(GetParam()) >= 11) {
     // Add some parameters to the TrackStatusRequest.
-    params.push_back(
-        {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-         "stampolli",
-         0});
-    params.push_back(
-        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         "",
-         999});
+    params.push_back({getAuthorizationParamKey(GetParam()), "stampolli", 0});
+    params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999});
   }
   trackStatus.params = params;
   auto writeResult = writer_.writeTrackStatus(writeBuf, trackStatus);
@@ -655,13 +640,10 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
   if (getDraftMajorVersion(GetParam()) >= 11) {
     EXPECT_EQ(parseResult->params.size(), 2);
-    EXPECT_EQ(
-        parseResult->params[0].key,
-        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION));
+    EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
     EXPECT_EQ(parseResult->params[0].asString, "stampolli");
     EXPECT_EQ(
-        parseResult->params[1].key,
-        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+        parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
     EXPECT_EQ(parseResult->params[1].asUint64, 999);
   }
 }

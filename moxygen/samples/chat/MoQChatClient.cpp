@@ -52,11 +52,12 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
       co_return;
     }
     announceHandle_ = std::move(announceRes.value());
+    uint64_t negotiatedVersion =
+        *(moqClient_.moqSession_->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the latest group
     auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
         {TrackNamespace(chatPrefix()),
-         {{folly::to_underlying(TrackRequestParamKey::AUTHORIZATION),
-           username_}}});
+         {{getAuthorizationParamKey(negotiatedVersion), username_}}});
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });

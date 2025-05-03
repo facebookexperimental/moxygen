@@ -31,6 +31,19 @@ uint64_t getLocationTypeValue(
   }
 }
 
+// Used below draft 11
+enum class LegacyTrackRequestParamKey : uint64_t {
+  AUTHORIZATION = 2,
+  DELIVERY_TIMEOUT = 3,
+  MAX_CACHE_DURATION = 4,
+};
+
+// Used in draft 11 and above
+enum class TrackRequestParamKey : uint64_t {
+  AUTHORIZATION = 1,
+  DELIVERY_TIMEOUT = 2,
+  MAX_CACHE_DURATION = 4,
+};
 } // namespace
 
 namespace moxygen {
@@ -40,6 +53,30 @@ uint64_t getDraftMajorVersion(uint64_t version) {
     return (version & 0x00ff0000) >> 16;
   } else {
     return (version & 0x0000ffff);
+  }
+}
+
+uint64_t getAuthorizationParamKey(uint64_t version) {
+  if (getDraftMajorVersion(version) >= 11) {
+    return folly::to_underlying(TrackRequestParamKey::AUTHORIZATION);
+  } else {
+    return folly::to_underlying(LegacyTrackRequestParamKey::AUTHORIZATION);
+  }
+}
+
+uint64_t getDeliveryTimeoutParamKey(uint64_t version) {
+  if (getDraftMajorVersion(version) >= 11) {
+    return folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
+  } else {
+    return folly::to_underlying(LegacyTrackRequestParamKey::DELIVERY_TIMEOUT);
+  }
+}
+
+uint64_t getMaxCacheDurationParamKey(uint64_t version) {
+  if (getDraftMajorVersion(version) >= 11) {
+    return folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION);
+  } else {
+    return folly::to_underlying(LegacyTrackRequestParamKey::MAX_CACHE_DURATION);
   }
 }
 
@@ -367,6 +404,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     size_t& length,
     size_t numParams,
     std::vector<TrackRequestParameter>& params) const noexcept {
+  CHECK(version_.hasValue())
+      << "The version must be set before parsing track request params";
   for (auto i = 0u; i < numParams; i++) {
     TrackRequestParameter p;
     auto key = quic::decodeQuicInteger(cursor, length);
@@ -375,7 +414,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     }
     length -= key->second;
     p.key = key->first;
-    if (p.key == folly::to_underlying(TrackRequestParamKey::AUTHORIZATION)) {
+
+    if (p.key == getAuthorizationParamKey(*version_)) {
       auto res = parseFixedString(cursor, length);
       if (!res) {
         return folly::makeUnexpected(res.error());
@@ -1436,32 +1476,6 @@ void writeFullTrackName(
   writeFixedString(writeBuf, fullTrackName.trackName, size, error);
 }
 
-void writeTrackRequestParams(
-    folly::IOBufQueue& writeBuf,
-    const std::vector<TrackRequestParameter>& params,
-    size_t& size,
-    bool& error) noexcept {
-  writeVarint(writeBuf, params.size(), size, error);
-  for (auto& param : params) {
-    writeVarint(writeBuf, param.key, size, error);
-    switch (param.key) {
-      case folly::to_underlying(TrackRequestParamKey::AUTHORIZATION):
-        writeFixedString(writeBuf, param.asString, size, error);
-        break;
-      case folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT):
-      case folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION):
-        auto res = quic::getQuicIntegerSize(param.asUint64);
-        if (!res) {
-          error = true;
-          return;
-        }
-        writeVarint(writeBuf, res.value(), size, error);
-        writeVarint(writeBuf, param.asUint64, size, error);
-        break;
-    }
-  }
-}
-
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
     const ClientSetup& clientSetup,
@@ -1652,6 +1666,32 @@ size_t MoQFrameWriter::getExtensionSize(
     }
   }
   return size;
+}
+
+void MoQFrameWriter::writeTrackRequestParams(
+    folly::IOBufQueue& writeBuf,
+    const std::vector<TrackRequestParameter>& params,
+    size_t& size,
+    bool& error) const noexcept {
+  CHECK(*version_) << "Version must be set before writing track request params";
+  writeVarint(writeBuf, params.size(), size, error);
+  for (auto& param : params) {
+    writeVarint(writeBuf, param.key, size, error);
+
+    if (param.key == getAuthorizationParamKey(*version_)) {
+      writeFixedString(writeBuf, param.asString, size, error);
+    } else if (
+        param.key == getDeliveryTimeoutParamKey(*version_) ||
+        param.key == getMaxCacheDurationParamKey(*version_)) {
+      auto res = quic::getQuicIntegerSize(param.asUint64);
+      if (!res) {
+        error = true;
+        return;
+      }
+      writeVarint(writeBuf, res.value(), size, error);
+      writeVarint(writeBuf, param.asUint64, size, error);
+    }
+  }
 }
 
 WriteResult MoQFrameWriter::writeDatagramObject(

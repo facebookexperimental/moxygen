@@ -418,11 +418,11 @@ struct ObjectHeader {
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
 
-enum class TrackRequestParamKey : uint64_t {
-  AUTHORIZATION = 2,
-  DELIVERY_TIMEOUT = 3,
-  MAX_CACHE_DURATION = 4,
-};
+uint64_t getAuthorizationParamKey(uint64_t version);
+
+uint64_t getDeliveryTimeoutParamKey(uint64_t version);
+
+uint64_t getMaxCacheDurationParamKey(uint64_t version);
 
 enum class LocationType : uint8_t {
   NextGroupStart = 1,
@@ -1112,6 +1112,12 @@ class MoQFrameWriter {
 
   size_t getExtensionSize(const std::vector<Extension>& extensions, bool& error)
       const noexcept;
+
+  void writeTrackRequestParams(
+      folly::IOBufQueue& writeBuf,
+      const std::vector<TrackRequestParameter>& params,
+      size_t& size,
+      bool& error) const noexcept;
 
   folly::Optional<uint64_t> version_;
 };
