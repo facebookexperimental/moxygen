@@ -177,7 +177,7 @@ void MoQChatClient::publishLoop() {
                /*subgroup=*/0,
                /*id=*/0,
                /*pri=*/0,
-               ObjectStatus::END_OF_TRACK_AND_GROUP},
+               ObjectStatus::END_OF_TRACK},
               nullptr);
           // Publisher=TrackReceiveState which contains a shared_ptr to the
           // chat client (to deliver unsubscribe/subscribeUpdate).  It *must*

@@ -109,7 +109,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
       uint64_t endOfTrackObjectID,
       Extensions ext) override {
     header_.id = endOfTrackObjectID;
-    header_.status = ObjectStatus::END_OF_TRACK_AND_GROUP;
+    header_.status = ObjectStatus::END_OF_TRACK;
     header_.extensions = std::move(ext);
     callback_->onObjectStatus(header_);
     return folly::unit;
@@ -173,7 +173,7 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
         subgroup,
         0,
         pri,
-        ObjectStatus::END_OF_TRACK_AND_GROUP,
+        ObjectStatus::END_OF_GROUP,
         std::move(ext)));
     return folly::unit;
   }

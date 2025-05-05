@@ -8,8 +8,7 @@ namespace {
 using namespace moxygen;
 
 bool isEndOfTrack(ObjectStatus status) {
-  return status == ObjectStatus::END_OF_TRACK ||
-      status == ObjectStatus::END_OF_TRACK_AND_GROUP;
+  return status == ObjectStatus::END_OF_TRACK;
 }
 
 bool exists(ObjectStatus status) {
@@ -46,7 +45,6 @@ folly::Expected<folly::Unit, MoQPublishError> publishObject(
           current.object,
           object.extensions,
           lastObject);
-    case ObjectStatus::END_OF_TRACK_AND_GROUP:
     case ObjectStatus::END_OF_TRACK:
       return consumer->endOfTrackAndGroup(
           current.group, object.subgroup, current.object, object.extensions);
@@ -298,7 +296,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     auto cacheRes = cacheGroup_.cacheObject(
         subgroup_,
         endOfTrackObjectID,
-        ObjectStatus::END_OF_TRACK_AND_GROUP,
+        ObjectStatus::END_OF_TRACK,
         extensions,
         nullptr,
         true);
@@ -611,7 +609,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       uint64_t sgID,
       uint64_t objID,
       Extensions ext) override {
-    constexpr auto kEndOfTrack = ObjectStatus::END_OF_TRACK_AND_GROUP;
+    constexpr auto kEndOfTrack = ObjectStatus::END_OF_TRACK;
     auto res =
         cacheImpl(gID, sgID, objID, kEndOfTrack, ext, nullptr, true, true);
     if (!res) {

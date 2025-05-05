@@ -2588,8 +2588,6 @@ const char* getObjectStatusString(ObjectStatus objectStatus) {
       return "GROUP_NOT_EXIST";
     case ObjectStatus::END_OF_GROUP:
       return "END_OF_GROUP";
-    case ObjectStatus::END_OF_TRACK_AND_GROUP:
-      return "END_OF_TRACK_AND_GROUP";
     case ObjectStatus::END_OF_TRACK:
       return "END_OF_TRACK";
     default:

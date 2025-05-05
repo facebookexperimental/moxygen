@@ -255,8 +255,7 @@ enum class ObjectStatus : uint64_t {
   OBJECT_NOT_EXIST = 1,
   GROUP_NOT_EXIST = 2,
   END_OF_GROUP = 3,
-  END_OF_TRACK_AND_GROUP = 4,
-  END_OF_TRACK = 5,
+  END_OF_TRACK = 4,
 };
 
 std::ostream& operator<<(std::ostream& os, ObjectStatus type);

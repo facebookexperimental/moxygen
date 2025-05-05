@@ -193,7 +193,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r20a = parser_.parseSubgroupObjectHeader(cursor, res.value());
     testUnderflowResult(r20a);
     EXPECT_EQ(r20a.value().extensions, test::getTestExtensions());
-    EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK_AND_GROUP);
+    EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK);
 
     skip(cursor, 1);
     auto r21 = parser_.parseFetchHeader(cursor);

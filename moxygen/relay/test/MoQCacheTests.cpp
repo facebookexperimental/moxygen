@@ -380,8 +380,7 @@ CO_TEST_F(MoQCacheTest, TestFetchEndBeyondEndOfTrack) {
   populateCacheRange({0, 0}, {0, 5});
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
   writeback->datagram(
-      ObjectHeader(
-          TrackAlias(0), 0, 0, 5, 0, ObjectStatus::END_OF_TRACK_AND_GROUP),
+      ObjectHeader(TrackAlias(0), 0, 0, 5, 0, ObjectStatus::END_OF_TRACK),
       nullptr);
   writeback.reset();
   expectFetchObjects({0, 0}, {0, 5}, false);
@@ -680,8 +679,7 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
 
   // End of track not largest
   result = writeback->objectStream(
-      ObjectHeader(
-          TrackAlias(0), 5, 0, 1, 0, ObjectStatus::END_OF_TRACK_AND_GROUP),
+      ObjectHeader(TrackAlias(0), 5, 0, 1, 0, ObjectStatus::END_OF_TRACK),
       makeBuf(20));
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
@@ -774,7 +772,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupNotExist) {
 }
 
 CO_TEST_F(MoQCacheTest, TestUpstreamServesEndOfTrackAndGroup) {
-  // Test case for upstream serving END_OF_TRACK_AND_GROUP
+  // Test case for upstream serving END_OF_TRACK
 
   // Expect upstream fetch to be called with the specified range
   expectUpstreamFetch({0, 0}, {2, 1}, 0, AbsoluteLocation{2, 0})

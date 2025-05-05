@@ -225,7 +225,7 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
   obj.id++;
-  obj.status = ObjectStatus::END_OF_TRACK_AND_GROUP;
+  obj.status = ObjectStatus::END_OF_TRACK;
   obj.extensions = getTestExtensions();
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);

@@ -277,8 +277,7 @@ void MoQObjectStreamCodec::onIngress(
                 curObjectHeader_.status,
                 std::move(curObjectHeader_.extensions));
           }
-          if (curObjectHeader_.status == ObjectStatus::END_OF_TRACK_AND_GROUP ||
-              curObjectHeader_.status == ObjectStatus::END_OF_TRACK ||
+          if (curObjectHeader_.status == ObjectStatus::END_OF_TRACK ||
               (!isFetch &&
                curObjectHeader_.status == ObjectStatus::END_OF_GROUP)) {
             parseState_ = ParseState::STREAM_FIN_DELIVERED;
