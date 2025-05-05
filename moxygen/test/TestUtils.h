@@ -20,8 +20,6 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
     const MoQFrameWriter& moqFrameWriter);
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
     const MoQFrameWriter& moqFrameWriter);
-std::unique_ptr<folly::IOBuf> writeAllDatagramMessages(
-    const MoQFrameWriter& moqFrameWriter);
 
 inline std::unique_ptr<folly::IOBuf> writeAllMessages(
     const MoQFrameWriter& moqFrameWriter,
@@ -30,7 +28,6 @@ inline std::unique_ptr<folly::IOBuf> writeAllMessages(
       TestControlMessages::BOTH, moqFrameWriter, version);
   buf->appendToChain(writeAllObjectMessages(moqFrameWriter));
   buf->appendToChain(writeAllFetchMessages(moqFrameWriter));
-  buf->appendToChain(writeAllDatagramMessages(moqFrameWriter));
   return buf;
 }
 

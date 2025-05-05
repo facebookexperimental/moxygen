@@ -3402,8 +3402,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  if (StreamType(type->first) != StreamType::OBJECT_DATAGRAM &&
-      StreamType(type->first) != StreamType::OBJECT_DATAGRAM_STATUS) {
+  if (type->first >
+      folly::to_underlying(StreamType::OBJECT_DATAGRAM_STATUS_EXT)) {
     XLOG(ERR) << __func__ << " Bad datagram header type=" << type->first;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;

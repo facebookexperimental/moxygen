@@ -205,6 +205,17 @@ folly::Expected<SubscribeID, ErrorCode> MoQFrameParser::parseFetchHeader(
   return SubscribeID(subscribeID->first);
 }
 
+bool datagramTypeHasExtensions(uint64_t version, StreamType streamType) {
+  return getDraftMajorVersion(version) < 11 ||
+      streamType == StreamType::OBJECT_DATAGRAM_EXT ||
+      streamType == StreamType::OBJECT_DATAGRAM_STATUS_EXT;
+}
+
+bool datagramTypeIsStatus(StreamType streamType) {
+  return streamType == StreamType::OBJECT_DATAGRAM_STATUS ||
+      streamType == StreamType::OBJECT_DATAGRAM_STATUS_EXT;
+}
+
 folly::Expected<ObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
@@ -234,12 +245,14 @@ MoQFrameParser::parseDatagramObjectHeader(
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
   length -= 1;
-  auto ext = parseExtensions(cursor, length, objectHeader);
-  if (!ext) {
-    return folly::makeUnexpected(ext.error());
+  if (datagramTypeHasExtensions(*version_, streamType)) {
+    auto ext = parseExtensions(cursor, length, objectHeader);
+    if (!ext) {
+      return folly::makeUnexpected(ext.error());
+    }
   }
 
-  if (streamType == StreamType::OBJECT_DATAGRAM_STATUS) {
+  if (datagramTypeIsStatus(streamType)) {
     auto status = quic::decodeQuicInteger(cursor, length);
     if (!status) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -257,7 +270,6 @@ MoQFrameParser::parseDatagramObjectHeader(
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
   } else {
-    CHECK(streamType == StreamType::OBJECT_DATAGRAM);
     objectHeader.status = ObjectStatus::NORMAL;
     objectHeader.length = length;
   }
@@ -1971,6 +1983,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   size_t size = 0;
   bool error = false;
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
+  bool hasExtensions = objectHeader.extensions.size() > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
       << "non-zero length objects require NORMAL status";
   if (objectHeader.status != ObjectStatus::NORMAL || !hasLength) {
@@ -1978,7 +1991,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
         << "non-empty objectPayload with no header length";
     writeVarint(
         writeBuf,
-        folly::to_underlying(StreamType::OBJECT_DATAGRAM_STATUS),
+        folly::to_underlying(getDatagramType(*version_, true, hasExtensions)),
         size,
         error);
     writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
@@ -1986,13 +1999,15 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
-    writeExtensions(writeBuf, objectHeader.extensions, size, error);
+    if (getDraftMajorVersion(*version_) < 11 || hasExtensions) {
+      writeExtensions(writeBuf, objectHeader.extensions, size, error);
+    }
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
   } else {
     writeVarint(
         writeBuf,
-        folly::to_underlying(StreamType::OBJECT_DATAGRAM),
+        folly::to_underlying(getDatagramType(*version_, false, hasExtensions)),
         size,
         error);
     writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
@@ -2000,7 +2015,9 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
-    writeExtensions(writeBuf, objectHeader.extensions, size, error);
+    if (getDraftMajorVersion(*version_) < 11 || hasExtensions) {
+      writeExtensions(writeBuf, objectHeader.extensions, size, error);
+    }
     writeBuf.append(std::move(objectPayload));
   }
   if (error) {
@@ -2608,9 +2625,18 @@ const char* getFrameTypeString(FrameType type) {
 
 const char* getStreamTypeString(StreamType type) {
   switch (type) {
-    case StreamType::OBJECT_DATAGRAM:
+    case StreamType::OBJECT_DATAGRAM_EXT:
+    case StreamType::OBJECT_DATAGRAM_NO_EXT:
+    case StreamType::OBJECT_DATAGRAM_STATUS:
+    case StreamType::OBJECT_DATAGRAM_STATUS_EXT:
       return "OBJECT_DATAGRAM";
     case StreamType::SUBGROUP_HEADER:
+    case StreamType::SUBGROUP_HEADER_SG:
+    case StreamType::SUBGROUP_HEADER_SG_EXT:
+    case StreamType::SUBGROUP_HEADER_SG_FIRST:
+    case StreamType::SUBGROUP_HEADER_SG_FIRST_EXT:
+    case StreamType::SUBGROUP_HEADER_SG_ZERO:
+    case StreamType::SUBGROUP_HEADER_SG_ZERO_EXT:
       return "SUBGROUP_HEADER";
     case StreamType::FETCH_HEADER:
       return "FETCH_HEADER";

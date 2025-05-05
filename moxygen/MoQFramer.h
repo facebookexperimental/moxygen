@@ -152,9 +152,11 @@ enum class FrameType : uint64_t {
 };
 
 enum class StreamType : uint64_t {
-  OBJECT_DATAGRAM = 1,
-  OBJECT_DATAGRAM_STATUS = 02,
-  SUBGROUP_HEADER = 0x4,
+  OBJECT_DATAGRAM_NO_EXT = 0x0,
+  OBJECT_DATAGRAM_EXT = 0x1,
+  OBJECT_DATAGRAM_STATUS = 0x2,
+  OBJECT_DATAGRAM_STATUS_EXT = 0x3,
+  SUBGROUP_HEADER = 0x4, // draft-10 and earlier
   FETCH_HEADER = 0x5,
   SUBGROUP_HEADER_MASK = 0x8,
   SUBGROUP_HEADER_SG_ZERO = 0x8,
@@ -857,6 +859,14 @@ inline StreamType getSubgroupStreamType(
       (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
       (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
       (includeExtensions ? SG_HAS_EXTENSIONS : 0));
+}
+
+inline StreamType
+getDatagramType(uint64_t version, bool status, bool includeExtensions) {
+  return getDraftMajorVersion(version) < 11
+      ? (status ? StreamType::OBJECT_DATAGRAM_STATUS
+                : StreamType::OBJECT_DATAGRAM_EXT)
+      : (StreamType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0)));
 }
 
 // parseClientSetup and parseServerSetup are version-agnostic, so we're

@@ -267,30 +267,6 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
   return writeBuf.move();
 }
 
-std::unique_ptr<folly::IOBuf> writeAllDatagramMessages(
-    const MoQFrameWriter& moqFrameWriter) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST);
-  auto res = moqFrameWriter.writeDatagramObject(writeBuf, obj, nullptr);
-  obj.id++;
-  obj.extensions = getTestExtensions();
-  obj.status = ObjectStatus::END_OF_GROUP;
-  res = moqFrameWriter.writeDatagramObject(writeBuf, obj, nullptr);
-  obj.group++;
-  obj.id = 0;
-  obj.extensions.clear();
-  obj.status = ObjectStatus::NORMAL;
-  obj.length = 11;
-  res = moqFrameWriter.writeDatagramObject(
-      writeBuf, obj, folly::IOBuf::copyBuffer("hello world"));
-  obj.id++;
-  obj.extensions = getTestExtensions();
-  obj.length = 15;
-  res = moqFrameWriter.writeDatagramObject(
-      writeBuf, obj, folly::IOBuf::copyBuffer("hello world ext"));
-  return writeBuf.move();
-}
-
 std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size) {
   auto out = folly::IOBuf::create(size);
   out->append(size);

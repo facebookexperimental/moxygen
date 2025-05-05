@@ -226,55 +226,17 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r23a);
     EXPECT_EQ(r23a.value().extensions, test::getTestExtensions());
     EXPECT_EQ(r23a.value().status, ObjectStatus::END_OF_GROUP);
-
-    skip(cursor, 1);
-    size_t datagramLength = std::min(6lu, cursor.totalLength());
-    auto r24 = parser_.parseDatagramObjectHeader(
-        cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
-    testUnderflowResult(r24);
-    EXPECT_EQ(r24.value().status, ObjectStatus::OBJECT_NOT_EXIST);
-
-    skip(cursor, 1);
-    EXPECT_EQ(datagramLength, 0);
-    datagramLength = std::min(13lu, cursor.totalLength());
-    auto r24a = parser_.parseDatagramObjectHeader(
-        cursor, StreamType::OBJECT_DATAGRAM_STATUS, datagramLength);
-    testUnderflowResult(r24a);
-    EXPECT_EQ(r24a.value().extensions, test::getTestExtensions());
-    EXPECT_EQ(r24a.value().status, ObjectStatus::END_OF_GROUP);
-
-    skip(cursor, 1);
-    EXPECT_EQ(datagramLength, 0);
-    datagramLength = std::min(16lu, cursor.totalLength());
-    bool underflowPayload = datagramLength < 16lu;
-    auto r25 = parser_.parseDatagramObjectHeader(
-        cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
-    testUnderflowResult(r25);
-    EXPECT_EQ(r25.value().id, 0);
-    if (underflowPayload) {
-      throw TestUnderflow();
-    }
-    EXPECT_EQ(datagramLength, *r25.value().length);
-    skip(cursor, *r25.value().length);
-
-    skip(cursor, 1);
-    datagramLength = cursor.totalLength();
-    underflowPayload = datagramLength < 27lu;
-    auto r25a = parser_.parseDatagramObjectHeader(
-        cursor, StreamType::OBJECT_DATAGRAM, datagramLength);
-    testUnderflowResult(r25a);
-    EXPECT_EQ(r25a.value().id, 1);
-    EXPECT_EQ(r25a.value().extensions, test::getTestExtensions());
-    if (underflowPayload) {
-      throw TestUnderflow();
-    }
-    EXPECT_EQ(r25a.value().length, 15);
-    skip(cursor, *r25a.value().length);
   }
 
  protected:
   MoQFrameParser parser_;
   MoQFrameWriter writer_;
+
+  ObjectHeader testUnderflowDatagramHelper(
+      folly::IOBufQueue& writeBuf,
+      bool isStatus,
+      bool hasExtensions,
+      uint64_t expectedPayloadLen);
 };
 
 } // namespace
@@ -333,10 +295,10 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM);
+  EXPECT_EQ(parseStreamType(cursor), getDatagramType(GetParam(), false, false));
   auto length = cursor.totalLength();
   auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM, length);
+      cursor, getDatagramType(GetParam(), false, false), length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -344,6 +306,96 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
   EXPECT_EQ(parseResult->length, 8);
+}
+
+ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
+    folly::IOBufQueue& writeBuf,
+    bool isStatus,
+    bool hasExtensions,
+    uint64_t expectedPayloadLen) {
+  for (size_t i = 1; i <= writeBuf.chainLength(); ++i) {
+    folly::io::Cursor cursor(writeBuf.front());
+    auto datagramType = getDatagramType(GetParam(), isStatus, hasExtensions);
+    auto decodedType = quic::decodeQuicInteger(cursor, i);
+    EXPECT_TRUE(decodedType.hasValue());
+    EXPECT_EQ(decodedType->first, folly::to_underlying(datagramType));
+
+    auto len = i - decodedType->second;
+    auto result = parser_.parseDatagramObjectHeader(cursor, datagramType, len);
+    if (i < writeBuf.chainLength()) {
+      if (result.hasValue()) {
+        EXPECT_TRUE(result.value().status == ObjectStatus::NORMAL);
+        EXPECT_LT(*result.value().length, expectedPayloadLen);
+      } else {
+        EXPECT_TRUE(result.error() == ErrorCode::PARSE_UNDERFLOW);
+      }
+      continue;
+    }
+    if (hasExtensions) {
+      EXPECT_EQ(result.value().extensions, test::getTestExtensions());
+    }
+    return *result;
+  }
+  return ObjectHeader();
+}
+
+TEST_P(MoQFramerTest, testParseDatagramObjectHeader1) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST);
+  writer_.writeDatagramObject(writeBuf, obj, nullptr);
+
+  auto pobj = testUnderflowDatagramHelper(writeBuf, true, false, 0);
+  EXPECT_EQ(pobj.id, 4);
+  EXPECT_EQ(pobj.status, ObjectStatus::OBJECT_NOT_EXIST);
+}
+
+TEST_P(MoQFramerTest, testParseDatagramObjectHeader2) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader obj(
+      TrackAlias(1),
+      2,
+      3,
+      4,
+      5,
+      ObjectStatus::END_OF_GROUP,
+      test::getTestExtensions());
+  writer_.writeDatagramObject(writeBuf, obj, nullptr);
+
+  auto pobj = testUnderflowDatagramHelper(writeBuf, true, true, 0);
+  EXPECT_EQ(pobj.id, 4);
+  EXPECT_EQ(pobj.status, ObjectStatus::END_OF_GROUP);
+}
+
+TEST_P(MoQFramerTest, testParseDatagramObjectHeader3) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader obj(
+      TrackAlias(1), 2, 3, 4, 5, ObjectStatus::NORMAL, noExtensions(), 11);
+  writer_.writeDatagramObject(
+      writeBuf, obj, folly::IOBuf::copyBuffer("hello world"));
+  auto pobj = testUnderflowDatagramHelper(writeBuf, false, false, 11);
+  EXPECT_EQ(pobj.id, 4);
+  EXPECT_EQ(pobj.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(pobj.length, 11);
+}
+
+TEST_P(MoQFramerTest, testParseDatagramObjectHeader4) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader obj(
+      TrackAlias(1),
+      2,
+      3,
+      4,
+      5,
+      ObjectStatus::NORMAL,
+      test::getTestExtensions(),
+      11);
+  writer_.writeDatagramObject(
+      writeBuf, obj, folly::IOBuf::copyBuffer("hello world"));
+
+  auto pobj = testUnderflowDatagramHelper(writeBuf, false, true, 11);
+  EXPECT_EQ(pobj.id, 4);
+  EXPECT_EQ(pobj.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(pobj.length, 11);
 }
 
 TEST_P(MoQFramerTest, ZeroLengthNormal) {
