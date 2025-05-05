@@ -9,6 +9,7 @@ add_library(moxygen
     MoQFramer.cpp
     MoQCodec.cpp
     MoQSession.cpp
+    MoQTokenCache.cpp
 )
 
 target_include_directories(
