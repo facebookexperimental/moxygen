@@ -3475,7 +3475,14 @@ uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
 void MoQSession::aliasifyAuthTokens(
     std::vector<TrackRequestParameter>& params) {
   auto version = getNegotiatedVersion();
-  if (!version || *version < 11) {
+  if (!version) {
+    return;
+  }
+  auto majorVersion = getDraftMajorVersion(*version);
+  if (majorVersion < 11) {
+    XLOG(DBG4)
+        << "Not appliying aliasifyAuthTokens since version detected is < 11 ("
+        << majorVersion << ")";
     return;
   }
   auto authParamKey = getAuthorizationParamKey(*version);
