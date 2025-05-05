@@ -156,7 +156,19 @@ enum class StreamType : uint64_t {
   OBJECT_DATAGRAM_STATUS = 02,
   SUBGROUP_HEADER = 0x4,
   FETCH_HEADER = 0x5,
+  SUBGROUP_HEADER_MASK = 0x8,
+  SUBGROUP_HEADER_SG_ZERO = 0x8,
+  SUBGROUP_HEADER_SG_ZERO_EXT = 0x9,
+  SUBGROUP_HEADER_SG_FIRST = 0xA,
+  SUBGROUP_HEADER_SG_FIRST_EXT = 0xB,
+  SUBGROUP_HEADER_SG = 0xC,
+  SUBGROUP_HEADER_SG_EXT = 0xD,
 };
+
+// Subgroup Bit Fields
+constexpr uint8_t SG_HAS_EXTENSIONS = 0x1;
+constexpr uint8_t SG_SUBGROUP_VALUE = 0x2;
+constexpr uint8_t SG_HAS_SUBGROUP_ID = 0x4;
 
 std::ostream& operator<<(std::ostream& os, FrameType type);
 
@@ -832,6 +844,21 @@ struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
 
+enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
+inline StreamType getSubgroupStreamType(
+    uint64_t version,
+    SubgroupIDFormat format,
+    bool includeExtensions) {
+  if (getDraftMajorVersion(version) < 11) {
+    return StreamType::SUBGROUP_HEADER;
+  }
+  return StreamType(
+      folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
+      (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
+      (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
+      (includeExtensions ? SG_HAS_EXTENSIONS : 0));
+}
+
 // parseClientSetup and parseServerSetup are version-agnostic, so we're
 // leaving them out of the MoQFrameParser.
 class MoQFrameParser {
@@ -846,7 +873,9 @@ class MoQFrameParser {
       folly::io::Cursor& cursor) const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
-      folly::io::Cursor& cursor) const noexcept;
+      folly::io::Cursor& cursor,
+      SubgroupIDFormat format,
+      bool includeExtensions) const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
       folly::io::Cursor& cursor,
@@ -854,7 +883,9 @@ class MoQFrameParser {
 
   folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
       folly::io::Cursor& cursor,
-      const ObjectHeader& headerTemplate) const noexcept;
+      const ObjectHeader& headerTemplate,
+      SubgroupIDFormat format,
+      bool includeExtensions) const noexcept;
 
   folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
       folly::io::Cursor& cursor,
@@ -1029,7 +1060,9 @@ class MoQFrameWriter {
  public:
   WriteResult writeSubgroupHeader(
       folly::IOBufQueue& writeBuf,
-      const ObjectHeader& objectHeader) const noexcept;
+      const ObjectHeader& objectHeader,
+      SubgroupIDFormat format = SubgroupIDFormat::Present,
+      bool includeExtensions = true) const noexcept;
 
   WriteResult writeFetchHeader(
       folly::IOBufQueue& writeBuf,

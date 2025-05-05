@@ -200,6 +200,8 @@ class MoQObjectStreamCodec : public MoQCodec {
   };
   ParseState parseState_{ParseState::STREAM_HEADER_TYPE};
   StreamType streamType_{StreamType::SUBGROUP_HEADER};
+  SubgroupIDFormat subgroupFormat_{SubgroupIDFormat::Present};
+  bool includeExtensions_{true};
   ObjectCallback* callback_;
 };
 

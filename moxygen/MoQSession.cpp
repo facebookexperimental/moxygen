@@ -83,7 +83,9 @@ class StreamPublisherImpl
       proxygen::WebTransport::StreamWriteHandle* writeHandle,
       TrackAlias alias,
       uint64_t groupID,
-      uint64_t subgroupID);
+      uint64_t subgroupID,
+      SubgroupIDFormat format,
+      bool includeExtensions);
 
   // SubgroupConsumer overrides
   // Note where the interface uses finSubgroup, this class uses finStream,
@@ -314,14 +316,17 @@ StreamPublisherImpl::StreamPublisherImpl(
     proxygen::WebTransport::StreamWriteHandle* writeHandle,
     TrackAlias alias,
     uint64_t groupID,
-    uint64_t subgroupID)
+    uint64_t subgroupID,
+    SubgroupIDFormat format,
+    bool includeExtensions)
     : StreamPublisherImpl(publisher) {
   streamType_ = StreamType::SUBGROUP_HEADER;
   header_.trackIdentifier = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
   writeBuf_.move(); // clear FETCH_HEADER
-  (void)moqFrameWriter_.writeSubgroupHeader(writeBuf_, header_);
+  (void)moqFrameWriter_.writeSubgroupHeader(
+      writeBuf_, header_, format, includeExtensions);
 }
 
 // Private methods
@@ -789,6 +794,14 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
       override;
 
+  folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+  beginSubgroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      SubgroupIDFormat format,
+      bool includeExtensions);
+
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitStreamCredit() override;
 
@@ -903,6 +916,17 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
     Priority pubPriority) {
+  return beginSubgroup(
+      groupID, subgroupID, pubPriority, SubgroupIDFormat::Present, true);
+}
+
+folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+MoQSession::TrackPublisherImpl::beginSubgroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Priority pubPriority,
+    SubgroupIDFormat format,
+    bool includeExtensions) {
   if (!forward_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR,
@@ -932,7 +956,13 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
           groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
       false);
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
-      shared_from_this(), *stream, trackAlias_, groupID, subgroupID);
+      shared_from_this(),
+      *stream,
+      trackAlias_,
+      groupID,
+      subgroupID,
+      format,
+      includeExtensions);
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
@@ -981,8 +1011,13 @@ MoQSession::TrackPublisherImpl::objectStream(
     const ObjectHeader& objHeader,
     Payload payload) {
   XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
-  auto subgroup =
-      beginSubgroup(objHeader.group, objHeader.subgroup, objHeader.priority);
+  auto subgroup = beginSubgroup(
+      objHeader.group,
+      objHeader.subgroup,
+      objHeader.priority,
+      objHeader.subgroup == objHeader.id ? SubgroupIDFormat::FirstObject
+                                         : SubgroupIDFormat::Present,
+      !objHeader.extensions.empty());
   if (subgroup.hasError()) {
     return folly::makeUnexpected(std::move(subgroup.error()));
   }

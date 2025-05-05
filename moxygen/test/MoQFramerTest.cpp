@@ -171,26 +171,31 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r19);
 
     skip(cursor, 1);
-    auto res = parser_.parseSubgroupHeader(cursor);
+    auto res =
+        parser_.parseSubgroupHeader(cursor, SubgroupIDFormat::Present, true);
     testUnderflowResult(res);
     EXPECT_EQ(res.value().group, 2);
 
-    auto r15 = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    auto r15 = parser_.parseSubgroupObjectHeader(
+        cursor, res.value(), SubgroupIDFormat::Present, true);
     testUnderflowResult(r15);
     EXPECT_EQ(r15.value().id, 4);
     skip(cursor, *r15.value().length);
 
-    auto r15a = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    auto r15a = parser_.parseSubgroupObjectHeader(
+        cursor, res.value(), SubgroupIDFormat::Present, true);
     testUnderflowResult(r15a);
     EXPECT_EQ(r15a.value().id, 5);
     EXPECT_EQ(r15a.value().extensions, test::getTestExtensions());
     skip(cursor, *r15a.value().length);
 
-    auto r20 = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    auto r20 = parser_.parseSubgroupObjectHeader(
+        cursor, res.value(), SubgroupIDFormat::Present, true);
     testUnderflowResult(r20);
     EXPECT_EQ(r20.value().status, ObjectStatus::OBJECT_NOT_EXIST);
 
-    auto r20a = parser_.parseSubgroupObjectHeader(cursor, res.value());
+    auto r20a = parser_.parseSubgroupObjectHeader(
+        cursor, res.value(), SubgroupIDFormat::Present, true);
     testUnderflowResult(r20a);
     EXPECT_EQ(r20a.value().extensions, test::getTestExtensions());
     EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK);
@@ -382,11 +387,14 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
       noExtensions(),
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writer_.writeSubgroupHeader(writeBuf, expectedObjectHeader);
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false);
+  auto result = writer_.writeSubgroupHeader(
+      writeBuf, expectedObjectHeader, SubgroupIDFormat::Zero, false);
   EXPECT_TRUE(result.hasValue());
   result = writer_.writeStreamObject(
       writeBuf,
-      StreamType::SUBGROUP_HEADER,
+      streamType,
       expectedObjectHeader,
       folly::IOBuf::copyBuffer("EFGH"));
   EXPECT_TRUE(result.hasValue());
@@ -395,17 +403,17 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
   expectedObjectHeader.length = 0;
   result = writer_.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER, expectedObjectHeader, nullptr);
+      writeBuf, streamType, expectedObjectHeader, nullptr);
   EXPECT_TRUE(result.hasValue());
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
-
-  EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
-  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor);
+  EXPECT_EQ(parseStreamType(cursor), streamType);
+  auto parseStreamHeaderResult =
+      parser_.parseSubgroupHeader(cursor, SubgroupIDFormat::Zero, false);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
-  auto parseResult =
-      parser_.parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+  auto parseResult = parser_.parseSubgroupObjectHeader(
+      cursor, *parseStreamHeaderResult, SubgroupIDFormat::Zero, false);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -415,8 +423,8 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   EXPECT_EQ(*parseResult->length, 4);
   cursor.skip(*parseResult->length);
 
-  parseResult =
-      parser_.parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+  parseResult = parser_.parseSubgroupObjectHeader(
+      cursor, *parseStreamHeaderResult, SubgroupIDFormat::Zero, false);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -550,7 +558,7 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
       ObjectHeader(
           TrackAlias(22), // trackAlias
           33,             // group
-          0,              // subgroup
+          44,             // subgroup
           44,             // id
           55,             // priority
           4),
@@ -559,11 +567,21 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::SUBGROUP_HEADER);
-  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor);
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::FirstObject, false);
+  auto hasExtensions = getDraftMajorVersion(GetParam()) < 11;
+  auto parsedST = parseStreamType(cursor);
+  EXPECT_EQ(parsedST, streamType)
+      << GetParam() << " " << folly::to_underlying(parsedST) << " "
+      << folly::to_underlying(streamType);
+  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(
+      cursor, SubgroupIDFormat::FirstObject, hasExtensions);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
-  auto parseResult =
-      parser_.parseSubgroupObjectHeader(cursor, *parseStreamHeaderResult);
+  auto parseResult = parser_.parseSubgroupObjectHeader(
+      cursor,
+      *parseStreamHeaderResult,
+      SubgroupIDFormat::FirstObject,
+      hasExtensions);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);

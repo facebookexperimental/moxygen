@@ -265,7 +265,9 @@ MoQFrameParser::parseDatagramObjectHeader(
 }
 
 folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
-    folly::io::Cursor& cursor) const noexcept {
+    folly::io::Cursor& cursor,
+    SubgroupIDFormat format,
+    bool /* includeExtensions*/) const noexcept {
   auto length = cursor.totalLength();
   ObjectHeader objectHeader;
   objectHeader.group = std::numeric_limits<uint64_t>::max(); // unset
@@ -282,17 +284,33 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
   }
   length -= group->second;
   objectHeader.group = group->first;
-  auto subgroup = quic::decodeQuicInteger(cursor, length);
-  if (!subgroup) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  bool parseObjectID = false;
+  if (getDraftMajorVersion(*version_) < 11 ||
+      format == SubgroupIDFormat::Present) {
+    auto subgroup = quic::decodeQuicInteger(cursor, length);
+    if (!subgroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    objectHeader.subgroup = subgroup->first;
+    length -= subgroup->second;
+  } else if (format == SubgroupIDFormat::Zero) {
+    objectHeader.subgroup = 0;
+  } else {
+    parseObjectID = true;
   }
-  objectHeader.subgroup = subgroup->first;
-  length -= subgroup->second;
   if (length > 0 || cursor.canAdvance(1)) {
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (parseObjectID) {
+    auto tmpCursor = cursor; // we reparse the object ID later
+    auto id = quic::decodeQuicInteger(tmpCursor, length);
+    if (!id) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    objectHeader.subgroup = objectHeader.id = id->first;
   }
   return objectHeader;
 }
@@ -377,7 +395,9 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
 folly::Expected<ObjectHeader, ErrorCode>
 MoQFrameParser::parseSubgroupObjectHeader(
     folly::io::Cursor& cursor,
-    const ObjectHeader& headerTemplate) const noexcept {
+    const ObjectHeader& headerTemplate,
+    SubgroupIDFormat /*format*/,
+    bool includeExtensions) const noexcept {
   // TODO get rid of this
   auto length = cursor.totalLength();
   ObjectHeader objectHeader = headerTemplate;
@@ -388,9 +408,11 @@ MoQFrameParser::parseSubgroupObjectHeader(
   length -= id->second;
   objectHeader.id = id->first;
 
-  auto ext = parseExtensions(cursor, length, objectHeader);
-  if (!ext) {
-    return folly::makeUnexpected(ext.error());
+  if (getDraftMajorVersion(*version_) < 11 || includeExtensions) {
+    auto ext = parseExtensions(cursor, length, objectHeader);
+    if (!ext) {
+      return folly::makeUnexpected(ext.error());
+    }
   }
 
   auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
@@ -1767,14 +1789,23 @@ WriteResult writeServerSetup(
 
 WriteResult MoQFrameWriter::writeSubgroupHeader(
     folly::IOBufQueue& writeBuf,
-    const ObjectHeader& objectHeader) const noexcept {
+    const ObjectHeader& objectHeader,
+    SubgroupIDFormat format,
+    bool includeExtensions) const noexcept {
   size_t size = 0;
   bool error = false;
-  writeVarint(
-      writeBuf, folly::to_underlying(StreamType::SUBGROUP_HEADER), size, error);
+  auto streamType = getSubgroupStreamType(
+      *version_,
+      objectHeader.subgroup == 0 ? SubgroupIDFormat::Zero : format,
+      includeExtensions);
+  auto streamTypeInt = folly::to_underlying(streamType);
+  writeVarint(writeBuf, streamTypeInt, size, error);
   writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
   writeVarint(writeBuf, objectHeader.group, size, error);
-  writeVarint(writeBuf, objectHeader.subgroup, size, error);
+  if (streamType == StreamType::SUBGROUP_HEADER ||
+      streamTypeInt & SG_HAS_SUBGROUP_ID) {
+    writeVarint(writeBuf, objectHeader.subgroup, size, error);
+  }
   writeBuf.append(&objectHeader.priority, 1);
   size += 1;
   if (error) {
@@ -1801,11 +1832,20 @@ WriteResult MoQFrameWriter::writeSingleObjectStream(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
-  auto res = writeSubgroupHeader(writeBuf, objectHeader);
+  bool v11Plus = getDraftMajorVersion(*version_) >= 11;
+  bool hasExtensions = !v11Plus || objectHeader.extensions.size() > 0;
+  auto res = writeSubgroupHeader(
+      writeBuf,
+      objectHeader,
+      v11Plus && objectHeader.subgroup == objectHeader.id
+          ? SubgroupIDFormat::FirstObject
+          : SubgroupIDFormat::Present,
+      hasExtensions);
   if (res) {
     return writeStreamObject(
         writeBuf,
-        StreamType::SUBGROUP_HEADER,
+        hasExtensions ? StreamType::SUBGROUP_HEADER_SG_EXT
+                      : StreamType::SUBGROUP_HEADER_SG,
         objectHeader,
         std::move(objectPayload));
   } else {
@@ -1985,7 +2025,11 @@ WriteResult MoQFrameWriter::writeStreamObject(
   } else {
     writeVarint(writeBuf, objectHeader.id, size, error);
   }
-  writeExtensions(writeBuf, objectHeader.extensions, size, error);
+  if (folly::to_underlying(streamType) & 0x1 ||
+      streamType == StreamType::SUBGROUP_HEADER) {
+    // includes FETCH, watch out if we add more types!
+    writeExtensions(writeBuf, objectHeader.extensions, size, error);
+  }
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
       << "non-zero length objects require NORMAL status";

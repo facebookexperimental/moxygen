@@ -156,6 +156,20 @@ void MoQObjectStreamCodec::onIngress(
         }
         cursor = newCursor;
         streamType_ = StreamType(type->first);
+        auto version = moqFrameParser_.getVersion();
+        if (version && getDraftMajorVersion(*version) >= 11 &&
+            type->first &
+                folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) {
+          subgroupFormat_ =
+              ((type->first & SG_HAS_SUBGROUP_ID)
+                   ? SubgroupIDFormat::Present
+                   : ((type->first & SG_SUBGROUP_VALUE)
+                          ? SubgroupIDFormat::FirstObject
+                          : SubgroupIDFormat::Zero));
+          includeExtensions_ = type->first & SG_HAS_EXTENSIONS;
+          streamType_ = StreamType::SUBGROUP_HEADER;
+          parseState_ = ParseState::OBJECT_STREAM;
+        }
         switch (streamType_) {
           case StreamType::SUBGROUP_HEADER:
             parseState_ = ParseState::OBJECT_STREAM;
@@ -193,7 +207,8 @@ void MoQObjectStreamCodec::onIngress(
       }
       case ParseState::OBJECT_STREAM: {
         auto newCursor = cursor;
-        auto res = moqFrameParser_.parseSubgroupHeader(newCursor);
+        auto res = moqFrameParser_.parseSubgroupHeader(
+            newCursor, subgroupFormat_, includeExtensions_);
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
@@ -223,7 +238,7 @@ void MoQObjectStreamCodec::onIngress(
         } else {
           DCHECK(streamType_ == StreamType::SUBGROUP_HEADER);
           res = moqFrameParser_.parseSubgroupObjectHeader(
-              newCursor, curObjectHeader_);
+              newCursor, curObjectHeader_, subgroupFormat_, includeExtensions_);
         }
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());

@@ -203,11 +203,12 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5);
-  auto res = moqFrameWriter.writeSubgroupHeader(writeBuf, obj);
+  auto res = moqFrameWriter.writeSubgroupHeader(
+      writeBuf, obj, SubgroupIDFormat::Present, true);
   obj.length = 11;
   res = moqFrameWriter.writeStreamObject(
       writeBuf,
-      StreamType::SUBGROUP_HEADER,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
       obj,
       folly::IOBuf::copyBuffer("hello world"));
   obj.id++;
@@ -215,7 +216,7 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
   obj.length = 15;
   res = moqFrameWriter.writeStreamObject(
       writeBuf,
-      StreamType::SUBGROUP_HEADER,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
       obj,
       folly::IOBuf::copyBuffer("hello world ext"));
   obj.id++;
@@ -223,12 +224,12 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
   obj.status = ObjectStatus::OBJECT_NOT_EXIST;
   obj.extensions.clear();
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, obj, nullptr);
   obj.id++;
   obj.status = ObjectStatus::END_OF_TRACK;
   obj.extensions = getTestExtensions();
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER, obj, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, obj, nullptr);
   return writeBuf.move();
 }
 
