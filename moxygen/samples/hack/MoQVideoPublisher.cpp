@@ -315,7 +315,9 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
   if (videoSgPub_) {
     XLOG(DBG1) << "Sending video frame. grp-obj: " << latestVideo_.group << "-"
                << latestVideo_.object << ". Payload size: "
-               << moqMiObj->payload->computeChainDataLength();
+               << (moqMiObj->payload
+                       ? moqMiObj->payload->computeChainDataLength()
+                       : 0);
     videoSgPub_->object(
         latestVideo_.object++,
         std::move(moqMiObj->payload),
