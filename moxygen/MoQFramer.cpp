@@ -48,6 +48,49 @@ enum class TrackRequestParamKey : uint64_t {
 
 namespace moxygen {
 
+// Forward declarations for iOS.
+folly::Expected<std::string, ErrorCode> parseFixedString(
+    folly::io::Cursor& cursor,
+    size_t& length);
+folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
+    folly::io::Cursor& cursor,
+    size_t& length,
+    size_t numParams,
+    std::vector<SetupParameter>& params);
+bool datagramTypeHasExtensions(uint64_t version, StreamType streamType);
+bool datagramTypeIsStatus(StreamType streamType);
+void writeVarint(
+    folly::IOBufQueue& buf,
+    uint64_t value,
+    size_t& size,
+    bool& error) noexcept;
+
+void writeFixedString(
+    folly::IOBufQueue& writeBuf,
+    const std::string& str,
+    size_t& size,
+    bool& error);
+void writeFixedTuple(
+    folly::IOBufQueue& writeBuf,
+    const std::vector<std::string>& tup,
+    size_t& size,
+    bool& error);
+void writeTrackNamespace(
+    folly::IOBufQueue& writeBuf,
+    const TrackNamespace& tn,
+    size_t& size,
+    bool& error);
+uint16_t*
+writeFrameHeader(folly::IOBufQueue& writeBuf, FrameType frameType, bool& error);
+void writeSize(uint16_t* sizePtr, size_t size, bool& error, uint64_t versionIn);
+
+void writeFullTrackName(
+    folly::IOBufQueue& writeBuf,
+    const FullTrackName& fullTrackName,
+    size_t& size,
+    bool error);
+bool includeParam(uint64_t version, uint64_t key);
+
 uint64_t getDraftMajorVersion(uint64_t version) {
   if (isDraftVariant(version)) {
     return (version & 0x00ff0000) >> 16;
@@ -1708,11 +1751,11 @@ WriteResult writeClientSetup(
 
   writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
   bool v11Plus = true;
-  for (auto version : clientSetup.supportedVersions) {
-    if (getDraftMajorVersion(version) < 11) {
+  for (auto ver : clientSetup.supportedVersions) {
+    if (getDraftMajorVersion(ver) < 11) {
       v11Plus = false;
     }
-    writeVarint(writeBuf, version, size, error);
+    writeVarint(writeBuf, ver, size, error);
   }
 
   // Count the number of params, excluding !v11Plus MAX_AUTH_TOKEN_CACHE_SIZE

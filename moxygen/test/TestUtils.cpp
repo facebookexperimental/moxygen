@@ -20,7 +20,7 @@ std::vector<Extension> getTestExtensions() {
   return extensions;
 }
 
-TrackRequestParameter getTestAuthParam(
+static TrackRequestParameter getTestAuthParam(
     const MoQFrameWriter& moqFrameWriter,
     const std::string& authValue) {
   return TrackRequestParameter{
@@ -30,7 +30,7 @@ TrackRequestParameter getTestAuthParam(
       {}};
 }
 
-std::vector<TrackRequestParameter> getTestTrackRequestParameters(
+static std::vector<TrackRequestParameter> getTestTrackRequestParameters(
     const MoQFrameWriter& moqFrameWriter) {
   return {
       getTestAuthParam(moqFrameWriter, "binky"),

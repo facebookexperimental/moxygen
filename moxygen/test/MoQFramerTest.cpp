@@ -726,7 +726,7 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   }
 }
 
-std::string encodeToken(
+static std::string encodeToken(
     MoQFrameWriter& writer,
     AliasType aliasType,
     uint64_t alias,
@@ -746,7 +746,7 @@ std::string encodeToken(
   }
 }
 
-size_t writeSubscribeRequestWithAuthToken(
+static size_t writeSubscribeRequestWithAuthToken(
     folly::IOBufQueue& writeBuf,
     MoQFrameWriter& writer,
     AliasType aliasType,
