@@ -317,7 +317,7 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     folly::io::Cursor cursor(writeBuf.front());
     auto datagramType = getDatagramType(GetParam(), isStatus, hasExtensions);
     auto decodedType = quic::decodeQuicInteger(cursor, i);
-    EXPECT_TRUE(decodedType.hasValue());
+    EXPECT_TRUE(decodedType.has_value());
     EXPECT_EQ(decodedType->first, folly::to_underlying(datagramType));
 
     auto len = i - decodedType->second;
