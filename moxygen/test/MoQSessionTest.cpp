@@ -21,7 +21,7 @@ namespace {
 using namespace moxygen;
 using testing::_;
 
-const size_t kTestMaxSubscribeId = 2;
+const size_t kTestMaxRequestID = 2;
 const FullTrackName kTestTrackName{TrackNamespace{{"foo"}}, "bar"};
 
 MATCHER_P(HasChainDataLengthOf, n, "") {
@@ -32,7 +32,7 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
     const Fetch& fetch,
     const AbsoluteLocation& location) {
   return std::make_shared<MockFetchHandle>(FetchOk{
-      fetch.subscribeID,
+      fetch.requestID,
       GroupOrder::OldestFirst,
       /*endOfTrack=*/0,
       location,
@@ -43,7 +43,7 @@ auto makeSubscribeOkResult(
     const SubscribeRequest& sub,
     const folly::Optional<AbsoluteLocation>& latest = folly::none) {
   return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
-      sub.subscribeID,
+      sub.requestID,
       std::chrono::milliseconds(0),
       GroupOrder::OldestFirst,
       latest,
@@ -95,11 +95,11 @@ class MoQSessionTest : public testing::Test,
     if (!setup.params.empty()) {
       EXPECT_EQ(
           setup.params.at(0).key,
-          folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID));
       EXPECT_EQ(
           setup.params.at(1).key,
           folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
-      EXPECT_EQ(setup.params.at(0).asUint64, initialMaxSubscribeId_);
+      EXPECT_EQ(setup.params.at(0).asUint64, initialMaxRequestID_);
     }
     if (failServerSetup_) {
       return folly::makeTryWith(
@@ -109,9 +109,9 @@ class MoQSessionTest : public testing::Test,
         .selectedVersion = getServerSelectedVersion(),
         .params = {
             SetupParameter{
-                folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+                folly::to_underlying(SetupKey::MAX_REQUEST_ID),
                 "",
-                initialMaxSubscribeId_,
+                initialMaxRequestID_,
                 {}},
             SetupParameter{
                 folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
@@ -182,15 +182,15 @@ class MoQSessionTest : public testing::Test,
   }
 
   // GCC barfs when using struct brace initializers inside a coroutine?
-  // Helper function to make ClientSetup with MAX_SUBSCRIBE_ID
-  ClientSetup getClientSetup(uint64_t initialMaxSubscribeId) {
+  // Helper function to make ClientSetup with MAX_REQUEST_ID
+  ClientSetup getClientSetup(uint64_t initialMaxRequestID) {
     return ClientSetup{
         .supportedVersions = getClientSupportedVersions(),
         .params = {
             SetupParameter{
-                folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+                folly::to_underlying(SetupKey::MAX_REQUEST_ID),
                 "",
-                initialMaxSubscribeId,
+                initialMaxRequestID,
                 {}},
             SetupParameter{
                 folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
@@ -224,7 +224,7 @@ class MoQSessionTest : public testing::Test,
   std::shared_ptr<MockPublisher> serverPublisher{
       std::make_shared<MockPublisher>()};
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
-  uint64_t initialMaxSubscribeId_{kTestMaxSubscribeId};
+  uint64_t initialMaxRequestID_{kTestMaxRequestID};
   bool failServerSetup_{false};
   bool invalidVersion_{false};
   std::shared_ptr<testing::StrictMock<MockFetchConsumer>> fetchCallback_;
@@ -239,12 +239,12 @@ class MoQSessionTest : public testing::Test,
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
   return Fetch(
-      SubscribeID(0), kTestTrackName, start, end, 0, GroupOrder::OldestFirst);
+      RequestID(0), kTestTrackName, start, end, 0, GroupOrder::OldestFirst);
 }
 
 SubscribeRequest getSubscribe(const FullTrackName& ftn) {
   return SubscribeRequest{
-      SubscribeID(0),
+      RequestID(0),
       TrackAlias(0),
       ftn,
       0,
@@ -256,7 +256,7 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       {}};
 }
 
-SubscribeDone getTrackEndedSubscribeDone(SubscribeID id) {
+SubscribeDone getTrackEndedSubscribeDone(RequestID id) {
   return {id, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"};
 }
 
@@ -274,13 +274,13 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   serverSession_->setPublishHandler(serverPublisher);
   serverSession_->start();
   auto serverSetup =
-      co_await clientSession_->setup(getClientSetup(initialMaxSubscribeId_));
+      co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
 
   EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
   EXPECT_EQ(
       serverSetup.params.at(0).key,
-      folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID));
-  EXPECT_EQ(serverSetup.params.at(0).asUint64, initialMaxSubscribeId_);
+      folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+  EXPECT_EQ(serverSetup.params.at(0).asUint64, initialMaxRequestID_);
 }
 } // namespace
 
@@ -381,7 +381,7 @@ CO_TEST_F_X(MoQSessionTest, RelativeJoiningFetch) {
     pub->datagram(
         ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
         folly::IOBuf::copyBuffer("hello world"));
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -430,8 +430,8 @@ CO_TEST_F_X(MoQSessionTest, BadRelativeJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
       Fetch(
-          SubscribeID(0),
-          SubscribeID(17),
+          RequestID(0),
+          RequestID(17),
           1,
           FetchType::RELATIVE_JOINING,
           128,
@@ -460,7 +460,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, AbsoluteJoiningFetch) {
           ObjectHeader(sub.trackAlias, group, 0, 0, 0, 11),
           folly::IOBuf::copyBuffer("hello world"));
     }
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -515,8 +515,8 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, BadAbsoluteJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
       Fetch(
-          SubscribeID(0),
-          SubscribeID(17),
+          RequestID(0),
+          RequestID(17),
           1,
           FetchType::ABSOLUTE_JOINING,
           128,
@@ -580,9 +580,7 @@ CO_TEST_F_X(MoQSessionTest, FetchPublisherError) {
   expectFetch(
       [](Fetch fetch, auto) -> TaskFetchResult {
         co_return folly::makeUnexpected(FetchError{
-            fetch.subscribeID,
-            FetchErrorCode::TRACK_NOT_EXIST,
-            "Bad trackname"});
+            fetch.requestID, FetchErrorCode::TRACK_NOT_EXIST, "Bad trackname"});
       },
       FetchErrorCode::TRACK_NOT_EXIST);
   auto res =
@@ -823,7 +821,7 @@ CO_TEST_F_X(MoQSessionTest, DoubleBeginObject) {
     EXPECT_EQ(
         sgp->beginObject(2, 100, test::makeBuf(10)).error().code,
         MoQPublishError::API_ERROR);
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
   });
 }
 
@@ -836,7 +834,7 @@ CO_TEST_F_X(MoQSessionTest, ObjectPayloadTooLong) {
     auto payloadFail =
         sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(200, 'x')));
     EXPECT_EQ(payloadFail.error().code, MoQPublishError::API_ERROR);
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
   });
 }
 
@@ -853,7 +851,7 @@ CO_TEST_F_X(MoQSessionTest, ObjectPayloadEarlyFin) {
         folly::IOBuf::copyBuffer(std::string(20, 'x')), true);
     EXPECT_EQ(payloadFinFail.error().code, MoQPublishError::API_ERROR);
 
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
   });
 }
 
@@ -872,7 +870,7 @@ CO_TEST_F_X(MoQSessionTest, PublisherResetAfterBeginObject) {
         sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(20, 'x')));
     EXPECT_EQ(payloadFail.error().code, MoQPublishError::CANCELLED);
 
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
   });
 }
 
@@ -896,14 +894,14 @@ CO_TEST_F_X(MoQSessionTest, TrackStatus) {
 
 // MAX SUBSCRIBE ID tests
 
-CO_TEST_F_X(MoQSessionTest, MaxSubscribeID) {
+CO_TEST_F_X(MoQSessionTest, MaxRequestID) {
   co_await setupMoQSession();
   {
     testing::InSequence enforceOrder;
     expectSubscribe(
         [](auto sub, auto) -> TaskSubscribeResult {
           co_return folly::makeUnexpected(SubscribeError{
-              sub.subscribeID,
+              sub.requestID,
               SubscribeErrorCode::UNAUTHORIZED,
               "bad",
               folly::none});
@@ -911,7 +909,7 @@ CO_TEST_F_X(MoQSessionTest, MaxSubscribeID) {
         SubscribeErrorCode::UNAUTHORIZED);
     expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
       eventBase_.add([pub, sub] {
-        pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+        pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
       });
       co_return makeSubscribeOkResult(sub);
     });
@@ -937,7 +935,7 @@ CO_TEST_F_X(MoQSessionTest, MaxSubscribeID) {
   // This is true because initial is 2 in this test case and we grant credit
   // every 50%.
   auto expectedSubId = 3;
-  EXPECT_EQ(serverSession_->maxSubscribeID(), expectedSubId);
+  EXPECT_EQ(serverSession_->maxRequestID(), expectedSubId);
 
   // subscribe again but this time we get a DONE
   EXPECT_CALL(*trackPublisher2, subscribeDone(_))
@@ -947,7 +945,7 @@ CO_TEST_F_X(MoQSessionTest, MaxSubscribeID) {
       getSubscribe(kTestTrackName), trackPublisher2);
   co_await folly::coro::co_reschedule_on_current_executor;
   expectedSubId++;
-  EXPECT_EQ(serverSession_->maxSubscribeID(), expectedSubId);
+  EXPECT_EQ(serverSession_->maxRequestID(), expectedSubId);
 
   // subscribe three more times, last one should fail, the first two will get
   // subscribeDone via the session closure
@@ -978,7 +976,7 @@ CO_TEST_F_X(MoQSessionTest, Datagrams) {
         ObjectHeader(
             sub.trackAlias, 0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST),
         nullptr);
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   {
@@ -1026,7 +1024,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeForwardingFalse) {
     EXPECT_TRUE(pubResult3.hasError());
     auto pubResult4 = pub->groupNotExists(0, 0, 0, noExtensions());
     EXPECT_TRUE(pubResult4.hasError());
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   expectSubscribeDone();
@@ -1064,7 +1062,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeUpdateForwardingFalse) {
   expectSubscribeDone();
 
   SubscribeUpdate subscribeUpdate{
-      subscribeRequest.subscribeID,
+      subscribeRequest.requestID,
       AbsoluteLocation{0, 0},
       10,
       kDefaultPriority,
@@ -1093,7 +1091,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneStreamCount) {
       auto sgp = pub->beginSubgroup(0, 1, 0).value();
       sgp->object(1, moxygen::test::makeBuf(10));
       sgp->object(2, moxygen::test::makeBuf(10), noExtensions(), true);
-      pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+      pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     });
     co_return makeSubscribeOkResult(sub);
   });
@@ -1119,7 +1117,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneStreamCount) {
 CO_TEST_F_X(MoQSessionTest, SubscribeDoneFromSubscribe) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub);
   });
   expectSubscribeDone();
@@ -1132,7 +1130,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneFromSubscribe) {
 CO_TEST_F_X(MoQSessionTest, SubscribeDoneAPIErrors) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     // All these APIs fail after SUBSCRIBE_DONE
     EXPECT_EQ(
         pub->beginSubgroup(1, 1, 1).error().code, MoQPublishError::API_ERROR);
@@ -1146,7 +1144,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneAPIErrors) {
             .code,
         MoQPublishError::API_ERROR);
     EXPECT_EQ(
-        pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID))
+        pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID))
             .error()
             .code,
         MoQPublishError::API_ERROR);
@@ -1242,7 +1240,7 @@ CO_TEST_F_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
         serverWt->writeHandles[2]->deliverInflightData();
         EXPECT_FALSE(objectResult.hasError());
       }
-      pub->subscribeDone(getTrackEndedSubscribeDone(sub.subscribeID));
+      pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     });
     co_return makeSubscribeOkResult(sub);
   });
@@ -1407,7 +1405,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, TrackStatusWithAuthorizationToken) {
 // subscribeUpdate/onSubscribeUpdate
 // unsubscribe/onUnsubscribe
 // onSubscribeOk/Error/Done with unknown ID
-// onMaxSubscribeID with ID == 0 {no setup param}
+// onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
 // trackstatus
 // announce/unannounce/announceCancel/announceError

@@ -383,16 +383,16 @@ class MoQFlvReceiverClient
       trackReceiverHandlerAudio_->setFlvWriterShared(flvw_);
       trackReceiverHandlerVideo_->setFlvWriterShared(flvw_);
 
-      const auto subscribeIDAudio = 0;
+      const auto requestIDAudio = 0;
       const auto trackAliasAudio = 1;
-      const auto subscribeIDVideo = 1;
+      const auto requestIDVideo = 1;
       const auto trackAliasVideo = 2;
 
       uint64_t negotiatedVersion =
           *(moqClient_->moqSession_->getNegotiatedVersion());
 
       SubscribeRequest subAudio{
-          subscribeIDAudio,
+          requestIDAudio,
           trackAliasAudio,
           moxygen::FullTrackName(
               {{TrackNamespace(
@@ -406,7 +406,7 @@ class MoQFlvReceiverClient
           0,
           {getAuthParam(negotiatedVersion, FLAGS_auth)}};
       SubscribeRequest subVideo{
-          subscribeIDVideo,
+          requestIDVideo,
           trackAliasVideo,
           moxygen::FullTrackName(
               {TrackNamespace(
@@ -427,8 +427,8 @@ class MoQFlvReceiverClient
           subAudio, subRxHandlerAudio_);
       if (trackAudio.hasValue()) {
         audioSubscribeHandle_ = std::move(trackAudio.value());
-        XLOG(DBG1) << "Audio subscribeID="
-                   << audioSubscribeHandle_->subscribeOk().subscribeID;
+        XLOG(DBG1) << "Audio requestID="
+                   << audioSubscribeHandle_->subscribeOk().requestID;
         auto latest = audioSubscribeHandle_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Audio Latest={" << latest->group << ", "
@@ -436,7 +436,7 @@ class MoQFlvReceiverClient
         }
       } else {
         XLOG(WARNING) << "Audio SubscribeError id="
-                      << trackAudio.error().subscribeID << " code="
+                      << trackAudio.error().requestID << " code="
                       << folly::to_underlying(trackAudio.error().errorCode)
                       << " reason=" << trackAudio.error().reasonPhrase;
       }
@@ -448,8 +448,8 @@ class MoQFlvReceiverClient
           subVideo, subRxHandlerVideo_);
       if (trackVideo.hasValue()) {
         videoSubscribeHandle_ = std::move(trackVideo.value());
-        XLOG(DBG1) << "Video subscribeID="
-                   << videoSubscribeHandle_->subscribeOk().subscribeID;
+        XLOG(DBG1) << "Video requestID="
+                   << videoSubscribeHandle_->subscribeOk().requestID;
         auto latest = videoSubscribeHandle_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Video Latest={" << latest->group << ", "
@@ -457,7 +457,7 @@ class MoQFlvReceiverClient
         }
       } else {
         XLOG(WARNING) << "Video SubscribeError id="
-                      << trackVideo.error().subscribeID << " code="
+                      << trackVideo.error().requestID << " code="
                       << folly::to_underlying(trackVideo.error().errorCode)
                       << " reason=" << trackVideo.error().reasonPhrase;
       }

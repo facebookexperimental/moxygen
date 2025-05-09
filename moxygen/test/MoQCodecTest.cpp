@@ -53,7 +53,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
     EXPECT_CALL(callback, onGoaway(testing::_));
-    EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
+    EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnouncesError(testing::_));
@@ -100,7 +100,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
     EXPECT_CALL(callback, onGoaway(testing::_));
-    EXPECT_CALL(callback, onMaxSubscribeId(testing::_));
+    EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnouncesError(testing::_));
@@ -325,10 +325,10 @@ TEST_P(MoQCodecTest, UnknownStreamType) {
 
 TEST_P(MoQCodecTest, Fetch) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  SubscribeID subscribeId(1);
-  ObjectHeader obj(subscribeId, 2, 3, 4, 5);
+  RequestID requestID(1);
+  ObjectHeader obj(requestID, 2, 3, 4, 5);
   StreamType streamType = StreamType::FETCH_HEADER;
-  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, subscribeId);
+  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
   obj.length = 5;
   res = moqFrameWriter_.writeStreamObject(
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
@@ -358,8 +358,8 @@ TEST_P(MoQCodecTest, Fetch) {
 
 TEST_P(MoQCodecTest, FetchHeaderUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  SubscribeID subscribeId(0xffffffffffffff);
-  moqFrameWriter_.writeFetchHeader(writeBuf, subscribeId);
+  RequestID requestID(0xffffffffffffff);
+  moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
   // only deliver first byte of fetch header
   EXPECT_CALL(
       objectStreamCodecCallback_,
@@ -384,7 +384,7 @@ TEST_P(MoQCodecTest, ClientGetsClientSetup) {
           {{1},
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-               {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
+               {folly::to_underlying(SetupKey::MAX_REQUEST_ID), "", 100},
            }}),
       GetParam());
 

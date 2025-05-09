@@ -139,12 +139,12 @@ enum class FrameType : uint64_t {
   SUBSCRIBE_ANNOUNCES_OK = 0x12,
   SUBSCRIBE_ANNOUNCES_ERROR = 0x13,
   UNSUBSCRIBE_ANNOUNCES = 0x14,
-  MAX_SUBSCRIBE_ID = 0x15,
+  MAX_REQUEST_ID = 0x15,
   FETCH = 0x16,
   FETCH_CANCEL = 0x17,
   FETCH_OK = 0x18,
   FETCH_ERROR = 0x19,
-  SUBSCRIBES_BLOCKED = 0x1A,
+  REQUESTS_BLOCKED = 0x1A,
   CLIENT_SETUP = 0x20,
   SERVER_SETUP = 0x21,
   LEGACY_CLIENT_SETUP = 0x40,
@@ -178,7 +178,7 @@ std::ostream& operator<<(std::ostream& os, StreamType type);
 
 enum class SetupKey : uint64_t {
   PATH = 1,
-  MAX_SUBSCRIBE_ID = 2,
+  MAX_REQUEST_ID = 2,
   MAX_AUTH_TOKEN_CACHE_SIZE = 4,
 };
 
@@ -289,23 +289,23 @@ struct TrackAlias {
 };
 std::ostream& operator<<(std::ostream& os, TrackAlias alias);
 
-struct SubscribeID {
-  /* implicit */ SubscribeID(uint64_t v) : value(v) {}
-  SubscribeID() = default;
+struct RequestID {
+  /* implicit */ RequestID(uint64_t v) : value(v) {}
+  RequestID() = default;
   uint64_t value{0};
-  bool operator==(const SubscribeID& s) const {
+  bool operator==(const RequestID& s) const {
     return value == s.value;
   }
-  std::strong_ordering operator<=>(const SubscribeID& other) const {
+  std::strong_ordering operator<=>(const RequestID& other) const {
     return value <=> other.value;
   }
   struct hash {
-    size_t operator()(const SubscribeID& s) const {
+    size_t operator()(const RequestID& s) const {
       return std::hash<uint64_t>{}(s.value);
     }
   };
 };
-std::ostream& operator<<(std::ostream& os, SubscribeID id);
+std::ostream& operator<<(std::ostream& os, RequestID id);
 
 struct UnitializedIdentifier {
   bool operator==(const UnitializedIdentifier&) const {
@@ -313,7 +313,7 @@ struct UnitializedIdentifier {
   }
 };
 using TrackIdentifier =
-    std::variant<UnitializedIdentifier, TrackAlias, SubscribeID>;
+    std::variant<UnitializedIdentifier, TrackAlias, RequestID>;
 struct TrackIdentifierHash {
   size_t operator()(const TrackIdentifier& trackIdentifier) const {
     XCHECK_GT(trackIdentifier.index(), 0llu);
@@ -323,8 +323,7 @@ struct TrackIdentifierHash {
           trackIdentifier.index(), trackAlias->value);
     } else {
       return folly::hash::hash_combine(
-          trackIdentifier.index(),
-          std::get<SubscribeID>(trackIdentifier).value);
+          trackIdentifier.index(), std::get<RequestID>(trackIdentifier).value);
     }
   }
 };
@@ -335,7 +334,7 @@ inline uint64_t value(const TrackIdentifier& trackIdentifier) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, TrackAlias>) {
           return value.value;
-        } else if constexpr (std::is_same_v<T, SubscribeID>) {
+        } else if constexpr (std::is_same_v<T, RequestID>) {
           return value.value;
         }
         return std::numeric_limits<uint64_t>::max();
@@ -624,7 +623,7 @@ enum class GroupOrder : uint8_t {
 };
 
 struct SubscribeRequest {
-  SubscribeID subscribeID;
+  RequestID requestID;
   TrackAlias trackAlias;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
@@ -637,7 +636,7 @@ struct SubscribeRequest {
 };
 
 struct SubscribeUpdate {
-  SubscribeID subscribeID;
+  RequestID requestID;
   AbsoluteLocation start;
   uint64_t endGroup;
   uint8_t priority{kDefaultPriority};
@@ -646,7 +645,7 @@ struct SubscribeUpdate {
 };
 
 struct SubscribeOk {
-  SubscribeID subscribeID;
+  RequestID requestID;
   std::chrono::milliseconds expires;
   GroupOrder groupOrder;
   // context exists is inferred from presence of latest
@@ -655,18 +654,18 @@ struct SubscribeOk {
 };
 
 struct SubscribeError {
-  SubscribeID subscribeID;
+  RequestID requestID;
   SubscribeErrorCode errorCode;
   std::string reasonPhrase;
   folly::Optional<uint64_t> retryAlias{folly::none};
 };
 
 struct Unsubscribe {
-  SubscribeID subscribeID;
+  RequestID requestID;
 };
 
 struct SubscribeDone {
-  SubscribeID subscribeID;
+  RequestID requestID;
   SubscribeDoneStatusCode statusCode;
   uint64_t streamCount;
   std::string reasonPhrase;
@@ -713,12 +712,12 @@ struct Goaway {
   std::string newSessionUri;
 };
 
-struct MaxSubscribeId {
-  SubscribeID subscribeID;
+struct MaxRequestID {
+  RequestID requestID;
 };
 
-struct SubscribesBlocked {
-  SubscribeID maxSubscribeID;
+struct RequestsBlocked {
+  RequestID maxRequestID;
 };
 
 enum class FetchType : uint8_t {
@@ -735,15 +734,15 @@ struct StandaloneFetch {
 };
 
 struct JoiningFetch {
-  JoiningFetch(SubscribeID jsid, uint64_t joiningStartIn, FetchType fetchTypeIn)
-      : joiningSubscribeID(jsid),
+  JoiningFetch(RequestID jsid, uint64_t joiningStartIn, FetchType fetchTypeIn)
+      : joiningRequestID(jsid),
         joiningStart(joiningStartIn),
         fetchType(fetchTypeIn) {
     CHECK(
         fetchType == FetchType::RELATIVE_JOINING ||
         fetchType == FetchType::ABSOLUTE_JOINING);
   }
-  SubscribeID joiningSubscribeID;
+  RequestID joiningRequestID;
   // For absolute joining, this is the starting group id. For relative joining,
   // this is the group offset prior and relative to the current group of the
   // corresponding subscribe.
@@ -756,14 +755,14 @@ struct Fetch {
 
   // Used for standalone fetches
   Fetch(
-      SubscribeID su,
+      RequestID su,
       FullTrackName ftn,
       AbsoluteLocation st,
       AbsoluteLocation e,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
       std::vector<TrackRequestParameter> pa = {})
-      : subscribeID(su),
+      : requestID(su),
         fullTrackName(std::move(ftn)),
         priority(p),
         groupOrder(g),
@@ -772,14 +771,14 @@ struct Fetch {
 
   // Used for absolute or relative joining fetches
   Fetch(
-      SubscribeID su,
-      SubscribeID jsid,
+      RequestID su,
+      RequestID jsid,
       uint64_t joiningStart,
       FetchType fetchType,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
       std::vector<TrackRequestParameter> pa = {})
-      : subscribeID(su),
+      : requestID(su),
         priority(p),
         groupOrder(g),
         params(std::move(pa)),
@@ -788,7 +787,7 @@ struct Fetch {
         fetchType == FetchType::RELATIVE_JOINING ||
         fetchType == FetchType::ABSOLUTE_JOINING);
   }
-  SubscribeID subscribeID;
+  RequestID requestID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
@@ -810,11 +809,11 @@ inline std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
 }
 
 struct FetchCancel {
-  SubscribeID subscribeID;
+  RequestID requestID;
 };
 
 struct FetchOk {
-  SubscribeID subscribeID;
+  RequestID requestID;
   GroupOrder groupOrder;
   uint8_t endOfTrack;
   AbsoluteLocation endLocation;
@@ -822,7 +821,7 @@ struct FetchOk {
 };
 
 struct FetchError {
-  SubscribeID subscribeID;
+  RequestID requestID;
   FetchErrorCode errorCode;
   std::string reasonPhrase;
 };
@@ -879,7 +878,7 @@ class MoQFrameParser {
       StreamType streamType,
       size_t& length) const noexcept;
 
-  folly::Expected<SubscribeID, ErrorCode> parseFetchHeader(
+  folly::Expected<RequestID, ErrorCode> parseFetchHeader(
       folly::io::Cursor& cursor) const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
@@ -953,11 +952,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<MaxSubscribeId, ErrorCode> parseMaxSubscribeId(
+  folly::Expected<MaxRequestID, ErrorCode> parseMaxRequestID(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<SubscribesBlocked, ErrorCode> parseSubscribesBlocked(
+  folly::Expected<RequestsBlocked, ErrorCode> parseRequestsBlocked(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -1074,9 +1073,8 @@ class MoQFrameWriter {
       SubgroupIDFormat format = SubgroupIDFormat::Present,
       bool includeExtensions = true) const noexcept;
 
-  WriteResult writeFetchHeader(
-      folly::IOBufQueue& writeBuf,
-      SubscribeID subscribeID) const noexcept;
+  WriteResult writeFetchHeader(folly::IOBufQueue& writeBuf, RequestID requestID)
+      const noexcept;
 
   WriteResult writeStreamHeader(
       folly::IOBufQueue& writeBuf,
@@ -1123,13 +1121,13 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const Unsubscribe& unsubscribe) const noexcept;
 
-  WriteResult writeMaxSubscribeId(
+  WriteResult writeMaxRequestID(
       folly::IOBufQueue& writeBuf,
-      const MaxSubscribeId& maxSubscribeId) const noexcept;
+      const MaxRequestID& maxRequestID) const noexcept;
 
-  WriteResult writeSubscribesBlocked(
+  WriteResult writeRequestsBlocked(
       folly::IOBufQueue& writeBuf,
-      const SubscribesBlocked& subscribesBlocked) const noexcept;
+      const RequestsBlocked& subscribesBlocked) const noexcept;
 
   WriteResult writeAnnounce(
       folly::IOBufQueue& writeBuf,

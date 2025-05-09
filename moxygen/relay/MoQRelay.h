@@ -93,7 +93,7 @@ class MoQRelay : public Publisher,
 
     std::shared_ptr<MoQForwarder> forwarder;
     std::shared_ptr<MoQSession> upstream;
-    SubscribeID subscribeID{0};
+    RequestID requestID{0};
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
     folly::coro::SharedPromise<folly::Unit> promise;
   };

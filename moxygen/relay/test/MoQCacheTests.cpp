@@ -692,7 +692,7 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
   writeback->beginSubgroup(7, 0, 0).value()->reset(
       ResetStreamErrorCode::CANCELLED);
   writeback->subscribeDone(
-      {SubscribeID(0), SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 0, ""});
+      {RequestID(0), SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 0, ""});
 
   writeback.reset();
 }

@@ -119,16 +119,16 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   folly::coro::Task<ServerSetup> setup(ClientSetup setup);
 
-  void setMaxConcurrentSubscribes(uint64_t maxConcurrent) {
-    if (maxConcurrent > maxConcurrentSubscribes_) {
-      auto delta = maxConcurrent - maxConcurrentSubscribes_;
-      maxSubscribeID_ += delta;
-      sendMaxSubscribeID(/*signalWriteLoop=*/true);
+  void setMaxConcurrentRequests(uint64_t maxConcurrent) {
+    if (maxConcurrent > maxConcurrentRequests_) {
+      auto delta = maxConcurrent - maxConcurrentRequests_;
+      maxRequestID_ += delta;
+      sendMaxRequestID(/*signalWriteLoop=*/true);
     }
   }
 
-  uint64_t maxSubscribeID() const {
-    return maxSubscribeID_;
+  uint64_t maxRequestID() const {
+    return maxRequestID_;
   }
 
   static GroupOrder resolveGroupOrder(
@@ -184,14 +184,14 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     PublisherImpl(
         MoQSession* session,
         FullTrackName ftn,
-        SubscribeID subscribeID,
+        RequestID requestID,
         Priority subPriority,
         GroupOrder groupOrder,
         uint64_t version,
         uint64_t bytesBufferedThreshold)
         : session_(session),
           fullTrackName_(std::move(ftn)),
-          subscribeID_(subscribeID),
+          requestID_(requestID),
           subPriority_(subPriority),
           groupOrder_(groupOrder),
           version_(version),
@@ -204,8 +204,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     const FullTrackName& fullTrackName() const {
       return fullTrackName_;
     }
-    SubscribeID subscribeID() const {
-      return subscribeID_;
+    RequestID requestID() const {
+      return requestID_;
     }
     uint8_t subPriority() const {
       return subPriority_;
@@ -261,7 +261,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
-    SubscribeID subscribeID_;
+    RequestID requestID_;
     uint8_t subPriority_;
     GroupOrder groupOrder_;
     MoQFrameWriter moqFrameWriter_;
@@ -289,7 +289,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   std::shared_ptr<SubscribeTrackReceiveState> getSubscribeTrackReceiveState(
       TrackAlias trackAlias);
   std::shared_ptr<FetchTrackReceiveState> getFetchTrackReceiveState(
-      SubscribeID subscribeID);
+      RequestID requestID);
 
  private:
   static const folly::RequestToken& sessionRequestToken();
@@ -355,8 +355,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onSubscribeError(SubscribeError subscribeError) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
-  void onMaxSubscribeId(MaxSubscribeId maxSubId) override;
-  void onSubscribesBlocked(SubscribesBlocked subscribesBlocked) override;
+  void onMaxRequestID(MaxRequestID maxSubId) override;
+  void onRequestsBlocked(RequestsBlocked requestsBlocked) override;
   void onFetch(Fetch fetch) override;
   void onFetchCancel(FetchCancel fetchCancel) override;
   void onFetchOk(FetchOk fetchOk) override;
@@ -377,25 +377,25 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onTrackStatus(TrackStatus trackStatus) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
-  void removeSubscriptionState(TrackAlias alias, SubscribeID id);
+  void removeSubscriptionState(TrackAlias alias, RequestID id);
   void checkForCloseOnDrain();
 
-  void retireSubscribeId(bool signalWriteLoop);
-  void sendMaxSubscribeID(bool signalWriteLoop);
-  void fetchComplete(SubscribeID subscribeID);
+  void retireRequestID(bool signalWriteLoop);
+  void sendMaxRequestID(bool signalWriteLoop);
+  void fetchComplete(RequestID requestID);
 
-  // Get the max subscribe id from the setup params. If MAX_SUBSCRIBE_ID key
+  // Get the max requestID from the setup params. If MAX_REQUEST_ID key
   // is not present, we default to 0 as specified. 0 means that the peer
   // MUST NOT create any subscriptions
-  static uint64_t getMaxSubscribeIdIfPresent(
+  static uint64_t getMaxRequestIDIfPresent(
       const std::vector<SetupParameter>& params);
   static uint64_t getMaxAuthTokenCacheSizeIfPresent(
       const std::vector<SetupParameter>& params);
 
-  //  Closes the session if the subscribeID is invalid, that is,
-  //  subscribeID <= maxSubscribeID_;
-  //  TODO: Add this to all messages that have subscribeId
-  bool closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID);
+  //  Closes the session if the requestID is invalid, that is,
+  //  requestID <= maxRequestID_;
+  //  TODO: Add this to all messages that have requestID
+  bool closeSessionIfRequestIDInvalid(RequestID requestID);
 
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
   void aliasifyAuthTokens(std::vector<TrackRequestParameter>& params);
@@ -413,12 +413,11 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       TrackAlias::hash>
       subTracks_;
   folly::F14FastMap<
-      SubscribeID,
+      RequestID,
       std::shared_ptr<FetchTrackReceiveState>,
-      SubscribeID::hash>
+      RequestID::hash>
       fetches_;
-  folly::F14FastMap<SubscribeID, TrackAlias, SubscribeID::hash>
-      subIdToTrackAlias_;
+  folly::F14FastMap<RequestID, TrackAlias, RequestID::hash> subIdToTrackAlias_;
 
   // Publisher State
   // Track Namespace -> Promise<AnnounceOK>
@@ -443,9 +442,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       trackStatuses_;
 
   // Subscriber ID -> metadata about a publish track
-  folly::
-      F14FastMap<SubscribeID, std::shared_ptr<PublisherImpl>, SubscribeID::hash>
-          pubTracks_;
+  folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
+      pubTracks_;
 
   class SubscriberAnnounceCallback;
   class PublisherAnnounceHandle;
@@ -466,12 +464,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       TrackNamespace::hash>
       subscribeAnnounces_;
 
-  uint64_t closedSubscribes_{0};
-  // TODO: Make this value configurable. maxConcurrentSubscribes_ represents
+  uint64_t closedRequests_{0};
+  // TODO: Make this value configurable. maxConcurrentRequests_ represents
   // the maximum number of concurrent subscriptions to a given sessions, set
-  // to the initial MAX_SUBSCRIBE_ID
-  uint64_t maxConcurrentSubscribes_{100};
-  uint64_t peerMaxSubscribeID_{0};
+  // to the initial MAX_REQUEST_ID
+  uint64_t maxConcurrentRequests_{100};
+  uint64_t peerMaxRequestID_{0};
 
   folly::coro::Promise<ServerSetup> setupPromise_;
   bool setupComplete_{false};
@@ -479,10 +477,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   bool receivedGoaway_{false};
   folly::CancellationSource cancellationSource_;
 
-  // SubscribeID must be a unique monotonically increasing number that is
-  // less than maxSubscribeID.
-  uint64_t nextSubscribeID_{0};
-  uint64_t maxSubscribeID_{0};
+  // RequestID must be a unique monotonically increasing number that is
+  // less than maxRequestID.
+  uint64_t nextRequestID_{0};
+  uint64_t maxRequestID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};
   MoQSettings moqSettings_;

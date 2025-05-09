@@ -110,17 +110,17 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   if (subscribeReq.fullTrackName.trackNamespace !=
       participantTrackName(username_)) {
     co_return folly::makeUnexpected(SubscribeError{
-        subscribeReq.subscribeID,
+        subscribeReq.requestID,
         SubscribeErrorCode::TRACK_NOT_EXIST,
         "no such track"});
   }
   if (publisher_) {
     co_return folly::makeUnexpected(SubscribeError{
-        subscribeReq.subscribeID,
+        subscribeReq.requestID,
         SubscribeErrorCode::INTERNAL_ERROR,
         "Duplicate subscribe for track"});
   }
-  chatSubscribeID_.emplace(subscribeReq.subscribeID);
+  chatRequestID_.emplace(subscribeReq.requestID);
   chatTrackAlias_.emplace(subscribeReq.trackAlias);
   folly::Optional<AbsoluteLocation> latest;
   if (nextGroup_ > 0) {
@@ -128,7 +128,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   }
   publisher_ = std::move(consumer);
   setSubscribeOk(
-      {subscribeReq.subscribeID,
+      {subscribeReq.requestID,
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(
            GroupOrder::OldestFirst, subscribeReq.groupOrder),
@@ -139,9 +139,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
 
 void MoQChatClient::unsubscribe() {
   // MoQChatClient only publishes a single track at a time.
-  XLOG(INFO) << "Unsubscribe id=" << *chatSubscribeID_;
+  XLOG(INFO) << "UNSUBSCRIBE reqID=" << *chatRequestID_;
   publisher_.reset();
-  chatSubscribeID_.reset();
+  chatRequestID_.reset();
   chatTrackAlias_.reset();
 }
 
@@ -299,15 +299,14 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     co_return;
   }
   if (track.value().hasError()) {
-    XLOG(INFO) << "SubscribeError id=" << track->error().subscribeID
+    XLOG(INFO) << "SubscribeError id=" << track->error().requestID
                << " code=" << folly::to_underlying(track->error().errorCode)
                << " reason=" << track->error().reasonPhrase;
     co_return;
   }
 
   userTrackPtr->subscription = std::move(track->value());
-  userTrackPtr->subscribeId =
-      userTrackPtr->subscription->subscribeOk().subscribeID;
+  userTrackPtr->requestID = userTrackPtr->subscription->subscribeOk().requestID;
   userTrackPtr->timestamp = timestamp;
   co_await handler->baton;
 }
@@ -317,7 +316,7 @@ void MoQChatClient::subscribeDone(SubscribeDone subDone) {
     for (auto userTrackIt = userTracks.second.begin();
          userTrackIt != userTracks.second.end();
          ++userTrackIt) {
-      if (userTrackIt->subscribeId == subDone.subscribeID) {
+      if (userTrackIt->requestID == subDone.requestID) {
         if (userTrackIt->subscription) {
           userTrackIt->subscription.reset();
         }

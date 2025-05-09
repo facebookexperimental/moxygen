@@ -141,7 +141,7 @@ void MoQObjectStreamCodec::onIngress(
     bool endOfStream) {
   onIngressStart(std::move(data));
   folly::io::Cursor cursor(ingress_.front());
-  bool isFetch = std::get_if<SubscribeID>(&curObjectHeader_.trackIdentifier);
+  bool isFetch = std::get_if<RequestID>(&curObjectHeader_.trackIdentifier);
   while (!connError_ &&
          ((ingress_.chainLength() > 0 && !cursor.isAtEnd())/* ||
           (endOfStream && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH)*/)) {
@@ -195,11 +195,11 @@ void MoQObjectStreamCodec::onIngress(
           connError_ = res.error();
           break;
         }
-        auto subscribeID = res.value();
-        curObjectHeader_.trackIdentifier = subscribeID;
+        auto requestID = res.value();
+        curObjectHeader_.trackIdentifier = requestID;
         isFetch = true;
         if (callback_) {
-          callback_->onFetchHeader(subscribeID);
+          callback_->onFetchHeader(requestID);
         }
         parseState_ = ParseState::MULTI_OBJECT_HEADER;
         cursor = newCursor;
@@ -466,23 +466,22 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::MAX_SUBSCRIBE_ID: {
-      auto res = moqFrameParser_.parseMaxSubscribeId(cursor, curFrameLength_);
+    case FrameType::MAX_REQUEST_ID: {
+      auto res = moqFrameParser_.parseMaxRequestID(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onMaxSubscribeId(std::move(res.value()));
+          callback_->onMaxRequestID(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::SUBSCRIBES_BLOCKED: {
-      auto res =
-          moqFrameParser_.parseSubscribesBlocked(cursor, curFrameLength_);
+    case FrameType::REQUESTS_BLOCKED: {
+      auto res = moqFrameParser_.parseRequestsBlocked(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribesBlocked(res.value());
+          callback_->onRequestsBlocked(res.value());
         }
       } else {
         return folly::makeUnexpected(res.error());

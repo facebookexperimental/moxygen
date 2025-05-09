@@ -119,11 +119,11 @@ class MoQDateServer : public MoQServer,
     XLOG(INFO) << "SubscribeRequest track ns="
                << subReq.fullTrackName.trackNamespace
                << " name=" << subReq.fullTrackName.trackName
-               << " subscribe id=" << subReq.subscribeID
+               << " requestID=" << subReq.requestID
                << " track alias=" << subReq.trackAlias;
     if (subReq.fullTrackName != dateTrackName()) {
       co_return folly::makeUnexpected(SubscribeError{
-          subReq.subscribeID,
+          subReq.requestID,
           SubscribeErrorCode::TRACK_NOT_EXIST,
           "unexpected subscribe"});
     }
@@ -131,7 +131,7 @@ class MoQDateServer : public MoQServer,
     if (subReq.locType == LocationType::AbsoluteRange &&
         subReq.endGroup < latest.group) {
       co_return folly::makeUnexpected(SubscribeError{
-          subReq.subscribeID,
+          subReq.requestID,
           SubscribeErrorCode::INVALID_RANGE,
           "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to latest
@@ -162,10 +162,10 @@ class MoQDateServer : public MoQServer,
     auto clientSession = MoQSession::getRequestSession();
     XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
                << " name=" << fetch.fullTrackName.trackName
-               << " subscribe id=" << fetch.subscribeID;
+               << " requestID=" << fetch.requestID;
     if (fetch.fullTrackName != dateTrackName()) {
       co_return folly::makeUnexpected(FetchError{
-          fetch.subscribeID,
+          fetch.requestID,
           FetchErrorCode::TRACK_NOT_EXIST,
           "unexpected fetch"});
     }
@@ -175,7 +175,7 @@ class MoQDateServer : public MoQServer,
     if (joining) {
       auto res = forwarder_.resolveJoiningFetch(clientSession, *joining);
       if (res.hasError()) {
-        XLOG(ERR) << "Bad joining fetch id=" << fetch.subscribeID
+        XLOG(ERR) << "Bad joining fetch id=" << fetch.requestID
                   << " err=" << res.error().reasonPhrase;
         co_return folly::makeUnexpected(res.error());
       }
@@ -189,11 +189,11 @@ class MoQDateServer : public MoQServer,
         !(standalone->start.group == standalone->end.group &&
           standalone->end.object == 0)) {
       co_return folly::makeUnexpected(FetchError{
-          fetch.subscribeID, FetchErrorCode::INVALID_RANGE, "No objects"});
+          fetch.requestID, FetchErrorCode::INVALID_RANGE, "No objects"});
     }
     if (standalone->start > latest) {
       co_return folly::makeUnexpected(FetchError{
-          fetch.subscribeID,
+          fetch.requestID,
           FetchErrorCode::INVALID_RANGE,
           "fetch starts in future"});
     }
@@ -202,7 +202,7 @@ class MoQDateServer : public MoQServer,
                << "," << standalone->end.object << "}";
 
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
-        fetch.subscribeID,
+        fetch.requestID,
         MoQSession::resolveGroupOrder(
             GroupOrder::OldestFirst, fetch.groupOrder),
         0, // not end of track

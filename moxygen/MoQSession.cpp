@@ -301,14 +301,14 @@ StreamPublisherImpl::StreamPublisherImpl(
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
-          publisher->subscribeID(),
+          publisher->requestID(),
           0,
           0,
           std::numeric_limits<uint64_t>::max(),
           0,
           ObjectStatus::NORMAL) {
   moqFrameWriter_.initializeVersion(publisher->getVersion());
-  (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->subscribeID());
+  (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->requestID());
 }
 
 StreamPublisherImpl::StreamPublisherImpl(
@@ -710,7 +710,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   TrackPublisherImpl(
       MoQSession* session,
       FullTrackName fullTrackName,
-      SubscribeID subscribeID,
+      RequestID requestID,
       TrackAlias trackAlias,
       Priority subPriority,
       GroupOrder groupOrder,
@@ -720,7 +720,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       : PublisherImpl(
             session,
             std::move(fullTrackName),
-            subscribeID,
+            requestID,
             subPriority,
             groupOrder,
             version,
@@ -753,7 +753,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   void subscribeUpdate(SubscribeUpdate subscribeUpdate) {
     if (!handle_) {
       XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
-                << subscribeID_ << " trackPub=" << this;
+                << requestID_ << " trackPub=" << this;
       // TODO: I think we need to buffer it?
     } else {
       forward_ = subscribeUpdate.forward;
@@ -767,7 +767,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   void unsubscribe() {
     if (!handle_) {
       XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
-                << subscribeID_ << " trackPub=" << this;
+                << requestID_ << " trackPub=" << this;
       // TODO: cancel handleSubscribe?
     } else {
       handle_->unsubscribe();
@@ -841,7 +841,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   FetchPublisherImpl(
       MoQSession* session,
       FullTrackName fullTrackName,
-      SubscribeID subscribeID,
+      RequestID requestID,
       Priority subPriority,
       GroupOrder groupOrder,
       uint64_t version,
@@ -849,7 +849,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
       : PublisherImpl(
             session,
             std::move(fullTrackName),
-            subscribeID,
+            requestID,
             subPriority,
             groupOrder,
             version,
@@ -875,7 +875,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   void cancel() {
     cancelled_ = true;
     // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
-    // and retireSubscribeId
+    // and retireRequestID
     reset(ResetStreamErrorCode::CANCELLED);
     if (handle_) {
       handle_->fetchCancel();
@@ -999,7 +999,7 @@ void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
   // for the stream counts to equalize.
   terminatePublish(
       SubscribeDone(
-          {subscribeID_,
+          {requestID_,
            SubscribeDoneStatusCode::TOO_FAR_BEHIND,
            streamCount_,
            "peer is too far behind"}),
@@ -1123,7 +1123,7 @@ MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
         MoQPublishError(MoQPublishError::API_ERROR, "subscribeDone twice"));
   }
   state_ = State::DONE;
-  subDone.subscribeID = subscribeID_;
+  subDone.requestID = requestID_;
   if (!handle_) {
     // subscribeDone called from inside the subscribe handler,
     // before subscribeOk.
@@ -1137,8 +1137,8 @@ MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
 // Receive State
 class MoQSession::TrackReceiveStateBase {
  public:
-  TrackReceiveStateBase(FullTrackName fullTrackName, SubscribeID subscribeID)
-      : fullTrackName_(std::move(fullTrackName)), subscribeID_(subscribeID) {}
+  TrackReceiveStateBase(FullTrackName fullTrackName, RequestID requestID)
+      : fullTrackName_(std::move(fullTrackName)), requestID_(requestID) {}
 
   ~TrackReceiveStateBase() = default;
 
@@ -1146,8 +1146,8 @@ class MoQSession::TrackReceiveStateBase {
     return fullTrackName_;
   }
 
-  [[nodiscard]] SubscribeID getSubscribeID() const {
-    return subscribeID_;
+  [[nodiscard]] RequestID getRequestID() const {
+    return requestID_;
   }
 
   folly::CancellationToken getCancelToken() const {
@@ -1156,7 +1156,7 @@ class MoQSession::TrackReceiveStateBase {
 
  protected:
   FullTrackName fullTrackName_;
-  SubscribeID subscribeID_;
+  RequestID requestID_;
   folly::CancellationSource cancelSource_;
 };
 
@@ -1166,9 +1166,9 @@ class MoQSession::SubscribeTrackReceiveState
   using SubscribeResult = folly::Expected<SubscribeOk, SubscribeError>;
   SubscribeTrackReceiveState(
       FullTrackName fullTrackName,
-      SubscribeID subscribeID,
+      RequestID requestID,
       std::shared_ptr<TrackConsumer> callback)
-      : TrackReceiveStateBase(std::move(fullTrackName), subscribeID),
+      : TrackReceiveStateBase(std::move(fullTrackName), requestID),
         callback_(std::move(callback)) {}
 
   folly::coro::Future<SubscribeResult> subscribeFuture() {
@@ -1201,11 +1201,11 @@ class MoQSession::SubscribeTrackReceiveState
   void subscribeError(SubscribeError subErr) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
     if (!promise_.isFulfilled()) {
-      subErr.subscribeID = subscribeID_;
+      subErr.requestID = requestID_;
       promise_.setValue(folly::makeUnexpected(std::move(subErr)));
     } else {
       subscribeDone(
-          {subscribeID_,
+          {requestID_,
            SubscribeDoneStatusCode::SESSION_CLOSED,
            0, // forces immediately invoking the callback
            "closed locally"});
@@ -1223,7 +1223,7 @@ class MoQSession::SubscribeTrackReceiveState
         callback_->subscribeDone(std::move(*pendingSubscribeDone_));
         pendingSubscribeDone_.reset();
       }
-      session->removeSubscriptionState(alias, subscribeID_);
+      session->removeSubscriptionState(alias, requestID_);
       return true;
     }
     return false;
@@ -1260,9 +1260,9 @@ class MoQSession::FetchTrackReceiveState
   using FetchResult = folly::Expected<FetchOk, FetchError>;
   FetchTrackReceiveState(
       FullTrackName fullTrackName,
-      SubscribeID subscribeID,
+      RequestID requestID,
       std::shared_ptr<FetchConsumer> fetchCallback)
-      : TrackReceiveStateBase(std::move(fullTrackName), subscribeID),
+      : TrackReceiveStateBase(std::move(fullTrackName), requestID),
         callback_(std::move(fetchCallback)) {}
 
   folly::coro::Future<FetchResult> fetchFuture() {
@@ -1278,14 +1278,14 @@ class MoQSession::FetchTrackReceiveState
   void resetFetchCallback(const std::shared_ptr<MoQSession>& session) {
     callback_.reset();
     if (fetchOkAndAllDataReceived()) {
-      session->fetches_.erase(subscribeID_);
+      session->fetches_.erase(requestID_);
       session->checkForCloseOnDrain();
     }
   }
 
   void cancel(const std::shared_ptr<MoQSession>& session) {
     cancelSource_.requestCancellation();
-    fetchError({subscribeID_, FetchErrorCode::CANCELLED, "cancelled"});
+    fetchError({requestID_, FetchErrorCode::CANCELLED, "cancelled"});
     resetFetchCallback(session);
   }
 
@@ -1296,7 +1296,7 @@ class MoQSession::FetchTrackReceiveState
 
   void fetchError(FetchError fetchErr) {
     if (!promise_.isFulfilled()) {
-      fetchErr.subscribeID = subscribeID_;
+      fetchErr.requestID = requestID_;
       promise_.setValue(folly::makeUnexpected(std::move(fetchErr)));
     } // there's likely a missing case here from shutdown
   }
@@ -1536,7 +1536,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   std::tie(setupPromise_, setupFuture) =
       folly::coro::makePromiseContract<ServerSetup>();
 
-  auto maxSubscribeId = getMaxSubscribeIdIfPresent(setup.params);
+  auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
   // TODO: Potentially rethink what we're doing here. If the client
   // supports any version < 11, we send a < 11 setup.
@@ -1557,7 +1557,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     XLOG(ERR) << "writeClientSetup failed sess=" << this;
     co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
   }
-  maxSubscribeID_ = maxConcurrentSubscribes_ = maxSubscribeId;
+  maxRequestID_ = maxConcurrentRequests_ = maxRequestID;
   controlWriteEvent_.signal();
 
   auto deletedToken = cancellationSource_.getToken();
@@ -1593,7 +1593,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 void MoQSession::onServerSetup(ServerSetup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(serverSetup.params);
+  peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(std::min(
       kMaxSendTokenCacheSize,
       getMaxAuthTokenCacheSizeIfPresent(serverSetup.params)));
@@ -1603,7 +1603,7 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 void MoQSession::onClientSetup(ClientSetup clientSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  peerMaxSubscribeID_ = getMaxSubscribeIdIfPresent(clientSetup.params);
+  peerMaxRequestID_ = getMaxRequestIDIfPresent(clientSetup.params);
   tokenCache_.setMaxSize(std::min(
       kMaxSendTokenCacheSize,
       getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)));
@@ -1615,7 +1615,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     return;
   }
   initializeNegotiatedVersion(serverSetup->selectedVersion);
-  auto maxSubscribeId = getMaxSubscribeIdIfPresent(serverSetup->params);
+  auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
   // TODO: clamp egress max auth token cache size
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
@@ -1626,7 +1626,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
-  maxSubscribeID_ = maxConcurrentSubscribes_ = maxSubscribeId;
+  maxRequestID_ = maxConcurrentRequests_ = maxRequestID;
   setupComplete_ = true;
   controlWriteEvent_.signal();
 }
@@ -1678,12 +1678,12 @@ MoQSession::getSubscribeTrackReceiveState(TrackAlias trackAlias) {
 }
 
 std::shared_ptr<MoQSession::FetchTrackReceiveState>
-MoQSession::getFetchTrackReceiveState(SubscribeID subscribeID) {
-  XLOG(DBG3) << "getTrack subID=" << subscribeID;
-  auto trackIt = fetches_.find(subscribeID);
+MoQSession::getFetchTrackReceiveState(RequestID requestID) {
+  XLOG(DBG3) << "getTrack reqID=" << requestID;
+  auto trackIt = fetches_.find(requestID);
   if (trackIt == fetches_.end()) {
     // received an object for unknown subscribe ID
-    XLOG(ERR) << "unknown subscribe ID=" << subscribeID << " sess=" << this;
+    XLOG(ERR) << "unknown subscribe ID=" << requestID << " sess=" << this;
     return nullptr;
   }
   return trackIt->second;
@@ -1755,8 +1755,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     subscribeState_->onSubgroup(session_, alias);
   }
 
-  void onFetchHeader(SubscribeID subscribeID) override {
-    fetchState_ = session_->getFetchTrackReceiveState(subscribeID);
+  void onFetchHeader(RequestID requestID) override {
+    fetchState_ = session_->getFetchTrackReceiveState(requestID);
 
     if (!fetchState_) {
       error_ = MoQPublishError(
@@ -2025,8 +2025,8 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
 void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << subscribeRequest.fullTrackName
              << " sess=" << this;
-  const auto subscribeID = subscribeRequest.subscribeID;
-  if (closeSessionIfSubscribeIdInvalid(subscribeID)) {
+  const auto requestID = subscribeRequest.requestID;
+  if (closeSessionIfRequestIDInvalid(requestID)) {
     return;
   }
 
@@ -2035,13 +2035,13 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   //   MoQForwarder] Track Alias -> Track Name
   // If ths session holds this state, it can check for duplicate
   // subscriptions
-  auto it = pubTracks_.find(subscribeRequest.subscribeID);
+  auto it = pubTracks_.find(subscribeRequest.requestID);
   if (it != pubTracks_.end()) {
-    XLOG(ERR) << "Duplicate subscribe ID=" << subscribeRequest.subscribeID
+    XLOG(ERR) << "Duplicate subscribe ID=" << subscribeRequest.requestID
               << " sess=" << this;
     // TODO: message error?
     subscribeError(
-        {subscribeRequest.subscribeID,
+        {subscribeRequest.requestID,
          SubscribeErrorCode::INTERNAL_ERROR,
          "dup sub ID"});
     return;
@@ -2052,14 +2052,14 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
       subscribeRequest.fullTrackName,
-      subscribeRequest.subscribeID,
+      subscribeRequest.requestID,
       subscribeRequest.trackAlias,
       subscribeRequest.priority,
       subscribeRequest.groupOrder,
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       forward);
-  pubTracks_.emplace(subscribeID, trackPublisher);
+  pubTracks_.emplace(requestID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
   handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher))
@@ -2072,7 +2072,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     std::shared_ptr<TrackPublisherImpl> trackPublisher) {
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  auto subscribeID = sub.subscribeID;
+  auto requestID = sub.requestID;
   auto subscribeResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->subscribe(
@@ -2082,7 +2082,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subscribeResult.exception().what().toStdString();
     subscribeError(
-        {subscribeID,
+        {requestID,
          SubscribeErrorCode::INTERNAL_ERROR,
          subscribeResult.exception().what().toStdString()});
     co_return;
@@ -2091,87 +2091,86 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     XLOG(DBG1) << "Application subscribe error err="
                << subscribeResult->error().reasonPhrase;
     auto subErr = std::move(subscribeResult->error());
-    subErr.subscribeID = subscribeID; // In case app got it wrong
+    subErr.requestID = requestID; // In case app got it wrong
     subscribeError(subErr);
   } else {
     auto subHandle = std::move(subscribeResult->value());
     auto subOk = subHandle->subscribeOk();
-    subOk.subscribeID = subscribeID;
+    subOk.requestID = requestID;
     subscribeOk(subOk);
     trackPublisher->setSubscriptionHandle(std::move(subHandle));
   }
 }
 
 void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
-  XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.subscribeID
+  XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.requestID
              << " sess=" << this;
-  const auto subscribeID = subscribeUpdate.subscribeID;
+  const auto requestID = subscribeUpdate.requestID;
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     return;
   }
 
-  auto it = pubTracks_.find(subscribeID);
+  auto it = pubTracks_.find(requestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << subscribeID << " sess=" << this;
+    XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
     return;
   }
-  if (closeSessionIfSubscribeIdInvalid(subscribeID)) {
+  if (closeSessionIfRequestIDInvalid(requestID)) {
     return;
   }
 
   it->second->setSubPriority(subscribeUpdate.priority);
   // TODO: update priority of tracks in flight
-  auto pubTrackIt = pubTracks_.find(subscribeID);
+  auto pubTrackIt = pubTracks_.find(requestID);
   if (pubTrackIt == pubTracks_.end()) {
-    XLOG(ERR) << "SubscribeUpdate track not found id=" << subscribeID
+    XLOG(ERR) << "SubscribeUpdate track not found id=" << requestID
               << " sess=" << this;
     return;
   }
   auto trackPublisher =
       dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
   if (!trackPublisher) {
-    XLOG(ERR) << "SubscribeID in SubscribeUpdate is for a FETCH, id="
-              << subscribeID << " sess=" << this;
+    XLOG(ERR) << "RequestID in SubscribeUpdate is for a FETCH, id=" << requestID
+              << " sess=" << this;
   } else {
     trackPublisher->subscribeUpdate(std::move(subscribeUpdate));
   }
 }
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
-  XLOG(DBG1) << __func__ << " id=" << unsubscribe.subscribeID
-             << " sess=" << this;
+  XLOG(DBG1) << __func__ << " id=" << unsubscribe.requestID << " sess=" << this;
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     return;
   }
   // How does this impact pending subscribes?
   // and open TrackReceiveStates
-  auto pubTrackIt = pubTracks_.find(unsubscribe.subscribeID);
+  auto pubTrackIt = pubTracks_.find(unsubscribe.requestID);
   if (pubTrackIt == pubTracks_.end()) {
-    XLOG(ERR) << "Unsubscribe track not found id=" << unsubscribe.subscribeID
+    XLOG(ERR) << "Unsubscribe track not found id=" << unsubscribe.requestID
               << " sess=" << this;
     return;
   }
   auto trackPublisher =
       dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
   if (!trackPublisher) {
-    XLOG(ERR) << "SubscribeID in Unsubscribe is for a FETCH, id="
-              << unsubscribe.subscribeID << " sess=" << this;
+    XLOG(ERR) << "RequestID in Unsubscribe is for a FETCH, id="
+              << unsubscribe.requestID << " sess=" << this;
   } else {
     trackPublisher->unsubscribe();
-    if (pubTracks_.erase(unsubscribe.subscribeID)) {
-      retireSubscribeId(/*signalWriteLoop=*/true);
+    if (pubTracks_.erase(unsubscribe.requestID)) {
+      retireRequestID(/*signalWriteLoop=*/true);
     } // else, the caller invoked subscribeDone, which isn't needed but fine
   }
 }
 
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
-  XLOG(DBG1) << __func__ << " id=" << subOk.subscribeID << " sess=" << this;
-  auto trackAliasIt = subIdToTrackAlias_.find(subOk.subscribeID);
+  XLOG(DBG1) << __func__ << " id=" << subOk.requestID << " sess=" << this;
+  auto trackAliasIt = subIdToTrackAlias_.find(subOk.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subOk.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << subOk.requestID
               << " sess=" << this;
     return;
   }
@@ -2184,11 +2183,11 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
-  XLOG(DBG1) << __func__ << " id=" << subErr.subscribeID << " sess=" << this;
-  auto trackAliasIt = subIdToTrackAlias_.find(subErr.subscribeID);
+  XLOG(DBG1) << __func__ << " id=" << subErr.requestID << " sess=" << this;
+  auto trackAliasIt = subIdToTrackAlias_.find(subErr.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subErr.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << subErr.requestID
               << " sess=" << this;
     return;
   }
@@ -2205,13 +2204,13 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
 }
 
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
-  XLOG(DBG1) << "SubscribeDone id=" << subscribeDone.subscribeID
+  XLOG(DBG1) << "SubscribeDone id=" << subscribeDone.requestID
              << " code=" << folly::to_underlying(subscribeDone.statusCode)
              << " reason=" << subscribeDone.reasonPhrase;
-  auto trackAliasIt = subIdToTrackAlias_.find(subscribeDone.subscribeID);
+  auto trackAliasIt = subIdToTrackAlias_.find(subscribeDone.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subscribeDone.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << subscribeDone.requestID
               << " sess=" << this;
     return;
   }
@@ -2228,45 +2227,44 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
     }
   } else {
     XLOG(DFATAL) << "trackAliasIt but no trackReceiveStateIt for id="
-                 << subscribeDone.subscribeID << " sess=" << this;
+                 << subscribeDone.requestID << " sess=" << this;
   }
   subIdToTrackAlias_.erase(trackAliasIt);
   checkForCloseOnDrain();
 }
 
-void MoQSession::removeSubscriptionState(TrackAlias alias, SubscribeID id) {
+void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
   subTracks_.erase(alias);
   subIdToTrackAlias_.erase(id);
   checkForCloseOnDrain();
 }
 
-void MoQSession::onMaxSubscribeId(MaxSubscribeId maxSubscribeId) {
+void MoQSession::onMaxRequestID(MaxRequestID maxRequestID) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (maxSubscribeId.subscribeID.value > peerMaxSubscribeID_) {
+  if (maxRequestID.requestID.value > peerMaxRequestID_) {
     XLOG(DBG1) << fmt::format(
-        "Bumping the maxSubscribeId to: {} from: {}",
-        maxSubscribeId.subscribeID.value,
-        peerMaxSubscribeID_);
-    peerMaxSubscribeID_ = maxSubscribeId.subscribeID.value;
+        "Bumping the maxRequestID to: {} from: {}",
+        maxRequestID.requestID.value,
+        peerMaxRequestID_);
+    peerMaxRequestID_ = maxRequestID.requestID.value;
     return;
   }
 
   XLOG(ERR) << fmt::format(
-      "Invalid MaxSubscribeId: {}. Current maxSubscribeId:{}",
-      maxSubscribeId.subscribeID.value,
-      maxSubscribeID_);
+      "Invalid MaxRequestID: {}. Current maxRequestID:{}",
+      maxRequestID.requestID.value,
+      maxRequestID_);
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
-void MoQSession::onSubscribesBlocked(SubscribesBlocked subscribesBlocked) {
+void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  // Increment the maxSubscribeID_ by the number of pending closed subscribes
-  // and send a new MaxSubscribeId.
-  if (subscribesBlocked.maxSubscribeID >= maxSubscribeID_ &&
-      closedSubscribes_ > 0) {
-    maxSubscribeID_ += closedSubscribes_;
-    closedSubscribes_ = 0;
-    sendMaxSubscribeID(true);
+  // Increment the maxRequestID_ by the number of pending closed subscribes
+  // and send a new MaxRequestID.
+  if (requestsBlocked.maxRequestID >= maxRequestID_ && closedRequests_ > 0) {
+    maxRequestID_ += closedRequests_;
+    closedRequests_ = 0;
+    sendMaxRequestID(true);
   }
 }
 
@@ -2274,10 +2272,10 @@ void MoQSession::onFetch(Fetch fetch) {
   auto [standalone, joining] = fetchType(fetch);
   auto logStr = (standalone)
       ? fetch.fullTrackName.describe()
-      : folly::to<std::string>("joining=", joining->joiningSubscribeID.value);
+      : folly::to<std::string>("joining=", joining->joiningRequestID.value);
   XLOG(DBG1) << __func__ << " (" << logStr << ") sess=" << this;
-  const auto subscribeID = fetch.subscribeID;
-  if (closeSessionIfSubscribeIdInvalid(subscribeID)) {
+  const auto requestID = fetch.requestID;
+  if (closeSessionIfRequestIDInvalid(requestID)) {
     return;
   }
   if (standalone) {
@@ -2287,45 +2285,44 @@ void MoQSession::onFetch(Fetch fetch) {
       if (!(standalone->end.group == standalone->start.group &&
             standalone->end.object == 0)) {
         fetchError(
-            {fetch.subscribeID,
+            {fetch.requestID,
              FetchErrorCode::INVALID_RANGE,
              "End must be after start"});
         return;
       }
     }
   } else {
-    auto joinIt = pubTracks_.find(joining->joiningSubscribeID);
+    auto joinIt = pubTracks_.find(joining->joiningRequestID);
     if (joinIt == pubTracks_.end()) {
-      XLOG(ERR) << "Unknown joining subscribe ID="
-                << joining->joiningSubscribeID << " sess=" << this;
+      XLOG(ERR) << "Unknown joining subscribe ID=" << joining->joiningRequestID
+                << " sess=" << this;
       // message error
       fetchError(
-          {fetch.subscribeID,
+          {fetch.requestID,
            FetchErrorCode::INTERNAL_ERROR,
-           "Unknown joining subscribeID"});
+           "Unknown joining requestID"});
       return;
     }
     fetch.fullTrackName = joinIt->second->fullTrackName();
   }
-  auto it = pubTracks_.find(fetch.subscribeID);
+  auto it = pubTracks_.find(fetch.requestID);
   if (it != pubTracks_.end()) {
-    XLOG(ERR) << "Duplicate subscribe ID=" << fetch.subscribeID
+    XLOG(ERR) << "Duplicate subscribe ID=" << fetch.requestID
               << " sess=" << this;
     // message error
-    fetchError(
-        {fetch.subscribeID, FetchErrorCode::INTERNAL_ERROR, "dup sub ID"});
+    fetchError({fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "dup sub ID"});
     return;
   }
   auto fetchPublisher = std::make_shared<FetchPublisherImpl>(
       this,
       fetch.fullTrackName,
-      fetch.subscribeID,
+      fetch.requestID,
       fetch.priority,
       fetch.groupOrder,
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription);
   fetchPublisher->initialize();
-  pubTracks_.emplace(fetch.subscribeID, fetchPublisher);
+  pubTracks_.emplace(fetch.requestID, fetchPublisher);
   handleFetch(std::move(fetch), std::move(fetchPublisher))
       .scheduleOn(evb_)
       .start();
@@ -2336,10 +2333,10 @@ folly::coro::Task<void> MoQSession::handleFetch(
     std::shared_ptr<FetchPublisherImpl> fetchPublisher) {
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  auto subscribeID = fetch.subscribeID;
+  auto requestID = fetch.requestID;
   if (!fetchPublisher->getStreamPublisher()) {
     XLOG(ERR) << "Fetch Publisher killed sess=" << this;
-    fetchError({subscribeID, FetchErrorCode::INTERNAL_ERROR, "Fetch Failed"});
+    fetchError({requestID, FetchErrorCode::INTERNAL_ERROR, "Fetch Failed"});
     co_return;
   }
   auto fetchResult = co_await co_awaitTry(co_withCancellation(
@@ -2360,7 +2357,7 @@ folly::coro::Task<void> MoQSession::handleFetch(
     XLOG(ERR) << "Exception in Publisher callback ex="
               << fetchResult.exception().what();
     fetchError(
-        {subscribeID,
+        {requestID,
          FetchErrorCode::INTERNAL_ERROR,
          fetchResult.exception().what().toStdString()});
     co_return;
@@ -2369,23 +2366,22 @@ folly::coro::Task<void> MoQSession::handleFetch(
     XLOG(DBG1) << "Application fetch error err="
                << fetchResult->error().reasonPhrase;
     auto fetchErr = std::move(fetchResult->error());
-    fetchErr.subscribeID = subscribeID; // In case app got it wrong
+    fetchErr.requestID = requestID; // In case app got it wrong
     fetchError(fetchErr);
   } else if (!fetchPublisher->isCancelled()) {
     auto fetchHandle = std::move(fetchResult->value());
     auto fetchOkMsg = fetchHandle->fetchOk();
-    fetchOkMsg.subscribeID = subscribeID;
+    fetchOkMsg.requestID = requestID;
     fetchOk(fetchOkMsg);
     fetchPublisher->setFetchHandle(std::move(fetchHandle));
   } // else, no need to fetchError, state has been removed on both sides already
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
-  XLOG(DBG1) << __func__ << " id=" << fetchCancel.subscribeID
-             << " sess=" << this;
-  auto pubTrackIt = pubTracks_.find(fetchCancel.subscribeID);
+  XLOG(DBG1) << __func__ << " id=" << fetchCancel.requestID << " sess=" << this;
+  auto pubTrackIt = pubTracks_.find(fetchCancel.requestID);
   if (pubTrackIt == pubTracks_.end()) {
-    XLOG(DBG4) << "No publish key for fetch id=" << fetchCancel.subscribeID
+    XLOG(DBG4) << "No publish key for fetch id=" << fetchCancel.requestID
                << " sess=" << this;
     // The Fetch stream has already closed, or never existed
     // If it's already closed, a no-op is fine.
@@ -2396,7 +2392,7 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
     auto fetchPublisher =
         std::dynamic_pointer_cast<FetchPublisherImpl>(pubTrackIt->second);
     if (!fetchPublisher) {
-      XLOG(ERR) << "FETCH_CANCEL on SUBSCRIBE id=" << fetchCancel.subscribeID;
+      XLOG(ERR) << "FETCH_CANCEL on SUBSCRIBE id=" << fetchCancel.requestID;
       return;
     }
     fetchPublisher->cancel();
@@ -2404,10 +2400,10 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
 }
 
 void MoQSession::onFetchOk(FetchOk fetchOk) {
-  XLOG(DBG1) << __func__ << " id=" << fetchOk.subscribeID << " sess=" << this;
-  auto fetchIt = fetches_.find(fetchOk.subscribeID);
+  XLOG(DBG1) << __func__ << " id=" << fetchOk.requestID << " sess=" << this;
+  auto fetchIt = fetches_.find(fetchOk.requestID);
   if (fetchIt == fetches_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << fetchOk.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << fetchOk.requestID
               << " sess=" << this;
     return;
   }
@@ -2420,11 +2416,10 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
 }
 
 void MoQSession::onFetchError(FetchError fetchError) {
-  XLOG(DBG1) << __func__ << " id=" << fetchError.subscribeID
-             << " sess=" << this;
-  auto fetchIt = fetches_.find(fetchError.subscribeID);
+  XLOG(DBG1) << __func__ << " id=" << fetchError.requestID << " sess=" << this;
+  auto fetchIt = fetches_.find(fetchError.requestID);
   if (fetchIt == fetches_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << fetchError.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << fetchError.requestID
               << " sess=" << this;
     return;
   }
@@ -2920,14 +2915,14 @@ class MoQSession::ReceiverSubscriptionHandle
 
   void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
     if (session_) {
-      subscribeUpdate.subscribeID = subscribeOk_->subscribeID;
+      subscribeUpdate.requestID = subscribeOk_->requestID;
       session_->subscribeUpdate(subscribeUpdate);
     }
   }
 
   void unsubscribe() override {
     if (session_) {
-      session_->unsubscribe({subscribeOk_->subscribeID});
+      session_->unsubscribe({subscribeOk_->requestID});
       session_.reset();
     }
   }
@@ -2952,15 +2947,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     co_return folly::makeUnexpected(subscribeError);
   }
   auto fullTrackName = sub.fullTrackName;
-  if (nextSubscribeID_ >= peerMaxSubscribeID_) {
-    XLOG(WARN) << "Issuing subscribe that will fail; nextSubscribeID_="
-               << nextSubscribeID_
-               << " peerMaxSubscribeID_=" << peerMaxSubscribeID_
+  if (nextRequestID_ >= peerMaxRequestID_) {
+    XLOG(WARN) << "Issuing subscribe that will fail; nextRequestID_="
+               << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
                << " sess=" << this;
   }
-  SubscribeID subID = nextSubscribeID_++;
-  sub.subscribeID = subID;
-  TrackAlias alias = subID.value;
+  RequestID reqID = nextRequestID_++;
+  sub.requestID = reqID;
+  TrackAlias alias = reqID.value;
   sub.trackAlias = alias;
   TrackAlias trackAlias = sub.trackAlias;
   aliasifyAuthTokens(sub.params);
@@ -2968,7 +2962,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
     SubscribeError subscribeError = {
-        subID,
+        reqID,
         SubscribeErrorCode::INTERNAL_ERROR,
         "local write failed",
         folly::none};
@@ -2977,17 +2971,17 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     co_return folly::makeUnexpected(subscribeError);
   }
   controlWriteEvent_.signal();
-  auto res = subIdToTrackAlias_.emplace(subID, trackAlias);
+  auto res = subIdToTrackAlias_.emplace(reqID, trackAlias);
   XCHECK(res.second) << "Duplicate subscribe ID";
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
-      fullTrackName, subID, callback);
+      fullTrackName, reqID, callback);
   auto subTrack = subTracks_.try_emplace(trackAlias, trackReceiveState);
   XCHECK(subTrack.second) << "Track alias already in use alias=" << trackAlias
                           << " sess=" << this;
 
   auto subscribeResult = co_await trackReceiveState->subscribeFuture();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
-             << " subscribeID=" << subID;
+             << " requestID=" << reqID;
   if (subscribeResult.hasError()) {
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_,
@@ -3005,18 +2999,18 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
     const SubscribeOk& subOk) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeSuccess);
-  auto it = pubTracks_.find(subOk.subscribeID);
+  auto it = pubTracks_.find(subOk.requestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "Invalid Subscribe OK, id=" << subOk.subscribeID;
+    XLOG(ERR) << "Invalid Subscribe OK, id=" << subOk.requestID;
     return nullptr;
   }
   auto trackPublisher =
       std::dynamic_pointer_cast<TrackPublisherImpl>(it->second);
   if (!trackPublisher) {
     XLOG(ERR) << "subscribe ID maps to a fetch, not a subscribe, id="
-              << subOk.subscribeID;
+              << subOk.requestID;
     subscribeError(
-        {subOk.subscribeID,
+        {subOk.requestID,
          SubscribeErrorCode::INTERNAL_ERROR,
          "Invalid internal state"});
     return nullptr;
@@ -3035,14 +3029,14 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onSubscribeError, subErr.errorCode);
-  auto it = pubTracks_.find(subErr.subscribeID);
+  auto it = pubTracks_.find(subErr.requestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "Invalid Subscribe OK, id=" << subErr.subscribeID;
+    XLOG(ERR) << "Invalid Subscribe OK, id=" << subErr.requestID;
     return;
   }
   pubTracks_.erase(it);
   auto res = moqFrameWriter_.writeSubscribeError(controlWriteBuf_, subErr);
-  retireSubscribeId(/*signalWriteLoop=*/false);
+  retireRequestID(/*signalWriteLoop=*/false);
   if (!res) {
     XLOG(ERR) << "writeSubscribeError failed sess=" << this;
     return;
@@ -3052,17 +3046,17 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
 
 void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto trackAliasIt = subIdToTrackAlias_.find(unsubscribe.subscribeID);
+  auto trackAliasIt = subIdToTrackAlias_.find(unsubscribe.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.requestID
               << " sess=" << this;
     return;
   }
   auto trackIt = subTracks_.find(trackAliasIt->second);
   if (trackIt == subTracks_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.requestID
               << " sess=" << this;
     return;
   }
@@ -3092,9 +3086,9 @@ MoQSession::PublisherImpl::subscribeDone(SubscribeDone subscribeDone) {
 
 void MoQSession::subscribeDone(const SubscribeDone& subDone) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto it = pubTracks_.find(subDone.subscribeID);
+  auto it = pubTracks_.find(subDone.requestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "subscribeDone for invalid id=" << subDone.subscribeID
+    XLOG(ERR) << "subscribeDone for invalid id=" << subDone.requestID
               << " sess=" << this;
     return;
   }
@@ -3106,27 +3100,27 @@ void MoQSession::subscribeDone(const SubscribeDone& subDone) {
     return;
   }
 
-  retireSubscribeId(/*signalWriteLoop=*/false);
+  retireRequestID(/*signalWriteLoop=*/false);
   controlWriteEvent_.signal();
 }
 
-void MoQSession::retireSubscribeId(bool signalWriteLoop) {
-  // If # of closed subscribes is greater than 1/2 of max subscribes, then
-  // let's bump the maxSubscribeID by the number of closed subscribes.
-  if (++closedSubscribes_ >= maxConcurrentSubscribes_ / 2) {
-    maxSubscribeID_ += closedSubscribes_;
-    closedSubscribes_ = 0;
-    sendMaxSubscribeID(signalWriteLoop);
+void MoQSession::retireRequestID(bool signalWriteLoop) {
+  // If # of closed requests is greater than 1/2 of max requests, then
+  // let's bump the maxRequestID by the number of closed requests.
+  if (++closedRequests_ >= maxConcurrentRequests_ / 2) {
+    maxRequestID_ += closedRequests_;
+    closedRequests_ = 0;
+    sendMaxRequestID(signalWriteLoop);
   }
 }
 
-void MoQSession::sendMaxSubscribeID(bool signalWriteLoop) {
-  XLOG(DBG1) << "Issuing new maxSubscribeID=" << maxSubscribeID_
+void MoQSession::sendMaxRequestID(bool signalWriteLoop) {
+  XLOG(DBG1) << "Issuing new maxRequestID=" << maxRequestID_
              << " sess=" << this;
-  auto res = moqFrameWriter_.writeMaxSubscribeId(
-      controlWriteBuf_, {.subscribeID = maxSubscribeID_});
+  auto res = moqFrameWriter_.writeMaxRequestID(
+      controlWriteBuf_, {.requestID = maxRequestID_});
   if (!res) {
-    XLOG(ERR) << "writeMaxSubscribeId failed sess=" << this;
+    XLOG(ERR) << "writeMaxRequestID failed sess=" << this;
     return;
   }
   if (signalWriteLoop) {
@@ -3137,34 +3131,34 @@ void MoQSession::sendMaxSubscribeID(bool signalWriteLoop) {
 void MoQSession::PublisherImpl::fetchComplete() {
   auto session = session_;
   session_ = nullptr;
-  session->fetchComplete(subscribeID_);
+  session->fetchComplete(requestID_);
 }
 
-void MoQSession::fetchComplete(SubscribeID subscribeID) {
+void MoQSession::fetchComplete(RequestID requestID) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto it = pubTracks_.find(subscribeID);
+  auto it = pubTracks_.find(requestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "fetchComplete for invalid id=" << subscribeID
+    XLOG(ERR) << "fetchComplete for invalid id=" << requestID
               << " sess=" << this;
     return;
   }
   pubTracks_.erase(it);
-  retireSubscribeId(/*signalWriteLoop=*/true);
+  retireRequestID(/*signalWriteLoop=*/true);
 }
 
 void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto trackAliasIt = subIdToTrackAlias_.find(subUpdate.subscribeID);
+  auto trackAliasIt = subIdToTrackAlias_.find(subUpdate.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.requestID
               << " sess=" << this;
     return;
   }
   auto trackIt = subTracks_.find(trackAliasIt->second);
   if (trackIt == subTracks_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.subscribeID
+    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.requestID
               << " sess=" << this;
     return;
   }
@@ -3183,7 +3177,7 @@ class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle {
 
   void fetchCancel() override {
     if (session_) {
-      session_->fetchCancel({fetchOk_->subscribeID});
+      session_->fetchCancel({fetchOk_->requestID});
       session_.reset();
     }
   }
@@ -3208,19 +3202,18 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     co_return folly::makeUnexpected(fetchError);
   }
 
-  if (nextSubscribeID_ >= peerMaxSubscribeID_) {
-    XLOG(WARN) << "Issuing fetch that will fail; nextSubscribeID_="
-               << nextSubscribeID_
-               << " peerMaxSubscribeid_=" << peerMaxSubscribeID_
+  if (nextRequestID_ >= peerMaxRequestID_) {
+    XLOG(WARN) << "Issuing fetch that will fail; nextRequestID_="
+               << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
                << " sess=" << this;
   }
   auto [standalone, joining] = fetchType(fetch);
   FullTrackName fullTrackName = fetch.fullTrackName;
   if (joining) {
-    auto subIt = subIdToTrackAlias_.find(joining->joiningSubscribeID);
+    auto subIt = subIdToTrackAlias_.find(joining->joiningRequestID);
     if (subIt == subIdToTrackAlias_.end()) {
-      XLOG(ERR) << "API error, joining FETCH for invalid subscribe id="
-                << joining->joiningSubscribeID.value << " sess=" << this;
+      XLOG(ERR) << "API error, joining FETCH for invalid requestID="
+                << joining->joiningRequestID.value << " sess=" << this;
       co_return folly::makeUnexpected(FetchError{
           std::numeric_limits<uint64_t>::max(),
           FetchErrorCode::INTERNAL_ERROR,
@@ -3244,24 +3237,24 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
           "Track name mismatch"});
     }
   }
-  auto subID = nextSubscribeID_++;
-  fetch.subscribeID = subID;
+  auto reqID = nextRequestID_++;
+  fetch.requestID = reqID;
   aliasifyAuthTokens(fetch.params);
   auto wres = moqFrameWriter_.writeFetch(controlWriteBuf_, fetch);
   if (!wres) {
     XLOG(ERR) << "writeFetch failed sess=" << this;
     FetchError fetchError = {
-        subID, FetchErrorCode::INTERNAL_ERROR, "local write failed"};
+        reqID, FetchErrorCode::INTERNAL_ERROR, "local write failed"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onFetchError, fetchError.errorCode);
     co_return folly::makeUnexpected(fetchError);
   }
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<FetchTrackReceiveState>(
-      fullTrackName, subID, std::move(consumer));
-  auto fetchTrack = fetches_.try_emplace(subID, trackReceiveState);
+      fullTrackName, reqID, std::move(consumer));
+  auto fetchTrack = fetches_.try_emplace(reqID, trackReceiveState);
   XCHECK(fetchTrack.second)
-      << "SubscribeID already in use id=" << subID << " sess=" << this;
+      << "RequestID already in use id=" << reqID << " sess=" << this;
   auto fetchResult = co_await trackReceiveState->fetchFuture();
   XLOG(DBG1) << __func__
              << " fetchReady trackReceiveState=" << trackReceiveState;
@@ -3292,10 +3285,10 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onFetchError, fetchErr.errorCode);
-  if (pubTracks_.erase(fetchErr.subscribeID) == 0) {
+  if (pubTracks_.erase(fetchErr.requestID) == 0) {
     // fetchError is called sometimes before adding publisher state, so this
     // is not an error
-    XLOG(DBG1) << "fetchErr for invalid id=" << fetchErr.subscribeID
+    XLOG(DBG1) << "fetchErr for invalid id=" << fetchErr.requestID
                << " sess=" << this;
   }
   auto res = moqFrameWriter_.writeFetchError(controlWriteBuf_, fetchErr);
@@ -3308,9 +3301,9 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
 
 void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  auto trackIt = fetches_.find(fetchCan.subscribeID);
+  auto trackIt = fetches_.find(fetchCan.requestID);
   if (trackIt == fetches_.end()) {
-    XLOG(ERR) << "unknown subscribe ID=" << fetchCan.subscribeID
+    XLOG(ERR) << "unknown subscribe ID=" << fetchCan.requestID
               << " sess=" << this;
     return;
   }
@@ -3333,8 +3326,8 @@ folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
     std::shared_ptr<FetchConsumer> fetchCallback,
     FetchType fetchType) {
   Fetch fetchReq(
-      0,                // will be picked by fetch()
-      nextSubscribeID_, // this will be the ID for subscribe()
+      0,              // will be picked by fetch()
+      nextRequestID_, // this will be the ID for subscribe()
       joiningStart,
       fetchType,
       fetchPri,
@@ -3435,9 +3428,9 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
 }
 
-bool MoQSession::closeSessionIfSubscribeIdInvalid(SubscribeID subscribeID) {
-  if (maxSubscribeID_ <= subscribeID.value) {
-    XLOG(ERR) << "Invalid subscribeID: " << subscribeID << " sess=" << this;
+bool MoQSession::closeSessionIfRequestIDInvalid(RequestID requestID) {
+  if (maxRequestID_ <= requestID.value) {
+    XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
     close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
     return true;
   }
@@ -3451,10 +3444,10 @@ void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
 }
 
 /*static*/
-uint64_t MoQSession::getMaxSubscribeIdIfPresent(
+uint64_t MoQSession::getMaxRequestIDIfPresent(
     const std::vector<SetupParameter>& params) {
   for (const auto& param : params) {
-    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID)) {
+    if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID)) {
       return param.asUint64;
     }
   }

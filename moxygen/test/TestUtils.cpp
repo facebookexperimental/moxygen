@@ -54,7 +54,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
             {{1},
              {
                  {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-                 {folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID), "", 100},
+                 {folly::to_underlying(SetupKey::MAX_REQUEST_ID), "", 100},
              }}),
         version);
   }
@@ -98,9 +98,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            GroupOrder::OldestFirst,
            AbsoluteLocation{2, 5},
            {{getMaxCacheDurationParamKey(version), "", 3600000}}}));
-  res = moqFrameWriter.writeMaxSubscribeId(writeBuf, {.subscribeID = 50000});
-  res = moqFrameWriter.writeSubscribesBlocked(
-      writeBuf, {.maxSubscribeID = 50000});
+  res = moqFrameWriter.writeMaxRequestID(writeBuf, {.requestID = 50000});
+  res = moqFrameWriter.writeRequestsBlocked(writeBuf, {.maxRequestID = 50000});
   res = moqFrameWriter.writeSubscribeError(
       writeBuf,
       SubscribeError(
@@ -238,7 +237,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
   // writes a fetch header, object without extensions, object with
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto res = moqFrameWriter.writeFetchHeader(writeBuf, SubscribeID(1));
+  auto res = moqFrameWriter.writeFetchHeader(writeBuf, RequestID(1));
   ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, 11);
   res = moqFrameWriter.writeStreamObject(
       writeBuf,

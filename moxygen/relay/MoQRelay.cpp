@@ -202,7 +202,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     if (subReq.fullTrackName.trackNamespace.empty()) {
       // message error?
       co_return folly::makeUnexpected(SubscribeError(
-          {subReq.subscribeID,
+          {subReq.requestID,
            SubscribeErrorCode::TRACK_NOT_EXIST,
            "namespace required"}));
     }
@@ -211,14 +211,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     if (!upstreamSession) {
       // no such namespace has been announced
       co_return folly::makeUnexpected(SubscribeError(
-          {subReq.subscribeID,
+          {subReq.requestID,
            SubscribeErrorCode::TRACK_NOT_EXIST,
            "no such namespace"}));
     }
     if (session.get() == upstreamSession.get()) {
       // message error
       co_return folly::makeUnexpected(SubscribeError(
-          {subReq.subscribeID,
+          {subReq.requestID,
            SubscribeErrorCode::INTERNAL_ERROR,
            "self subscribe"}));
     }
@@ -254,7 +254,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
         subReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
     if (subRes.hasError()) {
       co_return folly::makeUnexpected(SubscribeError(
-          {subReq.subscribeID,
+          {subReq.requestID,
            subRes.error().errorCode,
            folly::to<std::string>(
                "upstream subscribe failed: ", subRes.error().reasonPhrase)}));
@@ -271,7 +271,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     auto it = subscriptions_.find(subReq.fullTrackName);
     XCHECK(it != subscriptions_.end());
     auto& rsub = it->second;
-    rsub.subscribeID = subRes.value()->subscribeOk().subscribeID;
+    rsub.requestID = subRes.value()->subscribeOk().requestID;
     rsub.handle = std::move(subRes.value());
     rsub.promise.setValue(folly::unit);
     co_return subscriber;
@@ -285,7 +285,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     if (forwarder->latest() && subReq.locType == LocationType::AbsoluteRange &&
         subReq.endGroup < forwarder->latest()->group) {
       co_return folly::makeUnexpected(SubscribeError{
-          subReq.subscribeID,
+          subReq.requestID,
           SubscribeErrorCode::INVALID_RANGE,
           "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to latest
@@ -304,7 +304,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   // get trackNamespace
   if (fetch.fullTrackName.trackNamespace.empty()) {
     co_return folly::makeUnexpected(FetchError(
-        {fetch.subscribeID,
+        {fetch.requestID,
          FetchErrorCode::TRACK_NOT_EXIST,
          "namespace required"}));
   }
@@ -316,7 +316,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
       XLOG(ERR) << "No subscription for joining fetch";
       // message error
       co_return folly::makeUnexpected(FetchError(
-          {fetch.subscribeID,
+          {fetch.requestID,
            FetchErrorCode::TRACK_NOT_EXIST,
            "No subscription for joining fetch"}));
     } else if (subscriptionIt->second.promise.isFulfilled()) {
@@ -329,7 +329,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
       joining = nullptr;
     } else {
       // Upstream is resolving the subscribe, forward joining fetch
-      joining->joiningSubscribeID = subscriptionIt->second.subscribeID;
+      joining->joiningRequestID = subscriptionIt->second.requestID;
     }
   }
 
@@ -338,13 +338,13 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   if (!upstreamSession) {
     // no such namespace has been announced
     co_return folly::makeUnexpected(FetchError(
-        {fetch.subscribeID,
+        {fetch.requestID,
          FetchErrorCode::TRACK_NOT_EXIST,
          "no such namespace"}));
   }
   if (session.get() == upstreamSession.get()) {
     co_return folly::makeUnexpected(FetchError(
-        {fetch.subscribeID, FetchErrorCode::INTERNAL_ERROR, "self fetch"}));
+        {fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "self fetch"}));
   }
   fetch.priority = kDefaultUpstreamPriority;
   if (!cache_ || joining) {
@@ -429,7 +429,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
     // these actions may erase the current subscription
     if (subscription.upstream.get() == session.get()) {
       subscription.forwarder->subscribeDone(
-          {SubscribeID(0),
+          {RequestID(0),
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
            0, // filled in by session
            "upstream disconnect"});

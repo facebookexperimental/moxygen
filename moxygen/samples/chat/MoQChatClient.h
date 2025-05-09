@@ -77,14 +77,14 @@ class MoQChatClient : public Publisher,
   std::string deviceId_;
   std::string timestampString_;
   MoQClient moqClient_;
-  folly::Optional<SubscribeID> chatSubscribeID_;
+  folly::Optional<RequestID> chatRequestID_;
   folly::Optional<TrackAlias> chatTrackAlias_;
   std::shared_ptr<TrackConsumer> publisher_;
   uint64_t nextGroup_{0};
   struct UserTrack {
     std::string deviceId;
     std::chrono::seconds timestamp;
-    SubscribeID subscribeId;
+    RequestID requestID;
     std::shared_ptr<Publisher::SubscriptionHandle> subscription;
   };
   std::map<std::string, std::vector<UserTrack>> subscriptions_;

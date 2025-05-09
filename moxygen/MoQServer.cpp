@@ -79,15 +79,15 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
         std::runtime_error("Client does not support draft-09 or draft-10"));
   }
 
-  // TODO: Make the default MAX_SUBSCRIBE_ID configurable and
+  // TODO: Make the default MAX_REQUEST_ID configurable and
   // take in the value from ClientSetup
-  static constexpr size_t kDefaultMaxSubscribeId = 100;
+  static constexpr size_t kDefaultMaxRequestID = 100;
   static constexpr size_t kMaxAuthTokenCacheSize = 1024;
   return folly::Try<ServerSetup>(ServerSetup({
       negotiatedVersion,
-      {{folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID),
+      {{folly::to_underlying(SetupKey::MAX_REQUEST_ID),
         "",
-        kDefaultMaxSubscribeId,
+        kDefaultMaxRequestID,
         {}},
        {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
         "",

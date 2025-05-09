@@ -187,14 +187,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
       (sub.fullTrackName != audioForwarder_.fullTrackName())) {
     XLOG(ERR) << "Unknown track " << sub.fullTrackName;
     co_return folly::makeUnexpected(SubscribeError{
-        sub.subscribeID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
+        sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
   }
   if ((sub.fullTrackName == videoForwarder_.fullTrackName()) &&
       !videoForwarder_.empty()) {
     XLOG(ERR) << "Already subscribed to video track "
               << videoForwarder_.fullTrackName();
     co_return folly::makeUnexpected(SubscribeError{
-        sub.subscribeID,
+        sub.requestID,
         SubscribeErrorCode::INTERNAL_ERROR,
         "Already subscribed"});
   }
@@ -204,13 +204,13 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
     XLOG(ERR) << "Already subscribed to audio track "
               << audioForwarder_.fullTrackName();
     co_return folly::makeUnexpected(SubscribeError{
-        sub.subscribeID,
+        sub.requestID,
         SubscribeErrorCode::INTERNAL_ERROR,
         "Already subscribed"});
   }
 
   co_return folly::makeUnexpected(SubscribeError{
-      sub.subscribeID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
+      sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
 }
 
 void MoQVideoPublisher::publishVideoFrame(

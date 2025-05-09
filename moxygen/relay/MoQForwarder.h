@@ -71,14 +71,14 @@ class MoQForwarder : public TrackConsumer {
         MoQForwarder& f,
         SubscribeOk ok,
         std::shared_ptr<MoQSession> s,
-        SubscribeID sid,
+        RequestID sid,
         TrackAlias ta,
         SubscribeRange r,
         std::shared_ptr<TrackConsumer> tc,
         bool shouldForwardIn)
         : SubscriptionHandle(std::move(ok)),
           session(std::move(s)),
-          subscribeID(sid),
+          requestID(sid),
           trackAlias(ta),
           range(r),
           trackConsumer(std::move(tc)),
@@ -112,13 +112,13 @@ class MoQForwarder : public TrackConsumer {
 
     bool checkShouldForward() {
       if (!shouldForward) {
-        XLOG(DBG6) << "shouldForward is false of subscribeID " << subscribeID;
+        XLOG(DBG6) << "shouldForward is false of requestID " << requestID;
       }
       return shouldForward;
     }
 
     std::shared_ptr<MoQSession> session;
-    SubscribeID subscribeID;
+    RequestID requestID;
     TrackAlias trackAlias;
     SubscribeRange range;
     std::shared_ptr<TrackConsumer> trackConsumer;
@@ -142,13 +142,13 @@ class MoQForwarder : public TrackConsumer {
     auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
         *this,
         SubscribeOk{
-            subReq.subscribeID,
+            subReq.requestID,
             std::chrono::milliseconds(0),
             MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
             latest_,
             {}},
         std::move(session),
-        subReq.subscribeID,
+        subReq.requestID,
         subReq.trackAlias,
         toSubscribeRange(subReq, latest_),
         std::move(consumer),
@@ -164,25 +164,25 @@ class MoQForwarder : public TrackConsumer {
     if (subIt == subscribers_.end()) {
       XLOG(ERR) << "Session not found";
       return folly::makeUnexpected(FetchError{
-          SubscribeID(0),
+          RequestID(0),
           FetchErrorCode::TRACK_NOT_EXIST,
           "Session has no active subscribe"});
     }
-    if (subIt->second->subscribeID != joining.joiningSubscribeID) {
-      XLOG(ERR) << joining.joiningSubscribeID
+    if (subIt->second->requestID != joining.joiningRequestID) {
+      XLOG(ERR) << joining.joiningRequestID
                 << " does not name a Subscribe "
                    " for this track";
       return folly::makeUnexpected(FetchError{
-          SubscribeID(0),
+          RequestID(0),
           FetchErrorCode::INTERNAL_ERROR,
-          "Incorrect SubscribeID for Track"});
+          "Incorrect RequestID for Track"});
     }
     if (!subIt->second->subscribeOk().latest) {
       // No content exists, fetch error
       // Relay caller verifies upstream SubscribeOK has been processed before
       // calling resolveJoiningFetch()
       return folly::makeUnexpected(FetchError{
-          SubscribeID(0), FetchErrorCode::INTERNAL_ERROR, "No latest"});
+          RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No latest"});
     }
     CHECK(
         joining.fetchType == FetchType::RELATIVE_JOINING ||
@@ -227,7 +227,7 @@ class MoQForwarder : public TrackConsumer {
       subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
     }
     if (subDone) {
-      subDone->subscribeID = subscriber.subscribeID;
+      subDone->requestID = subscriber.requestID;
       subscriber.trackConsumer->subscribeDone(*subDone);
     }
   }
@@ -260,7 +260,7 @@ class MoQForwarder : public TrackConsumer {
       removeSession(
           sub.session,
           SubscribeDone{
-              sub.subscribeID,
+              sub.requestID,
               SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
               0, // filled in by session
               ""});
@@ -273,7 +273,7 @@ class MoQForwarder : public TrackConsumer {
     removeSession(
         sub.session,
         SubscribeDone{
-            sub.subscribeID,
+            sub.requestID,
             SubscribeDoneStatusCode::INTERNAL_ERROR,
             0, // filled in by session
             err.what()});

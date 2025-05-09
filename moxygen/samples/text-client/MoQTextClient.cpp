@@ -170,8 +170,8 @@ class MoQTextClient : public Subscriber,
       AbsoluteLocation fetchEnd{sub.endGroup + 1, 0};
       if (track.hasValue()) {
         subscription_ = std::move(track.value());
-        auto subscribeID = subscription_->subscribeOk().subscribeID;
-        XLOG(DBG1) << "subscribeID=" << subscribeID;
+        auto requestID = subscription_->subscribeOk().requestID;
+        XLOG(DBG1) << "requestID=" << requestID;
         auto latest = subscription_->subscribeOk().latest;
         if (latest) {
           XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
@@ -196,7 +196,7 @@ class MoQTextClient : public Subscriber,
           }
         }
       } else {
-        XLOG(INFO) << "SubscribeError id=" << track.error().subscribeID
+        XLOG(INFO) << "SubscribeError id=" << track.error().requestID
                    << " code=" << folly::to_underlying(track.error().errorCode)
                    << " reason=" << track.error().reasonPhrase;
         subTextReceiver_.reset();
@@ -210,7 +210,7 @@ class MoQTextClient : public Subscriber,
             ObjectReceiver::FETCH, fetchTextHandler_);
         auto fetchTrack = co_await moqClient_->moqSession_->fetch(
             Fetch(
-                SubscribeID(0),
+                RequestID(0),
                 sub.fullTrackName,
                 *sub.start,
                 fetchEnd,
@@ -328,11 +328,11 @@ int main(int argc, char* argv[]) {
   SigHandler handler(
       &eventBase, [&textClient](int) mutable { textClient->stop(); });
   auto subParams = flags2params();
-  const auto subscribeID = 0;
+  const auto requestID = 0;
   const auto trackAlias = 1;
   textClient
       ->run(
-          {subscribeID,
+          {requestID,
            trackAlias,
            moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
            0,

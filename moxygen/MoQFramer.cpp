@@ -152,7 +152,7 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     length -= key->second;
     SetupParameter p;
     p.key = key->first;
-    if (p.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID) ||
+    if (p.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
         p.key == folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
       auto res = quic::decodeQuicInteger(cursor);
       if (!res) {
@@ -239,13 +239,13 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
   return serverSetup;
 }
 
-folly::Expected<SubscribeID, ErrorCode> MoQFrameParser::parseFetchHeader(
+folly::Expected<RequestID, ErrorCode> MoQFrameParser::parseFetchHeader(
     folly::io::Cursor& cursor) const noexcept {
-  auto subscribeID = quic::decodeQuicInteger(cursor);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  return SubscribeID(subscribeID->first);
+  return RequestID(requestID->first);
 }
 
 bool datagramTypeHasExtensions(uint64_t version, StreamType streamType) {
@@ -649,12 +649,12 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   CHECK(version_.hasValue())
       << "The version must be set before parsing a subscribe request";
   SubscribeRequest subscribeRequest;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= subscribeID->second;
-  subscribeRequest.subscribeID = subscribeID->first;
+  length -= requestID->second;
+  subscribeRequest.requestID = requestID->first;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -751,12 +751,12 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
       << "The version must be set before parsing a subscribe update";
 
   SubscribeUpdate subscribeUpdate;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  subscribeUpdate.subscribeID = subscribeID->first;
-  length -= subscribeID->second;
+  subscribeUpdate.requestID = requestID->first;
+  length -= requestID->second;
   auto start = parseAbsoluteLocation(cursor, length);
   if (!start) {
     return folly::makeUnexpected(start.error());
@@ -809,12 +809,12 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   SubscribeOk subscribeOk;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= subscribeID->second;
-  subscribeOk.subscribeID = subscribeID->first;
+  length -= requestID->second;
+  subscribeOk.requestID = requestID->first;
 
   auto expires = quic::decodeQuicInteger(cursor, length);
   if (!expires) {
@@ -861,12 +861,12 @@ folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   SubscribeError subscribeError;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= subscribeID->second;
-  subscribeError.subscribeID = subscribeID->first;
+  length -= requestID->second;
+  subscribeError.requestID = requestID->first;
 
   auto errorCode = quic::decodeQuicInteger(cursor, length);
   if (!errorCode) {
@@ -899,12 +899,12 @@ folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   Unsubscribe unsubscribe;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= subscribeID->second;
-  unsubscribe.subscribeID = subscribeID->first;
+  length -= requestID->second;
+  unsubscribe.requestID = requestID->first;
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -915,12 +915,12 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   SubscribeDone subscribeDone;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= subscribeID->second;
-  subscribeDone.subscribeID = subscribeID->first;
+  length -= requestID->second;
+  subscribeDone.requestID = requestID->first;
 
   auto statusCode = quic::decodeQuicInteger(cursor, length);
   if (!statusCode) {
@@ -1165,31 +1165,31 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
   return goaway;
 }
 
-folly::Expected<MaxSubscribeId, ErrorCode> MoQFrameParser::parseMaxSubscribeId(
+folly::Expected<MaxRequestID, ErrorCode> MoQFrameParser::parseMaxRequestID(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  MaxSubscribeId maxSubscribeId;
-  auto subscribeID = quic::decodeQuicInteger(cursor, length);
-  if (!subscribeID) {
+  MaxRequestID maxRequestID;
+  auto requestID = quic::decodeQuicInteger(cursor, length);
+  if (!requestID) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= subscribeID->second;
-  maxSubscribeId.subscribeID = subscribeID->first;
+  length -= requestID->second;
+  maxRequestID.requestID = requestID->first;
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
-  return maxSubscribeId;
+  return maxRequestID;
 }
 
-folly::Expected<SubscribesBlocked, ErrorCode>
-MoQFrameParser::parseSubscribesBlocked(folly::io::Cursor& cursor, size_t length)
+folly::Expected<RequestsBlocked, ErrorCode>
+MoQFrameParser::parseRequestsBlocked(folly::io::Cursor& cursor, size_t length)
     const noexcept {
-  SubscribesBlocked subscribesBlocked;
+  RequestsBlocked subscribesBlocked;
   auto res = quic::decodeQuicInteger(cursor, length);
   if (!res) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  subscribesBlocked.maxSubscribeID = res->first;
+  subscribesBlocked.maxRequestID = res->first;
   length -= res->second;
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -1205,7 +1205,7 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   if (!res) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetch.subscribeID = res->first;
+  fetch.requestID = res->first;
   length -= res->second;
 
   if (length < 3) {
@@ -1270,7 +1270,7 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     length -= joiningStart->second;
     // Note fetch.fullTrackName is empty at this point, the session fills it in
     fetch.args = JoiningFetch(
-        SubscribeID(jsid->first), joiningStart->first, fetchTypeEnum);
+        RequestID(jsid->first), joiningStart->first, fetchTypeEnum);
   }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1296,7 +1296,7 @@ folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
   if (!res) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetchCancel.subscribeID = res->first;
+  fetchCancel.requestID = res->first;
   length -= res->second;
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -1312,7 +1312,7 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   if (!res) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetchOk.subscribeID = res->first;
+  fetchOk.requestID = res->first;
   length -= res->second;
 
   // Check for next two bytes
@@ -1359,7 +1359,7 @@ folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
   if (!res) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  fetchError.subscribeID = res->first;
+  fetchError.requestID = res->first;
   length -= res->second;
 
   auto res2 = quic::decodeQuicInteger(cursor, length);
@@ -1773,12 +1773,12 @@ WriteResult writeClientSetup(
       continue;
     }
     writeVarint(writeBuf, param.key, size, error);
-    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID) ||
+    if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
         param.key ==
             folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
       auto ret = quic::getQuicIntegerSize(param.asUint64);
       if (ret.hasError()) {
-        XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
+        XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
         return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
       }
       writeVarint(writeBuf, ret.value(), size, error);
@@ -1821,12 +1821,12 @@ WriteResult writeServerSetup(
       continue;
     }
     writeVarint(writeBuf, param.key, size, error);
-    if (param.key == folly::to_underlying(SetupKey::MAX_SUBSCRIBE_ID) ||
+    if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
         (param.key ==
          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE))) {
       auto ret = quic::getQuicIntegerSize(param.asUint64);
       if (ret.hasError()) {
-        XLOG(ERR) << "Invalid max subscribe id: " << param.asUint64;
+        XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
         return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
       }
       writeVarint(writeBuf, ret.value(), size, error);
@@ -1871,12 +1871,12 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
 
 WriteResult MoQFrameWriter::writeFetchHeader(
     folly::IOBufQueue& writeBuf,
-    SubscribeID subscribeID) const noexcept {
+    RequestID requestID) const noexcept {
   size_t size = 0;
   bool error = false;
   writeVarint(
       writeBuf, folly::to_underlying(StreamType::FETCH_HEADER), size, error);
-  writeVarint(writeBuf, subscribeID.value, size, error);
+  writeVarint(writeBuf, requestID.value, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -2118,7 +2118,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
-  writeVarint(writeBuf, subscribeRequest.subscribeID.value, size, error);
+  writeVarint(writeBuf, subscribeRequest.requestID.value, size, error);
   writeVarint(writeBuf, subscribeRequest.trackAlias.value, size, error);
   writeFullTrackName(writeBuf, subscribeRequest.fullTrackName, size, error);
   writeBuf.append(&subscribeRequest.priority, 1);
@@ -2161,7 +2161,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);
-  writeVarint(writeBuf, update.subscribeID.value, size, error);
+  writeVarint(writeBuf, update.requestID.value, size, error);
   writeVarint(writeBuf, update.start.group, size, error);
   writeVarint(writeBuf, update.start.object, size, error);
   writeVarint(writeBuf, update.endGroup, size, error);
@@ -2187,7 +2187,7 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
-  writeVarint(writeBuf, subscribeOk.subscribeID.value, size, error);
+  writeVarint(writeBuf, subscribeOk.requestID.value, size, error);
   writeVarint(writeBuf, subscribeOk.expires.count(), size, error);
   auto order = folly::to_underlying(subscribeOk.groupOrder);
   writeBuf.append(&order, 1);
@@ -2215,7 +2215,7 @@ WriteResult MoQFrameWriter::writeSubscribeError(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
-  writeVarint(writeBuf, subscribeError.subscribeID.value, size, error);
+  writeVarint(writeBuf, subscribeError.requestID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(subscribeError.errorCode), size, error);
   writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
@@ -2227,15 +2227,15 @@ WriteResult MoQFrameWriter::writeSubscribeError(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeMaxSubscribeId(
+WriteResult MoQFrameWriter::writeMaxRequestID(
     folly::IOBufQueue& writeBuf,
-    const MaxSubscribeId& maxSubscribeId) const noexcept {
+    const MaxRequestID& maxRequestID) const noexcept {
   CHECK(version_.hasValue())
-      << "Version needs to be set to write max subscribe id";
+      << "Version needs to be set to write max requestID";
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_SUBSCRIBE_ID, error);
-  writeVarint(writeBuf, maxSubscribeId.subscribeID.value, size, error);
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::MAX_REQUEST_ID, error);
+  writeVarint(writeBuf, maxRequestID.requestID.value, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -2243,16 +2243,15 @@ WriteResult MoQFrameWriter::writeMaxSubscribeId(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeSubscribesBlocked(
+WriteResult MoQFrameWriter::writeRequestsBlocked(
     folly::IOBufQueue& writeBuf,
-    const SubscribesBlocked& subscribesBlocked) const noexcept {
+    const RequestsBlocked& subscribesBlocked) const noexcept {
   CHECK(version_.hasValue())
       << "Version needs to be set to write subscribes blocked";
   size_t size = 0;
   bool error = false;
-  auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBES_BLOCKED, error);
-  writeVarint(writeBuf, subscribesBlocked.maxSubscribeID.value, size, error);
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::REQUESTS_BLOCKED, error);
+  writeVarint(writeBuf, subscribesBlocked.maxRequestID.value, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -2267,7 +2266,7 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE, error);
-  writeVarint(writeBuf, unsubscribe.subscribeID.value, size, error);
+  writeVarint(writeBuf, unsubscribe.requestID.value, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -2283,7 +2282,7 @@ WriteResult MoQFrameWriter::writeSubscribeDone(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_DONE, error);
-  writeVarint(writeBuf, subscribeDone.subscribeID.value, size, error);
+  writeVarint(writeBuf, subscribeDone.requestID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(subscribeDone.statusCode), size, error);
   writeVarint(writeBuf, subscribeDone.streamCount, size, error);
@@ -2533,7 +2532,7 @@ WriteResult MoQFrameWriter::writeFetch(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
-  writeVarint(writeBuf, fetch.subscribeID.value, size, error);
+  writeVarint(writeBuf, fetch.requestID.value, size, error);
 
   writeBuf.append(&fetch.priority, 1);
   size += 1;
@@ -2561,7 +2560,7 @@ WriteResult MoQFrameWriter::writeFetch(
 
     writeVarint(
         writeBuf, folly::to_underlying(joining->fetchType), size, error);
-    writeVarint(writeBuf, joining->joiningSubscribeID.value, size, error);
+    writeVarint(writeBuf, joining->joiningRequestID.value, size, error);
     writeVarint(writeBuf, joining->joiningStart, size, error);
   }
   writeTrackRequestParams(writeBuf, fetch.params, size, error);
@@ -2580,7 +2579,7 @@ WriteResult MoQFrameWriter::writeFetchCancel(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_CANCEL, error);
-  writeVarint(writeBuf, fetchCancel.subscribeID.value, size, error);
+  writeVarint(writeBuf, fetchCancel.requestID.value, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -2595,7 +2594,7 @@ WriteResult MoQFrameWriter::writeFetchOk(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
-  writeVarint(writeBuf, fetchOk.subscribeID.value, size, error);
+  writeVarint(writeBuf, fetchOk.requestID.value, size, error);
   auto order = folly::to_underlying(fetchOk.groupOrder);
   writeBuf.append(&order, 1);
   size += 1;
@@ -2618,7 +2617,7 @@ WriteResult MoQFrameWriter::writeFetchError(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
-  writeVarint(writeBuf, fetchError.subscribeID.value, size, error);
+  writeVarint(writeBuf, fetchError.requestID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(fetchError.errorCode), size, error);
   writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
@@ -2644,8 +2643,8 @@ const char* getFrameTypeString(FrameType type) {
       return "SUBSCRIBE_ERROR";
     case FrameType::SUBSCRIBE_DONE:
       return "SUBSCRIBE_DONE";
-    case FrameType::MAX_SUBSCRIBE_ID:
-      return "MAX_SUBSCRIBE_ID";
+    case FrameType::MAX_REQUEST_ID:
+      return "MAX_REQUEST_ID";
     case FrameType::UNSUBSCRIBE:
       return "UNSUBSCRIBE";
     case FrameType::ANNOUNCE:
@@ -2732,7 +2731,7 @@ std::ostream& operator<<(std::ostream& os, TrackAlias alias) {
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, SubscribeID id) {
+std::ostream& operator<<(std::ostream& os, RequestID id) {
   os << id.value;
   return os;
 }
