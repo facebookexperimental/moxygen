@@ -22,14 +22,16 @@ class MoQRelayClient {
       std::shared_ptr<Subscriber> subscriber,
       std::vector<TrackNamespace> namespaces,
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
-      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60)) {
+      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60),
+      bool v11Plus = true) {
     try {
       bool isPublisher = bool(publisher);
       co_await moqClient_->setupMoQSession(
           connectTimeout,
           transactionTimeout,
           std::move(publisher),
-          std::move(subscriber));
+          std::move(subscriber),
+          v11Plus);
       // could parallelize
       if (!moqClient_->moqSession_) {
         XLOG(ERR) << "Session is dead now #sad";

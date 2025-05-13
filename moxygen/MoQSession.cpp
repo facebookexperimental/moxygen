@@ -320,7 +320,8 @@ StreamPublisherImpl::StreamPublisherImpl(
     SubgroupIDFormat format,
     bool includeExtensions)
     : StreamPublisherImpl(publisher) {
-  streamType_ = StreamType::SUBGROUP_HEADER;
+  streamType_ =
+      getSubgroupStreamType(publisher->getVersion(), format, includeExtensions);
   header_.trackIdentifier = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -397,7 +398,7 @@ StreamPublisherImpl::writeCurrentObject(
 
 folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::writeToStream(bool finStream) {
-  if (streamType_ == StreamType::SUBGROUP_HEADER &&
+  if (streamType_ != StreamType::FETCH_HEADER &&
       !publisher_->canBufferBytes(writeBuf_.chainLength())) {
     publisher_->onTooManyBytesBuffered();
     return folly::makeUnexpected(
@@ -1404,16 +1405,18 @@ void MoQSession::cleanup() {
          "session closed"});
   }
   fetches_.clear();
-  for (auto& [trackNamespace, pendingAnn] : pendingAnnounce_) {
-    pendingAnn.setValue(folly::makeUnexpected(AnnounceError(
-        {trackNamespace,
+  for (auto& [reqID, pendingAnn] : pendingAnnounce_) {
+    pendingAnn.promise.setValue(folly::makeUnexpected(AnnounceError(
+        {reqID,
+         TrackNamespace(),
          AnnounceErrorCode::INTERNAL_ERROR,
          "session closed"})));
   }
   pendingAnnounce_.clear();
-  for (auto& [trackNamespace, pendingSn] : pendingSubscribeAnnounces_) {
+  for (auto& [reqID, pendingSn] : pendingSubscribeAnnounces_) {
     pendingSn.setValue(folly::makeUnexpected(SubscribeAnnouncesError(
-        {trackNamespace,
+        {reqID,
+         TrackNamespace(),
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          "session closed"})));
   }
@@ -1557,7 +1560,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     XLOG(ERR) << "writeClientSetup failed sess=" << this;
     co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
   }
-  maxRequestID_ = maxConcurrentRequests_ = maxRequestID;
+  maxRequestID_ = maxRequestID;
+  maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
   controlWriteEvent_.signal();
 
   auto deletedToken = cancellationSource_.getToken();
@@ -1586,13 +1590,14 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   }
 
   setupComplete_ = true;
-  initializeNegotiatedVersion(serverSetup->selectedVersion);
+  XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
   co_return *serverSetup;
 }
 
 void MoQSession::onServerSetup(ServerSetup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+  initializeNegotiatedVersion(serverSetup.selectedVersion);
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(std::min(
       kMaxSendTokenCacheSize,
@@ -1615,7 +1620,11 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     return;
   }
   initializeNegotiatedVersion(serverSetup->selectedVersion);
+  XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
+  if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
+    nextRequestID_ = 0;
+  }
   // TODO: clamp egress max auth token cache size
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
@@ -1626,7 +1635,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
-  maxRequestID_ = maxConcurrentRequests_ = maxRequestID;
+  maxRequestID_ = maxRequestID;
+  maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
   setupComplete_ = true;
   controlWriteEvent_.signal();
 }
@@ -2026,7 +2036,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << subscribeRequest.fullTrackName
              << " sess=" << this;
   const auto requestID = subscribeRequest.requestID;
-  if (closeSessionIfRequestIDInvalid(requestID)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
 
@@ -2116,7 +2126,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
     return;
   }
-  if (closeSessionIfRequestIDInvalid(requestID)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, false)) {
     return;
   }
 
@@ -2140,6 +2150,9 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__ << " id=" << unsubscribe.requestID << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(unsubscribe.requestID, false, false)) {
+    return;
+  }
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     return;
@@ -2262,7 +2275,7 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   // Increment the maxRequestID_ by the number of pending closed subscribes
   // and send a new MaxRequestID.
   if (requestsBlocked.maxRequestID >= maxRequestID_ && closedRequests_ > 0) {
-    maxRequestID_ += closedRequests_;
+    maxRequestID_ += (closedRequests_ * getRequestIDMultiplier());
     closedRequests_ = 0;
     sendMaxRequestID(true);
   }
@@ -2275,7 +2288,7 @@ void MoQSession::onFetch(Fetch fetch) {
       : folly::to<std::string>("joining=", joining->joiningRequestID.value);
   XLOG(DBG1) << __func__ << " (" << logStr << ") sess=" << this;
   const auto requestID = fetch.requestID;
-  if (closeSessionIfRequestIDInvalid(requestID)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
   if (standalone) {
@@ -2379,6 +2392,9 @@ folly::coro::Task<void> MoQSession::handleFetch(
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
   XLOG(DBG1) << __func__ << " id=" << fetchCancel.requestID << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(fetchCancel.requestID, false, false)) {
+    return;
+  }
   auto pubTrackIt = pubTracks_.find(fetchCancel.requestID);
   if (pubTrackIt == pubTracks_.end()) {
     XLOG(DBG4) << "No publish key for fetch id=" << fetchCancel.requestID
@@ -2430,10 +2446,17 @@ void MoQSession::onFetchError(FetchError fetchError) {
 
 void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(
+          ann.requestID,
+          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
+          true)) {
+    return;
+  }
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << "No subscriber callback set";
     announceError(
-        {ann.trackNamespace,
+        {ann.requestID,
+         ann.trackNamespace,
          AnnounceErrorCode::NOT_SUPPORTED,
          "Not a subscriber"});
   } else {
@@ -2453,7 +2476,8 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
     XLOG(ERR) << "Exception in Subscriber callback ex="
               << announceResult.exception().what().toStdString();
     announceError(
-        {announce.trackNamespace,
+        {announce.requestID,
+         announce.trackNamespace,
          AnnounceErrorCode::INTERNAL_ERROR,
          announceResult.exception().what().toStdString()});
     co_return;
@@ -2462,6 +2486,7 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
     XLOG(DBG1) << "Application announce error err="
                << announceResult->error().reasonPhrase;
     auto annErr = std::move(announceResult->error());
+    annErr.requestID = announce.requestID;           // In case app got it wrong
     annErr.trackNamespace = announce.trackNamespace; // In case app got it wrong
     announceError(annErr);
   } else {
@@ -2474,31 +2499,66 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
   }
 }
 
+void MoQSession::maybeAddLegacyRequestIDMapping(
+    const FullTrackName& ftn,
+    RequestID id) {
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) {
+    return;
+  } else {
+    fullTrackNameToRequestID_[ftn] = id;
+  }
+}
+
+RequestID MoQSession::getRequestID(RequestID id, const FullTrackName& ftn) {
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) {
+    return id;
+  } else {
+    auto it = fullTrackNameToRequestID_.find(ftn);
+    if (it == fullTrackNameToRequestID_.end()) {
+      return std::numeric_limits<uint64_t>::max();
+    } else {
+      auto ret = it->second;
+      fullTrackNameToRequestID_.erase(it);
+      return ret;
+    }
+  }
+}
+
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
-  auto annIt = pendingAnnounce_.find(annOk.trackNamespace);
+  auto reqID = getRequestID(
+      annOk.requestID, FullTrackName(annOk.trackNamespace, "announce"));
+  auto annIt = pendingAnnounce_.find(reqID);
   if (annIt == pendingAnnounce_.end()) {
     // unknown
-    XLOG(ERR) << "No matching announce trackNamespace=" << annOk.trackNamespace
-              << " sess=" << this;
+    XLOG(ERR) << "No matching announce reqID=" << reqID
+              << " trackNamespace=" << annOk.trackNamespace << " sess=" << this;
     return;
   }
-  annIt->second.setValue(std::move(annOk));
+
+  publisherAnnounces_[annIt->second.trackNamespace] =
+      std::move(annIt->second.callback);
+  annOk.trackNamespace = annIt->second.trackNamespace;
+  annIt->second.promise.setValue(std::move(annOk));
   pendingAnnounce_.erase(annIt);
 }
 
 void MoQSession::onAnnounceError(AnnounceError announceError) {
   XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
              << " sess=" << this;
-  auto annIt = pendingAnnounce_.find(announceError.trackNamespace);
+  auto reqID = getRequestID(
+      announceError.requestID,
+      FullTrackName(announceError.trackNamespace, "announce"));
+  auto annIt = pendingAnnounce_.find(reqID);
   if (annIt == pendingAnnounce_.end()) {
     // unknown
-    XLOG(ERR) << "No matching announce trackNamespace="
-              << announceError.trackNamespace << " sess=" << this;
+    XLOG(ERR) << "No matching announce requestID=" << reqID
+              << " trackNamespace=" << announceError.trackNamespace
+              << " sess=" << this;
     return;
   }
-  publisherAnnounces_.erase(announceError.trackNamespace);
-  annIt->second.setValue(folly::makeUnexpected(std::move(announceError)));
+  annIt->second.promise.setValue(
+      folly::makeUnexpected(std::move(announceError)));
   pendingAnnounce_.erase(annIt);
 }
 
@@ -2510,6 +2570,7 @@ void MoQSession::onUnannounce(Unannounce unAnn) {
   } else {
     annIt->second->unannounce();
     subscriberAnnounces_.erase(annIt);
+    retireRequestID(/*signalWriteLoop=*/true);
   }
 }
 
@@ -2520,6 +2581,7 @@ void MoQSession::announceCancel(const AnnounceCancel& annCan) {
   }
   controlWriteEvent_.signal();
   subscriberAnnounces_.erase(annCan.trackNamespace);
+  retireRequestID(/*signalWriteLoop=*/false);
 }
 
 void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
@@ -2538,10 +2600,17 @@ void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
 void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(
+          sa.requestID,
+          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
+          true)) {
+    return;
+  }
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     subscribeAnnouncesError(
-        {sa.trackNamespacePrefix,
+        {sa.requestID,
+         sa.trackNamespacePrefix,
          SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
          "Not a publisher"});
     return;
@@ -2560,7 +2629,8 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subAnnResult.exception().what().toStdString();
     subscribeAnnouncesError(
-        {subAnn.trackNamespacePrefix,
+        {subAnn.requestID,
+         subAnn.trackNamespacePrefix,
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          subAnnResult.exception().what().toStdString()});
     co_return;
@@ -2569,6 +2639,7 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
     XLOG(DBG1) << "Application subAnn error err="
                << subAnnResult->error().reasonPhrase;
     auto subAnnErr = std::move(subAnnResult->error());
+    subAnnErr.requestID = subAnn.requestID; // In case app got it wrong
     subAnnErr.trackNamespacePrefix =
         subAnn.trackNamespacePrefix; // In case app got it wrong
     subscribeAnnouncesError(subAnnErr);
@@ -2584,11 +2655,14 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
 void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
   XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
              << " sess=" << this;
-  auto saIt = pendingSubscribeAnnounces_.find(saOk.trackNamespacePrefix);
+  auto reqID = getRequestID(
+      saOk.requestID, FullTrackName(saOk.trackNamespacePrefix, "subannounce"));
+  auto saIt = pendingSubscribeAnnounces_.find(reqID);
   if (saIt == pendingSubscribeAnnounces_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribeAnnounces trackNamespace="
-              << saOk.trackNamespacePrefix << " sess=" << this;
+    XLOG(ERR) << "No matching subscribeAnnounces reqID=" << reqID
+              << " trackNamespace=" << saOk.trackNamespacePrefix
+              << " sess=" << this;
     return;
   }
   saIt->second.setValue(std::move(saOk));
@@ -2600,11 +2674,15 @@ void MoQSession::onSubscribeAnnouncesError(
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
              << " sess=" << this;
-  auto saIt = pendingSubscribeAnnounces_.find(
-      subscribeAnnouncesError.trackNamespacePrefix);
+  auto reqID = getRequestID(
+      subscribeAnnouncesError.requestID,
+      FullTrackName(
+          subscribeAnnouncesError.trackNamespacePrefix, "subannounce"));
+  auto saIt = pendingSubscribeAnnounces_.find(reqID);
   if (saIt == pendingSubscribeAnnounces_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribeAnnounces trackNamespace="
+    XLOG(ERR) << "No matching subscribeAnnounces reqID=" << reqID
+              << " trackNamespace="
               << subscribeAnnouncesError.trackNamespacePrefix
               << " sess=" << this;
     return;
@@ -2629,16 +2707,24 @@ void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
     setRequestSession();
     saIt->second->unsubscribeAnnounces();
     subscribeAnnounces_.erase(saIt);
+    retireRequestID(/*signalWriteLoop=*/true);
   }
 }
 
 void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(
+          trackStatusRequest.requestID,
+          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
+          true)) {
+    return;
+  }
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     writeTrackStatus(
-        {trackStatusRequest.fullTrackName,
+        {trackStatusRequest.requestID,
+         trackStatusRequest.fullTrackName,
          TrackStatusCode::UNKNOWN,
          folly::none});
   } else {
@@ -2655,11 +2741,16 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
     XLOG(ERR) << "Exception in Publisher callback ex="
               << trackStatusResult.exception().what().toStdString();
     writeTrackStatus(
-        {trackStatusReq.fullTrackName, TrackStatusCode::UNKNOWN, folly::none});
+        {trackStatusReq.requestID,
+         trackStatusReq.fullTrackName,
+         TrackStatusCode::UNKNOWN,
+         folly::none});
   } else {
-    trackStatusResult.value().fullTrackName = trackStatusReq.fullTrackName;
+    trackStatusResult->requestID = trackStatusReq.requestID;
+    trackStatusResult->fullTrackName = trackStatusReq.fullTrackName;
     writeTrackStatus(trackStatusResult.value());
   }
+  retireRequestID(/*signalWriteLoop=*/false);
 }
 
 void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
@@ -2676,11 +2767,16 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << "sess=" << this;
   aliasifyAuthTokens(trackStatusRequest.params);
+  trackStatusRequest.requestID = getNextRequestID(/*legacyAction=*/true);
+  maybeAddLegacyRequestIDMapping(
+      trackStatusRequest.fullTrackName, trackStatusRequest.requestID);
+
   auto res = moqFrameWriter_.writeTrackStatusRequest(
       controlWriteBuf_, trackStatusRequest);
   if (!res) {
     XLOG(ERR) << "writeTrackStatusREquest failed sess=" << this;
     co_return TrackStatusResult{
+        trackStatusRequest.requestID,
         trackStatusRequest.fullTrackName,
         TrackStatusCode::UNKNOWN,
         folly::none};
@@ -2688,7 +2784,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<TrackStatus>();
   trackStatuses_.emplace(
-      trackStatusRequest.fullTrackName, std::move(contract.first));
+      trackStatusRequest.requestID, std::move(contract.first));
   co_return co_await std::move(contract.second);
 }
 
@@ -2696,11 +2792,12 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << " code=" << uint64_t(trackStatus.statusCode)
              << " sess=" << this;
-  auto trackStatusIt = trackStatuses_.find(trackStatus.fullTrackName);
+  auto reqID = getRequestID(trackStatus.requestID, trackStatus.fullTrackName);
+  auto trackStatusIt = trackStatuses_.find(reqID);
   if (trackStatusIt == trackStatuses_.end()) {
     XLOG(ERR) << __func__
-              << " Couldn't find a pending TrackStatusRequest for ftn="
-              << trackStatus.fullTrackName;
+              << " Couldn't find a pending TrackStatusRequest for reqID="
+              << reqID << " ftn=" << trackStatus.fullTrackName;
     return;
   }
   trackStatusIt->second.setValue(std::move(trackStatus));
@@ -2749,20 +2846,27 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   auto trackNamespace = ann.trackNamespace;
   aliasifyAuthTokens(ann.params);
+  ann.requestID = getNextRequestID(/*legacyAction=*/true);
+  maybeAddLegacyRequestIDMapping(
+      FullTrackName(ann.trackNamespace, "announce"), ann.requestID);
   auto res = moqFrameWriter_.writeAnnounce(controlWriteBuf_, ann);
   if (!res) {
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
     co_return folly::makeUnexpected(AnnounceError(
-        {std::move(trackNamespace),
+        {ann.requestID,
+         std::move(trackNamespace),
          AnnounceErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<AnnounceOk, AnnounceError>>();
-  publisherAnnounces_[trackNamespace] = std::move(announceCallback);
   pendingAnnounce_.emplace(
-      std::move(trackNamespace), std::move(contract.first));
+      ann.requestID,
+      PendingAnnounce(
+          {std::move(ann.trackNamespace),
+           std::move(contract.first),
+           std::move(announceCallback)}));
   auto announceResult = co_await std::move(contract.second);
   if (announceResult.hasError()) {
     co_return folly::makeUnexpected(announceResult.error());
@@ -2798,8 +2902,25 @@ void MoQSession::unannounce(const Unannounce& unann) {
   XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
   auto it = publisherAnnounces_.find(unann.trackNamespace);
   if (it == publisherAnnounces_.end()) {
-    XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
-    return;
+    // Not established but could be pending
+    auto pendingIt = std::find_if(
+        pendingAnnounce_.begin(),
+        pendingAnnounce_.end(),
+        [&unann](const auto& pair) {
+          return pair.second.trackNamespace == unann.trackNamespace;
+        });
+
+    if (pendingIt != pendingAnnounce_.end()) {
+      pendingIt->second.promise.setValue(folly::makeUnexpected(AnnounceError(
+          {pendingIt->first,
+           unann.trackNamespace,
+           AnnounceErrorCode::INTERNAL_ERROR,
+           "Unannounce before announce"})));
+      pendingAnnounce_.erase(pendingIt);
+    } else {
+      XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
+      return;
+    }
   }
   auto trackNamespace = unann.trackNamespace;
   auto res = moqFrameWriter_.writeUnannounce(controlWriteBuf_, unann);
@@ -2843,19 +2964,23 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
              << " sess=" << this;
   auto trackNamespace = sa.trackNamespacePrefix;
   aliasifyAuthTokens(sa.params);
+  sa.requestID = getNextRequestID(/*legacyAction=*/true);
+  maybeAddLegacyRequestIDMapping(
+      FullTrackName(sa.trackNamespacePrefix, "subannounce"), sa.requestID);
+
   auto res = moqFrameWriter_.writeSubscribeAnnounces(controlWriteBuf_, sa);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
     co_return folly::makeUnexpected(SubscribeAnnouncesError(
-        {std::move(trackNamespace),
+        {0,
+         std::move(trackNamespace),
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>();
-  pendingSubscribeAnnounces_.emplace(
-      std::move(trackNamespace), std::move(contract.first));
+  pendingSubscribeAnnounces_.emplace(sa.requestID, std::move(contract.first));
   auto subAnnResult = co_await std::move(contract.second);
   if (subAnnResult.hasError()) {
     co_return folly::makeUnexpected(subAnnResult.error());
@@ -2932,6 +3057,20 @@ class MoQSession::ReceiverSubscriptionHandle
   std::shared_ptr<MoQSession> session_;
 };
 
+RequestID MoQSession::getNextRequestID(bool legacyAction) {
+  if (legacyAction && getDraftMajorVersion(*getNegotiatedVersion()) < 11) {
+    return legacyNextRequestID_++;
+  }
+  if (nextRequestID_ >= peerMaxRequestID_) {
+    XLOG(WARN) << "Issuing request that will fail; nextRequestID_="
+               << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
+               << " sess=" << this;
+  }
+  auto ret = nextRequestID_;
+  nextRequestID_ += getRequestIDMultiplier();
+  return ret;
+}
+
 folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
@@ -2947,12 +3086,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     co_return folly::makeUnexpected(subscribeError);
   }
   auto fullTrackName = sub.fullTrackName;
-  if (nextRequestID_ >= peerMaxRequestID_) {
-    XLOG(WARN) << "Issuing subscribe that will fail; nextRequestID_="
-               << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
-               << " sess=" << this;
-  }
-  RequestID reqID = nextRequestID_++;
+  RequestID reqID = getNextRequestID();
   sub.requestID = reqID;
   TrackAlias alias = reqID.value;
   sub.trackAlias = alias;
@@ -3108,7 +3242,7 @@ void MoQSession::retireRequestID(bool signalWriteLoop) {
   // If # of closed requests is greater than 1/2 of max requests, then
   // let's bump the maxRequestID by the number of closed requests.
   if (++closedRequests_ >= maxConcurrentRequests_ / 2) {
-    maxRequestID_ += closedRequests_;
+    maxRequestID_ += (closedRequests_ * getRequestIDMultiplier());
     closedRequests_ = 0;
     sendMaxRequestID(signalWriteLoop);
   }
@@ -3202,11 +3336,6 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     co_return folly::makeUnexpected(fetchError);
   }
 
-  if (nextRequestID_ >= peerMaxRequestID_) {
-    XLOG(WARN) << "Issuing fetch that will fail; nextRequestID_="
-               << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
-               << " sess=" << this;
-  }
   auto [standalone, joining] = fetchType(fetch);
   FullTrackName fullTrackName = fetch.fullTrackName;
   if (joining) {
@@ -3237,7 +3366,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
           "Track name mismatch"});
     }
   }
-  auto reqID = nextRequestID_++;
+  auto reqID = getNextRequestID();
   fetch.requestID = reqID;
   aliasifyAuthTokens(fetch.params);
   auto wres = moqFrameWriter_.writeFetch(controlWriteBuf_, fetch);
@@ -3428,11 +3557,40 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
 }
 
-bool MoQSession::closeSessionIfRequestIDInvalid(RequestID requestID) {
-  if (maxRequestID_ <= requestID.value) {
-    XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
-    close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
+bool MoQSession::closeSessionIfRequestIDInvalid(
+    RequestID requestID,
+    bool skipCheck,
+    bool isNewRequest) {
+  if (skipCheck) {
+    return false;
+  }
+
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
+      ((requestID.value % 2) == 1) !=
+          (dir_ == MoQControlCodec::Direction::CLIENT)) {
+    XLOG(ERR) << "Invalid requestID parity: " << requestID << " sess=" << this;
+    close(SessionCloseErrorCode::INVALID_REQUEST_ID);
     return true;
+  }
+  if (isNewRequest) {
+    if (requestID.value >= maxRequestID_) {
+      XLOG(ERR) << "Too many requests requestID: " << requestID
+                << " sess=" << this;
+      close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
+      return true;
+    }
+    if (requestID.value != nextExpectedPeerRequestID_) {
+      XLOG(ERR) << "Invalid next requestID: " << requestID << " sess=" << this;
+      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+      return true;
+    }
+    nextExpectedPeerRequestID_ += getRequestIDMultiplier();
+  } else {
+    if (requestID.value >= maxRequestID_) {
+      XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
+      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+      return true;
+    }
   }
   return false;
 }

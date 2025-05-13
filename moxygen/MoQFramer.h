@@ -672,15 +672,18 @@ struct SubscribeDone {
 };
 
 struct Announce {
+  RequestID requestID;
   TrackNamespace trackNamespace;
   std::vector<TrackRequestParameter> params;
 };
 
 struct AnnounceOk {
+  RequestID requestID;
   TrackNamespace trackNamespace;
 };
 
 struct AnnounceError {
+  RequestID requestID;
   TrackNamespace trackNamespace;
   AnnounceErrorCode errorCode;
   std::string reasonPhrase;
@@ -697,11 +700,13 @@ struct AnnounceCancel {
 };
 
 struct TrackStatusRequest {
+  RequestID requestID;
   FullTrackName fullTrackName;
   std::vector<TrackRequestParameter> params; // draft-11 and later
 };
 
 struct TrackStatus {
+  RequestID requestID;
   FullTrackName fullTrackName;
   TrackStatusCode statusCode;
   folly::Optional<AbsoluteLocation> latestGroupAndObject;
@@ -827,15 +832,18 @@ struct FetchError {
 };
 
 struct SubscribeAnnounces {
+  RequestID requestID;
   TrackNamespace trackNamespacePrefix;
   std::vector<TrackRequestParameter> params;
 };
 
 struct SubscribeAnnouncesOk {
+  RequestID requestID;
   TrackNamespace trackNamespacePrefix;
 };
 
 struct SubscribeAnnouncesError {
+  RequestID requestID;
   TrackNamespace trackNamespacePrefix;
   SubscribeAnnouncesErrorCode errorCode;
   std::string reasonPhrase;

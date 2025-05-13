@@ -115,16 +115,18 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeAnnounce(
       writeBuf,
       Announce(
-          {TrackNamespace({"hello"}),
+          {1,
+           TrackNamespace({"hello"}),
            {getTestAuthParam(moqFrameWriter, "binky"),
             {getDeliveryTimeoutParamKey(version), "", 1000},
             {getMaxCacheDurationParamKey(version), "", 3600000}}}));
   res = moqFrameWriter.writeAnnounceOk(
-      writeBuf, AnnounceOk({TrackNamespace({"hello"})}));
+      writeBuf, AnnounceOk({1, TrackNamespace({"hello"})}));
   res = moqFrameWriter.writeAnnounceError(
       writeBuf,
       AnnounceError(
-          {TrackNamespace({"hello"}),
+          {1,
+           TrackNamespace({"hello"}),
            AnnounceErrorCode::INTERNAL_ERROR,
            "server error"}));
   res = moqFrameWriter.writeAnnounceCancel(
@@ -139,6 +141,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
           TrackNamespace({"hello"}),
       }));
   TrackStatusRequest trackStatusRequest;
+  trackStatusRequest.requestID = 3;
   trackStatusRequest.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
   // Params will be ignored for draft-11 and below
@@ -146,6 +149,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeTrackStatusRequest(writeBuf, trackStatusRequest);
 
   TrackStatus trackStatus;
+  trackStatus.requestID = 3;
   trackStatus.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
@@ -158,14 +162,16 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeSubscribeAnnounces(
       writeBuf,
       SubscribeAnnounces(
-          {TrackNamespace({"hello"}),
+          {2,
+           TrackNamespace({"hello"}),
            {getTestAuthParam(moqFrameWriter, "binky")}}));
   res = moqFrameWriter.writeSubscribeAnnouncesOk(
-      writeBuf, SubscribeAnnouncesOk({TrackNamespace({"hello"})}));
+      writeBuf, SubscribeAnnouncesOk({2, TrackNamespace({"hello"})}));
   res = moqFrameWriter.writeSubscribeAnnouncesError(
       writeBuf,
       SubscribeAnnouncesError(
-          {TrackNamespace({"hello"}),
+          {2,
+           TrackNamespace({"hello"}),
            SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
            "server error"}));
   res = moqFrameWriter.writeUnsubscribeAnnounces(

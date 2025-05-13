@@ -25,6 +25,7 @@ DEFINE_string(audio_track_name, "audio0", "Audio track Name");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
+DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 
 namespace {
 using namespace moxygen;
@@ -52,7 +53,8 @@ class MoQFlvStreamerClient
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/shared_from_this(),
-          /*subscribeHandler=*/nullptr);
+          /*subscribeHandler=*/nullptr,
+          FLAGS_v11Plus);
       // Announce
       auto annResp = co_await moqClient_->moqSession_->announce(std::move(ann));
       if (annResp.hasValue()) {
@@ -369,7 +371,7 @@ int main(int argc, char* argv[]) {
   SigHandler handler(
       &eventBase, [&streamerClient](int) mutable { streamerClient->stop(); });
 
-  streamerClient->run({{std::move(ns)}, {}})
+  streamerClient->run({RequestID(0), {std::move(ns)}, {}})
       .scheduleOn(&eventBase)
       .start()
       .via(&eventBase)

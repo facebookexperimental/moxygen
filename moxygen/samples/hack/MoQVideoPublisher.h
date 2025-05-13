@@ -26,7 +26,7 @@ class MoQVideoPublisher
     evbThread_ = std::make_unique<folly::ScopedEventBaseThread>();
   }
 
-  bool setup(const std::string& connectURL);
+  bool setup(const std::string& connectURL, bool v11Plus = true);
 
   /**
    * Publishes a single frame of the video stream.
