@@ -207,6 +207,10 @@ class MoQSessionTest : public testing::Test,
     return negotiatedVersion_;
   }
 
+  uint8_t getRequestIDMultiplier() const {
+    return negotiatedVersion_ >= kVersionDraft11 ? 2 : 1;
+  }
+
   using TestLogicFn = std::function<void(
       const SubscribeRequest& sub,
       std::shared_ptr<TrackConsumer> pub,
@@ -224,7 +228,7 @@ class MoQSessionTest : public testing::Test,
   std::shared_ptr<MockPublisher> serverPublisher{
       std::make_shared<MockPublisher>()};
   uint64_t negotiatedVersion_ = kVersionDraftCurrent;
-  uint64_t initialMaxRequestID_{kTestMaxRequestID};
+  uint64_t initialMaxRequestID_{kTestMaxRequestID * getRequestIDMultiplier()};
   bool failServerSetup_{false};
   bool invalidVersion_{false};
   std::shared_ptr<testing::StrictMock<MockFetchConsumer>> fetchCallback_;
@@ -453,6 +457,7 @@ class MoQSessionTestWithVersion11 : public MoQSessionTest {
 };
 
 CO_TEST_F_X(MoQSessionTestWithVersion11, AbsoluteJoiningFetch) {
+  initialMaxRequestID_ = 10;
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     for (uint32_t group = 6; group < 10; group++) {
@@ -933,9 +938,9 @@ CO_TEST_F_X(MoQSessionTest, MaxRequestID) {
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), trackPublisher1);
   co_await folly::coro::co_reschedule_on_current_executor;
-  // This is true because initial is 2 in this test case and we grant credit
+  // This is true because initial is 4 in this test case and we grant credit
   // every 50%.
-  auto expectedSubId = 3;
+  auto expectedSubId = 3 * getRequestIDMultiplier();
   EXPECT_EQ(serverSession_->maxRequestID(), expectedSubId);
 
   // subscribe again but this time we get a DONE
@@ -945,7 +950,7 @@ CO_TEST_F_X(MoQSessionTest, MaxRequestID) {
   res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), trackPublisher2);
   co_await folly::coro::co_reschedule_on_current_executor;
-  expectedSubId++;
+  expectedSubId += getRequestIDMultiplier();
   EXPECT_EQ(serverSession_->maxRequestID(), expectedSubId);
 
   // subscribe three more times, last one should fail, the first two will get

@@ -73,6 +73,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       : dir_(MoQControlCodec::Direction::CLIENT),
         wt_(wt),
         evb_(evb),
+        nextRequestID_(0),
+        nextExpectedPeerRequestID_(1),
         controlCodec_(dir_, this) {}
 
   explicit MoQSession(
@@ -82,6 +84,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       : dir_(MoQControlCodec::Direction::SERVER),
         wt_(wt),
         evb_(evb),
+        nextRequestID_(1),
+        nextExpectedPeerRequestID_(0),
         serverSetupCallback_(&serverSetupCallback),
         controlCodec_(dir_, this) {}
 
@@ -396,13 +400,17 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   //  requestID <= maxRequestID_;
   bool closeSessionIfRequestIDInvalid(
       RequestID requestID,
-      bool skipCheck = false);
+      bool skipCheck,
+      bool isNewRequest);
 
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
   void aliasifyAuthTokens(std::vector<TrackRequestParameter>& params);
   RequestID getRequestID(RequestID id, const FullTrackName& ftn);
   RequestID getNextRequestID(bool legacyAction = false);
   void maybeAddLegacyRequestIDMapping(const FullTrackName& ftn, RequestID id);
+  uint8_t getRequestIDMultiplier() const {
+    return (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) ? 2 : 1;
+  }
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
@@ -489,6 +497,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   // RequestID must be a unique monotonically increasing number that is
   // less than maxRequestID.
   uint64_t nextRequestID_{0};
+  uint64_t nextExpectedPeerRequestID_{0};
   // For request IDs for messages that didn't use subscribe ID in v<11
   uint64_t legacyNextRequestID_{quic::kEightByteLimit + 1};
   uint64_t maxRequestID_{0};
