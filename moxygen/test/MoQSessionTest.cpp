@@ -97,12 +97,14 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     }
 
     EXPECT_EQ(setup.supportedVersions[0], getClientSupportedVersions()[0]);
+    EXPECT_EQ(setup.params.at(0).key, folly::to_underlying(SetupKey::PATH));
+    EXPECT_EQ(setup.params.at(0).asString, "/foo");
     EXPECT_EQ(
-        setup.params.at(0).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-    EXPECT_EQ(setup.params.at(0).asUint64, initialMaxRequestID_);
-    if (setup.params.size() > 1) {
+        setup.params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(setup.params.at(1).asUint64, initialMaxRequestID_);
+    if (setup.params.size() > 2) {
       EXPECT_EQ(
-          setup.params.at(1).key,
+          setup.params.at(2).key,
           folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
     } else {
       EXPECT_LT(setup.supportedVersions[0], kVersionDraft11);
@@ -193,6 +195,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     return ClientSetup{
         .supportedVersions = getClientSupportedVersions(),
         .params = {
+            SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo", 0, {}},
             SetupParameter{
                 folly::to_underlying(SetupKey::MAX_REQUEST_ID),
                 "",
@@ -1432,6 +1435,43 @@ CO_TEST_P_X(V11OnlyTests, TrackStatusWithAuthorizationToken) {
   addAuthToken(request.params, {0, "xyzw", AuthToken::Register});
   auto res = co_await clientSession_->trackStatus(request);
   EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
+  co_await setupMoQSession();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    EXPECT_EQ(sub.params.size(), 2);
+    EXPECT_EQ(
+        sub.params.at(0).key,
+        getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+    EXPECT_EQ(sub.params.at(0).asUint64, 5000);
+    EXPECT_EQ(
+        sub.params.at(1).key,
+        getAuthorizationParamKey(getServerSelectedVersion()));
+    if (getServerSelectedVersion() < kVersionDraft11) {
+      EXPECT_EQ(sub.params.at(1).asString, "auth_token_value");
+    } else {
+      EXPECT_EQ(sub.params.at(1).asAuthToken.tokenValue, "auth_token_value");
+    }
+
+    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  expectSubscribeDone();
+
+  SubscribeRequest subscribeRequest = getSubscribe(kTestTrackName);
+  subscribeRequest.params.push_back(
+      {getDeliveryTimeoutParamKey(getServerSelectedVersion()), "", 5000, {}});
+  subscribeRequest.params.push_back(
+      getAuthParam(getServerSelectedVersion(), "auth_token_value"));
+
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
