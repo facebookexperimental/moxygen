@@ -369,7 +369,7 @@ int main(int argc, char* argv[]) {
   SigHandler handler(
       &eventBase, [&streamerClient](int) mutable { streamerClient->stop(); });
 
-  streamerClient->run({{std::move(ns)}, {}})
+  streamerClient->run({RequestID(0), {std::move(ns)}, {}})
       .scheduleOn(&eventBase)
       .start()
       .via(&eventBase)

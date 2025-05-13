@@ -40,6 +40,7 @@ class Publisher {
   virtual folly::coro::Task<TrackStatusResult> trackStatus(
       TrackStatusRequest trackStatusRequest) {
     return folly::coro::makeTask<TrackStatusResult>(TrackStatus{
+        trackStatusRequest.requestID,
         trackStatusRequest.fullTrackName,
         TrackStatusCode::UNKNOWN,
         folly::none});
@@ -143,6 +144,7 @@ class Publisher {
       SubscribeAnnounces subAnn) {
     return folly::coro::makeTask<SubscribeAnnouncesResult>(
         folly::makeUnexpected(SubscribeAnnouncesError{
+            subAnn.requestID,
             subAnn.trackNamespacePrefix,
             SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
             "unimplemented"}));

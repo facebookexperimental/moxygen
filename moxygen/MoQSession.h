@@ -394,11 +394,15 @@ class MoQSession : public MoQControlCodec::ControlCallback,
 
   //  Closes the session if the requestID is invalid, that is,
   //  requestID <= maxRequestID_;
-  //  TODO: Add this to all messages that have requestID
-  bool closeSessionIfRequestIDInvalid(RequestID requestID);
+  bool closeSessionIfRequestIDInvalid(
+      RequestID requestID,
+      bool skipCheck = false);
 
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
   void aliasifyAuthTokens(std::vector<TrackRequestParameter>& params);
+  RequestID getRequestID(RequestID id, const FullTrackName& ftn);
+  RequestID getNextRequestID(bool legacyAction = false);
+  void maybeAddLegacyRequestIDMapping(const FullTrackName& ftn, RequestID id);
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
@@ -419,27 +423,32 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       fetches_;
   folly::F14FastMap<RequestID, TrackAlias, RequestID::hash> subIdToTrackAlias_;
 
+  struct PendingAnnounce {
+    TrackNamespace trackNamespace;
+    folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>> promise;
+    std::shared_ptr<AnnounceCallback> callback;
+  };
+
   // Publisher State
   // Track Namespace -> Promise<AnnounceOK>
-  folly::F14FastMap<
-      TrackNamespace,
-      folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>>,
-      TrackNamespace::hash>
+  folly::F14FastMap<RequestID, PendingAnnounce, RequestID::hash>
       pendingAnnounce_;
 
   folly::F14FastMap<
-      TrackNamespace,
+      RequestID,
       folly::coro::Promise<
           folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>,
-      TrackNamespace::hash>
+      RequestID::hash>
       pendingSubscribeAnnounces_;
 
   // Track Status
-  folly::F14FastMap<
-      FullTrackName,
-      folly::coro::Promise<TrackStatus>,
-      FullTrackName::hash>
-      trackStatuses_;
+  folly::
+      F14FastMap<RequestID, folly::coro::Promise<TrackStatus>, RequestID::hash>
+          trackStatuses_;
+
+  // For <= v10
+  folly::F14FastMap<FullTrackName, RequestID, FullTrackName::hash>
+      fullTrackNameToRequestID_;
 
   // Subscriber ID -> metadata about a publish track
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
@@ -480,6 +489,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   // RequestID must be a unique monotonically increasing number that is
   // less than maxRequestID.
   uint64_t nextRequestID_{0};
+  // For request IDs for messages that didn't use subscribe ID in v<11
+  uint64_t legacyNextRequestID_{quic::kEightByteLimit + 1};
   uint64_t maxRequestID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};

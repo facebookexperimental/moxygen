@@ -685,6 +685,7 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
 TEST_P(MoQFramerTest, ParseTrackStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   TrackStatus trackStatus;
+  trackStatus.requestID = 7;
   trackStatus.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
@@ -707,9 +708,13 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS));
   auto parseResult = parser_.parseTrackStatus(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
-  EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
-  EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
+  if (getDraftMajorVersion(GetParam()) >= 11) {
+    EXPECT_EQ(parseResult->requestID, 7);
+  } else {
+    EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
+    EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
+    EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
+  }
   EXPECT_EQ(parseResult->latestGroupAndObject->group, 19);
   EXPECT_EQ(parseResult->latestGroupAndObject->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
