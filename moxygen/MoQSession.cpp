@@ -1590,13 +1590,14 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   }
 
   setupComplete_ = true;
-  initializeNegotiatedVersion(serverSetup->selectedVersion);
+  XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
   co_return *serverSetup;
 }
 
 void MoQSession::onServerSetup(ServerSetup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+  initializeNegotiatedVersion(serverSetup.selectedVersion);
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(std::min(
       kMaxSendTokenCacheSize,
@@ -1619,6 +1620,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     return;
   }
   initializeNegotiatedVersion(serverSetup->selectedVersion);
+  XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
   if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
     nextRequestID_ = 0;

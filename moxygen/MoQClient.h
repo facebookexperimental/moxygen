@@ -31,15 +31,19 @@ class MoQClient : public proxygen::WebTransportHandler {
       std::chrono::milliseconds connect_timeout,
       std::chrono::milliseconds transaction_timeout,
       std::shared_ptr<Publisher> publishHandler,
-      std::shared_ptr<Subscriber> subscribeHandler) noexcept;
+      std::shared_ptr<Subscriber> subscribeHandler,
+      bool v11Plus) noexcept;
 
  protected:
   folly::coro::Task<ServerSetup> completeSetupMoQSession(
       proxygen::WebTransport* wt,
       folly::Optional<std::string> pathParam,
       std::shared_ptr<Publisher> publishHandler,
-      std::shared_ptr<Subscriber> subscribeHandler);
-  ClientSetup getClientSetup(const folly::Optional<std::string>& path);
+      std::shared_ptr<Subscriber> subscribeHandler,
+      bool v11Plus);
+  ClientSetup getClientSetup(
+      const folly::Optional<std::string>& path,
+      bool v11Plus);
 
   void onSessionEnd(folly::Optional<uint32_t>) override;
   void onNewBidiStream(

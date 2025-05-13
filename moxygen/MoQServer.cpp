@@ -65,15 +65,22 @@ void MoQServer::createMoQQuicSession(
 folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
   XLOG(INFO) << "ClientSetup";
   uint64_t negotiatedVersion = 0;
-  // Pick the highest available version of 8, 9, and 10
+  // Pick the highest available version of 8, 9, 10, 11
+  static const std::array<uint64_t, 4> draftVersions = {
+      kVersionDraft11, kVersionDraft10, kVersionDraft09, kVersionDraft08};
+
   folly::F14FastSet<uint64_t> negotiatedVersionSet(
       setup.supportedVersions.begin(), setup.supportedVersions.end());
-  if (negotiatedVersionSet.contains(kVersionDraft10)) {
-    negotiatedVersion = kVersionDraft10;
-  } else if (negotiatedVersionSet.contains(kVersionDraft09)) {
-    negotiatedVersion = kVersionDraft09;
-  } else if (negotiatedVersionSet.contains(kVersionDraft08)) {
-    negotiatedVersion = kVersionDraft08;
+
+  auto it = std::find_if(
+      draftVersions.begin(),
+      draftVersions.end(),
+      [&negotiatedVersionSet](uint64_t version) {
+        return negotiatedVersionSet.contains(version);
+      });
+
+  if (it != draftVersions.end()) {
+    negotiatedVersion = *it;
   } else {
     return folly::Try<ServerSetup>(
         std::runtime_error("Client does not support draft-09 or draft-10"));

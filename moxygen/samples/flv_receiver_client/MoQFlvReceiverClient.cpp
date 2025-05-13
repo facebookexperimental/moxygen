@@ -37,6 +37,7 @@ DEFINE_int32(
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
 DEFINE_string(auth, "secret", "MOQ subscription auth string");
+DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 
 namespace {
 using namespace moxygen;
@@ -377,7 +378,8 @@ class MoQFlvReceiverClient
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
-          /*subscribeHandler=*/shared_from_this());
+          /*subscribeHandler=*/shared_from_this(),
+          FLAGS_v11Plus);
       // Create output file
       flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
       trackReceiverHandlerAudio_->setFlvWriterShared(flvw_);

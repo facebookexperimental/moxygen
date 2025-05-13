@@ -150,7 +150,7 @@ const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
 const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
 // Implementation of setup function
-bool MoQVideoPublisher::setup(const std::string& connectURL) {
+bool MoQVideoPublisher::setup(const std::string& connectURL, bool v11Plus) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << connectURL;
@@ -164,7 +164,8 @@ bool MoQVideoPublisher::setup(const std::string& connectURL) {
           /*subscriber=*/nullptr,
           {videoForwarder_.fullTrackName().trackNamespace},
           kConnectTimeout,
-          kTransactionTimeout)
+          kTransactionTimeout,
+          v11Plus)
       .scheduleOn(evbThread_->getEventBase())
       .start();
   return true;

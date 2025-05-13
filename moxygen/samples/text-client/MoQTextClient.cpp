@@ -32,6 +32,7 @@ DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
 DEFINE_bool(jrfetch, false, "Joining relative fetch");
 DEFINE_bool(jafetch, false, "Joining absolute fetch");
 DEFINE_bool(forward, true, "Forward flag for subscriptions");
+DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 
 namespace {
 using namespace moxygen;
@@ -142,7 +143,8 @@ class MoQTextClient : public Subscriber,
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
-          /*subscribeHandler=*/shared_from_this());
+          /*subscribeHandler=*/shared_from_this(),
+          FLAGS_v11Plus);
 
       Publisher::SubscribeResult track;
       if (FLAGS_jafetch || FLAGS_jrfetch) {

@@ -27,6 +27,7 @@ DEFINE_string(
     "Transmission mode for track: stream-per-group (spg), "
     "stream-per-object(spo), datagram");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
+DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 
 namespace {
 using namespace moxygen;
@@ -64,7 +65,8 @@ class MoQDateServer : public MoQServer,
             /*subscriber=*/nullptr,
             {TrackNamespace({"moq-date"})},
             std::chrono::milliseconds(FLAGS_relay_connect_timeout),
-            std::chrono::seconds(FLAGS_relay_transaction_timeout))
+            std::chrono::seconds(FLAGS_relay_transaction_timeout),
+            FLAGS_v11Plus)
         .scheduleOn(evb)
         .start();
     return true;

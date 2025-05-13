@@ -16,6 +16,7 @@ DEFINE_string(username, "", "Username to join chat");
 DEFINE_string(device, "12345", "Device ID");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
+DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 
 namespace moxygen {
 
@@ -43,7 +44,8 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         std::chrono::milliseconds(FLAGS_connect_timeout),
         std::chrono::seconds(FLAGS_transaction_timeout),
         /*publishHandler=*/shared_from_this(),
-        /*subscribeHandler=*/shared_from_this());
+        /*subscribeHandler=*/shared_from_this(),
+        FLAGS_v11Plus);
     // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.moqSession_->announce(
         {RequestID(0), participantTrackName(username_), {}});
