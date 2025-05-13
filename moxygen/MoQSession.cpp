@@ -1559,7 +1559,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     XLOG(ERR) << "writeClientSetup failed sess=" << this;
     co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
   }
-  maxRequestID_ = maxConcurrentRequests_ = maxRequestID;
+  maxRequestID_ = maxRequestID;
+  maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
   controlWriteEvent_.signal();
 
   auto deletedToken = cancellationSource_.getToken();
@@ -1618,6 +1619,9 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
   initializeNegotiatedVersion(serverSetup->selectedVersion);
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
+  if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
+    nextRequestID_ = 0;
+  }
   // TODO: clamp egress max auth token cache size
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
@@ -1628,7 +1632,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
-  maxRequestID_ = maxConcurrentRequests_ = maxRequestID;
+  maxRequestID_ = maxRequestID;
+  maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
   setupComplete_ = true;
   controlWriteEvent_.signal();
 }
@@ -2028,7 +2033,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   XLOG(DBG1) << __func__ << " ftn=" << subscribeRequest.fullTrackName
              << " sess=" << this;
   const auto requestID = subscribeRequest.requestID;
-  if (closeSessionIfRequestIDInvalid(requestID)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
 
@@ -2118,7 +2123,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
     return;
   }
-  if (closeSessionIfRequestIDInvalid(requestID)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, false)) {
     return;
   }
 
@@ -2142,7 +2147,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__ << " id=" << unsubscribe.requestID << " sess=" << this;
-  if (closeSessionIfRequestIDInvalid(unsubscribe.requestID)) {
+  if (closeSessionIfRequestIDInvalid(unsubscribe.requestID, false, false)) {
     return;
   }
   if (!publishHandler_) {
@@ -2267,7 +2272,7 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   // Increment the maxRequestID_ by the number of pending closed subscribes
   // and send a new MaxRequestID.
   if (requestsBlocked.maxRequestID >= maxRequestID_ && closedRequests_ > 0) {
-    maxRequestID_ += closedRequests_;
+    maxRequestID_ += (closedRequests_ * getRequestIDMultiplier());
     closedRequests_ = 0;
     sendMaxRequestID(true);
   }
@@ -2280,7 +2285,7 @@ void MoQSession::onFetch(Fetch fetch) {
       : folly::to<std::string>("joining=", joining->joiningRequestID.value);
   XLOG(DBG1) << __func__ << " (" << logStr << ") sess=" << this;
   const auto requestID = fetch.requestID;
-  if (closeSessionIfRequestIDInvalid(requestID)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
   if (standalone) {
@@ -2384,6 +2389,9 @@ folly::coro::Task<void> MoQSession::handleFetch(
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
   XLOG(DBG1) << __func__ << " id=" << fetchCancel.requestID << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(fetchCancel.requestID, false, false)) {
+    return;
+  }
   auto pubTrackIt = pubTracks_.find(fetchCancel.requestID);
   if (pubTrackIt == pubTracks_.end()) {
     XLOG(DBG4) << "No publish key for fetch id=" << fetchCancel.requestID
@@ -2436,7 +2444,9 @@ void MoQSession::onFetchError(FetchError fetchError) {
 void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
   if (closeSessionIfRequestIDInvalid(
-          ann.requestID, getDraftMajorVersion(*getNegotiatedVersion()) < 11)) {
+          ann.requestID,
+          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
+          true)) {
     return;
   }
   if (!subscribeHandler_) {
@@ -2588,7 +2598,9 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   if (closeSessionIfRequestIDInvalid(
-          sa.requestID, getDraftMajorVersion(*getNegotiatedVersion()) < 11)) {
+          sa.requestID,
+          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
+          true)) {
     return;
   }
   if (!publishHandler_) {
@@ -2701,7 +2713,8 @@ void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
              << " sess=" << this;
   if (closeSessionIfRequestIDInvalid(
           trackStatusRequest.requestID,
-          getDraftMajorVersion(*getNegotiatedVersion()) < 11)) {
+          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
+          true)) {
     return;
   }
   if (!publishHandler_) {
@@ -3050,7 +3063,9 @@ RequestID MoQSession::getNextRequestID(bool legacyAction) {
                << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
                << " sess=" << this;
   }
-  return nextRequestID_++;
+  auto ret = nextRequestID_;
+  nextRequestID_ += getRequestIDMultiplier();
+  return ret;
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
@@ -3224,7 +3239,7 @@ void MoQSession::retireRequestID(bool signalWriteLoop) {
   // If # of closed requests is greater than 1/2 of max requests, then
   // let's bump the maxRequestID by the number of closed requests.
   if (++closedRequests_ >= maxConcurrentRequests_ / 2) {
-    maxRequestID_ += closedRequests_;
+    maxRequestID_ += (closedRequests_ * getRequestIDMultiplier());
     closedRequests_ = 0;
     sendMaxRequestID(signalWriteLoop);
   }
@@ -3412,9 +3427,6 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
 
 void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (closeSessionIfRequestIDInvalid(fetchCan.requestID)) {
-    return;
-  }
   auto trackIt = fetches_.find(fetchCan.requestID);
   if (trackIt == fetches_.end()) {
     XLOG(ERR) << "unknown subscribe ID=" << fetchCan.requestID
@@ -3544,11 +3556,38 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
 
 bool MoQSession::closeSessionIfRequestIDInvalid(
     RequestID requestID,
-    bool skipCheck) {
-  if (!skipCheck && maxRequestID_ <= requestID.value) {
-    XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
-    close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
+    bool skipCheck,
+    bool isNewRequest) {
+  if (skipCheck) {
+    return false;
+  }
+
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
+      ((requestID.value % 2) == 1) !=
+          (dir_ == MoQControlCodec::Direction::CLIENT)) {
+    XLOG(ERR) << "Invalid requestID parity: " << requestID << " sess=" << this;
+    close(SessionCloseErrorCode::INVALID_REQUEST_ID);
     return true;
+  }
+  if (isNewRequest) {
+    if (requestID.value >= maxRequestID_) {
+      XLOG(ERR) << "Too many requests requestID: " << requestID
+                << " sess=" << this;
+      close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
+      return true;
+    }
+    if (requestID.value != nextExpectedPeerRequestID_) {
+      XLOG(ERR) << "Invalid next requestID: " << requestID << " sess=" << this;
+      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+      return true;
+    }
+    nextExpectedPeerRequestID_ += getRequestIDMultiplier();
+  } else {
+    if (requestID.value >= maxRequestID_) {
+      XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
+      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+      return true;
+    }
   }
   return false;
 }
