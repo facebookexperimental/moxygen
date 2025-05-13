@@ -48,7 +48,10 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     co_return folly::makeUnexpected(AnnounceError{
-        ann.trackNamespace, AnnounceErrorCode::UNINTERESTED, "bad namespace"});
+        ann.requestID,
+        ann.trackNamespace,
+        AnnounceErrorCode::UNINTERESTED,
+        "bad namespace"});
   }
   std::vector<std::shared_ptr<MoQSession>> sessions;
   auto nodePtr = findNamespaceNode(
@@ -57,7 +60,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   // TODO: store auth for forwarding on future SubscribeAnnounces?
   auto session = MoQSession::getRequestSession();
   nodePtr->sourceSession = std::move(session);
-  nodePtr->setAnnounceOk({ann.trackNamespace});
+  nodePtr->setAnnounceOk({ann.requestID, ann.trackNamespace});
   for (auto& outSession : sessions) {
     if (outSession != session) {
       auto evb = outSession->getEventBase();
@@ -127,6 +130,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   // check auth
   if (subNs.trackNamespacePrefix.empty()) {
     co_return folly::makeUnexpected(SubscribeAnnouncesError{
+        subNs.requestID,
         subNs.trackNamespacePrefix,
         SubscribeAnnouncesErrorCode::NAMESPACE_PREFIX_UNKNOWN,
         "empty"});
@@ -145,7 +149,9 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
     nodes.pop_front();
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
       // TODO: Auth/params
-      announceToSession(session, {prefix, {}}, nodePtr).scheduleOn(evb).start();
+      announceToSession(session, {subNs.requestID, prefix, {}}, nodePtr)
+          .scheduleOn(evb)
+          .start();
     }
     for (auto& nextNodeIt : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
@@ -156,7 +162,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   co_return std::make_shared<AnnouncesSubscription>(
       shared_from_this(),
       std::move(session),
-      SubscribeAnnouncesOk{subNs.trackNamespacePrefix});
+      SubscribeAnnouncesOk{subNs.requestID, subNs.trackNamespacePrefix});
 }
 
 void MoQRelay::unsubscribeAnnounces(

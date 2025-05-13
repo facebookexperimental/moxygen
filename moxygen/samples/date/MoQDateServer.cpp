@@ -99,6 +99,7 @@ class MoQDateServer : public MoQServer,
     XLOG(DBG1) << __func__ << trackStatusRequest.fullTrackName;
     if (trackStatusRequest.fullTrackName != dateTrackName()) {
       co_return TrackStatus{
+          trackStatusRequest.requestID,
           std::move(trackStatusRequest.fullTrackName),
           TrackStatusCode::TRACK_NOT_EXIST,
           folly::none};
@@ -108,6 +109,7 @@ class MoQDateServer : public MoQServer,
     // ways
     auto latest = updateLatest();
     co_return TrackStatus{
+        trackStatusRequest.requestID,
         std::move(trackStatusRequest.fullTrackName),
         TrackStatusCode::IN_PROGRESS,
         latest};

@@ -249,8 +249,8 @@ class MoQTextClient : public Subscriber,
     // text client doesn't expect server or relay to announce anything,
     // but announce OK anyways
     return folly::coro::makeTask<AnnounceResult>(
-        std::make_shared<AnnounceHandle>(
-            AnnounceOk{std::move(announce.trackNamespace)}));
+        std::make_shared<AnnounceHandle>(AnnounceOk{
+            announce.requestID, std::move(announce.trackNamespace)}));
   }
 
   void goaway(Goaway goaway) override {
