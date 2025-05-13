@@ -320,7 +320,8 @@ StreamPublisherImpl::StreamPublisherImpl(
     SubgroupIDFormat format,
     bool includeExtensions)
     : StreamPublisherImpl(publisher) {
-  streamType_ = StreamType::SUBGROUP_HEADER;
+  streamType_ =
+      getSubgroupStreamType(publisher->getVersion(), format, includeExtensions);
   header_.trackIdentifier = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -397,7 +398,7 @@ StreamPublisherImpl::writeCurrentObject(
 
 folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::writeToStream(bool finStream) {
-  if (streamType_ == StreamType::SUBGROUP_HEADER &&
+  if (streamType_ != StreamType::FETCH_HEADER &&
       !publisher_->canBufferBytes(writeBuf_.chainLength())) {
     publisher_->onTooManyBytesBuffered();
     return folly::makeUnexpected(

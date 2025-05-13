@@ -56,7 +56,12 @@ Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
       SubscribeAnnouncesOk({RequestID(0), subAnn.trackNamespacePrefix}));
 }
 
-class MoQSessionTest : public testing::Test,
+struct VersionParams {
+  std::vector<uint64_t> clientVersions;
+  uint64_t serverVersion;
+};
+
+class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                        public MoQSession::ServerSetupCallback {
  public:
   void SetUp() override {
@@ -92,14 +97,15 @@ class MoQSessionTest : public testing::Test,
     }
 
     EXPECT_EQ(setup.supportedVersions[0], getClientSupportedVersions()[0]);
-    if (!setup.params.empty()) {
-      EXPECT_EQ(
-          setup.params.at(0).key,
-          folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(
+        setup.params.at(0).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(setup.params.at(0).asUint64, initialMaxRequestID_);
+    if (setup.params.size() > 1) {
       EXPECT_EQ(
           setup.params.at(1).key,
           folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
-      EXPECT_EQ(setup.params.at(0).asUint64, initialMaxRequestID_);
+    } else {
+      EXPECT_LT(setup.supportedVersions[0], kVersionDraft11);
     }
     if (failServerSetup_) {
       return folly::makeTryWith(
@@ -183,7 +189,7 @@ class MoQSessionTest : public testing::Test,
 
   // GCC barfs when using struct brace initializers inside a coroutine?
   // Helper function to make ClientSetup with MAX_REQUEST_ID
-  ClientSetup getClientSetup(uint64_t initialMaxRequestID) {
+  ClientSetup getClientSetup(uint64_t initialMaxRequestID = 2) {
     return ClientSetup{
         .supportedVersions = getClientSupportedVersions(),
         .params = {
@@ -199,16 +205,16 @@ class MoQSessionTest : public testing::Test,
                 {}}}};
   }
 
-  virtual std::vector<uint64_t> getClientSupportedVersions() {
-    return {kVersionDraftCurrent};
+  std::vector<uint64_t> getClientSupportedVersions() {
+    return GetParam().clientVersions;
   }
 
-  virtual uint64_t getServerSelectedVersion() {
-    return negotiatedVersion_;
+  uint64_t getServerSelectedVersion() {
+    return GetParam().serverVersion;
   }
 
   uint8_t getRequestIDMultiplier() const {
-    return negotiatedVersion_ >= kVersionDraft11 ? 2 : 1;
+    return GetParam().serverVersion >= kVersionDraft11 ? 2 : 1;
   }
 
   using TestLogicFn = std::function<void(
@@ -227,7 +233,6 @@ class MoQSessionTest : public testing::Test,
       std::make_shared<MockPublisher>()};
   std::shared_ptr<MockPublisher> serverPublisher{
       std::make_shared<MockPublisher>()};
-  uint64_t negotiatedVersion_ = kVersionDraftCurrent;
   uint64_t initialMaxRequestID_{kTestMaxRequestID * getRequestIDMultiplier()};
   bool failServerSetup_{false};
   bool invalidVersion_{false};
@@ -239,6 +244,15 @@ class MoQSessionTest : public testing::Test,
   std::shared_ptr<MockSubscriberStats> serverSubscriberStatsCallback_;
   std::shared_ptr<MockPublisherStats> serverPublisherStatsCallback_;
 };
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQSessionTest,
+    MoQSessionTest,
+    testing::Values(
+        VersionParams{{kVersionDraft08}, kVersionDraft08},
+        VersionParams{{kVersionDraft09}, kVersionDraft09},
+        VersionParams{{kVersionDraft10}, kVersionDraft10},
+        VersionParams{{kVersionDraft11}, kVersionDraft11}));
 
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
@@ -290,12 +304,27 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
 
 // === SETUP tests ===
 
-TEST_F(MoQSessionTest, Setup) {
+using MoQVersionNegotiationTest = MoQSessionTest;
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQVersionNegotiationTest,
+    MoQVersionNegotiationTest,
+    testing::Values(
+        VersionParams{{kVersionDraft08}, kVersionDraft08},
+        VersionParams{{kVersionDraft09}, kVersionDraft09},
+        VersionParams{{kVersionDraft10}, kVersionDraft10},
+        VersionParams{{kVersionDraft11}, kVersionDraft11},
+        VersionParams{{kVersionDraft10, kVersionDraft11}, kVersionDraft10},
+        VersionParams{{kVersionDraft10, kVersionDraft11}, kVersionDraft11}));
+
+TEST_P(MoQVersionNegotiationTest, Setup) {
   folly::coro::blockingWait(setupMoQSession(), getExecutor());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, SetupTimeout) {
+using CurrentVersionOnly = MoQSessionTest;
+
+CO_TEST_P_X(CurrentVersionOnly, SetupTimeout) {
   ClientSetup setup;
   setup.supportedVersions.push_back(kVersionDraftCurrent);
   auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
@@ -303,7 +332,22 @@ CO_TEST_F_X(MoQSessionTest, SetupTimeout) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, InvalidVersion) {
+CO_TEST_P_X(CurrentVersionOnly, ServerSetupFail) {
+  failServerSetup_ = true;
+  clientSession_->start();
+  auto serverSetup =
+      co_await co_awaitTry(clientSession_->setup(getClientSetup()));
+  EXPECT_TRUE(serverSetup.hasException());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    CurrentVersionOnly,
+    CurrentVersionOnly,
+    testing::Values(
+        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
+
+CO_TEST_P_X(MoQSessionTest, InvalidVersion) {
   invalidVersion_ = true;
   clientSession_->start();
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -313,41 +357,35 @@ CO_TEST_F_X(MoQSessionTest, InvalidVersion) {
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+class InvalidServerVersionTest : public MoQSessionTest {};
 
-CO_TEST_F_X(MoQSessionTest, InvalidServerVersion) {
-  negotiatedVersion_ = 0xfaceb001;
+INSTANTIATE_TEST_SUITE_P(
+    InvalidServerVersionTest,
+    InvalidServerVersionTest,
+    testing::Values(
+        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent - 1},
+        VersionParams{{kVersionDraftCurrent}, 0xfaceb001}));
+
+CO_TEST_P_X(InvalidServerVersionTest, InvalidServerVersion) {
   clientSession_->start();
   co_await folly::coro::co_reschedule_on_current_executor;
-  ClientSetup setup;
-  setup.supportedVersions.push_back(kVersionDraftCurrent);
-  auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
+  auto serverSetup =
+      co_await co_awaitTry(clientSession_->setup(getClientSetup()));
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, ServerSetupFail) {
-  failServerSetup_ = true;
+CO_TEST_P_X(InvalidServerVersionTest, ServerSetupUnsupportedVersion) {
   clientSession_->start();
-  ClientSetup setup;
-  setup.supportedVersions.push_back(kVersionDraftCurrent);
-  auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
-  EXPECT_TRUE(serverSetup.hasException());
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
-
-CO_TEST_F_X(MoQSessionTest, ServerSetupUnsupportedVersion) {
-  negotiatedVersion_ = kVersionDraftCurrent - 1;
-  clientSession_->start();
-  ClientSetup setup;
-  setup.supportedVersions.push_back(kVersionDraftCurrent);
-  auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
+  auto serverSetup =
+      co_await co_awaitTry(clientSession_->setup(getClientSetup()));
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
 // === FETCH tests ===
 
-CO_TEST_F_X(MoQSessionTest, Fetch) {
+CO_TEST_P_X(MoQSessionTest, Fetch) {
   co_await setupMoQSession();
   // Usage
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -379,7 +417,7 @@ CO_TEST_F_X(MoQSessionTest, Fetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, RelativeJoiningFetch) {
+CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
@@ -430,7 +468,7 @@ CO_TEST_F_X(MoQSessionTest, RelativeJoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, BadRelativeJoiningFetch) {
+CO_TEST_P_X(MoQSessionTest, BadRelativeJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
       Fetch(
@@ -445,19 +483,14 @@ CO_TEST_F_X(MoQSessionTest, BadRelativeJoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-class MoQSessionTestWithVersion11 : public MoQSessionTest {
- protected:
-  std::vector<uint64_t> getClientSupportedVersions() override {
-    return {kVersionDraft11};
-  }
+using V11OnlyTests = MoQSessionTest;
 
-  uint64_t getServerSelectedVersion() override {
-    return kVersionDraft11;
-  }
-};
+INSTANTIATE_TEST_SUITE_P(
+    V11OnlyTests,
+    V11OnlyTests,
+    testing::Values(VersionParams{{kVersionDraft11}, kVersionDraft11}));
 
-CO_TEST_F_X(MoQSessionTestWithVersion11, AbsoluteJoiningFetch) {
-  initialMaxRequestID_ = 10;
+CO_TEST_P_X(V11OnlyTests, AbsoluteJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     for (uint32_t group = 6; group < 10; group++) {
@@ -516,7 +549,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, AbsoluteJoiningFetch) {
 }
 
 // Subscribe id passed into fetch() doesn't correspond to a subscription.
-CO_TEST_F_X(MoQSessionTestWithVersion11, BadAbsoluteJoiningFetch) {
+CO_TEST_P_X(V11OnlyTests, BadAbsoluteJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
       Fetch(
@@ -531,7 +564,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, BadAbsoluteJoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchCleanupFromStreamFin) {
+CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   co_await setupMoQSession();
 
   std::shared_ptr<FetchConsumer> fetchPub;
@@ -565,7 +598,7 @@ CO_TEST_F_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchError) {
+CO_TEST_P_X(MoQSessionTest, FetchError) {
   co_await setupMoQSession();
   EXPECT_CALL(
       *serverPublisherStatsCallback_,
@@ -580,7 +613,7 @@ CO_TEST_F_X(MoQSessionTest, FetchError) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchPublisherError) {
+CO_TEST_P_X(MoQSessionTest, FetchPublisherError) {
   co_await setupMoQSession();
   expectFetch(
       [](Fetch fetch, auto) -> TaskFetchResult {
@@ -595,7 +628,7 @@ CO_TEST_F_X(MoQSessionTest, FetchPublisherError) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchPublisherThrow) {
+CO_TEST_P_X(MoQSessionTest, FetchPublisherThrow) {
   co_await setupMoQSession();
   expectFetch(
       [](Fetch fetch, auto) -> TaskFetchResult {
@@ -610,7 +643,7 @@ CO_TEST_F_X(MoQSessionTest, FetchPublisherThrow) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchCancel) {
+CO_TEST_P_X(MoQSessionTest, FetchCancel) {
   co_await setupMoQSession();
   std::shared_ptr<FetchConsumer> fetchPub;
   expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
@@ -654,7 +687,7 @@ CO_TEST_F_X(MoQSessionTest, FetchCancel) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchEarlyCancel) {
+CO_TEST_P_X(MoQSessionTest, FetchEarlyCancel) {
   co_await setupMoQSession();
   expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
     EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
@@ -669,7 +702,7 @@ CO_TEST_F_X(MoQSessionTest, FetchEarlyCancel) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchBadLength) {
+CO_TEST_P_X(MoQSessionTest, FetchBadLength) {
   co_await setupMoQSession();
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
     auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
@@ -704,7 +737,7 @@ CO_TEST_F_X(MoQSessionTest, FetchBadLength) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchOverLimit) {
+CO_TEST_P_X(MoQSessionTest, FetchOverLimit) {
   co_await setupMoQSession();
   expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
     EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
@@ -732,7 +765,7 @@ CO_TEST_F_X(MoQSessionTest, FetchOverLimit) {
   EXPECT_TRUE(res.hasError());
 }
 
-CO_TEST_F_X(MoQSessionTest, FetchOutOfOrder) {
+CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
   co_await setupMoQSession();
   std::shared_ptr<FetchConsumer> fetchPub;
   expectFetch(
@@ -817,7 +850,7 @@ folly::coro::Task<void> MoQSessionTest::publishValidationTest(
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, DoubleBeginObject) {
+CO_TEST_P_X(MoQSessionTest, DoubleBeginObject) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
         .WillOnce(testing::Return(
@@ -830,7 +863,7 @@ CO_TEST_F_X(MoQSessionTest, DoubleBeginObject) {
   });
 }
 
-CO_TEST_F_X(MoQSessionTest, ObjectPayloadTooLong) {
+CO_TEST_P_X(MoQSessionTest, ObjectPayloadTooLong) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
         .WillOnce(testing::Return(
@@ -843,7 +876,7 @@ CO_TEST_F_X(MoQSessionTest, ObjectPayloadTooLong) {
   });
 }
 
-CO_TEST_F_X(MoQSessionTest, ObjectPayloadEarlyFin) {
+CO_TEST_P_X(MoQSessionTest, ObjectPayloadEarlyFin) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
         .WillOnce(testing::Return(
@@ -860,7 +893,7 @@ CO_TEST_F_X(MoQSessionTest, ObjectPayloadEarlyFin) {
   });
 }
 
-CO_TEST_F_X(MoQSessionTest, PublisherResetAfterBeginObject) {
+CO_TEST_P_X(MoQSessionTest, PublisherResetAfterBeginObject) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
         .WillOnce(testing::Return(
@@ -881,7 +914,7 @@ CO_TEST_F_X(MoQSessionTest, PublisherResetAfterBeginObject) {
 
 // === TRACK STATUS tests ===
 
-CO_TEST_F_X(MoQSessionTest, TrackStatus) {
+CO_TEST_P_X(MoQSessionTest, TrackStatus) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
@@ -900,7 +933,7 @@ CO_TEST_F_X(MoQSessionTest, TrackStatus) {
 
 // MAX SUBSCRIBE ID tests
 
-CO_TEST_F_X(MoQSessionTest, MaxRequestID) {
+CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
   co_await setupMoQSession();
   {
     testing::InSequence enforceOrder;
@@ -972,7 +1005,7 @@ CO_TEST_F_X(MoQSessionTest, MaxRequestID) {
 
 // === SUBSCRIBE tests ===
 
-CO_TEST_F_X(MoQSessionTest, Datagrams) {
+CO_TEST_P_X(MoQSessionTest, Datagrams) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
@@ -1006,7 +1039,7 @@ CO_TEST_F_X(MoQSessionTest, Datagrams) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, DatagramBeforeSessionSetup) {
+CO_TEST_P_X(MoQSessionTest, DatagramBeforeSessionSetup) {
   clientSession_->start();
   EXPECT_FALSE(clientWt_->isSessionClosed());
   clientSession_->onDatagram(folly::IOBuf::copyBuffer("hello world"));
@@ -1016,7 +1049,7 @@ CO_TEST_F_X(MoQSessionTest, DatagramBeforeSessionSetup) {
 
 // Checks to see that we return errors if we receive a subscribe request with
 // forward == false and try to send data.
-CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeForwardingFalse) {
+CO_TEST_P_X(V11OnlyTests, SubscribeForwardingFalse) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     auto pubResult1 = pub->datagram(
@@ -1045,7 +1078,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeForwardingFalse) {
 
 // Checks to see that we return errors if we receive a subscribe update with
 // forward == false and try to send data.
-CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeUpdateForwardingFalse) {
+CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
   co_await setupMoQSession();
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -1087,7 +1120,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, SubscribeUpdateForwardingFalse) {
 
 // SUBSCRIBE DONE tests
 
-CO_TEST_F_X(MoQSessionTest, SubscribeDoneStreamCount) {
+CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
   co_await setupMoQSession();
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
     eventBase_.add([pub, sub] {
@@ -1120,7 +1153,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneStreamCount) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, SubscribeDoneFromSubscribe) {
+CO_TEST_P_X(MoQSessionTest, SubscribeDoneFromSubscribe) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
@@ -1133,7 +1166,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneFromSubscribe) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, SubscribeDoneAPIErrors) {
+CO_TEST_P_X(MoQSessionTest, SubscribeDoneAPIErrors) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
@@ -1163,7 +1196,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeDoneAPIErrors) {
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_F_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
+CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
   co_await setupMoQSession();
 
   EXPECT_CALL(*serverPublisher, subscribeAnnounces(_))
@@ -1182,7 +1215,7 @@ CO_TEST_F_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, TooFarBehindOneSubgroup) {
+CO_TEST_P_X(MoQSessionTest, TooFarBehindOneSubgroup) {
   co_await setupMoQSession();
 
   MoQSettings moqSettings;
@@ -1223,7 +1256,7 @@ CO_TEST_F_X(MoQSessionTest, TooFarBehindOneSubgroup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
+CO_TEST_P_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
   co_await setupMoQSession();
 
   MoQSettings moqSettings;
@@ -1265,7 +1298,7 @@ CO_TEST_F_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
+CO_TEST_P_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
   co_await setupMoQSession();
 
   MoQSettings moqSettings;
@@ -1320,7 +1353,7 @@ CO_TEST_F_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
+CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   co_await setupMoQSession();
   folly::coro::Baton barricade;
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
@@ -1356,7 +1389,7 @@ CO_TEST_F_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_F_X(MoQSessionTestWithVersion11, TrackStatusWithAuthorizationToken) {
+CO_TEST_P_X(V11OnlyTests, TrackStatusWithAuthorizationToken) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
