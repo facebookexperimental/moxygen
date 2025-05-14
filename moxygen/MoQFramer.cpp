@@ -55,6 +55,7 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
 folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     folly::io::Cursor& cursor,
     size_t& length,
+    uint64_t version,
     size_t numParams,
     std::vector<SetupParameter>& params);
 bool datagramTypeHasExtensions(uint64_t version, StreamType streamType);
@@ -142,6 +143,7 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
 folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     folly::io::Cursor& cursor,
     size_t& length,
+    uint64_t version,
     size_t numParams,
     std::vector<SetupParameter>& params) {
   for (auto i = 0u; i < numParams; i++) {
@@ -158,10 +160,13 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
-      length -= res->second;
-      res = quic::decodeQuicInteger(cursor, res->first);
-      if (!res) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      if (getDraftMajorVersion(version) < 11) {
+        length -= res->second;
+        res = quic::decodeQuicInteger(cursor, res->first);
+        if (!res) {
+          XLOG(ERR) << "Failed to decode parameter value";
+          return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+        }
       }
       p.asUint64 = res->first;
       length -= res->second;
@@ -189,10 +194,14 @@ folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numVersions->second;
+  bool v11Plus = true;
   for (auto i = 0ul; i < numVersions->first; i++) {
     auto version = quic::decodeQuicInteger(cursor, length);
     if (!version) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    if (getDraftMajorVersion(version->first) < 11) {
+      v11Plus = false;
     }
     clientSetup.supportedVersions.push_back(version->first);
     length -= version->second;
@@ -202,8 +211,12 @@ folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
-  auto res =
-      parseSetupParams(cursor, length, numParams->first, clientSetup.params);
+  auto res = parseSetupParams(
+      cursor,
+      length,
+      v11Plus ? kVersionDraft11 : kVersionDraft10,
+      numParams->first,
+      clientSetup.params);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
   }
@@ -228,8 +241,12 @@ folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
-  auto res =
-      parseSetupParams(cursor, length, numParams->first, serverSetup.params);
+  auto res = parseSetupParams(
+      cursor,
+      length,
+      serverSetup.selectedVersion,
+      numParams->first,
+      serverSetup.params);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
   }
@@ -624,11 +641,13 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       p.asAuthToken = std::move(*tokenRes.value());
     } else {
       auto res = quic::decodeQuicInteger(cursor, length);
-      if (!res) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      if (getDraftMajorVersion(*version_) < 11) {
+        if (!res) {
+          return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+        }
+        length -= res->second;
+        res = quic::decodeQuicInteger(cursor, res->first);
       }
-      length -= res->second;
-      res = quic::decodeQuicInteger(cursor, res->first);
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
@@ -1791,9 +1810,10 @@ std::string MoQFrameWriter::encodeTokenValue(
 }
 
 bool includeParam(uint64_t version, uint64_t key) {
-  return key == getAuthorizationParamKey(version) ||
-      key == getMaxCacheDurationParamKey(version) ||
-      key == getDeliveryTimeoutParamKey(version);
+  return key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
+      key == folly::to_underlying(SetupKey::PATH) ||
+      (getDraftMajorVersion(version) >= 11 &&
+       key == folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
 }
 
 WriteResult writeClientSetup(
@@ -1834,12 +1854,15 @@ WriteResult writeClientSetup(
     if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
         param.key ==
             folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
-      auto ret = quic::getQuicIntegerSize(param.asUint64);
-      if (ret.hasError()) {
-        XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
-        return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+      if (!v11Plus) {
+        auto ret = quic::getQuicIntegerSize(param.asUint64);
+        if (ret.hasError()) {
+          XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
+          return folly::makeUnexpected(
+              quic::TransportErrorCode::INTERNAL_ERROR);
+        }
+        writeVarint(writeBuf, ret.value(), size, error);
       }
-      writeVarint(writeBuf, ret.value(), size, error);
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
       writeFixedString(writeBuf, param.asString, size, error);
@@ -1882,12 +1905,15 @@ WriteResult writeServerSetup(
     if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
         (param.key ==
          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE))) {
-      auto ret = quic::getQuicIntegerSize(param.asUint64);
-      if (ret.hasError()) {
-        XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
-        return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+      if (getDraftMajorVersion(serverSetup.selectedVersion) < 11) {
+        auto ret = quic::getQuicIntegerSize(param.asUint64);
+        if (ret.hasError()) {
+          XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
+          return folly::makeUnexpected(
+              quic::TransportErrorCode::INTERNAL_ERROR);
+        }
+        writeVarint(writeBuf, ret.value(), size, error);
       }
-      writeVarint(writeBuf, ret.value(), size, error);
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
       writeFixedString(writeBuf, param.asString, size, error);
@@ -2066,12 +2092,14 @@ void MoQFrameWriter::writeTrackRequestParams(
     } else if (
         param.key == getDeliveryTimeoutParamKey(*version_) ||
         param.key == getMaxCacheDurationParamKey(*version_)) {
-      auto res = quic::getQuicIntegerSize(param.asUint64);
-      if (!res) {
-        error = true;
-        return;
+      if (getDraftMajorVersion(*version_) < 11) {
+        auto res = quic::getQuicIntegerSize(param.asUint64);
+        if (!res) {
+          error = true;
+          return;
+        }
+        writeVarint(writeBuf, res.value(), size, error);
       }
-      writeVarint(writeBuf, res.value(), size, error);
       writeVarint(writeBuf, param.asUint64, size, error);
     }
   }
