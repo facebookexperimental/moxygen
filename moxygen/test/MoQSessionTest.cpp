@@ -53,7 +53,7 @@ auto makeSubscribeOkResult(
 Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
     const auto& subAnn) {
   return std::make_shared<MockSubscribeAnnouncesHandle>(
-      SubscribeAnnouncesOk({subAnn.trackNamespacePrefix}));
+      SubscribeAnnouncesOk({RequestID(0), subAnn.trackNamespacePrefix}));
 }
 
 class MoQSessionTest : public testing::Test,
@@ -261,11 +261,11 @@ SubscribeDone getTrackEndedSubscribeDone(RequestID id) {
 }
 
 TrackStatusRequest getTrackStatusRequest() {
-  return TrackStatusRequest{kTestTrackName};
+  return TrackStatusRequest{RequestID(0), kTestTrackName};
 }
 
 moxygen::SubscribeAnnounces getSubscribeAnnounces() {
-  return SubscribeAnnounces{TrackNamespace{{"foo"}}, {}};
+  return SubscribeAnnounces{RequestID(0), TrackNamespace{{"foo"}}, {}};
 }
 
 folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
@@ -883,6 +883,7 @@ CO_TEST_F_X(MoQSessionTest, TrackStatus) {
           [](TrackStatusRequest request)
               -> folly::coro::Task<Publisher::TrackStatusResult> {
             co_return Publisher::TrackStatusResult{
+                request.requestID,
                 request.fullTrackName,
                 TrackStatusCode::IN_PROGRESS,
                 AbsoluteLocation{}};
@@ -1374,6 +1375,7 @@ CO_TEST_F_X(MoQSessionTestWithVersion11, TrackStatusWithAuthorizationToken) {
             EXPECT_TRUE(verifyParam(request.params.at(4), "xyzw"))
                 << "'" << request.params.at(4).asAuthToken.tokenValue;
             co_return Publisher::TrackStatusResult{
+                request.requestID,
                 request.fullTrackName,
                 TrackStatusCode::IN_PROGRESS,
                 AbsoluteLocation{},

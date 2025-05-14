@@ -931,11 +931,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
           res.error().errorCode == FetchErrorCode::NO_OBJECTS) {
         consumer->endOfFetch();
         co_return std::make_shared<FetchHandle>(FetchOk(
-            fetch.requestID,
-            GroupOrder::OldestFirst,
-            false, // standalone->end can't be the end of track
-            standalone->end,
-            {}));
+            {fetch.requestID,
+             GroupOrder::OldestFirst,
+             false, // standalone->end can't be the end of track
+             standalone->end,
+             {}}));
       }
       co_return folly::makeUnexpected(res.error());
     } else if (!fetchHandle) {
@@ -958,10 +958,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         standalone->end = *track.latestGroupAndObject;
       }
       co_return std::make_shared<FetchHandle>(FetchOk(
-          fetch.requestID,
-          GroupOrder::OldestFirst,
-          endOfTrack,
-          standalone->end));
+          {fetch.requestID,
+           GroupOrder::OldestFirst,
+           endOfTrack,
+           standalone->end,
+           {}}));
     } else {
       co_return folly::makeUnexpected(
           FetchError{fetch.requestID, FetchErrorCode::NO_OBJECTS, ""});

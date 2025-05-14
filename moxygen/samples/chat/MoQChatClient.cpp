@@ -46,7 +46,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         /*subscribeHandler=*/shared_from_this());
     // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.moqSession_->announce(
-        {participantTrackName(username_), {}});
+        {RequestID(0), participantTrackName(username_), {}});
     if (announceRes.hasError()) {
       XLOG(ERR) << "Announce failed err=" << announceRes.error().reasonPhrase;
       co_return;
@@ -56,7 +56,8 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         *(moqClient_.moqSession_->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the latest group
     auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
-        {TrackNamespace(chatPrefix()),
+        {RequestID(0),
+         TrackNamespace(chatPrefix()),
          {getAuthParam(negotiatedVersion, username_)}});
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
@@ -81,6 +82,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
   if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
     if (announce.trackNamespace.size() != 5) {
       co_return folly::makeUnexpected(AnnounceError{
+          announce.requestID,
           announce.trackNamespace,
           AnnounceErrorCode::UNINTERESTED,
           "Invalid chat announce"});
@@ -90,12 +92,14 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
         .start();
   } else {
     co_return folly::makeUnexpected(AnnounceError{
+        announce.requestID,
         announce.trackNamespace,
         AnnounceErrorCode::UNINTERESTED,
         "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
-      AnnounceOk{announce.trackNamespace}, shared_from_this());
+      AnnounceOk{announce.requestID, announce.trackNamespace},
+      shared_from_this());
 }
 
 void MoQChatClient::unannounce(const TrackNamespace&) {
