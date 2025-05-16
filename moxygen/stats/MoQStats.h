@@ -54,6 +54,21 @@ class MoQStatsCallback {
    * Subscriber: Responded to an ANNOUNCE request with a ANNOUNCE_ERROR
    */
   virtual void onAnnounceError(AnnounceErrorCode errorCode) = 0;
+
+  /*
+   * Publisher: Responded to a SUBSCRIBE_ANNOUNCES request with a
+   *   SUBSCRIBE_ANNOUNCES_OK
+   * Subscriber: Received a SUBSCRIBE_ANNOUNCES_OK from the publisher
+   */
+  virtual void onSubscribeAnnouncesSuccess() = 0;
+
+  /*
+   * Publisher: Responded to a SUBSCRIBE_ANNOUNCES request with a
+   *   SUBSCRIBE_ANNOUNCES_ERROR
+   * Subscriber: Received a SUBSCRIBE_ANNOUNCES_ERROR from the publisher
+   */
+  virtual void onSubscribeAnnouncesError(
+      SubscribeAnnouncesErrorCode errorCode) = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {};

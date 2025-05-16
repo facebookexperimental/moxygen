@@ -1243,6 +1243,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
             co_return makeSubscribeAnnouncesOkResult(subAnn);
           }));
 
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeAnnouncesSuccess());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeAnnouncesSuccess());
   auto announceResult =
       co_await clientSession_->subscribeAnnounces(getSubscribeAnnounces());
   EXPECT_FALSE(announceResult.hasError());

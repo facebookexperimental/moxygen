@@ -2992,8 +2992,13 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   pendingSubscribeAnnounces_.emplace(sa.requestID, std::move(contract.first));
   auto subAnnResult = co_await std::move(contract.second);
   if (subAnnResult.hasError()) {
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_,
+        onSubscribeAnnouncesError,
+        subAnnResult.error().errorCode);
     co_return folly::makeUnexpected(subAnnResult.error());
   } else {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeAnnouncesSuccess);
     co_return std::make_shared<SubscribeAnnouncesHandle>(
         shared_from_this(), std::move(subAnnResult.value()));
   }
@@ -3002,6 +3007,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
 void MoQSession::subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk) {
   XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
              << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeAnnouncesSuccess);
   auto res = moqFrameWriter_.writeSubscribeAnnouncesOk(controlWriteBuf_, saOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnouncesOk failed sess=" << this;
@@ -3015,6 +3021,10 @@ void MoQSession::subscribeAnnouncesError(
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
              << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_,
+      onSubscribeAnnouncesError,
+      subscribeAnnouncesError.errorCode);
   auto res = moqFrameWriter_.writeSubscribeAnnouncesError(
       controlWriteBuf_, subscribeAnnouncesError);
   if (!res) {

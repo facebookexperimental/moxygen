@@ -304,6 +304,14 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
   MOCK_METHOD(void, onAnnounceSuccess, (), (override));
 
   MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
+
+  MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
+
+  MOCK_METHOD(
+      void,
+      onSubscribeAnnouncesError,
+      (SubscribeAnnouncesErrorCode),
+      (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -321,6 +329,14 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onAnnounceSuccess, (), (override));
 
   MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
+
+  MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
+
+  MOCK_METHOD(
+      void,
+      onSubscribeAnnouncesError,
+      (SubscribeAnnouncesErrorCode),
+      (override));
 };
 
 } // namespace moxygen
