@@ -312,6 +312,8 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
       onSubscribeAnnouncesError,
       (SubscribeAnnouncesErrorCode),
       (override));
+
+  MOCK_METHOD(void, onTrackStatus, (), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -337,6 +339,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
       onSubscribeAnnouncesError,
       (SubscribeAnnouncesErrorCode),
       (override));
+
+  MOCK_METHOD(void, onTrackStatus, (), (override));
 };
 
 } // namespace moxygen

@@ -2711,6 +2711,7 @@ void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
 }
 
 void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << " sess=" << this;
   if (closeSessionIfRequestIDInvalid(
@@ -2763,6 +2764,7 @@ void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
 
 folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
     TrackStatusRequest trackStatusRequest) {
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << "sess=" << this;
   aliasifyAuthTokens(trackStatusRequest.params);

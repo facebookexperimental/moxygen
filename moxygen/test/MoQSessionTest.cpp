@@ -934,6 +934,8 @@ CO_TEST_P_X(MoQSessionTest, PublisherResetAfterBeginObject) {
 
 CO_TEST_P_X(MoQSessionTest, TrackStatus) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
           [](TrackStatusRequest request)
@@ -1430,6 +1432,8 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
 
 CO_TEST_P_X(V11OnlyTests, TrackStatusWithAuthorizationToken) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
           [this](TrackStatusRequest request)

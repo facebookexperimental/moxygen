@@ -69,6 +69,12 @@ class MoQStatsCallback {
    */
   virtual void onSubscribeAnnouncesError(
       SubscribeAnnouncesErrorCode errorCode) = 0;
+
+  /*
+   * Publisher: Responded to a TRACK_STATUS request
+   * Subscriber: Sent a TRACK_STATUS request
+   */
+  virtual void onTrackStatus() = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {};
