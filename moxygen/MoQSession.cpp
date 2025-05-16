@@ -2868,8 +2868,13 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
            std::move(announceCallback)}));
   auto announceResult = co_await std::move(contract.second);
   if (announceResult.hasError()) {
+    MOQ_PUBLISHER_STATS(
+        publisherStatsCallback_,
+        onAnnounceError,
+        announceResult.error().errorCode);
     co_return folly::makeUnexpected(announceResult.error());
   } else {
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceSuccess);
     co_return std::make_shared<PublisherAnnounceHandle>(
         shared_from_this(), std::move(announceResult.value()));
   }
@@ -2877,6 +2882,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
 
 void MoQSession::announceOk(const AnnounceOk& annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onAnnounceSuccess);
   auto res = moqFrameWriter_.writeAnnounceOk(controlWriteBuf_, annOk);
   if (!res) {
     XLOG(ERR) << "writeAnnounceOk failed sess=" << this;
@@ -2888,6 +2894,10 @@ void MoQSession::announceOk(const AnnounceOk& annOk) {
 void MoQSession::announceError(const AnnounceError& announceError) {
   XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
              << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(
+      subscriberStatsCallback_,
+      onAnnounceError,
+      AnnounceErrorCode::NOT_SUPPORTED);
   auto res =
       moqFrameWriter_.writeAnnounceError(controlWriteBuf_, announceError);
   if (!res) {

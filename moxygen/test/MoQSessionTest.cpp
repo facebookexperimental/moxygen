@@ -56,6 +56,11 @@ Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
       SubscribeAnnouncesOk({RequestID(0), subAnn.trackNamespacePrefix}));
 }
 
+Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
+  return std::make_shared<MockAnnounceHandle>(
+      AnnounceOk({ann.requestID, ann.trackNamespace}));
+}
+
 struct VersionParams {
   std::vector<uint64_t> clientVersions;
   uint64_t serverVersion;
@@ -236,6 +241,10 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
       std::make_shared<MockPublisher>()};
   std::shared_ptr<MockPublisher> serverPublisher{
       std::make_shared<MockPublisher>()};
+  std::shared_ptr<MockSubscriber> clientSubscriber{
+      std::make_shared<MockSubscriber>()};
+  std::shared_ptr<MockSubscriber> serverSubscriber{
+      std::make_shared<MockSubscriber>()};
   uint64_t initialMaxRequestID_{kTestMaxRequestID * getRequestIDMultiplier()};
   bool failServerSetup_{false};
   bool invalidVersion_{false};
@@ -289,10 +298,16 @@ moxygen::SubscribeAnnounces getSubscribeAnnounces() {
   return SubscribeAnnounces{RequestID(0), TrackNamespace{{"foo"}}, {}};
 }
 
+moxygen::Announce getAnnounce() {
+  return Announce{RequestID(0), TrackNamespace{{"foo"}}, {}};
+}
+
 folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
   clientSession_->start();
   serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
   serverSession_->start();
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
@@ -1199,6 +1214,25 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneAPIErrors) {
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, Announce) {
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*serverSubscriber, announce(_, _))
+      .WillOnce(testing::Invoke(
+          [](auto ann, auto /* announceCallback */)
+              -> folly::coro::Task<Subscriber::AnnounceResult> {
+            co_return makeAnnounceOkResult(ann);
+          }));
+
+  EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceSuccess());
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceSuccess());
+  auto announceResult = co_await clientSession_->announce(getAnnounce());
+  EXPECT_FALSE(announceResult.hasError());
+  co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
   co_await setupMoQSession();
 

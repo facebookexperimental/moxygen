@@ -4,6 +4,7 @@
 #include <moxygen/MoQCodec.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/Subscriber.h>
 #include <moxygen/stats/MoQStats.h>
 
 namespace moxygen {
@@ -243,6 +244,15 @@ class MockSubscribeAnnouncesHandle
   MOCK_METHOD(void, unsubscribeAnnounces, (), (override));
 };
 
+class MockAnnounceHandle : public Subscriber::AnnounceHandle {
+ public:
+  MockAnnounceHandle() = default;
+  explicit MockAnnounceHandle(AnnounceOk ok)
+      : Subscriber::AnnounceHandle(std::move(ok)) {}
+
+  MOCK_METHOD(void, unannounce, (), (override));
+};
+
 class MockPublisher : public Publisher {
  public:
   MOCK_METHOD(
@@ -270,6 +280,15 @@ class MockPublisher : public Publisher {
       (override));
 };
 
+class MockSubscriber : public Subscriber {
+ public:
+  MOCK_METHOD(
+      folly::coro::Task<AnnounceResult>,
+      announce,
+      (Announce, std::shared_ptr<AnnounceCallback>),
+      (override));
+};
+
 class MockPublisherStats : public MoQPublisherStatsCallback {
  public:
   MockPublisherStats() = default;
@@ -281,6 +300,10 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
   MOCK_METHOD(void, onFetchSuccess, (), (override));
 
   MOCK_METHOD(void, onFetchError, (FetchErrorCode), (override));
+
+  MOCK_METHOD(void, onAnnounceSuccess, (), (override));
+
+  MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -294,6 +317,10 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onFetchSuccess, (), (override));
 
   MOCK_METHOD(void, onFetchError, (FetchErrorCode), (override));
+
+  MOCK_METHOD(void, onAnnounceSuccess, (), (override));
+
+  MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
 };
 
 } // namespace moxygen

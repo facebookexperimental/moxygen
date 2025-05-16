@@ -43,7 +43,17 @@ class MoQStatsCallback {
    */
   virtual void onFetchError(FetchErrorCode errorCode) = 0;
 
-  // TODO: Add more stats
+  /*
+   * Publisher: Received an ANNOUNCE_OK from the subscriber
+   * Subscriber: Responded to an ANNOUNCE request with a ANNOUNCE_OK
+   */
+  virtual void onAnnounceSuccess() = 0;
+
+  /*
+   * Publisher: Received an ANNOUNCE_ERROR from the subscriber
+   * Subscriber: Responded to an ANNOUNCE request with a ANNOUNCE_ERROR
+   */
+  virtual void onAnnounceError(AnnounceErrorCode errorCode) = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {};
