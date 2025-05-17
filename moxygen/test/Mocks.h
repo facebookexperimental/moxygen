@@ -314,6 +314,8 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
       (override));
 
   MOCK_METHOD(void, onTrackStatus, (), (override));
+
+  MOCK_METHOD(void, onUnsubscribe, (), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -341,6 +343,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
       (override));
 
   MOCK_METHOD(void, onTrackStatus, (), (override));
+
+  MOCK_METHOD(void, onUnsubscribe, (), (override));
 };
 
 } // namespace moxygen

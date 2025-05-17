@@ -1515,6 +1515,37 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
+  co_await setupMoQSession();
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  expectSubscribe(
+      [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        auto pubResult = pub->beginSubgroup(0, 0, 0);
+        EXPECT_FALSE(pubResult.hasError());
+        subgroupConsumer = pubResult.value();
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeSuccess());
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+  folly::coro::Baton unsubscribeInvoked;
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*mockSubscriptionHandle, unsubscribe)
+      .WillOnce(testing::Invoke([&]() { unsubscribeInvoked.post(); }));
+  subscribeHandler->unsubscribe();
+  co_await unsubscribeInvoked;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // receive bidi stream on client
@@ -1523,13 +1554,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
 // receive non-normal object
 // onObjectPayload maps to non-existent object in TrackHandle
 // subscribeUpdate/onSubscribeUpdate
-// unsubscribe/onUnsubscribe
 // onSubscribeOk/Error/Done with unknown ID
 // onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
 // trackstatus
-// announce/unannounce/announceCancel/announceError
-// subscribeAnnounces/unsubscribeAnnounces
+// unannounce/announceCancel/announceError
+// subscribeAnnounces
 // GOAWAY
 // onConnectionError
 // control message write failures

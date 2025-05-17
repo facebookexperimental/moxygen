@@ -75,6 +75,12 @@ class MoQStatsCallback {
    * Subscriber: Sent a TRACK_STATUS request
    */
   virtual void onTrackStatus() = 0;
+
+  /*
+   * Publisher: Received to an UNSUBSCRIBE
+   * Subscriber: Sent an UNSUBSCRIBE
+   */
+  virtual void onUnsubscribe() = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {};
