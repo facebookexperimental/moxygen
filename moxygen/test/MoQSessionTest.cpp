@@ -1284,6 +1284,46 @@ CO_TEST_P_X(MoQSessionTest, Unannounce) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, AnnounceCancel) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<MockAnnounceHandle> mockAnnounceHandle;
+  std::shared_ptr<moxygen::MoQSession::AnnounceCallback> announceCallback;
+  EXPECT_CALL(*serverSubscriber, announce(_, _))
+      .WillOnce(testing::Invoke(
+          [&mockAnnounceHandle, &announceCallback](
+              auto ann, auto announceCallbackIn)
+              -> folly::coro::Task<Subscriber::AnnounceResult> {
+            announceCallback = announceCallbackIn;
+            mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
+                AnnounceOk({ann.requestID, ann.trackNamespace}));
+            Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
+            co_return announceResult;
+          }));
+
+  EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceSuccess());
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceSuccess());
+  auto mockAnnounceCallback = std::make_shared<MockAnnounceCallback>();
+  auto announceResult =
+      co_await clientSession_->announce(getAnnounce(), mockAnnounceCallback);
+  EXPECT_FALSE(announceResult.hasError());
+  EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceCancel());
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceCancel());
+
+  folly::coro::Baton barricade;
+  EXPECT_CALL(*mockAnnounceCallback, announceCancel(_, _))
+      .WillOnce(testing::Invoke(
+          [&barricade](moxygen::AnnounceErrorCode, std::string) {
+            barricade.post();
+            return;
+          }));
+  announceCallback->announceCancel(
+      AnnounceErrorCode::UNINTERESTED, "Not interested!");
+
+  co_await barricade;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
   co_await setupMoQSession();
 
@@ -1607,7 +1647,7 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
 // onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
 // trackstatus
-// announceCancel/announceError
+// announceError
 // subscribeAnnounces
 // GOAWAY
 // onConnectionError

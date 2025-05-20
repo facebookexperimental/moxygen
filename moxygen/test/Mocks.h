@@ -253,6 +253,17 @@ class MockAnnounceHandle : public Subscriber::AnnounceHandle {
   MOCK_METHOD(void, unannounce, (), (override));
 };
 
+class MockAnnounceCallback : public Subscriber::AnnounceCallback {
+ public:
+  MockAnnounceCallback() : Subscriber::AnnounceCallback() {}
+
+  MOCK_METHOD(
+      void,
+      announceCancel,
+      (AnnounceErrorCode, std::string),
+      (override));
+};
+
 class MockPublisher : public Publisher {
  public:
   MOCK_METHOD(
@@ -307,6 +318,8 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onUnannounce, (), (override));
 
+  MOCK_METHOD(void, onAnnounceCancel, (), (override));
+
   MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
 
   MOCK_METHOD(
@@ -339,6 +352,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
 
   MOCK_METHOD(void, onUnannounce, (), (override));
+
+  MOCK_METHOD(void, onAnnounceCancel, (), (override));
 
   MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
 

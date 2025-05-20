@@ -62,6 +62,12 @@ class MoQStatsCallback {
   virtual void onUnannounce() = 0;
 
   /*
+   * Publisher: Received an ANNOUNCE_CANCEL
+   * Subscriber: Sent an ANNOUNCE_CANCEL
+   */
+  virtual void onAnnounceCancel() = 0;
+
+  /*
    * Publisher: Responded to a SUBSCRIBE_ANNOUNCES request with a
    *   SUBSCRIBE_ANNOUNCES_OK
    * Subscriber: Received a SUBSCRIBE_ANNOUNCES_OK from the publisher

@@ -2577,6 +2577,7 @@ void MoQSession::onUnannounce(Unannounce unAnn) {
 }
 
 void MoQSession::announceCancel(const AnnounceCancel& annCan) {
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onAnnounceCancel);
   auto res = moqFrameWriter_.writeAnnounceCancel(controlWriteBuf_, annCan);
   if (!res) {
     XLOG(ERR) << "writeAnnounceCancel failed sess=" << this;
@@ -2589,6 +2590,7 @@ void MoQSession::announceCancel(const AnnounceCancel& annCan) {
 void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
   XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
              << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceCancel);
   auto it = publisherAnnounces_.find(announceCancel.trackNamespace);
   if (it == publisherAnnounces_.end()) {
     XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
