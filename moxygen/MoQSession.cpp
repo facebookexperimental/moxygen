@@ -2219,6 +2219,8 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   XLOG(DBG1) << "SubscribeDone id=" << subscribeDone.requestID
              << " code=" << folly::to_underlying(subscribeDone.statusCode)
              << " reason=" << subscribeDone.reasonPhrase;
+  MOQ_SUBSCRIBER_STATS(
+      subscriberStatsCallback_, onSubscribeDone, subscribeDone.statusCode);
   auto trackAliasIt = subIdToTrackAlias_.find(subscribeDone.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
@@ -3243,6 +3245,8 @@ MoQSession::PublisherImpl::subscribeDone(SubscribeDone subscribeDone) {
 
 void MoQSession::subscribeDone(const SubscribeDone& subDone) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_, onSubscribeDone, subDone.statusCode);
   auto it = pubTracks_.find(subDone.requestID);
   if (it == pubTracks_.end()) {
     XLOG(ERR) << "subscribeDone for invalid id=" << subDone.requestID

@@ -81,6 +81,12 @@ class MoQStatsCallback {
    * Subscriber: Sent an UNSUBSCRIBE
    */
   virtual void onUnsubscribe() = 0;
+
+  /*
+   * Publisher: Sent a SUBSCRIBE_DONE
+   * Subscriber: Received a SUBSCRIBE_DONE
+   */
+  virtual void onSubscribeDone(SubscribeDoneStatusCode statusCode) = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {};

@@ -187,6 +187,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   }
 
   void expectSubscribeDone() {
+    EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeDone(_));
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeDone(_));
     EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           subscribeDone_.post();
@@ -1103,6 +1105,7 @@ CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  expectSubscribeDone();
   expectSubscribe(
       [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle](
           auto sub, auto pub) -> TaskSubscribeResult {
@@ -1110,15 +1113,31 @@ CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
         auto pubResult = pub->beginSubgroup(0, 0, 0);
         EXPECT_FALSE(pubResult.hasError());
         subgroupConsumer = pubResult.value();
+        auto objectResult =
+            subgroupConsumer->object(0, moxygen::test::makeBuf(10));
+        EXPECT_FALSE(objectResult.hasError());
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
         co_return mockSubscriptionHandle;
       });
+
+  auto mockSubgroupConsumer =
+      std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton subgroupCreated;
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Invoke([&](auto, auto, auto) {
+        subgroupCreated.post();
+        return mockSubgroupConsumer;
+      }));
+  EXPECT_CALL(*mockSubgroupConsumer, object(0, _, _, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*mockSubgroupConsumer, reset(_));
   auto subscribeRequest = getSubscribe(kTestTrackName);
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   auto subscribeHandler = res.value();
-  expectSubscribeDone();
+
+  co_await subgroupCreated;
 
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
@@ -1135,6 +1154,9 @@ CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
   co_await subscribeUpdateInvoked;
   auto pubResult = subgroupConsumer->object(1, moxygen::test::makeBuf(10));
   EXPECT_TRUE(pubResult.hasError());
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
