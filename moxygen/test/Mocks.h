@@ -305,6 +305,8 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
 
+  MOCK_METHOD(void, onUnannounce, (), (override));
+
   MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
 
   MOCK_METHOD(
@@ -335,6 +337,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onAnnounceSuccess, (), (override));
 
   MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
+
+  MOCK_METHOD(void, onUnannounce, (), (override));
 
   MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
 

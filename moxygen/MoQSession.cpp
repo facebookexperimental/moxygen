@@ -2565,6 +2565,7 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
 
 void MoQSession::onUnannounce(Unannounce unAnn) {
   XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnannounce);
   auto annIt = subscriberAnnounces_.find(unAnn.trackNamespace);
   if (annIt == subscriberAnnounces_.end()) {
     XLOG(ERR) << "Unannounce for bad namespace ns=" << unAnn.trackNamespace;
@@ -2914,6 +2915,7 @@ void MoQSession::announceError(const AnnounceError& announceError) {
 
 void MoQSession::unannounce(const Unannounce& unann) {
   XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnannounce);
   auto it = publisherAnnounces_.find(unann.trackNamespace);
   if (it == publisherAnnounces_.end()) {
     // Not established but could be pending
