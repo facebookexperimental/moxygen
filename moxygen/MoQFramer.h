@@ -878,6 +878,10 @@ getDatagramType(uint64_t version, bool status, bool includeExtensions) {
       : (StreamType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0)));
 }
 
+folly::Expected<std::string, ErrorCode> parseFixedString(
+    folly::io::Cursor& cursor,
+    size_t& length);
+
 // parseClientSetup and parseServerSetup are version-agnostic, so we're
 // leaving them out of the MoQFrameParser.
 class MoQFrameParser {

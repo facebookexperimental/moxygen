@@ -49,9 +49,6 @@ enum class TrackRequestParamKey : uint64_t {
 namespace moxygen {
 
 // Forward declarations for iOS.
-folly::Expected<std::string, ErrorCode> parseFixedString(
-    folly::io::Cursor& cursor,
-    size_t& length);
 folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     folly::io::Cursor& cursor,
     size_t& length,

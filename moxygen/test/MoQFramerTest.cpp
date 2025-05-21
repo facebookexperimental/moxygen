@@ -349,6 +349,33 @@ TEST_P(MoQFramerTest, testParseDatagramObjectHeader1) {
   EXPECT_EQ(pobj.status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
+TEST_P(MoQFramerTest, parseFixedString) {
+  // Create a buffer
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // General String
+  std::string s("Hello, World");
+
+  // Encode a QuicInteger onto the buffer
+  auto quicIntegerSize = quic::getQuicIntegerSize(s.length());
+  folly::io::QueueAppender appender(&writeBuf, *quicIntegerSize);
+  quic::encodeQuicInteger(
+      s.length(), [appender = std::move(appender)](auto val) mutable {
+        appender.writeBE(val);
+      });
+
+  // Write a blob of bytes to buffer
+  writeBuf.append(s.data(), s.length());
+
+  // Parse and decode to check
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  size_t length = 13;
+  auto decoded = parseFixedString(cursor, length);
+  EXPECT_TRUE(decoded.hasValue());
+  EXPECT_EQ(decoded.value(), s);
+}
+
 TEST_P(MoQFramerTest, testParseDatagramObjectHeader2) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(
