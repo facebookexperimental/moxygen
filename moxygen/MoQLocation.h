@@ -21,7 +21,7 @@ inline SubscribeRange toSubscribeRange(
     folly::Optional<AbsoluteLocation> end,
     LocationType locType,
     folly::Optional<AbsoluteLocation> latest) {
-  XLOG(DBG1) << "m=" << uint64_t(locType)
+  XLOG(DBG1) << "m=" << toString(locType)
              << (start ? folly::to<std::string>(
                              " g=", start->group, " o=", start->object)
                        : std::string());

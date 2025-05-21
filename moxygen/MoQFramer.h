@@ -467,6 +467,8 @@ enum class LocationType : uint8_t {
   LatestGroup = 250,
 };
 
+std::string toString(LocationType locType);
+
 struct AbsoluteLocation {
   uint64_t group{0};
   uint64_t object{0};

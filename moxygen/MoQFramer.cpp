@@ -124,6 +124,29 @@ uint64_t getMaxCacheDurationParamKey(uint64_t version) {
   }
 }
 
+std::string toString(LocationType loctype) {
+  switch (loctype) {
+    case LocationType::NextGroupStart: {
+      return "NextGroupStart";
+    }
+    case LocationType::AbsoluteStart: {
+      return "AbsoluteStart";
+    }
+    case LocationType::LatestObject: {
+      return "LatestObject";
+    }
+    case LocationType::AbsoluteRange: {
+      return "AbsoluteRange";
+    }
+    case LocationType::LatestGroup: {
+      return "LatestGroup";
+    }
+    default: {
+      return "Unknown";
+    }
+  }
+}
+
 folly::Expected<std::string, ErrorCode> parseFixedString(
     folly::io::Cursor& cursor,
     size_t& length) {
