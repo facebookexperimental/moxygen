@@ -2701,6 +2701,7 @@ void MoQSession::onSubscribeAnnouncesError(
 void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
   XLOG(DBG1) << __func__ << " prefix=" << unsub.trackNamespacePrefix
              << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeAnnounces);
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     return;
@@ -3047,6 +3048,7 @@ void MoQSession::subscribeAnnouncesError(
 void MoQSession::unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn) {
   XLOG(DBG1) << __func__ << " prefix=" << unsubAnn.trackNamespacePrefix
              << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribeAnnounces);
   auto res =
       moqFrameWriter_.writeUnsubscribeAnnounces(controlWriteBuf_, unsubAnn);
   if (!res) {

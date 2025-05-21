@@ -330,6 +330,8 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
       (SubscribeAnnouncesErrorCode),
       (override));
 
+  MOCK_METHOD(void, onUnsubscribeAnnounces, (), (override));
+
   MOCK_METHOD(void, onTrackStatus, (), (override));
 
   MOCK_METHOD(void, onUnsubscribe, (), (override));
@@ -366,6 +368,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
       onSubscribeAnnouncesError,
       (SubscribeAnnouncesErrorCode),
       (override));
+
+  MOCK_METHOD(void, onUnsubscribeAnnounces, (), (override));
 
   MOCK_METHOD(void, onTrackStatus, (), (override));
 

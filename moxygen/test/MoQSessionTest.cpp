@@ -1366,11 +1366,16 @@ CO_TEST_P_X(MoQSessionTest, AnnounceCancel) {
 CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
   co_await setupMoQSession();
 
+  std::shared_ptr<MockSubscribeAnnouncesHandle> mockSubscribeAnnouncesHandle;
   EXPECT_CALL(*serverPublisher, subscribeAnnounces(_))
       .WillOnce(testing::Invoke(
-          [](auto subAnn)
+          [&mockSubscribeAnnouncesHandle](auto subAnn)
               -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
-            co_return makeSubscribeAnnouncesOkResult(subAnn);
+            mockSubscribeAnnouncesHandle =
+                std::make_shared<MockSubscribeAnnouncesHandle>(
+                    SubscribeAnnouncesOk(
+                        {RequestID(0), subAnn.trackNamespacePrefix}));
+            co_return mockSubscribeAnnouncesHandle;
           }));
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeAnnouncesSuccess());
@@ -1379,6 +1384,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
       co_await clientSession_->subscribeAnnounces(getSubscribeAnnounces());
   EXPECT_FALSE(announceResult.hasError());
 
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribeAnnounces());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeAnnounces());
+  EXPECT_CALL(*mockSubscribeAnnouncesHandle, unsubscribeAnnounces());
   announceResult.value()->unsubscribeAnnounces();
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -1684,9 +1692,7 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
 // onSubscribeOk/Error/Done with unknown ID
 // onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
-// trackstatus
 // announceError
-// subscribeAnnounces
 // GOAWAY
 // onConnectionError
 // control message write failures

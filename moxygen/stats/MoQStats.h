@@ -83,6 +83,12 @@ class MoQStatsCallback {
       SubscribeAnnouncesErrorCode errorCode) = 0;
 
   /*
+   * Publisher: Received an UNSUBSCRIBE_ANNOUNCES
+   * Subscriber: Sent an UNSUBSCRIBE_ANNOUNCES
+   */
+  virtual void onUnsubscribeAnnounces() = 0;
+
+  /*
    * Publisher: Responded to a TRACK_STATUS request
    * Subscriber: Sent a TRACK_STATUS request
    */
