@@ -2853,6 +2853,14 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     Announce ann,
     std::shared_ptr<AnnounceCallback> announceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
+  auto announceStartTime = std::chrono::steady_clock::now();
+  SCOPE_EXIT {
+    auto duration = (std::chrono::steady_clock::now() - announceStartTime);
+    auto durationMsec =
+        std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    MOQ_PUBLISHER_STATS(
+        publisherStatsCallback_, recordAnnounceLatency, durationMsec.count());
+  };
   auto trackNamespace = ann.trackNamespace;
   aliasifyAuthTokens(ann.params);
   ann.requestID = getNextRequestID(/*legacyAction=*/true);

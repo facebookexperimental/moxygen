@@ -337,6 +337,8 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
   MOCK_METHOD(void, onUnsubscribe, (), (override));
 
   MOCK_METHOD(void, onSubscribeDone, (SubscribeDoneStatusCode), (override));
+
+  MOCK_METHOD(void, recordAnnounceLatency, (uint64_t), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {

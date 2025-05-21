@@ -1290,6 +1290,7 @@ CO_TEST_P_X(MoQSessionTest, Announce) {
 
   EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceSuccess());
   EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceSuccess());
+  EXPECT_CALL(*clientPublisherStatsCallback_, recordAnnounceLatency(_));
   auto announceResult = co_await clientSession_->announce(getAnnounce());
   EXPECT_FALSE(announceResult.hasError());
   co_await folly::coro::co_reschedule_on_current_executor;

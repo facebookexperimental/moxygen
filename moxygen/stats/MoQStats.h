@@ -113,7 +113,11 @@ class MoQStatsCallback {
   virtual void onSubscribeUpdate() = 0;
 };
 
-class MoQPublisherStatsCallback : public MoQStatsCallback {};
+class MoQPublisherStatsCallback : public MoQStatsCallback {
+ public:
+  // Record the time it takes from request to response for an ANNOUNCE
+  virtual void recordAnnounceLatency(uint64_t latencyMsec) = 0;
+};
 
 class MoQSubscriberStatsCallback : public MoQStatsCallback {};
 
