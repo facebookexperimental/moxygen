@@ -1069,6 +1069,45 @@ CO_TEST_P_X(MoQSessionTest, DatagramBeforeSessionSetup) {
   co_return;
 }
 
+CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectSubscribeDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+
+  SubscribeUpdate subscribeUpdate{
+      subscribeRequest.requestID,
+      AbsoluteLocation{0, 0},
+      10,
+      kDefaultPriority + 1,
+      true,
+      {}};
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  subscribeHandler->subscribeUpdate(subscribeUpdate);
+  folly::coro::Baton subscribeUpdateInvoked;
+  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
+      .WillOnce(testing::Invoke([&](auto) { subscribeUpdateInvoked.post(); }));
+  co_await subscribeUpdateInvoked;
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Checks to see that we return errors if we receive a subscribe request with
 // forward == false and try to send data.
 CO_TEST_P_X(V11OnlyTests, SubscribeForwardingFalse) {
@@ -1642,7 +1681,6 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
 // getTrack with invalid alias and subscribe ID
 // receive non-normal object
 // onObjectPayload maps to non-existent object in TrackHandle
-// subscribeUpdate/onSubscribeUpdate
 // onSubscribeOk/Error/Done with unknown ID
 // onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data

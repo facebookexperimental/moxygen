@@ -2113,6 +2113,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
 void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.requestID
              << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeUpdate);
   const auto requestID = subscribeUpdate.requestID;
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
@@ -3313,6 +3314,7 @@ void MoQSession::fetchComplete(RequestID requestID) {
 
 void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeUpdate);
   auto trackAliasIt = subIdToTrackAlias_.find(subUpdate.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
