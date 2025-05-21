@@ -2246,14 +2246,26 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
           subscribeRequest.locType, getDraftMajorVersion(*version_)),
       size,
       error);
-  if (subscribeRequest.locType == LocationType::AbsoluteStart ||
-      subscribeRequest.locType == LocationType::AbsoluteRange) {
-    writeVarint(writeBuf, subscribeRequest.start->group, size, error);
-    writeVarint(writeBuf, subscribeRequest.start->object, size, error);
+
+  switch (subscribeRequest.locType) {
+    case LocationType::AbsoluteStart: {
+      writeVarint(writeBuf, subscribeRequest.start->group, size, error);
+      writeVarint(writeBuf, subscribeRequest.start->object, size, error);
+      break;
+    }
+
+    case LocationType::AbsoluteRange: {
+      writeVarint(writeBuf, subscribeRequest.start->group, size, error);
+      writeVarint(writeBuf, subscribeRequest.start->object, size, error);
+      writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
+      break;
+    }
+
+    default: {
+      break;
+    }
   }
-  if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
-  }
+
   writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
