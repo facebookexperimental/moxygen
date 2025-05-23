@@ -119,7 +119,11 @@ class MoQPublisherStatsCallback : public MoQStatsCallback {
   virtual void recordAnnounceLatency(uint64_t latencyMsec) = 0;
 };
 
-class MoQSubscriberStatsCallback : public MoQStatsCallback {};
+class MoQSubscriberStatsCallback : public MoQStatsCallback {
+ public:
+  // Record the time it takes from request to response for a SUBSCRIBE
+  virtual void recordSubscribeLatency(uint64_t latencyMsec) = 0;
+};
 
 #define MOQ_PUBLISHER_STATS(publisherStatsCallback, method, ...) \
   if (publisherStatsCallback) {                                  \

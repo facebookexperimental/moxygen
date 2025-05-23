@@ -3114,6 +3114,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  auto subscribeStartTime = std::chrono::steady_clock::now();
+  SCOPE_EXIT {
+    auto duration = (std::chrono::steady_clock::now() - subscribeStartTime);
+    auto durationMsec =
+        std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, recordSubscribeLatency, durationMsec.count());
+  };
   if (draining_) {
     SubscribeError subscribeError = {
         std::numeric_limits<uint64_t>::max(),

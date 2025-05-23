@@ -172,6 +172,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
         .WillOnce(testing::Invoke(
             [this, lambda = std::move(lambda), error](
                 auto sub, auto pub) -> TaskSubscribeResult {
+              EXPECT_CALL(
+                  *clientSubscriberStatsCallback_, recordSubscribeLatency(_));
               if (error) {
                 EXPECT_CALL(
                     *serverPublisherStatsCallback_, onSubscribeError(*error))
@@ -1021,6 +1023,7 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
   EXPECT_CALL(
       *clientSubscriberStatsCallback_,
       onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordSubscribeLatency(_));
   res = co_await clientSession_->subscribe(sub, trackPublisher3);
   EXPECT_TRUE(res.hasError());
 }
