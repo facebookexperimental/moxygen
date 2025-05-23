@@ -3375,6 +3375,14 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> consumer) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  auto fetchStartTime = std::chrono::steady_clock::now();
+  SCOPE_EXIT {
+    auto duration = (std::chrono::steady_clock::now() - fetchStartTime);
+    auto durationMsec =
+        std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, recordFetchLatency, durationMsec.count());
+  };
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   if (draining_) {

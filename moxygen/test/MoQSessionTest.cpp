@@ -432,6 +432,7 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
         return folly::unit;
       }));
   expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
   auto res =
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
   EXPECT_FALSE(res.hasError());

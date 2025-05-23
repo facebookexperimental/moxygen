@@ -380,6 +380,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onSubscribeDone, (SubscribeDoneStatusCode), (override));
 
   MOCK_METHOD(void, recordSubscribeLatency, (uint64_t), (override));
+
+  MOCK_METHOD(void, recordFetchLatency, (uint64_t), (override));
 };
 
 } // namespace moxygen
