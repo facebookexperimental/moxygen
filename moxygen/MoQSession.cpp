@@ -1591,6 +1591,9 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   setupComplete_ = true;
   initializeNegotiatedVersion(serverSetup->selectedVersion);
+  if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
+    nextExpectedPeerRequestID_ = 0;
+  }
   co_return *serverSetup;
 }
 
