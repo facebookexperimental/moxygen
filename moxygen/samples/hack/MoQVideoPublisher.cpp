@@ -2,7 +2,6 @@
 
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
-#include <folly/io/IOBufQueue.h>
 #include <proxygen/lib/utils/URL.h>
 #include <moxygen/moq_mi/MoQMi.h>
 #include <moxygen/relay/MoQRelayClient.h>
