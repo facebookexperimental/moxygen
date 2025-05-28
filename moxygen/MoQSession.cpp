@@ -3162,7 +3162,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto subTrack = subTracks_.try_emplace(trackAlias, trackReceiveState);
   XCHECK(subTrack.second) << "Track alias already in use alias=" << trackAlias
                           << " sess=" << this;
-
   auto subscribeResult = co_await trackReceiveState->subscribeFuture();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " requestID=" << reqID;
