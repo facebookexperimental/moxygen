@@ -1846,6 +1846,21 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
   subscribeHandler->unsubscribe();
 }
 
+CO_TEST_P_X(MoQSessionTest, UniStreamBeforeSetup) {
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  serverWt_->createUniStream();
+  // Check that the client closed the session
+  EXPECT_TRUE(clientWt_->isSessionClosed());
+  co_return;
+}
+
+CO_TEST_P_X(MoQSessionTest, DatagramBeforeSetup) {
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  clientSession_->onDatagram(folly::IOBuf::copyBuffer("hello world"));
+  EXPECT_TRUE(clientWt_->isSessionClosed());
+  co_return;
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
