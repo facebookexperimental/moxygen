@@ -23,8 +23,8 @@ class MoQTrackTest : public testing::Test {
         "1",
         "1",
         "0",
-        "0",
-        "0",
+        "-1",
+        "-1",
         "0"};
   }
 
@@ -41,8 +41,8 @@ class MoQTrackTest : public testing::Test {
     params_.groupIncrement = 1;
     params_.objectIncrement = 1;
     params_.sendEndOfGroupMarkers = false;
-    params_.testIntegerExtension = false;
-    params_.testVariableExtension = false;
+    params_.testIntegerExtension = -1;
+    params_.testVariableExtension = -1;
     params_.publisherDeliveryTimeout = 0;
   }
 
@@ -119,8 +119,8 @@ TEST_F(MoQTrackTest, testConvertTrackNamespaceToMoQTestParameters) {
   EXPECT_EQ(params.value().groupIncrement, 1);
   EXPECT_EQ(params.value().objectIncrement, 1);
   EXPECT_EQ(params.value().sendEndOfGroupMarkers, false);
-  EXPECT_EQ(params.value().testIntegerExtension, false);
-  EXPECT_EQ(params.value().testVariableExtension, false);
+  EXPECT_EQ(params.value().testIntegerExtension, -1);
+  EXPECT_EQ(params.value().testVariableExtension, -1);
   EXPECT_EQ(params.value().publisherDeliveryTimeout, 0);
 }
 
@@ -173,8 +173,8 @@ TEST_F(MoQTrackTest, testConvertMoQTestParametersToTrackNamespace) {
   EXPECT_EQ(track.value().trackNamespace[10], "1");
   EXPECT_EQ(track.value().trackNamespace[11], "1");
   EXPECT_EQ(track.value().trackNamespace[12], "0");
-  EXPECT_EQ(track.value().trackNamespace[13], "0");
-  EXPECT_EQ(track.value().trackNamespace[14], "0");
+  EXPECT_EQ(track.value().trackNamespace[13], "-1");
+  EXPECT_EQ(track.value().trackNamespace[14], "-1");
   EXPECT_EQ(track.value().trackNamespace[15], "0");
 }
 

@@ -81,8 +81,8 @@ convertMoqTestParamToTrackNamespace(MoQTestParameters* params) {
       std::to_string(params->groupIncrement),
       std::to_string(params->objectIncrement),
       std::to_string(static_cast<int>(params->sendEndOfGroupMarkers)),
-      std::to_string(static_cast<int>(params->testIntegerExtension)),
-      std::to_string(static_cast<int>(params->testVariableExtension)),
+      std::to_string((params->testIntegerExtension)),
+      std::to_string((params->testVariableExtension)),
       std::to_string(params->publisherDeliveryTimeout),
   });
   return trackNamespace;
@@ -121,10 +121,8 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
     params.objectIncrement = std::stoull((track->trackNamespace)[11]);
     params.sendEndOfGroupMarkers =
         static_cast<bool>(std::stoi((track->trackNamespace)[12]));
-    params.testIntegerExtension =
-        static_cast<bool>(std::stoi((track->trackNamespace)[13]));
-    params.testVariableExtension =
-        static_cast<bool>(std::stoi((track->trackNamespace)[14]));
+    params.testIntegerExtension = (std::stoi((track->trackNamespace)[13]));
+    params.testVariableExtension = (std::stoi((track->trackNamespace)[14]));
     params.publisherDeliveryTimeout = std::stoull((track->trackNamespace)[15]);
   } catch (const std::exception& e) {
     return folly::makeUnexpected(std::runtime_error(

@@ -42,8 +42,8 @@ struct MoQTestParameters {
   uint64_t groupIncrement = kDefaultIncrement;        // Tuple Field 10
   uint64_t objectIncrement = kDefaultIncrement;       // Tuple Field 11
   bool sendEndOfGroupMarkers = false; // Tuple Field 12 0: DO NOT SEND, 1: SEND
-  bool testIntegerExtension = false;  // Tuple Field 13
-  bool testVariableExtension = false; // Tuple Field 14
+  int testIntegerExtension = -1;  // Tuple Field 13 <= 0 -> True, <0 -> False
+  int testVariableExtension = -1; // Tuple Field 14
   uint64_t publisherDeliveryTimeout =
       kDefaultPublisherDeliveryTimeout; // Tuple Field 15
 
