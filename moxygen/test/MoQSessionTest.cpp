@@ -163,24 +163,82 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
   using TaskSubscribeResult = folly::coro::Task<Publisher::SubscribeResult>;
 
+  std::shared_ptr<moxygen::MockSubscriberStats> getSubscriberStatsCallback(
+      MoQControlCodec::Direction direction) {
+    switch (direction) {
+      case MoQControlCodec::Direction::SERVER:
+        return serverSubscriberStatsCallback_;
+      case MoQControlCodec::Direction::CLIENT:
+        return clientSubscriberStatsCallback_;
+      default:
+        return nullptr;
+    }
+  }
+
+  std::shared_ptr<moxygen::MockPublisherStats> getPublisherStatsCallback(
+      MoQControlCodec::Direction direction) {
+    switch (direction) {
+      case MoQControlCodec::Direction::SERVER:
+        return serverPublisherStatsCallback_;
+      case MoQControlCodec::Direction::CLIENT:
+        return clientPublisherStatsCallback_;
+      default:
+        return nullptr;
+    }
+  }
+
+  std::shared_ptr<moxygen::MockPublisher> getPublisher(
+      MoQControlCodec::Direction direction) {
+    switch (direction) {
+      case MoQControlCodec::Direction::SERVER:
+        return serverPublisher;
+      case MoQControlCodec::Direction::CLIENT:
+        return clientPublisher;
+      default:
+        return nullptr;
+    }
+  }
+
+  std::shared_ptr<moxygen::MockSubscriber> getSubscriber(
+      MoQControlCodec::Direction direction) {
+    switch (direction) {
+      case MoQControlCodec::Direction::SERVER:
+        return serverSubscriber;
+      case MoQControlCodec::Direction::CLIENT:
+        return clientSubscriber;
+      default:
+        return nullptr;
+    }
+  }
+
+  MoQControlCodec::Direction oppositeDirection(
+      MoQControlCodec::Direction direction) {
+    return (direction == MoQControlCodec::Direction::CLIENT)
+        ? MoQControlCodec::Direction::SERVER
+        : MoQControlCodec::Direction::CLIENT;
+  }
+
   void expectSubscribe(
       std::function<TaskSubscribeResult(
           const SubscribeRequest&,
           std::shared_ptr<TrackConsumer>)> lambda,
+      MoQControlCodec::Direction direction = MoQControlCodec::Direction::SERVER,
       const folly::Optional<SubscribeErrorCode>& error = folly::none) {
-    EXPECT_CALL(*serverPublisher, subscribe(_, _))
+    EXPECT_CALL(*getPublisher(direction), subscribe(_, _))
         .WillOnce(testing::Invoke(
-            [this, lambda = std::move(lambda), error](
+            [this, lambda = std::move(lambda), error, direction](
                 auto sub, auto pub) -> TaskSubscribeResult {
               EXPECT_CALL(
-                  *clientSubscriberStatsCallback_, recordSubscribeLatency(_));
+                  *getSubscriberStatsCallback(oppositeDirection(direction)),
+                  recordSubscribeLatency(_));
               if (error) {
                 EXPECT_CALL(
-                    *serverPublisherStatsCallback_, onSubscribeError(*error))
+                    *getPublisherStatsCallback(direction),
+                    onSubscribeError(*error))
                     .RetiresOnSaturation();
               } else {
                 EXPECT_CALL(
-                    *serverPublisherStatsCallback_, onSubscribeSuccess())
+                    *getPublisherStatsCallback(direction), onSubscribeSuccess())
                     .RetiresOnSaturation();
               }
               return lambda(sub, pub);
@@ -188,9 +246,13 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
         .RetiresOnSaturation();
   }
 
-  void expectSubscribeDone() {
-    EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeDone(_));
-    EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeDone(_));
+  void expectSubscribeDone(
+      MoQControlCodec::Direction recipient =
+          MoQControlCodec::Direction::CLIENT) {
+    EXPECT_CALL(
+        *getPublisherStatsCallback(oppositeDirection(recipient)),
+        onSubscribeDone(_));
+    EXPECT_CALL(*getSubscriberStatsCallback(recipient), onSubscribeDone(_));
     EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
         .WillOnce(testing::Invoke([&] {
           subscribeDone_.post();
@@ -873,6 +935,34 @@ folly::coro::Task<void> MoQSessionTest::publishValidationTest(
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, ServerInitiatedSubscribe) {
+  co_await setupMoQSession();
+  expectSubscribe(
+      [this](auto sub, auto pub) -> TaskSubscribeResult {
+        eventBase_.add([pub, sub] {
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
+          sgp->object(0, moxygen::test::makeBuf(10));
+          sgp->object(1, moxygen::test::makeBuf(10), noExtensions(), true);
+          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        });
+        co_return makeSubscribeOkResult(sub);
+      },
+      MoQControlCodec::Direction::CLIENT);
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, object(1, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+  expectSubscribeDone(MoQControlCodec::Direction::SERVER);
+  auto res = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await subscribeDone_;
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, DoubleBeginObject) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
@@ -970,6 +1060,7 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
               "bad",
               folly::none});
         },
+        MoQControlCodec::Direction::SERVER,
         SubscribeErrorCode::UNAUTHORIZED);
     expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
       eventBase_.add([pub, sub] {
