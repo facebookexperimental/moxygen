@@ -2916,9 +2916,7 @@ void MoQSession::announceError(const AnnounceError& announceError) {
   XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
-      subscriberStatsCallback_,
-      onAnnounceError,
-      AnnounceErrorCode::NOT_SUPPORTED);
+      subscriberStatsCallback_, onAnnounceError, announceError.errorCode);
   auto res =
       moqFrameWriter_.writeAnnounceError(controlWriteBuf_, announceError);
   if (!res) {

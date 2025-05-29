@@ -1790,6 +1790,34 @@ CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
   co_return;
 }
 
+CO_TEST_P_X(MoQSessionTest, AnnounceError) {
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*serverSubscriber, announce(_, _))
+      .WillOnce(testing::Invoke(
+          [](auto ann, auto /* announceCallback */)
+              -> folly::coro::Task<Subscriber::AnnounceResult> {
+            co_return folly::makeUnexpected(AnnounceError{
+                ann.requestID,
+                ann.trackNamespace,
+                AnnounceErrorCode::UNAUTHORIZED,
+                "Unauthorized"});
+          }));
+
+  EXPECT_CALL(
+      *clientPublisherStatsCallback_,
+      onAnnounceError(AnnounceErrorCode::UNAUTHORIZED));
+  EXPECT_CALL(
+      *serverSubscriberStatsCallback_,
+      onAnnounceError(AnnounceErrorCode::UNAUTHORIZED));
+
+  auto announceResult = co_await clientSession_->announce(getAnnounce());
+  EXPECT_TRUE(announceResult.hasError());
+  EXPECT_EQ(announceResult.error().errorCode, AnnounceErrorCode::UNAUTHORIZED);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
@@ -1799,7 +1827,6 @@ CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
 // onSubscribeOk/Error/Done with unknown ID
 // onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
-// announceError
 // GOAWAY
 // onConnectionError
 // control message write failures
