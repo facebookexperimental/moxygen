@@ -289,6 +289,8 @@ class MockPublisher : public Publisher {
       subscribeAnnounces,
       (SubscribeAnnounces),
       (override));
+
+  MOCK_METHOD(void, goaway, (Goaway), (override));
 };
 
 class MockSubscriber : public Subscriber {

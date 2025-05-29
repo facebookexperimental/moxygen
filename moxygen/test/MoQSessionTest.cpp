@@ -1818,6 +1818,34 @@ CO_TEST_P_X(MoQSessionTest, AnnounceError) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, Goaway) {
+  co_await setupMoQSession();
+
+  // Make a SUBSCRIBE request so that we don't immediately close when goaway()
+  // is called.
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    auto pubResult = pub->beginSubgroup(0, 0, 0);
+    EXPECT_FALSE(pubResult.hasError());
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+
+  Goaway goaway{};
+  clientSession_->goaway(goaway);
+  folly::coro::Baton goawayBaton;
+  EXPECT_CALL(*serverPublisher, goaway(_))
+      .WillOnce(testing::Invoke([&goawayBaton](auto /* goaway */) -> void {
+        goawayBaton.post();
+        return;
+      }));
+  co_await goawayBaton;
+
+  subscribeHandler->unsubscribe();
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
@@ -1827,7 +1855,6 @@ CO_TEST_P_X(MoQSessionTest, AnnounceError) {
 // onSubscribeOk/Error/Done with unknown ID
 // onMaxRequestID with ID == 0 {no setup param}
 // onFetchCancel with no publish data
-// GOAWAY
 // onConnectionError
 // control message write failures
 // order on invalid pub track
