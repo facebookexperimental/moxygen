@@ -1687,9 +1687,20 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
+  serverWt_->createBidiStream();
+  // Check that the client called stopSending and resetStream on the newly
+  // created stream.
+  EXPECT_TRUE(clientWt_->readHandles.begin()
+                  ->second->stopSendingErrorCode()
+                  .hasValue());
+  EXPECT_TRUE(
+      clientWt_->writeHandles.begin()->second->getWriteErr().hasValue());
+  co_return;
+}
+
 // Missing Test Cases
 // ===
-// receive bidi stream on client
 // getTrack by alias (subscribe with stream)
 // getTrack with invalid alias and subscribe ID
 // receive non-normal object
