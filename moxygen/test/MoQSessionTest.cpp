@@ -1025,6 +1025,56 @@ CO_TEST_P_X(MoQSessionTest, PublisherResetAfterBeginObject) {
   });
 }
 
+CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, sub] {
+          auto sgp1 = pub->beginSubgroup(0, 0, 0).value();
+          sgp1->object(0, moxygen::test::makeBuf(10));
+          sgp1->objectNotExists(1);
+          sgp1->object(2, moxygen::test::makeBuf(11));
+          sgp1->endOfGroup(3, noExtensions());
+          auto sgp2 = pub->beginSubgroup(1, 0, 0).value();
+          sgp2->object(0, moxygen::test::makeBuf(10));
+          sgp2->endOfTrackAndGroup(1);
+        });
+        co_return makeSubscribeOkResult(sub);
+      });
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, objectNotExists(1, _, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, object(2, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, endOfGroup(3, _)).WillOnce(testing::Return(folly::unit));
+
+  auto sg2 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(1, 0, 0))
+      .WillOnce(testing::Return(sg2));
+  EXPECT_CALL(*sg2, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  folly::coro::Baton endOfTrackAndGroupBaton;
+  EXPECT_CALL(*sg2, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+    endOfTrackAndGroupBaton.post();
+    return folly::unit;
+  }));
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  co_await endOfTrackAndGroupBaton;
+  expectSubscribeDone();
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // === TRACK STATUS tests ===
 
 CO_TEST_P_X(MoQSessionTest, TrackStatus) {
