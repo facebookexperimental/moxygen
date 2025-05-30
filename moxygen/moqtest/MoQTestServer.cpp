@@ -22,6 +22,10 @@ void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
   // Empty Method Body For Now
 }
 
+void MoQTestFetchHandle::fetchCancel() {
+  // Empty Method Body For Now
+}
+
 MoQTestServer::MoQTestServer(uint16_t port)
     : MoQServer(port, kCert, kKey, kEndpointName) {}
 
@@ -322,6 +326,111 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
       sub.groupOrder,
       folly::none};
   co_return std::make_shared<MoQTestSubscriptionHandle>(subRes);
+}
+
+// Fetch Methods
+folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> fetchCallback) {
+  LOG(INFO) << "Recieved Fetch Request";
+
+  // Ensure Params are valid according to spec, if not return FetchError
+  auto res = moxygen::convertTrackNamespaceToMoqTestParam(
+      &fetch.fullTrackName.trackNamespace);
+  if (res.hasError()) {
+    FetchError error;
+    error.requestID = fetch.requestID;
+    error.errorCode = FetchErrorCode::NOT_SUPPORTED;
+    error.reasonPhrase = "Invalid Parameters";
+    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
+  }
+
+  // Request Session
+  auto session = MoQSession::getRequestSession();
+
+  // Start a Co-routine
+  onFetch(fetch, fetchCallback).scheduleOn(session->getEventBase()).start();
+
+  FetchOk ok;
+  ok.requestID = fetch.requestID;
+  ok.groupOrder = fetch.groupOrder;
+  return folly::coro::makeTask<FetchResult>(
+      std::make_shared<MoQTestFetchHandle>(ok));
+}
+
+folly::coro::Task<void> MoQTestServer::onFetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> fetchCallback) {
+  // Make a MoQTestParams (Only valid params are passed through from fetch
+  // function)
+  auto res = moxygen::convertTrackNamespaceToMoqTestParam(
+      &fetch.fullTrackName.trackNamespace);
+  CHECK(res.hasValue())
+      << "Only valid params must be passed into this function";
+  MoQTestParameters params = res.value();
+
+  // Publish Objects in Accordance to params
+
+  // Publisher Delivery Timeout (To be implemented later)
+
+  // Switch based on forwarding preference
+  switch (params.forwardingPreference) {
+    case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
+      co_await fetchOneSubgroupPerGroup(params, fetchCallback);
+      break;
+    }
+
+    default: {
+    }
+  }
+
+  co_return;
+}
+
+folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
+    MoQTestParameters params,
+    std::shared_ptr<FetchConsumer> callback) {
+  // Iterate through Groups
+  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+       groupNum += params.groupIncrement) {
+    // Iterate Through Objects in SubGroup
+    for (int objectId = params.startObject;
+         objectId <= params.lastObjectInTrack;
+         objectId += params.objectIncrement) {
+      // Find Object Size
+      int objectSize = getObjectSize(objectId, &params);
+
+      // Add Integer/Variable Extensions if needed
+      std::vector<Extension> extensions = getExtensions(
+          params.testIntegerExtension, params.testVariableExtension);
+
+      // If there are send end of group markers and j == lastObjectID, send
+      // the end of group
+      if (objectId < params.lastObjectInTrack ||
+          !params.sendEndOfGroupMarkers) {
+        // Begin Delivering Object With Payload
+        std::string p = std::string(objectSize, 't');
+        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        callback->object(
+            groupNum,
+            0 /* subgroupId */,
+            objectId,
+            std::move(objectPayload),
+            extensions,
+            false);
+      } else {
+        callback->endOfGroup(
+            groupNum, 0 /* subgroupId */, objectId, extensions, false);
+      }
+
+      // Set Delay Based on Object Frequency
+      co_await folly::coro::sleep(
+          std::chrono::milliseconds(params.objectFrequency));
+    }
+  }
+
+  // Inform Consumer that fetch is completed
+  callback->endOfFetch();
 }
 
 } // namespace moxygen

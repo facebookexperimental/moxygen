@@ -20,6 +20,16 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
   SubscribeOk subscribeOk_;
 };
 
+class MoQTestFetchHandle : public Publisher::FetchHandle {
+ public:
+  MoQTestFetchHandle(FetchOk ok) : Publisher::FetchHandle(ok), fetchOk_(ok){};
+
+  virtual void fetchCancel() override;
+
+ private:
+  FetchOk fetchOk_;
+};
+
 class MoQTestServer : public moxygen::Publisher,
                       public moxygen::MoQServer,
                       public std::enable_shared_from_this<MoQTestServer> {
@@ -31,6 +41,7 @@ class MoQTestServer : public moxygen::Publisher,
     clientSession->setPublishHandler(shared_from_this());
   }
 
+  // Subscribing Methods
   virtual folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback) override;
@@ -55,6 +66,19 @@ class MoQTestServer : public moxygen::Publisher,
       SubscribeRequest sub,
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
+
+  // Fetching Methods
+  virtual folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> fetchCallback) override;
+
+  folly::coro::Task<void> onFetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> callback);
+
+  folly::coro::Task<void> fetchOneSubgroupPerGroup(
+      MoQTestParameters params,
+      std::shared_ptr<FetchConsumer> callback);
 
  private:
 };
