@@ -70,7 +70,13 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   // Switch based on forwarding preference
   switch (params.forwardingPreference) {
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      co_await sendObjectsForForwardPreferenceZero(params, callback);
+      co_await sendOneSubgroupPerGroup(params, callback);
+      break;
+    }
+
+    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
+      co_await sendOneSubgroupPerObject(params, callback);
+
       break;
     }
 
@@ -89,7 +95,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   co_return;
 }
 
-folly::coro::Task<void> MoQTestServer::sendObjectsForForwardPreferenceZero(
+folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Groups
@@ -134,6 +140,53 @@ folly::coro::Task<void> MoQTestServer::sendObjectsForForwardPreferenceZero(
       subConsumer->endOfSubgroup();
     }
   }
+}
+
+folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
+    MoQTestParameters params,
+    std::shared_ptr<TrackConsumer> callback) {
+  // Iterate through Objects
+  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+       groupNum += params.groupIncrement) {
+    // Iterate Through Objects in SubGroup
+    for (int objectId = params.startObject;
+         objectId <= params.lastObjectInTrack;
+         objectId += params.objectIncrement) {
+      // Begin a New Subgroup per object (Default Priority)
+      auto maybeSubConsumer =
+          callback->beginSubgroup(groupNum, objectId, kDefaultPriority);
+      auto subConsumer = maybeSubConsumer->get();
+      // Find Object Size
+      int objectSize = moxygen::getObjectSize(objectId, &params);
+
+      // Add Integer/Variable Extensions if needed
+      std::vector<Extension> extensions = getExtensions(
+          params.testIntegerExtension, params.testVariableExtension);
+
+      // If there are send end of group markers and j == lastObjectID, send
+      // the end of group
+      if (objectId < params.lastObjectInTrack ||
+          !params.sendEndOfGroupMarkers) {
+        // Begin Delivering Object With Payload
+        std::string p = std::string(objectSize, 't');
+        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        subConsumer->object(
+            objectId, std::move(objectPayload), extensions, false);
+      } else {
+        subConsumer->endOfGroup(objectId);
+      }
+
+      // If SubGroup Hasn't Been Ended Already
+      if (!params.sendEndOfGroupMarkers) {
+        subConsumer->endOfSubgroup();
+      }
+
+      // Set Delay Based on Object Frequency
+      co_await folly::coro::sleep(
+          std::chrono::milliseconds(params.objectFrequency));
+    }
+  }
+  co_return;
 }
 
 } // namespace moxygen

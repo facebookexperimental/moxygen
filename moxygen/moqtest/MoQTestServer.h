@@ -39,7 +39,11 @@ class MoQTestServer : public moxygen::Publisher,
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback);
 
-  folly::coro::Task<void> sendObjectsForForwardPreferenceZero(
+  folly::coro::Task<void> sendOneSubgroupPerGroup(
+      MoQTestParameters params,
+      std::shared_ptr<TrackConsumer> callback);
+
+  folly::coro::Task<void> sendOneSubgroupPerObject(
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
 
