@@ -230,3 +230,163 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
 }
+
+TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference = moxygen::ForwardingPreference(2);
+  params_.lastObjectInTrack = 2;
+  params_.objectsPerGroup = 2;
+
+  // Create a mock track consumer
+  auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
+
+  // Set expectations for beginSubgroup
+  for (int groupId = 0; groupId <= 10; groupId++) {
+    // Create a mock subgroup consumer
+    auto mockSubgroupConsumerOne =
+        std::make_shared<moxygen::MockSubgroupConsumer>();
+    auto mockSubgroupConsumerZero =
+        std::make_shared<moxygen::MockSubgroupConsumer>();
+    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 0, testing::_))
+        .Times(1)
+        .WillRepeatedly(testing::Return(mockSubgroupConsumerZero));
+    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 1, testing::_))
+        .Times(1)
+        .WillRepeatedly(testing::Return(mockSubgroupConsumerOne));
+
+    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+      int objectSize = moxygen::getObjectSize(objectId, &params_);
+      // Set expectations for beginObject
+      if (objectId % 2 == 0) {
+        EXPECT_CALL(
+            *mockSubgroupConsumerZero,
+            object(objectId, testing::_, testing::_, testing::_))
+            .Times(1)
+            .WillOnce(testing::Invoke(
+                [objectSize](
+                    auto, std::unique_ptr<folly::IOBuf> payload, auto, auto) {
+                  int payloadLength = (*payload).length();
+                  EXPECT_EQ(payloadLength, objectSize);
+                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      {});
+                }))
+            .WillOnce(::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+      } else {
+        EXPECT_CALL(
+            *mockSubgroupConsumerOne,
+            object(objectId, testing::_, testing::_, testing::_))
+            .Times(1)
+            .WillOnce(testing::Invoke(
+                [objectSize](
+                    auto, std::unique_ptr<folly::IOBuf> payload, auto, auto) {
+                  int payloadLength = (*payload).length();
+                  EXPECT_EQ(payloadLength, objectSize);
+                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      {});
+                }))
+            .WillOnce(::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+      }
+    }
+    // Set expectations for endOfSubgroup
+    EXPECT_CALL(*mockSubgroupConsumerZero, endOfSubgroup())
+        .Times(1)
+        .WillOnce(::testing::Return(
+            folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+    EXPECT_CALL(*mockSubgroupConsumerOne, endOfSubgroup())
+        .Times(1)
+        .WillOnce(::testing::Return(
+            folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+  }
+
+  // Call the onSubscribe method
+  auto task = server_.sendTwoSubgroupsPerGroup(params_, mockConsumer);
+
+  // Wait for the coroutine to complete
+  folly::coro::blockingWait(std::move(task));
+}
+
+TEST_F(
+    MoQTrackServerTest,
+    ValidateSubscribeWithForwardPreferenceTwoWithEndOfGroupMarkers) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference = moxygen::ForwardingPreference(2);
+  params_.lastObjectInTrack = 2;
+  params_.objectsPerGroup = 2;
+  params_.sendEndOfGroupMarkers = true;
+
+  // Create a mock track consumer
+  auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
+
+  // Set expectations for beginSubgroup
+  for (int groupId = 0; groupId <= 10; groupId++) {
+    // Create a mock subgroup consumer
+    auto mockSubgroupConsumerOne =
+        std::make_shared<moxygen::MockSubgroupConsumer>();
+    auto mockSubgroupConsumerZero =
+        std::make_shared<moxygen::MockSubgroupConsumer>();
+    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 0, testing::_))
+        .Times(1)
+        .WillRepeatedly(testing::Return(mockSubgroupConsumerZero));
+    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 1, testing::_))
+        .Times(1)
+        .WillRepeatedly(testing::Return(mockSubgroupConsumerOne));
+
+    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+      int objectSize = moxygen::getObjectSize(objectId, &params_);
+      // Set expectations for beginObject
+      if (objectId % 2 == 1 && objectId == params_.lastObjectInTrack) {
+        EXPECT_CALL(*mockSubgroupConsumerZero, endOfGroup(objectId, testing::_))
+            .WillOnce(::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+
+        EXPECT_CALL(*mockSubgroupConsumerOne, endOfSubgroup())
+            .Times(1)
+            .WillOnce(::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+      } else if (objectId == params_.lastObjectInTrack) {
+        EXPECT_CALL(*mockSubgroupConsumerOne, endOfGroup(objectId, testing::_))
+            .WillOnce(::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+
+        EXPECT_CALL(*mockSubgroupConsumerZero, endOfSubgroup())
+            .Times(1)
+            .WillOnce(::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+      } else if (objectId % 2 == 0) {
+        EXPECT_CALL(
+            *mockSubgroupConsumerZero,
+            object(objectId, testing::_, testing::_, testing::_))
+            .Times(1)
+            .WillOnce(testing::Invoke(
+                [objectSize](
+                    auto, std::unique_ptr<folly::IOBuf> payload, auto, auto) {
+                  int payloadLength = (*payload).length();
+                  EXPECT_EQ(payloadLength, objectSize);
+                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      {});
+                }));
+      } else {
+        EXPECT_CALL(
+            *mockSubgroupConsumerOne,
+            object(objectId, testing::_, testing::_, testing::_))
+            .Times(1)
+            .WillOnce(testing::Invoke(
+                [objectSize](
+                    auto, std::unique_ptr<folly::IOBuf> payload, auto, auto) {
+                  int payloadLength = (*payload).length();
+                  EXPECT_EQ(payloadLength, objectSize);
+                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      {});
+                }));
+      }
+    }
+  }
+
+  // Call the onSubscribe method
+  auto task = server_.sendTwoSubgroupsPerGroup(params_, mockConsumer);
+
+  // Wait for the coroutine to complete
+  folly::coro::blockingWait(std::move(task));
+}

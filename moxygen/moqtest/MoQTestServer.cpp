@@ -80,6 +80,11 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
       break;
     }
 
+    case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
+      co_await sendTwoSubgroupsPerGroup(params, callback);
+      break;
+    }
+
     default: {
       break;
     }
@@ -186,6 +191,61 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
           std::chrono::milliseconds(params.objectFrequency));
     }
   }
+  co_return;
+}
+
+folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
+    MoQTestParameters params,
+    std::shared_ptr<TrackConsumer> callback) {
+  // Iterate through Objects
+
+  // Odd number of objects in track means end on subgroupZero
+  bool endZero = params.lastObjectInTrack % 2 == 1;
+  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+       groupNum += params.groupIncrement) {
+    std::vector<std::shared_ptr<SubgroupConsumer>> subConsumers;
+    subConsumers.push_back(
+        callback->beginSubgroup(groupNum, 0, kDefaultPriority).value());
+    subConsumers.push_back(
+        callback->beginSubgroup(groupNum, 1, kDefaultPriority).value());
+
+    // Iterate Through Objects in SubGroup
+    for (int objectId = params.startObject;
+         objectId <= params.lastObjectInTrack;
+         objectId += params.objectIncrement) {
+      // Find Object Size
+      int objectSize = getObjectSize(objectId, &params);
+      // Add Integer/Variable Extensions if needed
+      std::vector<Extension> extensions = getExtensions(
+          params.testIntegerExtension, params.testVariableExtension);
+
+      // If there are send end of group markers and j == lastObjectID, send
+      // the end of group
+      if (objectId < params.lastObjectInTrack ||
+          !params.sendEndOfGroupMarkers) {
+        // Begin Delivering Object With Payload
+        std::string p = std::string(objectSize, 't');
+        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        subConsumers[(objectId % 2)]->object(
+            objectId, std::move(objectPayload), extensions, false);
+
+      } else {
+        subConsumers[(int)!endZero]->endOfGroup(objectId);
+        subConsumers[(int)endZero]->endOfSubgroup();
+      }
+
+      // Set Delay Based on Object Frequency
+      co_await folly::coro::sleep(
+          std::chrono::milliseconds(params.objectFrequency));
+    }
+
+    // If SubGroup Hasn't Been Ended Already
+    if (!params.sendEndOfGroupMarkers) {
+      subConsumers[0]->endOfSubgroup();
+      subConsumers[1]->endOfSubgroup();
+    }
+  }
+
   co_return;
 }
 

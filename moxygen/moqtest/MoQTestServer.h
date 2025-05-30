@@ -47,6 +47,10 @@ class MoQTestServer : public moxygen::Publisher,
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
 
+  folly::coro::Task<void> sendTwoSubgroupsPerGroup(
+      MoQTestParameters params,
+      std::shared_ptr<TrackConsumer> callback);
+
  private:
 };
 
