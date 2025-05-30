@@ -612,3 +612,55 @@ TEST_F(
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
 }
+
+TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  int integerExtension = 1;
+  int variableExtension = 1;
+
+  // Create a mock track consumer
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+
+  // Set expectations for beginSubgroup
+  for (int groupId = 0; groupId <= 10; groupId++) {
+    // Create a mock subgroup consumer
+    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+      // Find Object Size
+      int objectSize = moxygen::getObjectSize(objectId, &params_);
+
+      // Set expectations for beginObject
+      EXPECT_CALL(
+          *mockConsumer,
+          object(
+              groupId, objectId, objectId, testing::_, testing::_, testing::_))
+          .Times(1)
+          .WillOnce(
+              testing::Invoke([objectSize, integerExtension, variableExtension](
+                                  auto,
+                                  auto,
+                                  auto,
+                                  std::unique_ptr<folly::IOBuf> payload,
+                                  auto,
+                                  auto) {
+                // Check Payload
+                int payloadLength = (*payload).length();
+                EXPECT_EQ(payloadLength, objectSize);
+                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                    {});
+              }))
+          .WillRepeatedly(::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+    }
+  }
+
+  EXPECT_CALL(*mockConsumer, endOfFetch())
+      .Times(1)
+      .WillOnce(::testing::Return(
+          folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+
+  // Call the onSubscribe method
+  auto task = server_.fetchOneSubgroupPerObject(params_, mockConsumer);
+
+  // Wait for the coroutine to complete
+  folly::coro::blockingWait(std::move(task));
+}
