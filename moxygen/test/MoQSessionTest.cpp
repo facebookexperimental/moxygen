@@ -1861,6 +1861,41 @@ CO_TEST_P_X(MoQSessionTest, DatagramBeforeSetup) {
   co_return;
 }
 
+CO_TEST_P_X(MoQSessionTest, SubscribeDuringDrain) {
+  co_await setupMoQSession();
+
+  // Make a FETCH request so that we don't immediately close when drain()
+  // is called.
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+    EXPECT_NE(standalone, nullptr);
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub->object(
+        standalone->start.group,
+        /*subgroupID=*/0,
+        standalone->start.object,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  clientSession_->drain();
+
+  // Attempting to subscribe during the drain should return an error
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto subscribeRes =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(subscribeRes.hasError());
+  EXPECT_EQ(subscribeRes.error().errorCode, SubscribeErrorCode::INTERNAL_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
