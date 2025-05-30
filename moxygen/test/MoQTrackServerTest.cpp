@@ -790,3 +790,30 @@ TEST_F(
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
 }
+
+TEST_F(
+    MoQTrackServerTest,
+    ValidateFetchWithForwardPreferenceThreeReturnsError) {
+  moxygen::Fetch req;
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[1] = "3";
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+
+  // Call the subscribe method
+  auto task = server_.fetch(req, nullptr);
+
+  // Wait for the coroutine to complete and get the result
+  auto result = folly::coro::blockingWait(std::move(task));
+
+  // Check that the result is an error
+  ASSERT_TRUE(result.hasError());
+
+  // Verify the error details
+  const auto& error = result.error();
+  EXPECT_EQ(error.requestID, req.requestID);
+  EXPECT_EQ(error.errorCode, moxygen::FetchErrorCode::NOT_SUPPORTED);
+  EXPECT_EQ(
+      error.reasonPhrase,
+      "Datagram Forwarding Preference is not supported for fetch");
+}

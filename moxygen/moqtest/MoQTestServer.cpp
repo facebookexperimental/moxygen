@@ -344,6 +344,14 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     error.reasonPhrase = "Invalid Parameters";
     return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
   }
+  if (res.value().forwardingPreference == ForwardingPreference::DATAGRAM) {
+    FetchError error;
+    error.requestID = fetch.requestID;
+    error.errorCode = FetchErrorCode::NOT_SUPPORTED;
+    error.reasonPhrase =
+        "Datagram Forwarding Preference is not supported for fetch";
+    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
+  }
 
   // Request Session
   auto session = MoQSession::getRequestSession();
@@ -367,6 +375,8 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       &fetch.fullTrackName.trackNamespace);
   CHECK(res.hasValue())
       << "Only valid params must be passed into this function";
+  CHECK(res.value().forwardingPreference == ForwardingPreference::DATAGRAM)
+      << "Datagram Forwarding Preference is not supported for fetch";
   MoQTestParameters params = res.value();
 
   // Publish Objects in Accordance to params
@@ -389,6 +399,7 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       co_await fetchTwoSubgroupsPerGroup(params, fetchCallback);
       break;
     }
+
     default: {
       break;
     }
