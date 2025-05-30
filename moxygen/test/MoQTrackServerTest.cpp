@@ -60,6 +60,31 @@ class MoQTrackServerTest : public testing::Test {
 } // namespace
 
 // Subscription Testing
+TEST_F(
+    MoQTrackServerTest,
+    TestSubscribeFunctionReturnsSubscribeErrorWithInvalidParams) {
+  moxygen::SubscribeRequest req;
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[0] = "invalid";
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.trackAlias = kDefaultTrackAlias;
+
+  // Call the subscribe method
+  auto task = server_.subscribe(req, nullptr);
+
+  // Wait for the coroutine to complete and get the result
+  auto result = folly::coro::blockingWait(std::move(task));
+
+  // Check that the result is an error
+  ASSERT_TRUE(result.hasError());
+
+  // Verify the error details
+  const auto& error = result.error();
+  EXPECT_EQ(error.requestID, req.requestID);
+  EXPECT_EQ(error.errorCode, moxygen::SubscribeErrorCode::NOT_SUPPORTED);
+  EXPECT_EQ(error.reasonPhrase, "Invalid Parameters");
+}
 TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
 

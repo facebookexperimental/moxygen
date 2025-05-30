@@ -30,6 +30,17 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     std::shared_ptr<TrackConsumer> callback) {
   LOG(INFO) << "Recieved Subscription";
 
+  // Ensure Params are valid according to spec, if not return SubscribeError
+  auto res = moxygen::convertTrackNamespaceToMoqTestParam(
+      &sub.fullTrackName.trackNamespace);
+  if (res.hasError()) {
+    SubscribeError error;
+    error.requestID = sub.requestID;
+    error.errorCode = SubscribeErrorCode::NOT_SUPPORTED;
+    error.reasonPhrase = "Invalid Parameters";
+    return folly::coro::makeTask<SubscribeResult>(folly::makeUnexpected(error));
+  }
+
   // Request Session
   auto session = MoQSession::getRequestSession();
 
@@ -50,17 +61,12 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
 folly::coro::Task<void> MoQTestServer::onSubscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
-  // Make a MoQTestParams
+  // Make a MoQTestParams (Only valid params are passed through from subscribe
+  // function)
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
       &sub.fullTrackName.trackNamespace);
-  if (res.hasError()) {
-    SubscribeDone done;
-    done.requestID = sub.requestID;
-    done.reasonPhrase = "Invalid Parameters";
-    done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
-    callback->subscribeDone(done);
-    co_return;
-  }
+  CHECK(res.hasValue())
+      << "Only valid params must be passed into this function";
   MoQTestParameters params = res.value();
 
   // Publish Objects in Accordance to params
