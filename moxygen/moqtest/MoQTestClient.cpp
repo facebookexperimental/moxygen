@@ -14,9 +14,12 @@ DEFINE_int32(connect_timeout, 1000, "connect timeout in ms");
 DEFINE_int32(transaction_timeout, 1000, "transaction timeout in ms");
 const int kDefaultRequestId = 0;
 const std::string kDefaultTrackName = "test";
-const GroupOrder kDefaultGroupOrder = GroupOrder(0x0);
-const LocationType kDefaultLocationType = LocationType(1);
-const uint64_t kDefaultEndGroup = 128;
+const GroupOrder kDefaultGroupOrder = GroupOrder::OldestFirst;
+const LocationType kDefaultLocationType = LocationType::NextGroupStart;
+const uint64_t kDefaultEndGroup = 10;
+const TrackAlias kDefaultTrackAlias = TrackAlias(0);
+const uint64_t kLastObjectInTrack = 10;
+const uint64_t kLastGroupInTrack = 10;
 
 MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
     : moqClient_(std::make_unique<MoQClient>(evb, std::move(url))) {}
@@ -53,7 +56,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   ftn.trackName = kDefaultTrackName;
 
   sub.fullTrackName = ftn;
-  sub.trackAlias = TrackAlias();
+  sub.trackAlias = kDefaultTrackAlias;
   sub.groupOrder = kDefaultGroupOrder;
   sub.locType = kDefaultLocationType;
   sub.endGroup = kDefaultEndGroup;
@@ -88,7 +91,8 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     const ObjectHeader& objHeader,
     Payload payload) {
   std::cout << "onObject" << std::endl;
-  return ObjectReceiverCallback::FlowControlState::BLOCKED;
+  // Leave Unblocked For Now
+  return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
 }
 
 void MoQTestClient::onObjectStatus(const ObjectHeader& objHeader) {
@@ -116,20 +120,25 @@ int main(int argc, char** argv) {
 
   // Initialize Client with url
   moxygen::MoQTestParameters kDefaultMoqParams;
+  kDefaultMoqParams.lastObjectInTrack = moxygen::kLastObjectInTrack;
+  kDefaultMoqParams.lastGroupInTrack = moxygen::kLastGroupInTrack;
+
   auto url = proxygen::URL(moxygen::FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
       std::make_shared<moxygen::MoQTestClient>(evb.getEventBase(), url);
   client->initialize();
 
   // Connect Client to Server
+  LOG(INFO) << "Connecting to " << url.getHostAndPort();
   folly::coro::blockingWait(
       client->connect(evb.getEventBase()).scheduleOn(evb.getEventBase()));
 
+  LOG(INFO) << "Subscribing to " << url.getHostAndPort();
   // Test a Subscribe Call
   folly::coro::blockingWait(
       client->subscribe(kDefaultMoqParams).scheduleOn(evb.getEventBase()));
 
-  sleep(10);
+  sleep(100);
 
   return 0;
 }

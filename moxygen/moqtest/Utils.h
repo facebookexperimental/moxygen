@@ -19,4 +19,10 @@ convertMoqTestParamToTrackNamespace(MoQTestParameters* params);
 folly::Expected<moxygen::MoQTestParameters, std::runtime_error>
 convertTrackNamespaceToMoqTestParam(TrackNamespace* track);
 
+std::vector<Extension> getExtensions(
+    int integerExtensionId,
+    int variableExtensionId);
+
+int getObjectSize(int objectId, MoQTestParameters* params);
+
 } // namespace moxygen

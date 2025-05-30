@@ -6,6 +6,7 @@ namespace moxygen {
 
 const int kNumParams = 16;
 const std::string kField0 = "moq-test-00";
+const int kTestVariableExtensionMax = 20;
 
 folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
     MoQTestParameters* track) {
@@ -138,6 +139,34 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
   }
 
   return params;
+}
+
+std::vector<Extension> getExtensions(
+    int integerExtensionId,
+    int variableExtensionId) {
+  std::vector<Extension> extensions;
+  if (integerExtensionId >= 0) {
+    uint64_t randomNumber = std::rand();
+    Extension ext{static_cast<uint64_t>(2 * integerExtensionId), randomNumber};
+    extensions.push_back(ext);
+  }
+  if (variableExtensionId >= 0) {
+    uint64_t randomNumber = std::rand() % kTestVariableExtensionMax + 1;
+    auto buf = folly::IOBuf::create(randomNumber);
+    buf->append(randomNumber);
+    Extension ext{
+        static_cast<uint64_t>(2 * variableExtensionId + 1), {std::move(buf)}};
+    extensions.push_back(ext);
+  }
+  return extensions;
+}
+
+int getObjectSize(int objectId, MoQTestParameters* params) {
+  if (objectId == params->startObject) {
+    return params->sizeOfObjectZero;
+  } else {
+    return params->sizeOfObjectGreaterThanZero;
+  }
 }
 
 } // namespace moxygen
