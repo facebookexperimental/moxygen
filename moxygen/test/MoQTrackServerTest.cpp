@@ -390,3 +390,59 @@ TEST_F(
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
 }
+
+TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference = moxygen::ForwardingPreference(3);
+  params_.lastObjectInTrack = 1;
+  params_.objectsPerGroup = 1;
+  params_.lastGroupInTrack = 1;
+  params_.sendEndOfGroupMarkers = false;
+
+  moxygen::SubscribeRequest sub;
+  sub.requestID = 0;
+  sub.trackAlias = moxygen::TrackAlias(sub.requestID.value);
+  sub.groupOrder = moxygen::GroupOrder(0x1);
+  sub.fullTrackName.trackNamespace = track_;
+  params_.testIntegerExtension = -1;
+  params_.testVariableExtension = -1;
+
+  // Create a mock track consumer
+  auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
+
+  // Build Expect Calls
+  for (int groupNum = 1; groupNum >= 0; groupNum--) {
+    for (int objectId = 1; objectId >= 0; objectId--) {
+      // Set expectations for datagram
+      moxygen::ObjectHeader expectedHeader;
+      expectedHeader.trackIdentifier = moxygen::TrackIdentifier(sub.trackAlias);
+      expectedHeader.group = groupNum;
+      expectedHeader.id = objectId;
+      expectedHeader.extensions = moxygen::getExtensions(
+          params_.testIntegerExtension, params_.testVariableExtension);
+
+      int objectSize = moxygen::getObjectSize(objectId, &params_);
+      EXPECT_CALL(*mockConsumer, datagram(expectedHeader, testing::_))
+          .Times(1)
+          .WillOnce(testing::Invoke([expectedHeader, objectId, objectSize](
+                                        auto header, auto objectPayload) {
+            // Check Object Header
+            EXPECT_EQ(expectedHeader.trackIdentifier, header.trackIdentifier);
+            EXPECT_EQ(expectedHeader.group, header.group);
+            EXPECT_EQ(expectedHeader.id, header.id);
+            EXPECT_EQ(expectedHeader.extensions, header.extensions);
+
+            // Check Object Payload
+            int payloadLength = (*objectPayload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          }));
+    }
+  }
+
+  // Call the sendObjectsForForwardPreferenceThree method
+  auto task = server_.sendDatagram(sub, params_, mockConsumer);
+
+  // Wait for the coroutine to complete
+  folly::coro::blockingWait(std::move(task));
+}

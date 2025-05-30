@@ -51,6 +51,11 @@ class MoQTestServer : public moxygen::Publisher,
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
 
+  folly::coro::Task<SubscribeResult> sendDatagram(
+      SubscribeRequest sub,
+      MoQTestParameters params,
+      std::shared_ptr<TrackConsumer> callback);
+
  private:
 };
 

@@ -85,6 +85,21 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
       break;
     }
 
+    case (ForwardingPreference::DATAGRAM): {
+      auto res = co_await MoQTestServer::sendDatagram(sub, params, callback);
+      if (res.hasError()) {
+        // Return a SubscribeDone With an Error to indicate Datagram process
+        // failed
+        SubscribeDone done;
+        done.requestID = sub.requestID;
+        done.reasonPhrase = "Error Sending Datagram Objects";
+        done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
+        callback->subscribeDone(done);
+        co_return;
+      }
+      break;
+    }
+
     default: {
       break;
     }
@@ -247,6 +262,60 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
   }
 
   co_return;
+}
+
+folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
+    SubscribeRequest sub,
+    MoQTestParameters params,
+    std::shared_ptr<TrackConsumer> callback) {
+  // Iterate through Objects
+  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+       groupNum += params.groupIncrement) {
+    // Iterate Through Objects in SubGroup
+    for (int objectId = params.startObject;
+         objectId <= params.lastObjectInTrack;
+         objectId += params.objectIncrement) {
+      // Add Integer/Variable Extensions if needed
+      std::vector<Extension> extensions = getExtensions(
+          params.testIntegerExtension, params.testVariableExtension);
+
+      // Find Object Size
+      int objectSize = getObjectSize(objectId, &params);
+
+      std::string p = std::string(objectSize, 't');
+      auto objectPayload = folly::IOBuf::copyBuffer(p);
+
+      // Build object header
+      ObjectHeader header;
+      header.trackIdentifier = TrackIdentifier(sub.trackAlias);
+      header.group = groupNum;
+      header.id = objectId;
+      header.extensions = extensions;
+
+      // Try/Catch Datagram
+
+      auto res = callback->datagram(header, std::move(objectPayload));
+      if (res.hasError()) {
+        co_return folly::makeUnexpected(SubscribeError{
+            sub.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "Error Sending Datagram Objects"});
+      }
+
+      // Set Delay Based on Object Frequency
+      co_await folly::coro::sleep(
+          std::chrono::milliseconds(params.objectFrequency))
+          .scheduleOn(folly::getGlobalCPUExecutor());
+    }
+  }
+
+  // Return SubscribeOK
+  SubscribeOk subRes{
+      sub.requestID,
+      std::chrono::milliseconds(kDefaultExpires),
+      sub.groupOrder,
+      folly::none};
+  co_return std::make_shared<MoQTestSubscriptionHandle>(subRes);
 }
 
 } // namespace moxygen

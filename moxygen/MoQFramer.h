@@ -449,6 +449,14 @@ struct ObjectHeader {
   ObjectStatus status{ObjectStatus::NORMAL};
   std::vector<Extension> extensions;
   folly::Optional<uint64_t> length{folly::none};
+
+  // == Operator For Datagram Testing
+  bool operator==(const ObjectHeader& other) const {
+    return trackIdentifier == other.trackIdentifier && group == other.group &&
+        subgroup == other.subgroup && id == other.id &&
+        priority == other.priority && status == other.status &&
+        extensions == other.extensions && length == other.length;
+  }
 };
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
