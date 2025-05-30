@@ -384,7 +384,13 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       co_await fetchOneSubgroupPerObject(params, fetchCallback);
       break;
     }
+
+    case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
+      co_await fetchTwoSubgroupsPerGroup(params, fetchCallback);
+      break;
+    }
     default: {
+      break;
     }
   }
 
@@ -470,6 +476,52 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
             false);
       } else {
         callback->endOfGroup(groupNum, objectId, objectId, extensions, false);
+      }
+
+      // Set Delay Based on Object Frequency
+      co_await folly::coro::sleep(
+          std::chrono::milliseconds(params.objectFrequency));
+    }
+  }
+
+  // Inform Consumer that fetch is completed
+  callback->endOfFetch();
+}
+
+folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
+    MoQTestParameters params,
+    std::shared_ptr<FetchConsumer> callback) {
+  // Iterate through Groups
+  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+       groupNum += params.groupIncrement) {
+    // Iterate Through Objects in SubGroup
+    for (int objectId = params.startObject;
+         objectId <= params.lastObjectInTrack;
+         objectId += params.objectIncrement) {
+      // Find Object Size
+      int objectSize = getObjectSize(objectId, &params);
+
+      // Add Integer/Variable Extensions if needed
+      std::vector<Extension> extensions = getExtensions(
+          params.testIntegerExtension, params.testVariableExtension);
+
+      int subGroupId = objectId % 2;
+      // If there are send end of group markers and j == lastObjectID, send
+      // the end of group
+      if (objectId < params.lastObjectInTrack ||
+          !params.sendEndOfGroupMarkers) {
+        // Begin Delivering Object With Payload
+        std::string p = std::string(objectSize, 't');
+        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        callback->object(
+            groupNum,
+            subGroupId,
+            objectId,
+            std::move(objectPayload),
+            extensions,
+            false);
+      } else {
+        callback->endOfGroup(groupNum, subGroupId, objectId, extensions, false);
       }
 
       // Set Delay Based on Object Frequency

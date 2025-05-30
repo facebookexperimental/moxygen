@@ -84,6 +84,10 @@ class MoQTestServer : public moxygen::Publisher,
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback);
 
+  folly::coro::Task<void> fetchTwoSubgroupsPerGroup(
+      MoQTestParameters params,
+      std::shared_ptr<FetchConsumer> callback);
+
  private:
 };
 
