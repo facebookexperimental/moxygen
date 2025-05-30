@@ -1488,6 +1488,34 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, SubscribeAnnouncesError) {
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*serverPublisher, subscribeAnnounces(_))
+      .WillOnce(testing::Invoke(
+          [](auto subAnn)
+              -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
+            SubscribeAnnouncesError subAnnError{
+                subAnn.requestID,
+                subAnn.trackNamespacePrefix,
+                SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+                "not supported"};
+            co_return folly::makeUnexpected(subAnnError);
+          }));
+
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onSubscribeAnnouncesError(SubscribeAnnouncesErrorCode::NOT_SUPPORTED));
+  EXPECT_CALL(
+      *serverPublisherStatsCallback_,
+      onSubscribeAnnouncesError(SubscribeAnnouncesErrorCode::NOT_SUPPORTED));
+  auto subAnnResult =
+      co_await clientSession_->subscribeAnnounces(getSubscribeAnnounces());
+  EXPECT_TRUE(subAnnResult.hasError());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, TooFarBehindOneSubgroup) {
   co_await setupMoQSession();
 
