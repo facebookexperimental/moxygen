@@ -1037,9 +1037,10 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
           sgp1->objectNotExists(1);
           sgp1->object(2, moxygen::test::makeBuf(11));
           sgp1->endOfGroup(3, noExtensions());
-          auto sgp2 = pub->beginSubgroup(1, 0, 0).value();
+          pub->groupNotExists(1, 0, 0);
+          auto sgp2 = pub->beginSubgroup(2, 0, 0).value();
           sgp2->object(0, moxygen::test::makeBuf(10));
-          sgp2->endOfTrackAndGroup(1);
+          sgp2->endOfTrackAndGroup(2);
         });
         co_return makeSubscribeOkResult(sub);
       });
@@ -1057,10 +1058,16 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
   auto sg2 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(1, 0, 0))
       .WillOnce(testing::Return(sg2));
-  EXPECT_CALL(*sg2, object(0, _, _, false))
+  EXPECT_CALL(*subscribeCallback_, groupNotExists(1, 0, 0, _))
+      .WillOnce(testing::Return(folly::unit));
+
+  auto sg3 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(2, 0, 0))
+      .WillOnce(testing::Return(sg3));
+  EXPECT_CALL(*sg3, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
   folly::coro::Baton endOfTrackAndGroupBaton;
-  EXPECT_CALL(*sg2, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg3, endOfTrackAndGroup(2, _)).WillOnce(testing::Invoke([&]() {
     endOfTrackAndGroupBaton.post();
     return folly::unit;
   }));
