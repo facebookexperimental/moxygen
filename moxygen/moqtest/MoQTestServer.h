@@ -10,24 +10,31 @@ namespace moxygen {
 
 class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
  public:
-  MoQTestSubscriptionHandle(SubscribeOk ok)
-      : Publisher::SubscriptionHandle(ok){};
+  MoQTestSubscriptionHandle(
+      SubscribeOk ok,
+      folly::CancellationSource* cancellationSource)
+      : Publisher::SubscriptionHandle(ok), cancelSource_(cancellationSource){};
 
   virtual void unsubscribe() override;
   virtual void subscribeUpdate(SubscribeUpdate subUpdate) override;
 
  private:
   SubscribeOk subscribeOk_;
+  folly::CancellationSource* cancelSource_;
 };
 
 class MoQTestFetchHandle : public Publisher::FetchHandle {
  public:
-  MoQTestFetchHandle(FetchOk ok) : Publisher::FetchHandle(ok), fetchOk_(ok){};
+  MoQTestFetchHandle(FetchOk ok, folly::CancellationSource* cancellationSource)
+      : Publisher::FetchHandle(ok),
+        fetchOk_(ok),
+        cancelSource_(cancellationSource){};
 
   virtual void fetchCancel() override;
 
  private:
   FetchOk fetchOk_;
+  folly::CancellationSource* cancelSource_;
 };
 
 class MoQTestServer : public moxygen::Publisher,
@@ -89,6 +96,7 @@ class MoQTestServer : public moxygen::Publisher,
       std::shared_ptr<FetchConsumer> callback);
 
  private:
+  folly::CancellationSource cancelSource_;
 };
 
 } // namespace moxygen

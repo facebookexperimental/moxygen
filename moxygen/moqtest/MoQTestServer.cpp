@@ -15,7 +15,7 @@ const int kDefaultExpires = 0;
 const std::string kDefaultSubscribeDoneReason = "Testing";
 
 void MoQTestSubscriptionHandle::unsubscribe() {
-  // Empty Method Body For Now
+  cancelSource_->requestCancellation();
 }
 
 void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
@@ -23,7 +23,7 @@ void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
 }
 
 void MoQTestFetchHandle::fetchCancel() {
-  // Empty Method Body For Now
+  cancelSource_->requestCancellation();
 }
 
 MoQTestServer::MoQTestServer(uint16_t port)
@@ -58,7 +58,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
       sub.groupOrder,
       folly::none};
   return folly::coro::makeTask<SubscribeResult>(
-      std::make_shared<MoQTestSubscriptionHandle>(subRes));
+      std::make_shared<MoQTestSubscriptionHandle>(subRes, &cancelSource_));
 }
 
 // Perform Co-routine
@@ -140,6 +140,9 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return;
+      }
       // Find Object Size
       int objectSize = getObjectSize(objectId, &params);
 
@@ -166,7 +169,8 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     }
 
     // If SubGroup Hasn't Been Ended Already
-    if (!params.sendEndOfGroupMarkers) {
+    if (!cancelSource_.isCancellationRequested() &&
+        !params.sendEndOfGroupMarkers) {
       subConsumer->endOfSubgroup();
     }
   }
@@ -182,6 +186,9 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return;
+      }
       // Begin a New Subgroup per object (Default Priority)
       auto maybeSubConsumer =
           callback->beginSubgroup(groupNum, objectId, kDefaultPriority);
@@ -238,6 +245,9 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return;
+      }
       // Find Object Size
       int objectSize = getObjectSize(objectId, &params);
       // Add Integer/Variable Extensions if needed
@@ -265,7 +275,8 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     }
 
     // If SubGroup Hasn't Been Ended Already
-    if (!params.sendEndOfGroupMarkers) {
+    if (!cancelSource_.isCancellationRequested() &&
+        !params.sendEndOfGroupMarkers) {
       subConsumers[0]->endOfSubgroup();
       subConsumers[1]->endOfSubgroup();
     }
@@ -285,6 +296,12 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return folly::makeUnexpected(SubscribeError{
+            sub.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "Datagram Subscription Cancelled"});
+      }
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
           params.testIntegerExtension, params.testVariableExtension);
@@ -301,8 +318,6 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
       header.group = groupNum;
       header.id = objectId;
       header.extensions = extensions;
-
-      // Try/Catch Datagram
 
       auto res = callback->datagram(header, std::move(objectPayload));
       if (res.hasError()) {
@@ -325,7 +340,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
       std::chrono::milliseconds(kDefaultExpires),
       sub.groupOrder,
       folly::none};
-  co_return std::make_shared<MoQTestSubscriptionHandle>(subRes);
+  co_return std::make_shared<MoQTestSubscriptionHandle>(subRes, &cancelSource_);
 }
 
 // Fetch Methods
@@ -363,7 +378,7 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
   ok.requestID = fetch.requestID;
   ok.groupOrder = fetch.groupOrder;
   return folly::coro::makeTask<FetchResult>(
-      std::make_shared<MoQTestFetchHandle>(ok));
+      std::make_shared<MoQTestFetchHandle>(ok, &cancelSource_));
 }
 
 folly::coro::Task<void> MoQTestServer::onFetch(
@@ -418,6 +433,9 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return;
+      }
       // Find Object Size
       int objectSize = getObjectSize(objectId, &params);
 
@@ -464,6 +482,9 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return;
+      }
       // Find Object Size
       int objectSize = getObjectSize(objectId, &params);
 
@@ -509,6 +530,9 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
+      if (cancelSource_.isCancellationRequested()) {
+        co_return;
+      }
       // Find Object Size
       int objectSize = getObjectSize(objectId, &params);
 
