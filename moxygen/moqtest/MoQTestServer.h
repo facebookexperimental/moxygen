@@ -95,8 +95,17 @@ class MoQTestServer : public moxygen::Publisher,
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback);
 
+  // Methods For Tests in MoQTrackServerTest
+  bool isSubCancelled();
+  bool isFetchCancelled();
+  void initializeCancellationSources() {
+    subCancelSource_ = std::make_shared<folly::CancellationSource>();
+    fetchCancelSource_ = std::make_shared<folly::CancellationSource>();
+  }
+
  private:
-  folly::CancellationSource cancelSource_;
+  std::shared_ptr<folly::CancellationSource> subCancelSource_;
+  std::shared_ptr<folly::CancellationSource> fetchCancelSource_;
 };
 
 } // namespace moxygen

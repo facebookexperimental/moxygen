@@ -33,6 +33,15 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
   LOG(INFO) << "Recieved Subscription";
+  if (subCancelSource_) {
+    SubscribeError error;
+    error.requestID = sub.requestID;
+    error.errorCode = SubscribeErrorCode::INTERNAL_ERROR;
+    error.reasonPhrase = "Cannot have concurrent subscriptions";
+    return folly::coro::makeTask<SubscribeResult>(folly::makeUnexpected(error));
+  }
+
+  subCancelSource_ = std::make_shared<folly::CancellationSource>();
 
   // Ensure Params are valid according to spec, if not return SubscribeError
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
@@ -58,7 +67,8 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
       sub.groupOrder,
       folly::none};
   return folly::coro::makeTask<SubscribeResult>(
-      std::make_shared<MoQTestSubscriptionHandle>(subRes, &cancelSource_));
+      std::make_shared<MoQTestSubscriptionHandle>(
+          subRes, &(*subCancelSource_)));
 }
 
 // Perform Co-routine
@@ -122,6 +132,9 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   done.reasonPhrase = kDefaultSubscribeDoneReason;
   callback->subscribeDone(done);
 
+  // Reset Session
+  subCancelSource_ = nullptr;
+
   co_return;
 }
 
@@ -140,7 +153,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isSubCancelled()) {
         co_return;
       }
       // Find Object Size
@@ -169,8 +182,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     }
 
     // If SubGroup Hasn't Been Ended Already
-    if (!cancelSource_.isCancellationRequested() &&
-        !params.sendEndOfGroupMarkers) {
+    if (!isSubCancelled() && !params.sendEndOfGroupMarkers) {
       subConsumer->endOfSubgroup();
     }
   }
@@ -186,7 +198,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isSubCancelled()) {
         co_return;
       }
       // Begin a New Subgroup per object (Default Priority)
@@ -245,7 +257,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isSubCancelled()) {
         co_return;
       }
       // Find Object Size
@@ -275,8 +287,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     }
 
     // If SubGroup Hasn't Been Ended Already
-    if (!cancelSource_.isCancellationRequested() &&
-        !params.sendEndOfGroupMarkers) {
+    if (!isSubCancelled() && !params.sendEndOfGroupMarkers) {
       subConsumers[0]->endOfSubgroup();
       subConsumers[1]->endOfSubgroup();
     }
@@ -296,7 +307,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isSubCancelled()) {
         co_return folly::makeUnexpected(SubscribeError{
             sub.requestID,
             SubscribeErrorCode::INTERNAL_ERROR,
@@ -340,7 +351,8 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
       std::chrono::milliseconds(kDefaultExpires),
       sub.groupOrder,
       folly::none};
-  co_return std::make_shared<MoQTestSubscriptionHandle>(subRes, &cancelSource_);
+  co_return std::make_shared<MoQTestSubscriptionHandle>(
+      subRes, &(*subCancelSource_));
 }
 
 // Fetch Methods
@@ -348,6 +360,14 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> fetchCallback) {
   LOG(INFO) << "Recieved Fetch Request";
+  if (fetchCancelSource_) {
+    FetchError error;
+    error.requestID = fetch.requestID;
+    error.errorCode = FetchErrorCode::INTERNAL_ERROR;
+    error.reasonPhrase = "Cannot have concurrent fetches";
+    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
+  }
+  fetchCancelSource_ = std::make_shared<folly::CancellationSource>();
 
   // Ensure Params are valid according to spec, if not return FetchError
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
@@ -377,8 +397,9 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
   FetchOk ok;
   ok.requestID = fetch.requestID;
   ok.groupOrder = fetch.groupOrder;
+
   return folly::coro::makeTask<FetchResult>(
-      std::make_shared<MoQTestFetchHandle>(ok, &cancelSource_));
+      std::make_shared<MoQTestFetchHandle>(ok, &(*fetchCancelSource_)));
 }
 
 folly::coro::Task<void> MoQTestServer::onFetch(
@@ -420,6 +441,9 @@ folly::coro::Task<void> MoQTestServer::onFetch(
     }
   }
 
+  // Reset Session
+  fetchCancelSource_ = nullptr;
+
   co_return;
 }
 
@@ -433,7 +457,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isFetchCancelled()) {
         co_return;
       }
       // Find Object Size
@@ -482,7 +506,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isFetchCancelled()) {
         co_return;
       }
       // Find Object Size
@@ -530,7 +554,7 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
     for (int objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (cancelSource_.isCancellationRequested()) {
+      if (isFetchCancelled()) {
         co_return;
       }
       // Find Object Size
@@ -567,6 +591,14 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
 
   // Inform Consumer that fetch is completed
   callback->endOfFetch();
+}
+
+bool MoQTestServer::isSubCancelled() {
+  return subCancelSource_->isCancellationRequested();
+}
+
+bool MoQTestServer::isFetchCancelled() {
+  return fetchCancelSource_->isCancellationRequested();
 }
 
 } // namespace moxygen
