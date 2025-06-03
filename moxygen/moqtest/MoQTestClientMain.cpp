@@ -9,9 +9,33 @@
 
 namespace moxygen {
 DEFINE_string(url, "http://localhost:9999", "URL to connect to");
-
-const uint64_t kLastObjectInTrack = 10;
-const uint64_t kLastGroupInTrack = 10;
+DEFINE_int64(forwarding_preference, 0, "Forwarding preference");
+DEFINE_uint64(start_group, kDefaultStart, "Start group for MoQParams");
+DEFINE_uint64(start_object, kDefaultStart, "Start object for MoQParams");
+DEFINE_uint64(last_group, kDefaultLastGroupInTrack, "Last group for MoQParams");
+DEFINE_uint64(objects_per_group, kDefaultObjectsPerGroup, "Objects per group");
+DEFINE_uint64(
+    size_of_object_zero,
+    kDefaultSizeOfObjectZero,
+    "Size of object zero");
+DEFINE_uint64(
+    size_of_object_greater_than_zero,
+    kDefaultSizeOfObjectGreaterThanZero,
+    "Size of object nonzero");
+DEFINE_uint64(object_frequency, kDefaultObjectFrequency, "Object frequency");
+DEFINE_uint64(group_increment, kDefaultIncrement, "Group increment");
+DEFINE_uint64(object_increment, kDefaultIncrement, "Object increment");
+DEFINE_bool(send_end_of_group_markers, false, "Send end of group markers");
+DEFINE_int64(test_integer_extension, -1, "Test integer extension");
+DEFINE_int64(test_variable_extension, -1, "Test variable extension");
+DEFINE_uint64(
+    publisher_delivery_timeout,
+    kDefaultPublisherDeliveryTimeout,
+    "Publisher delivery timeout");
+DEFINE_uint64(
+    last_object_in_track,
+    FLAGS_objects_per_group + (int)FLAGS_send_end_of_group_markers,
+    "Last object in track");
 
 } // namespace moxygen
 
@@ -21,10 +45,28 @@ int main(int argc, char** argv) {
 
   folly::ScopedEventBaseThread evb;
 
-  // Initialize Client with url
+  // Initialize Client with url and moq params
   moxygen::MoQTestParameters defaultMoqParams;
-  defaultMoqParams.lastObjectInTrack = moxygen::kLastObjectInTrack;
-  defaultMoqParams.lastGroupInTrack = moxygen::kLastGroupInTrack;
+  defaultMoqParams.forwardingPreference =
+      moxygen::ForwardingPreference(moxygen::FLAGS_forwarding_preference);
+  defaultMoqParams.startGroup = moxygen::FLAGS_start_group;
+  defaultMoqParams.startObject = moxygen::FLAGS_start_object;
+  defaultMoqParams.lastGroupInTrack = moxygen::FLAGS_last_group;
+  defaultMoqParams.objectsPerGroup = moxygen::FLAGS_objects_per_group;
+  defaultMoqParams.sizeOfObjectZero = moxygen::FLAGS_size_of_object_zero;
+  defaultMoqParams.sizeOfObjectGreaterThanZero =
+      moxygen::FLAGS_size_of_object_greater_than_zero;
+  defaultMoqParams.objectFrequency = moxygen::FLAGS_object_frequency;
+  defaultMoqParams.groupIncrement = moxygen::FLAGS_group_increment;
+  defaultMoqParams.objectIncrement = moxygen::FLAGS_object_increment;
+  defaultMoqParams.sendEndOfGroupMarkers =
+      moxygen::FLAGS_send_end_of_group_markers;
+  defaultMoqParams.testIntegerExtension = moxygen::FLAGS_test_integer_extension;
+  defaultMoqParams.testVariableExtension =
+      moxygen::FLAGS_test_variable_extension;
+  defaultMoqParams.publisherDeliveryTimeout =
+      moxygen::FLAGS_publisher_delivery_timeout;
+  defaultMoqParams.lastObjectInTrack = moxygen::FLAGS_last_object_in_track;
 
   auto url = proxygen::URL(moxygen::FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =

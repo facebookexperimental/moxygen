@@ -202,6 +202,8 @@ bool MoQTestClient::validateSubscribedData(
     const std::string& payload) {
   // Validate Group, Object Id, SubGroup (and End of Group Markers if
   // applicable)
+  XLOG(DBG8) << "Expected Group=" << expectedGroup_
+             << " Expected ObjectId=" << expectedObjectId_;
   if (header.group != expectedGroup_) {
     XLOG(ERR) << "Group Mismatch: Actual=" << header.group
               << "  Expected=" << expectedGroup_ << std::endl;
