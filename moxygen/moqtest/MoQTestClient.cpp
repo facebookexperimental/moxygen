@@ -118,21 +118,10 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     return ObjectReceiverCallback::FlowControlState::BLOCKED;
   }
 
-  // Adjust the expected data
-  switch (params_.forwardingPreference) {
-    case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      if (!adjustExpectedForOneSubgroupPerGroup(params_)) {
-        XLOG(DBG1) << "onObject: No more data to be expected" << std::endl;
-        return ObjectReceiverCallback::FlowControlState::BLOCKED;
-      }
-      break;
-    }
-    default: {
-      break;
-    }
-  }
-
-  return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
+  // Adjust the expected data (If Still recieving data, leave unblocked)
+  return adjustExpected(params_) == AdjustedExpectedResult::STILL_RECEIVING_DATA
+      ? ObjectReceiverCallback::FlowControlState::UNBLOCKED
+      : ObjectReceiverCallback::FlowControlState::BLOCKED;
 }
 
 void MoQTestClient::onObjectStatus(const ObjectHeader& objHeader) {
@@ -158,17 +147,8 @@ void MoQTestClient::onObjectStatus(const ObjectHeader& objHeader) {
   }
 
   // Adjust the expected data
-  switch (params_.forwardingPreference) {
-    case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      if (!adjustExpectedForOneSubgroupPerGroup(params_)) {
-        XLOG(DBG1) << "onObject: No more data to be expected" << std::endl;
-        return;
-      }
-      break;
-    }
-    default: {
-      break;
-    }
+  if (adjustExpected(params_) == AdjustedExpectedResult::RECEIVED_ALL_DATA) {
+    XLOG(DBG1) << "onObject: No more data to be expected" << std::endl;
   }
 }
 
@@ -182,18 +162,9 @@ void MoQTestClient::onError(ResetStreamErrorCode) {
 void MoQTestClient::onSubscribeDone(SubscribeDone done) {
   XLOG(DBG1) << "onSubscribeDone" << std::endl;
 
-  switch (params_.forwardingPreference) {
-    case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      // If we are expecting more objects -> returns true
-      if (adjustExpectedForOneSubgroupPerGroup(params_)) {
-        subHandle_->unsubscribe();
-        XLOG(ERR) << "SubscribeDone recieved while objects are still expected";
-      }
-      break;
-    }
-    default: {
-      break;
-    }
+  if (adjustExpected(params_) == AdjustedExpectedResult::STILL_RECEIVING_DATA) {
+    subHandle_->unsubscribe();
+    XLOG(ERR) << "SubscribeDone recieved while objects are still expected";
   }
 }
 
@@ -250,7 +221,7 @@ bool MoQTestClient::validateSubscribedData(
   return true;
 }
 
-bool MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
+AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
     MoQTestParameters& params) {
   // Adjust Expected Group and ObjectId
   if (expectedGroup_ < params.lastGroupInTrack &&
@@ -260,9 +231,28 @@ bool MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
   } else if (expectedObjectId_ < params.lastObjectInTrack) {
     expectedObjectId_ += params.objectIncrement;
   } else {
-    return false;
+    return AdjustedExpectedResult::RECEIVED_ALL_DATA;
   }
-  return true;
+  return AdjustedExpectedResult::STILL_RECEIVING_DATA;
+}
+
+AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject(
+    MoQTestParameters& params) {
+  // Adjust Expected Group, ObjectId and Subgroup
+  if (expectedGroup_ < params.lastGroupInTrack &&
+      expectedObjectId_ == params.lastObjectInTrack) {
+    // Increment Group, Reset ObjectId and Subgroup
+    expectedGroup_ += params.groupIncrement;
+    expectedObjectId_ = params.startObject;
+    expectedSubgroup_ = 0;
+  } else if (expectedObjectId_ < params.lastObjectInTrack) {
+    // Increment ObjectId and Subgroup
+    expectedObjectId_ += params.objectIncrement;
+    expectedSubgroup_++;
+  } else {
+    return AdjustedExpectedResult::RECEIVED_ALL_DATA;
+  }
+  return AdjustedExpectedResult::STILL_RECEIVING_DATA;
 }
 
 folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
@@ -329,6 +319,24 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
   expectedObjectId_ = params.startObject;
   expectedSubgroup_ = 0;
   expectEndOfGroup_ = params.sendEndOfGroupMarkers;
+}
+
+AdjustedExpectedResult MoQTestClient::adjustExpected(
+    MoQTestParameters& params) {
+  switch (params_.forwardingPreference) {
+    case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
+      return adjustExpectedForOneSubgroupPerGroup(params);
+      break;
+    }
+    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
+      return adjustExpectedForOneSubgroupPerObject(params);
+      break;
+    }
+    default: {
+      break;
+    }
+  }
+  return AdjustedExpectedResult::ERROR_RECEIVING_DATA;
 }
 
 } // namespace moxygen

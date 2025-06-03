@@ -25,6 +25,12 @@ struct ExtensionError {
   std::string reason;
 };
 
+enum AdjustedExpectedResult : int {
+  RECEIVED_ALL_DATA = 0,
+  STILL_RECEIVING_DATA = 1,
+  ERROR_RECEIVING_DATA = 2
+};
+
 class MoQTestClient : public moxygen::Subscriber,
                       public std::enable_shared_from_this<MoQTestClient>,
                       public ObjectReceiverCallback {
@@ -82,7 +88,10 @@ class MoQTestClient : public moxygen::Subscriber,
       std::vector<Extension> extensions,
       MoQTestParameters* params);
 
-  // bool indicates if the expected data is complete
-  bool adjustExpectedForOneSubgroupPerGroup(MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpected(MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpectedForOneSubgroupPerGroup(
+      MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpectedForOneSubgroupPerObject(
+      MoQTestParameters& params);
 };
 } // namespace moxygen
