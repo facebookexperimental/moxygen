@@ -104,6 +104,9 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     const ObjectHeader& objHeader,
     Payload payload) {
   XLOG(DBG1) << "Calling onObject" << std::endl;
+  XLOG(DBG1) << "onObject: Group=" << objHeader.group
+             << "  Object Id=" << objHeader.id
+             << "  Sugroup:" << objHeader.subgroup << std::endl;
 
   ObjectHeader header = objHeader;
   // Validate the received data
@@ -255,6 +258,32 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject(
   return AdjustedExpectedResult::STILL_RECEIVING_DATA;
 }
 
+bool validatePayload(int objectSize, std::string payload) {
+  if (payload.size() != objectSize) {
+    return false;
+  }
+  return true;
+}
+
+AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
+    MoQTestParameters& params) {
+  // Adjust Expected Group, ObjectId and Subgroup
+  if (expectedGroup_ < params.lastGroupInTrack &&
+      expectedObjectId_ == params.lastObjectInTrack) {
+    // Increment Group, Reset ObjectId and Subgroup
+    expectedGroup_ += params.groupIncrement;
+    expectedObjectId_ = params.startObject;
+    expectedSubgroup_ = 0;
+  } else if (expectedObjectId_ < params.lastObjectInTrack) {
+    // Increment ObjectId, Switch Subgroup between 0 and 1
+    expectedObjectId_ += params.objectIncrement;
+    expectedSubgroup_ = 1 - expectedSubgroup_;
+  } else {
+    return AdjustedExpectedResult::RECEIVED_ALL_DATA;
+  }
+  return AdjustedExpectedResult::STILL_RECEIVING_DATA;
+}
+
 folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
     std::vector<Extension> extensions,
     MoQTestParameters* params) {
@@ -330,6 +359,10 @@ AdjustedExpectedResult MoQTestClient::adjustExpected(
     }
     case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
       return adjustExpectedForOneSubgroupPerObject(params);
+      break;
+    }
+    case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
+      return adjustExpectedForTwoSubgroupsPerGroup(params);
       break;
     }
     default: {

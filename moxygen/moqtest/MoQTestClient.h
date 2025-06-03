@@ -93,5 +93,7 @@ class MoQTestClient : public moxygen::Subscriber,
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForOneSubgroupPerObject(
       MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpectedForTwoSubgroupsPerGroup(
+      MoQTestParameters& params);
 };
 } // namespace moxygen
