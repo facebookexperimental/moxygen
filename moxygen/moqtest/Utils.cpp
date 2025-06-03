@@ -169,4 +169,34 @@ int getObjectSize(int objectId, MoQTestParameters* params) {
   }
 }
 
+// Extension Validation Helper Functions
+bool validateExtensionSize(
+    std::vector<Extension> extensions,
+    MoQTestParameters* params) {
+  return extensions.size() ==
+      (int)(params->testIntegerExtension >= 0) +
+      (int)(params->testVariableExtension >= 0);
+}
+
+bool validateIntExtensions(Extension intExt, MoQTestParameters* params) {
+  return intExt.type == 2 * params->testIntegerExtension;
+}
+
+bool validateVarExtensions(Extension varExt, MoQTestParameters* params) {
+  return (varExt.type == 2 * params->testVariableExtension + 1);
+}
+
+// Payload Validation Helper Function
+bool validatePayload(int objectSize, std::string payload) {
+  int payloadLength = (payload).length();
+  if (payloadLength != objectSize) {
+    return false;
+  }
+
+  if (payload != std::string(payloadLength, 't')) {
+    return false;
+  }
+
+  return true;
+}
 } // namespace moxygen

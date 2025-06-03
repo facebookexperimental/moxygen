@@ -25,4 +25,12 @@ std::vector<Extension> getExtensions(
 
 int getObjectSize(int objectId, MoQTestParameters* params);
 
+bool validatePayload(int objectSize, std::string payload);
+
+bool validateExtensionSize(
+    std::vector<Extension> extensions,
+    MoQTestParameters* params);
+bool validateIntExtensions(Extension intExt, MoQTestParameters* params);
+bool validateVarExtensions(Extension varExt, MoQTestParameters* params);
+
 } // namespace moxygen
