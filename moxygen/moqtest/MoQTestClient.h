@@ -75,6 +75,10 @@ class MoQTestClient : public moxygen::Subscriber,
   // Holds if current request expects end of group markers
   bool expectEndOfGroup_;
 
+  // Holds Datagram Objects Recieved - (Only relevant for forwarding preference
+  // 3)
+  uint64_t datagramObjects_;
+
   // Handles
   std::shared_ptr<MoQSession::SubscriptionHandle> subHandle_;
   std::shared_ptr<MoQSession::FetchHandle> fetchHandle_;
@@ -95,5 +99,7 @@ class MoQTestClient : public moxygen::Subscriber,
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForTwoSubgroupsPerGroup(
       MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpectedForDatagram(MoQTestParameters& params);
+  bool validateDatagramObjects(const ObjectHeader& header);
 };
 } // namespace moxygen

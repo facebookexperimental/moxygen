@@ -165,9 +165,18 @@ void MoQTestClient::onError(ResetStreamErrorCode) {
 void MoQTestClient::onSubscribeDone(SubscribeDone done) {
   XLOG(DBG1) << "onSubscribeDone" << std::endl;
 
-  if (adjustExpected(params_) == AdjustedExpectedResult::STILL_RECEIVING_DATA) {
-    subHandle_->unsubscribe();
+  if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
+    if (datagramObjects_ == 0) {
+      XLOG(ERR) << "Datagram Failed - 0 Objects Recieved" << std::endl;
+      subHandle_->unsubscribe();
+    } else {
+      XLOG(DBG1) << "Data has been successfully verified" << std::endl;
+    }
+  }
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
+      adjustExpected(params_) == AdjustedExpectedResult::STILL_RECEIVING_DATA) {
     XLOG(ERR) << "SubscribeDone recieved while objects are still expected";
+    subHandle_->unsubscribe();
   }
 }
 
@@ -178,19 +187,29 @@ bool MoQTestClient::validateSubscribedData(
   // applicable)
   XLOG(DBG8) << "Expected Group=" << expectedGroup_
              << " Expected ObjectId=" << expectedObjectId_;
-  if (header.group != expectedGroup_) {
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
+      header.group != expectedGroup_) {
     XLOG(ERR) << "Group Mismatch: Actual=" << header.group
               << "  Expected=" << expectedGroup_ << std::endl;
     return false;
   }
 
-  if (header.subgroup != expectedSubgroup_) {
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
+      header.subgroup != expectedSubgroup_) {
     XLOG(ERR) << "SubGroup Mismatch: Actual=" << header.subgroup
               << "  Expected=" << expectedSubgroup_ << std::endl;
     return false;
   }
 
-  if (header.id != expectedObjectId_) {
+  // Validate function for Datagram Objects
+  if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
+    if (!validateDatagramObjects(header)) {
+      return false;
+    }
+  }
+
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
+      header.id != expectedObjectId_) {
     XLOG(ERR) << "Object Id Mismatch: Actual=" << header.id
               << "  Expected=" << expectedObjectId_ << std::endl;
     return false;
@@ -214,7 +233,7 @@ bool MoQTestClient::validateSubscribedData(
   }
 
   // Validate Payload
-  int objectSize = moxygen::getObjectSize(expectedObjectId_, &params_);
+  int objectSize = moxygen::getObjectSize(header.id, &params_);
   if (!validatePayload(objectSize, payload)) {
     XLOG(ERR) << "Payload Mismatch: Actual=" << payload
               << "  Expected=" << std::string(objectSize, 't') << std::endl;
@@ -258,13 +277,6 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject(
   return AdjustedExpectedResult::STILL_RECEIVING_DATA;
 }
 
-bool validatePayload(int objectSize, std::string payload) {
-  if (payload.size() != objectSize) {
-    return false;
-  }
-  return true;
-}
-
 AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
     MoQTestParameters& params) {
   // Adjust Expected Group, ObjectId and Subgroup
@@ -279,6 +291,18 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
     expectedObjectId_ += params.objectIncrement;
     expectedSubgroup_ = 1 - expectedSubgroup_;
   } else {
+    return AdjustedExpectedResult::RECEIVED_ALL_DATA;
+  }
+  return AdjustedExpectedResult::STILL_RECEIVING_DATA;
+}
+
+AdjustedExpectedResult MoQTestClient::adjustExpectedForDatagram(
+    MoQTestParameters& params) {
+  // Adjust Object Count
+  datagramObjects_++;
+  // Only Complete if expectedGroup_ and expectedObjectId_ are at the end
+  if (expectedGroup_ == params_.lastGroupInTrack &&
+      expectedObjectId_ == params_.lastObjectInTrack) {
     return AdjustedExpectedResult::RECEIVED_ALL_DATA;
   }
   return AdjustedExpectedResult::STILL_RECEIVING_DATA;
@@ -348,6 +372,9 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
   expectedObjectId_ = params.startObject;
   expectedSubgroup_ = 0;
   expectEndOfGroup_ = params.sendEndOfGroupMarkers;
+
+  // Only relevant for Datagram Forwarding Preference
+  datagramObjects_ = 0;
 }
 
 AdjustedExpectedResult MoQTestClient::adjustExpected(
@@ -365,11 +392,58 @@ AdjustedExpectedResult MoQTestClient::adjustExpected(
       return adjustExpectedForTwoSubgroupsPerGroup(params);
       break;
     }
+    case (ForwardingPreference::DATAGRAM): {
+      if (receivingType_ == ReceivingType::FETCH) {
+        XLOG(ERR) << "Datagram Forwarding Preference Not Supported For Fetch";
+        return AdjustedExpectedResult::ERROR_RECEIVING_DATA;
+      }
+      return adjustExpectedForDatagram(params);
+      break;
+    }
     default: {
       break;
     }
   }
+
   return AdjustedExpectedResult::ERROR_RECEIVING_DATA;
+}
+
+bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
+  // Validate Datagram Group and ObjectId
+
+  // Group Must be Properly incremented
+  if (header.group % params_.groupIncrement != 0) {
+    XLOG(ERR) << "Datagram Group Mismatch: Actual=" << header.group
+              << "Expected Increment of " << params_.groupIncrement
+              << std::endl;
+    return false;
+  }
+
+  // Group Must be before last group in track
+  if (header.group > params_.lastGroupInTrack) {
+    XLOG(ERR) << "Datagram Group Mismatch: Actual=" << header.group
+              << "Can't be greater than last group " << params_.lastGroupInTrack
+              << std::endl;
+    return false;
+  }
+
+  // Object Id Must be Properly incremented
+  if (header.id % params_.objectIncrement != 0) {
+    XLOG(ERR) << "Datagram Object Id Mismatch: Actual=" << header.id
+              << "Expected Increment of " << params_.objectIncrement
+              << std::endl;
+    return false;
+  }
+
+  // Object Id Must be before last object in track
+  if (header.id > params_.lastObjectInTrack) {
+    XLOG(ERR) << "Datagram Object Id Mismatch: Actual=" << header.id
+              << "Can't be greater than last object "
+              << params_.lastObjectInTrack << std::endl;
+    return false;
+  }
+
+  return true;
 }
 
 } // namespace moxygen
