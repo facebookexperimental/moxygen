@@ -1981,6 +1981,55 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDuringDrain) {
   EXPECT_EQ(subscribeRes.error().errorCode, SubscribeErrorCode::INTERNAL_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, TestOnObjectPayload) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> subgroupPublisher = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    auto sgp = pub->beginSubgroup(0, 0, 0).value();
+    subgroupPublisher = sgp;
+    trackConsumer = pub;
+    sgp->beginObject(0, 100, test::makeBuf(10)).hasValue();
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg));
+
+  folly::coro::Baton receivedBeginObject;
+  EXPECT_CALL(*sg, beginObject(0, _, _, _))
+      .WillOnce(testing::Invoke([&receivedBeginObject]() {
+        receivedBeginObject.post();
+        return folly::unit;
+      }));
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto subscribeRes =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await receivedBeginObject;
+
+  auto payloadSendResult = subgroupPublisher->objectPayload(
+      folly::IOBuf::copyBuffer(std::string(90, 'x')), true);
+  EXPECT_TRUE(payloadSendResult.hasValue());
+  folly::coro::Baton receivedObjectPayload;
+  EXPECT_CALL(*sg, objectPayload(_, _))
+      .WillOnce(testing::Invoke([&receivedObjectPayload]() {
+        receivedObjectPayload.post();
+        return ObjectPublishStatus::DONE;
+      }));
+  EXPECT_CALL(*sg, endOfSubgroup());
+  co_await receivedObjectPayload;
+
+  expectSubscribeDone();
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
