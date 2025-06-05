@@ -118,6 +118,16 @@ class SubgroupConsumer {
   // consumer is writing, this resets the transport stream with the given error
   // code.  The stream will be reliably delivered up to the last checkpoint().
   virtual void reset(ResetStreamErrorCode error) = 0;
+
+  // This function will never be called by the library. It is meant to only be
+  // used by the application. The publisher can use this signal if it wants to
+  // pace data according to the rate at which the consumer is consuming it. If
+  // the publisher ignores this signal (which is perfectly valid), it may get
+  // a TOO_FAR_BEHIND if the client is unable to keep up.
+  virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  awaitReadyToConsume() {
+    return folly::makeSemiFuture();
+  }
 };
 
 // Interface for Publishing and Receiving Subscriptions

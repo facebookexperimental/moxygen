@@ -215,6 +215,11 @@ class MockSubgroupConsumer : public SubgroupConsumer {
       (),
       (override));
   MOCK_METHOD(void, reset, (ResetStreamErrorCode), (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>),
+      awaitReadyToConsume,
+      (),
+      (override));
 };
 
 class MockSubscriptionHandle : public Publisher::SubscriptionHandle {
