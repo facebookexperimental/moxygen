@@ -1863,6 +1863,26 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, SubscribeException) {
+  co_await setupMoQSession();
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  EXPECT_CALL(
+      *getPublisher(MoQControlCodec::Direction::SERVER), subscribe(_, _))
+      .WillOnce(testing::Invoke(
+          [&](SubscribeRequest /* sub */,
+              std::shared_ptr<TrackConsumer> /* pub */) -> TaskSubscribeResult {
+            co_yield folly::coro::co_error(folly::exception_wrapper(
+                std::runtime_error("Unsubscribe unsuccessful")));
+          }));
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasError());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
   serverWt_->createBidiStream();
   // Check that the client called stopSending and resetStream on the newly
