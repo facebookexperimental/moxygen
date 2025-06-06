@@ -1883,6 +1883,17 @@ CO_TEST_P_X(MoQSessionTest, SubscribeException) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, NoPublishHandler) {
+  co_await setupMoQSession();
+  serverSession_->setPublishHandler(nullptr);
+  auto subAnnResult =
+      co_await clientSession_->subscribeAnnounces(getSubscribeAnnounces());
+  EXPECT_TRUE(subAnnResult.hasError());
+  auto res = co_await clientSession_->trackStatus(getTrackStatusRequest());
+  EXPECT_EQ(res.statusCode, TrackStatusCode::UNKNOWN);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
   serverWt_->createBidiStream();
   // Check that the client called stopSending and resetStream on the newly
