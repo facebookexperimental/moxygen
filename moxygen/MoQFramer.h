@@ -246,6 +246,12 @@ constexpr uint64_t kVersionDraft11 = 0xff00000B;
 // version 8 and minor version 2.
 uint64_t getDraftMajorVersion(uint64_t version);
 
+void writeVarint(
+    folly::IOBufQueue& buf,
+    uint64_t value,
+    size_t& size,
+    bool& error) noexcept;
+
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
   std::vector<SetupParameter> params;

@@ -308,6 +308,43 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   EXPECT_EQ(parseResult->length, 8);
 }
 
+TEST(MoQFramerTest, ParseServerSetupQuicIntegerLength) {
+  // Malformed server setup, see that we don't crash
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  size_t size = 0;
+  bool error = false;
+
+  // Encode the selected version
+  uint64_t version = kVersionDraft10;
+  writeVarint(writeBuf, version, size, error);
+
+  // Encode the number of parameters
+  uint64_t numParams = 4;
+  writeVarint(writeBuf, numParams, size, error);
+
+  uint64_t param1key = 4;
+  writeVarint(writeBuf, param1key, size, error);
+
+  uint64_t param1length = 10;
+  writeVarint(writeBuf, param1length, size, error);
+
+  size_t sizeToGive = size;
+
+  uint64_t param1value = 100;
+  writeVarint(writeBuf, param1value, size, error);
+
+  uint64_t param2key = 20;
+  writeVarint(writeBuf, param2key, size, error);
+
+  uint64_t param2length = 10;
+  writeVarint(writeBuf, param2length, size, error);
+
+  auto buf = writeBuf.move();
+  folly::io::Cursor cursor(buf.get());
+  parseServerSetup(cursor, sizeToGive);
+}
+
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     folly::IOBufQueue& writeBuf,
     bool isStatus,

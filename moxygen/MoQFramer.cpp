@@ -57,11 +57,6 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     std::vector<SetupParameter>& params);
 bool datagramTypeHasExtensions(uint64_t version, StreamType streamType);
 bool datagramTypeIsStatus(StreamType streamType);
-void writeVarint(
-    folly::IOBufQueue& buf,
-    uint64_t value,
-    size_t& size,
-    bool& error) noexcept;
 
 void writeFixedString(
     folly::IOBufQueue& writeBuf,
@@ -182,6 +177,9 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
       }
       if (getDraftMajorVersion(version) < 11) {
         length -= res->second;
+        if (res->first > length) {
+          return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+        }
         res = quic::decodeQuicInteger(cursor, res->first);
         if (!res) {
           XLOG(ERR) << "Failed to decode parameter value";
@@ -666,6 +664,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
           return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
         }
         length -= res->second;
+        if (res->first > length) {
+          return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+        }
         res = quic::decodeQuicInteger(cursor, res->first);
       }
       if (!res) {
