@@ -171,7 +171,7 @@ folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
     p.key = key->first;
     if (p.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) ||
         p.key == folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
-      auto res = quic::decodeQuicInteger(cursor);
+      auto res = quic::decodeQuicInteger(cursor, length);
       if (!res) {
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
