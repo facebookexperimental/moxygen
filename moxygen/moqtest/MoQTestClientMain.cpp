@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
   folly::ScopedEventBaseThread evb;
+  XLOG(INFO) << "Starting MoQTestClient";
 
   // Initialize Client with url and moq params
   moxygen::MoQTestParameters defaultMoqParams;
@@ -82,8 +83,4 @@ int main(int argc, char** argv) {
   // Test a Subscribe Call
   folly::coro::blockingWait(
       client->subscribe(defaultMoqParams).scheduleOn(evb.getEventBase()));
-
-  sleep(100);
-
-  return 0;
 }
