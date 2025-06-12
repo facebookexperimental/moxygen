@@ -631,6 +631,9 @@ struct FullTrackName {
     return trackNamespace == other.trackNamespace &&
         trackName == other.trackName;
   }
+  bool operator!=(const FullTrackName& other) const {
+    return !(*this == other);
+  }
   bool operator<(const FullTrackName& other) const {
     return trackNamespace < other.trackNamespace ||
         (trackNamespace == other.trackNamespace && trackName < other.trackName);
