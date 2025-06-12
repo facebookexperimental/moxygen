@@ -34,7 +34,7 @@ TEST(Location, LatestObject) {
       getRequest(LocationType::LatestObject), AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 19);
   EXPECT_EQ(range.start.object, 78);
-  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+  EXPECT_EQ(range.end, kLocationMax);
 }
 
 TEST(Location, NextGroupStart) {
@@ -42,7 +42,7 @@ TEST(Location, NextGroupStart) {
       getRequest(LocationType::NextGroupStart), AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 20);
   EXPECT_EQ(range.start.object, 0);
-  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+  EXPECT_EQ(range.end, kLocationMax);
 }
 
 TEST(Location, LatestGroup) {
@@ -50,7 +50,7 @@ TEST(Location, LatestGroup) {
       getRequest(LocationType::LatestGroup), AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 19);
   EXPECT_EQ(range.start.object, 0);
-  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+  EXPECT_EQ(range.end, kLocationMax);
 }
 
 TEST(Location, AbsoluteStart) {
@@ -59,7 +59,7 @@ TEST(Location, AbsoluteStart) {
       AbsoluteLocation({1, 1}));
   EXPECT_EQ(range.start.group, 1);
   EXPECT_EQ(range.start.object, 2);
-  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+  EXPECT_EQ(range.end, kLocationMax);
 }
 
 TEST(Location, AbsoluteStartBehindLatest) {
@@ -68,7 +68,7 @@ TEST(Location, AbsoluteStartBehindLatest) {
       AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 19);
   EXPECT_EQ(range.start.object, 78);
-  EXPECT_EQ(range.end <=> kLocationMax, std::strong_ordering::equivalent);
+  EXPECT_EQ(range.end, kLocationMax);
 }
 
 TEST(Location, AbsoluteRange) {
@@ -95,7 +95,7 @@ TEST(Location, Compare) {
   AbsoluteLocation loc1 = {1, 2};
   AbsoluteLocation loc2 = {1, 3};
   AbsoluteLocation loc3 = {2, 1};
-  EXPECT_EQ(loc1 <=> loc1, std::strong_ordering::equivalent);
+  EXPECT_TRUE(loc1 == loc1);
   EXPECT_TRUE(loc1 < loc2);
   EXPECT_TRUE(loc2 > loc1);
   EXPECT_TRUE(loc2 < loc3);

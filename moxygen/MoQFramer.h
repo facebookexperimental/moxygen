@@ -302,8 +302,20 @@ struct RequestID {
   bool operator==(const RequestID& s) const {
     return value == s.value;
   }
-  std::strong_ordering operator<=>(const RequestID& other) const {
-    return value <=> other.value;
+  bool operator!=(const RequestID& s) const {
+    return value != s.value;
+  }
+  bool operator<(const RequestID& other) const {
+    return value < other.value;
+  }
+  bool operator<=(const RequestID& other) const {
+    return value <= other.value;
+  }
+  bool operator>(const RequestID& other) const {
+    return value > other.value;
+  }
+  bool operator>=(const RequestID& other) const {
+    return value >= other.value;
   }
   struct hash {
     size_t operator()(const RequestID& s) const {
@@ -490,24 +502,33 @@ struct AbsoluteLocation {
   AbsoluteLocation() = default;
   constexpr AbsoluteLocation(uint64_t g, uint64_t o) : group(g), object(o) {}
 
-  std::strong_ordering operator<=>(const AbsoluteLocation& other) const {
-    if (group < other.group) {
-      return std::strong_ordering::less;
-    } else if (group == other.group) {
-      if (object < other.object) {
-        return std::strong_ordering::less;
-      } else if (object == other.object) {
-        return std::strong_ordering::equivalent;
-      } else {
-        return std::strong_ordering::greater;
-      }
-    } else {
-      return std::strong_ordering::greater;
-    }
-  }
-
   bool operator==(const AbsoluteLocation& other) const {
     return group == other.group && object == other.object;
+  }
+
+  bool operator!=(const AbsoluteLocation& other) const {
+    return !(*this == other);
+  }
+
+  bool operator<(const AbsoluteLocation& other) const {
+    if (group < other.group) {
+      return true;
+    } else if (group == other.group) {
+      return object < other.object;
+    }
+    return false;
+  }
+
+  bool operator<=(const AbsoluteLocation& other) const {
+    return *this < other || *this == other;
+  }
+
+  bool operator>(const AbsoluteLocation& other) const {
+    return !(*this <= other);
+  }
+
+  bool operator>=(const AbsoluteLocation& other) const {
+    return !(*this < other);
   }
 
   friend std::ostream& operator<<(
