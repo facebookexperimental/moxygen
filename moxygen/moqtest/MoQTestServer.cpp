@@ -433,7 +433,9 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       &fetch.fullTrackName.trackNamespace);
   CHECK(res.hasValue())
       << "Only valid params must be passed into this function";
-  CHECK(res.value().forwardingPreference != ForwardingPreference::DATAGRAM)
+  CHECK_NE(
+      static_cast<int>(res.value().forwardingPreference),
+      static_cast<int>(ForwardingPreference::DATAGRAM))
       << "Datagram Forwarding Preference is not supported for fetch";
   MoQTestParameters params = res.value();
 
