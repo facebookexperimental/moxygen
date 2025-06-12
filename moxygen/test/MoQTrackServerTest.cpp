@@ -744,6 +744,7 @@ TEST_F(
   int integerExtension = 1;
   int variableExtension = 1;
   params_.sendEndOfGroupMarkers = true;
+  params_.objectsPerGroup = 10;
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
@@ -755,7 +756,7 @@ TEST_F(
     for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
       // Find Object Size
       int objectSize = moxygen::getObjectSize(objectId, &params_);
-      int subGroupId = objectId % 2;
+      int subGroupId = (objectId - params_.startObject) % 2;
       // Set expectations for beginObject
       if (objectId != params_.lastObjectInTrack) {
         EXPECT_CALL(
@@ -782,7 +783,7 @@ TEST_F(
                   return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
                       {});
                 }))
-            .WillRepeatedly(::testing::Return(
+            .WillOnce(::testing::Return(
                 folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
       } else {
         EXPECT_CALL(

@@ -142,7 +142,8 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Groups
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     // Begin a New Subgroup (Default Priority)
     auto maybeSubConsumer =
@@ -150,7 +151,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     auto subConsumer = maybeSubConsumer->get();
 
     // Iterate Through Objects in SubGroup
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isSubCancelled()) {
@@ -192,10 +193,11 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Objects
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects in SubGroup
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isSubCancelled()) {
@@ -242,19 +244,24 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Objects
+  LOG(INFO) << "Starting Two Subgroups Per Group" << std::endl;
 
   // Odd number of objects in track means end on subgroupZero
-  bool endZero = params.lastObjectInTrack % 2 == 1;
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  bool endZero = (params.lastObjectInTrack - params.startObject) % 2 == 1;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     std::vector<std::shared_ptr<SubgroupConsumer>> subConsumers;
     subConsumers.push_back(
         callback->beginSubgroup(groupNum, 0, kDefaultPriority).value());
-    subConsumers.push_back(
-        callback->beginSubgroup(groupNum, 1, kDefaultPriority).value());
+
+    if (params.objectsPerGroup > 1) {
+      subConsumers.push_back(
+          callback->beginSubgroup(groupNum, 1, kDefaultPriority).value());
+    }
 
     // Iterate Through Objects in SubGroup
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isSubCancelled()) {
@@ -271,14 +278,26 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
       if (objectId < params.lastObjectInTrack ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
+        int index;
+        if (params.objectsPerGroup > 1) {
+          index = (objectId - params.startObject) % 2;
+        } else {
+          index = 0;
+        }
+        LOG(INFO) << "Sending Object " << objectId << " to Subgroup " << index;
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
-        subConsumers[(objectId % 2)]->object(
+        subConsumers[index]->object(
             objectId, std::move(objectPayload), extensions, false);
 
       } else {
+        LOG(INFO) << "Sending End of Group Marker to Subgroup " << !endZero;
         subConsumers[(int)!endZero]->endOfGroup(objectId);
-        subConsumers[(int)endZero]->endOfSubgroup();
+
+        // For case of only 1 object being sent
+        if (params.objectsPerGroup > 1) {
+          subConsumers[(int)endZero]->endOfSubgroup();
+        }
       }
 
       // Set Delay Based on Object Frequency
@@ -289,7 +308,9 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     // If SubGroup Hasn't Been Ended Already
     if (!isSubCancelled() && !params.sendEndOfGroupMarkers) {
       subConsumers[0]->endOfSubgroup();
-      subConsumers[1]->endOfSubgroup();
+      if (params.objectsPerGroup > 1) {
+        subConsumers[1]->endOfSubgroup();
+      }
     }
   }
 
@@ -301,10 +322,11 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Objects
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects in SubGroup
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isSubCancelled()) {
@@ -411,7 +433,7 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       &fetch.fullTrackName.trackNamespace);
   CHECK(res.hasValue())
       << "Only valid params must be passed into this function";
-  CHECK(res.value().forwardingPreference == ForwardingPreference::DATAGRAM)
+  CHECK(res.value().forwardingPreference != ForwardingPreference::DATAGRAM)
       << "Datagram Forwarding Preference is not supported for fetch";
   MoQTestParameters params = res.value();
 
@@ -451,10 +473,11 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects in SubGroup
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isFetchCancelled()) {
@@ -500,10 +523,11 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isFetchCancelled()) {
@@ -548,10 +572,11 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
-  for (int groupNum = params.startGroup; groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = params.startGroup;
+       groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects in SubGroup
-    for (int objectId = params.startObject;
+    for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isFetchCancelled()) {
@@ -564,7 +589,12 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
       std::vector<Extension> extensions = getExtensions(
           params.testIntegerExtension, params.testVariableExtension);
 
-      int subGroupId = objectId % 2;
+      int subgroupId;
+      if (params.objectsPerGroup > 1) {
+        subgroupId = (objectId - params.startObject) % 2;
+      } else {
+        subgroupId = 0;
+      }
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
       if (objectId < params.lastObjectInTrack ||
@@ -574,13 +604,13 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
         auto objectPayload = folly::IOBuf::copyBuffer(p);
         callback->object(
             groupNum,
-            subGroupId,
+            subgroupId,
             objectId,
             std::move(objectPayload),
             extensions,
             false);
       } else {
-        callback->endOfGroup(groupNum, subGroupId, objectId, extensions, false);
+        callback->endOfGroup(groupNum, subgroupId, objectId, extensions, false);
       }
 
       // Set Delay Based on Object Frequency
