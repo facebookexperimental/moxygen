@@ -32,6 +32,7 @@ class MoQClientParams:
     test_variable_extension: int = -1
     send_end_of_group_markers: bool = False
     publisher_delivery_timeout: int = 0  # Not Implemented Yet
+    request_type: str = "subscribe"  # subscribe or fetch
 
 
 class MoqtestCogwheelTest(CogwheelTest):
@@ -100,6 +101,8 @@ class MoqtestCogwheelTest(CogwheelTest):
                 else "",
                 "--publisher_delivery_timeout",
                 str(params.publisher_delivery_timeout),
+                "--request",
+                str(params.request_type),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -121,13 +124,17 @@ class MoqtestCogwheelTest(CogwheelTest):
         return None
 
     def get_client_output(self, params: MoQClientParams) -> List[str]:
+        # Get the server address
         ip = self.wait_for_server_address()
         if not ip:
             self.fail("Failed to get server address")
 
+        # Start the client
         client_process = self.create_client_process_with_params(
             params, ip, CONNECTION_PORT
         )
+
+        # Wait for the client to finish
         client_process.wait()
         client_process_error = client_process.stderr
         if not client_process_error:
@@ -161,6 +168,26 @@ class MoqtestCogwheelTest(CogwheelTest):
                 else:
                     self.fail(test_name + "ERROR: resulted in error=" + line)
         return check
+
+    def check_lines_fetch(
+        self,
+        lines: List[str],
+        test_name: str,
+        forwarding_preference: Union[int, None] = None,
+    ) -> bool:
+        for line in lines:
+            if self.failure_message in line:
+                if forwarding_preference:
+                    self.fail(
+                        test_name
+                        + "ERROR: with forwarding preference "
+                        + str(forwarding_preference)
+                        + " resulted in error="
+                        + line
+                    )
+                else:
+                    self.fail(test_name + "ERROR: resulted in error=" + line)
+        return True
 
     @cogwheel_test
     def test_client_server_connection(self) -> None:
@@ -198,7 +225,6 @@ class MoqtestCogwheelTest(CogwheelTest):
             params.forwardingPreference = i
 
             error_lines = self.get_client_output(params)
-            print(error_lines)
             check = False
 
             for line in error_lines:
@@ -297,6 +323,142 @@ class MoqtestCogwheelTest(CogwheelTest):
 
             check = self.check_lines(
                 error_lines, "test_subscribe_start_object_equals_last_object", i
+            )
+            # Check if Test Results in Success
+            self.assertTrue(check)
+        return None
+
+    @cogwheel_test
+    def test_fetch_client_server_connection(self) -> None:
+        """
+        Test to verify that the client can connect to the server using fetch and recieves a Success.
+        """
+
+        params = MoQClientParams()
+        params.request_type = "fetch"
+        error_lines = self.get_client_output(params)
+        check = self.check_lines_fetch(
+            error_lines, "test_fetch_client_server_connection"
+        )
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_fetch_client_with_end_of_flag_markers(self) -> None:
+        """
+        Test To Verify End of Group Markers result in a success.
+        Expect 10 onObject Calls Per Group and 1 onObjectStatus Call Per Group. (10 objects Per Group)
+        Tested for first 3 forwarding preference types for fetch.
+        """
+
+        params = MoQClientParams()
+        params.send_end_of_group_markers = True
+        params.last_group = 3
+        params.last_object = 10
+        params.request_type = "fetch"
+
+        for i in range(0, 3):
+            expected_objects = 40
+            expected_end_of_group_markers = 4
+            called_objects = 0
+            called_objects_status = 0
+
+            # Test For each Forwarding Preference
+            params.forwardingPreference = i
+
+            error_lines = self.get_client_output(params)
+
+            for line in error_lines:
+                if self.onObject_message in line:
+                    called_objects += 1
+                if self.onObjectStatus_message in line:
+                    called_objects_status += 1
+                if self.failure_message in line:
+                    self.fail(
+                        "Fetch with forwarding preference "
+                        + str(i)
+                        + " resulted in error="
+                        + line
+                    )
+
+            # Check if Object calls are correct
+            self.assertEqual(called_objects, expected_objects)
+
+            # Check if Object Status calls are correct
+            self.assertEqual(called_objects_status, expected_end_of_group_markers)
+
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_fetch_client_with_extensions(self) -> None:
+        """
+        Test To Verify Extensions result in a success.
+        Tested for first 3 forwarding preference types for fetch.
+        """
+
+        params = MoQClientParams()
+        params.test_integer_extension = 10
+        params.test_variable_extension = 10
+        params.request_type = "fetch"
+
+        for i in range(0, 3):
+            # Test For each Forwarding Preference
+            params.forwardingPreference = i
+
+            error_lines = self.get_client_output(params)
+            check = self.check_lines_fetch(
+                error_lines, "test_fetch_client_with_extensions", i
+            )
+            # Check if Test Results in Success
+            self.assertTrue(check)
+
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_fetch_start_group_equals_last_group(self) -> None:
+        """
+        Test To Verify that case of start_group = last_group results in a success.
+        Tested For first 3 Forwarding Preference Types.
+        """
+
+        params = MoQClientParams()
+        params.last_group = 0
+        params.request_type = "fetch"
+
+        for i in range(0, 3):
+            # Test For each Forwarding Preference
+            params.forwardingPreference = i
+
+            error_lines = self.get_client_output(params)
+            check = self.check_lines_fetch(
+                error_lines, "test_fetch_start_group_equals_last_group", i
+            )
+            # Check if Test Results in Success
+            self.assertTrue(check)
+        return None
+
+    @cogwheel_test
+    def test_fetch_start_object_equals_last_object(self) -> None:
+        """
+        Test To Verify that case of start_object = last_object results in a success.
+        Tested For first 3 Forwarding Preference Types.
+        """
+
+        params = MoQClientParams()
+        params.last_object = 0
+        params.request_type = "fetch"
+
+        for i in range(0, 3):
+            # Test For each Forwarding Preference
+            params.forwardingPreference = i
+
+            error_lines = self.get_client_output(params)
+            check = self.check_lines_fetch(
+                error_lines, "test_fetch_start_object_equals_last_object", i
             )
             # Check if Test Results in Success
             self.assertTrue(check)

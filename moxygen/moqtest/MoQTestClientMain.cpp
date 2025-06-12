@@ -36,6 +36,10 @@ DEFINE_uint64(
     last_object_in_track,
     FLAGS_objects_per_group + (int)FLAGS_send_end_of_group_markers,
     "Last object in track");
+DEFINE_string(
+    request,
+    "subscribe",
+    "Request Type: must be one of \"subscribe\" or \"fetch\"");
 
 } // namespace moxygen
 
@@ -79,8 +83,17 @@ int main(int argc, char** argv) {
   folly::coro::blockingWait(
       client->connect(evb.getEventBase()).scheduleOn(evb.getEventBase()));
 
-  XLOG(INFO) << "Subscribing to " << url.getHostAndPort();
-  // Test a Subscribe Call
-  folly::coro::blockingWait(
-      client->subscribe(defaultMoqParams).scheduleOn(evb.getEventBase()));
+  if (moxygen::FLAGS_request == "subscribe") {
+    XLOG(INFO) << "Subscribing to " << url.getHostAndPort();
+    // Test a Subscribe Call
+    folly::coro::blockingWait(
+        client->subscribe(defaultMoqParams).scheduleOn(evb.getEventBase()));
+  } else if (moxygen::FLAGS_request == "fetch") {
+    XLOG(INFO) << "Fetching from " << url.getHostAndPort();
+    // Test a Fetch Call
+    folly::coro::blockingWait(
+        client->fetch(defaultMoqParams).scheduleOn(evb.getEventBase()));
+  } else {
+    XLOG(ERR) << "Invalid Request Type: " << moxygen::FLAGS_request;
+  }
 }

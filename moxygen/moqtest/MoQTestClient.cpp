@@ -106,9 +106,6 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     const ObjectHeader& objHeader,
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject" << std::endl;
-  XLOG(DBG1) << "MoQTest DEBUGGING: onObject: Group=" << objHeader.group
-             << "  Object Id=" << objHeader.id
-             << "  Sugroup:" << objHeader.subgroup << std::endl;
 
   ObjectHeader header = objHeader;
   // Validate the received data
@@ -205,6 +202,10 @@ bool MoQTestClient::validateSubscribedData(
   // applicable)
   XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << expectedGroup_
              << " Expected ObjectId=" << expectedObjectId_;
+  XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
+             << " end of group markers=" << params_.sendEndOfGroupMarkers
+             << " expected end of group markers=" << expectEndOfGroup_
+             << std::endl;
   if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
       header.group != expectedGroup_) {
     XLOG(ERR)
