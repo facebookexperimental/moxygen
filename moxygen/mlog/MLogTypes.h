@@ -2,15 +2,21 @@
 
 #pragma once
 
-#include <folly/Optional.h>
-#include <folly/io/IOBuf.h>
 #include <cstdint>
-#include <map>
-#include <memory>
 #include <string>
 #include <vector>
+#include "folly/Optional.h"
+#include "folly/io/IOBuf.h"
+#include "folly/json/dynamic.h"
 
 namespace moxygen {
+
+// Constants + Helper Structs
+
+enum VantagePoint : int {
+  CLIENT = 0,
+  SERVER = 1,
+};
 
 // Data Type Structs
 
@@ -25,98 +31,74 @@ struct MOQTExtensionHeader {
   std::unique_ptr<folly::IOBuf> payload;
 };
 
-struct MOQTPathSetupParameter {
-  std::string name = std::string("path");
-  std::string value = std::string("");
-};
+// No RawInfo Value Type For Now
+enum MOQTParameterType { STRING, INT };
 
-struct MOQTMaxSubscribeIdSetupParameter {
-  std::string name = std::string("max_subscribe_id");
-  uint64_t value{0};
-};
+class MOQTParameter {
+ public:
+  MOQTParameter() {}
+  MOQTParameterType type;
+  std::string name;
+  std::string stringValue;
+  uint64_t intValue;
+  ~MOQTParameter() {}
 
-struct MOQTUnknownSetupParameter {
-  std::string name = std::string("unknown");
-  uint64_t nameBytes{0};
-  folly::Optional<uint64_t> length;
-  folly::Optional<uint64_t> value;
-  std::unique_ptr<folly::IOBuf> valueBytes;
-};
-
-union MOQTBaseSetupParameters {
-  MOQTPathSetupParameter path;
-  MOQTMaxSubscribeIdSetupParameter maxSubscribeId;
-  MOQTUnknownSetupParameter unknown;
-};
-
-struct MOQTSetupParameter {
-  // Variant so Types being mapped to can be extended
-  std::map<std::string, std::variant<MOQTBaseSetupParameters>> map;
-};
-
-struct MOQTAuthorizationInfoParameter {
-  std::string name = std::string("authorization_info");
-  folly::Optional<std::string> value;
-};
-
-struct MOQTDeliveryTimeoutParameter {
-  std::string name = std::string("delivery_timeout");
-  uint64_t value{0};
-};
-
-struct MOQTMaxCacheDurationParameter {
-  std::string name = std::string("max_cache_duration");
-  uint64_t value{0};
-};
-
-struct MOQTUnknownParameter {
-  std::string name = std::string("unknown");
-  uint64_t nameBytes{0};
-  folly::Optional<uint64_t> length;
-  folly::Optional<uint64_t> value;
-  std::unique_ptr<folly::IOBuf> valueBytes;
-};
-
-union MOQTBaseParameters {
-  MOQTAuthorizationInfoParameter authorizationInfo;
-  MOQTDeliveryTimeoutParameter deliveryTimeout;
-  MOQTMaxCacheDurationParameter maxCacheDuration;
-  MOQTUnknownParameter unknown;
-};
-
-struct MOQTParameter {
-  // Variant so Types being mapped to can be extended
-  std::map<std::string, std::variant<MOQTBaseParameters>> map;
+  folly::dynamic toObject();
 };
 
 union MOQTByteString {
   std::string value;
   std::unique_ptr<folly::IOBuf> valueBytes;
+
+  MOQTByteString() {}
+
+  ~MOQTByteString() {}
 };
 
-struct MOQTClientSetupMessage {
-  std::string type = std::string("client_setup");
+class MOQTBaseControlMessage {
+ public:
+  MOQTBaseControlMessage() = default;
+  std::string type;
+  virtual folly::dynamic toObject() = 0;
+  virtual ~MOQTBaseControlMessage() {}
+};
+
+class MOQTClientSetupMessage : public MOQTBaseControlMessage {
+ public:
+  MOQTClientSetupMessage() {
+    type = "client_setup";
+  }
+  folly::dynamic toObject() override;
   uint64_t numberOfSupportedVersions{0};
   std::vector<uint64_t> supportedVersions;
   uint64_t numberOfParameters{0};
-  std::vector<MOQTSetupParameter> setupParameters;
+  std::vector<MOQTParameter> setupParameters;
 };
 
-struct MOQTServerSetupMessage {
-  std::string type = std::string("server_setup");
+class MOQTServerSetupMessage : public MOQTBaseControlMessage {
+ public:
+  MOQTServerSetupMessage() {
+    type = "server_setup";
+  }
   uint64_t selectedVersion{0};
   uint64_t numberOfParameters{0};
-  std::vector<MOQTSetupParameter> setupParameters;
+  std::vector<MOQTParameter> setupParameters;
 };
 
-struct MOQTGoaway {
-  std::string type = std::string("goaway");
+class MOQTGoaway : public MOQTBaseControlMessage {
+ public:
+  MOQTGoaway() {
+    type = "goaway";
+  }
   folly::Optional<uint64_t> length;
   std::unique_ptr<folly::IOBuf> newSessionUri;
 };
 
-struct MOQTSubscribe {
-  std::string type = std::string("subscribe");
+class MOQTSubscribe : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribe() {
+    type = "subscribe";
+  }
   uint64_t subscribeId{0};
   uint64_t trackAlias{0};
   std::vector<MOQTByteString> trackNamespace;
@@ -131,8 +113,11 @@ struct MOQTSubscribe {
   std::vector<MOQTParameter> subscribeParameters;
 };
 
-struct MOQTSubscribeUpdate {
-  std::string type = std::string("subscribe_update");
+class MOQTSubscribeUpdate : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeUpdate() {
+    type = "subscribe_update";
+  }
   uint64_t subscribeId{0};
   uint64_t startGroup;
   uint64_t startObject;
@@ -142,18 +127,23 @@ struct MOQTSubscribeUpdate {
   std::vector<MOQTParameter> subscribeParameters;
 };
 
-struct MOQTUnsubscribe {
-  std::string type = std::string("unsubscribe");
+class MOQTUnsubscribe : public MOQTBaseControlMessage {
+ public:
+  MOQTUnsubscribe() {
+    type = "unsubscribe";
+  }
   uint64_t subscribeId{0};
 };
 
-struct MOQTFetch {
-  std::string type = std::string("fetch");
+class MOQTFetch : public MOQTBaseControlMessage {
+ public:
+  MOQTFetch() {
+    type = "fetch";
+  }
   uint64_t subscribeId{0};
   uint8_t subscriberPriority;
   uint8_t groupOrder;
   uint64_t fetchType;
-
   std::vector<MOQTByteString> trackNamespace;
   folly::Optional<MOQTByteString> trackName;
   folly::Optional<uint64_t> startGroup;
@@ -162,57 +152,80 @@ struct MOQTFetch {
   folly::Optional<uint64_t> endObject;
   folly::Optional<uint64_t> joiningSubscribeId;
   folly::Optional<uint64_t> precedingGroupOffset;
-
   uint64_t numberOfParameters;
   std::vector<MOQTParameter> parameters;
 };
 
-struct MOQTFetchCancel {
-  std::string type = std::string("fetch_cancel");
+class MOQTFetchCancel : public MOQTBaseControlMessage {
+ public:
+  MOQTFetchCancel() {
+    type = "fetch_cancel";
+  }
   uint64_t subscribeId{0};
 };
 
-struct MOQTAnnounceOk {
-  std::string type = std::string("announce_ok");
+class MOQTAnnounceOk : public MOQTBaseControlMessage {
+ public:
+  MOQTAnnounceOk() {
+    type = "announce_ok";
+  }
   std::vector<MOQTByteString> trackNamespace;
 };
 
-struct MOQTAnnounceError {
-  std::string type = std::string("announce_error");
-  std::vector<MOQTByteString> trackNamespace;
-  uint64_t errorCode;
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
-};
-
-struct MOQTAnnounceCancel {
-  std::string type = std::string("announce_cancel");
+class MOQTAnnounceError : public MOQTBaseControlMessage {
+ public:
+  MOQTAnnounceError() {
+    type = "announce_error";
+  }
   std::vector<MOQTByteString> trackNamespace;
   uint64_t errorCode;
   folly::Optional<std::string> reason;
   folly::Optional<std::string> reasonBytes;
 };
 
-struct MOQTTrackStatusRequest {
-  std::string type = std::string("track_status_request");
+class MOQTAnnounceCancel : public MOQTBaseControlMessage {
+ public:
+  MOQTAnnounceCancel() {
+    type = "announce_cancel";
+  }
+  std::vector<MOQTByteString> trackNamespace;
+  uint64_t errorCode;
+  folly::Optional<std::string> reason;
+  folly::Optional<std::string> reasonBytes;
+};
+
+class MOQTTrackStatusRequest : public MOQTBaseControlMessage {
+ public:
+  MOQTTrackStatusRequest() {
+    type = "track_status_request";
+  }
   std::vector<MOQTByteString> trackNamespace;
   MOQTByteString trackName;
 };
 
-struct MOQTSubscribeAnnounces {
-  std::string type = std::string("subscribe_announces");
+class MOQTSubscribeAnnounces : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeAnnounces() {
+    type = "subscribe_announces";
+  }
   std::vector<MOQTByteString> trackNamespace;
   uint64_t numberOfParameters;
   std::vector<MOQTParameter> parameters;
 };
 
-struct MOQTUnsubscribeAnnounces {
-  std::string type = std::string("unsubscribe_announces");
+class MOQTUnsubscribeAnnounces : public MOQTBaseControlMessage {
+ public:
+  MOQTUnsubscribeAnnounces() {
+    type = "unsubscribe_announces";
+  }
   std::vector<MOQTByteString> trackNamespace;
 };
 
-struct MOQTSubscribeOk {
-  std::string type = std::string("subscribe_ok");
+class MOQTSubscribeOk : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeOk() {
+    type = "subscribe_ok";
+  }
   uint64_t subscribeId{0};
   uint64_t expires;
   uint8_t groupOrder;
@@ -223,8 +236,11 @@ struct MOQTSubscribeOk {
   std::vector<MOQTParameter> subscribeParameters;
 };
 
-struct MOQTSubscribeError {
-  std::string type = std::string("subscribe_error");
+class MOQTSubscribeError : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeError() {
+    type = "subscribe_error";
+  }
   uint64_t subscribeId{0};
   uint64_t errorCode;
   folly::Optional<std::string> reason;
@@ -232,8 +248,11 @@ struct MOQTSubscribeError {
   uint64_t trackAlias;
 };
 
-struct MOQTFetchOk {
-  std::string type = std::string("fetch_ok");
+class MOQTFetchOk : public MOQTBaseControlMessage {
+ public:
+  MOQTFetchOk() {
+    type = "fetch_ok";
+  }
   uint64_t subscribeId{0};
   uint8_t groupOrder;
   uint8_t endOfTrack;
@@ -243,16 +262,22 @@ struct MOQTFetchOk {
   std::vector<MOQTParameter> subscribeParameters;
 };
 
-struct MOQTFetchError {
-  std::string type = std::string("fetch_error");
+class MOQTFetchError : public MOQTBaseControlMessage {
+ public:
+  MOQTFetchError() {
+    type = "fetch_error";
+  }
   uint64_t subscribeId{0};
   uint64_t errorCode;
   folly::Optional<std::string> reason;
   folly::Optional<std::string> reasonBytes;
 };
 
-struct MOQTSubscribeDone {
-  std::string type = std::string("subscribe_done");
+class MOQTSubscribeDone : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeDone() {
+    type = "subscribe_done";
+  }
   uint64_t subscribeId{0};
   uint64_t statusCode;
   uint64_t streamCount;
@@ -260,30 +285,45 @@ struct MOQTSubscribeDone {
   folly::Optional<std::string> reasonBytes;
 };
 
-struct MOQTMaxSubscribeId {
-  std::string type = std::string("max_subscribe_id");
+class MOQTMaxSubscribeId : public MOQTBaseControlMessage {
+ public:
+  MOQTMaxSubscribeId() {
+    type = "max_subscribe_id";
+  }
   uint64_t subscribeId{0};
 };
 
-struct MOQTSubscribesBlocked {
-  std::string type = std::string("subscribes_blocked");
+class MOQTSubscribesBlocked : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribesBlocked() {
+    type = "subscribes_blocked";
+  }
   uint64_t maximumSubscribeId{0};
 };
 
-struct MOQTAnnounce {
-  std::string type = std::string("announce");
+class MOQTAnnounce : public MOQTBaseControlMessage {
+ public:
+  MOQTAnnounce() {
+    type = "announce";
+  }
   std::vector<MOQTByteString> trackNamespace;
   uint64_t numberOfParameters;
   std::vector<MOQTParameter> parameters;
 };
 
-struct MOQTUnannounce {
-  std::string type = std::string("unannounce");
+class MOQTUnannounce : public MOQTBaseControlMessage {
+ public:
+  MOQTUnannounce() {
+    type = "unannounce";
+  }
   std::vector<MOQTByteString> trackNamespace;
 };
 
-struct MOQTTrackStatus {
-  std::string type = std::string("track_status");
+class MOQTTrackStatus : public MOQTBaseControlMessage {
+ public:
+  MOQTTrackStatus() {
+    type = "track_status";
+  }
   std::vector<MOQTByteString> trackNamespace;
   MOQTByteString trackName;
   uint64_t statusCode;
@@ -291,65 +331,37 @@ struct MOQTTrackStatus {
   uint64_t lastObjectId;
 };
 
-struct MOQTSubscribeAnnouncesOk {
-  std::string type = std::string("subscribe_announces_ok");
+class MOQTSubscribeAnnouncesOk : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeAnnouncesOk() {
+    type = "subscribe_announces_ok";
+  }
   std::vector<MOQTByteString> trackNamespace;
 };
 
-struct MOQTSubscribeAnnouncesError {
-  std::string type = std::string("subscribe_announces_error");
+class MOQTSubscribeAnnouncesError : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeAnnouncesError() {
+    type = "subscribe_announces_error";
+  }
   std::vector<MOQTByteString> trackNamespace;
   uint64_t errorCode;
   folly::Optional<std::string> reason;
   folly::Optional<std::string> reasonBytes;
 };
 
-union MOQTBaseControlMessages {
-  MOQTClientSetupMessage clientSetup;
-  MOQTServerSetupMessage serverSetup;
-  MOQTGoaway goaway;
-  MOQTSubscribe subscribe;
-  MOQTSubscribeUpdate subscribeUpdate;
-  MOQTUnsubscribe unsubscribe;
-  MOQTFetch fetch;
-  MOQTFetchCancel fetchCancel;
-  MOQTAnnounceOk announceOk;
-  MOQTAnnounceError announceError;
-  MOQTAnnounceCancel announceCancel;
-  MOQTTrackStatusRequest trackStatusRequest;
-  MOQTSubscribeAnnounces subscribeAnnounces;
-  MOQTUnsubscribeAnnounces unsubscribeAnnounces;
-  MOQTSubscribeOk subscribeOk;
-  MOQTSubscribeError subscribeError;
-  MOQTFetchOk fetchOk;
-  MOQTFetchError fetchError;
-  MOQTSubscribeDone subscribeDone;
-  MOQTMaxSubscribeId maxSubscribeId;
-  MOQTSubscribesBlocked subscribesBlocked;
-  MOQTAnnounce announce;
-  MOQTUnannounce unannounce;
-  MOQTTrackStatus trackStatus;
-  MOQTSubscribeAnnouncesOk subscribeAnnouncesOk;
-  MOQTSubscribeAnnouncesError subscribeAnnouncesError;
-};
-
-struct MOQTControlMessage {
-  // Variant so Types being mapped to can be extended
-  std::map<std::string, std::variant<MOQTBaseControlMessages>> map;
-};
-
 // MOQTEvents Structs
 struct MOQTControlMessageCreated {
   uint64_t streamId{0};
   folly::Optional<uint64_t> length;
-  MOQTControlMessage message;
+  std::unique_ptr<MOQTBaseControlMessage> message;
   std::unique_ptr<folly::IOBuf> raw;
 };
 
 struct MOQTControlMessageParsed {
   uint64_t streamId{0};
   folly::Optional<uint64_t> length;
-  MOQTControlMessage message;
+  std::unique_ptr<MOQTBaseControlMessage> message;
   std::unique_ptr<folly::IOBuf> raw;
 };
 
