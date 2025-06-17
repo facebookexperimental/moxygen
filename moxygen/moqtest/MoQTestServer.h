@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "moxygen/MoQServer.h"
 #include "moxygen/Publisher.h"
 #include "moxygen/moqtest/Types.h"
@@ -13,7 +15,8 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
   MoQTestSubscriptionHandle(
       SubscribeOk ok,
       folly::CancellationSource* cancellationSource)
-      : Publisher::SubscriptionHandle(ok), cancelSource_(cancellationSource){};
+      : Publisher::SubscriptionHandle(std::move(ok)),
+        cancelSource_(cancellationSource){};
 
   virtual void unsubscribe() override;
   virtual void subscribeUpdate(SubscribeUpdate subUpdate) override;
@@ -25,7 +28,9 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
 
 class MoQTestFetchHandle : public Publisher::FetchHandle {
  public:
-  MoQTestFetchHandle(FetchOk ok, folly::CancellationSource* cancellationSource)
+  MoQTestFetchHandle(
+      const FetchOk& ok,
+      folly::CancellationSource* cancellationSource)
       : Publisher::FetchHandle(ok),
         fetchOk_(ok),
         cancelSource_(cancellationSource){};

@@ -12,6 +12,7 @@ namespace moxygen {
 enum ReceivingType : int {
   SUBSCRIBE = 0,
   FETCH = 1,
+  UNKNOWN_RECEIVING_TYPE = 2
 };
 
 enum ExtensionErrorCode : int {
@@ -39,6 +40,11 @@ class MoQTestClient : public moxygen::Subscriber,
 
   ~MoQTestClient() override {}
 
+  MoQTestClient(const MoQTestClient&) = delete;
+  MoQTestClient& operator=(const MoQTestClient&) = delete;
+  MoQTestClient(MoQTestClient&&) = default;
+  MoQTestClient& operator=(MoQTestClient&&) = default;
+
   folly::coro::Task<void> connect(folly::EventBase* evb);
 
   void initialize();
@@ -57,27 +63,29 @@ class MoQTestClient : public moxygen::Subscriber,
   virtual void onError(ResetStreamErrorCode) override;
   virtual void onSubscribeDone(SubscribeDone done) override;
 
+  void setLogger(std::shared_ptr<MLogger> logger);
+
  private:
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;
 
   // Holds Current Request Parameters
-  ReceivingType receivingType_;
+  ReceivingType receivingType_ = ReceivingType::UNKNOWN_RECEIVING_TYPE;
   MoQTestParameters params_;
 
   // Holds Current Request Group, SubGroup, and objectId (updated based on
   // expected data)
-  uint64_t expectedGroup_;
-  uint64_t expectedSubgroup_;
-  uint64_t expectedObjectId_;
+  uint64_t expectedGroup_{};
+  uint64_t expectedSubgroup_{};
+  uint64_t expectedObjectId_{};
 
   // Holds if current request expects end of group markers
-  bool expectEndOfGroup_;
+  bool expectEndOfGroup_{};
 
   // Holds Datagram Objects Recieved - (Only relevant for forwarding preference
   // 3)
-  uint64_t datagramObjects_;
+  uint64_t datagramObjects_{};
 
   // Handles
   std::shared_ptr<MoQSession::SubscriptionHandle> subHandle_;
@@ -89,7 +97,7 @@ class MoQTestClient : public moxygen::Subscriber,
       const ObjectHeader& header,
       const std::string& payload);
   folly::Expected<folly::Unit, ExtensionError> validateExtensions(
-      std::vector<Extension> extensions,
+      const std::vector<Extension>& extensions,
       MoQTestParameters* params);
 
   AdjustedExpectedResult adjustExpected(MoQTestParameters& params);

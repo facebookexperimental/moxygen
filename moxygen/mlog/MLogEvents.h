@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <variant>
 #include "moxygen/mlog/MLogTypes.h"
 
@@ -15,11 +16,11 @@ const std::string kControlMessageCreatedName = "moqt:control_message_created";
 class MLogEvent {
  public:
   MLogEvent(VantagePoint vantagePoint, uint64_t time, std::string name)
-      : vantagePoint_(vantagePoint), time_(time), name_(name){};
+      : vantagePoint_(vantagePoint), time_(time), name_(std::move(name)) {}
 
   VantagePoint vantagePoint_;
   uint64_t time_{0};
-  std::string name_{""};
+  std::string name_;
   std::variant<MOQTControlMessageCreated>
       data_; // Add more events to variant as implemented
 };

@@ -8,10 +8,11 @@
 
 #include <moxygen/util/QuicConnector.h>
 
-#include <quic/api/QuicSocket.h>
 #include <quic/client/QuicClientTransport.h>
 
 #include <fizz/protocol/CertificateVerifier.h>
+
+#include <utility>
 
 // TODO: clean this up.
 namespace proxygen {
@@ -68,7 +69,7 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
 
 folly::coro::Task<ServerSetup> MoQClient::completeSetupMoQSession(
     proxygen::WebTransport* wt,
-    folly::Optional<std::string> pathParam,
+    const folly::Optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler) {
   //  Create MoQSession and Setup MoQSession parameters
@@ -76,7 +77,11 @@ folly::coro::Task<ServerSetup> MoQClient::completeSetupMoQSession(
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->start();
-  return moqSession_->setup(getClientSetup(pathParam));
+  ClientSetup clientSetup = getClientSetup(pathParam);
+  if (logger_) {
+    logger_->logClientSetup(clientSetup);
+  }
+  return moqSession_->setup(clientSetup);
 }
 
 ClientSetup MoQClient::getClientSetup(
@@ -96,14 +101,19 @@ ClientSetup MoQClient::getClientSetup(
         "",
         kMaxAuthTokenCacheSize,
         {}}}};
+
   if (path) {
     clientSetup.params.emplace_back(
         SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0}));
   }
+
   return clientSetup;
 }
 
 void MoQClient::onSessionEnd(folly::Optional<uint32_t> err) {
+  if (logger_) {
+    logger_->outputLogsToFile();
+  }
   if (moqSession_) {
     moqSession_->onSessionEnd(err);
     XLOG(DBG1) << "resetting moqSession_";
@@ -124,6 +134,10 @@ void MoQClient::onNewUniStream(
 
 void MoQClient::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   moqSession_->onDatagram(std::move(datagram));
+}
+
+void MoQClient::setLogger(std::shared_ptr<MLogger> logger) {
+  logger_ = logger;
 }
 
 } // namespace moxygen

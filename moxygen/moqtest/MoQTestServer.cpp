@@ -1,7 +1,6 @@
 // (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
 #include "moxygen/moqtest/MoQTestServer.h"
-#include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
 #include "moxygen/moqtest/Utils.h"
 

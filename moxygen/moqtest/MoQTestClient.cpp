@@ -18,12 +18,17 @@ const TrackAlias kDefaultTrackAlias = TrackAlias(0);
 MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
     : moqClient_(std::make_unique<MoQClient>(evb, std::move(url))) {}
 
+void MoQTestClient::setLogger(std::shared_ptr<MLogger> logger) {
+  moqClient_->setLogger(logger);
+}
+
 folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {
   co_await moqClient_->setupMoQSession(
       std::chrono::milliseconds(FLAGS_connect_timeout),
       std::chrono::seconds(FLAGS_transaction_timeout),
       nullptr,
       shared_from_this());
+
   co_return;
 }
 
@@ -107,9 +112,8 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject" << std::endl;
 
-  ObjectHeader header = objHeader;
   // Validate the received data
-  if (!validateSubscribedData(header, payload->toString())) {
+  if (!validateSubscribedData(objHeader, payload->toString())) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Data Validation Failed"
         << std::endl;
@@ -192,6 +196,7 @@ void MoQTestClient::onSubscribeDone(SubscribeDone done) {
     subHandle_->unsubscribe();
     return;
   }
+
   XLOG(DBG1) << "MoQTest verification result: SUCCESS! All Data Recieved";
 }
 
@@ -337,7 +342,7 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForDatagram(
 }
 
 folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
-    std::vector<Extension> extensions,
+    const std::vector<Extension>& extensions,
     MoQTestParameters* params) {
   // validate extension size
   if (!validateExtensionSize(extensions, params)) {
@@ -356,7 +361,7 @@ folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
   // Get Extensions
   Extension intExt;
   Extension varExt;
-  for (Extension ext : extensions) {
+  for (const Extension& ext : extensions) {
     if (ext.type % 2 == 0) {
       intExt = ext;
     } else {
