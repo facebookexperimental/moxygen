@@ -4,6 +4,13 @@
 
 namespace moxygen {
 
+// Update Based on Validation Needs (TBD)
+bool validateMoQPerfParams(MoQPerfParams& params) {
+  return params.numObjectsPerSubgroup && params.numSubgroupsPerGroup &&
+      params.objectSize && params.request <= RequestType::FETCH &&
+      params.request >= 0;
+}
+
 TrackNamespace convertMoQPerfParamsToTrackNamespace(MoQPerfParams& params) {
   TrackNamespace trackNamespace;
 

@@ -44,3 +44,23 @@ TEST_F(MoQPerfTest, TestConvertTrackNamespaceToMoQPerfParams) {
   EXPECT_EQ(params.sendEndOfGroupMarkers, false);
   EXPECT_EQ(params.request, moxygen::RequestType(0));
 }
+
+TEST_F(MoQPerfTest, TestValidateMoQPerfParamsWithValidParams) {
+  moxygen::MoQPerfParams params = CreateDefaultMoQPerfParameters();
+  EXPECT_TRUE(moxygen::validateMoQPerfParams(params));
+}
+
+TEST_F(MoQPerfTest, TestValidateMoQPerfParamsWithInvalidParams) {
+  moxygen::MoQPerfParams params = CreateDefaultMoQPerfParameters();
+  params.numObjectsPerSubgroup = 0;
+  EXPECT_FALSE(moxygen::validateMoQPerfParams(params));
+  params.numObjectsPerSubgroup = 1;
+  params.numSubgroupsPerGroup = 0;
+  EXPECT_FALSE(moxygen::validateMoQPerfParams(params));
+  params.numSubgroupsPerGroup = 1;
+  params.objectSize = 0;
+  EXPECT_FALSE(moxygen::validateMoQPerfParams(params));
+  params.objectSize = 1;
+  params.request = moxygen::RequestType(2);
+  EXPECT_FALSE(moxygen::validateMoQPerfParams(params));
+}

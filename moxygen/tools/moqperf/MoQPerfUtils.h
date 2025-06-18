@@ -6,6 +6,8 @@
 
 namespace moxygen {
 
+bool validateMoQPerfParams(MoQPerfParams& params);
+
 TrackNamespace convertMoQPerfParamsToTrackNamespace(MoQPerfParams& params);
 MoQPerfParams convertTrackNamespaceToMoQPerfParams(TrackNamespace& ns);
 
