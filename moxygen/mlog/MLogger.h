@@ -36,6 +36,9 @@ class MLogger {
   void logClientSetup(const ClientSetup& setup);
   void logServerSetup(const ServerSetup& setup);
   void logGoaway(const Goaway& goaway);
+  void logSubscribe(
+      const SubscribeRequest& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
 
   void setPath(const std::string& path);
 
@@ -47,7 +50,14 @@ class MLogger {
 
   // Log Formatting
   folly::dynamic formatLog(const MLogEvent& log);
-
+  MOQTByteString convertTrackNameToByteStringFormat(
+      const std::string& t,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+  std::vector<MOQTParameter> convertTrackParamsToMoQTParams(
+      const std::vector<TrackRequestParameter>& params);
+  std::vector<MOQTByteString> convertTrackNamespaceToByteStringFormat(
+      const std::vector<std::string>& ns,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
   std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
       const std::vector<SetupParameter>& params);
 };

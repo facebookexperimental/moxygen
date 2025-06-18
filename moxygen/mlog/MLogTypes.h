@@ -50,15 +50,17 @@ class MOQTParameter {
   folly::dynamic toDynamic() const;
 };
 
-union MOQTByteString {
+enum MOQTByteStringType { STRING_VALUE, VALUE_BYTES, UNKNOWN_VALUE };
+struct MOQTByteString {
   std::string value;
   std::unique_ptr<folly::IOBuf> valueBytes;
+  MOQTByteStringType type = MOQTByteStringType::UNKNOWN_VALUE;
 
   MOQTByteString() {}
-  MOQTByteString(const MOQTByteString&) = delete;
-  MOQTByteString& operator=(const MOQTByteString&) = delete;
-  MOQTByteString(MOQTByteString&&) noexcept = delete;
-  MOQTByteString& operator=(MOQTByteString&&) noexcept = delete;
+  MOQTByteString(const MOQTByteString& other) = delete;
+  MOQTByteString& operator=(const MOQTByteString& other) = delete;
+  MOQTByteString(MOQTByteString&& other) noexcept = default;
+  MOQTByteString& operator=(MOQTByteString&& other) noexcept = default;
 
   ~MOQTByteString() {}
 };
@@ -74,6 +76,11 @@ class MOQTBaseControlMessage {
   std::string type;
   virtual folly::dynamic toDynamic() const = 0;
   virtual ~MOQTBaseControlMessage() {}
+
+  // Helper Methods Extended to BaseControlMessage Classes
+  std::vector<std::string> parseTrackNamespace(
+      const std::vector<MOQTByteString>& trackNamespace) const;
+  std::string parseTrackName(const MOQTByteString& trackName) const;
 };
 
 class MOQTClientSetupMessage : public MOQTBaseControlMessage {
@@ -114,6 +121,7 @@ class MOQTSubscribe : public MOQTBaseControlMessage {
   MOQTSubscribe() {
     type = "subscribe";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint64_t trackAlias{0};
   std::vector<MOQTByteString> trackNamespace;

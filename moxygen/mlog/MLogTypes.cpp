@@ -63,6 +63,86 @@ folly::dynamic MOQTParameter::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribe::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["trackAlias"] = trackAlias;
+  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
+  obj["trackNamespace"] =
+      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  obj["trackName"] = parseTrackName(trackName);
+  obj["subscriberPriority"] = std::to_string(subscriberPriority);
+  obj["groupOrder"] = std::to_string(groupOrder);
+  obj["filterType"] = std::to_string(filterType);
+
+  if (startGroup.hasValue()) {
+    obj["startGroup"] = std::to_string(startGroup.value());
+  }
+  if (startObject.hasValue()) {
+    obj["startObject"] = std::to_string(startObject.value());
+  }
+  if (endGroup.hasValue()) {
+    obj["endGroup"] = std::to_string(endGroup.value());
+  }
+  obj["numberOfParameters"] = numberOfParameters;
+
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(subscribeParameters.size());
+  for (auto& param : subscribeParameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["subscribeParameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
+std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
+    const std::vector<MOQTByteString>& trackNamespace) const {
+  std::vector<std::string> track;
+  // Check If TrackNamespace is string or value Bytes
+
+  switch (trackNamespace[0].type) {
+    case MOQTByteStringType::VALUE_BYTES: {
+      for (auto& t : trackNamespace) {
+        track.emplace_back(
+            reinterpret_cast<const char*>(t.valueBytes->data()),
+            t.valueBytes->length());
+      }
+      break;
+    }
+    case MOQTByteStringType::STRING_VALUE: {
+      for (auto& t : trackNamespace) {
+        track.emplace_back(t.value);
+      }
+      break;
+    }
+    default: {
+    }
+  }
+
+  return track;
+}
+
+std::string MOQTBaseControlMessage::parseTrackName(
+    const MOQTByteString& trackName) const {
+  std::string name;
+  switch (trackName.type) {
+    case MOQTByteStringType::VALUE_BYTES: {
+      name = std::string(
+          reinterpret_cast<const char*>(trackName.valueBytes->data()),
+          trackName.valueBytes->length());
+      break;
+    }
+    case MOQTByteStringType::STRING_VALUE: {
+      name = trackName.value;
+      break;
+    }
+    default: {
+    }
+  }
+  return name;
+}
+
 folly::dynamic MOQTGoaway::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;

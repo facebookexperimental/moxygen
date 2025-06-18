@@ -100,6 +100,36 @@ void MLogger::logGoaway(const Goaway& goaway) {
   addControlMessageCreatedLog(std::move(req));
 }
 
+void MLogger::logSubscribe(
+    const SubscribeRequest& req,
+    const MOQTByteStringType& type) {
+  auto baseMsg = std::make_unique<MOQTSubscribe>();
+  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->trackAlias = req.trackAlias.value;
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.fullTrackName.trackNamespace.trackNamespace, type);
+  baseMsg->trackName =
+      convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
+  baseMsg->subscriberPriority = req.priority;
+  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+  baseMsg->filterType = static_cast<uint8_t>(req.locType);
+  if (req.start.hasValue()) {
+    baseMsg->startGroup = req.start.value().group;
+    baseMsg->startObject = req.start.value().object;
+  }
+  baseMsg->endGroup = req.endGroup;
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+
+  // Add the message to the logs
+  MOQTControlMessageCreated msgCreated{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msgCreated));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector
@@ -126,7 +156,7 @@ std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
       default:
         p.name = "unknown";
         // Check if string value is initialized
-        if (param.asString != "") {
+        if (param.key % 2) {
           p.type = MOQTParameterType::STRING;
           p.stringValue = param.asString;
         } else {
@@ -138,6 +168,55 @@ std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     moqParams.push_back(p);
   }
   return moqParams;
+}
+
+std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
+    const std::vector<TrackRequestParameter>& params) {
+  std::vector<MOQTParameter> moqParams;
+  for (const auto& param : params) {
+    MOQTParameter p;
+    p.name = "unknown"; // No TrackParamKeys (like SetupKey) so default to
+                        // unknown for now
+    if (param.key % 2) {
+      p.type = MOQTParameterType::STRING;
+      p.stringValue = param.asString;
+    } else {
+      p.type = MOQTParameterType::INT;
+      p.intValue = param.asUint64;
+    }
+  }
+  return moqParams;
+}
+
+std::vector<MOQTByteString> MLogger::convertTrackNamespaceToByteStringFormat(
+    const std::vector<std::string>& ns,
+    const MOQTByteStringType& type) {
+  std::vector<MOQTByteString> track;
+  for (auto& t : ns) {
+    MOQTByteString str;
+    str.type = type;
+    if (type == MOQTByteStringType::STRING_VALUE) {
+      str.value = t;
+      track.push_back(std::move(str));
+    } else {
+      str.valueBytes = folly::IOBuf::copyBuffer(t);
+      track.push_back(std::move(str));
+    }
+  }
+  return track;
+}
+
+MOQTByteString MLogger::convertTrackNameToByteStringFormat(
+    const std::string& t,
+    const MOQTByteStringType& type) {
+  MOQTByteString str;
+  str.type = type;
+  if (type == MOQTByteStringType::STRING_VALUE) {
+    str.value = t;
+  } else {
+    str.valueBytes = folly::IOBuf::copyBuffer(t);
+  }
+  return str;
 }
 
 void MLogger::outputLogsToFile() {
