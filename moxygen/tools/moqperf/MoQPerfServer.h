@@ -43,7 +43,8 @@ class MoQPerfServer : public moxygen::Publisher,
 
  private:
   folly::coro::Task<void> writeLoop(
-      std::shared_ptr<TrackConsumer> trackConsumer);
+      std::shared_ptr<TrackConsumer> trackConsumer,
+      SubscribeRequest req);
 
   // Used to cancel the write loop when the client sends us an UNSUBSCRIBE.
   // Note that we currently only support one subscription during the lifetime

@@ -1,6 +1,7 @@
 // (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
 #include <moxygen/tools/moqperf/MoQPerfServer.h>
+#include <moxygen/tools/moqperf/MoQPerfUtils.h>
 
 #include <utility>
 
@@ -22,7 +23,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> callback) {
   auto session = MoQSession::getRequestSession();
-  writeLoop(callback).scheduleOn(session->getEventBase()).start();
+
+  writeLoop(callback, subscribeRequest)
+      .scheduleOn(session->getEventBase())
+      .start();
   SubscribeOk ok{
       subscribeRequest.requestID,
       std::chrono::milliseconds(0) /* never expires */,
@@ -38,20 +42,43 @@ void MoQPerfServer::onNewSession(std::shared_ptr<MoQSession> clientSession) {
 }
 
 folly::coro::Task<void> MoQPerfServer::writeLoop(
-    std::shared_ptr<TrackConsumer> trackConsumer) {
-  auto beginSubgroupResult =
-      trackConsumer->beginSubgroup(0, 0, kDefaultPriority);
-  CHECK(beginSubgroupResult.hasValue()) << "Unable to create subgroup";
-  auto subgroupConsumer = beginSubgroupResult.value();
-  uint64_t objectId = 0;
+    std::shared_ptr<TrackConsumer> trackConsumer,
+    SubscribeRequest req) {
+  moxygen::MoQPerfParams params = moxygen::convertTrackNamespaceToMoQPerfParams(
+      req.fullTrackName.trackNamespace);
+
+  // Group number
+  uint64_t group = 0;
+
   while (!cancellationSource_.isCancellationRequested()) {
-    auto awaitResult = subgroupConsumer->awaitReadyToConsume();
-    if (awaitResult.hasValue()) {
-      co_await std::move(awaitResult.value());
+    for (uint64_t subgroup = 0; subgroup < params.numSubgroupsPerGroup;
+         subgroup++) {
+      auto beginSubgroupResult =
+          trackConsumer->beginSubgroup(group, subgroup, kDefaultPriority);
+      CHECK(beginSubgroupResult.hasValue())
+          << "Unable to create subgroup with num - " << subgroup;
+      auto subgroupConsumer = beginSubgroupResult.value();
+      for (uint64_t objectId = 0; objectId < params.numObjectsPerSubgroup;
+           objectId++) {
+        auto awaitResult = subgroupConsumer->awaitReadyToConsume();
+        if (awaitResult.hasValue()) {
+          co_await std::move(awaitResult.value());
+        }
+        auto data = folly::IOBuf::create(params.objectSize);
+        data->append(params.objectSize);
+        subgroupConsumer->object(objectId++, std::move(data));
+      }
     }
-    auto data = folly::IOBuf::create(500);
-    data->append(500);
-    subgroupConsumer->object(objectId++, std::move(data));
+    if (params.sendEndOfGroupMarkers) {
+      // For End of group marker, create a final subgroup in group and call
+      // endOfGroup
+      auto endMarkerSubgroupConsumer =
+          (trackConsumer->beginSubgroup(
+               group, params.numSubgroupsPerGroup, kDefaultPriority))
+              .value();
+      endMarkerSubgroupConsumer->endOfGroup(0);
+    }
+    group++;
   }
   // We get out of the while loop once we receive an UNSUBSCRIBE from
   // the peer.

@@ -4,6 +4,7 @@
 
 #include <moxygen/MoQClient.h>
 #include <moxygen/Subscriber.h>
+#include <moxygen/tools/moqperf/MoQPerfParams.h>
 
 #include <utility>
 
@@ -132,7 +133,8 @@ class MoQPerfClient : public moxygen::Subscriber,
   folly::coro::Task<void> connect();
 
   folly::coro::Task<MoQSession::SubscribeResult> subscribe(
-      std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer);
+      std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer,
+      MoQPerfParams params);
 
   void drain();
 

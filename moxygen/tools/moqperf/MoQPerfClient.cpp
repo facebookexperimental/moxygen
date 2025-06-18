@@ -1,6 +1,8 @@
 // (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
 #include <moxygen/tools/moqperf/MoQPerfClient.h>
+#include <moxygen/tools/moqperf/MoQPerfUtils.h>
+#include <functional>
 
 namespace moxygen {
 
@@ -21,15 +23,23 @@ folly::coro::Task<void> MoQPerfClient::connect() {
 }
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
-    std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer) {
-  // TODO: For now, we're just providing an arbitrary track namespace, but later
-  // on, we'll want to serialize parameters (e.g. object size, objects per
-  // subgroup, etc.)
+    std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer,
+    MoQPerfParams params) {
+  // Validate the params
+  if (!moxygen::validateMoQPerfParams(params)) {
+    XLOG(ERR) << "Invalid MoQPerfParams";
+    co_return folly::makeUnexpected(moxygen::SubscribeError{
+        0,
+        SubscribeErrorCode::INTERNAL_ERROR,
+        "Client Parameters are Invalid"});
+  }
+  // Create a SubRequest with the created TrackNamespace in its fullTrackName
+  TrackNamespace track = convertMoQPerfParamsToTrackNamespace(params);
+
   SubscribeRequest subscribeRequest{
       .requestID = 0,
       .trackAlias = 1,
-      .fullTrackName =
-          moxygen::FullTrackName({{TrackNamespace("blah", "/")}, "blah"}),
+      .fullTrackName = moxygen::FullTrackName({track, "blah"}),
       .priority = 0,
       .groupOrder = GroupOrder::OldestFirst,
       .forward = true,
