@@ -104,6 +104,7 @@ class MOQTGoaway : public MOQTBaseControlMessage {
   MOQTGoaway() {
     type = "goaway";
   }
+  folly::dynamic toDynamic() const override;
   folly::Optional<uint64_t> length;
   std::unique_ptr<folly::IOBuf> newSessionUri;
 };

@@ -42,6 +42,7 @@ MOQTServerSetupMessage MLogger::createServerSetupControlMessage(
 
 folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   folly::dynamic logObject = folly::dynamic::object;
+
   logObject["vantagePoint"] =
       (log.vantagePoint_ == VantagePoint::CLIENT) ? "client" : "server";
   logObject["name"] = std::string(log.name_);
@@ -86,6 +87,16 @@ void MLogger::logServerSetup(const ServerSetup& setup) {
       std::make_unique<MOQTServerSetupMessage>(createServerSetupControlMessage(
           setup.selectedVersion, params.size(), params)),
       nullptr};
+  addControlMessageCreatedLog(std::move(req));
+}
+
+void MLogger::logGoaway(const Goaway& goaway) {
+  uint64_t length = goaway.newSessionUri.length();
+  auto baseMsg = std::make_unique<MOQTGoaway>();
+  baseMsg->length = length;
+  baseMsg->newSessionUri = folly::IOBuf::copyBuffer(goaway.newSessionUri);
+  MOQTControlMessageCreated req{
+      kFirstBidiStreamId, folly::none, std::move(baseMsg), nullptr};
   addControlMessageCreatedLog(std::move(req));
 }
 

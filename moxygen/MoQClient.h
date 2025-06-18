@@ -36,7 +36,10 @@ class MoQClient : public proxygen::WebTransportHandler {
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler) noexcept;
 
-  void setLogger(std::shared_ptr<MLogger> logger);
+  void setLogger(const std::shared_ptr<MLogger>& logger);
+
+  void goaway(const Goaway& goaway);
+  std::shared_ptr<MLogger> logger_ = nullptr;
 
  protected:
   folly::coro::Task<ServerSetup> completeSetupMoQSession(
@@ -56,7 +59,6 @@ class MoQClient : public proxygen::WebTransportHandler {
   folly::EventBase* evb_{nullptr};
   proxygen::URL url_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
-  std::shared_ptr<MLogger> logger_ = nullptr;
 };
 
 } // namespace moxygen

@@ -405,10 +405,15 @@ StreamPublisherImpl::writeToStream(bool finStream) {
         MoQPublishError(MoQPublishError::TOO_FAR_BEHIND));
   }
 
+  if (!writeHandle_) {
+    return folly::makeUnexpected(MoQPublishError(MoQPublishError::CANCELLED));
+  }
+
   auto writeHandle = writeHandle_;
   if (finStream) {
     writeHandle_ = nullptr;
   }
+
   proxygen::WebTransport::ByteEventCallback* deliveryCallback = nullptr;
   if (!writeBuf_.empty() || finStream) {
     deliveryCallback = this;
@@ -1459,6 +1464,10 @@ void MoQSession::start() {
   }
 }
 
+void MoQSession::setLogger(const std::shared_ptr<MLogger>& logger) {
+  logger_ = logger;
+}
+
 void MoQSession::drain() {
   XLOG(DBG1) << __func__ << " sess=" << this;
   draining_ = true;
@@ -1467,6 +1476,9 @@ void MoQSession::drain() {
 
 void MoQSession::goaway(Goaway goaway) {
   if (!draining_) {
+    if (logger_) {
+      logger_->logGoaway(goaway);
+    }
     moqFrameWriter_.writeGoaway(controlWriteBuf_, goaway);
     controlWriteEvent_.signal();
     drain();

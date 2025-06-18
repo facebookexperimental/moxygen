@@ -80,6 +80,7 @@ folly::coro::Task<ServerSetup> MoQClient::completeSetupMoQSession(
   ClientSetup clientSetup = getClientSetup(pathParam);
   if (logger_) {
     logger_->logClientSetup(clientSetup);
+    moqSession_->setLogger(logger_);
   }
   return moqSession_->setup(clientSetup);
 }
@@ -136,7 +137,13 @@ void MoQClient::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   moqSession_->onDatagram(std::move(datagram));
 }
 
-void MoQClient::setLogger(std::shared_ptr<MLogger> logger) {
+void MoQClient::goaway(const Goaway& goaway) {
+  XLOG(DBG1) << __func__;
+
+  moqSession_->goaway(goaway);
+}
+
+void MoQClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   logger_ = logger;
 }
 

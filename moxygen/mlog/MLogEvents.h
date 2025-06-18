@@ -9,8 +9,8 @@
 #include "moxygen/mlog/MLogTypes.h"
 
 namespace moxygen {
-
-const std::string kControlMessageCreatedName = "moqt:control_message_created";
+inline constexpr const char* kControlMessageCreatedName =
+    "moqt:control_message_created";
 
 // Basic Log Event Class
 class MLogEvent {

@@ -35,6 +35,7 @@ class MLogger {
 
   void logClientSetup(const ClientSetup& setup);
   void logServerSetup(const ServerSetup& setup);
+  void logGoaway(const Goaway& goaway);
 
   void setPath(const std::string& path);
 

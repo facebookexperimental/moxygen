@@ -89,9 +89,10 @@ int main(int argc, char** argv) {
   auto url = proxygen::URL(FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
       std::make_shared<moxygen::MoQTestClient>(evb.getEventBase(), url);
+
+  std::shared_ptr<moxygen::MLogger> logger;
   if (FLAGS_log) {
-    std::shared_ptr logger =
-        std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::CLIENT);
+    logger = std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::CLIENT);
     logger->setPath(FLAGS_mlog_path);
     client->setLogger(logger);
   }

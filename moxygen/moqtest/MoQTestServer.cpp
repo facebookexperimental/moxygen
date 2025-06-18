@@ -25,6 +25,19 @@ void MoQTestFetchHandle::fetchCancel() {
   cancelSource_->requestCancellation();
 }
 
+void MoQTestServer::goaway(Goaway goaway) {
+  LOG(INFO) << "Server goaway uri=" << goaway.newSessionUri;
+
+  // Call Go Away on sessions
+  if (subSession_) {
+    subSession_->goaway(goaway);
+  }
+
+  if (fetchSession_) {
+    fetchSession_->goaway(goaway);
+  }
+}
+
 MoQTestServer::MoQTestServer(uint16_t port)
     : MoQServer(port, kCert, kKey, kEndpointName) {}
 
@@ -54,10 +67,14 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   }
 
   // Request Session
-  auto session = MoQSession::getRequestSession();
+  subSession_ = MoQSession::getRequestSession();
+
+  if (logger_) {
+    subSession_->setLogger(logger_);
+  }
 
   // Start a Co-routine to send objects back according to spec
-  onSubscribe(sub, callback).scheduleOn(session->getEventBase()).start();
+  onSubscribe(sub, callback).scheduleOn(subSession_->getEventBase()).start();
 
   // Return a SubscribeOk
   SubscribeOk subRes{
@@ -410,10 +427,15 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
   }
 
   // Request Session
-  auto session = MoQSession::getRequestSession();
+  fetchSession_ = MoQSession::getRequestSession();
+  if (logger_) {
+    fetchSession_->setLogger(logger_);
+  }
 
   // Start a Co-routine
-  onFetch(fetch, fetchCallback).scheduleOn(session->getEventBase()).start();
+  onFetch(fetch, fetchCallback)
+      .scheduleOn(fetchSession_->getEventBase())
+      .start();
 
   FetchOk ok;
   ok.requestID = fetch.requestID;

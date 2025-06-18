@@ -5,6 +5,7 @@
 #include "moxygen/MoQClient.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/Subscriber.h"
+#include "moxygen/mlog/MLogger.h"
 #include "moxygen/moqtest/Types.h"
 
 namespace moxygen {
@@ -63,7 +64,9 @@ class MoQTestClient : public moxygen::Subscriber,
   virtual void onError(ResetStreamErrorCode) override;
   virtual void onSubscribeDone(SubscribeDone done) override;
 
-  void setLogger(std::shared_ptr<MLogger> logger);
+  void setLogger(const std::shared_ptr<MLogger>& logger);
+
+  virtual void goaway(Goaway goaway) override;
 
  private:
   std::unique_ptr<MoQClient> moqClient_;

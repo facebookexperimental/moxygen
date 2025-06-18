@@ -18,7 +18,7 @@ const TrackAlias kDefaultTrackAlias = TrackAlias(0);
 MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
     : moqClient_(std::make_unique<MoQClient>(evb, std::move(url))) {}
 
-void MoQTestClient::setLogger(std::shared_ptr<MLogger> logger) {
+void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   moqClient_->setLogger(logger);
 }
 
@@ -483,5 +483,10 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
 
   return true;
 }
+
+void MoQTestClient::goaway(Goaway goaway) {
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling goaway" << std::endl;
+  moqClient_->goaway(goaway);
+};
 
 } // namespace moxygen

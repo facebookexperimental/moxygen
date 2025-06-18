@@ -108,9 +108,13 @@ class MoQTestServer : public moxygen::Publisher,
     fetchCancelSource_ = std::make_shared<folly::CancellationSource>();
   }
 
+  virtual void goaway(Goaway goaway) override;
+
  private:
   std::shared_ptr<folly::CancellationSource> subCancelSource_;
   std::shared_ptr<folly::CancellationSource> fetchCancelSource_;
+  std::shared_ptr<MoQSession> subSession_;
+  std::shared_ptr<MoQSession> fetchSession_;
 };
 
 } // namespace moxygen

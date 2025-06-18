@@ -20,6 +20,7 @@
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
 #include <moxygen/stats/MoQStats.h>
+#include "moxygen/mlog/MLogger.h"
 #include "moxygen/util/TimedBaton.h"
 
 #include <boost/variant.hpp>
@@ -295,8 +296,11 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   std::shared_ptr<FetchTrackReceiveState> getFetchTrackReceiveState(
       RequestID requestID);
 
+  void setLogger(const std::shared_ptr<MLogger>& logger);
+
  private:
   static const folly::RequestToken& sessionRequestToken();
+  std::shared_ptr<MLogger> logger_ = nullptr;
 
   void setRequestSession() {
     folly::RequestContext::get()->setContextData(
