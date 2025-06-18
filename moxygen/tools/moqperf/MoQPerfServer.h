@@ -25,6 +25,20 @@ class PerfSubscriptionHandle : public Publisher::SubscriptionHandle {
   folly::CancellationSource* cancellationSource_;
 };
 
+class PerfFetchHandle : public Publisher::FetchHandle {
+ public:
+  PerfFetchHandle(FetchOk ok, folly::CancellationSource* cancellationSource)
+      : Publisher::FetchHandle(ok), cancellationSource_(cancellationSource) {}
+  ~PerfFetchHandle() override = default;
+
+  virtual void fetchCancel() {
+    cancellationSource_->requestCancellation();
+  }
+
+ private:
+  folly::CancellationSource* cancellationSource_;
+};
+
 class MoQPerfServer : public moxygen::Publisher,
                       public moxygen::MoQServer,
                       public std::enable_shared_from_this<MoQPerfServer> {
@@ -34,6 +48,10 @@ class MoQPerfServer : public moxygen::Publisher,
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest subscribeRequest,
       std::shared_ptr<TrackConsumer> callback) override;
+
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> callback) override;
 
   void onNewSession(
       std::shared_ptr<moxygen::MoQSession> clientSession) override;
@@ -45,11 +63,15 @@ class MoQPerfServer : public moxygen::Publisher,
   folly::coro::Task<void> writeLoop(
       std::shared_ptr<TrackConsumer> trackConsumer,
       SubscribeRequest req);
+  folly::coro::Task<void> writeLoopFetch(
+      std::shared_ptr<FetchConsumer> fetchConsumer,
+      Fetch req);
 
   // Used to cancel the write loop when the client sends us an UNSUBSCRIBE.
   // Note that we currently only support one subscription during the lifetime
   // of this server.
   folly::CancellationSource cancellationSource_;
+  folly::Optional<RequestID> requestId_;
 };
 
 } // namespace moxygen

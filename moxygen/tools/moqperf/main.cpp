@@ -40,11 +40,59 @@ folly::coro::Task<void> connect(std::shared_ptr<MoQPerfClient> moqPerfClient) {
 
 folly::coro::Task<moxygen::MoQPerfServer::SubscribeResult> subscribe(
     std::shared_ptr<MoQPerfClient> moqPerfClient,
-    std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer) {
+    std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer,
+    moxygen::MoQPerfParams params) {
+  auto subscribeResult =
+      co_await moqPerfClient->subscribe(trackConsumer, params);
+  co_return subscribeResult;
+}
+
+void runSubscribe(
+    folly::EventBase* evb,
+    std::shared_ptr<moxygen::MoQPerfClient> client,
+    moxygen::MoQPerfParams params) {
+  auto trackConsumer = std::make_shared<MoQPerfClientTrackConsumer>();
+  auto subscribeResult = folly::coro::blockingWait(
+      subscribe(client, trackConsumer, params).scheduleOn(evb));
+  CHECK(subscribeResult.hasValue()) << "Subscription failed";
+
+  sleep(10);
+
+  evb->runInEventBaseThreadAndWait([&]() {
+    auto subscribeHandle = subscribeResult.value();
+    subscribeHandle->unsubscribe();
+    client->drain();
+  });
+
+  LOG(INFO) << "Sent " << trackConsumer->getDataSent()
+            << " bytes in 10 seconds.";
+}
+
+void runFetch(
+    folly::EventBase* evb,
+    std::shared_ptr<moxygen::MoQPerfClient> client,
+    moxygen::MoQPerfParams params) {
+  auto fetchConsumer = std::make_shared<MoQPerfClientFetchConsumer>();
+  auto fetchResult = folly::coro::blockingWait(
+      client->fetch(fetchConsumer, params).scheduleOn(evb));
+  CHECK(fetchResult.hasValue()) << "Fetch failed";
+
+  sleep(10);
+
+  evb->runInEventBaseThreadAndWait([&]() {
+    auto fetchHandle = fetchResult.value();
+    fetchHandle->fetchCancel();
+    client->drain();
+  });
+
+  LOG(INFO) << "Received " << fetchConsumer->getFetchDataSent()
+            << " bytes in 10 seconds.";
+}
+
+void runClient(folly::EventBase* evb) {
   // Create MoQPerfParams From Flags
   RequestType req = (FLAGS_request_type == "subscribe") ? RequestType::SUBSCRIBE
                                                         : RequestType::FETCH;
-
   moxygen::MoQPerfParams params{
       FLAGS_objects_per_subgroup,
       FLAGS_subgroups_per_group,
@@ -52,12 +100,6 @@ folly::coro::Task<moxygen::MoQPerfServer::SubscribeResult> subscribe(
       FLAGS_send_end_of_flag_markers,
       req};
 
-  auto subscribeResult =
-      co_await moqPerfClient->subscribe(trackConsumer, params);
-  co_return subscribeResult;
-}
-
-void runClient(folly::EventBase* evb) {
   auto moqPerfClient = std::make_shared<MoQPerfClient>(
       folly::SocketAddress(FLAGS_server_addr, FLAGS_server_port),
       evb,
@@ -66,21 +108,11 @@ void runClient(folly::EventBase* evb) {
 
   folly::coro::blockingWait(connect(moqPerfClient).scheduleOn(evb));
 
-  auto trackConsumer = std::make_shared<MoQPerfClientTrackConsumer>();
-  auto subscribeResult = folly::coro::blockingWait(
-      subscribe(moqPerfClient, trackConsumer).scheduleOn(evb));
-  CHECK(subscribeResult.hasValue()) << "Subscription failed";
-
-  sleep(10);
-
-  evb->runInEventBaseThreadAndWait([&]() {
-    auto subscribeHandle = subscribeResult.value();
-    subscribeHandle->unsubscribe();
-    moqPerfClient->drain();
-  });
-
-  LOG(INFO) << "Sent " << trackConsumer->getDataSent()
-            << " bytes in 10 seconds.";
+  if (params.request == RequestType::SUBSCRIBE) {
+    runSubscribe(evb, moqPerfClient, params);
+  } else if (params.request == RequestType::FETCH) {
+    runFetch(evb, moqPerfClient, params);
+  }
 }
 
 int main(int argc, char** argv) {

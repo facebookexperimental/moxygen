@@ -37,6 +37,26 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
       std::make_shared<PerfSubscriptionHandle>(ok, &cancellationSource_));
 }
 
+folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
+    Fetch fetchRequest,
+    std::shared_ptr<FetchConsumer> callback) {
+  CHECK(!requestId_.hasValue()) << "Cannot get more than one fetch, as of now";
+  auto session = MoQSession::getRequestSession();
+
+  writeLoopFetch(callback, fetchRequest)
+      .scheduleOn(session->getEventBase())
+      .start();
+  FetchOk ok{
+      fetchRequest.requestID,
+      GroupOrder(fetchRequest.groupOrder),
+      0,
+      AbsoluteLocation{0, 0},
+      {}};
+  requestId_ = fetchRequest.requestID;
+  return folly::coro::makeTask<FetchResult>(
+      std::make_shared<PerfFetchHandle>(ok, &cancellationSource_));
+}
+
 void MoQPerfServer::onNewSession(std::shared_ptr<MoQSession> clientSession) {
   clientSession->setPublishHandler(shared_from_this());
 }
@@ -82,6 +102,45 @@ folly::coro::Task<void> MoQPerfServer::writeLoop(
   }
   // We get out of the while loop once we receive an UNSUBSCRIBE from
   // the peer.
+}
+
+folly::coro::Task<void> MoQPerfServer::writeLoopFetch(
+    std::shared_ptr<FetchConsumer> fetchConsumer,
+    Fetch req) {
+  moxygen::MoQPerfParams params = moxygen::convertTrackNamespaceToMoQPerfParams(
+      req.fullTrackName.trackNamespace);
+
+  // Group number
+  uint64_t group = 0;
+
+  while (!cancellationSource_.isCancellationRequested()) {
+    int objectIdStart = -1;
+    for (uint64_t subgroup = 0; subgroup < params.numSubgroupsPerGroup;
+         subgroup++) {
+      int start = objectIdStart + 1;
+      for (uint64_t objectId = start;
+           objectId < params.numObjectsPerSubgroup + start;
+           objectId++) {
+        auto data = folly::IOBuf::create(params.objectSize);
+        data->append(params.objectSize);
+        auto awaitResult = fetchConsumer->awaitReadyToConsume();
+        if (awaitResult.hasValue()) {
+          co_await std::move(awaitResult.value());
+        }
+        fetchConsumer->object(group, subgroup, objectId, std::move(data));
+
+        objectIdStart++;
+      }
+    }
+    if (params.sendEndOfGroupMarkers) {
+      // For End of group marker, create a final subgroup in group and call
+      // endOfGroup
+      fetchConsumer->endOfGroup(group, params.numSubgroupsPerGroup, 0);
+    }
+    group++;
+  }
+
+  // Get out of the while loop once we receive a FetchCancel
 }
 
 } // namespace moxygen

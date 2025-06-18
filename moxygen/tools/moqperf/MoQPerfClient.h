@@ -121,6 +121,71 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
   uint64_t dataSent_{0};
 };
 
+class MoQPerfClientFetchConsumer : public FetchConsumer {
+ public:
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions = noExtensions(),
+      bool finFetch = false);
+
+  void incrementFetchDataSent(uint64_t amount);
+
+  uint64_t getFetchDataSent();
+
+  virtual folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Extensions extensions = noExtensions(),
+      bool finFetch = false) override;
+
+  virtual folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Extensions extensions = noExtensions(),
+      bool finFetch = false) override;
+
+  virtual void checkpoint() override;
+
+  virtual folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions = noExtensions()) override;
+
+  virtual folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finSubgroup = false) override;
+
+  virtual folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Extensions extensions = noExtensions(),
+      bool finFetch = false) override;
+
+  virtual folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Extensions extensions = noExtensions()) override;
+
+  virtual folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override;
+
+  virtual void reset(ResetStreamErrorCode error) override;
+
+  virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  awaitReadyToConsume() override;
+
+ private:
+  uint64_t fetchDataSent_{0};
+};
+
 class MoQPerfClient : public moxygen::Subscriber,
                       public std::enable_shared_from_this<MoQPerfClient> {
  public:
@@ -134,6 +199,10 @@ class MoQPerfClient : public moxygen::Subscriber,
 
   folly::coro::Task<MoQSession::SubscribeResult> subscribe(
       std::shared_ptr<MoQPerfClientTrackConsumer> trackConsumer,
+      MoQPerfParams params);
+
+  folly::coro::Task<MoQSession::FetchResult> fetch(
+      std::shared_ptr<MoQPerfClientFetchConsumer> fetchConsumer,
       MoQPerfParams params);
 
   void drain();

@@ -2,9 +2,97 @@
 
 #include <moxygen/tools/moqperf/MoQPerfClient.h>
 #include <moxygen/tools/moqperf/MoQPerfUtils.h>
-#include <functional>
 
 namespace moxygen {
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::object(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    Payload payload,
+    Extensions extensions,
+    bool finFetch) {
+  incrementFetchDataSent(payload->computeChainDataLength());
+  return folly::Unit();
+}
+
+void MoQPerfClientFetchConsumer::incrementFetchDataSent(uint64_t amount) {
+  fetchDataSent_ += amount;
+}
+
+uint64_t MoQPerfClientFetchConsumer::getFetchDataSent() {
+  return fetchDataSent_;
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::objectNotExists(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    Extensions extensions,
+    bool finFetch) {
+  return folly::Unit();
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::groupNotExists(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Extensions extensions,
+    bool finFetch) {
+  return folly::Unit();
+}
+
+void MoQPerfClientFetchConsumer::checkpoint() {}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::beginObject(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    uint64_t length,
+    Payload initialPayload,
+    Extensions extensions) {
+  incrementFetchDataSent(initialPayload->computeChainDataLength());
+  return folly::Unit();
+}
+
+folly::Expected<ObjectPublishStatus, MoQPublishError>
+MoQPerfClientFetchConsumer::objectPayload(Payload payload, bool finSubgroup) {
+  incrementFetchDataSent(payload->computeChainDataLength());
+  return ObjectPublishStatus::DONE;
+}
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::endOfGroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    Extensions extensions,
+    bool finFetch) {
+  return folly::Unit();
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::endOfTrackAndGroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    Extensions extensions) {
+  return folly::Unit();
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQPerfClientFetchConsumer::endOfFetch() {
+  return folly::Unit();
+}
+
+void MoQPerfClientFetchConsumer::reset(ResetStreamErrorCode error) {}
+
+folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+MoQPerfClientFetchConsumer::awaitReadyToConsume() {
+  return folly::makeSemiFuture();
+}
 
 MoQPerfClient::MoQPerfClient(
     const folly::SocketAddress& peerAddr,
@@ -51,6 +139,29 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
       subscribeRequest, trackConsumer);
   CHECK(subscribeResult.hasValue()) << "Issue with subscribing to peer";
   co_return subscribeResult;
+}
+
+folly::coro::Task<MoQSession::FetchResult> MoQPerfClient::fetch(
+    std::shared_ptr<MoQPerfClientFetchConsumer> fetchConsumer,
+    MoQPerfParams params) {
+  // Validate the params
+  if (!moxygen::validateMoQPerfParams(params)) {
+    XLOG(ERR) << "Invalid MoQPerfParams";
+    co_return folly::makeUnexpected(moxygen::FetchError{
+        0, FetchErrorCode::INTERNAL_ERROR, "Client Parameters are Invalid"});
+  }
+  // Create a SubRequest with the created TrackNamespace in its fullTrackName
+  TrackNamespace track = convertMoQPerfParamsToTrackNamespace(params);
+
+  Fetch fetchRequest{
+      0,
+      moxygen::FullTrackName({track, "blah"}),
+      moxygen::AbsoluteLocation{0, 0},
+      moxygen::AbsoluteLocation{0, 0}};
+  auto fetchResult =
+      co_await moqClient_.moqSession_->fetch(fetchRequest, fetchConsumer);
+  CHECK(fetchResult.hasValue()) << "Issue with fetching to peer";
+  co_return fetchResult;
 }
 
 void MoQPerfClient::drain() {
