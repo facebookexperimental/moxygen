@@ -24,12 +24,17 @@ class MLogger {
       std::vector<uint64_t> supportedVersions,
       uint64_t numberOfParameters,
       std::vector<MOQTParameter> params);
+  MOQTServerSetupMessage createServerSetupControlMessage(
+      uint64_t selectedVersion,
+      uint64_t number_of_parameters,
+      std::vector<MOQTParameter> params);
 
   void addControlMessageCreatedLog(MOQTControlMessageCreated req);
 
   void outputLogsToFile();
 
   void logClientSetup(const ClientSetup& setup);
+  void logServerSetup(const ServerSetup& setup);
 
   void setPath(const std::string& path);
 
@@ -41,6 +46,9 @@ class MLogger {
 
   // Log Formatting
   folly::dynamic formatLog(const MLogEvent& log);
+
+  std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
+      const std::vector<SetupParameter>& params);
 };
 
 } // namespace moxygen

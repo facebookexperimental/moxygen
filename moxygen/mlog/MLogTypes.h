@@ -93,6 +93,7 @@ class MOQTServerSetupMessage : public MOQTBaseControlMessage {
   MOQTServerSetupMessage() {
     type = "server_setup";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t selectedVersion{0};
   uint64_t numberOfParameters{0};
   std::vector<MOQTParameter> setupParameters;

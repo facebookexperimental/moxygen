@@ -7,13 +7,19 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
+#include "moxygen/mlog/MLogger.h"
 
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBaseManager.h>
 
+#include <utility>
+
 #include "moxygen/MoQSession.h"
 
 namespace moxygen {
+
+const std::string kDefaultFilePath =
+    "ti/experimental/moxygen/moqtest/mlog_server.txt";
 
 class MoQServer : public MoQSession::ServerSetupCallback {
  public:
@@ -22,6 +28,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       std::string cert,
       std::string key,
       std::string endpoint);
+
   MoQServer(const MoQServer&) = delete;
   MoQServer(MoQServer&&) = delete;
   MoQServer& operator=(const MoQServer&) = delete;
@@ -35,6 +42,9 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::vector<folly::EventBase*> getWorkerEvbs() const noexcept {
     return hqServer_->getWorkerEvbs();
   }
+
+  std::shared_ptr<MLogger> logger_;
+  void setLogger(std::shared_ptr<MLogger> logger);
 
  private:
   folly::coro::Task<void> handleClientSession(
@@ -86,7 +96,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
    private:
     void onSessionEnd(folly::Optional<uint32_t> err) {
       if (clientSession_) {
-        clientSession_->onSessionEnd(err);
+        clientSession_->onSessionEnd(std::move(err));
         clientSession_.reset();
       }
     }

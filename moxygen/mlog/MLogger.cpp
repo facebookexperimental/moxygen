@@ -29,6 +29,17 @@ MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
   return client;
 }
 
+MOQTServerSetupMessage MLogger::createServerSetupControlMessage(
+    uint64_t selectedVersion,
+    uint64_t number_of_parameters,
+    std::vector<MOQTParameter> params) {
+  MOQTServerSetupMessage server = MOQTServerSetupMessage();
+  server.selectedVersion = selectedVersion;
+  server.numberOfParameters = number_of_parameters;
+  server.setupParameters = std::move(params);
+  return server;
+}
+
 folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   folly::dynamic logObject = folly::dynamic::object;
   logObject["vantagePoint"] =
@@ -50,9 +61,40 @@ void MLogger::logClientSetup(const ClientSetup& setup) {
   std::vector<uint64_t> versions = setup.supportedVersions;
 
   // Add Params to params vector
-  std::vector<MOQTParameter> params;
+  std::vector<MOQTParameter> params =
+      convertSetupParamsToMoQTParams(setup.params);
 
-  for (const auto& param : setup.params) {
+  // Log Setup Message
+  MOQTControlMessageCreated req{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::make_unique<MOQTClientSetupMessage>(createClientSetupControlMessage(
+          versions.size(), versions, params.size(), params)),
+      nullptr};
+  addControlMessageCreatedLog(std::move(req));
+}
+
+void MLogger::logServerSetup(const ServerSetup& setup) {
+  // Add Params to params vector
+  std::vector<MOQTParameter> params =
+      convertSetupParamsToMoQTParams(setup.params);
+
+  // Log Setup Message
+  MOQTControlMessageCreated req{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::make_unique<MOQTServerSetupMessage>(createServerSetupControlMessage(
+          setup.selectedVersion, params.size(), params)),
+      nullptr};
+  addControlMessageCreatedLog(std::move(req));
+}
+
+std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
+    const std::vector<SetupParameter>& params) {
+  // Add Params to params vector
+  std::vector<MOQTParameter> moqParams;
+
+  for (const auto& param : params) {
     MOQTParameter p;
     switch (param.key) {
       case folly::to_underlying(SetupKey::PATH):
@@ -82,17 +124,9 @@ void MLogger::logClientSetup(const ClientSetup& setup) {
         }
         break;
     }
-    params.push_back(p);
+    moqParams.push_back(p);
   }
-
-  // Log Setup Message
-  MOQTControlMessageCreated req{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::make_unique<MOQTClientSetupMessage>(createClientSetupControlMessage(
-          versions.size(), versions, params.size(), params)),
-      nullptr};
-  addControlMessageCreatedLog(std::move(req));
+  return moqParams;
 }
 
 void MLogger::outputLogsToFile() {

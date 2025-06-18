@@ -7,6 +7,8 @@
 #include "moxygen/MoQServer.h"
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
 
+#include <utility>
+
 using namespace quic::samples;
 using namespace proxygen;
 
@@ -17,12 +19,12 @@ MoQServer::MoQServer(
     std::string cert,
     std::string key,
     std::string endpoint)
-    : endpoint_(endpoint) {
+    : endpoint_(std::move(endpoint)) {
   params_.localAddress.emplace();
   params_.localAddress->setFromLocalPort(port);
   params_.serverThreads = 1;
-  params_.certificateFilePath = cert;
-  params_.keyFilePath = key;
+  params_.certificateFilePath = std::move(cert);
+  params_.keyFilePath = std::move(key);
   params_.txnTimeout = std::chrono::seconds(60);
   params_.supportedAlpns = {"h3", "moq-00"};
   auto factory = std::make_unique<HQServerTransportFactory>(
@@ -83,7 +85,7 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
   // take in the value from ClientSetup
   static constexpr size_t kDefaultMaxRequestID = 100;
   static constexpr size_t kMaxAuthTokenCacheSize = 1024;
-  return folly::Try<ServerSetup>(ServerSetup({
+  ServerSetup serverSetup = ServerSetup({
       negotiatedVersion,
       {{folly::to_underlying(SetupKey::MAX_REQUEST_ID),
         "",
@@ -93,7 +95,14 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
         "",
         kMaxAuthTokenCacheSize,
         {}}},
-  }));
+  });
+
+  // Log Server Setup
+  if (logger_) {
+    logger_->logServerSetup(serverSetup);
+  }
+
+  return folly::Try<ServerSetup>(serverSetup);
 }
 
 folly::coro::Task<void> MoQServer::handleClientSession(
@@ -142,4 +151,9 @@ void MoQServer::Handler::onHeadersComplete(
 
   server_.handleClientSession(clientSession_).scheduleOn(evb).start();
 }
+
+void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {
+  logger_ = std::move(logger);
+}
+
 } // namespace moxygen
