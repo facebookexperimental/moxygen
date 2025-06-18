@@ -2164,6 +2164,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__ << " id=" << unsubscribe.requestID << " sess=" << this;
+
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribe);
   if (closeSessionIfRequestIDInvalid(unsubscribe.requestID, false, false)) {
     return;
@@ -3245,6 +3246,7 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
 
 void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribe);
   auto trackAliasIt = subIdToTrackAlias_.find(unsubscribe.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
@@ -3272,6 +3274,12 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
     return;
   }
+
+  // Log Unsubscribe
+  if (logger_) {
+    logger_->logUnsubscribe(unsubscribe);
+  }
+
   controlWriteEvent_.signal();
   checkForCloseOnDrain();
 }

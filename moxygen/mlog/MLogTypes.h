@@ -156,6 +156,7 @@ class MOQTUnsubscribe : public MOQTBaseControlMessage {
   MOQTUnsubscribe() {
     type = "unsubscribe";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
 };
 

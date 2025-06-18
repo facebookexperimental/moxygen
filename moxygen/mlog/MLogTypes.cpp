@@ -115,6 +115,13 @@ folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTUnsubscribe::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(subscribeId);
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;
