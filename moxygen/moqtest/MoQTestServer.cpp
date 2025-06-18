@@ -18,7 +18,7 @@ void MoQTestSubscriptionHandle::unsubscribe() {
 }
 
 void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
-  // Empty Method Body For Now
+  LOG(INFO) << "Received Subscribe Update";
 }
 
 void MoQTestFetchHandle::fetchCancel() {

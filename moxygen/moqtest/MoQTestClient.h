@@ -68,6 +68,8 @@ class MoQTestClient : public moxygen::Subscriber,
 
   virtual void goaway(Goaway goaway) override;
 
+  void subscribeUpdate(SubscribeUpdate update);
+
  private:
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;

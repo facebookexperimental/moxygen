@@ -1,6 +1,8 @@
 // (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
 #include "moxygen/moqtest/MoQTestClient.h"
+
+#include <utility>
 #include "moxygen/MoQClient.h"
 #include "moxygen/moqtest/Utils.h"
 
@@ -20,6 +22,13 @@ MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
 
 void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   moqClient_->setLogger(logger);
+}
+
+void MoQTestClient::subscribeUpdate(SubscribeUpdate update) {
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling subscribeUpdate" << std::endl;
+  if (receivingType_ == ReceivingType::SUBSCRIBE && subHandle_) {
+    subHandle_->subscribeUpdate(std::move(update));
+  }
 }
 
 folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {

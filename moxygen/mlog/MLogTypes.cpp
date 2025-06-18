@@ -96,6 +96,25 @@ folly::dynamic MOQTSubscribe::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["startGroup"] = std::to_string(startGroup);
+  obj["startObject"] = std::to_string(startObject);
+  obj["endGroup"] = std::to_string(endGroup);
+  obj["subscriberPriority"] = std::to_string(subscriberPriority);
+  obj["numberOfParameters"] = std::to_string(numberOfParameters);
+
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(subscribeParameters.size());
+  for (auto& param : subscribeParameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["subscribeParameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;

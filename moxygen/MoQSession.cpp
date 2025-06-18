@@ -3349,6 +3349,9 @@ void MoQSession::fetchComplete(RequestID requestID) {
 }
 
 void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
+  if (logger_) {
+    logger_->logSubscribeUpdate(subUpdate);
+  }
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeUpdate);
   auto trackAliasIt = subIdToTrackAlias_.find(subUpdate.requestID);

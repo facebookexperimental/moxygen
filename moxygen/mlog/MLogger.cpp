@@ -130,6 +130,25 @@ void MLogger::logSubscribe(
   addControlMessageCreatedLog(std::move(msgCreated));
 }
 
+void MLogger::logSubscribeUpdate(const SubscribeUpdate& req) {
+  auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
+  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->startGroup = req.start.group;
+  baseMsg->startObject = req.start.object;
+  baseMsg->endGroup = req.endGroup;
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->subscriberPriority = req.priority;
+  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+
+  // Add the message to the logs
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector
