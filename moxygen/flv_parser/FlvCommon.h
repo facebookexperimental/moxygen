@@ -118,7 +118,7 @@ struct AscHeaderData {
         channels(channels) {
     freqIndex = getAscFreqIndex(sampleFreq);
   }
-  bool operator==(const AscHeaderData& other) {
+  bool operator==(const AscHeaderData& other) const {
     return (
         this->valid == other.valid && this->aot == other.aot &&
         this->freqIndex == other.freqIndex &&
@@ -145,7 +145,7 @@ struct FlvTagBase {
         size(tag.size),
         timestamp(tag.timestamp),
         streamId(tag.streamId) {}
-  bool operator==(const FlvTagBase& other) {
+  bool operator==(const FlvTagBase& other) const {
     return (
         this->type == other.type && this->size == other.size &&
         this->timestamp == other.timestamp && this->streamId == other.streamId);
@@ -176,8 +176,8 @@ struct FlvVideoTag : public FlvTagBase {
         avcPacketType(avcPacketType),
         compositionTime(compositionTime),
         data(std::move(data)) {}
-  bool operator==(const FlvVideoTag& other) {
-    auto base = dynamic_cast<FlvTagBase*>(this);
+  bool operator==(const FlvVideoTag& other) const {
+    auto base = dynamic_cast<const FlvTagBase*>(this);
     auto baseOther = dynamic_cast<const FlvTagBase*>(&other);
     if (*base != *baseOther) {
       return false;
@@ -228,8 +228,8 @@ struct FlvAudioTag : public FlvTagBase {
         soundType(soundType),
         aacPacketType(aacPacketType),
         data(std::move(data)) {}
-  bool operator==(const FlvAudioTag& other) {
-    auto base = dynamic_cast<FlvTagBase*>(this);
+  bool operator==(const FlvAudioTag& other) const {
+    auto base = dynamic_cast<const FlvTagBase*>(this);
     auto baseOther = dynamic_cast<const FlvTagBase*>(&other);
     if (*base != *baseOther) {
       return false;
@@ -272,8 +272,8 @@ struct FlvScriptTag : public FlvTagBase {
   explicit FlvScriptTag(const FlvTagBase& tag) : FlvTagBase(tag) {}
   FlvScriptTag(const FlvTagBase& tag, std::unique_ptr<folly::IOBuf> data)
       : FlvTagBase(tag), data(std::move(data)) {}
-  bool operator==(const FlvScriptTag& other) {
-    auto base = dynamic_cast<FlvTagBase*>(this);
+  bool operator==(const FlvScriptTag& other) const {
+    auto base = dynamic_cast<const FlvTagBase*>(this);
     auto baseOther = dynamic_cast<const FlvTagBase*>(&other);
     if (*base != *baseOther) {
       return false;
