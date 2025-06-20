@@ -40,6 +40,10 @@ MoQServer::MoQServer(
   hqServer_->start();
 }
 
+void MoQServer::stop() {
+  hqServer_->stop();
+}
+
 void MoQServer::createMoQQuicSession(
     std::shared_ptr<quic::QuicSocket> quicSocket) {
   auto qevb = quicSocket->getEventBase();

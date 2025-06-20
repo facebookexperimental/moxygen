@@ -46,6 +46,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::shared_ptr<MLogger> logger_;
   void setLogger(std::shared_ptr<MLogger> logger);
 
+  void stop();
+
  private:
   folly::coro::Task<void> handleClientSession(
       std::shared_ptr<MoQSession> clientSession);
