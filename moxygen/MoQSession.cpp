@@ -3524,6 +3524,12 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
 
 void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  // Log FetchCancel
+  if (logger_) {
+    logger_->logFetchCancel(fetchCan);
+  }
+
   auto trackIt = fetches_.find(fetchCan.requestID);
   if (trackIt == fetches_.end()) {
     XLOG(ERR) << "unknown subscribe ID=" << fetchCan.requestID

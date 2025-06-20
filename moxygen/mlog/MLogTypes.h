@@ -187,6 +187,7 @@ class MOQTFetchCancel : public MOQTBaseControlMessage {
   MOQTFetchCancel() {
     type = "fetch_cancel";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
 };
 

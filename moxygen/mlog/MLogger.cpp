@@ -201,6 +201,18 @@ void MLogger::logFetch(const Fetch& req, const MOQTByteStringType& type) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logFetchCancel(const FetchCancel& req) {
+  auto baseMsg = std::make_unique<MOQTFetchCancel>();
+  baseMsg->subscribeId = req.requestID.value;
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector
