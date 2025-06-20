@@ -45,6 +45,9 @@ class MLogger {
       const Fetch& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
   void logFetchCancel(const FetchCancel& req);
+  void logAnnounceOk(
+      const AnnounceOk& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
 
   void setPath(const std::string& path);
 

@@ -2916,6 +2916,11 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
 
 void MoQSession::announceOk(const AnnounceOk& annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
+
+  if (logger_) {
+    logger_->logAnnounceOk(annOk);
+  }
+
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onAnnounceSuccess);
   auto res = moqFrameWriter_.writeAnnounceOk(controlWriteBuf_, annOk);
   if (!res) {

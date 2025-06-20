@@ -67,6 +67,9 @@ class MoQTestClient : public moxygen::Subscriber,
   void setLogger(const std::shared_ptr<MLogger>& logger);
 
   virtual void goaway(Goaway goaway) override;
+  virtual folly::coro::Task<AnnounceResult> announce(
+      Announce ann,
+      std::shared_ptr<AnnounceCallback> callback = nullptr) override;
 
   void subscribeUpdate(SubscribeUpdate update);
 
@@ -78,6 +81,7 @@ class MoQTestClient : public moxygen::Subscriber,
   // Holds Current Request Parameters
   ReceivingType receivingType_ = ReceivingType::UNKNOWN_RECEIVING_TYPE;
   MoQTestParameters params_;
+  RequestID requestID_{};
 
   // Holds Current Request Group, SubGroup, and objectId (updated based on
   // expected data)

@@ -58,6 +58,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   // Create a SubRequest with the created TrackNamespace as its fullTrackName
   SubscribeRequest sub;
   sub.requestID = kDefaultRequestId;
+  requestID_ = kDefaultRequestId;
 
   FullTrackName ftn;
   ftn.trackNamespace = trackNamespace.value();
@@ -93,6 +94,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
   // Create a Fetch with the created TrackNamespace as its fullTrackName
   Fetch fetch;
   fetch.requestID = kDefaultRequestId;
+  requestID_ = kDefaultRequestId;
 
   FullTrackName ftn;
   ftn.trackNamespace = trackNamespace.value();
@@ -497,5 +499,27 @@ void MoQTestClient::goaway(Goaway goaway) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling goaway" << std::endl;
   moqClient_->goaway(goaway);
 };
+
+folly::coro::Task<MoQSession::AnnounceResult> MoQTestClient::announce(
+    Announce ann,
+    std::shared_ptr<AnnounceCallback> callback) {
+  LOG(INFO) << "MoQTest DEBUGGING: calling announce";
+  auto track = convertMoqTestParamToTrackNamespace(&params_);
+
+  if (track.hasError()) {
+    AnnounceError error{
+        requestID_,
+        TrackNamespace{},
+        AnnounceErrorCode::INTERNAL_ERROR,
+        "Parameters couldn't be converted to TrackNamespace"};
+    co_return folly::makeUnexpected(error);
+  }
+
+  AnnounceOk ok = {
+      requestID_,
+      track.value(),
+  };
+  co_return std::make_shared<AnnounceHandle>(ok);
+}
 
 } // namespace moxygen

@@ -196,6 +196,7 @@ class MOQTAnnounceOk : public MOQTBaseControlMessage {
   MOQTAnnounceOk() {
     type = "announce_ok";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
 };
 
