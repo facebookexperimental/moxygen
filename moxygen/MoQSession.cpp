@@ -2810,6 +2810,9 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
         TrackStatusCode::UNKNOWN,
         folly::none};
   }
+  if (logger_) {
+    logger_->logTrackStatusRequest(trackStatusRequest);
+  }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<TrackStatus>();
   trackStatuses_.emplace(

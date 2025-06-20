@@ -229,6 +229,7 @@ class MOQTTrackStatusRequest : public MOQTBaseControlMessage {
   MOQTTrackStatusRequest() {
     type = "track_status_request";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   MOQTByteString trackName;
 };

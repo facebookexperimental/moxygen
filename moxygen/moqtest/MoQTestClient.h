@@ -71,6 +71,7 @@ class MoQTestClient : public moxygen::Subscriber,
       Announce ann,
       std::shared_ptr<AnnounceCallback> callback = nullptr) override;
 
+  folly::coro::Task<void> trackStatus(TrackStatusRequest req);
   void subscribeUpdate(SubscribeUpdate update);
 
   void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase);
