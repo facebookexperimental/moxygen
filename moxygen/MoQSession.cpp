@@ -3098,6 +3098,11 @@ void MoQSession::unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn) {
     XLOG(ERR) << "writeUnsubscribeAnnounces failed sess=" << this;
     return;
   }
+
+  if (logger_) {
+    logger_->logUnsubscribeAnnounces(unsubAnn);
+  }
+
   controlWriteEvent_.signal();
 }
 

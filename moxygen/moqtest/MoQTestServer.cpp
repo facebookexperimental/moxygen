@@ -676,7 +676,7 @@ MoQTestServer::subscribeAnnounces(SubscribeAnnounces subAnn) {
 }
 
 void MoQTestSubscribeAnnouncesHandle::unsubscribeAnnounces() {
-  // Empty For Now
+  LOG(INFO) << "CALLING unsubscribeAnnounces";
 }
 
 } // namespace moxygen

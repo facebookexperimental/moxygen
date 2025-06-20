@@ -84,6 +84,10 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
         << "MoQTest verification result: FAILURE! Reason: Error Subscribing to receiver";
   }
 
+  auto track = convertMoqTestParamToTrackNamespace(&params_);
+  SubscribeAnnounces ann{0, track.value(), {}};
+  co_await subscribeAnnounces(ann);
+
   co_return trackNamespace.value();
 }
 
@@ -538,9 +542,19 @@ folly::coro::Task<void> MoQTestClient::trackStatus(TrackStatusRequest req) {
   co_await moqClient_->moqSession_->trackStatus(req);
 }
 
-folly::coro::Task<void> MoQTestClient::subscribeAnnounces(
-    SubscribeAnnounces ann) {
-  co_await moqClient_->moqSession_->subscribeAnnounces(ann);
+folly::coro::Task<MoQSession::SubscribeAnnouncesResult>
+MoQTestClient::subscribeAnnounces(SubscribeAnnounces ann) {
+  auto res = co_await moqClient_->moqSession_->subscribeAnnounces(ann);
+  if (res.hasValue()) {
+    subAnnouncesHandle_ = res.value();
+  }
+  co_return res;
+}
+
+void MoQTestClient::unsubscribeAnnounces(UnsubscribeAnnounces unann) {
+  if (subAnnouncesHandle_) {
+    subAnnouncesHandle_->unsubscribeAnnounces();
+  }
 }
 
 } // namespace moxygen

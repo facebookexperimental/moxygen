@@ -250,6 +250,7 @@ class MOQTUnsubscribeAnnounces : public MOQTBaseControlMessage {
   MOQTUnsubscribeAnnounces() {
     type = "unsubscribe_announces";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
 };
 
