@@ -63,6 +63,7 @@ class MLogger {
   void logUnsubscribeAnnounces(
       const UnsubscribeAnnounces& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+  void logSubscribeOk(const SubscribeOk& req);
 
   void setPath(const std::string& path);
 

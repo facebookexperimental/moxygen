@@ -246,6 +246,29 @@ folly::dynamic MOQTUnsubscribeAnnounces::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribeOk::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["expires"] = std::to_string(expires);
+  obj["groupOrder"] = std::to_string(groupOrder);
+  obj["contentExists"] = std::to_string(contentExists);
+  if (largestGroupId.has_value()) {
+    obj["largestGroupId"] = std::to_string(largestGroupId.value());
+  }
+  if (largestObjectId.has_value()) {
+    obj["largestObjectId"] = std::to_string(largestObjectId.value());
+  }
+  obj["numberOfParameters"] = std::to_string(numberOfParameters);
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(subscribeParameters.size());
+  for (auto& param : subscribeParameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["subscribeParameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;

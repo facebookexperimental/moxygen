@@ -259,6 +259,7 @@ class MOQTSubscribeOk : public MOQTBaseControlMessage {
   MOQTSubscribeOk() {
     type = "subscribe_ok";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint64_t expires{};
   uint8_t groupOrder{};

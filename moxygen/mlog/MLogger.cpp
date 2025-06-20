@@ -321,6 +321,31 @@ void MLogger::logUnsubscribeAnnounces(
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logSubscribeOk(const SubscribeOk& req) {
+  auto baseMsg = std::make_unique<MOQTSubscribeOk>();
+  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->expires = req.expires.count();
+  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+
+  if (req.latest.has_value()) {
+    baseMsg->contentExists = 1;
+    baseMsg->largestGroupId = req.latest.value().group;
+    baseMsg->largestObjectId = req.latest.value().object;
+  } else {
+    baseMsg->contentExists = 0;
+  }
+
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

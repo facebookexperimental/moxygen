@@ -3247,6 +3247,11 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
     return nullptr;
   }
+
+  if (logger_) {
+    logger_->logSubscribeOk(subOk);
+  }
+
   controlWriteEvent_.signal();
   return std::static_pointer_cast<TrackConsumer>(trackPublisher);
 }
