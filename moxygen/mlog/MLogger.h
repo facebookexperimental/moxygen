@@ -48,6 +48,9 @@ class MLogger {
   void logAnnounceOk(
       const AnnounceOk& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+  void logAnnounceError(
+      const AnnounceError& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
 
   void setPath(const std::string& path);
 
@@ -69,6 +72,7 @@ class MLogger {
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
   std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
       const std::vector<SetupParameter>& params);
+  bool isHexstring(const std::string& s);
 };
 
 } // namespace moxygen

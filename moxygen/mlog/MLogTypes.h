@@ -205,6 +205,7 @@ class MOQTAnnounceError : public MOQTBaseControlMessage {
   MOQTAnnounceError() {
     type = "announce_error";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   uint64_t errorCode{};
   folly::Optional<std::string> reason;

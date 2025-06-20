@@ -2941,6 +2941,12 @@ void MoQSession::announceError(const AnnounceError& announceError) {
     XLOG(ERR) << "writeAnnounceError failed sess=" << this;
     return;
   }
+
+  // Log AnnounceError
+  if (logger_) {
+    logger_->logAnnounceError(announceError);
+  }
+
   controlWriteEvent_.signal();
 }
 
