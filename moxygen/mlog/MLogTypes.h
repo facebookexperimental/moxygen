@@ -288,6 +288,7 @@ class MOQTFetchOk : public MOQTBaseControlMessage {
   MOQTFetchOk() {
     type = "fetch_ok";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint8_t groupOrder{};
   uint8_t endOfTrack{};

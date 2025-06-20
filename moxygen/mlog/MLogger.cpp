@@ -368,6 +368,24 @@ void MLogger::logSubscribeError(const SubscribeError& req) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logFetchOk(const FetchOk& req) {
+  auto baseMsg = std::make_unique<MOQTFetchOk>();
+  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+  baseMsg->endOfTrack = req.endOfTrack;
+  baseMsg->largestGroupId = req.endLocation.group;
+  baseMsg->largestObjectId = req.endLocation.object;
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

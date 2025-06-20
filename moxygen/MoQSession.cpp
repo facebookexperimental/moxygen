@@ -3537,6 +3537,9 @@ void MoQSession::fetchOk(const FetchOk& fetchOk) {
     XLOG(ERR) << "writeFetchOk failed sess=" << this;
     return;
   }
+  if (logger_) {
+    logger_->logFetchOk(fetchOk);
+  }
   controlWriteEvent_.signal();
 }
 
