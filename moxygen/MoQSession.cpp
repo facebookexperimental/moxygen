@@ -3404,6 +3404,12 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> consumer) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  // Log Fetch
+  if (logger_) {
+    logger_->logFetch(fetch);
+  }
+
   auto fetchStartTime = std::chrono::steady_clock::now();
   SCOPE_EXIT {
     auto duration = (std::chrono::steady_clock::now() - fetchStartTime);

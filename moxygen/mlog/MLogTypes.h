@@ -165,6 +165,7 @@ class MOQTFetch : public MOQTBaseControlMessage {
   MOQTFetch() {
     type = "fetch";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint8_t subscriberPriority{};
   uint8_t groupOrder{};

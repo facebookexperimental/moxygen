@@ -161,6 +161,46 @@ void MLogger::logUnsubscribe(const Unsubscribe& req) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logFetch(const Fetch& req, const MOQTByteStringType& type) {
+  auto baseMsg = std::make_unique<MOQTFetch>();
+  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->subscriberPriority = req.priority;
+  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+
+  auto [standalone, joining] = fetchType(req);
+  if (joining) {
+    baseMsg->fetchType = static_cast<uint64_t>(joining->fetchType);
+    baseMsg->joiningSubscribeId =
+        std::get<JoiningFetch>(req.args).joiningRequestID.value;
+    baseMsg->precedingGroupOffset =
+        std::get<JoiningFetch>(req.args).joiningStart;
+  } else if (standalone) {
+    baseMsg->fetchType = static_cast<uint64_t>(FetchType::STANDALONE);
+    baseMsg->startGroup = std::get<StandaloneFetch>(req.args).start.group;
+    baseMsg->startObject = std::get<StandaloneFetch>(req.args).start.object;
+    baseMsg->endGroup = std::get<StandaloneFetch>(req.args).end.group;
+    baseMsg->endObject = std::get<StandaloneFetch>(req.args).end.object;
+  }
+
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.fullTrackName.trackNamespace.trackNamespace, type);
+  if (req.fullTrackName.trackName != "") {
+    baseMsg->trackName =
+        convertTrackNameToByteStringFormat(req.fullTrackName.trackName);
+  }
+
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+
+  // Add the message to the logs
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

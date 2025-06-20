@@ -122,6 +122,47 @@ folly::dynamic MOQTUnsubscribe::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTFetch::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["subscriberPriority"] = std::to_string(subscriberPriority);
+  obj["groupOrder"] = std::to_string(groupOrder);
+  obj["fetchType"] = std::to_string(fetchType);
+  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
+  obj["trackNamespace"] =
+      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  if (trackName.hasValue()) {
+    obj["trackName"] = parseTrackName(trackName.value());
+  }
+  if (startGroup.hasValue()) {
+    obj["startGroup"] = std::to_string(startGroup.value());
+  }
+  if (startObject.hasValue()) {
+    obj["startObject"] = std::to_string(startObject.value());
+  }
+  if (endGroup.hasValue()) {
+    obj["endGroup"] = std::to_string(endGroup.value());
+  }
+  if (endObject.hasValue()) {
+    obj["endObject"] = std::to_string(endObject.value());
+  }
+  if (joiningSubscribeId.hasValue()) {
+    obj["joiningSubscribeId"] = std::to_string(joiningSubscribeId.value());
+  }
+  if (precedingGroupOffset.hasValue()) {
+    obj["precedingGroupOffset"] = std::to_string(precedingGroupOffset.value());
+  }
+  obj["numberOfParameters"] = std::to_string(numberOfParameters);
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(parameters.size());
+  for (auto& param : parameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["parameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;
