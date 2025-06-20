@@ -6,7 +6,6 @@
 
 #include "moxygen/moq_mi/MoQMi.h"
 
-#include <folly/String.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/utils/Logging.h>
