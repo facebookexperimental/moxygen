@@ -3547,6 +3547,11 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onFetchError, fetchErr.errorCode);
+
+  if (logger_) {
+    logger_->logFetchError(fetchErr);
+  }
+
   if (pubTracks_.erase(fetchErr.requestID) == 0) {
     // fetchError is called sometimes before adding publisher state, so this
     // is not an error

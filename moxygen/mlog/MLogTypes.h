@@ -303,6 +303,7 @@ class MOQTFetchError : public MOQTBaseControlMessage {
   MOQTFetchError() {
     type = "fetch_error";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint64_t errorCode{};
   folly::Optional<std::string> reason;
