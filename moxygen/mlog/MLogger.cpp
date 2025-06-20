@@ -346,6 +346,28 @@ void MLogger::logSubscribeOk(const SubscribeOk& req) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logSubscribeError(const SubscribeError& req) {
+  auto baseMsg = std::make_unique<MOQTSubscribeError>();
+  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
+
+  if (isHexstring(req.reasonPhrase)) {
+    baseMsg->reasonBytes = req.reasonPhrase;
+  } else {
+    baseMsg->reason = req.reasonPhrase;
+  }
+  if (req.retryAlias.has_value()) {
+    baseMsg->trackAlias = req.retryAlias.value();
+  }
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

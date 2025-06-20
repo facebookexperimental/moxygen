@@ -275,11 +275,12 @@ class MOQTSubscribeError : public MOQTBaseControlMessage {
   MOQTSubscribeError() {
     type = "subscribe_error";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint64_t errorCode{};
   folly::Optional<std::string> reason;
   folly::Optional<std::string> reasonBytes;
-  uint64_t trackAlias{};
+  folly::Optional<uint64_t> trackAlias{};
 };
 
 class MOQTFetchOk : public MOQTBaseControlMessage {

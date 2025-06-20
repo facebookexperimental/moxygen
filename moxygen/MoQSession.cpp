@@ -3272,6 +3272,11 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
     XLOG(ERR) << "writeSubscribeError failed sess=" << this;
     return;
   }
+
+  if (logger_) {
+    logger_->logSubscribeError(subErr);
+  }
+
   controlWriteEvent_.signal();
 }
 
