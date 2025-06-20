@@ -3037,6 +3037,9 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
+  if (logger_) {
+    logger_->logSubscribeAnnounces(sa);
+  }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>();

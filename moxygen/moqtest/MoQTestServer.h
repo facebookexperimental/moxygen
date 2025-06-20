@@ -35,6 +35,14 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
   folly::CancellationSource* cancelSource_;
 };
 
+class MoQTestSubscribeAnnouncesHandle
+    : public Publisher::SubscribeAnnouncesHandle {
+ public:
+  MoQTestSubscribeAnnouncesHandle(SubscribeAnnouncesOk ok)
+      : Publisher::SubscribeAnnouncesHandle(std::move(ok)) {}
+  virtual void unsubscribeAnnounces() override;
+};
+
 class MoQTestFetchHandle : public Publisher::FetchHandle {
  public:
   MoQTestFetchHandle(
@@ -118,6 +126,8 @@ class MoQTestServer : public moxygen::Publisher,
   }
 
   virtual void goaway(Goaway goaway) override;
+  virtual folly::coro::Task<SubscribeAnnouncesResult> subscribeAnnounces(
+      SubscribeAnnounces subAnn) override;
 
  private:
   std::shared_ptr<folly::CancellationSource> subCancelSource_;

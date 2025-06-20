@@ -73,6 +73,7 @@ class MoQTestClient : public moxygen::Subscriber,
 
   folly::coro::Task<void> trackStatus(TrackStatusRequest req);
   void subscribeUpdate(SubscribeUpdate update);
+  folly::coro::Task<void> subscribeAnnounces(SubscribeAnnounces announces);
 
   void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase);
 

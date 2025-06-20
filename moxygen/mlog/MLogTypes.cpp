@@ -221,6 +221,22 @@ folly::dynamic MOQTTrackStatusRequest::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribeAnnounces::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
+  obj["trackNamespace"] =
+      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  obj["numberOfParameters"] = std::to_string(numberOfParameters);
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(parameters.size());
+  for (auto& param : parameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["parameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;

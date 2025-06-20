@@ -239,6 +239,7 @@ class MOQTSubscribeAnnounces : public MOQTBaseControlMessage {
   MOQTSubscribeAnnounces() {
     type = "subscribe_announces";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;

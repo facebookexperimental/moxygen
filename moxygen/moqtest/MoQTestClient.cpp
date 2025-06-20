@@ -538,4 +538,9 @@ folly::coro::Task<void> MoQTestClient::trackStatus(TrackStatusRequest req) {
   co_await moqClient_->moqSession_->trackStatus(req);
 }
 
+folly::coro::Task<void> MoQTestClient::subscribeAnnounces(
+    SubscribeAnnounces ann) {
+  co_await moqClient_->moqSession_->subscribeAnnounces(ann);
+}
+
 } // namespace moxygen

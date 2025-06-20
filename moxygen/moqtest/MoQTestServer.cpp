@@ -70,14 +70,14 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   // Request Session
   subSession_ = MoQSession::getRequestSession();
 
+  if (logger_) {
+    subSession_->setLogger(logger_);
+  }
+
   Announce ann{0, sub.fullTrackName.trackNamespace, {}};
   subSession_->announce(ann, std::make_shared<MoQTAnnounceCallback>())
       .scheduleOn(subSession_->getEventBase())
       .start();
-
-  if (logger_) {
-    subSession_->setLogger(logger_);
-  }
 
   // Start a Co-routine to send objects back according to spec
   onSubscribe(sub, callback).scheduleOn(subSession_->getEventBase()).start();
@@ -665,6 +665,18 @@ void MoQTAnnounceCallback::announceCancel(
     AnnounceErrorCode errorCode,
     std::string reasonPhrase) {
   LOG(INFO) << "Calling Announce Cancel";
+}
+
+folly::coro::Task<MoQSession::SubscribeAnnouncesResult>
+MoQTestServer::subscribeAnnounces(SubscribeAnnounces subAnn) {
+  SubscribeAnnouncesOk ok{subAnn.requestID, subAnn.trackNamespacePrefix};
+  auto handle =
+      std::make_shared<MoQTestSubscribeAnnouncesHandle>(std::move(ok));
+  co_return handle;
+}
+
+void MoQTestSubscribeAnnouncesHandle::unsubscribeAnnounces() {
+  // Empty For Now
 }
 
 } // namespace moxygen
