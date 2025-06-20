@@ -2602,6 +2602,10 @@ void MoQSession::announceCancel(const AnnounceCancel& annCan) {
   controlWriteEvent_.signal();
   subscriberAnnounces_.erase(annCan.trackNamespace);
   retireRequestID(/*signalWriteLoop=*/false);
+
+  if (logger_) {
+    logger_->logAnnounceCancel(annCan);
+  }
 }
 
 void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {

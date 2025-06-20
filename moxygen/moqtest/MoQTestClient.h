@@ -73,10 +73,13 @@ class MoQTestClient : public moxygen::Subscriber,
 
   void subscribeUpdate(SubscribeUpdate update);
 
+  void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase);
+
  private:
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;
+  std::shared_ptr<AnnounceCallback> announceCallback_;
 
   // Holds Current Request Parameters
   ReceivingType receivingType_ = ReceivingType::UNKNOWN_RECEIVING_TYPE;

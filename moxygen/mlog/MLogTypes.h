@@ -217,6 +217,7 @@ class MOQTAnnounceCancel : public MOQTBaseControlMessage {
   MOQTAnnounceCancel() {
     type = "announce_cancel";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   uint64_t errorCode{};
   folly::Optional<std::string> reason;

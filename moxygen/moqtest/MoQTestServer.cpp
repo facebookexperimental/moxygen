@@ -45,6 +45,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
   LOG(INFO) << "Recieved Subscription";
+
   if (subCancelSource_) {
     SubscribeError error;
     error.requestID = sub.requestID;
@@ -68,6 +69,11 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
 
   // Request Session
   subSession_ = MoQSession::getRequestSession();
+
+  Announce ann{0, sub.fullTrackName.trackNamespace, {}};
+  subSession_->announce(ann, std::make_shared<MoQTAnnounceCallback>())
+      .scheduleOn(subSession_->getEventBase())
+      .start();
 
   if (logger_) {
     subSession_->setLogger(logger_);
@@ -143,6 +149,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
 
   // Inform Consumer that publisher is finished opening subgroups/datagrams
   // Default SubscribeDone For Now
+
   SubscribeDone done;
   done.requestID = sub.requestID;
   done.reasonPhrase = kDefaultSubscribeDoneReason;
@@ -652,6 +659,12 @@ bool MoQTestServer::isSubCancelled() {
 
 bool MoQTestServer::isFetchCancelled() {
   return fetchCancelSource_->isCancellationRequested();
+}
+
+void MoQTAnnounceCallback::announceCancel(
+    AnnounceErrorCode errorCode,
+    std::string reasonPhrase) {
+  LOG(INFO) << "Calling Announce Cancel";
 }
 
 } // namespace moxygen

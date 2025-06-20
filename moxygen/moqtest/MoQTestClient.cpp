@@ -500,11 +500,23 @@ void MoQTestClient::goaway(Goaway goaway) {
   moqClient_->goaway(goaway);
 };
 
+void MoQTestClient::announceCancel(
+    AnnounceErrorCode errorCode,
+    std::string reasonPhrase) {
+  if (announceCallback_) {
+    announceCallback_->announceCancel(errorCode, std::move(reasonPhrase));
+  }
+}
+
 folly::coro::Task<MoQSession::AnnounceResult> MoQTestClient::announce(
     Announce ann,
     std::shared_ptr<AnnounceCallback> callback) {
   LOG(INFO) << "MoQTest DEBUGGING: calling announce";
   auto track = convertMoqTestParamToTrackNamespace(&params_);
+
+  if (callback) {
+    announceCallback_ = callback;
+  }
 
   if (track.hasError()) {
     AnnounceError error{

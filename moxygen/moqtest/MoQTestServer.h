@@ -10,6 +10,15 @@
 
 namespace moxygen {
 
+class MoQTAnnounceCallback : public Subscriber::AnnounceCallback {
+ public:
+  MoQTAnnounceCallback() = default;
+
+  virtual void announceCancel(
+      AnnounceErrorCode errorCode,
+      std::string reasonPhrase) override;
+};
+
 class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
  public:
   MoQTestSubscriptionHandle(
