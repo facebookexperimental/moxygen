@@ -315,6 +315,7 @@ class MOQTSubscribeDone : public MOQTBaseControlMessage {
   MOQTSubscribeDone() {
     type = "subscribe_done";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
   uint64_t statusCode{};
   uint64_t streamCount{};

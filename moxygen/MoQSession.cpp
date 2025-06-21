@@ -3346,6 +3346,10 @@ void MoQSession::subscribeDone(const SubscribeDone& subDone) {
     return;
   }
 
+  if (logger_) {
+    logger_->logSubscribeDone(subDone);
+  }
+
   retireRequestID(/*signalWriteLoop=*/false);
   controlWriteEvent_.signal();
 }

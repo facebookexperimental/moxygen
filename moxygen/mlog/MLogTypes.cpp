@@ -318,6 +318,21 @@ folly::dynamic MOQTFetchError::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribeDone::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["statusCode"] = std::to_string(statusCode);
+  obj["streamCount"] = std::to_string(streamCount);
+  if (reason.hasValue()) {
+    obj["reason"] = reason.value();
+  }
+  if (reasonBytes.hasValue()) {
+    obj["reasonBytes"] = reasonBytes.value();
+  }
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;

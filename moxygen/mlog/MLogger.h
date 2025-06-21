@@ -67,6 +67,7 @@ class MLogger {
   void logSubscribeError(const SubscribeError& req);
   void logFetchOk(const FetchOk& req);
   void logFetchError(const FetchError& req);
+  void logSubscribeDone(const SubscribeDone& req);
 
   void setPath(const std::string& path);
 
