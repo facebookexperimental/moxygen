@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "folly/json.h"
 #include "folly/json/dynamic.h"
+#include "folly/json/json.h"
 #include "moxygen/MoQFramer.h"
 #include "moxygen/mlog/MLogEvents.h"
 #include "moxygen/mlog/MLogTypes.h"
