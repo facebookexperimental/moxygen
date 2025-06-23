@@ -363,6 +363,7 @@ class MOQTUnannounce : public MOQTBaseControlMessage {
   MOQTUnannounce() {
     type = "unannounce";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
 };
 

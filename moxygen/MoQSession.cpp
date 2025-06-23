@@ -2966,6 +2966,11 @@ void MoQSession::announceError(const AnnounceError& announceError) {
 
 void MoQSession::unannounce(const Unannounce& unann) {
   XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
+
+  if (logger_) {
+    logger_->logUnannounce(unann);
+  }
+
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnannounce);
   auto it = publisherAnnounces_.find(unann.trackNamespace);
   if (it == publisherAnnounces_.end()) {

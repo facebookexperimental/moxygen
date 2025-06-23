@@ -443,6 +443,21 @@ void MLogger::logMaxSubscribeId(const uint64_t maxRequestID) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logUnannounce(
+    const Unannounce& req,
+    const MOQTByteStringType& type) {
+  auto baseMsg = std::make_unique<MOQTUnannounce>();
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespace.trackNamespace, type);
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 void MLogger::logSubscribesBlocked(const uint64_t maxRequestID) {
   auto baseMsg = std::make_unique<MOQTSubscribesBlocked>();
   baseMsg->maximumSubscribeId = maxRequestID;

@@ -369,6 +369,15 @@ folly::dynamic MOQTAnnounce::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTUnannounce::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
+  obj["trackNamespace"] =
+      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;
