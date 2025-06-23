@@ -2878,6 +2878,11 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     Announce ann,
     std::shared_ptr<AnnounceCallback> announceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
+
+  if (logger_) {
+    logger_->logAnnounce(ann);
+  }
+
   auto announceStartTime = std::chrono::steady_clock::now();
   SCOPE_EXIT {
     auto duration = (std::chrono::steady_clock::now() - announceStartTime);

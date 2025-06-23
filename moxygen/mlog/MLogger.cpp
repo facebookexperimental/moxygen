@@ -455,6 +455,21 @@ void MLogger::logSubscribesBlocked(const uint64_t maxRequestID) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logAnnounce(const Announce& req, const MOQTByteStringType& type) {
+  auto baseMsg = std::make_unique<MOQTAnnounce>();
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespace.trackNamespace, type);
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

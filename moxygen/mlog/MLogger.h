@@ -76,6 +76,9 @@ class MLogger {
   void logSubscribeDone(const SubscribeDone& req);
   void logMaxSubscribeId(const uint64_t maxRequestID);
   void logSubscribesBlocked(const uint64_t maxRequestID);
+  void logAnnounce(
+      const Announce& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
 
   void setPath(const std::string& path);
 
