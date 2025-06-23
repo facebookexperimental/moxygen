@@ -394,6 +394,7 @@ class MOQTSubscribeAnnouncesError : public MOQTBaseControlMessage {
   MOQTSubscribeAnnouncesError() {
     type = "subscribe_announces_error";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   uint64_t errorCode{};
   folly::Optional<std::string> reason;

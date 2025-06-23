@@ -3107,6 +3107,11 @@ void MoQSession::subscribeAnnouncesError(
     XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
     return;
   }
+
+  if (logger_) {
+    logger_->logSubscribeAnnouncesError(subscribeAnnouncesError);
+  }
+
   controlWriteEvent_.signal();
 }
 
