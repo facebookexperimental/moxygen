@@ -305,6 +305,7 @@ int main(int argc, char* argv[]) {
       &eventBase,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}));
+
   class SigHandler : public folly::AsyncSignalHandler {
    public:
     explicit SigHandler(folly::EventBase* evb, std::function<void(int)> fn)
@@ -325,8 +326,12 @@ int main(int argc, char* argv[]) {
    private:
     std::function<void(int)> fn_;
   };
-  SigHandler handler(
-      &eventBase, [&textClient](int) mutable { textClient->stop(); });
+
+  SigHandler handler(&eventBase, [&textClient](int) mutable {
+    textClient->stop();
+    textClient->moqClient_->moqSession_.reset();
+  });
+
   auto subParams = flags2params();
   const auto requestID = 0;
   const auto trackAlias = 1;
