@@ -385,6 +385,7 @@ class MOQTSubscribeAnnouncesOk : public MOQTBaseControlMessage {
   MOQTSubscribeAnnouncesOk() {
     type = "subscribe_announces_ok";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
 };
 

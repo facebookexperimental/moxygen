@@ -506,6 +506,21 @@ void MLogger::logAnnounce(const Announce& req, const MOQTByteStringType& type) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logSubscribeAnnouncesOk(
+    const SubscribeAnnouncesOk& req,
+    const MOQTByteStringType& type) {
+  auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesOk>();
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespacePrefix.trackNamespace, type);
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

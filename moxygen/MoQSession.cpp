@@ -3084,6 +3084,11 @@ void MoQSession::subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk) {
     XLOG(ERR) << "writeSubscribeAnnouncesOk failed sess=" << this;
     return;
   }
+
+  if (logger_) {
+    logger_->logSubscribeAnnouncesOk(saOk);
+  }
+
   controlWriteEvent_.signal();
 }
 
