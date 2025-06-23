@@ -82,6 +82,9 @@ class MLogger {
   void logUnannounce(
       const Unannounce& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+  void logTrackStatus(
+      const TrackStatus& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
 
   void setPath(const std::string& path);
 

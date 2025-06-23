@@ -2785,6 +2785,11 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
 
 void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
   auto res = moqFrameWriter_.writeTrackStatus(controlWriteBuf_, trackStatus);
+
+  if (logger_) {
+    logger_->logTrackStatus(trackStatus);
+  }
+
   if (!res) {
     XLOG(ERR) << "writeTrackStatus failed sess=" << this;
   } else {

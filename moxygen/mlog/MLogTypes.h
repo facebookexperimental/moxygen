@@ -372,11 +372,12 @@ class MOQTTrackStatus : public MOQTBaseControlMessage {
   MOQTTrackStatus() {
     type = "track_status";
   }
+  folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   MOQTByteString trackName;
   uint64_t statusCode{};
-  uint64_t lastGroupId{};
-  uint64_t lastObjectId{};
+  folly::Optional<uint64_t> lastGroupId;
+  folly::Optional<uint64_t> lastObjectId;
 };
 
 class MOQTSubscribeAnnouncesOk : public MOQTBaseControlMessage {

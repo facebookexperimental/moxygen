@@ -458,6 +458,27 @@ void MLogger::logUnannounce(
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logTrackStatus(
+    const TrackStatus& req,
+    const MOQTByteStringType& type) {
+  auto baseMsg = std::make_unique<MOQTTrackStatus>();
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.fullTrackName.trackNamespace.trackNamespace, type);
+  baseMsg->trackName =
+      convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
+  baseMsg->statusCode = static_cast<uint64_t>(req.statusCode);
+  if (req.latestGroupAndObject.has_value()) {
+    baseMsg->lastGroupId = req.latestGroupAndObject.value().group;
+    baseMsg->lastObjectId = req.latestGroupAndObject.value().object;
+  }
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 void MLogger::logSubscribesBlocked(const uint64_t maxRequestID) {
   auto baseMsg = std::make_unique<MOQTSubscribesBlocked>();
   baseMsg->maximumSubscribeId = maxRequestID;
