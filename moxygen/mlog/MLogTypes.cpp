@@ -346,6 +346,13 @@ folly::dynamic MOQTMaxSubscribeId::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribesBlocked::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["maximumSubscribeId"] = std::to_string(maximumSubscribeId);
+  return obj;
+}
+
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;

@@ -75,6 +75,7 @@ class MLogger {
   void logFetchError(const FetchError& req);
   void logSubscribeDone(const SubscribeDone& req);
   void logMaxSubscribeId(const uint64_t maxRequestID);
+  void logSubscribesBlocked(const uint64_t maxRequestID);
 
   void setPath(const std::string& path);
 

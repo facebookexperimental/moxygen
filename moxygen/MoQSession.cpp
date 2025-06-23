@@ -2293,6 +2293,7 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   // Increment the maxRequestID_ by the number of pending closed subscribes
   // and send a new MaxRequestID.
+
   if (requestsBlocked.maxRequestID >= maxRequestID_ && closedRequests_ > 0) {
     maxRequestID_ += (closedRequests_ * getRequestIDMultiplier());
     closedRequests_ = 0;

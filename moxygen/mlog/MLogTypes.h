@@ -343,6 +343,7 @@ class MOQTSubscribesBlocked : public MOQTBaseControlMessage {
   MOQTSubscribesBlocked() {
     type = "subscribes_blocked";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t maximumSubscribeId{0};
 };
 
