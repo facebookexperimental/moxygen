@@ -431,6 +431,18 @@ void MLogger::logSubscribeDone(const SubscribeDone& req) {
   addControlMessageCreatedLog(std::move(msg));
 }
 
+void MLogger::logMaxSubscribeId(const uint64_t maxRequestID) {
+  auto baseMsg = std::make_unique<MOQTMaxSubscribeId>();
+  baseMsg->subscribeId = maxRequestID;
+
+  MOQTControlMessageCreated msg{
+      kFirstBidiStreamId,
+      folly::none /* length */,
+      std::move(baseMsg),
+      nullptr};
+  addControlMessageCreatedLog(std::move(msg));
+}
+
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     const std::vector<SetupParameter>& params) {
   // Add Params to params vector

@@ -2272,6 +2272,7 @@ void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
 
 void MoQSession::onMaxRequestID(MaxRequestID maxRequestID) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+
   if (maxRequestID.requestID.value > peerMaxRequestID_) {
     XLOG(DBG1) << fmt::format(
         "Bumping the maxRequestID to: {} from: {}",
@@ -3373,6 +3374,11 @@ void MoQSession::sendMaxRequestID(bool signalWriteLoop) {
     XLOG(ERR) << "writeMaxRequestID failed sess=" << this;
     return;
   }
+
+  if (logger_) {
+    logger_->logMaxSubscribeId(maxRequestID_);
+  }
+
   if (signalWriteLoop) {
     controlWriteEvent_.signal();
   }

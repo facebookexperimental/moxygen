@@ -334,6 +334,7 @@ class MOQTMaxSubscribeId : public MOQTBaseControlMessage {
   MOQTMaxSubscribeId() {
     type = "max_subscribe_id";
   }
+  folly::dynamic toDynamic() const override;
   uint64_t subscribeId{0};
 };
 
