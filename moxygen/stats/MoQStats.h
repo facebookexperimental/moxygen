@@ -111,6 +111,18 @@ class MoQStatsCallback {
    * Subscriber: Sent a SUBSCRIBE_UPDATE
    */
   virtual void onSubscribeUpdate() = 0;
+
+  /*
+   * Publisher: Opened a subscription stream to the subscriber
+   * Subscriber: The publisher opened a subscription stream to us
+   */
+  virtual void onSubscriptionStreamOpened() = 0;
+
+  /*
+   * Publisher: Closed a subscription stream to the subscriber
+   * Subscriber: The publisher closed a subscription stream to us
+   */
+  virtual void onSubscriptionStreamClosed() = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {

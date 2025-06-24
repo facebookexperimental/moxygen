@@ -918,6 +918,10 @@ folly::coro::Task<void> MoQSessionTest::publishValidationTest(
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
   expectSubscribe(
       [this, testLogic, sg1](auto sub, auto pub) -> TaskSubscribeResult {
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
         eventBase_.add([testLogic, sub, pub, sgp, sg1]() {
           testLogic(sub, pub, sgp, sg1);
@@ -929,6 +933,8 @@ folly::coro::Task<void> MoQSessionTest::publishValidationTest(
       .WillOnce(testing::Return(sg1));
   EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::INTERNAL_ERROR));
   expectSubscribeDone();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
   co_await subscribeDone_;
@@ -1298,9 +1304,13 @@ CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   expectSubscribeDone();
   expectSubscribe(
-      [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle](
+      [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle, this](
           auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
         auto pubResult = pub->beginSubgroup(0, 0, 0);
         EXPECT_FALSE(pubResult.hasError());
         subgroupConsumer = pubResult.value();
@@ -1343,6 +1353,8 @@ CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
       .WillOnce(testing::Invoke(
           [&](auto /*blag*/) { subscribeUpdateInvoked.post(); }));
   co_await subscribeUpdateInvoked;
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   auto pubResult = subgroupConsumer->object(1, moxygen::test::makeBuf(10));
   EXPECT_TRUE(pubResult.hasError());
   trackConsumer->subscribeDone(
@@ -1356,7 +1368,15 @@ CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
 CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
   co_await setupMoQSession();
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    eventBase_.add([pub, sub] {
+    eventBase_.add([this, pub, sub] {
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened())
+          .Times(2);
+      EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+          .Times(2);
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed())
+          .Times(2);
+      EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+          .Times(2);
       pub->objectStream(
           ObjectHeader(sub.trackAlias, 0, 0, 0, 0, 10),
           moxygen::test::makeBuf(10));
@@ -1582,7 +1602,11 @@ CO_TEST_P_X(MoQSessionTest, TooFarBehindOneSubgroup) {
 
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
     eventBase_.add(
-        [pub, sub, serverWt = serverWt_.get(), eventBase = &eventBase_] {
+        [this, pub, sub, serverWt = serverWt_.get(), eventBase = &eventBase_] {
+          EXPECT_CALL(
+              *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+          EXPECT_CALL(
+              *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
           auto sgp = pub->beginSubgroup(0, 0, 0).value();
           auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
           EXPECT_TRUE(objectResult.hasValue());
@@ -1600,6 +1624,8 @@ CO_TEST_P_X(MoQSessionTest, TooFarBehindOneSubgroup) {
     co_return makeSubscribeOkResult(sub);
   });
 
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   expectSubscribeDone();
   auto mockSubgroupConsumer =
       std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -1622,7 +1648,10 @@ CO_TEST_P_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
   serverSession_->setMoqSettings(moqSettings);
 
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    eventBase_.add([pub, sub, serverWt = serverWt_.get()] {
+    eventBase_.add([this, pub, sub, serverWt = serverWt_.get()] {
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+      EXPECT_CALL(
+          *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
       auto sgp = pub->beginSubgroup(0, 0, 0).value();
       auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
       EXPECT_TRUE(objectResult.hasValue());
@@ -1642,6 +1671,8 @@ CO_TEST_P_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
     co_return makeSubscribeOkResult(sub);
   });
 
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   expectSubscribeDone();
   auto mockSubgroupConsumer =
       std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -1664,36 +1695,48 @@ CO_TEST_P_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
   serverSession_->setMoqSettings(moqSettings);
 
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    eventBase_.add(
-        [pub, sub, serverWt = serverWt_.get(), eventBase = &eventBase_] {
-          std::vector<std::shared_ptr<SubgroupConsumer>> subgroupConsumers;
+    eventBase_.add([this,
+                    pub,
+                    sub,
+                    serverWt = serverWt_.get(),
+                    eventBase = &eventBase_] {
+      std::vector<std::shared_ptr<SubgroupConsumer>> subgroupConsumers;
 
-          for (uint32_t subgroupId = 0; subgroupId < 3; subgroupId++) {
-            subgroupConsumers.push_back(
-                pub->beginSubgroup(0, subgroupId, 0).value());
-            auto objectResult = subgroupConsumers[subgroupId]->object(
-                0, moxygen::test::makeBuf(10));
-            EXPECT_TRUE(objectResult.hasValue());
-          }
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened())
+          .Times(3);
+      EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+          .Times(3);
+      for (uint32_t subgroupId = 0; subgroupId < 3; subgroupId++) {
+        subgroupConsumers.push_back(
+            pub->beginSubgroup(0, subgroupId, 0).value());
+        auto objectResult = subgroupConsumers[subgroupId]->object(
+            0, moxygen::test::makeBuf(10));
+        EXPECT_TRUE(objectResult.hasValue());
+      }
 
-          // Run this stuff later on, otherwise the test will hang because of
-          // the discrepancy in the stream count because the stream would have
-          // been reset before the subgroup header got across.
-          eventBase->add([pub, sub, serverWt, subgroupConsumers] {
-            for (uint32_t subgroupId = 0; subgroupId < 2; subgroupId++) {
-              serverWt->writeHandles[2 + subgroupId * 4]->setImmediateDelivery(
-                  false);
-              auto objectResult = subgroupConsumers[subgroupId]->object(
-                  1, moxygen::test::makeBuf(30));
-              EXPECT_TRUE(objectResult.hasValue());
-            }
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed())
+          .Times(3);
+      EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+          .Times(3);
 
-            serverWt->writeHandles[10]->setImmediateDelivery(false);
-            auto objectResult =
-                subgroupConsumers[2]->object(1, moxygen::test::makeBuf(40));
-            EXPECT_TRUE(objectResult.hasError());
-          });
-        });
+      // Run this stuff later on, otherwise the test will hang because of
+      // the discrepancy in the stream count because the stream would have
+      // been reset before the subgroup header got across.
+      eventBase->add([pub, sub, serverWt, subgroupConsumers] {
+        for (uint32_t subgroupId = 0; subgroupId < 2; subgroupId++) {
+          serverWt->writeHandles[2 + subgroupId * 4]->setImmediateDelivery(
+              false);
+          auto objectResult = subgroupConsumers[subgroupId]->object(
+              1, moxygen::test::makeBuf(30));
+          EXPECT_TRUE(objectResult.hasValue());
+        }
+
+        serverWt->writeHandles[10]->setImmediateDelivery(false);
+        auto objectResult =
+            subgroupConsumers[2]->object(1, moxygen::test::makeBuf(40));
+        EXPECT_TRUE(objectResult.hasError());
+      });
+    });
     co_return makeSubscribeOkResult(sub);
   });
 
@@ -1717,7 +1760,11 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
   expectSubscribe(
       [this, &subgroupConsumer](auto sub, auto pub) -> TaskSubscribeResult {
-        eventBase_.add([pub, sub, &subgroupConsumer] {
+        eventBase_.add([this, pub, sub, &subgroupConsumer] {
+          EXPECT_CALL(
+              *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+          EXPECT_CALL(
+              *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
           auto sgp = pub->beginSubgroup(0, 0, 0).value();
           sgp->object(0, moxygen::test::makeBuf(10), Extensions(), false);
           subgroupConsumer = sgp;
@@ -1729,6 +1776,10 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
       .WillOnce(testing::Invoke([&] {
         eventBase_.add([&] {
           serverWt_->writeHandles[2]->setImmediateDelivery(false);
+          EXPECT_CALL(
+              *serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+          EXPECT_CALL(
+              *clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
           subgroupConsumer->object(
               1, moxygen::test::makeBuf(10), Extensions(), true);
           barricade.post();
@@ -1838,26 +1889,44 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   expectSubscribe(
-      [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle](
+      [this, &subgroupConsumer, &trackConsumer, &mockSubscriptionHandle](
           auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
         auto pubResult = pub->beginSubgroup(0, 0, 0);
         EXPECT_FALSE(pubResult.hasError());
         subgroupConsumer = pubResult.value();
+        subgroupConsumer->object(
+            0, moxygen::test::makeBuf(10), Extensions(), false);
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
         co_return mockSubscriptionHandle;
       });
   auto subscribeRequest = getSubscribe(kTestTrackName);
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeSuccess());
+  folly::coro::Baton subgroupCreated;
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Invoke([&]() {
+        subgroupCreated.post();
+        return sg;
+      }));
+  EXPECT_CALL(*sg, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  co_await subgroupCreated;
   auto subscribeHandler = res.value();
   folly::coro::Baton unsubscribeInvoked;
   EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*mockSubscriptionHandle, unsubscribe)
       .WillOnce(testing::Invoke([&]() { unsubscribeInvoked.post(); }));
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   subscribeHandler->unsubscribe();
   co_await unsubscribeInvoked;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

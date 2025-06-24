@@ -184,6 +184,22 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     subscriberStatsCallback_ = subscriberStatsCallback;
   }
 
+  void onSubscriptionStreamOpenedByPeer() {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionStreamOpened);
+  }
+
+  void onSubscriptionStreamClosedByPeer() {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionStreamClosed);
+  }
+
+  void onSubscriptionStreamOpened() {
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionStreamOpened);
+  }
+
+  void onSubscriptionStreamClosed() {
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionStreamClosed);
+  }
+
   class PublisherImpl : public std::enable_shared_from_this<PublisherImpl> {
    public:
     PublisherImpl(

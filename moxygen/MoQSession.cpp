@@ -320,6 +320,8 @@ StreamPublisherImpl::StreamPublisherImpl(
     SubgroupIDFormat format,
     bool includeExtensions)
     : StreamPublisherImpl(publisher) {
+  CHECK(writeHandle)
+      << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
   streamType_ =
       getSubgroupStreamType(publisher->getVersion(), format, includeExtensions);
   header_.trackIdentifier = alias;
@@ -956,6 +958,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   }
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
+  session_->onSubscriptionStreamOpened();
   stream.value()->setPriority(
       1,
       getStreamPriority(
@@ -987,6 +990,9 @@ MoQSession::TrackPublisherImpl::awaitStreamCredit() {
 
 void MoQSession::TrackPublisherImpl::onStreamComplete(
     const ObjectHeader& finalHeader) {
+  if (session_) {
+    session_->onSubscriptionStreamClosed();
+  }
   // The reason we need the keepalive is that when we call subgroups_.erase(),
   // we might end up erasing the last SubgroupPublisherImpl that has a
   // shared_ptr reference to this TrackPublisherImpl, causing the destruction of
@@ -1758,6 +1764,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t subgroup,
       Priority priority) override {
     subscribeState_ = session_->getSubscribeTrackReceiveState(alias);
+    session_->onSubscriptionStreamOpenedByPeer();
     if (!subscribeState_) {
       error_ = MoQPublishError(
           MoQPublishError::CANCELLED, "Subgroup for unknown track");
@@ -1957,6 +1964,12 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   }
 
   void endOfSubgroup(bool deliverCallback = false) {
+    if (subgroupCallback_) {
+      CHECK(session_) << "session_ is NULL in ObjectStreamCallback";
+      // We only want to call this for SUBSCRIBEs and not FETCHes, which is
+      // why we condition on subgroupCallback_
+      session_->onSubscriptionStreamClosedByPeer();
+    }
     if (deliverCallback && !isCancelled()) {
       if (fetchState_) {
         fetchState_->getFetchCallback()->endOfFetch();
@@ -3349,9 +3362,8 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
 
 folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::PublisherImpl::subscribeDone(SubscribeDone subscribeDone) {
-  auto session = session_;
-  session_ = nullptr;
-  session->subscribeDone(subscribeDone);
+  CHECK(session_) << "session_ is NULL in subscribeDone";
+  session_->subscribeDone(subscribeDone);
   return folly::unit;
 }
 
