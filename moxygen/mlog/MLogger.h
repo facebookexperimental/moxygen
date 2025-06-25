@@ -40,6 +40,7 @@ class MLogger {
   void addStreamTypeSetLog(MOQTStreamTypeSet req);
   void addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req);
   void addObjectDatagramParsedLog(MOQTObjectDatagramParsed req);
+  void addObjectDatagramStatusCreatedLog(MOQTObjectDatagramStatusCreated req);
 
   void outputLogsToFile();
 
@@ -145,6 +146,7 @@ class MLogger {
   void logObjectDatagramParsed(
       const ObjectHeader& header,
       const Payload& payload);
+  void logObjectDatagramStatusCreated(const ObjectHeader& header);
 
   void setPath(const std::string& path);
 

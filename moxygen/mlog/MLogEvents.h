@@ -24,6 +24,8 @@ inline constexpr const char* kObjectDatagramCreatedName =
     "moqt:object_datagram_created";
 inline constexpr const char* kObjectDatagramParsedName =
     "moqt:object_datagram_parsed";
+inline constexpr const char* kObjectDatagramStatusCreatedName =
+    "moqt:object_datagram_status_created";
 
 // Basic Log Event Class
 class MLogEvent {
@@ -39,7 +41,8 @@ class MLogEvent {
       MOQTControlMessageParsed,
       MOQTStreamTypeSet,
       MOQTObjectDatagramCreated,
-      MOQTObjectDatagramParsed>
+      MOQTObjectDatagramParsed,
+      MOQTObjectDatagramStatusCreated>
       data_; // Add more events to variant as implemented
 };
 
@@ -70,6 +73,10 @@ class MLogEventCreator {
   MLogEvent createObjectDatagramParsedEvent(
       VantagePoint vantagePoint,
       MOQTObjectDatagramParsed req);
+
+  MLogEvent createObjectDatagramStatusCreatedEvent(
+      VantagePoint vantagePoint,
+      MOQTObjectDatagramStatusCreated req);
 
  private:
   uint64_t startTime_;

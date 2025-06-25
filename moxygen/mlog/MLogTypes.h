@@ -467,6 +467,8 @@ struct MOQTObjectDatagramStatusCreated {
   uint64_t extensionHeadersLength{0};
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectStatus{0};
+
+  folly::dynamic toDynamic() const;
 };
 
 struct MOQTObjectDatagramStatusParsed {

@@ -46,6 +46,13 @@ void MLogger::addObjectDatagramParsedLog(MOQTObjectDatagramParsed req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addObjectDatagramStatusCreatedLog(
+    MOQTObjectDatagramStatusCreated req) {
+  auto log = eventCreator_.createObjectDatagramStatusCreatedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -97,6 +104,10 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kObjectDatagramParsedName) {
     const MOQTObjectDatagramParsed& msg =
         std::get<MOQTObjectDatagramParsed>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kObjectDatagramStatusCreatedName) {
+    const MOQTObjectDatagramStatusCreated& msg =
+        std::get<MOQTObjectDatagramStatusCreated>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -648,6 +659,19 @@ void MLogger::logObjectDatagramParsed(
       folly::IOBuf::copyBuffer({payload->data(), payload->length()});
   baseMsg.objectPayload = std::move(objPayload);
   addObjectDatagramParsedLog(std::move(baseMsg));
+}
+
+void MLogger::logObjectDatagramStatusCreated(const ObjectHeader& header) {
+  MOQTObjectDatagramStatusCreated baseMsg = MOQTObjectDatagramStatusCreated();
+  baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
+  baseMsg.groupId = header.group;
+  baseMsg.objectId = header.id;
+  baseMsg.publisherPriority = header.priority;
+  baseMsg.extensionHeadersLength = header.extensions.size();
+  baseMsg.extensionHeaders =
+      convertExtensionToMoQTExtensionHeaders(header.extensions);
+  baseMsg.objectStatus = static_cast<uint64_t>(header.status);
+  addObjectDatagramStatusCreatedLog(std::move(baseMsg));
 }
 
 bool MLogger::isHexstring(const std::string& s) {

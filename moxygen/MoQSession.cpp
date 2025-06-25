@@ -1135,6 +1135,8 @@ MoQSession::TrackPublisherImpl::datagram(
             header.extensions.size() > 0) !=
         StreamType::OBJECT_DATAGRAM_STATUS) {
       logger_->logObjectDatagramCreated(header, payload);
+    } else {
+      logger_->logObjectDatagramStatusCreated(header);
     }
   }
 
