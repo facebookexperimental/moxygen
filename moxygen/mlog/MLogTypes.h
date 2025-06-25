@@ -40,6 +40,8 @@ struct MOQTExtensionHeader {
   folly::Optional<uint64_t> headerValue;
   folly::Optional<uint64_t> headerLength;
   std::unique_ptr<folly::IOBuf> payload;
+
+  folly::dynamic toDynamic() const;
 };
 
 // No RawInfo Value Type For Now
@@ -441,6 +443,8 @@ struct MOQTObjectDatagramCreated {
   uint64_t extensionHeadersLength{0};
   std::vector<MOQTExtensionHeader> extensionHeaders;
   std::unique_ptr<folly::IOBuf> objectPayload;
+
+  folly::dynamic toDynamic() const;
 };
 
 struct MOQTObjectDatagramParsed {

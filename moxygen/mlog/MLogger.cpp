@@ -34,6 +34,12 @@ void MLogger::addStreamTypeSetLog(MOQTStreamTypeSet req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req) {
+  auto log = eventCreator_.createObjectDatagramCreatedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -77,6 +83,10 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
     logObject["data"] = msg.toDynamic();
   } else if (log.name_ == kStreamTypeSetName) {
     const MOQTStreamTypeSet& msg = std::get<MOQTStreamTypeSet>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kObjectDatagramCreatedName) {
+    const MOQTObjectDatagramCreated& msg =
+        std::get<MOQTObjectDatagramCreated>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -598,6 +608,21 @@ void MLogger::logStreamTypeSet(
   addStreamTypeSetLog(baseMsg);
 }
 
+void MLogger::logObjectDatagramCreated(
+    const ObjectHeader& header,
+    const Payload& payload) {
+  MOQTObjectDatagramCreated baseMsg = MOQTObjectDatagramCreated();
+  baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
+  baseMsg.groupId = header.group;
+  baseMsg.objectId = header.id;
+  baseMsg.publisherPriority = header.priority;
+  baseMsg.extensionHeadersLength = header.extensions.size();
+  baseMsg.extensionHeaders =
+      convertExtensionToMoQTExtensionHeaders(header.extensions);
+  baseMsg.objectPayload = payload->clone();
+  addObjectDatagramCreatedLog(std::move(baseMsg));
+}
+
 bool MLogger::isHexstring(const std::string& s) {
   for (char c : s) {
     if (!std::isxdigit(static_cast<unsigned char>(c))) {
@@ -605,6 +630,26 @@ bool MLogger::isHexstring(const std::string& s) {
     }
   }
   return true;
+}
+
+std::vector<MOQTExtensionHeader>
+MLogger::convertExtensionToMoQTExtensionHeaders(
+    std::vector<Extension> extensions) {
+  std::vector<MOQTExtensionHeader> moqExtensions;
+  for (auto& ext : extensions) {
+    MOQTExtensionHeader e;
+    e.headerType = ext.type;
+    if (ext.type % 2 == 1) {
+      e.headerLength = ext.arrayValue->length();
+      std::unique_ptr<folly::IOBuf> arrayPayload = folly::IOBuf::copyBuffer(
+          {ext.arrayValue->data(), ext.arrayValue->length()});
+      e.payload = std::move(arrayPayload);
+    } else {
+      e.headerValue = ext.intValue;
+    }
+    moqExtensions.push_back(std::move(e));
+  }
+  return moqExtensions;
 }
 
 void MLogger::logControlMessage(

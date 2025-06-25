@@ -57,4 +57,18 @@ MLogEvent MLogEventCreator::createStreamTypeSetEvent(
   return log;
 }
 
+MLogEvent MLogEventCreator::createObjectDatagramCreatedEvent(
+    VantagePoint vantagePoint,
+    MOQTObjectDatagramCreated req) {
+  auto log = MLogEvent(
+      vantagePoint,
+      static_cast<uint64_t>(
+          std::chrono::system_clock::now().time_since_epoch().count()) -
+          startTime_,
+      kObjectDatagramCreatedName);
+
+  log.data_ = std::move(req);
+  return log;
+}
+
 } // namespace moxygen

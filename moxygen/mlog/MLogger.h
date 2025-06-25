@@ -38,6 +38,7 @@ class MLogger {
   void addControlMessageCreatedLog(MOQTControlMessageCreated req);
   void addControlMessageParsedLog(MOQTControlMessageParsed req);
   void addStreamTypeSetLog(MOQTStreamTypeSet req);
+  void addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req);
 
   void outputLogsToFile();
 
@@ -137,6 +138,9 @@ class MLogger {
       uint64_t streamId,
       MOQTStreamType type,
       folly::Optional<Owner> owner);
+  void logObjectDatagramCreated(
+      const ObjectHeader& header,
+      const Payload& payload);
 
   void setPath(const std::string& path);
 
@@ -165,6 +169,8 @@ class MLogger {
       const folly::Optional<uint64_t>& length,
       std::unique_ptr<MOQTBaseControlMessage> message,
       std::unique_ptr<folly::IOBuf> raw = nullptr);
+  std::vector<MOQTExtensionHeader> convertExtensionToMoQTExtensionHeaders(
+      std::vector<Extension> extensions);
 };
 
 } // namespace moxygen

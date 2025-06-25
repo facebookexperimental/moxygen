@@ -1127,6 +1127,17 @@ MoQSession::TrackPublisherImpl::datagram(
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Publish after subscribeDone"));
   }
+
+  if (logger_) {
+    if (getDatagramType(
+            getVersion(),
+            header.status == ObjectStatus::NORMAL,
+            header.extensions.size() > 0) !=
+        StreamType::OBJECT_DATAGRAM_STATUS) {
+      logger_->logObjectDatagramCreated(header, payload);
+    }
+  }
+
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint64_t headerLength = 0;
   if (header.length) {
@@ -2184,9 +2195,11 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       forward);
+
   if (logger_) {
     trackPublisher->setLogger(logger_);
   }
+
   pubTracks_.emplace(requestID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error

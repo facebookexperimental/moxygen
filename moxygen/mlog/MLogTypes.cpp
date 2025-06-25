@@ -508,4 +508,45 @@ folly::dynamic MOQTStreamTypeSet::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTExtensionHeader::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["headerType"] = headerType;
+  if (headerValue.hasValue()) {
+    obj["headerValue"] = std::to_string(headerValue.value());
+  }
+  if (headerLength.hasValue()) {
+    obj["headerLength"] = std::to_string(headerLength.value());
+  }
+  if (payload) {
+    obj["payload"] = std::string(
+        reinterpret_cast<const char*>(payload->data()), payload->length());
+  }
+  return obj;
+}
+
+folly::dynamic MOQTObjectDatagramCreated::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["trackAlias"] = std::to_string(trackAlias);
+  obj["groupId"] = std::to_string(groupId);
+  obj["objectId"] = std::to_string(objectId);
+  obj["publisherPriority"] = std::to_string(publisherPriority);
+  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
+
+  if (extensionHeaders.size() > 0) {
+    std::vector<folly::dynamic> headerObjects;
+    headerObjects.reserve(extensionHeaders.size());
+    for (auto& header : extensionHeaders) {
+      headerObjects.push_back(header.toDynamic());
+    }
+    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
+  }
+
+  if (objectPayload) {
+    obj["objectPayload"] = std::string(
+        reinterpret_cast<const char*>(objectPayload->data()),
+        objectPayload->length());
+  }
+  return obj;
+}
+
 } // namespace moxygen
