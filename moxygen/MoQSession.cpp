@@ -337,6 +337,12 @@ StreamPublisherImpl::StreamPublisherImpl(
   if (logger_) {
     logger_->logStreamTypeSet(
         writeHandle->getID(), MOQTStreamType::SUBGROUP_HEADER, Owner::LOCAL);
+    logger_->logSubgroupHeaderCreated(
+        writeHandle->getID(),
+        alias,
+        groupID,
+        subgroupID,
+        publisher->subPriority());
   }
 
   writeBuf_.move(); // clear FETCH_HEADER
@@ -1003,6 +1009,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
+
   return subgroupPublisher;
 }
 

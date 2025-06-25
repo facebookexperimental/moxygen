@@ -42,6 +42,7 @@ class MLogger {
   void addObjectDatagramParsedLog(MOQTObjectDatagramParsed req);
   void addObjectDatagramStatusCreatedLog(MOQTObjectDatagramStatusCreated req);
   void addObjectDatagramStatusParsedLog(MOQTObjectDatagramStatusParsed req);
+  void addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req);
 
   void outputLogsToFile();
 
@@ -149,6 +150,12 @@ class MLogger {
       const Payload& payload);
   void logObjectDatagramStatusCreated(const ObjectHeader& header);
   void logObjectDatagramStatusParsed(const ObjectHeader& header);
+  void logSubgroupHeaderCreated(
+      uint64_t streamId,
+      TrackAlias trackAlias,
+      uint64_t groupId,
+      uint64_t sugroupId,
+      uint8_t publisherPriority);
 
   void setPath(const std::string& path);
 
