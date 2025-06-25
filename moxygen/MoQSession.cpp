@@ -513,6 +513,12 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
   }
   auto length = payload ? payload->computeChainDataLength() : 0;
   header_.status = ObjectStatus::NORMAL;
+
+  if (logger_) {
+    logger_->logSubgroupObjectCreated(
+        writeHandle_->getID(), header_, payload->clone());
+  }
+
   return writeCurrentObject(
       objectID, length, std::move(payload), extensions, finStream);
 }
@@ -1068,6 +1074,7 @@ MoQSession::TrackPublisherImpl::objectStream(
   if (subgroup.hasError()) {
     return folly::makeUnexpected(std::move(subgroup.error()));
   }
+
   switch (objHeader.status) {
     case ObjectStatus::NORMAL:
       return subgroup.value()->object(

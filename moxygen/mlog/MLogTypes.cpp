@@ -634,4 +634,35 @@ folly::dynamic MOQTSubgroupHeaderParsed::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubgroupObjectCreated::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["streamId"] = std::to_string(streamId);
+  if (groupId.hasValue()) {
+    obj["groupId"] = std::to_string(groupId.value());
+  }
+  if (subgroupId.hasValue()) {
+    obj["subgroupId"] = std::to_string(subgroupId.value());
+  }
+  obj["objectId"] = std::to_string(objectId);
+  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
+  if (extensionHeaders.size() > 0) {
+    std::vector<folly::dynamic> headerObjects;
+    headerObjects.reserve(extensionHeaders.size());
+    for (auto& header : extensionHeaders) {
+      headerObjects.push_back(header.toDynamic());
+    }
+    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
+  }
+  obj["objectPayloadLength"] = std::to_string(objectPayloadLength);
+  if (objectStatus.value()) {
+    obj["objectStatus"] = std::to_string(objectStatus.value());
+  }
+  if (objectPayload) {
+    obj["objectPayload"] = std::string(
+        reinterpret_cast<const char*>(objectPayload->data()),
+        objectPayload->length());
+  }
+  return obj;
+}
+
 } // namespace moxygen
