@@ -90,10 +90,6 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
         << "MoQTest verification result: FAILURE! Reason: Error Subscribing to receiver";
   }
 
-  auto track = convertMoqTestParamToTrackNamespace(&params_);
-  SubscribeAnnounces ann{0, track.value(), {}};
-  co_await subscribeAnnounces(ann);
-
   co_return trackNamespace.value();
 }
 

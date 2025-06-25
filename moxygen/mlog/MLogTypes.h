@@ -24,6 +24,11 @@ enum VantagePoint : int {
   SERVER = 1,
 };
 
+enum ControlMessageType : int {
+  CREATED = 0,
+  PARSED = 1,
+};
+
 // Data Type Structs
 
 enum MOQTStreamType { CONTROL, SUBGROUP_HEADER, FETCH_HEADER };
@@ -416,6 +421,8 @@ struct MOQTControlMessageParsed {
   folly::Optional<uint64_t> length;
   std::unique_ptr<MOQTBaseControlMessage> message;
   std::unique_ptr<folly::IOBuf> raw;
+
+  folly::dynamic toDynamic() const;
 };
 
 struct MOQTStreamTypeSet {

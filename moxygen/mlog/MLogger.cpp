@@ -22,6 +22,12 @@ void MLogger::addControlMessageCreatedLog(MOQTControlMessageCreated req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addControlMessageParsedLog(MOQTControlMessageParsed req) {
+  auto log = eventCreator_.createControlMessageParsedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -59,56 +65,57 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
     const MOQTControlMessageCreated& msg =
         std::get<MOQTControlMessageCreated>(log.data_);
     logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kControlMessageParsedName) {
+    const MOQTControlMessageParsed& msg =
+        std::get<MOQTControlMessageParsed>(log.data_);
+    logObject["data"] = msg.toDynamic();
   }
 
   return logObject;
 }
 
-void MLogger::logClientSetup(const ClientSetup& setup) {
+void MLogger::logClientSetup(
+    const ClientSetup& setup,
+    ControlMessageType controlType) {
   std::vector<uint64_t> versions = setup.supportedVersions;
 
   // Add Params to params vector
   std::vector<MOQTParameter> params =
       convertSetupParamsToMoQTParams(setup.params);
 
-  // Log Setup Message
-  MOQTControlMessageCreated req{
-      kFirstBidiStreamId,
-      folly::none /* length */,
+  std::unique_ptr<MOQTBaseControlMessage> msg =
       std::make_unique<MOQTClientSetupMessage>(createClientSetupControlMessage(
-          versions.size(), versions, params.size(), params)),
-      nullptr};
-  addControlMessageCreatedLog(std::move(req));
+          versions.size(), versions, params.size(), params));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(msg));
 }
 
-void MLogger::logServerSetup(const ServerSetup& setup) {
+void MLogger::logServerSetup(
+    const ServerSetup& setup,
+    ControlMessageType controlType) {
   // Add Params to params vector
   std::vector<MOQTParameter> params =
       convertSetupParamsToMoQTParams(setup.params);
-
-  // Log Setup Message
-  MOQTControlMessageCreated req{
-      kFirstBidiStreamId,
-      folly::none /* length */,
+  std::unique_ptr<MOQTBaseControlMessage> msg =
       std::make_unique<MOQTServerSetupMessage>(createServerSetupControlMessage(
-          setup.selectedVersion, params.size(), params)),
-      nullptr};
-  addControlMessageCreatedLog(std::move(req));
+          setup.selectedVersion, params.size(), params));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(msg));
 }
 
-void MLogger::logGoaway(const Goaway& goaway) {
+void MLogger::logGoaway(const Goaway& goaway, ControlMessageType controlType) {
   uint64_t length = goaway.newSessionUri.length();
   auto baseMsg = std::make_unique<MOQTGoaway>();
   baseMsg->length = length;
   baseMsg->newSessionUri = folly::IOBuf::copyBuffer(goaway.newSessionUri);
-  MOQTControlMessageCreated req{
-      kFirstBidiStreamId, folly::none, std::move(baseMsg), nullptr};
-  addControlMessageCreatedLog(std::move(req));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logSubscribe(
     const SubscribeRequest& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribe>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->trackAlias = req.trackAlias.value;
@@ -127,16 +134,13 @@ void MLogger::logSubscribe(
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
 
-  // Add the message to the logs
-  MOQTControlMessageCreated msgCreated{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msgCreated));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeUpdate(const SubscribeUpdate& req) {
+void MLogger::logSubscribeUpdate(
+    const SubscribeUpdate& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->startGroup = req.start.group;
@@ -146,28 +150,24 @@ void MLogger::logSubscribeUpdate(const SubscribeUpdate& req) {
   baseMsg->subscriberPriority = req.priority;
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
 
-  // Add the message to the logs
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logUnsubscribe(const Unsubscribe& req) {
+void MLogger::logUnsubscribe(
+    const Unsubscribe& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTUnsubscribe>();
   baseMsg->subscribeId = req.requestID.value;
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logFetch(const Fetch& req, const MOQTByteStringType& type) {
+void MLogger::logFetch(
+    const Fetch& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetch>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->subscriberPriority = req.priority;
@@ -198,45 +198,36 @@ void MLogger::logFetch(const Fetch& req, const MOQTByteStringType& type) {
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
-  // Add the message to the logs
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logFetchCancel(const FetchCancel& req) {
+void MLogger::logFetchCancel(
+    const FetchCancel& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchCancel>();
   baseMsg->subscribeId = req.requestID.value;
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logAnnounceOk(
     const AnnounceOk& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceOk>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logAnnounceError(
     const AnnounceError& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceError>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
@@ -248,17 +239,14 @@ void MLogger::logAnnounceError(
     baseMsg->reason = req.reasonPhrase;
   }
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logAnnounceCancel(
     const AnnounceCancel& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceCancel>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
@@ -270,64 +258,53 @@ void MLogger::logAnnounceCancel(
     baseMsg->reason = req.reasonPhrase;
   }
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logTrackStatusRequest(
     const TrackStatusRequest& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTTrackStatusRequest>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.fullTrackName.trackNamespace.trackNamespace, type);
   baseMsg->trackName =
       convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeAnnounces(
     const SubscribeAnnounces& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnounces>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespacePrefix.trackNamespace, type);
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logUnsubscribeAnnounces(
     const UnsubscribeAnnounces& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTUnsubscribeAnnounces>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespacePrefix.trackNamespace, type);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeOk(const SubscribeOk& req) {
+void MLogger::logSubscribeOk(
+    const SubscribeOk& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeOk>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->expires = req.expires.count();
@@ -344,15 +321,13 @@ void MLogger::logSubscribeOk(const SubscribeOk& req) {
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeError(const SubscribeError& req) {
+void MLogger::logSubscribeError(
+    const SubscribeError& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeError>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
@@ -366,15 +341,11 @@ void MLogger::logSubscribeError(const SubscribeError& req) {
     baseMsg->trackAlias = req.retryAlias.value();
   }
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logFetchOk(const FetchOk& req) {
+void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchOk>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
@@ -384,15 +355,13 @@ void MLogger::logFetchOk(const FetchOk& req) {
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logFetchError(const FetchError& req) {
+void MLogger::logFetchError(
+    const FetchError& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchError>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
@@ -403,15 +372,13 @@ void MLogger::logFetchError(const FetchError& req) {
     baseMsg->reason = req.reasonPhrase;
   }
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeDone(const SubscribeDone& req) {
+void MLogger::logSubscribeDone(
+    const SubscribeDone& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeDone>();
   baseMsg->subscribeId = req.requestID.value;
   baseMsg->statusCode = static_cast<uint64_t>(req.statusCode);
@@ -423,44 +390,36 @@ void MLogger::logSubscribeDone(const SubscribeDone& req) {
     baseMsg->reason = req.reasonPhrase;
   }
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logMaxSubscribeId(const uint64_t maxRequestID) {
+void MLogger::logMaxSubscribeId(
+    const uint64_t maxRequestID,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTMaxSubscribeId>();
   baseMsg->subscribeId = maxRequestID;
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logUnannounce(
     const Unannounce& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTUnannounce>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logTrackStatus(
     const TrackStatus& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTTrackStatus>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.fullTrackName.trackNamespace.trackNamespace, type);
@@ -471,59 +430,50 @@ void MLogger::logTrackStatus(
     baseMsg->lastGroupId = req.latestGroupAndObject.value().group;
     baseMsg->lastObjectId = req.latestGroupAndObject.value().object;
   }
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribesBlocked(const uint64_t maxRequestID) {
+void MLogger::logSubscribesBlocked(
+    const uint64_t maxRequestID,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribesBlocked>();
   baseMsg->maximumSubscribeId = maxRequestID;
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logAnnounce(const Announce& req, const MOQTByteStringType& type) {
+void MLogger::logAnnounce(
+    const Announce& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounce>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeAnnouncesOk(
     const SubscribeAnnouncesOk& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesOk>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespacePrefix.trackNamespace, type);
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeAnnouncesError(
     const SubscribeAnnouncesError& req,
-    const MOQTByteStringType& type) {
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesError>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespacePrefix.trackNamespace, type);
@@ -535,12 +485,8 @@ void MLogger::logSubscribeAnnouncesError(
     baseMsg->reason = req.reasonPhrase;
   }
 
-  MOQTControlMessageCreated msg{
-      kFirstBidiStreamId,
-      folly::none /* length */,
-      std::move(baseMsg),
-      nullptr};
-  addControlMessageCreatedLog(std::move(msg));
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
@@ -639,6 +585,37 @@ bool MLogger::isHexstring(const std::string& s) {
     }
   }
   return true;
+}
+
+void MLogger::logControlMessage(
+    ControlMessageType controlType,
+    uint64_t streamId,
+    const folly::Optional<uint64_t>& length,
+    std::unique_ptr<MOQTBaseControlMessage> message,
+    std::unique_ptr<folly::IOBuf> raw) {
+  switch (controlType) {
+    case ControlMessageType::CREATED: {
+      MOQTControlMessageCreated req{
+          kFirstBidiStreamId,
+          length,
+          std::move(message),
+          (raw) ? std::move(raw) : nullptr};
+      addControlMessageCreatedLog(std::move(req));
+      break;
+    }
+    case ControlMessageType::PARSED: {
+      MOQTControlMessageParsed req{
+          kFirstBidiStreamId,
+          length,
+          std::move(message),
+          (raw) ? std::move(raw) : nullptr};
+      addControlMessageParsedLog(std::move(req));
+      break;
+    }
+    default: {
+      break;
+    }
+  }
 }
 
 void MLogger::outputLogsToFile() {

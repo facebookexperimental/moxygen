@@ -74,6 +74,9 @@ class MoQTestServer : public moxygen::Publisher,
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
+    if (logger_) {
+      clientSession->setLogger(logger_);
+    }
   }
 
   // Subscribing Methods

@@ -22,6 +22,18 @@ folly::dynamic MOQTControlMessageCreated::toDynamic() const {
   return jsonObject;
 }
 
+folly::dynamic MOQTControlMessageParsed::toDynamic() const {
+  folly::dynamic jsonObject = folly::dynamic::object;
+  jsonObject["streamId"] = std::to_string(streamId);
+
+  if (length.has_value()) {
+    jsonObject["length"] = std::to_string(length.value());
+  }
+  jsonObject["message"] = message->toDynamic();
+
+  return jsonObject;
+}
+
 folly::dynamic MOQTClientSetupMessage::toDynamic() const {
   folly::dynamic clientSetupObj = folly::dynamic::object;
   clientSetupObj["type"] = type;

@@ -76,15 +76,6 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   // Request Session
   subSession_ = MoQSession::getRequestSession();
 
-  if (logger_) {
-    subSession_->setLogger(logger_);
-  }
-
-  Announce ann{0, sub.fullTrackName.trackNamespace, {}};
-  subSession_->announce(ann, std::make_shared<MoQTAnnounceCallback>())
-      .scheduleOn(subSession_->getEventBase())
-      .start();
-
   // Start a Co-routine to send objects back according to spec
   onSubscribe(sub, callback).scheduleOn(subSession_->getEventBase()).start();
 
@@ -411,6 +402,7 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> fetchCallback) {
   LOG(INFO) << "Recieved Fetch Request";
+
   if (fetchCancelSource_) {
     FetchError error;
     error.requestID = fetch.requestID;
@@ -441,9 +433,6 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
 
   // Request Session
   fetchSession_ = MoQSession::getRequestSession();
-  if (logger_) {
-    fetchSession_->setLogger(logger_);
-  }
 
   // Start a Co-routine
   onFetch(fetch, fetchCallback)

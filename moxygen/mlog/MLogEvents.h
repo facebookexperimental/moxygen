@@ -17,6 +17,8 @@
 namespace moxygen {
 inline constexpr const char* kControlMessageCreatedName =
     "moqt:control_message_created";
+inline constexpr const char* kControlMessageParsedName =
+    "moqt:control_message_parsed";
 
 // Basic Log Event Class
 class MLogEvent {
@@ -27,7 +29,7 @@ class MLogEvent {
   VantagePoint vantagePoint_;
   uint64_t time_{0};
   std::string name_;
-  std::variant<MOQTControlMessageCreated>
+  std::variant<MOQTControlMessageCreated, MOQTControlMessageParsed>
       data_; // Add more events to variant as implemented
 };
 
@@ -37,11 +39,15 @@ class MLogEventCreator {
  public:
   MLogEventCreator();
 
-  // Creates an MLogEvent for ControlMessageCreated in which MLogger will write
+  // Creates an MLogEvent in which MLogger will write
   // to a txt file as a JSON
   MLogEvent createControlMessageCreatedEvent(
       VantagePoint vantagePoint,
       MOQTControlMessageCreated req);
+
+  MLogEvent createControlMessageParsedEvent(
+      VantagePoint vantagePoint,
+      MOQTControlMessageParsed req);
 
  private:
   uint64_t startTime_;

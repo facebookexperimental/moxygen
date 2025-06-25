@@ -36,61 +36,101 @@ class MLogger {
       std::vector<MOQTParameter> params);
 
   void addControlMessageCreatedLog(MOQTControlMessageCreated req);
+  void addControlMessageParsedLog(MOQTControlMessageParsed req);
 
   void outputLogsToFile();
 
-  void logClientSetup(const ClientSetup& setup);
-  void logServerSetup(const ServerSetup& setup);
-  void logGoaway(const Goaway& goaway);
+  void logClientSetup(
+      const ClientSetup& setup,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logServerSetup(
+      const ServerSetup& setup,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logGoaway(
+      const Goaway& goaway,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribe(
       const SubscribeRequest& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
-  void logSubscribeUpdate(const SubscribeUpdate& req);
-  void logUnsubscribe(const Unsubscribe& req);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribeUpdate(
+      const SubscribeUpdate& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logUnsubscribe(
+      const Unsubscribe& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logFetch(
       const Fetch& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
-  void logFetchCancel(const FetchCancel& req);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logFetchCancel(
+      const FetchCancel& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounceOk(
       const AnnounceOk& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounceError(
       const AnnounceError& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounceCancel(
       const AnnounceCancel& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatusRequest(
       const TrackStatusRequest& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnounces(
       const SubscribeAnnounces& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logUnsubscribeAnnounces(
       const UnsubscribeAnnounces& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
-  void logSubscribeOk(const SubscribeOk& req);
-  void logSubscribeError(const SubscribeError& req);
-  void logFetchOk(const FetchOk& req);
-  void logFetchError(const FetchError& req);
-  void logSubscribeDone(const SubscribeDone& req);
-  void logMaxSubscribeId(const uint64_t maxRequestID);
-  void logSubscribesBlocked(const uint64_t maxRequestID);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribeOk(
+      const SubscribeOk& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribeError(
+      const SubscribeError& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logFetchOk(
+      const FetchOk& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logFetchError(
+      const FetchError& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribeDone(
+      const SubscribeDone& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logMaxSubscribeId(
+      const uint64_t maxRequestID,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribesBlocked(
+      const uint64_t maxRequestID,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounce(
       const Announce& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logUnannounce(
       const Unannounce& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatus(
       const TrackStatus& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnouncesOk(
       const SubscribeAnnouncesOk& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnouncesError(
       const SubscribeAnnouncesError& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
 
   void setPath(const std::string& path);
 
@@ -113,6 +153,12 @@ class MLogger {
   std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
       const std::vector<SetupParameter>& params);
   bool isHexstring(const std::string& s);
+  void logControlMessage(
+      ControlMessageType controlType,
+      uint64_t streamId,
+      const folly::Optional<uint64_t>& length,
+      std::unique_ptr<MOQTBaseControlMessage> message,
+      std::unique_ptr<folly::IOBuf> raw = nullptr);
 };
 
 } // namespace moxygen

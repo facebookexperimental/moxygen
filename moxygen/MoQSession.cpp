@@ -1618,6 +1618,11 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 void MoQSession::onServerSetup(ServerSetup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  if (logger_) {
+    logger_->logServerSetup(serverSetup, ControlMessageType::PARSED);
+  }
+
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(std::min(
       kMaxSendTokenCacheSize,
@@ -1628,6 +1633,11 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 void MoQSession::onClientSetup(ClientSetup clientSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  if (logger_) {
+    logger_->logClientSetup(clientSetup, ControlMessageType::PARSED);
+  }
+
   peerMaxRequestID_ = getMaxRequestIDIfPresent(clientSetup.params);
   tokenCache_.setMaxSize(std::min(
       kMaxSendTokenCacheSize,
@@ -2065,6 +2075,12 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
+  if (logger_) {
+    logger_->logSubscribe(
+        subscribeRequest,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
 
   // TODO: The publisher should maintain some state like
   //   Subscribe ID -> Track Name, Locations [currently held in
@@ -2148,6 +2164,10 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     return;
   }
 
+  if (logger_) {
+    logger_->logSubscribeUpdate(subscribeUpdate, ControlMessageType::PARSED);
+  }
+
   auto it = pubTracks_.find(requestID);
   if (it == pubTracks_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
@@ -2177,6 +2197,10 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   XLOG(DBG1) << __func__ << " id=" << unsubscribe.requestID << " sess=" << this;
+
+  if (logger_) {
+    logger_->logUnsubscribe(unsubscribe, ControlMessageType::PARSED);
+  }
 
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribe);
   if (closeSessionIfRequestIDInvalid(unsubscribe.requestID, false, false)) {
@@ -2209,6 +2233,11 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
 
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   XLOG(DBG1) << __func__ << " id=" << subOk.requestID << " sess=" << this;
+
+  if (logger_) {
+    logger_->logSubscribeOk(subOk, ControlMessageType::PARSED);
+  }
+
   auto trackAliasIt = subIdToTrackAlias_.find(subOk.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
@@ -2226,6 +2255,11 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
   XLOG(DBG1) << __func__ << " id=" << subErr.requestID << " sess=" << this;
+
+  if (logger_) {
+    logger_->logSubscribeError(subErr, ControlMessageType::PARSED);
+  }
+
   auto trackAliasIt = subIdToTrackAlias_.find(subErr.requestID);
   if (trackAliasIt == subIdToTrackAlias_.end()) {
     // unknown
@@ -2249,6 +2283,10 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   XLOG(DBG1) << "SubscribeDone id=" << subscribeDone.requestID
              << " code=" << folly::to_underlying(subscribeDone.statusCode)
              << " reason=" << subscribeDone.reasonPhrase;
+
+  if (logger_) {
+    logger_->logSubscribeDone(subscribeDone, ControlMessageType::PARSED);
+  }
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onSubscribeDone, subscribeDone.statusCode);
   auto trackAliasIt = subIdToTrackAlias_.find(subscribeDone.requestID);
@@ -2286,6 +2324,11 @@ void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
 void MoQSession::onMaxRequestID(MaxRequestID maxRequestID) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
+  if (logger_) {
+    logger_->logMaxSubscribeId(
+        maxRequestID.requestID.value, ControlMessageType::PARSED);
+  }
+
   if (maxRequestID.requestID.value > peerMaxRequestID_) {
     XLOG(DBG1) << fmt::format(
         "Bumping the maxRequestID to: {} from: {}",
@@ -2307,6 +2350,11 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   // Increment the maxRequestID_ by the number of pending closed subscribes
   // and send a new MaxRequestID.
 
+  if (logger_) {
+    logger_->logSubscribesBlocked(
+        requestsBlocked.maxRequestID.value, ControlMessageType::PARSED);
+  }
+
   if (requestsBlocked.maxRequestID >= maxRequestID_ && closedRequests_ > 0) {
     maxRequestID_ += (closedRequests_ * getRequestIDMultiplier());
     closedRequests_ = 0;
@@ -2321,6 +2369,12 @@ void MoQSession::onFetch(Fetch fetch) {
       : folly::to<std::string>("joining=", joining->joiningRequestID.value);
   XLOG(DBG1) << __func__ << " (" << logStr << ") sess=" << this;
   const auto requestID = fetch.requestID;
+
+  if (logger_) {
+    logger_->logFetch(
+        fetch, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
+
   if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
@@ -2428,6 +2482,11 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
   if (closeSessionIfRequestIDInvalid(fetchCancel.requestID, false, false)) {
     return;
   }
+
+  if (logger_) {
+    logger_->logFetchCancel(fetchCancel, ControlMessageType::PARSED);
+  }
+
   auto pubTrackIt = pubTracks_.find(fetchCancel.requestID);
   if (pubTrackIt == pubTracks_.end()) {
     XLOG(DBG4) << "No publish key for fetch id=" << fetchCancel.requestID
@@ -2451,6 +2510,11 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
 void MoQSession::onFetchOk(FetchOk fetchOk) {
   XLOG(DBG1) << __func__ << " id=" << fetchOk.requestID << " sess=" << this;
   auto fetchIt = fetches_.find(fetchOk.requestID);
+
+  if (logger_) {
+    logger_->logFetchOk(fetchOk, ControlMessageType::PARSED);
+  }
+
   if (fetchIt == fetches_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << fetchOk.requestID
               << " sess=" << this;
@@ -2467,6 +2531,11 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
 void MoQSession::onFetchError(FetchError fetchError) {
   XLOG(DBG1) << __func__ << " id=" << fetchError.requestID << " sess=" << this;
   auto fetchIt = fetches_.find(fetchError.requestID);
+
+  if (logger_) {
+    logger_->logFetchError(fetchError, ControlMessageType::PARSED);
+  }
+
   if (fetchIt == fetches_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << fetchError.requestID
               << " sess=" << this;
@@ -2479,6 +2548,12 @@ void MoQSession::onFetchError(FetchError fetchError) {
 
 void MoQSession::onAnnounce(Announce ann) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
+
+  if (logger_) {
+    logger_->logAnnounce(
+        ann, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
+
   if (closeSessionIfRequestIDInvalid(
           ann.requestID,
           getDraftMajorVersion(*getNegotiatedVersion()) < 11,
@@ -2559,6 +2634,12 @@ RequestID MoQSession::getRequestID(RequestID id, const FullTrackName& ftn) {
 
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
+
+  if (logger_) {
+    logger_->logAnnounceOk(
+        annOk, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
+
   auto reqID = getRequestID(
       annOk.requestID, FullTrackName({annOk.trackNamespace, "announce"}));
   auto annIt = pendingAnnounce_.find(reqID);
@@ -2579,6 +2660,13 @@ void MoQSession::onAnnounceOk(AnnounceOk annOk) {
 void MoQSession::onAnnounceError(AnnounceError announceError) {
   XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
              << " sess=" << this;
+
+  if (logger_) {
+    logger_->logAnnounceError(
+        announceError,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
   auto reqID = getRequestID(
       announceError.requestID,
       FullTrackName({announceError.trackNamespace, "announce"}));
@@ -2598,6 +2686,12 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
 void MoQSession::onUnannounce(Unannounce unAnn) {
   XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnannounce);
+
+  if (logger_) {
+    logger_->logUnannounce(
+        unAnn, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
+
   auto annIt = subscriberAnnounces_.find(unAnn.trackNamespace);
   if (annIt == subscriberAnnounces_.end()) {
     XLOG(ERR) << "Unannounce for bad namespace ns=" << unAnn.trackNamespace;
@@ -2627,6 +2721,14 @@ void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
   XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceCancel);
+
+  if (logger_) {
+    logger_->logAnnounceCancel(
+        announceCancel,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
+
   auto it = publisherAnnounces_.find(announceCancel.trackNamespace);
   if (it == publisherAnnounces_.end()) {
     XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
@@ -2640,6 +2742,10 @@ void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
 void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
+  if (logger_) {
+    logger_->logSubscribeAnnounces(
+        sa, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
   if (closeSessionIfRequestIDInvalid(
           sa.requestID,
           getDraftMajorVersion(*getNegotiatedVersion()) < 11,
@@ -2695,6 +2801,10 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
 void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
   XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
              << " sess=" << this;
+  if (logger_) {
+    logger_->logSubscribeAnnouncesOk(
+        saOk, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
   auto reqID = getRequestID(
       saOk.requestID,
       FullTrackName({saOk.trackNamespacePrefix, "subannounce"}));
@@ -2715,6 +2825,12 @@ void MoQSession::onSubscribeAnnouncesError(
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
              << " sess=" << this;
+  if (logger_) {
+    logger_->logSubscribeAnnouncesError(
+        subscribeAnnouncesError,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
   auto reqID = getRequestID(
       subscribeAnnouncesError.requestID,
       FullTrackName(
@@ -2736,6 +2852,10 @@ void MoQSession::onSubscribeAnnouncesError(
 void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
   XLOG(DBG1) << __func__ << " prefix=" << unsub.trackNamespacePrefix
              << " sess=" << this;
+  if (logger_) {
+    logger_->logUnsubscribeAnnounces(
+        unsub, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeAnnounces);
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
@@ -2757,6 +2877,12 @@ void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << " sess=" << this;
+  if (logger_) {
+    logger_->logTrackStatusRequest(
+        trackStatusRequest,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
   if (closeSessionIfRequestIDInvalid(
           trackStatusRequest.requestID,
           getDraftMajorVersion(*getNegotiatedVersion()) < 11,
@@ -2846,6 +2972,13 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
              << " sess=" << this;
   auto reqID = getRequestID(trackStatus.requestID, trackStatus.fullTrackName);
   auto trackStatusIt = trackStatuses_.find(reqID);
+
+  if (logger_) {
+    logger_->logTrackStatus(
+        trackStatus,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
   if (trackStatusIt == trackStatuses_.end()) {
     XLOG(ERR) << __func__
               << " Couldn't find a pending TrackStatusRequest for reqID="
@@ -2858,6 +2991,10 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
 
 void MoQSession::onGoaway(Goaway goaway) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  if (logger_) {
+    logger_->logGoaway(goaway, ControlMessageType::PARSED);
+  }
   if (receivedGoaway_) {
     XLOG(ERR) << "Received multiple GOAWAYs sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
