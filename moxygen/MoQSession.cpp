@@ -3988,6 +3988,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
             (*res).extensions.size() > 0) !=
         StreamType::OBJECT_DATAGRAM_STATUS) {
       logger_->logObjectDatagramParsed(std::move(*res), std::move(payload));
+    } else {
+      logger_->logObjectDatagramStatusParsed(std::move(*res));
     }
   }
   if (state) {

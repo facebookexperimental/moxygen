@@ -41,6 +41,7 @@ class MLogger {
   void addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req);
   void addObjectDatagramParsedLog(MOQTObjectDatagramParsed req);
   void addObjectDatagramStatusCreatedLog(MOQTObjectDatagramStatusCreated req);
+  void addObjectDatagramStatusParsedLog(MOQTObjectDatagramStatusParsed req);
 
   void outputLogsToFile();
 
@@ -147,6 +148,7 @@ class MLogger {
       const ObjectHeader& header,
       const Payload& payload);
   void logObjectDatagramStatusCreated(const ObjectHeader& header);
+  void logObjectDatagramStatusParsed(const ObjectHeader& header);
 
   void setPath(const std::string& path);
 
