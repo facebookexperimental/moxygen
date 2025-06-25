@@ -1880,6 +1880,11 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     } else {
       error_ = std::move(res.error());
     }
+    if (logger_) {
+      logger_->logSubgroupHeaderParsed(
+          currentStreamId_, alias, group, subgroup, priority);
+    }
+
     subscribeState_->setCurrentStreamId(currentStreamId_);
     subscribeState_->onSubgroup(session_, alias);
   }
@@ -2053,6 +2058,10 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     return error_;
   }
 
+  void setLogger(std::shared_ptr<MLogger> logger) {
+    logger_ = logger;
+  }
+
  private:
   bool isCancelled() const {
     if (fetchState_) {
@@ -2084,7 +2093,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       subgroupCallback_.reset();
     }
   }
-
+  std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<MoQSession> session_;
   folly::CancellationToken& token_;
   std::shared_ptr<MoQSession::SubscribeTrackReceiveState> subscribeState_;
@@ -2108,6 +2117,9 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
   ObjectStreamCallback dcb(session, /*by ref*/ token);
+  if (logger_) {
+    dcb.setLogger(logger_);
+  }
   dcb.setCurrentStreamId(readHandle->getID());
   codec.setCallback(&dcb);
   codec.setStreamId(id);

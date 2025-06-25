@@ -624,4 +624,14 @@ folly::dynamic MOQTSubgroupHeaderCreated::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubgroupHeaderParsed::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["streamId"] = std::to_string(streamId);
+  obj["trackAlias"] = std::to_string(trackAlias);
+  obj["groupId"] = std::to_string(groupId);
+  obj["subgroupId"] = std::to_string(subgroupId);
+  obj["publisherPriority"] = std::to_string(publisherPriority);
+  return obj;
+}
+
 } // namespace moxygen

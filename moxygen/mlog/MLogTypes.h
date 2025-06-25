@@ -499,6 +499,8 @@ struct MOQTSubgroupHeaderParsed {
   uint64_t groupId{0};
   uint64_t subgroupId{0};
   uint8_t publisherPriority{0};
+
+  folly::dynamic toDynamic() const;
 };
 
 struct MOQTSubgroupObjectCreated {

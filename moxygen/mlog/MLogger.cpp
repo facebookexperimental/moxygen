@@ -66,6 +66,12 @@ void MLogger::addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addSubgroupHeaderParsedLog(MOQTSubgroupHeaderParsed req) {
+  auto log = eventCreator_.createSubgroupHeaderParsedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -129,6 +135,10 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kSubgroupHeaderCreatedName) {
     const MOQTSubgroupHeaderCreated& msg =
         std::get<MOQTSubgroupHeaderCreated>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kSubgroupHeaderParsedName) {
+    const MOQTSubgroupHeaderParsed& msg =
+        std::get<MOQTSubgroupHeaderParsed>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -721,6 +731,21 @@ void MLogger::logSubgroupHeaderCreated(
   baseMsg.subgroupId = sugroupId;
   baseMsg.publisherPriority = publisherPriority;
   addSubgroupHeaderCreatedLog(std::move(baseMsg));
+}
+
+void MLogger::logSubgroupHeaderParsed(
+    uint64_t streamId,
+    TrackAlias trackAlias,
+    uint64_t groupId,
+    uint64_t sugroupId,
+    uint8_t publisherPriority) {
+  MOQTSubgroupHeaderParsed baseMsg = MOQTSubgroupHeaderParsed();
+  baseMsg.streamId = streamId;
+  baseMsg.trackAlias = trackAlias.value;
+  baseMsg.groupId = groupId;
+  baseMsg.subgroupId = sugroupId;
+  baseMsg.publisherPriority = publisherPriority;
+  addSubgroupHeaderParsedLog(std::move(baseMsg));
 }
 
 bool MLogger::isHexstring(const std::string& s) {
