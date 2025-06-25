@@ -3937,7 +3937,13 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
+  std::unique_ptr<folly::IOBuf> payload;
+  if (logger_) {
+    payload = std::move(datagram)->clone();
+  }
+
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+
   readBuf.append(std::move(datagram));
   size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
@@ -3973,6 +3979,15 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
   XCHECK(alias);
   auto state = getSubscribeTrackReceiveState(*alias).get();
+  if (logger_) {
+    if (getDatagramType(
+            *negotiatedVersion_,
+            (*res).status == ObjectStatus::NORMAL,
+            (*res).extensions.size() > 0) !=
+        StreamType::OBJECT_DATAGRAM_STATUS) {
+      logger_->logObjectDatagramParsed(std::move(*res), std::move(payload));
+    }
+  }
   if (state) {
     auto callback = state->getSubscribeCallback();
     if (callback) {

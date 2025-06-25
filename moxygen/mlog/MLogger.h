@@ -39,6 +39,7 @@ class MLogger {
   void addControlMessageParsedLog(MOQTControlMessageParsed req);
   void addStreamTypeSetLog(MOQTStreamTypeSet req);
   void addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req);
+  void addObjectDatagramParsedLog(MOQTObjectDatagramParsed req);
 
   void outputLogsToFile();
 
@@ -139,6 +140,9 @@ class MLogger {
       MOQTStreamType type,
       folly::Optional<Owner> owner);
   void logObjectDatagramCreated(
+      const ObjectHeader& header,
+      const Payload& payload);
+  void logObjectDatagramParsed(
       const ObjectHeader& header,
       const Payload& payload);
 
