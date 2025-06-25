@@ -19,6 +19,7 @@ inline constexpr const char* kControlMessageCreatedName =
     "moqt:control_message_created";
 inline constexpr const char* kControlMessageParsedName =
     "moqt:control_message_parsed";
+inline constexpr const char* kStreamTypeSetName = "moqt:stream_type_set";
 
 // Basic Log Event Class
 class MLogEvent {
@@ -29,7 +30,10 @@ class MLogEvent {
   VantagePoint vantagePoint_;
   uint64_t time_{0};
   std::string name_;
-  std::variant<MOQTControlMessageCreated, MOQTControlMessageParsed>
+  std::variant<
+      MOQTControlMessageCreated,
+      MOQTControlMessageParsed,
+      MOQTStreamTypeSet>
       data_; // Add more events to variant as implemented
 };
 
@@ -48,6 +52,10 @@ class MLogEventCreator {
   MLogEvent createControlMessageParsedEvent(
       VantagePoint vantagePoint,
       MOQTControlMessageParsed req);
+
+  MLogEvent createStreamTypeSetEvent(
+      VantagePoint vantagePoint,
+      MOQTStreamTypeSet req);
 
  private:
   uint64_t startTime_;

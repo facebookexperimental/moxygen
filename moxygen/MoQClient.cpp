@@ -76,11 +76,11 @@ folly::coro::Task<ServerSetup> MoQClient::completeSetupMoQSession(
   moqSession_ = std::make_shared<MoQSession>(wt, evb_);
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
+  moqSession_->setLogger(logger_);
   moqSession_->start();
   ClientSetup clientSetup = getClientSetup(pathParam);
   if (logger_) {
     logger_->logClientSetup(clientSetup);
-    moqSession_->setLogger(logger_);
   }
   return moqSession_->setup(clientSetup);
 }

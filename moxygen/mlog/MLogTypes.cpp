@@ -498,4 +498,14 @@ folly::dynamic MOQTGoaway::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTStreamTypeSet::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  if (owner.hasValue()) {
+    obj["owner"] = std::to_string(owner.value());
+  }
+  obj["streamId"] = std::to_string(streamId);
+  obj["streamType"] = std::to_string(streamType);
+  return obj;
+}
+
 } // namespace moxygen

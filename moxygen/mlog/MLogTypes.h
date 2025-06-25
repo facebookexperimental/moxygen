@@ -429,6 +429,8 @@ struct MOQTStreamTypeSet {
   folly::Optional<Owner> owner;
   uint64_t streamId{0};
   MOQTStreamType streamType;
+
+  folly::dynamic toDynamic() const;
 };
 
 struct MOQTObjectDatagramCreated {

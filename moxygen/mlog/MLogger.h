@@ -37,6 +37,7 @@ class MLogger {
 
   void addControlMessageCreatedLog(MOQTControlMessageCreated req);
   void addControlMessageParsedLog(MOQTControlMessageParsed req);
+  void addStreamTypeSetLog(MOQTStreamTypeSet req);
 
   void outputLogsToFile();
 
@@ -131,6 +132,11 @@ class MLogger {
       const SubscribeAnnouncesError& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
+
+  void logStreamTypeSet(
+      uint64_t streamId,
+      MOQTStreamType type,
+      folly::Optional<Owner> owner);
 
   void setPath(const std::string& path);
 

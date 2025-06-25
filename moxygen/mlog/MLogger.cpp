@@ -28,6 +28,12 @@ void MLogger::addControlMessageParsedLog(MOQTControlMessageParsed req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addStreamTypeSetLog(MOQTStreamTypeSet req) {
+  auto log =
+      eventCreator_.createStreamTypeSetEvent(vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -68,6 +74,9 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kControlMessageParsedName) {
     const MOQTControlMessageParsed& msg =
         std::get<MOQTControlMessageParsed>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kStreamTypeSetName) {
+    const MOQTStreamTypeSet& msg = std::get<MOQTStreamTypeSet>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -576,6 +585,17 @@ MOQTByteString MLogger::convertTrackNameToByteStringFormat(
     str.valueBytes = folly::IOBuf::copyBuffer(t);
   }
   return str;
+}
+
+void MLogger::logStreamTypeSet(
+    uint64_t streamId,
+    MOQTStreamType type,
+    folly::Optional<Owner> owner) {
+  MOQTStreamTypeSet baseMsg = MOQTStreamTypeSet();
+  baseMsg.streamId = streamId;
+  baseMsg.streamType = type;
+  baseMsg.owner = owner.has_value() ? owner.value() : Owner::LOCAL;
+  addStreamTypeSetLog(baseMsg);
 }
 
 bool MLogger::isHexstring(const std::string& s) {
