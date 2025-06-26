@@ -78,6 +78,12 @@ void MLogger::addSubgroupObjectCreatedLog(MOQTSubgroupObjectCreated req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addSubgroupObjectParsedLog(MOQTSubgroupObjectParsed req) {
+  auto log = eventCreator_.createSubgroupObjectParsedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -149,6 +155,10 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kSubgroupObjectCreatedName) {
     const MOQTSubgroupObjectCreated& msg =
         std::get<MOQTSubgroupObjectCreated>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kSubgroupObjectParsedName) {
+    const MOQTSubgroupObjectParsed& msg =
+        std::get<MOQTSubgroupObjectParsed>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -774,6 +784,24 @@ void MLogger::logSubgroupObjectCreated(
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
   baseMsg.objectPayload = payload->clone();
   addSubgroupObjectCreatedLog(std::move(baseMsg));
+}
+
+void MLogger::logSubgroupObjectParsed(
+    uint64_t streamId,
+    const ObjectHeader& objHeader,
+    Payload payload) {
+  MOQTSubgroupObjectParsed baseMsg = MOQTSubgroupObjectParsed();
+  baseMsg.streamId = streamId;
+  baseMsg.groupId = objHeader.group;
+  baseMsg.subgroupId = objHeader.id;
+  baseMsg.objectId = objHeader.id;
+  baseMsg.extensionHeadersLength = objHeader.extensions.size();
+  baseMsg.extensionHeaders =
+      convertExtensionToMoQTExtensionHeaders(objHeader.extensions);
+  baseMsg.objectPayloadLength = payload->length();
+  baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  baseMsg.objectPayload = payload->clone();
+  addSubgroupObjectParsedLog(std::move(baseMsg));
 }
 
 bool MLogger::isHexstring(const std::string& s) {

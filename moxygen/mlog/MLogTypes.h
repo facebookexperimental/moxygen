@@ -527,6 +527,8 @@ struct MOQTSubgroupObjectParsed {
   uint64_t objectPayloadLength{0};
   folly::Optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
+
+  folly::dynamic toDynamic() const;
 };
 
 struct MOQTFetchHeaderCreated {

@@ -1923,6 +1923,22 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       return;
     }
 
+    if (logger_) {
+      ObjectHeader obj = ObjectHeader();
+      obj.id = objectID;
+      obj.group = group;
+      obj.subgroup = subgroup;
+      obj.status = ObjectStatus::NORMAL;
+      obj.length = length;
+      obj.extensions = extensions;
+      if (objectComplete && subscribeState_) {
+        logger_->logSubgroupObjectParsed(
+            currentStreamId_, obj, initialPayload->clone());
+      } else {
+        currentObj_ = obj;
+      }
+    }
+
     folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
     if (objectComplete) {
       res = invokeCallback(
@@ -1956,6 +1972,13 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   void onObjectPayload(Payload payload, bool objectComplete) override {
     if (isCancelled()) {
       return;
+    }
+
+    if (logger_ && objectComplete) {
+      if (subscribeState_) {
+        logger_->logSubgroupObjectParsed(
+            currentStreamId_, currentObj_, payload->clone());
+      }
     }
 
     bool finStream = false;
@@ -2108,6 +2131,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   std::shared_ptr<MoQSession::FetchTrackReceiveState> fetchState_;
   folly::Optional<MoQPublishError> error_;
   uint64_t currentStreamId_{0};
+  ObjectHeader currentObj_;
 };
 } // namespace
 

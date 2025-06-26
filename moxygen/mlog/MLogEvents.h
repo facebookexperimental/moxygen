@@ -15,30 +15,33 @@
 #include "moxygen/mlog/MLogTypes.h"
 
 namespace moxygen {
-inline constexpr const char* kControlMessageCreatedName =
+
+inline constexpr std::string_view kControlMessageCreatedName =
     "moqt:control_message_created";
-inline constexpr const char* kControlMessageParsedName =
+inline constexpr std::string_view kControlMessageParsedName =
     "moqt:control_message_parsed";
-inline constexpr const char* kStreamTypeSetName = "moqt:stream_type_set";
-inline constexpr const char* kObjectDatagramCreatedName =
+inline constexpr std::string_view kStreamTypeSetName = "moqt:stream_type_set";
+inline constexpr std::string_view kObjectDatagramCreatedName =
     "moqt:object_datagram_created";
-inline constexpr const char* kObjectDatagramParsedName =
+inline constexpr std::string_view kObjectDatagramParsedName =
     "moqt:object_datagram_parsed";
-inline constexpr const char* kObjectDatagramStatusCreatedName =
+inline constexpr std::string_view kObjectDatagramStatusCreatedName =
     "moqt:object_datagram_status_created";
-inline constexpr const char* kObjectDatagramStatusParsedName =
+inline constexpr std::string_view kObjectDatagramStatusParsedName =
     "moqt:object_datagram_status_parsed";
-inline constexpr const char* kSubgroupHeaderCreatedName =
+inline constexpr std::string_view kSubgroupHeaderCreatedName =
     "moqt:subgroup_header_created";
-inline constexpr const char* kSubgroupHeaderParsedName =
+inline constexpr std::string_view kSubgroupHeaderParsedName =
     "moqt:subgroup_header_parsed";
-inline constexpr const char* kSubgroupObjectCreatedName =
+inline constexpr std::string_view kSubgroupObjectCreatedName =
     "moqt:subgroup_object_created";
+inline constexpr std::string_view kSubgroupObjectParsedName =
+    "moqt:subgroup_object_parsed";
 
 // Basic Log Event Class
 class MLogEvent {
  public:
-  MLogEvent(VantagePoint vantagePoint, uint64_t time, std::string name)
+  MLogEvent(VantagePoint vantagePoint, uint64_t time, std::string_view name)
       : vantagePoint_(vantagePoint), time_(time), name_(std::move(name)) {}
 
   VantagePoint vantagePoint_;
@@ -54,7 +57,8 @@ class MLogEvent {
       MOQTObjectDatagramStatusParsed,
       MOQTSubgroupHeaderCreated,
       MOQTSubgroupHeaderParsed,
-      MOQTSubgroupObjectCreated>
+      MOQTSubgroupObjectCreated,
+      MOQTSubgroupObjectParsed>
       data_; // Add more events to variant as implemented
 };
 
@@ -105,6 +109,10 @@ class MLogEventCreator {
   MLogEvent createSubgroupObjectCreatedEvent(
       VantagePoint vantagePoint,
       MOQTSubgroupObjectCreated req);
+
+  MLogEvent createSubgroupObjectParsedEvent(
+      VantagePoint vantagePoint,
+      MOQTSubgroupObjectParsed req);
 
  private:
   uint64_t startTime_;

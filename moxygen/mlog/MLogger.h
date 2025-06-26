@@ -45,6 +45,7 @@ class MLogger {
   void addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req);
   void addSubgroupHeaderParsedLog(MOQTSubgroupHeaderParsed req);
   void addSubgroupObjectCreatedLog(MOQTSubgroupObjectCreated req);
+  void addSubgroupObjectParsedLog(MOQTSubgroupObjectParsed req);
 
   void outputLogsToFile();
 
@@ -165,6 +166,10 @@ class MLogger {
       uint64_t sugroupId,
       uint8_t publisherPriority);
   void logSubgroupObjectCreated(
+      uint64_t streamId,
+      const ObjectHeader& objHeader,
+      Payload payload);
+  void logSubgroupObjectParsed(
       uint64_t streamId,
       const ObjectHeader& objHeader,
       Payload payload);
