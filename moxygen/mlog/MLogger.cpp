@@ -90,6 +90,12 @@ void MLogger::addFetchHeaderCreatedLog(MOQTFetchHeaderCreated req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addFetchHeaderParsedLog(MOQTFetchHeaderParsed req) {
+  auto log =
+      eventCreator_.createFetchHeaderParsedEvent(vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
@@ -169,6 +175,10 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kFetchHeaderCreatedName) {
     const MOQTFetchHeaderCreated& msg =
         std::get<MOQTFetchHeaderCreated>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kFetchHeaderParsedName) {
+    const MOQTFetchHeaderParsed& msg =
+        std::get<MOQTFetchHeaderParsed>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -821,6 +831,15 @@ void MLogger::logFetchHeaderCreated(
   baseMsg.streamId = streamId;
   baseMsg.subscribeId = subscribeId;
   addFetchHeaderCreatedLog(std::move(baseMsg));
+}
+
+void MLogger::logFetchHeaderParsed(
+    const uint64_t streamId,
+    const uint64_t subscribeId) {
+  MOQTFetchHeaderParsed baseMsg = MOQTFetchHeaderParsed();
+  baseMsg.streamId = streamId;
+  baseMsg.subscribeId = subscribeId;
+  addFetchHeaderParsedLog(std::move(baseMsg));
 }
 
 bool MLogger::isHexstring(const std::string& s) {

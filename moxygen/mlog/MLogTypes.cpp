@@ -703,4 +703,11 @@ folly::dynamic MOQTFetchHeaderCreated::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTFetchHeaderParsed::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["streamId"] = std::to_string(streamId);
+  obj["subscribeId"] = std::to_string(subscribeId);
+  return obj;
+}
+
 } // namespace moxygen

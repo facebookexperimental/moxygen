@@ -1386,10 +1386,11 @@ class MoQSession::FetchTrackReceiveState
     } // there's likely a missing case here from shutdown
   }
 
-  void onFetchHeader() {
+  void onFetchHeader(RequestID requestID) {
     if (logger_) {
       logger_->logStreamTypeSet(
           currentStreamId_, MOQTStreamType::FETCH_HEADER, Owner::REMOTE);
+      logger_->logFetchHeaderParsed(currentStreamId_, requestID.value);
     }
   }
 
@@ -1907,7 +1908,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       return;
     }
     fetchState_->setCurrentStreamId(currentStreamId_);
-    fetchState_->onFetchHeader();
+    fetchState_->onFetchHeader(requestID);
     token_ =
         folly::CancellationToken::merge(token_, fetchState_->getCancelToken());
   }
