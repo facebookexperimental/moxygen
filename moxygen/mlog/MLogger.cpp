@@ -102,12 +102,18 @@ void MLogger::addFetchObjectCreatedLog(MOQTFetchObjectCreated req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addFetchObjectParsedLog(MOQTFetchObjectParsed req) {
+  auto log =
+      eventCreator_.createFetchObjectParsedEvent(vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
     uint64_t numberOfParameters,
     std::vector<MOQTParameter> params) {
-  MOQTClientSetupMessage client = MOQTClientSetupMessage();
+  MOQTClientSetupMessage client;
   client.numberOfSupportedVersions = numberOfSupportedVersions;
   client.supportedVersions = std::move(supportedVersions);
   client.numberOfParameters = numberOfParameters;
@@ -119,7 +125,7 @@ MOQTServerSetupMessage MLogger::createServerSetupControlMessage(
     uint64_t selectedVersion,
     uint64_t number_of_parameters,
     std::vector<MOQTParameter> params) {
-  MOQTServerSetupMessage server = MOQTServerSetupMessage();
+  MOQTServerSetupMessage server;
   server.selectedVersion = selectedVersion;
   server.numberOfParameters = number_of_parameters;
   server.setupParameters = std::move(params);
@@ -189,6 +195,10 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kFetchObjectCreatedName) {
     const MOQTFetchObjectCreated& msg =
         std::get<MOQTFetchObjectCreated>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kFetchObjectParsedName) {
+    const MOQTFetchObjectParsed& msg =
+        std::get<MOQTFetchObjectParsed>(log.data_);
     logObject["data"] = msg.toDynamic();
   }
 
@@ -703,7 +713,7 @@ void MLogger::logStreamTypeSet(
     uint64_t streamId,
     MOQTStreamType type,
     folly::Optional<Owner> owner) {
-  MOQTStreamTypeSet baseMsg = MOQTStreamTypeSet();
+  MOQTStreamTypeSet baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.streamType = type;
   baseMsg.owner = owner.has_value() ? owner.value() : Owner::LOCAL;
@@ -713,7 +723,7 @@ void MLogger::logStreamTypeSet(
 void MLogger::logObjectDatagramCreated(
     const ObjectHeader& header,
     const Payload& payload) {
-  MOQTObjectDatagramCreated baseMsg = MOQTObjectDatagramCreated();
+  MOQTObjectDatagramCreated baseMsg;
   baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
@@ -728,7 +738,7 @@ void MLogger::logObjectDatagramCreated(
 void MLogger::logObjectDatagramParsed(
     const ObjectHeader& header,
     const Payload& payload) {
-  MOQTObjectDatagramParsed baseMsg = MOQTObjectDatagramParsed();
+  MOQTObjectDatagramParsed baseMsg;
   baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
@@ -743,7 +753,7 @@ void MLogger::logObjectDatagramParsed(
 }
 
 void MLogger::logObjectDatagramStatusCreated(const ObjectHeader& header) {
-  MOQTObjectDatagramStatusCreated baseMsg = MOQTObjectDatagramStatusCreated();
+  MOQTObjectDatagramStatusCreated baseMsg;
   baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
@@ -756,7 +766,7 @@ void MLogger::logObjectDatagramStatusCreated(const ObjectHeader& header) {
 }
 
 void MLogger::logObjectDatagramStatusParsed(const ObjectHeader& header) {
-  MOQTObjectDatagramStatusParsed baseMsg = MOQTObjectDatagramStatusParsed();
+  MOQTObjectDatagramStatusParsed baseMsg;
   baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
@@ -774,7 +784,7 @@ void MLogger::logSubgroupHeaderCreated(
     uint64_t groupId,
     uint64_t sugroupId,
     uint8_t publisherPriority) {
-  MOQTSubgroupHeaderCreated baseMsg = MOQTSubgroupHeaderCreated();
+  MOQTSubgroupHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = groupId;
@@ -789,7 +799,7 @@ void MLogger::logSubgroupHeaderParsed(
     uint64_t groupId,
     uint64_t sugroupId,
     uint8_t publisherPriority) {
-  MOQTSubgroupHeaderParsed baseMsg = MOQTSubgroupHeaderParsed();
+  MOQTSubgroupHeaderParsed baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = groupId;
@@ -802,7 +812,7 @@ void MLogger::logSubgroupObjectCreated(
     uint64_t streamId,
     const ObjectHeader& objHeader,
     Payload payload) {
-  MOQTSubgroupObjectCreated baseMsg = MOQTSubgroupObjectCreated();
+  MOQTSubgroupObjectCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.groupId = objHeader.group;
   baseMsg.subgroupId = objHeader.id;
@@ -820,7 +830,7 @@ void MLogger::logSubgroupObjectParsed(
     uint64_t streamId,
     const ObjectHeader& objHeader,
     Payload payload) {
-  MOQTSubgroupObjectParsed baseMsg = MOQTSubgroupObjectParsed();
+  MOQTSubgroupObjectParsed baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.groupId = objHeader.group;
   baseMsg.subgroupId = objHeader.id;
@@ -837,7 +847,7 @@ void MLogger::logSubgroupObjectParsed(
 void MLogger::logFetchHeaderCreated(
     const uint64_t streamId,
     const uint64_t subscribeId) {
-  MOQTFetchHeaderCreated baseMsg = MOQTFetchHeaderCreated();
+  MOQTFetchHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.subscribeId = subscribeId;
   addFetchHeaderCreatedLog(std::move(baseMsg));
@@ -846,7 +856,7 @@ void MLogger::logFetchHeaderCreated(
 void MLogger::logFetchHeaderParsed(
     const uint64_t streamId,
     const uint64_t subscribeId) {
-  MOQTFetchHeaderParsed baseMsg = MOQTFetchHeaderParsed();
+  MOQTFetchHeaderParsed baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.subscribeId = subscribeId;
   addFetchHeaderParsedLog(std::move(baseMsg));
@@ -856,7 +866,7 @@ void MLogger::logFetchObjectCreated(
     const uint64_t streamId,
     const ObjectHeader& objHeader,
     Payload payload) {
-  MOQTFetchObjectCreated baseMsg = MOQTFetchObjectCreated();
+  MOQTFetchObjectCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.groupId = objHeader.group;
   baseMsg.subgroupId = objHeader.id;
@@ -869,6 +879,25 @@ void MLogger::logFetchObjectCreated(
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
   baseMsg.objectPayload = payload->clone();
   addFetchObjectCreatedLog(std::move(baseMsg));
+}
+
+void MLogger::logFetchObjectParsed(
+    const uint64_t streamId,
+    const ObjectHeader& objHeader,
+    Payload payload) {
+  MOQTFetchObjectParsed baseMsg;
+  baseMsg.streamId = streamId;
+  baseMsg.groupId = objHeader.group;
+  baseMsg.subgroupId = objHeader.id;
+  baseMsg.objectId = objHeader.id;
+  baseMsg.publisherPriority = objHeader.priority;
+  baseMsg.extensionHeadersLength = objHeader.extensions.size();
+  baseMsg.extensionHeaders =
+      convertExtensionToMoQTExtensionHeaders(objHeader.extensions);
+  baseMsg.objectPayloadLength = payload->length();
+  baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  baseMsg.objectPayload = payload->clone();
+  addFetchObjectParsedLog(std::move(baseMsg));
 }
 
 bool MLogger::isHexstring(const std::string& s) {

@@ -49,6 +49,7 @@ class MLogger {
   void addFetchHeaderCreatedLog(MOQTFetchHeaderCreated req);
   void addFetchHeaderParsedLog(MOQTFetchHeaderParsed req);
   void addFetchObjectCreatedLog(MOQTFetchObjectCreated req);
+  void addFetchObjectParsedLog(MOQTFetchObjectParsed req);
 
   void outputLogsToFile();
 
@@ -183,6 +184,10 @@ class MLogger {
       const uint64_t streamId,
       const uint64_t subscribeId);
   void logFetchObjectCreated(
+      const uint64_t streamId,
+      const ObjectHeader& header,
+      Payload payload);
+  void logFetchObjectParsed(
       const uint64_t streamId,
       const ObjectHeader& header,
       Payload payload);

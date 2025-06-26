@@ -1942,6 +1942,9 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       if (objectComplete && subscribeState_) {
         logger_->logSubgroupObjectParsed(
             currentStreamId_, obj, initialPayload->clone());
+      } else if (objectComplete && fetchState_) {
+        logger_->logFetchObjectParsed(
+            currentStreamId_, obj, initialPayload->clone());
       } else {
         currentObj_ = obj;
       }
@@ -1985,6 +1988,9 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     if (logger_ && objectComplete) {
       if (subscribeState_) {
         logger_->logSubgroupObjectParsed(
+            currentStreamId_, currentObj_, payload->clone());
+      } else if (fetchState_) {
+        logger_->logFetchObjectParsed(
             currentStreamId_, currentObj_, payload->clone());
       }
     }
