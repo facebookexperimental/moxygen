@@ -41,6 +41,8 @@ inline constexpr const char* kFetchHeaderCreatedName =
     "moqt:fetch_header_created";
 inline constexpr const char* kFetchHeaderParsedName =
     "moqt:fetch_header_parsed";
+inline constexpr const char* kFetchObjectCreatedName =
+    "moqt:fetch_object_created";
 
 // Basic Log Event Class
 class MLogEvent {
@@ -64,7 +66,8 @@ class MLogEvent {
       MOQTSubgroupObjectCreated,
       MOQTSubgroupObjectParsed,
       MOQTFetchHeaderCreated,
-      MOQTFetchHeaderParsed>
+      MOQTFetchHeaderParsed,
+      MOQTFetchObjectCreated>
       data_; // Add more events to variant as implemented
 };
 
@@ -127,6 +130,10 @@ class MLogEventCreator {
   MLogEvent createFetchHeaderParsedEvent(
       VantagePoint vantagePoint,
       MOQTFetchHeaderParsed req);
+
+  MLogEvent createFetchObjectCreatedEvent(
+      VantagePoint vantagePoint,
+      MOQTFetchObjectCreated req);
 
  private:
   uint64_t startTime_;

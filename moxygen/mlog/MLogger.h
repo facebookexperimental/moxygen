@@ -48,6 +48,7 @@ class MLogger {
   void addSubgroupObjectParsedLog(MOQTSubgroupObjectParsed req);
   void addFetchHeaderCreatedLog(MOQTFetchHeaderCreated req);
   void addFetchHeaderParsedLog(MOQTFetchHeaderParsed req);
+  void addFetchObjectCreatedLog(MOQTFetchObjectCreated req);
 
   void outputLogsToFile();
 
@@ -181,6 +182,10 @@ class MLogger {
   void logFetchHeaderParsed(
       const uint64_t streamId,
       const uint64_t subscribeId);
+  void logFetchObjectCreated(
+      const uint64_t streamId,
+      const ObjectHeader& header,
+      Payload payload);
 
   void setPath(const std::string& path);
 

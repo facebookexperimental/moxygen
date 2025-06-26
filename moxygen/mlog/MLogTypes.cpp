@@ -710,4 +710,32 @@ folly::dynamic MOQTFetchHeaderParsed::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTFetchObjectCreated::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["streamId"] = std::to_string(streamId);
+  obj["groupId"] = std::to_string(groupId);
+  obj["subgroupId"] = std::to_string(subgroupId);
+  obj["objectId"] = std::to_string(objectId);
+  obj["publisherPriority"] = std::to_string(publisherPriority);
+  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
+  if (extensionHeaders.size() > 0) {
+    std::vector<folly::dynamic> headerObjects;
+    headerObjects.reserve(extensionHeaders.size());
+    for (auto& header : extensionHeaders) {
+      headerObjects.push_back(header.toDynamic());
+    }
+    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
+  }
+  obj["objectPayloadLength"] = std::to_string(objectPayloadLength);
+  if (objectStatus.hasValue()) {
+    obj["objectStatus"] = std::to_string(objectStatus.value());
+  }
+  if (objectPayload) {
+    obj["objectPayload"] = std::string(
+        reinterpret_cast<const char*>(objectPayload->data()),
+        objectPayload->length());
+  }
+  return obj;
+}
+
 } // namespace moxygen

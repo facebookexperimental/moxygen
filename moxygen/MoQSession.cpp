@@ -517,8 +517,13 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
   header_.status = ObjectStatus::NORMAL;
 
   if (logger_) {
-    logger_->logSubgroupObjectCreated(
-        writeHandle_->getID(), header_, payload->clone());
+    if (streamType_ != StreamType::FETCH_HEADER) {
+      logger_->logSubgroupObjectCreated(
+          writeHandle_->getID(), header_, payload->clone());
+    } else {
+      logger_->logFetchObjectCreated(
+          writeHandle_->getID(), header_, payload->clone());
+    }
   }
 
   return writeCurrentObject(
