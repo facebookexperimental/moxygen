@@ -361,6 +361,8 @@ void StreamPublisherImpl::setWriteHandle(
   if (streamType_ == StreamType::FETCH_HEADER && logger_) {
     logger_->logStreamTypeSet(
         writeHandle_->getID(), MOQTStreamType::FETCH_HEADER, Owner::LOCAL);
+    RequestID req = publisher_->requestID();
+    logger_->logFetchHeaderCreated(writeHandle_->getID(), req.value);
   }
 
   cancelCallback_.emplace(writeHandle_->getCancelToken(), [this] {

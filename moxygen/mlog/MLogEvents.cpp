@@ -169,4 +169,18 @@ MLogEvent MLogEventCreator::createSubgroupObjectParsedEvent(
   return log;
 }
 
+MLogEvent MLogEventCreator::createFetchHeaderCreatedEvent(
+    VantagePoint vantagePoint,
+    MOQTFetchHeaderCreated req) {
+  auto log = MLogEvent(
+      vantagePoint,
+      static_cast<uint64_t>(
+          std::chrono::system_clock::now().time_since_epoch().count()) -
+          startTime_,
+      kFetchHeaderCreatedName);
+
+  log.data_ = std::move(req);
+  return log;
+}
+
 } // namespace moxygen
