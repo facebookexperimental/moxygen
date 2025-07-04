@@ -107,18 +107,18 @@ int main(int argc, char** argv) {
   // Connect Client to Server
   XLOG(INFO) << "Connecting to " << url.getHostAndPort();
   folly::coro::blockingWait(
-      client->connect(evb.getEventBase()).scheduleOn(evb.getEventBase()));
+      co_withExecutor(evb.getEventBase(), client->connect(evb.getEventBase())));
 
   if (FLAGS_request == "subscribe") {
     XLOG(INFO) << "Subscribing to " << url.getHostAndPort();
     // Test a Subscribe Call
-    folly::coro::blockingWait(
-        client->subscribe(defaultMoqParams).scheduleOn(evb.getEventBase()));
+    folly::coro::blockingWait(co_withExecutor(
+        evb.getEventBase(), client->subscribe(defaultMoqParams)));
   } else if (FLAGS_request == "fetch") {
     XLOG(INFO) << "Fetching from " << url.getHostAndPort();
     // Test a Fetch Call
     folly::coro::blockingWait(
-        client->fetch(defaultMoqParams).scheduleOn(evb.getEventBase()));
+        co_withExecutor(evb.getEventBase(), client->fetch(defaultMoqParams)));
   } else {
     XLOG(ERR) << "Invalid Request Type: " << FLAGS_request;
   }

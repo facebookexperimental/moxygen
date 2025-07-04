@@ -381,9 +381,10 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency))
-          .scheduleOn(folly::getGlobalCPUExecutor());
+      co_await co_withExecutor(
+          folly::getGlobalCPUExecutor(),
+          folly::coro::sleep(
+              std::chrono::milliseconds(params.objectFrequency)));
     }
   }
 
