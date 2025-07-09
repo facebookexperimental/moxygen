@@ -28,6 +28,7 @@ target_link_libraries(
   moqrelay
   moxygenserver
   moxygenwtclient
+  mlogger
 )
 
 install(

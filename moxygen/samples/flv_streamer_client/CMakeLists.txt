@@ -28,6 +28,7 @@ target_link_libraries(
   moxygenwtclient
   flvparser
   moqmi
+  mlogger
 )
 
 install(

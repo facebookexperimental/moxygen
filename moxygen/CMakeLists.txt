@@ -96,7 +96,7 @@ target_link_libraries(
     proxygen::proxygenhqserver
 )
 
-
+add_subdirectory(mlog)
 add_subdirectory(relay)
 # TODO: Fails with compiler error in ubuntu P1361252588
 # add_subdirectory(samples/chat)

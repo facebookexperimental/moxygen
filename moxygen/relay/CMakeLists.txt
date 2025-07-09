@@ -75,6 +75,7 @@ target_link_libraries(
   Folly::folly
   moqrelay
   moxygenserver
+  mlogger
 )
 
 install(

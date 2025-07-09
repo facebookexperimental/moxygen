@@ -51,4 +51,5 @@ moxygen_add_test(TARGET MoQSessionTests
   DEPENDS
     moqtestutils
     moxygen
+    mlogger
 )
