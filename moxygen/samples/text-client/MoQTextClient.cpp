@@ -335,8 +335,9 @@ int main(int argc, char* argv[]) {
   auto subParams = flags2params();
   const auto requestID = 0;
   const auto trackAlias = 1;
-  textClient
-      ->run(
+  co_withExecutor(
+      &eventBase,
+      textClient->run(
           {requestID,
            trackAlias,
            moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
@@ -346,8 +347,7 @@ int main(int argc, char* argv[]) {
            subParams.locType,
            subParams.start,
            subParams.endGroup,
-           {}})
-      .scheduleOn(&eventBase)
+           {}}))
       .start()
       .via(&eventBase)
       .thenTry([&handler](auto) { handler.unreg(); });

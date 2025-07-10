@@ -29,9 +29,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> callback) {
   auto session = MoQSession::getRequestSession();
+  co_withExecutor(
+      session->getEventBase(),
 
-  writeLoop(callback, subscribeRequest)
-      .scheduleOn(session->getEventBase())
+      writeLoop(callback, subscribeRequest))
       .start();
   SubscribeOk ok{
       subscribeRequest.requestID,
@@ -48,9 +49,10 @@ folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
     std::shared_ptr<FetchConsumer> callback) {
   CHECK(!requestId_.hasValue()) << "Cannot get more than one fetch, as of now";
   auto session = MoQSession::getRequestSession();
+  co_withExecutor(
+      session->getEventBase(),
 
-  writeLoopFetch(callback, fetchRequest)
-      .scheduleOn(session->getEventBase())
+      writeLoopFetch(callback, fetchRequest))
       .start();
   FetchOk ok{
       fetchRequest.requestID,

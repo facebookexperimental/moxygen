@@ -165,14 +165,14 @@ bool MoQVideoPublisher::setup(const std::string& connectURL) {
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
       std::make_unique<MoQClient>(evbThread_->getEventBase(), url));
-  relayClient_
-      ->run(
+  co_withExecutor(
+      evbThread_->getEventBase(),
+      relayClient_->run(
           /*publisher=*/shared_from_this(),
           /*subscriber=*/nullptr,
           {videoForwarder_.fullTrackName().trackNamespace},
           kConnectTimeout,
-          kTransactionTimeout)
-      .scheduleOn(evbThread_->getEventBase())
+          kTransactionTimeout))
       .start();
   return true;
 }
