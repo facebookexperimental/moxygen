@@ -25,6 +25,7 @@ target_link_libraries(
     Folly::folly
     wangle::wangle
     proxygen::proxygen
+    mlogger
 )
 
 install(
