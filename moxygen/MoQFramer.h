@@ -29,6 +29,14 @@ const uint8_t kDefaultPriority = 128;
 using Payload = std::unique_ptr<folly::IOBuf>;
 using Priority = uint8_t;
 
+// Undefine Windows macros that conflict with our enum values
+#ifdef NO_ERROR
+#undef NO_ERROR
+#endif
+#ifdef DELETE
+#undef DELETE
+#endif
+
 enum class SessionCloseErrorCode : uint32_t {
   NO_ERROR = 0,
   INTERNAL_ERROR = 1,
