@@ -1,0 +1,295 @@
+{
+  "qlog_format": "JSON-SEQ",
+  "qlog_version": "0.3",
+  "title": "MoQ Transport Sample Session",
+  "description": "Sample MoQ Transport data transfer showing video and audio streaming",
+  "summary": {
+    "trace_count": 1
+  },
+  "traces": [
+    {
+      "title": "MoQ Video Conference Session",
+      "description": "MoQ Transport events for a video conference session with multiple tracks",
+      "vantage_point": {
+        "name": "client_endpoint",
+        "type": "client"
+      },
+      "configuration": {
+        "time_offset": 0,
+        "time_units": "ms"
+      },
+      "common_fields": {
+        "protocol_type": "MOQT",
+        "reference_time": "2025-01-15T10:30:00.000Z"
+      },
+      "events": [
+        [1000, "transport", "moqt:control_message_created", {
+          "message_type": "CLIENT_SETUP",
+          "vantage_point": "client",
+          "supported_versions": [1, 2],
+          "num_params": 0
+        }],
+        [1050, "transport", "moqt:control_message_parsed", {
+          "message_type": "SERVER_SETUP", 
+          "vantage_point": "server",
+          "selected_version": 2,
+          "num_params": 1
+        }],
+        [1100, "transport", "moqt:control_message_created", {
+          "message_type": "ANNOUNCE",
+          "vantage_point": "client",
+          "track_namespace": "conference/room123",
+          "num_params": 2
+        }],
+        [1150, "transport", "moqt:control_message_parsed", {
+          "message_type": "ANNOUNCE_OK",
+          "vantage_point": "server",
+          "track_namespace": "conference/room123"
+        }],
+        [1200, "transport", "moqt:control_message_created", {
+          "message_type": "SUBSCRIBE",
+          "vantage_point": "client", 
+          "subscribe_id": 1,
+          "track_alias": 100,
+          "track_namespace": "conference/room123",
+          "track_name": "video",
+          "start_group": 0,
+          "start_object": 0,
+          "end_group": null,
+          "end_object": null,
+          "num_params": 1
+        }],
+        [1250, "transport", "moqt:control_message_parsed", {
+          "message_type": "SUBSCRIBE_OK",
+          "vantage_point": "server",
+          "subscribe_id": 1,
+          "expires": 300000,
+          "group_order": 1,
+          "content_exists": true
+        }],
+        [1300, "transport", "moqt:stream_type_set", {
+          "track_alias": 100,
+          "stream_type": "STREAM_TYPE_DATAGRAM",
+          "vantage_point": "server"
+        }],
+        [1350, "transport", "moqt:object_datagram_created", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 0,
+          "object_id": 0,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 12580,
+          "payload_length": 12580,
+          "vantage_point": "server"
+        }],
+        [1355, "transport", "moqt:object_datagram_parsed", {
+          "track_alias": 100,
+          "track_id": "video", 
+          "group_id": 0,
+          "object_id": 0,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 12580,
+          "payload_length": 12580,
+          "vantage_point": "client"
+        }],
+        [1400, "transport", "moqt:control_message_created", {
+          "message_type": "SUBSCRIBE",
+          "vantage_point": "client",
+          "subscribe_id": 2,
+          "track_alias": 200,
+          "track_namespace": "conference/room123",
+          "track_name": "audio",
+          "start_group": 0,
+          "start_object": 0,
+          "end_group": null,
+          "end_object": null,
+          "num_params": 1
+        }],
+        [1450, "transport", "moqt:control_message_parsed", {
+          "message_type": "SUBSCRIBE_OK",
+          "vantage_point": "server",
+          "subscribe_id": 2,
+          "expires": 300000,
+          "group_order": 1,
+          "content_exists": true
+        }],
+        [1460, "transport", "moqt:object_datagram_created", {
+          "track_alias": 200,
+          "track_id": "audio",
+          "group_id": 0,
+          "object_id": 0,
+          "publisher_priority": 2,
+          "object_status": "NORMAL",
+          "object_size": 3240,
+          "payload_length": 3240,
+          "vantage_point": "server"
+        }],
+        [1465, "transport", "moqt:object_datagram_parsed", {
+          "track_alias": 200,
+          "track_id": "audio",
+          "group_id": 0,
+          "object_id": 0,
+          "publisher_priority": 2,
+          "object_status": "NORMAL",
+          "object_size": 3240,
+          "payload_length": 3240,
+          "vantage_point": "client"
+        }],
+        [1500, "transport", "moqt:object_datagram_created", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 0,
+          "object_id": 1,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 8950,
+          "payload_length": 8950,
+          "vantage_point": "server"
+        }],
+        [1505, "transport", "moqt:object_datagram_parsed", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 0,
+          "object_id": 1,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 8950,
+          "payload_length": 8950,
+          "vantage_point": "client"
+        }],
+        [1520, "transport", "moqt:subgroup_header_created", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 1,
+          "subgroup_id": 0,
+          "publisher_priority": 1,
+          "vantage_point": "server"
+        }],
+        [1525, "transport", "moqt:subgroup_header_parsed", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 1,
+          "subgroup_id": 0,
+          "publisher_priority": 1,
+          "vantage_point": "client"
+        }],
+        [1530, "transport", "moqt:subgroup_object_created", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 1,
+          "subgroup_id": 0,
+          "object_id": 0,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 15200,
+          "payload_length": 15200,
+          "vantage_point": "server"
+        }],
+        [1535, "transport", "moqt:subgroup_object_parsed", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 1,
+          "subgroup_id": 0,
+          "object_id": 0,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 15200,
+          "payload_length": 15200,
+          "vantage_point": "client"
+        }],
+        [1540, "transport", "moqt:object_datagram_created", {
+          "track_alias": 200,
+          "track_id": "audio",
+          "group_id": 0,
+          "object_id": 1,
+          "publisher_priority": 2,
+          "object_status": "NORMAL",
+          "object_size": 3180,
+          "payload_length": 3180,
+          "vantage_point": "server"
+        }],
+        [1545, "transport", "moqt:object_datagram_parsed", {
+          "track_alias": 200,
+          "track_id": "audio",
+          "group_id": 0,
+          "object_id": 1,
+          "publisher_priority": 2,
+          "object_status": "NORMAL",
+          "object_size": 3180,
+          "payload_length": 3180,
+          "vantage_point": "client"
+        }],
+        [1600, "transport", "moqt:fetch_header_created", {
+          "subscribe_id": 3,
+          "track_alias": 300,
+          "track_namespace": "conference/room123",
+          "track_name": "metadata",
+          "start_group": 0,
+          "start_object": 0,
+          "end_group": 0,
+          "end_object": 10,
+          "num_params": 0,
+          "vantage_point": "client"
+        }],
+        [1605, "transport", "moqt:fetch_header_parsed", {
+          "subscribe_id": 3,
+          "track_alias": 300,
+          "track_namespace": "conference/room123", 
+          "track_name": "metadata",
+          "start_group": 0,
+          "start_object": 0,
+          "end_group": 0,
+          "end_object": 10,
+          "num_params": 0,
+          "vantage_point": "server"
+        }],
+        [1610, "transport", "moqt:fetch_object_created", {
+          "track_alias": 300,
+          "track_id": "metadata",
+          "group_id": 0,
+          "object_id": 0,
+          "publisher_priority": 3,
+          "object_status": "NORMAL",
+          "object_size": 256,
+          "payload_length": 256,
+          "vantage_point": "server"
+        }],
+        [1615, "transport", "moqt:fetch_object_parsed", {
+          "track_alias": 300,
+          "track_id": "metadata",
+          "group_id": 0,
+          "object_id": 0,
+          "publisher_priority": 3,
+          "object_status": "NORMAL",
+          "object_size": 256,
+          "payload_length": 256,
+          "vantage_point": "client"
+        }],
+        [1650, "transport", "moqt:object_datagram_created", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 1,
+          "object_id": 1,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 11200,
+          "payload_length": 11200,
+          "vantage_point": "server"
+        }],
+        [1655, "transport", "moqt:object_datagram_parsed", {
+          "track_alias": 100,
+          "track_id": "video",
+          "group_id": 1,
+          "object_id": 1,
+          "publisher_priority": 1,
+          "object_status": "NORMAL",
+          "object_size": 11200,
+          "payload_length": 11200,
+          "vantage_point": "client"
+        }]
+      ]
+    }
+  ]
+}

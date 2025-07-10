@@ -1,0 +1,474 @@
+{
+  "qlog_format": "JSON-SEQ",
+  "qlog_version": "0.3",
+  "title": "MoQ Transport - Alice & Bob Meeting",
+  "traces": [
+    {
+      "title": "Alice & Bob Video Call Session",
+      "description": "Realistic MoQ Transport session with cross-subscribed audio/video tracks",
+      "vantage_point": {
+        "type": "client"
+      },
+      "events": [
+        [
+          20,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "ANNOUNCE",
+            "track_namespace": "alice",
+            "track_id": "alice"
+          }
+        ],
+        [
+          40,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "ANNOUNCE_OK",
+            "track_namespace": "alice",
+            "track_id": "alice"
+          }
+        ],
+        [
+          60,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "ANNOUNCE",
+            "track_namespace": "bob",
+            "track_id": "bob"
+          }
+        ],
+        [
+          80,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "ANNOUNCE_OK",
+            "track_namespace": "bob",
+            "track_id": "bob"
+          }
+        ],
+        [
+          100,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "SUBSCRIBE",
+            "track_id": "bob,audio",
+            "track_namespace": "bob,audio"
+          }
+        ],
+        [
+          120,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "SUBSCRIBE_OK",
+            "track_id": "bob,audio",
+            "track_namespace": "bob,audio"
+          }
+        ],
+        [
+          140,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "SUBSCRIBE",
+            "track_id": "bob,video",
+            "track_namespace": "bob,video"
+          }
+        ],
+        [
+          170,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "SUBSCRIBE_OK",
+            "track_id": "bob,video",
+            "track_namespace": "bob,video"
+          }
+        ],
+        [
+          200,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "SUBSCRIBE",
+            "track_id": "alice,audio",
+            "track_namespace": "alice,audio"
+          }
+        ],
+        [
+          230,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "SUBSCRIBE_OK",
+            "track_id": "alice,audio",
+            "track_namespace": "alice,audio"
+          }
+        ],
+        [
+          260,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "SUBSCRIBE",
+            "track_id": "alice,video",
+            "track_namespace": "alice,video"
+          }
+        ],
+        [
+          290,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "SUBSCRIBE_OK",
+            "track_id": "alice,video",
+            "track_namespace": "alice,video"
+          }
+        ],
+        [
+          500,
+          "transport",
+          "SUBGROUP_HEADER_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_count": 30
+          }
+        ],
+        [
+          502,
+          "transport",
+          "SUBGROUP_HEADER_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_count": 30
+          }
+        ],
+        [
+          510,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 0,
+            "object_size": 40000
+          }
+        ],
+        [
+          515,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 0,
+            "object_size": 40000
+          }
+        ],
+        [
+          543,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 1,
+            "object_size": 1500
+          }
+        ],
+        [
+          548,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 1,
+            "object_size": 1200
+          }
+        ],
+        [
+          576,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 2,
+            "object_size": 1800
+          }
+        ],
+        [
+          581,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 2,
+            "object_size": 1100
+          }
+        ],
+        [
+          500,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 0,
+            "object_size": 350
+          }
+        ],
+        [
+          502,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 0,
+            "object_size": 300
+          }
+        ],
+        [
+          520,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 1,
+            "object_size": 320
+          }
+        ],
+        [
+          522,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 1,
+            "object_size": 280
+          }
+        ],
+        [
+          540,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 2,
+            "object_size": 370
+          }
+        ],
+        [
+          542,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 2,
+            "object_size": 310
+          }
+        ],
+        [
+          560,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 3,
+            "object_size": 340
+          }
+        ],
+        [
+          562,
+          "transport",
+          "OBJECT_DATAGRAM_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,audio",
+            "group_id": 1,
+            "subgroup_id": 0,
+            "object_id": 3,
+            "object_size": 290
+          }
+        ],
+        [
+          1500,
+          "transport",
+          "SUBGROUP_HEADER_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 2,
+            "subgroup_id": 0,
+            "object_count": 30
+          }
+        ],
+        [
+          1502,
+          "transport",
+          "SUBGROUP_HEADER_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 2,
+            "subgroup_id": 0,
+            "object_count": 30
+          }
+        ],
+        [
+          1510,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 2,
+            "subgroup_id": 0,
+            "object_id": 0,
+            "object_size": 40000
+          }
+        ],
+        [
+          1515,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 2,
+            "subgroup_id": 0,
+            "object_id": 0,
+            "object_size": 40000
+          }
+        ],
+        [
+          1543,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "client",
+            "track_id": "alice,video",
+            "group_id": 2,
+            "subgroup_id": 0,
+            "object_id": 1,
+            "object_size": 1600
+          }
+        ],
+        [
+          1548,
+          "transport",
+          "SUBGROUP_OBJECT_CREATED",
+          {
+            "vantage_point": "server",
+            "track_id": "bob,video",
+            "group_id": 2,
+            "subgroup_id": 0,
+            "object_id": 1,
+            "object_size": 1400
+          }
+        ],
+        [
+          9500,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "UNSUBSCRIBE",
+            "track_id": "bob,audio",
+            "track_namespace": "bob,audio"
+          }
+        ],
+        [
+          9520,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "client",
+            "message_type": "UNSUBSCRIBE",
+            "track_id": "bob,video",
+            "track_namespace": "bob,video"
+          }
+        ],
+        [
+          9540,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "UNSUBSCRIBE",
+            "track_id": "alice,audio",
+            "track_namespace": "alice,audio"
+          }
+        ],
+        [
+          9560,
+          "transport",
+          "CONTROL_MESSAGE_PARSED",
+          {
+            "vantage_point": "server",
+            "message_type": "UNSUBSCRIBE",
+            "track_id": "alice,video",
+            "track_namespace": "alice,video"
+          }
+        ]
+      ]
+    }
+  ]
+}

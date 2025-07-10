@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>MoQ Transport Visualization</title>
+    <link rel='stylesheet' href='style.css'>
+</head>
+<body>
+    <header>
+        <h1 id='title'>MoQ Transport Data Visualization</h1>
+        <p class="subtitle">Media over QUIC Transport Event Timeline</p>
+    </header>
+
+    <div class="control-panel">
+        <div class="file-upload-section">
+            <label for="qlog-file-input">Upload MoQ QLOG JSON file:</label>
+            <input type="file" id="qlog-file-input" accept=".json" />
+            <button id="load-example-btn">Load Example Data</button>
+        </div>
+
+        <div class="filter-controls">
+            <label>Event Filters:</label>
+            <label><input type="checkbox" id="filter-control" checked> Control Messages</label>
+            <label><input type="checkbox" id="filter-objects" checked> Data Objects</label>
+            <label><input type="checkbox" id="filter-subgroups" checked> Subgroups</label>
+            <label><input type="checkbox" id="filter-fetch" checked> Fetch Operations</label>
+        </div>
+
+        <div class="view-controls">
+            <label>View Options:</label>
+            <label><input type="checkbox" id="show-object-ids" checked> Show Object IDs</label>
+            <label><input type="checkbox" id="show-sizes" checked> Size-proportional Bars</label>
+            <button id="reset-view-btn">Reset View</button>
+        </div>
+    </div>
+
+    <div class="user-instructions">
+        <p><strong>Controls:</strong> Mouse wheel to zoom • Drag to pan • Double-click timeline to center • Hover for details</p>
+    </div>
+
+    <div class="timeline-container">
+        <div class="timeline-header" id="timeline-header">
+            <!-- Dynamic column headers will be inserted here -->
+        </div>
+
+        <div id='timeline-div'>
+            <div class="time-labels" id="time-labels"></div>
+            <div class="event-columns" id="event-columns">
+                <!-- Dynamic event columns will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="event-details" class="event-details-panel">
+        <h3>Event Details</h3>
+        <div class="details-content">
+            <p>Hover over events to see details</p>
+        </div>
+    </div>
+<!--
+    <div id="legend" class="legend-panel">
+        <h3>Legend</h3>
+        <div class="legend-content">
+            <div class="legend-item">
+                <div class="legend-color control-msg-color"></div>
+                <span>Control Messages</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color object-msg-color"></div>
+                <span>Object Datagrams</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color subgroup-msg-color"></div>
+                <span>Subgroup Operations</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color fetch-msg-color"></div>
+                <span>Fetch Operations</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color stream-msg-color"></div>
+                <span>Stream Settings</span>
+            </div>
+        </div>
+    </div>
+-->
+    <div id="status-bar" class="status-bar">
+        <span id="status-text">Ready to load MoQ QLOG data</span>
+        <span id="event-count"></span>
+    </div>
+
+    <!-- Event tooltip -->
+    <div id="event-tooltip" class="tooltip">
+        <div class="tooltip-content"></div>
+    </div>
+
+    <script src='https://code.jquery.com/jquery-3.6.0.min.js'></script>
+    <script src='moq-parser.js'></script>
+    <script src='moq-timeline.js'></script>
+</body>
+</html>
