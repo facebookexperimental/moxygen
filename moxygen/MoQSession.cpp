@@ -1744,7 +1744,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   auto serverSetup =
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
   if (!serverSetup.hasValue()) {
-    XLOG(ERR) << "Server setup callback failed sess=" << this;
+    XLOG(ERR) << "Server setup callback failed sess=" << this
+              << " err=" << serverSetup.exception().what();
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }

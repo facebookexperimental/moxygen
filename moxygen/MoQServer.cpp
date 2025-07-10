@@ -71,19 +71,23 @@ void MoQServer::createMoQQuicSession(
 folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
   XLOG(INFO) << "ClientSetup";
   uint64_t negotiatedVersion = 0;
-  // Pick the highest available version of 8, 9, and 10
-  folly::F14FastSet<uint64_t> negotiatedVersionSet(
-      setup.supportedVersions.begin(), setup.supportedVersions.end());
-  if (negotiatedVersionSet.contains(kVersionDraft10)) {
-    negotiatedVersion = kVersionDraft10;
-  } else if (negotiatedVersionSet.contains(kVersionDraft09)) {
-    negotiatedVersion = kVersionDraft09;
-  } else if (negotiatedVersionSet.contains(kVersionDraft08)) {
-    negotiatedVersion = kVersionDraft08;
-  } else {
-    return folly::Try<ServerSetup>(
-        std::runtime_error("Client does not support draft-09 or draft-10"));
+  // Iterate over supported versions and set the highest version within the
+  // range
+  constexpr uint64_t kVersionMin = kVersionDraft08;
+  constexpr uint64_t kVersionMax = kVersionDraft11;
+  uint64_t highestVersion = 0;
+  for (const auto& version : setup.supportedVersions) {
+    if (version >= kVersionMin && version <= kVersionMax) {
+      highestVersion = std::max(highestVersion, version);
+    }
   }
+  if (highestVersion == 0) {
+    return folly::Try<ServerSetup>(std::runtime_error(
+        "Client does not support versions in the range " +
+        std::to_string(getDraftMajorVersion(kVersionMin)) + " to " +
+        std::to_string(getDraftMajorVersion(kVersionMax))));
+  }
+  negotiatedVersion = highestVersion;
 
   // TODO: Make the default MAX_REQUEST_ID configurable and
   // take in the value from ClientSetup
