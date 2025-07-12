@@ -202,7 +202,7 @@ class MoQFlvStreamerClient
     ObjectHeader objHeader = ObjectHeader{
         trackAlias,
         latestAudio_.group++,
-        /*subgroup=*/0,
+        /*subgroupIn=*/0,
         latestAudio_.object,
         AUDIO_STREAM_PRIORITY,
         ObjectStatus::NORMAL,

@@ -369,7 +369,7 @@ class MoQDateServer : public MoQServer,
         group,
         subgroup,
         object,
-        /*priority=*/0,
+        /*priorityIn=*/0,
         ObjectStatus::NORMAL,
         noExtensions(),
         folly::none};
@@ -394,7 +394,7 @@ class MoQDateServer : public MoQServer,
         group,
         0, // subgroup unused for datagrams
         object,
-        /*p=*/0, // priority
+        /*priorityIn=*/0, // priority
         ObjectStatus::NORMAL,
         kExtensions,
         folly::none};

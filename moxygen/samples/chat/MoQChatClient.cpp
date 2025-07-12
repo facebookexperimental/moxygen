@@ -180,9 +180,9 @@ void MoQChatClient::publishLoop() {
           publisher_->objectStream(
               {*chatTrackAlias_,
                nextGroup_++,
-               /*subgroup=*/0,
-               /*id=*/0,
-               /*pri=*/0,
+               /*subgroupIn=*/0,
+               /*idIn=*/0,
+               /*priorityIn=*/0,
                ObjectStatus::END_OF_TRACK},
               nullptr);
           // Publisher=TrackReceiveState which contains a shared_ptr to the
@@ -196,9 +196,9 @@ void MoQChatClient::publishLoop() {
         publisher_->objectStream(
             {*chatTrackAlias_,
              nextGroup_++,
-             /*subgroup=*/0,
-             /*id=*/0,
-             /*pri=*/0,
+             /*subgroupIn=*/0,
+             /*idIn=*/0,
+             /*priorityIn=*/0,
              ObjectStatus::NORMAL},
             folly::IOBuf::copyBuffer(input));
       }
