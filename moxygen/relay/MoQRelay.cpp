@@ -15,6 +15,7 @@ namespace moxygen {
 std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
+    MatchType matchType,
     std::vector<std::shared_ptr<MoQSession>>* sessions) {
   std::shared_ptr<AnnounceNode> nodePtr(
       std::shared_ptr<void>(), &announceRoot_);
@@ -30,6 +31,9 @@ std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
         auto node = std::make_shared<AnnounceNode>(*this);
         nodePtr->children.emplace(name, node);
         nodePtr = std::move(node);
+      } else if (
+          matchType == MatchType::Prefix && nodePtr.get() != &announceRoot_) {
+        return nodePtr;
       } else {
         XLOG(ERR) << "prefix not found in announce tree";
         return nullptr;
@@ -55,7 +59,10 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   }
   std::vector<std::shared_ptr<MoQSession>> sessions;
   auto nodePtr = findNamespaceNode(
-      ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
+      ann.trackNamespace,
+      /*createMissingNodes=*/true,
+      MatchType::Exact,
+      &sessions);
 
   // TODO: store auth for forwarding on future SubscribeAnnounces?
   auto session = MoQSession::getRequestSession();
@@ -86,8 +93,7 @@ folly::coro::Task<void> MoQRelay::announceToSession(
 void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   XLOG(DBG1) << __func__ << " ns=" << trackNamespace;
   // Node would be useful if there were back links
-  auto nodePtr =
-      findNamespaceNode(trackNamespace, /*createMissingNodes=*/false, nullptr);
+  auto nodePtr = findNamespaceNode(trackNamespace);
   XCHECK(nodePtr);
   nodePtr->sourceSession = nullptr;
   for (auto& announcement : nodePtr->announcements) {
@@ -169,8 +175,7 @@ void MoQRelay::unsubscribeAnnounces(
     const TrackNamespace& trackNamespacePrefix,
     std::shared_ptr<MoQSession> session) {
   XLOG(DBG1) << __func__ << " nsp=" << trackNamespacePrefix;
-  auto nodePtr =
-      findNamespaceNode(trackNamespacePrefix, /*createMissingNodes=*/false);
+  auto nodePtr = findNamespaceNode(trackNamespacePrefix);
   if (!nodePtr) {
     // TODO: maybe error?
     return;
@@ -188,7 +193,8 @@ void MoQRelay::unsubscribeAnnounces(
 
 std::shared_ptr<MoQSession> MoQRelay::findAnnounceSession(
     const TrackNamespace& ns) {
-  auto nodePtr = findNamespaceNode(ns, /*createMissingNodes=*/false);
+  auto nodePtr =
+      findNamespaceNode(ns, /*createMissingNodes=*/false, MatchType::Prefix);
   if (!nodePtr) {
     return nullptr;
   }
