@@ -695,12 +695,14 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   }
   length -= requestID->second;
   subscribeRequest.requestID = requestID->first;
-  auto trackAlias = quic::decodeQuicInteger(cursor, length);
-  if (!trackAlias) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  if (getDraftMajorVersion(*version_) < 12) {
+    auto trackAlias = quic::decodeQuicInteger(cursor, length);
+    if (!trackAlias) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= trackAlias->second;
+    subscribeRequest.trackAlias = trackAlias->first;
   }
-  length -= trackAlias->second;
-  subscribeRequest.trackAlias = trackAlias->first;
   auto res = parseFullTrackName(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
@@ -855,6 +857,17 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   }
   length -= requestID->second;
   subscribeOk.requestID = requestID->first;
+  if (getDraftMajorVersion(*version_) >= 12) {
+    auto trackAlias = quic::decodeQuicInteger(cursor, length);
+    if (!trackAlias) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= trackAlias->second;
+    subscribeOk.trackAlias = trackAlias->first;
+  } else {
+    // Session will fill this in
+    subscribeOk.trackAlias = 0;
+  }
 
   auto expires = quic::decodeQuicInteger(cursor, length);
   if (!expires) {
@@ -2226,7 +2239,10 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
   writeVarint(writeBuf, subscribeRequest.requestID.value, size, error);
-  writeVarint(writeBuf, subscribeRequest.trackAlias.value, size, error);
+  if (getDraftMajorVersion(version_.value()) < 12) {
+    XCHECK(subscribeRequest.trackAlias.has_value()) << "Track alias required";
+    writeVarint(writeBuf, subscribeRequest.trackAlias->value, size, error);
+  }
   writeFullTrackName(writeBuf, subscribeRequest.fullTrackName, size, error);
   writeBuf.append(&subscribeRequest.priority, 1);
   size += 1;
@@ -2307,6 +2323,9 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
   writeVarint(writeBuf, subscribeOk.requestID.value, size, error);
+  if (getDraftMajorVersion(*version_) >= 12) {
+    writeVarint(writeBuf, subscribeOk.trackAlias.value, size, error);
+  }
   writeVarint(writeBuf, subscribeOk.expires.count(), size, error);
   auto order = folly::to_underlying(subscribeOk.groupOrder);
   writeBuf.append(&order, 1);

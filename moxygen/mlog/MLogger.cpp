@@ -249,7 +249,8 @@ void MLogger::logSubscribe(
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribe>();
   baseMsg->subscribeId = req.requestID.value;
-  baseMsg->trackAlias = req.trackAlias.value;
+  baseMsg->trackAlias =
+      req.trackAlias ? req.trackAlias->value : req.requestID.value;
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.fullTrackName.trackNamespace.trackNamespace, type);
   baseMsg->trackName =

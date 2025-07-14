@@ -68,19 +68,17 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
              }}),
         version);
   }
-  res = moqFrameWriter.writeSubscribeRequest(
-      writeBuf,
-      SubscribeRequest(
-          {0,
-           0,
-           FullTrackName({TrackNamespace({"hello"}), "world"}),
-           255,
-           GroupOrder::Default,
-           true,
-           LocationType::LatestObject,
-           folly::none,
-           0,
-           getTestTrackRequestParameters(moqFrameWriter)}));
+  auto req = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"hello"}), "world"}),
+      255,
+      GroupOrder::Default,
+      true,
+      LocationType::LatestObject,
+      folly::none,
+      0,
+      getTestTrackRequestParameters(moqFrameWriter));
+  req.trackAlias = TrackAlias(0); // required for draft-11 and below
+  res = moqFrameWriter.writeSubscribeRequest(writeBuf, req);
   res = moqFrameWriter.writeSubscribeUpdate(
       writeBuf,
       SubscribeUpdate(
@@ -94,6 +92,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       writeBuf,
       SubscribeOk(
           {0,
+           TrackAlias(17),
            std::chrono::milliseconds(0),
            GroupOrder::OldestFirst,
            AbsoluteLocation{2, 5},

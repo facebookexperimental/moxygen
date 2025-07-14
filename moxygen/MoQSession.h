@@ -308,7 +308,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   friend class FetchTrackReceiveState;
 
   std::shared_ptr<SubscribeTrackReceiveState> getSubscribeTrackReceiveState(
-      TrackAlias trackAlias);
+      TrackAlias alias);
   std::shared_ptr<FetchTrackReceiveState> getFetchTrackReceiveState(
       RequestID requestID);
 
@@ -446,6 +446,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       subTracks_;
   folly::F14FastMap<
       RequestID,
+      std::shared_ptr<SubscribeTrackReceiveState>,
+      RequestID::hash>
+      pendingSubscribeTracks_;
+
+  folly::F14FastMap<
+      RequestID,
       std::shared_ptr<FetchTrackReceiveState>,
       RequestID::hash>
       fetches_;
@@ -500,6 +506,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
       TrackNamespace::hash>
       subscribeAnnounces_;
+  folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
+      bufferedDatagrams_;
 
   uint64_t closedRequests_{0};
   // TODO: Make this value configurable. maxConcurrentRequests_ represents

@@ -98,9 +98,7 @@ class MoQFlvStreamerClient
       for (auto& sub : subscriptions_) {
         XLOG(DBG1) << "Evaluating to send item: " << item->id
                    << ", type: " << folly::to_underlying(item->type)
-                   << ", to reqID-TrackAlias: "
-                   << sub.second->subscribeOk().requestID << "-"
-                   << sub.second->trackAlias;
+                   << ", to reqID: " << sub.second->subscribeOk().requestID;
 
         if (videoPub_ && sub.second->consumer == videoPub_.get()) {
           if (item->data &&
@@ -124,10 +122,8 @@ class MoQFlvStreamerClient
             // we can have multiple subscribers
             auto itemClone = item->clone();
             moqClient_->getEventBase()->runInEventBaseThread(
-                [self(this),
-                 trackAlias(sub.second->trackAlias),
-                 itemClone(std::move(itemClone))]() mutable {
-                  self->publishAudio(trackAlias, std::move(itemClone));
+                [self(this), itemClone(std::move(itemClone))]() mutable {
+                  self->publishAudio(std::move(itemClone));
                 });
           }
         }
@@ -145,8 +141,7 @@ class MoQFlvStreamerClient
     XLOG(INFO) << "SubscribeRequest track ns="
                << subscribeReq.fullTrackName.trackNamespace
                << " name=" << subscribeReq.fullTrackName.trackName
-               << " requestID=" << subscribeReq.requestID
-               << " track alias=" << subscribeReq.trackAlias;
+               << " requestID=" << subscribeReq.requestID;
     AbsoluteLocation latest;
     // Location mode not supported
     if (subscribeReq.locType != LocationType::LatestObject) {
@@ -156,6 +151,9 @@ class MoQFlvStreamerClient
           "Only location LatestObject mode supported"});
     }
     // Track not available
+    auto alias = subscribeReq.trackAlias.value_or(
+        TrackAlias(subscribeReq.requestID.value));
+    consumer->setTrackAlias(alias);
     auto consumerPtr = consumer.get();
     if (subscribeReq.fullTrackName == fullVideoTrackName_) {
       latest = latestVideo_;
@@ -173,12 +171,12 @@ class MoQFlvStreamerClient
     auto subscription = std::make_shared<Subscription>(
         SubscribeOk{
             subscribeReq.requestID,
+            alias,
             std::chrono::milliseconds(0),
             MoQSession::resolveGroupOrder(
                 GroupOrder::OldestFirst, subscribeReq.groupOrder),
             latest,
             {}},
-        subscribeReq.trackAlias,
         consumerPtr,
         *this);
     subscriptions_.emplace(subscribeReq.requestID, subscription);
@@ -187,9 +185,7 @@ class MoQFlvStreamerClient
     co_return subscription;
   }
 
-  void publishAudio(
-      TrackAlias trackAlias,
-      std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
+  void publishAudio(std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
     if (item->isEOF) {
       XLOG(INFO) << "FLV audio received EOF";
       return;
@@ -200,7 +196,7 @@ class MoQFlvStreamerClient
       return;
     }
     ObjectHeader objHeader = ObjectHeader{
-        trackAlias,
+        TrackAlias(0), // filled by session
         latestAudio_.group++,
         /*subgroupIn=*/0,
         latestAudio_.object,
@@ -284,15 +280,12 @@ class MoQFlvStreamerClient
   struct Subscription : public Publisher::SubscriptionHandle {
     Subscription(
         SubscribeOk ok,
-        TrackAlias alias,
         TrackConsumer* consumerPtr,
         MoQFlvStreamerClient& client)
         : SubscriptionHandle(std::move(ok)),
-          trackAlias(alias),
           consumer(consumerPtr),
           client_(client) {}
 
-    const TrackAlias trackAlias;
     const TrackConsumer* consumer{nullptr};
 
     void subscribeUpdate(SubscribeUpdate) override {}

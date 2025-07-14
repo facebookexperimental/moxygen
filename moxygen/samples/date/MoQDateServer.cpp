@@ -123,8 +123,7 @@ class MoQDateServer : public MoQServer,
     XLOG(INFO) << "SubscribeRequest track ns="
                << subReq.fullTrackName.trackNamespace
                << " name=" << subReq.fullTrackName.trackName
-               << " requestID=" << subReq.requestID
-               << " track alias=" << subReq.trackAlias;
+               << " requestID=" << subReq.requestID;
     if (subReq.fullTrackName != dateTrackName()) {
       co_return folly::makeUnexpected(SubscribeError{
           subReq.requestID,
@@ -141,6 +140,8 @@ class MoQDateServer : public MoQServer,
       // start may be in the past, it will get adjusted forward to latest
     }
 
+    auto alias = subReq.trackAlias.value_or(TrackAlias(subReq.requestID.value));
+    consumer->setTrackAlias(alias);
     auto session = MoQSession::getRequestSession();
     if (!loopRunning_) {
       loopRunning_ = true;

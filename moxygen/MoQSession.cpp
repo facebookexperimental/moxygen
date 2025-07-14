@@ -755,7 +755,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       MoQSession* session,
       FullTrackName fullTrackName,
       RequestID requestID,
-      TrackAlias trackAlias,
+      folly::Optional<TrackAlias> trackAlias,
       Priority subPriority,
       GroupOrder groupOrder,
       uint64_t version,
@@ -772,9 +772,25 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         trackAlias_(trackAlias),
         forward_(forward) {}
 
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias trackAlias) override {
+    if (trackAlias_ && trackAlias != *trackAlias_) {
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::API_ERROR,
+          "Track Alias already set to different value"));
+    }
+    // TODO: there's now way to verify which aliases are already in use from the
+    // publisher side
+    trackAlias_ = trackAlias;
+    return folly::unit;
+  }
+
   void setSubscriptionHandle(
       std::shared_ptr<Publisher::SubscriptionHandle> handle) {
     handle_ = std::move(handle);
+    if (!trackAlias_) {
+      trackAlias_ = handle->subscribeOk().trackAlias;
+    }
     if (pendingSubscribeDone_) {
       // If subscribeDone is called before publishHandler_->subscribe() returns,
       // catch the DONE here and defer it until after we send subscribe OK.
@@ -873,7 +889,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Publisher::SubscriptionHandle> handle_;
-  TrackAlias trackAlias_;
+  folly::Optional<TrackAlias> trackAlias_;
   folly::Optional<SubscribeDone> pendingSubscribeDone_;
   folly::F14FastMap<
       std::pair<uint64_t, uint64_t>,
@@ -981,6 +997,10 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     Priority pubPriority,
     SubgroupIDFormat format,
     bool includeExtensions) {
+  if (!trackAlias_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Must set track alias first"));
+  }
   if (!forward_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR,
@@ -1013,7 +1033,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
       shared_from_this(),
       *stream,
-      trackAlias_,
+      *trackAlias_,
       groupID,
       subgroupID,
       format,
@@ -1123,7 +1143,7 @@ MoQSession::TrackPublisherImpl::groupNotExists(
   }
   return objectStream(
       ObjectHeader(
-          trackAlias_,
+          *trackAlias_,
           groupID,
           subgroupID,
           0,
@@ -1137,6 +1157,10 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::datagram(
     const ObjectHeader& header,
     Payload payload) {
+  if (!trackAlias_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Must set track alias first"));
+  }
   if (!forward_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR,
@@ -1172,7 +1196,7 @@ MoQSession::TrackPublisherImpl::datagram(
   (void)moqFrameWriter_.writeDatagramObject(
       writeBuf,
       ObjectHeader(
-          trackAlias_,
+          *trackAlias_,
           header.group,
           header.id,
           header.id,
@@ -1252,6 +1276,11 @@ class MoQSession::SubscribeTrackReceiveState
     auto contract = folly::coro::makePromiseContract<SubscribeResult>();
     promise_ = std::move(contract.first);
     return std::move(contract.second);
+  }
+
+  TrackAlias getTrackAlias() const {
+    // This is only called when version < 12
+    return TrackAlias(requestID_.value);
   }
 
   [[nodiscard]] const FullTrackName& fullTrackName() const {
@@ -1490,6 +1519,14 @@ void MoQSession::cleanup() {
              "Session Closed"}),
         ResetStreamErrorCode::SESSION_CLOSED);
   }
+  for (auto& [reqID, trackReceiveState] : pendingSubscribeTracks_) {
+    trackReceiveState->subscribeError(
+        {reqID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         "session closed",
+         folly::none});
+  }
+  pendingSubscribeTracks_.clear();
   for (auto& subTrack : subTracks_) {
     subTrack.second->subscribeError(
         {/*TrackReceiveState fills in subId*/ 0,
@@ -1528,6 +1565,7 @@ void MoQSession::cleanup() {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
   }
+  bufferedDatagrams_.clear();
 }
 
 const folly::RequestToken& MoQSession::sessionRequestToken() {
@@ -2307,7 +2345,9 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     auto subHandle = std::move(subscribeResult->value());
     auto subOk = subHandle->subscribeOk();
     subOk.requestID = requestID;
+    // TODO: verify TrackAlias is unique
     subscribeOk(subOk);
+
     trackPublisher->setSubscriptionHandle(std::move(subHandle));
   }
 }
@@ -2396,19 +2436,41 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     logger_->logSubscribeOk(subOk, ControlMessageType::PARSED);
   }
 
-  auto trackAliasIt = subIdToTrackAlias_.find(subOk.requestID);
-  if (trackAliasIt == subIdToTrackAlias_.end()) {
-    // unknown
+  auto it = pendingSubscribeTracks_.find(subOk.requestID);
+  if (it == pendingSubscribeTracks_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << subOk.requestID
               << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto trackReceiveStateIt = subTracks_.find(trackAliasIt->second);
-  if (trackReceiveStateIt != subTracks_.end()) {
-    trackReceiveStateIt->second->subscribeOK(std::move(subOk));
-  } else {
-    XLOG(ERR) << "Missing subTracks_ entry for alias=" << trackAliasIt->second;
+  auto trackReceiveState = std::move(it->second);
+  pendingSubscribeTracks_.erase(it);
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 12) {
+    subOk.trackAlias = trackReceiveState->getTrackAlias();
   }
+
+  auto res = subIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
+  if (!res.second) {
+    XLOG(ERR) << "Request ID already mapped to alias reqID=" << subOk.requestID
+              << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  auto emplaceRes = subTracks_.try_emplace(subOk.trackAlias, trackReceiveState);
+  if (!emplaceRes.second) {
+    XLOG(ERR) << "TrackAlias already in use" << subOk.trackAlias
+              << " sess=" << this;
+    close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
+  }
+  auto datagramsIt = bufferedDatagrams_.find(subOk.trackAlias);
+  if (datagramsIt != bufferedDatagrams_.end()) {
+    for (auto& datagram : datagramsIt->second) {
+      onDatagram(std::move(datagram));
+    }
+    bufferedDatagrams_.erase(datagramsIt);
+  }
+  trackReceiveState->subscribeOK(std::move(subOk));
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
@@ -2418,23 +2480,17 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
     logger_->logSubscribeError(subErr, ControlMessageType::PARSED);
   }
 
-  auto trackAliasIt = subIdToTrackAlias_.find(subErr.requestID);
-  if (trackAliasIt == subIdToTrackAlias_.end()) {
-    // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subErr.requestID
+  auto it = pendingSubscribeTracks_.find(subErr.requestID);
+  if (it == pendingSubscribeTracks_.end()) {
+    XLOG(ERR) << "No matching request ID=" << subErr.requestID
               << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-
-  auto trackReceiveStateIt = subTracks_.find(trackAliasIt->second);
-  if (trackReceiveStateIt != subTracks_.end()) {
-    trackReceiveStateIt->second->subscribeError(std::move(subErr));
-    subTracks_.erase(trackReceiveStateIt);
-    subIdToTrackAlias_.erase(trackAliasIt);
-    checkForCloseOnDrain();
-  } else {
-    XLOG(ERR) << "Missing subTracks_ entry for alias=" << trackAliasIt->second;
-  }
+  auto trackReceiveState = std::move(it->second);
+  pendingSubscribeTracks_.erase(it);
+  trackReceiveState->subscribeError(std::move(subErr));
+  checkForCloseOnDrain();
 }
 
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
@@ -3517,9 +3573,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto fullTrackName = sub.fullTrackName;
   RequestID reqID = getNextRequestID();
   sub.requestID = reqID;
-  TrackAlias alias = reqID.value;
-  sub.trackAlias = alias;
-  TrackAlias trackAlias = sub.trackAlias;
+  TrackAlias trackAlias = reqID.value;
+  sub.trackAlias = trackAlias;
   aliasifyAuthTokens(sub.params);
   auto wres = moqFrameWriter_.writeSubscribeRequest(controlWriteBuf_, sub);
   if (!wres) {
@@ -3534,13 +3589,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     co_return folly::makeUnexpected(subscribeError);
   }
   controlWriteEvent_.signal();
-  auto res = subIdToTrackAlias_.emplace(reqID, trackAlias);
-  XCHECK(res.second) << "Duplicate subscribe ID";
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
       fullTrackName, reqID, callback, logger_);
-  auto subTrack = subTracks_.try_emplace(trackAlias, trackReceiveState);
-  XCHECK(subTrack.second) << "Track alias already in use alias=" << trackAlias
-                          << " sess=" << this;
+  pendingSubscribeTracks_.emplace(reqID, trackReceiveState);
   auto subscribeResult = co_await trackReceiveState->subscribeFuture();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " requestID=" << reqID;
@@ -3553,7 +3604,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   } else {
     MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeSuccess);
     co_return std::make_shared<ReceiverSubscriptionHandle>(
-        std::move(subscribeResult.value()), alias, shared_from_this());
+        std::move(subscribeResult.value()), trackAlias, shared_from_this());
   }
 }
 
@@ -3813,31 +3864,38 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto [standalone, joining] = fetchType(fetch);
   FullTrackName fullTrackName = fetch.fullTrackName;
   if (joining) {
-    auto subIt = subIdToTrackAlias_.find(joining->joiningRequestID);
-    if (subIt == subIdToTrackAlias_.end()) {
+    std::shared_ptr<SubscribeTrackReceiveState> state;
+    auto pendingIt = pendingSubscribeTracks_.find(joining->joiningRequestID);
+    if (pendingIt != pendingSubscribeTracks_.end()) {
+      state = pendingIt->second;
+    } else {
+      auto subIt = subIdToTrackAlias_.find(joining->joiningRequestID);
+      if (subIt != subIdToTrackAlias_.end()) {
+        state = getSubscribeTrackReceiveState(subIt->second);
+      }
+    }
+    if (!state) {
       XLOG(ERR) << "API error, joining FETCH for invalid requestID="
                 << joining->joiningRequestID.value << " sess=" << this;
-      co_return folly::makeUnexpected(FetchError{
+      FetchError fetchError = {
           std::numeric_limits<uint64_t>::max(),
           FetchErrorCode::INTERNAL_ERROR,
-          "Invalid JSID"});
+          "Invalid JSID"};
+      MOQ_SUBSCRIBER_STATS(
+          subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+      co_return folly::makeUnexpected(fetchError);
     }
-    auto stateIt = subTracks_.find(subIt->second);
-    if (stateIt == subTracks_.end()) {
-      XLOG(ERR) << "API error, missing receive state for alias="
-                << subIt->second << " sess=" << this;
-      co_return folly::makeUnexpected(FetchError{
-          std::numeric_limits<uint64_t>::max(),
-          FetchErrorCode::INTERNAL_ERROR,
-          "Missing state"});
-    }
-    if (fullTrackName != stateIt->second->fullTrackName()) {
+
+    if (fullTrackName != state->fullTrackName()) {
       XLOG(ERR) << "API error, track name mismatch=" << fullTrackName << ","
-                << stateIt->second->fullTrackName() << " sess=" << this;
-      co_return folly::makeUnexpected(FetchError{
+                << state->fullTrackName() << " sess=" << this;
+      FetchError fetchError = {
           std::numeric_limits<uint64_t>::max(),
           FetchErrorCode::INTERNAL_ERROR,
-          "Track name mismatch"});
+          "Track name mismatch"};
+      MOQ_SUBSCRIBER_STATS(
+          subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+      co_return folly::makeUnexpected(fetchError);
     }
   }
   auto reqID = getNextRequestID();
@@ -4008,7 +4066,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
   std::unique_ptr<folly::IOBuf> payload;
   if (logger_) {
-    payload = std::move(datagram)->clone();
+    payload = datagram->clone();
   }
 
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
@@ -4044,10 +4102,28 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  readBuf.trimStart(readBuf.chainLength() - remainingLength);
   auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
   XCHECK(alias);
   auto state = getSubscribeTrackReceiveState(*alias).get();
+  if (!state) {
+    constexpr size_t kMaxBufferedTracks = 10;
+    constexpr size_t kMaxBufferedDatagramsPerTrack = 30;
+    if (bufferedDatagrams_.size() > kMaxBufferedTracks) {
+      XLOG(DBG2) << " Too many buffered tracks, dropping datagram for alias="
+                 << *alias << " sess = " << this;
+      return;
+    }
+    auto it = bufferedDatagrams_.emplace(*alias, std::list<Payload>());
+    if (it.first->second.size() > kMaxBufferedDatagramsPerTrack) {
+      XLOG(DBG2)
+          << " Too many buffered datagrams for track, dropping datagram for alias="
+          << *alias << " sess = " << this;
+      return;
+    }
+    it.first->second.push_back(readBuf.move());
+    return;
+  }
+  readBuf.trimStart(readBuf.chainLength() - remainingLength);
   if (logger_) {
     if (getDatagramType(
             *negotiatedVersion_,

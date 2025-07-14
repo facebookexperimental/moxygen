@@ -385,17 +385,10 @@ class MoQFlvReceiverClient
       trackReceiverHandlerAudio_->setFlvWriterShared(flvw_);
       trackReceiverHandlerVideo_->setFlvWriterShared(flvw_);
 
-      const auto requestIDAudio = 0;
-      const auto trackAliasAudio = 1;
-      const auto requestIDVideo = 1;
-      const auto trackAliasVideo = 2;
-
       uint64_t negotiatedVersion =
           *(moqClient_->moqSession_->getNegotiatedVersion());
 
-      SubscribeRequest subAudio{
-          requestIDAudio,
-          trackAliasAudio,
+      auto subAudio = SubscribeRequest::make(
           moxygen::FullTrackName(
               {{TrackNamespace(
                    FLAGS_track_namespace, FLAGS_track_namespace_delimiter)},
@@ -406,10 +399,8 @@ class MoQFlvReceiverClient
           LocationType::LatestObject,
           folly::none,
           0,
-          {getAuthParam(negotiatedVersion, FLAGS_auth)}};
-      SubscribeRequest subVideo{
-          requestIDVideo,
-          trackAliasVideo,
+          {getAuthParam(negotiatedVersion, FLAGS_auth)});
+      auto subVideo = SubscribeRequest::make(
           moxygen::FullTrackName(
               {TrackNamespace(
                    FLAGS_track_namespace, FLAGS_track_namespace_delimiter),
@@ -420,7 +411,7 @@ class MoQFlvReceiverClient
           LocationType::LatestObject,
           folly::none,
           0,
-          {getAuthParam(negotiatedVersion, FLAGS_auth)}};
+          {getAuthParam(negotiatedVersion, FLAGS_auth)});
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(

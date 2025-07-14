@@ -77,11 +77,14 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   subSession_ = MoQSession::getRequestSession();
 
   // Start a Co-routine to send objects back according to spec
+  auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
+  callback->setTrackAlias(alias);
   onSubscribe(sub, callback).scheduleOn(subSession_->getEventBase()).start();
 
   // Return a SubscribeOk
   SubscribeOk subRes{
       sub.requestID,
+      alias,
       std::chrono::milliseconds(kDefaultExpires),
       sub.groupOrder,
       folly::none};
@@ -341,6 +344,8 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
     SubscribeRequest sub,
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
+  auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
+  callback->setTrackAlias(alias);
   // Iterate through Objects
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
@@ -367,7 +372,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
 
       // Build object header
       ObjectHeader header;
-      header.trackIdentifier = TrackIdentifier(sub.trackAlias);
+      header.trackIdentifier = alias;
       header.group = groupNum;
       header.id = objectId;
       header.extensions = extensions;
@@ -391,6 +396,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
   // Return SubscribeOK
   SubscribeOk subRes{
       sub.requestID,
+      alias,
       std::chrono::milliseconds(kDefaultExpires),
       sub.groupOrder,
       folly::none};

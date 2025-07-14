@@ -15,9 +15,7 @@ SubscribeRequest getRequest(
     LocationType locType,
     folly::Optional<AbsoluteLocation> start = folly::none,
     uint64_t endGroup = 0) {
-  return SubscribeRequest{
-      0,
-      0,
+  return SubscribeRequest::make(
       FullTrackName(),
       0,
       GroupOrder::OldestFirst,
@@ -25,7 +23,7 @@ SubscribeRequest getRequest(
       locType,
       start,
       endGroup,
-      {}};
+      {});
 }
 } // namespace
 

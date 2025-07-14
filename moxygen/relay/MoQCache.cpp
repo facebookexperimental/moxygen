@@ -351,6 +351,11 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     track_.isLive = false;
   }
 
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias alias) override {
+    return consumer_->setTrackAlias(std::move(alias));
+  }
+
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
       override {
