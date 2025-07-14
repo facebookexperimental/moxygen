@@ -360,7 +360,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
         seenSetup_ = true;
-        auto res = parseClientSetup(cursor, curFrameLength_);
+        auto res = moqFrameParser_.parseClientSetup(cursor, curFrameLength_);
         if (res) {
           if (callback_) {
             callback_->onClientSetup(std::move(res.value()));
@@ -376,7 +376,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
         seenSetup_ = true;
-        auto res = parseServerSetup(cursor, curFrameLength_);
+        auto res = moqFrameParser_.parseServerSetup(cursor, curFrameLength_);
         if (res) {
           if (callback_) {
             callback_->onServerSetup(std::move(res.value()));

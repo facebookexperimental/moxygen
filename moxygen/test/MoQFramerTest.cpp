@@ -66,11 +66,11 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
 
   void parseAll(folly::io::Cursor& cursor, bool eom) {
     skip(cursor, (getDraftMajorVersion(GetParam()) >= 11) ? 1 : 2);
-    auto r1 = parseClientSetup(cursor, frameLength(cursor));
+    auto r1 = parser_.parseClientSetup(cursor, frameLength(cursor));
     testUnderflowResult(r1);
 
     skip(cursor, (getDraftMajorVersion(GetParam()) >= 11) ? 1 : 2);
-    auto r2 = parseServerSetup(cursor, frameLength(cursor));
+    auto r2 = parser_.parseServerSetup(cursor, frameLength(cursor));
     testUnderflowResult(r2);
 
     skip(cursor, 1);
@@ -342,7 +342,8 @@ TEST(MoQFramerTest, ParseServerSetupQuicIntegerLength) {
 
   auto buf = writeBuf.move();
   folly::io::Cursor cursor(buf.get());
-  parseServerSetup(cursor, sizeToGive);
+  MoQFrameParser parser;
+  parser.parseServerSetup(cursor, sizeToGive);
 }
 
 TEST(MoQFramerTest, ParseServerSetupLengthParseParam) {
@@ -379,7 +380,8 @@ TEST(MoQFramerTest, ParseServerSetupLengthParseParam) {
 
   auto buf = writeBuf.move();
   folly::io::Cursor cursor(buf.get());
-  parseServerSetup(cursor, sizeToGive);
+  MoQFrameParser parser;
+  parser.parseServerSetup(cursor, sizeToGive);
 }
 
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
@@ -672,7 +674,8 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
         ? folly::to_underlying(FrameType::CLIENT_SETUP)
         : folly::to_underlying(FrameType::LEGACY_CLIENT_SETUP);
     EXPECT_EQ(frameType->first, expectedFrameType);
-    auto parseClientSetupResult = parseClientSetup(cursor, frameLength(cursor));
+    auto parseClientSetupResult =
+        parser_.parseClientSetup(cursor, frameLength(cursor));
     EXPECT_TRUE(parseClientSetupResult.hasValue())
         << "Failed to parse client setup for maxRequestID:" << maxRequestID;
     EXPECT_EQ(parseClientSetupResult->supportedVersions.size(), 1);

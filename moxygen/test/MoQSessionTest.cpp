@@ -267,7 +267,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   // GCC barfs when using struct brace initializers inside a coroutine?
   // Helper function to make ClientSetup with MAX_REQUEST_ID
   ClientSetup getClientSetup(uint64_t initialMaxRequestID = 2) {
-    return ClientSetup{
+    ClientSetup setup{
         .supportedVersions = getClientSupportedVersions(),
         .params = {
             SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo", 0, {}},
@@ -281,6 +281,14 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                 "",
                 16,
                 {}}}};
+    if (std::find(
+            setup.supportedVersions.begin(),
+            setup.supportedVersions.end(),
+            kVersionDraft12) != setup.supportedVersions.end()) {
+      setup.params.push_back(getAuthParam(
+          kVersionDraft12, "auth_token_value", 0, AuthToken::Register));
+    }
+    return setup;
   }
 
   std::vector<uint64_t> getClientSupportedVersions() {
@@ -380,6 +388,7 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   serverSession_->setPublishHandler(serverPublisher);
   serverSession_->setSubscribeHandler(serverSubscriber);
   serverSession_->start();
+  clientSession_->setServerMaxTokenCacheSizeGuess(1024);
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
 
