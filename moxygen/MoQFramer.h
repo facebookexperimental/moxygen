@@ -491,10 +491,10 @@ uint64_t getMaxCacheDurationParamKey(uint64_t version);
 
 enum class LocationType : uint8_t {
   NextGroupStart = 1,
-  LatestObject = 2,
+  LargestObject = 2,
   AbsoluteStart = 3,
   AbsoluteRange = 4,
-  LatestGroup = 250,
+  LargestGroup = 250,
 };
 
 std::string toString(LocationType locType);
@@ -672,7 +672,7 @@ struct SubscribeRequest {
       uint8_t priority = kDefaultPriority,
       GroupOrder groupOrder = GroupOrder::Default,
       bool forward = true,
-      LocationType locType = LocationType::LatestGroup,
+      LocationType locType = LocationType::LargestGroup,
       folly::Optional<AbsoluteLocation> start = folly::none,
       uint64_t endGroup = 0,
       std::vector<TrackRequestParameter> params = {}) {
@@ -715,8 +715,8 @@ struct SubscribeOk {
   TrackAlias trackAlias; // >= v12
   std::chrono::milliseconds expires;
   GroupOrder groupOrder;
-  // context exists is inferred from presence of latest
-  folly::Optional<AbsoluteLocation> latest;
+  // context exists is inferred from presence of largest
+  folly::Optional<AbsoluteLocation> largest;
   std::vector<TrackRequestParameter> params;
 };
 
@@ -776,7 +776,7 @@ struct TrackStatus {
   RequestID requestID;
   FullTrackName fullTrackName;
   TrackStatusCode statusCode;
-  folly::Optional<AbsoluteLocation> latestGroupAndObject;
+  folly::Optional<AbsoluteLocation> largestGroupAndObject;
   std::vector<TrackRequestParameter> params; // draft-11 and later
 };
 

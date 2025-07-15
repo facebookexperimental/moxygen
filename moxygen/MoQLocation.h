@@ -20,7 +20,7 @@ inline SubscribeRange toSubscribeRange(
     folly::Optional<AbsoluteLocation> start,
     folly::Optional<AbsoluteLocation> end,
     LocationType locType,
-    folly::Optional<AbsoluteLocation> latest) {
+    folly::Optional<AbsoluteLocation> largest) {
   XLOG(DBG1) << "m=" << toString(locType)
              << (start ? folly::to<std::string>(
                              " g=", start->group, " o=", start->object)
@@ -30,12 +30,12 @@ inline SubscribeRange toSubscribeRange(
   switch (locType) {
     case LocationType::NextGroupStart:
       result.start.group =
-          (latest.has_value() ? latest->group + 1 : kLocationMin.group);
+          (largest.has_value() ? largest->group + 1 : kLocationMin.group);
       result.start.object = 0;
       break;
-    case LocationType::LatestObject:
-      result.start.group = latest.value_or(kLocationMin).group;
-      result.start.object = latest ? latest->object + 1 : kLocationMin.object;
+    case LocationType::LargestObject:
+      result.start.group = largest.value_or(kLocationMin).group;
+      result.start.object = largest ? largest->object + 1 : kLocationMin.object;
       break;
     case LocationType::AbsoluteRange:
       XCHECK(end);
@@ -46,13 +46,13 @@ inline SubscribeRange toSubscribeRange(
       XCHECK(start);
       result.start.group = start->group;
       result.start.object = start->object;
-      if (latest && result.start < *latest) {
-        XLOG(DBG2) << "Adjusting past start to latest + 1";
-        result.start = AbsoluteLocation{latest->group, latest->object + 1};
+      if (largest && result.start < *largest) {
+        XLOG(DBG2) << "Adjusting past start to largest + 1";
+        result.start = AbsoluteLocation{largest->group, largest->object + 1};
       }
       break;
-    case LocationType::LatestGroup:
-      result.start.group = latest.value_or(kLocationMin).group;
+    case LocationType::LargestGroup:
+      result.start.group = largest.value_or(kLocationMin).group;
       result.start.object = 0;
       break;
   }
@@ -63,12 +63,12 @@ inline SubscribeRange toSubscribeRange(
 
 inline SubscribeRange toSubscribeRange(
     const SubscribeRequest& sub,
-    folly::Optional<AbsoluteLocation> latest) {
+    folly::Optional<AbsoluteLocation> largest) {
   folly::Optional<AbsoluteLocation> end;
   if (sub.endGroup > 0) {
     end = AbsoluteLocation({sub.endGroup, 0});
   }
-  return toSubscribeRange(sub.start, end, sub.locType, latest);
+  return toSubscribeRange(sub.start, end, sub.locType, largest);
 }
 
 } // namespace moxygen

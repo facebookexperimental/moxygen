@@ -396,7 +396,7 @@ class MoQFlvReceiverClient
           0,
           GroupOrder::OldestFirst,
           true,
-          LocationType::LatestObject,
+          LocationType::LargestObject,
           folly::none,
           0,
           {getAuthParam(negotiatedVersion, FLAGS_auth)});
@@ -408,7 +408,7 @@ class MoQFlvReceiverClient
           0,
           GroupOrder::OldestFirst,
           true,
-          LocationType::LatestObject,
+          LocationType::LargestObject,
           folly::none,
           0,
           {getAuthParam(negotiatedVersion, FLAGS_auth)});
@@ -422,10 +422,10 @@ class MoQFlvReceiverClient
         audioSubscribeHandle_ = std::move(trackAudio.value());
         XLOG(DBG1) << "Audio requestID="
                    << audioSubscribeHandle_->subscribeOk().requestID;
-        auto latest = audioSubscribeHandle_->subscribeOk().latest;
-        if (latest) {
-          XLOG(INFO) << "Audio Latest={" << latest->group << ", "
-                     << latest->object << "}";
+        auto largest = audioSubscribeHandle_->subscribeOk().largest;
+        if (largest) {
+          XLOG(INFO) << "Audio Largest={" << largest->group << ", "
+                     << largest->object << "}";
         }
       } else {
         XLOG(WARNING) << "Audio SubscribeError id="
@@ -443,10 +443,10 @@ class MoQFlvReceiverClient
         videoSubscribeHandle_ = std::move(trackVideo.value());
         XLOG(DBG1) << "Video requestID="
                    << videoSubscribeHandle_->subscribeOk().requestID;
-        auto latest = videoSubscribeHandle_->subscribeOk().latest;
-        if (latest) {
-          XLOG(INFO) << "Video Latest={" << latest->group << ", "
-                     << latest->object << "}";
+        auto largest = videoSubscribeHandle_->subscribeOk().largest;
+        if (largest) {
+          XLOG(INFO) << "Video Largest={" << largest->group << ", "
+                     << largest->object << "}";
         }
       } else {
         XLOG(WARNING) << "Video SubscribeError id="

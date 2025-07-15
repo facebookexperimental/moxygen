@@ -19,8 +19,8 @@ class MoQForwarder : public TrackConsumer {
  public:
   explicit MoQForwarder(
       FullTrackName ftn,
-      folly::Optional<AbsoluteLocation> latest = folly::none)
-      : fullTrackName_(std::move(ftn)), latest_(std::move(latest)) {}
+      folly::Optional<AbsoluteLocation> largest = folly::none)
+      : fullTrackName_(std::move(ftn)), largest_(std::move(largest)) {}
 
   const FullTrackName& fullTrackName() const {
     return fullTrackName_;
@@ -30,12 +30,12 @@ class MoQForwarder : public TrackConsumer {
     groupOrder_ = order;
   }
 
-  void setLatest(AbsoluteLocation latest) {
-    latest_ = latest;
+  void setLargest(AbsoluteLocation largest) {
+    largest_ = largest;
   }
 
-  folly::Optional<AbsoluteLocation> latest() {
-    return latest_;
+  folly::Optional<AbsoluteLocation> largest() {
+    return largest_;
   }
 
   class Callback {
@@ -90,14 +90,14 @@ class MoQForwarder : public TrackConsumer {
           pubGroupOrder, subscribeOk_->groupOrder);
     }
 
-    void updateLatest(AbsoluteLocation latest) {
-      subscribeOk_->latest = latest;
+    void updateLargest(AbsoluteLocation largest) {
+      subscribeOk_->largest = largest;
     }
 
     void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
       // TODO: Validate update subscription range conforms to SUBSCRIBE_UPDATE
       // rules
-      // If it moved end before latest, then the next published object will
+      // If it moved end before largest, then the next published object will
       // generate SUBSCRIBE_DONE
       range.start = subscribeUpdate.start;
       range.end = {subscribeUpdate.endGroup, 0};
@@ -144,11 +144,11 @@ class MoQForwarder : public TrackConsumer {
                 trackAlias_.value_or(TrackAlias(subReq.requestID.value))),
             std::chrono::milliseconds(0),
             MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
-            latest_,
+            largest_,
             {}},
         std::move(session),
         subReq.requestID,
-        toSubscribeRange(subReq, latest_),
+        toSubscribeRange(subReq, largest_),
         std::move(consumer),
         subReq.forward);
     subscribers_.emplace(sessionPtr, subscriber);
@@ -175,27 +175,27 @@ class MoQForwarder : public TrackConsumer {
           FetchErrorCode::INTERNAL_ERROR,
           "Incorrect RequestID for Track"});
     }
-    if (!subIt->second->subscribeOk().latest) {
+    if (!subIt->second->subscribeOk().largest) {
       // No content exists, fetch error
       // Relay caller verifies upstream SubscribeOK has been processed before
       // calling resolveJoiningFetch()
       return folly::makeUnexpected(FetchError{
-          RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No latest"});
+          RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No largest"});
     }
     CHECK(
         joining.fetchType == FetchType::RELATIVE_JOINING ||
         joining.fetchType == FetchType::ABSOLUTE_JOINING);
-    auto& latest = *subIt->second->subscribeOk().latest;
+    auto& largest = *subIt->second->subscribeOk().largest;
     if (joining.fetchType == FetchType::RELATIVE_JOINING) {
-      AbsoluteLocation start{latest};
+      AbsoluteLocation start{largest};
       start.group -=
           (start.group >= joining.joiningStart) ? joining.joiningStart : 0;
       start.object = 0;
-      return SubscribeRange{start, {latest.group, latest.object + 1}};
+      return SubscribeRange{start, {largest.group, largest.object + 1}};
     } else {
       // ABSOLUTE_JOINING
       AbsoluteLocation start{joining.joiningStart, 0};
-      return SubscribeRange{start, {latest.group, latest.object + 1}};
+      return SubscribeRange{start, {largest.group, largest.object + 1}};
     }
   }
 
@@ -240,19 +240,19 @@ class MoQForwarder : public TrackConsumer {
     }
   }
 
-  void updateLatest(uint64_t group, uint64_t object = 0) {
+  void updateLargest(uint64_t group, uint64_t object = 0) {
     AbsoluteLocation now{group, object};
-    if (!latest_ || now > *latest_) {
-      latest_ = now;
+    if (!largest_ || now > *largest_) {
+      largest_ = now;
     }
   }
 
   bool checkRange(const Subscriber& sub) {
-    XCHECK(latest_);
-    if (*latest_ < sub.range.start) {
+    XCHECK(largest_);
+    if (*largest_ < sub.range.start) {
       // future
       return false;
-    } else if (*latest_ > sub.range.end) {
+    } else if (*largest_ > sub.range.end) {
       // now past, send subscribeDone
       // TOOD: maybe this is too early for a relay.
       removeSession(
@@ -286,7 +286,7 @@ class MoQForwarder : public TrackConsumer {
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
       override {
-    updateLatest(groupID, 0);
+    updateLargest(groupID, 0);
     auto subgroupForwarder = std::make_shared<SubgroupForwarder>(
         *this, groupID, subgroupID, priority);
     SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
@@ -314,7 +314,7 @@ class MoQForwarder : public TrackConsumer {
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
       Payload payload) override {
-    updateLatest(header.group, header.id);
+    updateLargest(header.group, header.id);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
@@ -330,7 +330,7 @@ class MoQForwarder : public TrackConsumer {
       uint64_t subgroup,
       Priority pri,
       Extensions extensions) override {
-    updateLatest(groupID, 0);
+    updateLargest(groupID, 0);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
@@ -344,7 +344,7 @@ class MoQForwarder : public TrackConsumer {
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
       Payload payload) override {
-    updateLatest(header.group, header.id);
+    updateLargest(header.group, header.id);
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       if (!checkRange(*sub) || !sub->checkShouldForward()) {
         return;
@@ -374,7 +374,7 @@ class MoQForwarder : public TrackConsumer {
             const std::shared_ptr<Subscriber>& sub,
             const std::shared_ptr<SubgroupConsumer>&)> fn) {
       forwarder_.forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-        if (forwarder_.latest_ && forwarder_.checkRange(*sub)) {
+        if (forwarder_.largest_ && forwarder_.checkRange(*sub)) {
           auto subgroupConsumerIt = sub->subgroups.find(identifier_);
           if (subgroupConsumerIt == sub->subgroups.end()) {
             if (!sub->checkShouldForward()) {
@@ -427,7 +427,7 @@ class MoQForwarder : public TrackConsumer {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
       }
-      forwarder_.updateLatest(identifier_.group, objectID);
+      forwarder_.updateLargest(identifier_.group, objectID);
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
@@ -454,7 +454,7 @@ class MoQForwarder : public TrackConsumer {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
       }
-      forwarder_.updateLatest(identifier_.group, objectID);
+      forwarder_.updateLargest(identifier_.group, objectID);
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
@@ -478,7 +478,7 @@ class MoQForwarder : public TrackConsumer {
         Payload initialPayload,
         Extensions extensions) override {
       // TODO: use a shared class for object publish state validation
-      forwarder_.updateLatest(identifier_.group, objectID);
+      forwarder_.updateLargest(identifier_.group, objectID);
       if (currentObjectLength_) {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -508,7 +508,7 @@ class MoQForwarder : public TrackConsumer {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
       }
-      forwarder_.updateLatest(identifier_.group, endOfGroupObjectID);
+      forwarder_.updateLargest(identifier_.group, endOfGroupObjectID);
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
@@ -529,7 +529,7 @@ class MoQForwarder : public TrackConsumer {
         return folly::makeUnexpected(MoQPublishError(
             MoQPublishError::API_ERROR, "Still publishing previous object"));
       }
-      forwarder_.updateLatest(identifier_.group, endOfTrackObjectID);
+      forwarder_.updateLargest(identifier_.group, endOfTrackObjectID);
       forEachSubscriberSubgroup(
           [&](const std::shared_ptr<Subscriber>& sub,
               const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
@@ -620,7 +620,7 @@ class MoQForwarder : public TrackConsumer {
       SubgroupIdentifier::hash>
       subgroups_;
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
-  folly::Optional<AbsoluteLocation> latest_;
+  folly::Optional<AbsoluteLocation> largest_;
   std::shared_ptr<Callback> callback_;
 };
 

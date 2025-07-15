@@ -90,10 +90,10 @@ class MoQCache {
     folly::F14FastMap<uint64_t, std::unique_ptr<CacheGroup>> groups;
     bool isLive{false};
     bool endOfTrack{false};
-    folly::Optional<AbsoluteLocation> latestGroupAndObject;
+    folly::Optional<AbsoluteLocation> largestGroupAndObject;
     FetchInProgresSet fetchInProgress;
 
-    folly::Expected<folly::Unit, MoQPublishError> updateLatest(
+    folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
         bool endOfTrack = false);
     CacheGroup& getOrCreateGroup(uint64_t groupID);

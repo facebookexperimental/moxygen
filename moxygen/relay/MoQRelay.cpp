@@ -236,9 +236,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     }
     subReq.priority = kDefaultUpstreamPriority;
     subReq.groupOrder = GroupOrder::Default;
-    // We only subscribe upstream with LatestObject. This is to satisfy other
+    // We only subscribe upstream with LargestObject. This is to satisfy other
     // subscribers that join with narrower filters
-    subReq.locType = LocationType::LatestObject;
+    subReq.locType = LocationType::LargestObject;
     auto forwarder =
         std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
     forwarder->setCallback(shared_from_this());
@@ -272,10 +272,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
                "upstream subscribe failed: ", subRes.error().reasonPhrase)}));
     }
     g.dismiss();
-    auto latest = subRes.value()->subscribeOk().latest;
-    if (latest) {
-      forwarder->updateLatest(latest->group, latest->object);
-      subscriber->updateLatest(*latest);
+    auto largest = subRes.value()->subscribeOk().largest;
+    if (largest) {
+      forwarder->updateLargest(largest->group, largest->object);
+      subscriber->updateLargest(*largest);
     }
     auto pubGroupOrder = subRes.value()->subscribeOk().groupOrder;
     forwarder->setGroupOrder(pubGroupOrder);
@@ -294,13 +294,13 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       co_await subscriptionIt->second.promise.getFuture();
     }
     auto& forwarder = subscriptionIt->second.forwarder;
-    if (forwarder->latest() && subReq.locType == LocationType::AbsoluteRange &&
-        subReq.endGroup < forwarder->latest()->group) {
+    if (forwarder->largest() && subReq.locType == LocationType::AbsoluteRange &&
+        subReq.endGroup < forwarder->largest()->group) {
       co_return folly::makeUnexpected(SubscribeError{
           subReq.requestID,
           SubscribeErrorCode::INVALID_RANGE,
           "Range in the past, use FETCH"});
-      // start may be in the past, it will get adjusted forward to latest
+      // start may be in the past, it will get adjusted forward to largest
     }
     co_return subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));

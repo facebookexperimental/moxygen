@@ -43,13 +43,13 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
 
 auto makeSubscribeOkResult(
     const SubscribeRequest& sub,
-    const folly::Optional<AbsoluteLocation>& latest = folly::none) {
+    const folly::Optional<AbsoluteLocation>& largest = folly::none) {
   return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
       sub.requestID,
       TrackAlias(sub.requestID.value),
       std::chrono::milliseconds(0),
       GroupOrder::OldestFirst,
-      latest,
+      largest,
       {}});
 }
 
@@ -359,7 +359,7 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       0,
       GroupOrder::OldestFirst,
       true,
-      LocationType::LatestObject,
+      LocationType::LargestObject,
       folly::none,
       0,
       {}};

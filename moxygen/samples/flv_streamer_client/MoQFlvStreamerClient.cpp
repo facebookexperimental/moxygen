@@ -142,13 +142,13 @@ class MoQFlvStreamerClient
                << subscribeReq.fullTrackName.trackNamespace
                << " name=" << subscribeReq.fullTrackName.trackName
                << " requestID=" << subscribeReq.requestID;
-    AbsoluteLocation latest;
+    AbsoluteLocation largest;
     // Location mode not supported
-    if (subscribeReq.locType != LocationType::LatestObject) {
+    if (subscribeReq.locType != LocationType::LargestObject) {
       co_return folly::makeUnexpected(SubscribeError{
           subscribeReq.requestID,
           SubscribeErrorCode::NOT_SUPPORTED,
-          "Only location LatestObject mode supported"});
+          "Only location LargestObject mode supported"});
     }
     // Track not available
     auto alias = subscribeReq.trackAlias.value_or(
@@ -156,10 +156,10 @@ class MoQFlvStreamerClient
     consumer->setTrackAlias(alias);
     auto consumerPtr = consumer.get();
     if (subscribeReq.fullTrackName == fullVideoTrackName_) {
-      latest = latestVideo_;
+      largest = largestVideo_;
       videoPub_ = std::move(consumer);
     } else if (subscribeReq.fullTrackName == fullAudioTrackName_) {
-      latest = latestAudio_;
+      largest = largestAudio_;
       audioPub_ = std::move(consumer);
     } else {
       co_return folly::makeUnexpected(SubscribeError{
@@ -175,7 +175,7 @@ class MoQFlvStreamerClient
             std::chrono::milliseconds(0),
             MoQSession::resolveGroupOrder(
                 GroupOrder::OldestFirst, subscribeReq.groupOrder),
-            latest,
+            largest,
             {}},
         consumerPtr,
         *this);
@@ -197,9 +197,9 @@ class MoQFlvStreamerClient
     }
     ObjectHeader objHeader = ObjectHeader{
         TrackAlias(0), // filled by session
-        latestAudio_.group++,
+        largestAudio_.group++,
         /*subgroupIn=*/0,
-        latestAudio_.object,
+        largestAudio_.object,
         AUDIO_STREAM_PRIORITY,
         ObjectStatus::NORMAL,
         std::move(moqMiObj->extensions)};
@@ -213,11 +213,11 @@ class MoQFlvStreamerClient
     if (item->isEOF) {
       XLOG(INFO) << "FLV video received EOF";
       if (videoPub_ && videoSgPub_) {
-        videoSgPub_->endOfGroup(latestVideo_.object);
+        videoSgPub_->endOfGroup(largestVideo_.object);
         videoSgPub_.reset();
 
-        latestVideo_.group++;
-        latestVideo_.object = 0;
+        largestVideo_.group++;
+        largestVideo_.object = 0;
       }
       return;
     }
@@ -237,14 +237,14 @@ class MoQFlvStreamerClient
     if (isIdr) {
       if (videoSgPub_) {
         // Close previous subgroup
-        videoSgPub_->endOfGroup(latestVideo_.object);
+        videoSgPub_->endOfGroup(largestVideo_.object);
         videoSgPub_.reset();
-        latestVideo_.group++;
-        latestVideo_.object = 0;
+        largestVideo_.group++;
+        largestVideo_.object = 0;
       }
       // Open new subgroup
       auto res = videoPub_->beginSubgroup(
-          latestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
+          largestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
       if (!res) {
         XLOG(ERR) << "Error creating subgroup";
       }
@@ -253,11 +253,11 @@ class MoQFlvStreamerClient
 
     // Send video data
     if (videoSgPub_) {
-      XLOG(DBG1) << "Sending video frame. grp-obj: " << latestVideo_.group
-                 << "-" << latestVideo_.object << ". Payload size: "
+      XLOG(DBG1) << "Sending video frame. grp-obj: " << largestVideo_.group
+                 << "-" << largestVideo_.object << ". Payload size: "
                  << moqMiObj->payload->computeChainDataLength();
       videoSgPub_->object(
-          latestVideo_.object++,
+          largestVideo_.object++,
           std::move(moqMiObj->payload),
           std::move(moqMiObj->extensions));
     } else {
@@ -274,8 +274,8 @@ class MoQFlvStreamerClient
   FullTrackName fullVideoTrackName_;
   FullTrackName fullAudioTrackName_;
 
-  AbsoluteLocation latestVideo_{0, 0};
-  AbsoluteLocation latestAudio_{0, 0};
+  AbsoluteLocation largestVideo_{0, 0};
+  AbsoluteLocation largestAudio_{0, 0};
 
   struct Subscription : public Publisher::SubscriptionHandle {
     Subscription(

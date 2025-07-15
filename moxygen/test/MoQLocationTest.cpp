@@ -27,9 +27,9 @@ SubscribeRequest getRequest(
 }
 } // namespace
 
-TEST(Location, LatestObject) {
+TEST(Location, LargestObject) {
   auto range = toSubscribeRange(
-      getRequest(LocationType::LatestObject), AbsoluteLocation({19, 77}));
+      getRequest(LocationType::LargestObject), AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 19);
   EXPECT_EQ(range.start.object, 78);
   EXPECT_EQ(range.end, kLocationMax);
@@ -43,9 +43,9 @@ TEST(Location, NextGroupStart) {
   EXPECT_EQ(range.end, kLocationMax);
 }
 
-TEST(Location, LatestGroup) {
+TEST(Location, LargestGroup) {
   auto range = toSubscribeRange(
-      getRequest(LocationType::LatestGroup), AbsoluteLocation({19, 77}));
+      getRequest(LocationType::LargestGroup), AbsoluteLocation({19, 77}));
   EXPECT_EQ(range.start.group, 19);
   EXPECT_EQ(range.start.object, 0);
   EXPECT_EQ(range.end, kLocationMax);
@@ -60,7 +60,7 @@ TEST(Location, AbsoluteStart) {
   EXPECT_EQ(range.end, kLocationMax);
 }
 
-TEST(Location, AbsoluteStartBehindLatest) {
+TEST(Location, AbsoluteStartBehindLargest) {
   auto range = toSubscribeRange(
       getRequest(LocationType::AbsoluteStart, AbsoluteLocation({1, 2})),
       AbsoluteLocation({19, 77}));
@@ -79,7 +79,7 @@ TEST(Location, AbsoluteRange) {
   EXPECT_EQ(range.end.object, 0);
 }
 
-TEST(Location, AbsoluteRangeBehindLatest) {
+TEST(Location, AbsoluteRangeBehindLargest) {
   auto range = toSubscribeRange(
       getRequest(LocationType::AbsoluteRange, AbsoluteLocation({1, 2}), 3),
       AbsoluteLocation({19, 77}));
