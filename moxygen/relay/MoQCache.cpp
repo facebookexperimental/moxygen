@@ -155,9 +155,9 @@ class MoQCache::FetchHandle : public Publisher::FetchHandle {
 };
 
 folly::Expected<folly::Unit, MoQPublishError>
-MoQCache::CacheTrack::updateLatest(AbsoluteLocation current, bool eot) {
+MoQCache::CacheTrack::updateLargest(AbsoluteLocation current, bool eot) {
   // Check for a new largest object past the old endOfTrack
-  if (!latestGroupAndObject || current > *latestGroupAndObject) {
+  if (!largestGroupAndObject || current > *largestGroupAndObject) {
     if (endOfTrack) {
       XLOG(ERR) << "Malformed track, end of track set, but new largest object";
       return folly::makeUnexpected(
@@ -165,8 +165,8 @@ MoQCache::CacheTrack::updateLatest(AbsoluteLocation current, bool eot) {
     } else {
       endOfTrack = eot;
     }
-    latestGroupAndObject = current;
-  } else if (eot && current != *latestGroupAndObject) {
+    largestGroupAndObject = current;
+  } else if (eot && current != *largestGroupAndObject) {
     // End of track is not the largest
     XLOG(ERR) << "Malformed track, eot is not the largest object";
     return folly::makeUnexpected(
@@ -207,7 +207,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       Payload payload,
       Extensions ext,
       bool finSub) override {
-    auto res = cacheTrack_.updateLatest({group_, objID});
+    auto res = cacheTrack_.updateLargest({group_, objID});
     if (!res) {
       return res;
     }
@@ -222,7 +222,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError>
   objectNotExists(uint64_t objID, Extensions ext, bool finSub) override {
-    auto res = cacheTrack_.updateLatest({group_, objID});
+    auto res = cacheTrack_.updateLargest({group_, objID});
     if (!res) {
       return res;
     }
@@ -239,7 +239,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       uint64_t length,
       Payload initialPayload,
       Extensions extensions) override {
-    auto res = cacheTrack_.updateLatest({group_, objectID});
+    auto res = cacheTrack_.updateLargest({group_, objectID});
     if (!res) {
       return res;
     }
@@ -277,7 +277,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
       uint64_t endOfGroupObjectID,
       Extensions extensions) override {
-    auto res = cacheTrack_.updateLatest({group_, endOfGroupObjectID});
+    auto res = cacheTrack_.updateLargest({group_, endOfGroupObjectID});
     if (!res) {
       return res;
     }
@@ -297,7 +297,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
       uint64_t endOfTrackObjectID,
       Extensions extensions) override {
-    auto res = cacheTrack_.updateLatest({group_, endOfTrackObjectID}, true);
+    auto res = cacheTrack_.updateLargest({group_, endOfTrackObjectID}, true);
     if (!res) {
       return res;
     }
@@ -380,7 +380,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
       Payload payload) override {
-    auto res = track_.updateLatest(
+    auto res = track_.updateLargest(
         {header.group, header.id}, isEndOfTrack(header.status));
     if (!res) {
       return res;
@@ -402,7 +402,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
       Payload payload) override {
-    auto res = track_.updateLatest(
+    auto res = track_.updateLargest(
         {header.group, header.id}, isEndOfTrack(header.status));
     if (!res) {
       return res;
@@ -426,7 +426,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       uint64_t subgroup,
       Priority pri,
       Extensions extensions) override {
-    auto res = track_.updateLatest({groupID, 0});
+    auto res = track_.updateLargest({groupID, 0});
     if (!res) {
       return res;
     }
@@ -685,7 +685,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       auto& group = track_.getOrCreateGroup(start_.group);
       if (start_.group < current.group) {
         if (start_.object == 0) {
-          track_.updateLatest({start_.group, 0});
+          track_.updateLargest({start_.group, 0});
           group.cacheMissingStatus(0, ObjectStatus::GROUP_NOT_EXIST);
         } else {
           group.endOfGroup = true;
@@ -693,7 +693,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
         start_.group++;
         start_.object = 0;
       } else {
-        track_.updateLatest({start_.group, start_.object});
+        track_.updateLargest({start_.group, start_.object});
         group.cacheMissingStatus(start_.object, ObjectStatus::OBJECT_NOT_EXIST);
         start_.object++;
       }
@@ -717,7 +717,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       updateInProgress();
       return cacheRes;
     }
-    auto res = track_.updateLatest({groupID, objectID}, isEndOfTrack(status));
+    auto res = track_.updateLargest({groupID, objectID}, isEndOfTrack(status));
     if (!res) {
       updateInProgress();
       return res;
@@ -776,14 +776,14 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     // TODO: handle case where track.largestGroupAndObject is an END_OF_GROUP
     // or END_OF_TRACK
   }
-  if (track.latestGroupAndObject &&
-      (track.isLive || last <= *track.latestGroupAndObject)) {
+  if (track.largestGroupAndObject &&
+      (track.isLive || last <= *track.largestGroupAndObject)) {
     // we can immediately return fetch OK
     XLOG(DBG1) << "Live track or known past data, return FetchOK";
     AbsoluteLocation largestInFetch = standalone->end;
     bool isEndOfTrack = false;
-    if (standalone->end >= *track.latestGroupAndObject) {
-      standalone->end = *track.latestGroupAndObject;
+    if (standalone->end >= *track.largestGroupAndObject) {
+      standalone->end = *track.largestGroupAndObject;
       standalone->end.object++;
       largestInFetch = standalone->end;
       isEndOfTrack = track.endOfTrack;
@@ -839,7 +839,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     consumer->reset(ResetStreamErrorCode::CANCELLED);
   });
   while (!token.isCancellationRequested() && current < standalone->end &&
-         (!track.endOfTrack || current <= *track.latestGroupAndObject)) {
+         (!track.endOfTrack || current <= *track.largestGroupAndObject)) {
     auto writeback = track.fetchInProgress.getValue(current);
     if (writeback) {
       XLOG(DBG1) << "fetchInProgress for {" << current.group << ","
@@ -960,15 +960,15 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   }
   if (!fetchHandle) {
     XLOG(DBG1) << "Fetch completed entirely from cache";
-    // test for empty range with no latest group and object?
+    // test for empty range with no largest group and object?
     if (servedOneObject) {
       if (standalone->end.object == 0) {
         standalone->end.group--;
       }
       bool endOfTrack = false;
-      if (track.endOfTrack && standalone->end >= *track.latestGroupAndObject) {
+      if (track.endOfTrack && standalone->end >= *track.largestGroupAndObject) {
         endOfTrack = true;
-        standalone->end = *track.latestGroupAndObject;
+        standalone->end = *track.largestGroupAndObject;
       }
       co_return std::make_shared<FetchHandle>(FetchOk(
           {fetch.requestID,

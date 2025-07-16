@@ -442,10 +442,10 @@ void MLogger::logSubscribeOk(
   baseMsg->expires = req.expires.count();
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
 
-  if (req.latest.has_value()) {
+  if (req.largest.has_value()) {
     baseMsg->contentExists = 1;
-    baseMsg->largestGroupId = req.latest.value().group;
-    baseMsg->largestObjectId = req.latest.value().object;
+    baseMsg->largestGroupId = req.largest.value().group;
+    baseMsg->largestObjectId = req.largest.value().object;
   } else {
     baseMsg->contentExists = 0;
   }
@@ -558,9 +558,9 @@ void MLogger::logTrackStatus(
   baseMsg->trackName =
       convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
   baseMsg->statusCode = static_cast<uint64_t>(req.statusCode);
-  if (req.latestGroupAndObject.has_value()) {
-    baseMsg->lastGroupId = req.latestGroupAndObject.value().group;
-    baseMsg->lastObjectId = req.latestGroupAndObject.value().object;
+  if (req.largestGroupAndObject.has_value()) {
+    baseMsg->lastGroupId = req.largestGroupAndObject.value().group;
+    baseMsg->lastObjectId = req.largestGroupAndObject.value().object;
   }
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));

@@ -135,7 +135,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
       /*priority=*/0,
       /*groupOrder=*/GroupOrder::OldestFirst,
       /*forward=*/true,
-      /*locType=*/LocationType::LatestObject,
+      /*locType=*/LocationType::LargestObject,
       /*start=*/folly::none,
       /*endGroup=*/0,
       /*params=*/{});

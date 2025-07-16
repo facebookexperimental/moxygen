@@ -67,12 +67,12 @@ class MoQCacheTest : public ::testing::Test {
       AbsoluteLocation start,
       AbsoluteLocation end,
       bool endOfTrack,
-      AbsoluteLocation latest) {
+      AbsoluteLocation largest) {
     auto [p, future] =
         folly::makePromiseContract<std::shared_ptr<FetchConsumer>>();
     EXPECT_CALL(*upstream_, fetch(_, _))
         .WillOnce(
-            [start, end, endOfTrack, latest, promise = std::move(p), this](
+            [start, end, endOfTrack, largest, promise = std::move(p), this](
                 auto fetch, auto consumer) mutable {
               auto [standalone, joining] = fetchType(fetch);
               EXPECT_EQ(standalone->start, start);
@@ -80,7 +80,7 @@ class MoQCacheTest : public ::testing::Test {
               upstreamFetchConsumer_ = std::move(consumer);
               promise.setValue(upstreamFetchConsumer_);
               upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(
-                  FetchOk{0, GroupOrder::OldestFirst, endOfTrack, latest, {}});
+                  FetchOk{0, GroupOrder::OldestFirst, endOfTrack, largest, {}});
               return folly::coro::makeTask<Publisher::FetchResult>(
                   upstreamFetchHandle_);
             })

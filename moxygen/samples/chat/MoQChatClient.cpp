@@ -56,7 +56,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     announceHandle_ = std::move(announceRes.value());
     uint64_t negotiatedVersion =
         *(moqClient_.moqSession_->getNegotiatedVersion());
-    // subscribe to the catalog track from the beginning of the latest group
+    // subscribe to the catalog track from the beginning of the largest group
     auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
         {RequestID(0),
          TrackNamespace(chatPrefix()),
@@ -129,9 +129,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   chatRequestID_.emplace(subscribeReq.requestID);
   chatTrackAlias_.emplace(subscribeReq.trackAlias.value_or(
       TrackAlias(subscribeReq.requestID.value)));
-  folly::Optional<AbsoluteLocation> latest;
+  folly::Optional<AbsoluteLocation> largest;
   if (nextGroup_ > 0) {
-    latest.emplace(nextGroup_ - 1, 0);
+    largest.emplace(nextGroup_ - 1, 0);
   }
   publisher_ = std::move(consumer);
   setSubscribeOk(
@@ -140,7 +140,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(
            GroupOrder::OldestFirst, subscribeReq.groupOrder),
-       latest,
+       largest,
        {}});
   co_return shared_from_this();
 }

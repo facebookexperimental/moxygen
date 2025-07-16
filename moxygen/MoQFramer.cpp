@@ -19,12 +19,12 @@ bool isDraftVariant(uint64_t version) {
 uint64_t getLocationTypeValue(
     moxygen::LocationType locationType,
     uint64_t version) {
-  if (locationType != moxygen::LocationType::LatestGroup) {
+  if (locationType != moxygen::LocationType::LargestGroup) {
     return folly::to_underlying(locationType);
   }
 
   if (moxygen::getDraftMajorVersion(version) < 11) {
-    // In draft < 11, LatestGroup maps to 1
+    // In draft < 11, LargestGroup maps to 1
     return 1;
   } else {
     return folly::to_underlying(locationType);
@@ -153,14 +153,14 @@ std::string toString(LocationType loctype) {
     case LocationType::AbsoluteStart: {
       return "AbsoluteStart";
     }
-    case LocationType::LatestObject: {
-      return "LatestObject";
+    case LocationType::LargestObject: {
+      return "LargestObject";
     }
     case LocationType::AbsoluteRange: {
       return "AbsoluteRange";
     }
-    case LocationType::LatestGroup: {
-      return "LatestGroup";
+    case LocationType::LargestGroup: {
+      return "LargestGroup";
     }
     default: {
       return "Unknown";
@@ -807,16 +807,16 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   if (!locType) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  // LocationType == 1 was present in draft 8 and below as LatestGroup. Draft
+  // LocationType == 1 was present in draft 8 and below as LargestGroup. Draft
   // 11 and above have LocationType::NextGroupStart. Draft 9 and 10 don't have
-  // LocationType == 1, but we treat it as LatestGroup.
+  // LocationType == 1, but we treat it as LargestGroup.
   if (locType->first == folly::to_underlying(LocationType::NextGroupStart) &&
       getDraftMajorVersion(*version_) < 11) {
-    locType->first = folly::to_underlying(LocationType::LatestGroup);
+    locType->first = folly::to_underlying(LocationType::LargestGroup);
   }
   switch (locType->first) {
-    case folly::to_underlying(LocationType::LatestObject):
-    case folly::to_underlying(LocationType::LatestGroup):
+    case folly::to_underlying(LocationType::LargestObject):
+    case folly::to_underlying(LocationType::LargestGroup):
     case folly::to_underlying(LocationType::AbsoluteStart):
     case folly::to_underlying(LocationType::AbsoluteRange):
     case folly::to_underlying(LocationType::NextGroupStart):
@@ -965,7 +965,7 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
-    subscribeOk.latest = *res;
+    subscribeOk.largest = *res;
   }
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1306,7 +1306,7 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
   if (!location) {
     return folly::makeUnexpected(location.error());
   }
-  trackStatus.latestGroupAndObject = *location;
+  trackStatus.largestGroupAndObject = *location;
 
   if (getDraftMajorVersion(*version_) >= 11) {
     auto numParams = quic::decodeQuicInteger(cursor, length);
@@ -2402,12 +2402,12 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
   auto order = folly::to_underlying(subscribeOk.groupOrder);
   writeBuf.append(&order, 1);
   size += 1;
-  uint8_t contentExists = (subscribeOk.latest) ? 1 : 0;
+  uint8_t contentExists = (subscribeOk.largest) ? 1 : 0;
   writeBuf.append(&contentExists, 1);
   size += 1;
-  if (subscribeOk.latest) {
-    writeVarint(writeBuf, subscribeOk.latest->group, size, error);
-    writeVarint(writeBuf, subscribeOk.latest->object, size, error);
+  if (subscribeOk.largest) {
+    writeVarint(writeBuf, subscribeOk.largest->group, size, error);
+    writeVarint(writeBuf, subscribeOk.largest->object, size, error);
   }
   writeTrackRequestParams(writeBuf, subscribeOk.params, size, error);
   writeSize(sizePtr, size, error, *version_);
@@ -2642,9 +2642,10 @@ WriteResult MoQFrameWriter::writeTrackStatus(
   writeVarint(
       writeBuf, folly::to_underlying(trackStatus.statusCode), size, error);
   if (trackStatus.statusCode == TrackStatusCode::IN_PROGRESS) {
-    writeVarint(writeBuf, trackStatus.latestGroupAndObject->group, size, error);
     writeVarint(
-        writeBuf, trackStatus.latestGroupAndObject->object, size, error);
+        writeBuf, trackStatus.largestGroupAndObject->group, size, error);
+    writeVarint(
+        writeBuf, trackStatus.largestGroupAndObject->object, size, error);
   } else {
     writeVarint(writeBuf, 0, size, error);
     writeVarint(writeBuf, 0, size, error);

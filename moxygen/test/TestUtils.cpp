@@ -73,7 +73,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       255,
       GroupOrder::Default,
       true,
-      LocationType::LatestObject,
+      LocationType::LargestObject,
       folly::none,
       0,
       getTestTrackRequestParameters(moqFrameWriter));
@@ -152,7 +152,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   trackStatus.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
-  trackStatus.latestGroupAndObject = AbsoluteLocation({19, 77});
+  trackStatus.largestGroupAndObject = AbsoluteLocation({19, 77});
   // Params will be ignored for draft-11 and below
   trackStatus.params = getTestTrackRequestParameters(moqFrameWriter);
 

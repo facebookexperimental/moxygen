@@ -89,11 +89,11 @@ class MoQDateServer : public MoQServer,
     return {minute, second + 1};
   }
 
-  AbsoluteLocation updateLatest() {
+  AbsoluteLocation updateLargest() {
     if (!loopRunning_) {
-      forwarder_.setLatest(nowLocation());
+      forwarder_.setLargest(nowLocation());
     }
-    return *forwarder_.latest();
+    return *forwarder_.largest();
   }
 
   folly::coro::Task<TrackStatusResult> trackStatus(
@@ -109,12 +109,12 @@ class MoQDateServer : public MoQServer,
     // TODO: add other trackSTatus codes
     // TODO: unify this with subscribe. You can get the same information both
     // ways
-    auto latest = updateLatest();
+    auto largest = updateLargest();
     co_return TrackStatus{
         trackStatusRequest.requestID,
         std::move(trackStatusRequest.fullTrackName),
         TrackStatusCode::IN_PROGRESS,
-        latest};
+        largest};
   }
 
   folly::coro::Task<SubscribeResult> subscribe(
@@ -130,14 +130,14 @@ class MoQDateServer : public MoQServer,
           SubscribeErrorCode::TRACK_NOT_EXIST,
           "unexpected subscribe"});
     }
-    auto latest = updateLatest();
+    auto largest = updateLargest();
     if (subReq.locType == LocationType::AbsoluteRange &&
-        subReq.endGroup < latest.group) {
+        subReq.endGroup < largest.group) {
       co_return folly::makeUnexpected(SubscribeError{
           subReq.requestID,
           SubscribeErrorCode::INVALID_RANGE,
           "Range in the past, use FETCH"});
-      // start may be in the past, it will get adjusted forward to latest
+      // start may be in the past, it will get adjusted forward to largest
     }
 
     auto alias = subReq.trackAlias.value_or(TrackAlias(subReq.requestID.value));
@@ -174,7 +174,7 @@ class MoQDateServer : public MoQServer,
           FetchErrorCode::TRACK_NOT_EXIST,
           "unexpected fetch"});
     }
-    auto latest = updateLatest();
+    auto largest = updateLargest();
     auto [standalone, joining] = fetchType(fetch);
     StandaloneFetch sf;
     if (joining) {
@@ -186,9 +186,9 @@ class MoQDateServer : public MoQServer,
       }
       sf = StandaloneFetch(res.value().start, res.value().end);
       standalone = &sf;
-    } else if (standalone->end > latest) {
-      standalone->end = latest;
-      standalone->end.object++; // exclusive range, include latest
+    } else if (standalone->end > largest) {
+      standalone->end = largest;
+      standalone->end.object++; // exclusive range, include largest
     }
     if (standalone->end < standalone->start &&
         !(standalone->start.group == standalone->end.group &&
@@ -196,7 +196,7 @@ class MoQDateServer : public MoQServer,
       co_return folly::makeUnexpected(FetchError{
           fetch.requestID, FetchErrorCode::INVALID_RANGE, "No objects"});
     }
-    if (standalone->start > latest) {
+    if (standalone->start > largest) {
       co_return folly::makeUnexpected(FetchError{
           fetch.requestID,
           FetchErrorCode::INVALID_RANGE,
@@ -211,7 +211,7 @@ class MoQDateServer : public MoQServer,
         MoQSession::resolveGroupOrder(
             GroupOrder::OldestFirst, fetch.groupOrder),
         0, // not end of track
-        latest,
+        largest,
         {}});
     folly::coro::co_withCancellation(
         fetchHandle->cancelSource.getToken(),
@@ -319,7 +319,7 @@ class MoQDateServer : public MoQServer,
     std::shared_ptr<SubgroupConsumer> subgroupPublisher;
     while (!cancelToken.isCancellationRequested()) {
       if (forwarder_.empty()) {
-        forwarder_.setLatest(nowLocation());
+        forwarder_.setLargest(nowLocation());
       } else {
         auto [minute, second] = now();
         switch (mode_) {

@@ -18,8 +18,8 @@ DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
 DEFINE_string(track_namespace_delimiter, "/", "Track Namespace Delimiter");
 DEFINE_string(track_name, "", "Track Name");
-DEFINE_string(sg, "", "Start group, defaults to latest");
-DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or latest");
+DEFINE_string(sg, "", "Start group, defaults to largest");
+DEFINE_string(so, "", "Start object, defaults to 0 when sg is set or largest");
 DEFINE_string(eg, "", "End group");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
@@ -48,7 +48,7 @@ SubParams flags2params() {
   std::string soStr(FLAGS_so);
   if (FLAGS_sg.empty()) {
     if (soStr.empty()) {
-      result.locType = LocationType::LatestObject;
+      result.locType = LocationType::LargestObject;
       return result;
     } else {
       XLOG(ERR) << "Invalid: sg blank, so=" << soStr;
@@ -174,20 +174,20 @@ class MoQTextClient : public Subscriber,
         subscription_ = std::move(track.value());
         auto requestID = subscription_->subscribeOk().requestID;
         XLOG(DBG1) << "requestID=" << requestID;
-        auto latest = subscription_->subscribeOk().latest;
-        if (latest) {
-          XLOG(INFO) << "Latest={" << latest->group << ", " << latest->object
+        auto largest = subscription_->subscribeOk().largest;
+        if (largest) {
+          XLOG(INFO) << "Largest={" << largest->group << ", " << largest->object
                      << "}";
         }
         if ((sub.locType == LocationType::AbsoluteStart ||
              sub.locType == LocationType::AbsoluteRange) &&
-            subscription_ && subscription_->subscribeOk().latest &&
-            *sub.start < *subscription_->subscribeOk().latest) {
-          XLOG(INFO) << "Start before latest, need FETCH";
+            subscription_ && subscription_->subscribeOk().largest &&
+            *sub.start < *subscription_->subscribeOk().largest) {
+          XLOG(INFO) << "Start before largest, need FETCH";
           needFetch = true;
           fetchEnd = AbsoluteLocation{
-              subscription_->subscribeOk().latest->group,
-              subscription_->subscribeOk().latest->object + 1};
+              subscription_->subscribeOk().largest->group,
+              subscription_->subscribeOk().largest->object + 1};
           if (sub.locType == LocationType::AbsoluteRange &&
               fetchEnd.group >= sub.endGroup) {
             fetchEnd.group = sub.endGroup + 1;
@@ -203,7 +203,7 @@ class MoQTextClient : public Subscriber,
                    << " reason=" << track.error().reasonPhrase;
         subTextReceiver_.reset();
         if (track.error().errorCode == SubscribeErrorCode::INVALID_RANGE) {
-          XLOG(INFO) << "End before latest, need FETCH";
+          XLOG(INFO) << "End before largest, need FETCH";
           needFetch = true;
         }
       }

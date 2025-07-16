@@ -75,8 +75,8 @@ class MoQVideoPublisher
   // uint64_t timescale_{30};
   MoQForwarder videoForwarder_;
   MoQForwarder audioForwarder_;
-  AbsoluteLocation latestVideo_{0, 0};
-  AbsoluteLocation latestAudio_{0, 0};
+  AbsoluteLocation largestVideo_{0, 0};
+  AbsoluteLocation largestAudio_{0, 0};
   std::shared_ptr<SubgroupConsumer> videoSgPub_;
   std::shared_ptr<SubgroupConsumer> audioSgPub_;
   uint64_t videoSeqId_{0};

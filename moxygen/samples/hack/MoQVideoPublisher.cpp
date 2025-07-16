@@ -287,11 +287,11 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
   if (item->isEOF || item->isIdr) {
     XLOG(INFO) << "Ending group";
     if (videoSgPub_) {
-      videoSgPub_->endOfGroup(latestVideo_.object);
+      videoSgPub_->endOfGroup(largestVideo_.object);
       videoSgPub_.reset();
 
-      latestVideo_.group++;
-      latestVideo_.object = 0;
+      largestVideo_.group++;
+      largestVideo_.object = 0;
     }
     if (item->isEOF) {
       return;
@@ -312,7 +312,7 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
   if (!videoSgPub_) {
     // Open new subgroup
     auto res = videoForwarder_.beginSubgroup(
-        latestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
+        largestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
     if (!res) {
       XLOG(ERR) << "Error creating subgroup";
     }
@@ -321,13 +321,13 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
 
   // Send video data
   if (videoSgPub_) {
-    XLOG(DBG1) << "Sending video frame. grp-obj: " << latestVideo_.group << "-"
-               << latestVideo_.object << ". Payload size: "
+    XLOG(DBG1) << "Sending video frame. grp-obj: " << largestVideo_.group << "-"
+               << largestVideo_.object << ". Payload size: "
                << (moqMiObj->payload
                        ? moqMiObj->payload->computeChainDataLength()
                        : 0);
     videoSgPub_->object(
-        latestVideo_.object++,
+        largestVideo_.object++,
         std::move(moqMiObj->payload),
         std::move(moqMiObj->extensions));
   } else {
