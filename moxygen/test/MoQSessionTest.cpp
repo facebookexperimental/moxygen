@@ -24,6 +24,8 @@ using testing::_;
 const size_t kTestMaxRequestID = 2;
 const FullTrackName kTestTrackName{TrackNamespace{{"foo"}}, "bar"};
 
+const TrackAlias kUselessAlias(std::numeric_limits<uint32_t>::max());
+
 MATCHER_P(HasChainDataLengthOf, n, "") {
   return arg->computeChainDataLength() == uint64_t(n);
 }
@@ -44,6 +46,7 @@ auto makeSubscribeOkResult(
     const folly::Optional<AbsoluteLocation>& latest = folly::none) {
   return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
       sub.requestID,
+      TrackAlias(sub.requestID.value),
       std::chrono::milliseconds(0),
       GroupOrder::OldestFirst,
       latest,
@@ -240,6 +243,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                 EXPECT_CALL(
                     *getPublisherStatsCallback(direction), onSubscribeSuccess())
                     .RetiresOnSaturation();
+                pub->setTrackAlias(TrackAlias(sub.requestID.value));
               }
               return lambda(sub, pub);
             }))
@@ -330,7 +334,8 @@ INSTANTIATE_TEST_SUITE_P(
         VersionParams{{kVersionDraft08}, kVersionDraft08},
         VersionParams{{kVersionDraft09}, kVersionDraft09},
         VersionParams{{kVersionDraft10}, kVersionDraft10},
-        VersionParams{{kVersionDraft11}, kVersionDraft11}));
+        VersionParams{{kVersionDraft11}, kVersionDraft11},
+        VersionParams{{kVersionDraft12}, kVersionDraft12}));
 
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
@@ -398,6 +403,7 @@ INSTANTIATE_TEST_SUITE_P(
         VersionParams{{kVersionDraft09}, kVersionDraft09},
         VersionParams{{kVersionDraft10}, kVersionDraft10},
         VersionParams{{kVersionDraft11}, kVersionDraft11},
+        VersionParams{{kVersionDraft12}, kVersionDraft12},
         VersionParams{{kVersionDraft10, kVersionDraft11}, kVersionDraft10},
         VersionParams{{kVersionDraft10, kVersionDraft11}, kVersionDraft11}));
 
@@ -506,7 +512,7 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
-        ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
+        ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11),
         folly::IOBuf::copyBuffer("hello world"));
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
@@ -568,19 +574,20 @@ CO_TEST_P_X(MoQSessionTest, BadRelativeJoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-using V11OnlyTests = MoQSessionTest;
+using V11PlusTests = MoQSessionTest;
 
 INSTANTIATE_TEST_SUITE_P(
-    V11OnlyTests,
-    V11OnlyTests,
-    testing::Values(VersionParams{{kVersionDraft11}, kVersionDraft11}));
+    V11PlusTests,
+    V11PlusTests,
+    testing::Values(
+        VersionParams{{kVersionDraft11, kVersionDraft12}, kVersionDraft12}));
 
-CO_TEST_P_X(V11OnlyTests, AbsoluteJoiningFetch) {
+CO_TEST_P_X(V11PlusTests, AbsoluteJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     for (uint32_t group = 6; group < 10; group++) {
       pub->datagram(
-          ObjectHeader(sub.trackAlias, group, 0, 0, 0, 11),
+          ObjectHeader(kUselessAlias, group, 0, 0, 0, 11),
           folly::IOBuf::copyBuffer("hello world"));
     }
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
@@ -634,7 +641,7 @@ CO_TEST_P_X(V11OnlyTests, AbsoluteJoiningFetch) {
 }
 
 // Subscribe id passed into fetch() doesn't correspond to a subscription.
-CO_TEST_P_X(V11OnlyTests, BadAbsoluteJoiningFetch) {
+CO_TEST_P_X(V11PlusTests, BadAbsoluteJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
       Fetch(
@@ -1189,11 +1196,10 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
-        ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
+        ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11),
         folly::IOBuf::copyBuffer("hello world"));
     pub->datagram(
-        ObjectHeader(
-            sub.trackAlias, 0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST),
+        ObjectHeader(kUselessAlias, 0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST),
         nullptr);
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
@@ -1268,15 +1274,15 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
 
 // Checks to see that we return errors if we receive a subscribe request with
 // forward == false and try to send data.
-CO_TEST_P_X(V11OnlyTests, SubscribeForwardingFalse) {
+CO_TEST_P_X(V11PlusTests, SubscribeForwardingFalse) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     auto pubResult1 = pub->datagram(
-        ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11),
+        ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11),
         folly::IOBuf::copyBuffer("hello world"));
     EXPECT_TRUE(pubResult1.hasError());
-    auto pubResult2 = pub->objectStream(
-        ObjectHeader(sub.trackAlias, 0, 0, 1, 0, 11), nullptr);
+    auto pubResult2 =
+        pub->objectStream(ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11), nullptr);
     EXPECT_TRUE(pubResult2.hasError());
     auto pubResult3 = pub->beginSubgroup(0, 0, 0);
     EXPECT_TRUE(pubResult3.hasError());
@@ -1297,7 +1303,7 @@ CO_TEST_P_X(V11OnlyTests, SubscribeForwardingFalse) {
 
 // Checks to see that we return errors if we receive a subscribe update with
 // forward == false and try to send data.
-CO_TEST_P_X(V11OnlyTests, SubscribeUpdateForwardingFalse) {
+CO_TEST_P_X(V11PlusTests, SubscribeUpdateForwardingFalse) {
   co_await setupMoQSession();
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -1378,7 +1384,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
       EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
           .Times(2);
       pub->objectStream(
-          ObjectHeader(sub.trackAlias, 0, 0, 0, 0, 10),
+          ObjectHeader(kUselessAlias, 0, 0, 0, 0, 10),
           moxygen::test::makeBuf(10));
       auto sgp = pub->beginSubgroup(0, 1, 0).value();
       sgp->object(1, moxygen::test::makeBuf(10));
@@ -1430,7 +1436,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneAPIErrors) {
         pub->awaitStreamCredit().error().code, MoQPublishError::API_ERROR);
     EXPECT_EQ(
         pub->datagram(
-               ObjectHeader(sub.trackAlias, 2, 2, 2, 2, 10),
+               ObjectHeader(kUselessAlias, 2, 2, 2, 2, 10),
                moxygen::test::makeBuf(10))
             .error()
             .code,
@@ -1798,7 +1804,7 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(V11OnlyTests, TrackStatusWithAuthorizationToken) {
+CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());

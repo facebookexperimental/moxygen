@@ -127,7 +127,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
         "Duplicate subscribe for track"});
   }
   chatRequestID_.emplace(subscribeReq.requestID);
-  chatTrackAlias_.emplace(subscribeReq.trackAlias);
+  chatTrackAlias_.emplace(subscribeReq.trackAlias.value_or(
+      TrackAlias(subscribeReq.requestID.value)));
   folly::Optional<AbsoluteLocation> latest;
   if (nextGroup_ > 0) {
     latest.emplace(nextGroup_ - 1, 0);
@@ -135,6 +136,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   publisher_ = std::move(consumer);
   setSubscribeOk(
       {subscribeReq.requestID,
+       *chatTrackAlias_,
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(
            GroupOrder::OldestFirst, subscribeReq.groupOrder),
@@ -287,17 +289,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   };
   auto handler = std::make_shared<ChatObjectHandler>(*this, username);
 
+  auto req = SubscribeRequest::make(FullTrackName({trackNamespace, "chat"}));
   auto track = co_await co_awaitTry(moqClient_.moqSession_->subscribe(
-      {0,
-       0,
-       FullTrackName({trackNamespace, "chat"}),
-       0,
-       GroupOrder::OldestFirst,
-       true,
-       LocationType::LatestGroup,
-       folly::none,
-       0,
-       {}},
+      std::move(req),
       std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, handler)));
   if (track.hasException()) {
     // subscribe failed

@@ -78,6 +78,11 @@ class MoQPerfClientSubgroupConsumer : public SubgroupConsumer {
 
 class MoQPerfClientTrackConsumer : public TrackConsumer {
  public:
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias) override {
+    return folly::unit;
+  }
+
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(
       uint64_t /* groupID */,

@@ -148,6 +148,12 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
     }
   }
 
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias) override {
+    // who cares
+    return folly::unit;
+  }
+
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
       override {

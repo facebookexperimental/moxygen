@@ -130,17 +130,15 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
   // Create a SubRequest with the created TrackNamespace in its fullTrackName
   TrackNamespace track = convertMoQPerfParamsToTrackNamespace(params);
 
-  SubscribeRequest subscribeRequest{
-      .requestID = 0,
-      .trackAlias = 1,
-      .fullTrackName = moxygen::FullTrackName({track, "blah"}),
-      .priority = 0,
-      .groupOrder = GroupOrder::OldestFirst,
-      .forward = true,
-      .locType = LocationType::LatestObject,
-      .start = folly::none,
-      .endGroup = 0,
-      .params = {}};
+  auto subscribeRequest = SubscribeRequest::make(
+      /*fullTrackName=*/moxygen::FullTrackName({track, "blah"}),
+      /*priority=*/0,
+      /*groupOrder=*/GroupOrder::OldestFirst,
+      /*forward=*/true,
+      /*locType=*/LocationType::LatestObject,
+      /*start=*/folly::none,
+      /*endGroup=*/0,
+      /*params=*/{});
   auto subscribeResult = co_await moqClient_.moqSession_->subscribe(
       subscribeRequest, trackConsumer);
   CHECK(subscribeResult.hasValue()) << "Issue with subscribing to peer";

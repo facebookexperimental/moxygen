@@ -433,10 +433,10 @@ TEST_P(MoQFramerTest, parseFixedString) {
   // Encode a QuicInteger onto the buffer
   auto quicIntegerSize = quic::getQuicIntegerSize(s.length());
   folly::io::QueueAppender appender(&writeBuf, *quicIntegerSize);
-  quic::encodeQuicInteger(
+  CHECK(quic::encodeQuicInteger(
       s.length(), [appender = std::move(appender)](auto val) mutable {
         appender.writeBE(val);
-      });
+      }));
 
   // Write a blob of bytes to buffer
   writeBuf.append(s.data(), s.length());
@@ -1036,7 +1036,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       auto toParse = front->clone();
       auto shortTokenLengthBuf = folly::IOBuf::create(2);
       uint8_t tokenLengthBytes = 0;
-      quic::encodeQuicInteger(i, [&](auto val) {
+      CHECK(quic::encodeQuicInteger(i, [&](auto val) {
         if (sizeof(val) == 1) {
           shortTokenLengthBuf->writableData()[0] = val;
         } else {
@@ -1045,7 +1045,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
         }
         shortTokenLengthBuf->append(sizeof(val));
         tokenLengthBytes = sizeof(val);
-      });
+      }));
       toParse->appendToChain(std::move(shortTokenLengthBuf));
       toParse->appendToChain(tail->clone());
       folly::io::Cursor tmpCursor(toParse.get());
@@ -1058,7 +1058,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       auto toParse = front->clone();
       auto shortTokenLengthBuf = folly::IOBuf::create(2);
       uint8_t tokenLengthBytes = 0;
-      quic::encodeQuicInteger(tokenLengths[j] + 1, [&](auto val) {
+      CHECK(quic::encodeQuicInteger(tokenLengths[j] + 1, [&](auto val) {
         if (sizeof(val) == 1) {
           shortTokenLengthBuf->writableData()[0] = val;
         } else {
@@ -1067,7 +1067,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
         }
         shortTokenLengthBuf->append(sizeof(val));
         tokenLengthBytes = sizeof(val);
-      });
+      }));
       toParse->appendToChain(std::move(shortTokenLengthBuf));
       toParse->appendToChain(tail->clone());
       toParse->appendToChain(folly::IOBuf::copyBuffer("a"));
@@ -1096,7 +1096,8 @@ INSTANTIATE_TEST_SUITE_P(
         kVersionDraft08,
         kVersionDraft09,
         kVersionDraft10,
-        kVersionDraft11));
+        kVersionDraft11,
+        kVersionDraft12));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,

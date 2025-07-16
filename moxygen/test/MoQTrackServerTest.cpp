@@ -439,7 +439,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
 
   moxygen::SubscribeRequest sub;
   sub.requestID = 0;
-  sub.trackAlias = moxygen::TrackAlias(sub.requestID.value);
+  sub.trackAlias = kDefaultTrackAlias;
   sub.groupOrder = moxygen::GroupOrder(0x1);
   sub.fullTrackName.trackNamespace = track_;
   params_.testIntegerExtension = -1;
@@ -455,7 +455,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
     for (int objectId = 1; objectId >= 0; objectId--) {
       // Set expectations for datagram
       moxygen::ObjectHeader expectedHeader;
-      expectedHeader.trackIdentifier = moxygen::TrackIdentifier(sub.trackAlias);
+      expectedHeader.trackIdentifier =
+          moxygen::TrackIdentifier(*sub.trackAlias);
       expectedHeader.group = groupNum;
       expectedHeader.id = objectId;
       expectedHeader.extensions = moxygen::getExtensions(

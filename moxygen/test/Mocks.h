@@ -83,6 +83,11 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
 
 class MockTrackConsumer : public TrackConsumer {
  public:
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias) override {
+    return folly::unit;
+  }
+
   MOCK_METHOD(
       (folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>),
       beginSubgroup,

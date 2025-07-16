@@ -72,14 +72,12 @@ class MoQForwarder : public TrackConsumer {
         SubscribeOk ok,
         std::shared_ptr<MoQSession> s,
         RequestID sid,
-        TrackAlias ta,
         SubscribeRange r,
         std::shared_ptr<TrackConsumer> tc,
         bool shouldForwardIn)
         : SubscriptionHandle(std::move(ok)),
           session(std::move(s)),
           requestID(sid),
-          trackAlias(ta),
           range(r),
           trackConsumer(std::move(tc)),
           forwarder(f),
@@ -119,7 +117,6 @@ class MoQForwarder : public TrackConsumer {
 
     std::shared_ptr<MoQSession> session;
     RequestID requestID;
-    TrackAlias trackAlias;
     SubscribeRange range;
     std::shared_ptr<TrackConsumer> trackConsumer;
     // Stores the SubgroupConsumer for this subscriber for all currently
@@ -143,13 +140,14 @@ class MoQForwarder : public TrackConsumer {
         *this,
         SubscribeOk{
             subReq.requestID,
+            subReq.trackAlias.value_or(
+                trackAlias_.value_or(TrackAlias(subReq.requestID.value))),
             std::chrono::milliseconds(0),
             MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
             latest_,
             {}},
         std::move(session),
         subReq.requestID,
-        subReq.trackAlias,
         toSubscribeRange(subReq, latest_),
         std::move(consumer),
         subReq.forward);
@@ -277,6 +275,12 @@ class MoQForwarder : public TrackConsumer {
             SubscribeDoneStatusCode::INTERNAL_ERROR,
             0, // filled in by session
             err.what()});
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias alias) override {
+    trackAlias_ = alias;
+    return folly::unit;
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -608,6 +612,7 @@ class MoQForwarder : public TrackConsumer {
   }
 
   FullTrackName fullTrackName_;
+  folly::Optional<TrackAlias> trackAlias_;
   folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;
   folly::F14FastMap<
       SubgroupIdentifier,

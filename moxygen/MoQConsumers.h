@@ -153,6 +153,12 @@ class TrackConsumer {
  public:
   virtual ~TrackConsumer() = default;
 
+  // Set the Track Alias for this track.  This is called by publishers in
+  // response to SUBSCRIBE requests.  This can fail if the alias is already
+  // in use or has already been set.
+  virtual folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias alias) = 0;
+
   // Begin delivering a new subgroup in the specified group.  If the consumer is
   // writing, this Can fail with MoQPublishError::BLOCKED when out of stream
   // credit.

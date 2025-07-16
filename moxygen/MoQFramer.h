@@ -248,6 +248,7 @@ constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 constexpr uint64_t kVersionDraft09 = 0xff000009;
 constexpr uint64_t kVersionDraft10 = 0xff00000A;
 constexpr uint64_t kVersionDraft11 = 0xff00000B;
+constexpr uint64_t kVersionDraft12 = 0xff00000C;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -671,8 +672,30 @@ enum class GroupOrder : uint8_t {
 };
 
 struct SubscribeRequest {
+  static SubscribeRequest make(
+      const FullTrackName& fullTrackName,
+      uint8_t priority = kDefaultPriority,
+      GroupOrder groupOrder = GroupOrder::Default,
+      bool forward = true,
+      LocationType locType = LocationType::LatestGroup,
+      folly::Optional<AbsoluteLocation> start = folly::none,
+      uint64_t endGroup = 0,
+      std::vector<TrackRequestParameter> params = {}) {
+    return SubscribeRequest{
+        RequestID(), // Default constructed RequestID
+        folly::none, // Default constructed TrackAlias (folly::none)
+        fullTrackName,
+        priority,
+        groupOrder,
+        forward,
+        locType,
+        std::move(start),
+        endGroup,
+        std::move(params)};
+  }
+
   RequestID requestID;
-  TrackAlias trackAlias;
+  folly::Optional<TrackAlias> trackAlias; // < v12
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
@@ -694,6 +717,7 @@ struct SubscribeUpdate {
 
 struct SubscribeOk {
   RequestID requestID;
+  TrackAlias trackAlias; // >= v12
   std::chrono::milliseconds expires;
   GroupOrder groupOrder;
   // context exists is inferred from presence of latest

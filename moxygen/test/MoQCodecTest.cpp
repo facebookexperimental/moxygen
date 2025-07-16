@@ -450,5 +450,6 @@ INSTANTIATE_TEST_SUITE_P(
         kVersionDraft08,
         kVersionDraft09,
         kVersionDraft10,
-        kVersionDraft11));
+        kVersionDraft11,
+        kVersionDraft12));
 } // namespace moxygen::test
