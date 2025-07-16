@@ -79,9 +79,11 @@ class MoQRelay : public Publisher,
     MoQRelay& relay_;
   };
   AnnounceNode announceRoot_{*this};
+  enum class MatchType { Exact, Prefix };
   std::shared_ptr<AnnounceNode> findNamespaceNode(
       const TrackNamespace& ns,
-      bool createMissingNodes,
+      bool createMissingNodes = false,
+      MatchType matchType = MatchType::Exact,
       std::vector<std::shared_ptr<MoQSession>>* sessions = nullptr);
   std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
 
