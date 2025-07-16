@@ -62,6 +62,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
     return sessionData->session;
   }
 
+  void setServerMaxTokenCacheSizeGuess(size_t size) {
+    if (!setupComplete_ && dir_ == MoQControlCodec::Direction::CLIENT) {
+      tokenCache_.setMaxSize(size);
+    }
+  }
+
   class ServerSetupCallback {
    public:
     virtual ~ServerSetupCallback() = default;
@@ -424,7 +430,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       bool isNewRequest);
 
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
-  void aliasifyAuthTokens(std::vector<TrackRequestParameter>& params);
+  void aliasifyAuthTokens(
+      std::vector<Parameter>& params,
+      const folly::Optional<uint64_t>& forceVersion = folly::none);
   RequestID getRequestID(RequestID id, const FullTrackName& ftn);
   RequestID getNextRequestID(bool legacyAction = false);
   void maybeAddLegacyRequestIDMapping(const FullTrackName& ftn, RequestID id);
@@ -541,6 +549,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   MoQFrameWriter moqFrameWriter_;
   folly::Optional<uint64_t> negotiatedVersion_{0};
   MoQControlCodec controlCodec_;
-  MoQTokenCache tokenCache_; // sending tokens
+  MoQTokenCache tokenCache_{1024}; // sending tokens
 };
 } // namespace moxygen

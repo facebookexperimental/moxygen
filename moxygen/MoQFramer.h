@@ -54,8 +54,10 @@ enum class SessionCloseErrorCode : uint32_t {
   AUTH_TOKEN_CACHE_OVERFLOW = 0x13,
   DUPLICATE_AUTH_TOKEN_ALIAS = 0x14,
   VERSION_NEGOTIATION_FAILED = 0x15,
+  MALFORMED_AUTH_TOKEN = 0x16,
+  UNKNOWN_AUTH_TOKEN_ALIAS = 0x17,
+  EXPIRED_AUTH_TOKEN = 0x18,
 
-  UNKNOWN_AUTH_TOKEN_ALIAS = std::numeric_limits<uint32_t>::max() - 1,
   PARSE_UNDERFLOW = std::numeric_limits<uint32_t>::max(),
 };
 
@@ -187,6 +189,7 @@ std::ostream& operator<<(std::ostream& os, StreamType type);
 enum class SetupKey : uint64_t {
   PATH = 1,
   MAX_REQUEST_ID = 2,
+  AUTHORIZATION_TOKEN = 3,
   MAX_AUTH_TOKEN_CACHE_SIZE = 4,
 };
 
@@ -215,8 +218,8 @@ struct Parameter {
   AuthToken asAuthToken;
 };
 
-struct SetupParameter : public Parameter {};
-struct TrackRequestParameter : public Parameter {};
+using SetupParameter = Parameter;
+using TrackRequestParameter = Parameter;
 
 constexpr uint64_t kVersionDraft01 = 0xff000001;
 constexpr uint64_t kVersionDraft02 = 0xff000002;
@@ -270,14 +273,6 @@ struct ServerSetup {
   uint64_t selectedVersion;
   std::vector<SetupParameter> params;
 };
-
-folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
-
-folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
-    folly::io::Cursor& cursor,
-    size_t length) noexcept;
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,
@@ -952,10 +947,16 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
     folly::io::Cursor& cursor,
     size_t& length);
 
-// parseClientSetup and parseServerSetup are version-agnostic, so we're
-// leaving them out of the MoQFrameParser.
 class MoQFrameParser {
  public:
+  folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
+  folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
+      folly::io::Cursor& cursor,
+      size_t length) noexcept;
+
   // datagram only
   folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
       folly::io::Cursor& cursor,
@@ -1086,7 +1087,7 @@ class MoQFrameParser {
   }
 
   void setTokenCacheMaxSize(size_t size) {
-    tokenCache_.setMaxSize(size);
+    tokenCache_.setMaxSize(size, /*evict=*/true);
   }
 
  private:
@@ -1285,7 +1286,8 @@ class MoQFrameWriter {
 
   std::string encodeTokenValue(
       uint64_t tokenType,
-      const std::string& tokenValue) const;
+      const std::string& tokenValue,
+      const folly::Optional<uint64_t>& forceVersion = folly::none) const;
 
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";

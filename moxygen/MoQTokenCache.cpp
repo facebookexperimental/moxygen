@@ -43,6 +43,8 @@ MoQTokenCache::registerToken(
 
   // Insert the new token into the cache with the provided alias
   lru_.push_back(alias);
+  XLOG(DBG4) << "Inserting alias: " << alias << ", TokenValue: " << tokenValue;
+
   aliasToToken_.emplace(
       alias, CachedToken{tokenType, std::move(tokenValue), --lru_.end()});
   return folly::unit;
@@ -67,6 +69,9 @@ MoQTokenCache::deleteToken(Alias alias) {
   if (it == aliasToToken_.end()) {
     return folly::makeUnexpected(ErrorCode::UNKNOWN_ALIAS);
   }
+
+  XLOG(DBG4) << "Deleting alias: " << alias
+             << ", TokenValue: " << it->second.tokenValue;
   auto size = cachedSize(it->second.tokenValue);
   XCHECK_GE(totalSize_, size);
   totalSize_ -= size;
@@ -87,16 +92,28 @@ MoQTokenCache::getTokenForAlias(Alias alias) {
   return TokenTypeAndValue{cachedToken.tokenType, cachedToken.tokenValue};
 }
 
-MoQTokenCache::Alias MoQTokenCache::evictOne() {
-  XCHECK(!lru_.empty());
-  auto alias = lru_.front();
-  lru_.pop_front();
-  auto it = aliasToToken_.find(alias);
-  XCHECK(it != aliasToToken_.end());
-  XCHECK_GE(totalSize_, cachedSize(it->second.tokenValue));
-  totalSize_ -= cachedSize(it->second.tokenValue);
-  aliasToToken_.erase(it);
+MoQTokenCache::Alias MoQTokenCache::evictHelper(std::list<Alias>::iterator it) {
+  XCHECK(it != lru_.end());
+  auto alias = *it;
+  lru_.erase(it);
+  auto tokenIt = aliasToToken_.find(alias);
+  XCHECK(tokenIt != aliasToToken_.end());
+  XCHECK_GE(totalSize_, cachedSize(tokenIt->second.tokenValue));
+  XLOG(DBG4) << "Removing alias: " << alias
+             << ", TokenValue: " << tokenIt->second.tokenValue;
+  totalSize_ -= cachedSize(tokenIt->second.tokenValue);
+  aliasToToken_.erase(tokenIt);
   return alias;
+}
+
+MoQTokenCache::Alias MoQTokenCache::evictLRU() {
+  XCHECK(!lru_.empty());
+  return evictHelper(lru_.begin());
+}
+
+MoQTokenCache::Alias MoQTokenCache::evictMRU() {
+  XCHECK(!lru_.empty());
+  return evictHelper(--lru_.end());
 }
 
 } // namespace moxygen

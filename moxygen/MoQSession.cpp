@@ -1698,17 +1698,24 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   // TODO: Potentially rethink what we're doing here. If the client
   // supports any version < 11, we send a < 11 setup.
-  uint64_t setupSerializationVersion = kVersionDraft11;
+  uint64_t setupSerializationVersion = kVersionDraft12;
   for (auto supportedVersion : setup.supportedVersions) {
-    if (getDraftMajorVersion(supportedVersion) < 11) {
-      setupSerializationVersion = supportedVersion;
-      break;
+    auto majorVersion = getDraftMajorVersion(supportedVersion);
+    if (majorVersion < 12) {
+      setupSerializationVersion = kVersionDraft11;
+      if (majorVersion < 11) {
+        setupSerializationVersion = supportedVersion;
+        break;
+      }
     }
   }
-  // TODO: clamp egressmax auth token cache size
+  // This sets the receive token cache size, but it's necesarily empty
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(setup.params));
-
+  // Optimistically registers params without knowing peer's capabilities
+  if (getDraftMajorVersion(setupSerializationVersion) >= 12) {
+    aliasifyAuthTokens(setup.params, setupSerializationVersion);
+  }
   auto res =
       writeClientSetup(controlWriteBuf_, setup, setupSerializationVersion);
   if (!res) {
@@ -1762,9 +1769,11 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 
   initializeNegotiatedVersion(serverSetup.selectedVersion);
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
-  tokenCache_.setMaxSize(std::min(
-      kMaxSendTokenCacheSize,
-      getMaxAuthTokenCacheSizeIfPresent(serverSetup.params)));
+  tokenCache_.setMaxSize(
+      std::min(
+          kMaxSendTokenCacheSize,
+          getMaxAuthTokenCacheSizeIfPresent(serverSetup.params)),
+      /*evict=*/true);
   setupPromise_.setValue(std::move(serverSetup));
 }
 
@@ -1777,9 +1786,11 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
 
   peerMaxRequestID_ = getMaxRequestIDIfPresent(clientSetup.params);
-  tokenCache_.setMaxSize(std::min(
-      kMaxSendTokenCacheSize,
-      getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)));
+  tokenCache_.setMaxSize(
+      std::min(
+          kMaxSendTokenCacheSize,
+          getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)),
+      /*evict=*/true);
   auto serverSetup =
       serverSetupCallback_->onClientSetup(std::move(clientSetup));
   if (!serverSetup.hasValue()) {
@@ -1794,9 +1805,10 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
     nextRequestID_ = 0;
   }
-  // TODO: clamp egress max auth token cache size
+  // This sets the receive cache size and may evict received tokens
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
+  aliasifyAuthTokens(serverSetup->params);
   auto res = writeServerSetup(
       controlWriteBuf_, *serverSetup, serverSetup->selectedVersion);
   if (!res) {
@@ -4200,18 +4212,20 @@ uint64_t MoQSession::getMaxRequestIDIfPresent(
 
 uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
     const std::vector<SetupParameter>& params) {
+  constexpr uint64_t kMaxAuthTokenCacheSize = 4096;
   for (const auto& param : params) {
     if (param.key ==
         folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
-      return param.asUint64;
+      return std::min(param.asUint64, kMaxAuthTokenCacheSize);
     }
   }
   return 0;
 }
 
 void MoQSession::aliasifyAuthTokens(
-    std::vector<TrackRequestParameter>& params) {
-  auto version = getNegotiatedVersion();
+    std::vector<Parameter>& params,
+    const folly::Optional<uint64_t>& forceVersion) {
+  auto version = forceVersion ? forceVersion : getNegotiatedVersion();
   if (!version) {
     return;
   }
@@ -4236,8 +4250,8 @@ void MoQSession::aliasifyAuthTokens(
         auto tokenCopy = token;
         it = params.erase(it);
         while (!tokenCache_.canRegister(token.tokenType, token.tokenValue)) {
-          auto aliasToEvict = tokenCache_.evictOne();
-          TrackRequestParameter p;
+          auto aliasToEvict = tokenCache_.evictLRU();
+          Parameter p;
           p.key = authParamKey;
           p.asString = moqFrameWriter_.encodeDeleteTokenAlias(aliasToEvict);
           it = params.insert(it, std::move(p));
@@ -4246,14 +4260,14 @@ void MoQSession::aliasifyAuthTokens(
         auto alias =
             tokenCache_.registerToken(tokenCopy.tokenType, tokenCopy.tokenValue)
                 .value();
-        TrackRequestParameter p;
+        Parameter p;
         p.key = authParamKey;
         p.asString = moqFrameWriter_.encodeRegisterToken(
             alias, tokenCopy.tokenType, tokenCopy.tokenValue);
         it = params.insert(it, std::move(p));
       } else {
-        it->asString =
-            moqFrameWriter_.encodeTokenValue(token.tokenType, token.tokenValue);
+        it->asString = moqFrameWriter_.encodeTokenValue(
+            token.tokenType, token.tokenValue, version);
       }
     }
   }

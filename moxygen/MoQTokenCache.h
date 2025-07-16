@@ -23,9 +23,20 @@ class MoQTokenCache {
     UNKNOWN_ALIAS = 3,
   };
 
-  folly::Expected<folly::Unit, ErrorCode> setMaxSize(uint64_t maxSize) {
+  // Evicts most recently inserted/used rather than LRU order to handle
+  // optimisitic inserts during CLIENT_SETUP that are resolved after
+  // SERVER_SETUP.
+  folly::Expected<folly::Unit, ErrorCode> setMaxSize(
+      uint64_t maxSize,
+      bool evict = false) {
     if (maxSize < totalSize_) {
-      return folly::makeUnexpected(ErrorCode::LIMIT_EXCEEDED);
+      if (evict) {
+        while (totalSize_ > maxSize) {
+          evictMRU();
+        }
+      } else {
+        return folly::makeUnexpected(ErrorCode::LIMIT_EXCEEDED);
+      }
     }
     maxSize_ = maxSize;
     return folly::unit;
@@ -52,7 +63,8 @@ class MoQTokenCache {
     TokenValue tokenValue;
   };
   folly::Expected<TokenTypeAndValue, ErrorCode> getTokenForAlias(Alias alias);
-  Alias evictOne();
+  Alias evictLRU();
+  Alias evictMRU();
 
   uint64_t getTotalSize() const {
     return totalSize_;
@@ -64,13 +76,17 @@ class MoQTokenCache {
   }
 
   size_t maxTokenSize() const {
-    return maxSize_ < 8 ? 0 : maxSize_ - 8;
+    return maxSize_ < kTokenOverhead ? 0 : maxSize_ - kTokenOverhead;
   }
 
- private:
-  size_t cachedSize(const TokenValue& token) const {
-    return token.size() + 8;
+  static size_t cachedSize(const TokenValue& token) {
+    return token.size() + kTokenOverhead;
   }
+
+  constexpr static uint64_t kTokenOverhead = 16;
+
+ private:
+  MoQTokenCache::Alias evictHelper(std::list<Alias>::iterator it);
 
   struct CachedToken {
     uint64_t tokenType;
