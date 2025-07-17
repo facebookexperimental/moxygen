@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
 /**
  * MoQ QLOG Parser
  * Parses MoQ (Media over QUIC) Transport QLOG JSON files
@@ -60,13 +67,13 @@ class MoQParser {
 
             // Extract metadata
             const metadata = this.extractMetadata(trace);
-            
+
             // Process events
             const events = this.processEvents(trace.events);
-            
+
             // Group events by tracks
             const tracks = this.groupEventsByTracks(events);
-            
+
             // Calculate timeline bounds
             const timelineBounds = this.calculateTimelineBounds(events);
 
@@ -106,7 +113,7 @@ class MoQParser {
      */
     extractStartTime(events) {
         if (events.length === 0) return Date.now();
-        
+
         // Find the earliest timestamp
         let minTime = Number.MAX_SAFE_INTEGER;
         for (const event of events) {
@@ -115,7 +122,7 @@ class MoQParser {
                 minTime = timestamp;
             }
         }
-        
+
         return minTime;
     }
 
@@ -126,9 +133,9 @@ class MoQParser {
      */
     parseEventTime(event) {
         if (!Array.isArray(event) || event.length < 1) return 0;
-        
+
         const timeValue = event[0];
-        
+
         // Handle different time formats
         if (typeof timeValue === 'number') {
             // Assume microseconds if > 1e12, otherwise milliseconds
@@ -136,7 +143,7 @@ class MoQParser {
         } else if (typeof timeValue === 'string') {
             return new Date(timeValue).getTime();
         }
-        
+
         return 0;
     }
 
@@ -147,17 +154,17 @@ class MoQParser {
      */
     processEvents(rawEvents) {
         const processedEvents = [];
-        
+
         for (let i = 0; i < rawEvents.length; i++) {
             const rawEvent = rawEvents[i];
-            
+
             if (!Array.isArray(rawEvent) || rawEvent.length < 3) {
                 console.warn(`Skipping malformed event at index ${i}:`, rawEvent);
                 continue;
             }
 
             const [time, category, eventName, eventData] = rawEvent;
-            
+
             // Only process MoQ events
             if (!this.isMoQEvent(eventName)) {
                 continue;
@@ -192,7 +199,7 @@ class MoQParser {
             }
             return a.originalIndex - b.originalIndex;
         });
-        
+
         const startTime = processedEvents.length > 0 ? processedEvents[0].timestamp : 0;
         processedEvents.forEach(event => {
             event.relative_time = event.timestamp - startTime;
@@ -221,7 +228,7 @@ class MoQParser {
         if (eventData && eventData.vantage_point) {
             return eventData.vantage_point.toLowerCase();
         }
-        
+
         // Infer from event name patterns
         if (eventName.includes('_created')) {
             // Created events are typically from the sender's perspective
@@ -230,7 +237,7 @@ class MoQParser {
             // Parsed events are typically from the receiver's perspective
             return this.vantagePoints.SERVER;
         }
-        
+
         return this.vantagePoints.CLIENT; // Default
     }
 
@@ -248,10 +255,10 @@ class MoQParser {
                 return this.eventCategories.CONTROL;
             }
         }
-        
+
         // Everything else goes in track columns
         if (eventName.includes('object_datagram')) {
-            return this.eventCategories.OBJECT;  
+            return this.eventCategories.OBJECT;
         } else if (eventName.includes('subgroup')) {
             return this.eventCategories.SUBGROUP;
         } else if (eventName.includes('fetch')) {
@@ -259,7 +266,7 @@ class MoQParser {
         } else if (eventName.includes('stream_type')) {
             return this.eventCategories.STREAM;
         }
-        
+
         return 'track_data'; // Default to track data, not control
     }
 
@@ -270,11 +277,11 @@ class MoQParser {
      */
     extractTrackId(eventData) {
         if (!eventData) return null;
-        
-        return eventData.track_id || 
-               eventData.trackId || 
-               eventData.track_alias || 
-               eventData.track_name || 
+
+        return eventData.track_id ||
+               eventData.trackId ||
+               eventData.track_alias ||
+               eventData.track_name ||
                null;
     }
 
@@ -285,10 +292,10 @@ class MoQParser {
      */
     extractGroupId(eventData) {
         if (!eventData) return null;
-        
-        return eventData.group_id || 
-               eventData.groupId || 
-               eventData.group || 
+
+        return eventData.group_id ||
+               eventData.groupId ||
+               eventData.group ||
                null;
     }
 
@@ -299,10 +306,10 @@ class MoQParser {
      */
     extractSubgroupId(eventData) {
         if (!eventData) return null;
-        
-        return eventData.subgroup_id || 
-               eventData.subgroupId || 
-               eventData.subgroup || 
+
+        return eventData.subgroup_id ||
+               eventData.subgroupId ||
+               eventData.subgroup ||
                null;
     }
 
@@ -313,10 +320,10 @@ class MoQParser {
      */
     extractObjectId(eventData) {
         if (!eventData) return null;
-        
-        return eventData.object_id || 
-               eventData.objectId || 
-               eventData.object || 
+
+        return eventData.object_id ||
+               eventData.objectId ||
+               eventData.object ||
                null;
     }
 
@@ -327,11 +334,11 @@ class MoQParser {
      */
     extractObjectSize(eventData) {
         if (!eventData) return 0;
-        
-        return eventData.object_size || 
-               eventData.objectSize || 
-               eventData.size || 
-               eventData.length || 
+
+        return eventData.object_size ||
+               eventData.objectSize ||
+               eventData.size ||
+               eventData.length ||
                eventData.payload_length ||
                0;
     }
@@ -343,10 +350,10 @@ class MoQParser {
      */
     extractControlMessageType(eventData) {
         if (!eventData) return null;
-        
-        return eventData.message_type || 
-               eventData.messageType || 
-               eventData.type || 
+
+        return eventData.message_type ||
+               eventData.messageType ||
+               eventData.type ||
                eventData.control_type ||
                null;
     }
@@ -358,15 +365,15 @@ class MoQParser {
      */
     groupEventsByTracks(events) {
         const tracks = {};
-        
+
         for (const event of events) {
             // Skip control events - they don't belong to tracks
             if (event.event_category === 'control') {
                 continue;
             }
-            
+
             const trackId = event.track_id || 'unknown';
-            
+
             if (!tracks[trackId]) {
                 tracks[trackId] = {
                     id: trackId,
@@ -377,16 +384,16 @@ class MoQParser {
                     server_events: []
                 };
             }
-            
+
             tracks[trackId].events.push(event);
-            
+
             if (event.vantage_point === this.vantagePoints.CLIENT) {
                 tracks[trackId].client_events.push(event);
             } else {
                 tracks[trackId].server_events.push(event);
             }
         }
-        
+
         return tracks;
     }
 
@@ -397,12 +404,12 @@ class MoQParser {
      */
     getTrackDisplayName(trackId) {
         if (!trackId || typeof trackId !== 'string' || trackId === 'unknown') return 'Unknown';
-        
+
         // For comma-separated names like "alice,audio", return as-is
         if (trackId.includes(',')) {
             return trackId;
         }
-        
+
         // Capitalize simple names
         return trackId.charAt(0).toUpperCase() + trackId.slice(1);
     }
@@ -427,11 +434,11 @@ class MoQParser {
         if (events.length === 0) {
             return { start: 0, end: 1000, duration: 1000 };
         }
-        
+
         const timestamps = events.map(e => e.relative_time);
         const start = Math.min(...timestamps);
         const end = Math.max(...timestamps);
-        
+
         return {
             start,
             end,
@@ -451,20 +458,20 @@ class MoQParser {
             by_vantage_point: { client: 0, server: 0 },
             by_track: {}
         };
-        
+
         for (const event of events) {
             // Count by category
             const category = event.event_category;
             stats.by_category[category] = (stats.by_category[category] || 0) + 1;
-            
+
             // Count by vantage point
             stats.by_vantage_point[event.vantage_point]++;
-            
+
             // Count by track
             const trackId = event.track_id || 'default';
             stats.by_track[trackId] = (stats.by_track[trackId] || 0) + 1;
         }
-        
+
         return stats;
     }
 
@@ -476,12 +483,12 @@ class MoQParser {
         const now = Date.now();
         const events = [];
         let currentTime = now;
-        
+
         // === ANNOUNCE PHASE ===
         // Client announces namespace=(meeting1, alice)
         events.push([
             currentTime,
-            'transport', 
+            'transport',
             this.eventTypes.CONTROL_MESSAGE_CREATED,
             {
                 vantage_point: 'client',
@@ -491,11 +498,11 @@ class MoQParser {
             }
         ]);
         currentTime += 50;
-        
+
         events.push([
             currentTime,
             'transport',
-            this.eventTypes.CONTROL_MESSAGE_PARSED, 
+            this.eventTypes.CONTROL_MESSAGE_PARSED,
             {
                 vantage_point: 'server',
                 message_type: 'ANNOUNCE_OK',
@@ -504,34 +511,34 @@ class MoQParser {
             }
         ]);
         currentTime += 100;
-        
+
         // Server announces namespace=(meeting1, bob)
         events.push([
             currentTime,
             'transport',
             this.eventTypes.CONTROL_MESSAGE_CREATED,
             {
-                vantage_point: 'server', 
+                vantage_point: 'server',
                 message_type: 'ANNOUNCE',
                 namespace: 'meeting1',
                 track_namespace: 'bob'
             }
         ]);
         currentTime += 50;
-        
+
         events.push([
             currentTime,
             'transport',
             this.eventTypes.CONTROL_MESSAGE_PARSED,
             {
                 vantage_point: 'client',
-                message_type: 'ANNOUNCE_OK', 
+                message_type: 'ANNOUNCE_OK',
                 namespace: 'meeting1',
                 track_namespace: 'bob'
             }
         ]);
         currentTime += 200;
-        
+
         // === SUBSCRIPTION PHASE ===
         // Client subscribes to bob,audio and bob,video
         const clientSubscriptions = ['bob,audio', 'bob,video'];
@@ -548,9 +555,9 @@ class MoQParser {
                 }
             ]);
             currentTime += 20;
-            
+
             events.push([
-                currentTime, 
+                currentTime,
                 'transport',
                 this.eventTypes.CONTROL_MESSAGE_PARSED,
                 {
@@ -562,13 +569,13 @@ class MoQParser {
             ]);
             currentTime += 30;
         });
-        
+
         // Server subscribes to alice,audio and alice,video
         const serverSubscriptions = ['alice,audio', 'alice,video'];
         serverSubscriptions.forEach(trackName => {
             events.push([
                 currentTime,
-                'transport', 
+                'transport',
                 this.eventTypes.CONTROL_MESSAGE_CREATED,
                 {
                     vantage_point: 'server',
@@ -578,7 +585,7 @@ class MoQParser {
                 }
             ]);
             currentTime += 20;
-            
+
             events.push([
                 currentTime,
                 'transport',
@@ -592,17 +599,17 @@ class MoQParser {
             ]);
             currentTime += 30;
         });
-        
+
         currentTime += 500; // Pause before media starts
-        
+
         // === MEDIA STREAMING PHASE ===
         const streamDuration = 10000; // 10 seconds of streaming
         const endTime = currentTime + streamDuration;
         let groupId = 0;
-        
+
         while (currentTime < endTime) {
             const secondStart = currentTime;
-            
+
             // Video: New group every 1 second - Start with subgroup header, then objects
             // Create subgroup headers first
             events.push([
@@ -617,7 +624,7 @@ class MoQParser {
                     object_count: 30
                 }
             ]);
-            
+
             events.push([
                 secondStart + 2,
                 'transport',
@@ -630,13 +637,13 @@ class MoQParser {
                     object_count: 30
                 }
             ]);
-            
+
             // Then create subgroup objects (30 objects, first large, rest small)
             for (let objId = 0; objId < 30; objId++) {
                 const objectTime = secondStart + 10 + (objId * 33); // Start 10ms after header
                 const isFirstObject = objId === 0;
                 const objectSize = isFirstObject ? 40000 : Math.floor(Math.random() * 1000 + 1000); // 40KB vs 1-2KB
-                
+
                 // Alice video (client sends)
                 events.push([
                     objectTime,
@@ -651,8 +658,8 @@ class MoQParser {
                         object_size: objectSize
                     }
                 ]);
-                
-                // Bob video (server sends)  
+
+                // Bob video (server sends)
                 events.push([
                     objectTime + 5,
                     'transport',
@@ -661,18 +668,18 @@ class MoQParser {
                         vantage_point: 'server',
                         track_id: 'bob,video',
                         group_id: groupId,
-                        subgroup_id: 0, 
+                        subgroup_id: 0,
                         object_id: objId,
                         object_size: objectSize
                     }
                 ]);
             }
-            
+
             // Audio: Datagrams every 20ms (aligned with video groups)
             for (let audioFrame = 0; audioFrame < 50; audioFrame++) { // 50 frames per second
                 const audioTime = secondStart + (audioFrame * 20);
                 const audioSize = Math.floor(Math.random() * 200 + 200); // 200-400 bytes
-                
+
                 // Alice audio (client sends)
                 events.push([
                     audioTime,
@@ -687,11 +694,11 @@ class MoQParser {
                         object_size: audioSize
                     }
                 ]);
-                
+
                 // Bob audio (server sends)
                 events.push([
                     audioTime + 2,
-                    'transport', 
+                    'transport',
                     this.eventTypes.OBJECT_DATAGRAM_CREATED,
                     {
                         vantage_point: 'server',
@@ -703,11 +710,11 @@ class MoQParser {
                     }
                 ]);
             }
-            
+
             currentTime += 1000; // Next second
             groupId++;
         }
-        
+
         return {
             qlog_format: "JSON-SEQ",
             qlog_version: "0.3",
