@@ -89,8 +89,9 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
           AnnounceErrorCode::UNINTERESTED,
           "Invalid chat announce"});
     }
-    subscribeToUser(std::move(announce.trackNamespace))
-        .scheduleOn(moqClient_.moqSession_->getEventBase())
+    co_withExecutor(
+        moqClient_.moqSession_->getEventBase(),
+        subscribeToUser(std::move(announce.trackNamespace)))
         .start();
   } else {
     co_return folly::makeUnexpected(AnnounceError{
@@ -337,6 +338,6 @@ int main(int argc, char* argv[]) {
   }
   auto chatClient = std::make_shared<moxygen::MoQChatClient>(
       &eventBase, std::move(url), FLAGS_chat_id, FLAGS_username, FLAGS_device);
-  chatClient->run().scheduleOn(&eventBase).start();
+  co_withExecutor(&eventBase, chatClient->run()).start();
   eventBase.loop();
 }

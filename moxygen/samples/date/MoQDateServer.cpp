@@ -59,15 +59,15 @@ class MoQDateServer : public MoQServer,
         (FLAGS_quic_transport
              ? std::make_unique<MoQClient>(evb, url)
              : std::make_unique<MoQWebTransportClient>(evb, url)));
-    relayClient_
-        ->run(
+    co_withExecutor(
+        evb,
+        relayClient_->run(
             /*publisher=*/shared_from_this(),
             /*subscriber=*/nullptr,
             {TrackNamespace({"moq-date"})},
             std::chrono::milliseconds(FLAGS_relay_connect_timeout),
             std::chrono::seconds(FLAGS_relay_transaction_timeout),
-            FLAGS_v11Plus)
-        .scheduleOn(evb)
+            FLAGS_v11Plus))
         .start();
     return true;
   }
@@ -145,7 +145,7 @@ class MoQDateServer : public MoQServer,
     auto session = MoQSession::getRequestSession();
     if (!loopRunning_) {
       loopRunning_ = true;
-      publishDateLoop().scheduleOn(session->getEventBase()).start();
+      co_withExecutor(session->getEventBase(), publishDateLoop()).start();
     }
 
     co_return forwarder_.addSubscriber(
@@ -213,10 +213,11 @@ class MoQDateServer : public MoQServer,
         0, // not end of track
         largest,
         {}});
-    folly::coro::co_withCancellation(
-        fetchHandle->cancelSource.getToken(),
-        catchup(std::move(consumer), {standalone->start, standalone->end}))
-        .scheduleOn(clientSession->getEventBase())
+    co_withExecutor(
+        clientSession->getEventBase(),
+        folly::coro::co_withCancellation(
+            fetchHandle->cancelSource.getToken(),
+            catchup(std::move(consumer), {standalone->start, standalone->end})))
         .start();
     co_return fetchHandle;
   }

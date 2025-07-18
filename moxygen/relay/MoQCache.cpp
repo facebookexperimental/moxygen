@@ -797,15 +797,16 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
          isEndOfTrack,
          largestInFetch,
          {}}));
-    folly::coro::co_withCancellation(
-        fetchHandle->getToken(),
-        fetchImpl(
-            fetchHandle,
-            std::move(fetch),
-            track,
-            std::move(consumer),
-            std::move(upstream)))
-        .scheduleOn(co_await folly::coro::co_current_executor)
+    co_withExecutor(
+        co_await folly::coro::co_current_executor,
+        folly::coro::co_withCancellation(
+            fetchHandle->getToken(),
+            fetchImpl(
+                fetchHandle,
+                std::move(fetch),
+                track,
+                std::move(consumer),
+                std::move(upstream))))
         .start();
     co_return fetchHandle;
   } else {

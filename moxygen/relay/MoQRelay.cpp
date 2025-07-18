@@ -71,7 +71,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   for (auto& outSession : sessions) {
     if (outSession != session) {
       auto evb = outSession->getEventBase();
-      announceToSession(outSession, ann, nodePtr).scheduleOn(evb).start();
+      co_withExecutor(evb, announceToSession(outSession, ann, nodePtr)).start();
     }
   }
   co_return nodePtr;
@@ -155,8 +155,9 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
     nodes.pop_front();
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
       // TODO: Auth/params
-      announceToSession(session, {subNs.requestID, prefix, {}}, nodePtr)
-          .scheduleOn(evb)
+      co_withExecutor(
+          evb,
+          announceToSession(session, {subNs.requestID, prefix, {}}, nodePtr))
           .start();
     }
     for (auto& nextNodeIt : nodePtr->children) {
