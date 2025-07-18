@@ -65,7 +65,7 @@ void MoQServer::createMoQQuicSession(
   auto moqSession = std::make_shared<MoQSession>(wt, *this, evb);
   qWtPtr->setHandler(moqSession.get());
   // the handleClientSession coro this session moqSession
-  handleClientSession(std::move(moqSession)).scheduleOn(evb).start();
+  co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
 }
 
 folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
@@ -157,7 +157,7 @@ void MoQServer::Handler::onHeadersComplete(
   auto evb = folly::EventBaseManager::get()->getEventBase();
   clientSession_ = std::make_shared<MoQSession>(wt, server_, evb);
 
-  server_.handleClientSession(clientSession_).scheduleOn(evb).start();
+  co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();
 }
 
 void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {

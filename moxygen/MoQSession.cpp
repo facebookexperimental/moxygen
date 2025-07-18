@@ -1595,14 +1595,16 @@ void MoQSession::start() {
     auto mergeToken = folly::CancellationToken::merge(
         cancellationSource_.getToken(),
         controlStream.writeHandle->getCancelToken());
-    folly::coro::co_withCancellation(
-        std::move(mergeToken), controlWriteLoop(controlStream.writeHandle))
-        .scheduleOn(evb_)
+    co_withExecutor(
+        evb_,
+        folly::coro::co_withCancellation(
+            std::move(mergeToken), controlWriteLoop(controlStream.writeHandle)))
         .start();
-    co_withCancellation(
-        cancellationSource_.getToken(),
-        controlReadLoop(controlStream.readHandle))
-        .scheduleOn(evb_)
+    co_withExecutor(
+        evb_,
+        co_withCancellation(
+            cancellationSource_.getToken(),
+            controlReadLoop(controlStream.readHandle)))
         .start();
   }
 }
@@ -2322,8 +2324,9 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   pubTracks_.emplace(requestID, trackPublisher);
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
-  handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher))
-      .scheduleOn(evb_)
+  co_withExecutor(
+      evb_,
+      handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher)))
       .start();
 }
 
@@ -2650,8 +2653,8 @@ void MoQSession::onFetch(Fetch fetch) {
   fetchPublisher->setLogger(logger_);
   fetchPublisher->initialize();
   pubTracks_.emplace(fetch.requestID, fetchPublisher);
-  handleFetch(std::move(fetch), std::move(fetchPublisher))
-      .scheduleOn(evb_)
+  co_withExecutor(
+      evb_, handleFetch(std::move(fetch), std::move(fetchPublisher)))
       .start();
 }
 
@@ -2795,7 +2798,7 @@ void MoQSession::onAnnounce(Announce ann) {
          AnnounceErrorCode::NOT_SUPPORTED,
          "Not a subscriber"});
   } else {
-    handleAnnounce(std::move(ann)).scheduleOn(evb_).start();
+    co_withExecutor(evb_, handleAnnounce(std::move(ann))).start();
   }
 }
 
@@ -2988,7 +2991,7 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
          "Not a publisher"});
     return;
   }
-  handleSubscribeAnnounces(std::move(sa)).scheduleOn(evb_).start();
+  co_withExecutor(evb_, handleSubscribeAnnounces(std::move(sa))).start();
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
@@ -3124,7 +3127,8 @@ void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
          TrackStatusCode::UNKNOWN,
          folly::none});
   } else {
-    handleTrackStatus(std::move(trackStatusRequest)).scheduleOn(evb_).start();
+    co_withExecutor(evb_, handleTrackStatus(std::move(trackStatusRequest)))
+        .start();
   }
 }
 
@@ -4035,10 +4039,11 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
     return;
   }
   // maybe not SUBGROUP_HEADER, but at least not control
-  co_withCancellation(
-      cancellationSource_.getToken(),
-      unidirectionalReadLoop(shared_from_this(), rh))
-      .scheduleOn(evb_)
+  co_withExecutor(
+      evb_,
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          unidirectionalReadLoop(shared_from_this(), rh)))
       .start();
 }
 
@@ -4056,15 +4061,17 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
     }
 
     bh.writeHandle->setPriority(0, 0, false);
-    co_withCancellation(
-        cancellationSource_.getToken(), controlReadLoop(bh.readHandle))
-        .scheduleOn(evb_)
+    co_withExecutor(
+        evb_,
+        co_withCancellation(
+            cancellationSource_.getToken(), controlReadLoop(bh.readHandle)))
         .start();
     auto mergeToken = folly::CancellationToken::merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
-    folly::coro::co_withCancellation(
-        std::move(mergeToken), controlWriteLoop(bh.writeHandle))
-        .scheduleOn(evb_)
+    co_withExecutor(
+        evb_,
+        folly::coro::co_withCancellation(
+            std::move(mergeToken), controlWriteLoop(bh.writeHandle)))
         .start();
   }
 }
