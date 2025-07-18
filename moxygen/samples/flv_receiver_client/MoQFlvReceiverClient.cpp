@@ -553,8 +553,7 @@ int main(int argc, char* argv[]) {
     flvReceiverClient->stop();
   });
 
-  flvReceiverClient->run()
-      .scheduleOn(&eventBase)
+  co_withExecutor(&eventBase, flvReceiverClient->run())
       .start()
       .via(&eventBase)
       .thenTry([&handler](auto) { handler.unreg(); });

@@ -364,8 +364,8 @@ int main(int argc, char* argv[]) {
   SigHandler handler(
       &eventBase, [&streamerClient](int) mutable { streamerClient->stop(); });
 
-  streamerClient->run({RequestID(0), {std::move(ns)}, {}})
-      .scheduleOn(&eventBase)
+  co_withExecutor(
+      &eventBase, streamerClient->run({RequestID(0), {std::move(ns)}, {}}))
       .start()
       .via(&eventBase)
       .thenTry([&handler](auto) { handler.unreg(); });
