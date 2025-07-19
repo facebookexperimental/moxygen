@@ -1592,7 +1592,7 @@ void MoQSession::start() {
           Owner::LOCAL);
     }
 
-    auto mergeToken = folly::CancellationToken::merge(
+    auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(),
         controlStream.writeHandle->getCancelToken());
     co_withExecutor(
@@ -1730,7 +1730,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   auto deletedToken = cancellationSource_.getToken();
   auto token = co_await folly::coro::co_current_cancellation_token;
-  auto mergeToken = folly::CancellationToken::merge(deletedToken, token);
+  auto mergeToken = folly::cancellation_token_merge(deletedToken, token);
   folly::EventBaseThreadTimekeeper tk(*evb_);
   auto serverSetup = co_await co_awaitTry(folly::coro::co_withCancellation(
       mergeToken,
@@ -1938,7 +1938,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
           MoQPublishError::CANCELLED, "Subgroup for unknown track");
       return;
     }
-    token_ = folly::CancellationToken::merge(
+    token_ = folly::cancellation_token_merge(
         token_, subscribeState_->getCancelToken());
     auto callback = subscribeState_->getSubscribeCallback();
     if (!callback) {
@@ -1970,7 +1970,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     fetchState_->setCurrentStreamId(currentStreamId_);
     fetchState_->onFetchHeader(requestID);
     token_ =
-        folly::CancellationToken::merge(token_, fetchState_->getCancelToken());
+        folly::cancellation_token_merge(token_, fetchState_->getCancelToken());
   }
 
   void onObjectBegin(
@@ -4066,7 +4066,7 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
         co_withCancellation(
             cancellationSource_.getToken(), controlReadLoop(bh.readHandle)))
         .start();
-    auto mergeToken = folly::CancellationToken::merge(
+    auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
     co_withExecutor(
         evb_,
