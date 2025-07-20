@@ -30,6 +30,10 @@ class MoQForwarder : public TrackConsumer {
     groupOrder_ = order;
   }
 
+  GroupOrder groupOrder() const {
+    return groupOrder_;
+  }
+
   void setLargest(AbsoluteLocation largest) {
     largest_ = largest;
   }
@@ -151,6 +155,28 @@ class MoQForwarder : public TrackConsumer {
         toSubscribeRange(subReq, largest_),
         std::move(consumer),
         subReq.forward);
+    subscribers_.emplace(sessionPtr, subscriber);
+    return subscriber;
+  }
+
+  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
+      std::shared_ptr<MoQSession> session,
+      const PublishRequest& pub) {
+    auto sessionPtr = session.get();
+    auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
+        *this,
+        SubscribeOk{
+            pub.requestID,
+            pub.trackAlias,
+            std::chrono::milliseconds(0),
+            pub.groupOrder,
+            largest_,
+            {}},
+        std::move(session),
+        pub.requestID,
+        SubscribeRange{{0, 0}, kLocationMax},
+        nullptr,
+        pub.forward);
     subscribers_.emplace(sessionPtr, subscriber);
     return subscriber;
   }

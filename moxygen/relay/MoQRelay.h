@@ -45,6 +45,10 @@ class MoQRelay : public Publisher,
       Announce ann,
       std::shared_ptr<Subscriber::AnnounceCallback>) override;
 
+  PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> handle) override;
+
   void removeSession(const std::shared_ptr<MoQSession>& session);
 
   void goaway(Goaway goaway) override {
@@ -68,6 +72,7 @@ class MoQRelay : public Publisher,
     using Subscriber::AnnounceHandle::setAnnounceOk;
 
     folly::F14FastMap<std::string, std::shared_ptr<AnnounceNode>> children;
+    folly::F14FastMap<std::string, std::shared_ptr<MoQSession>> publishes;
     // Sessions with a SUBSCRIBE_ANNOUNCES here
     folly::F14FastSet<std::shared_ptr<MoQSession>> sessions;
     // All active ANNOUNCEs for this node (includes prefix sessions)
@@ -98,6 +103,7 @@ class MoQRelay : public Publisher,
     RequestID requestID{0};
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
     folly::coro::SharedPromise<folly::Unit> promise;
+    bool isPublish{false};
   };
 
   void onEmpty(MoQForwarder* forwarder) override;
@@ -106,6 +112,10 @@ class MoQRelay : public Publisher,
       std::shared_ptr<MoQSession> session,
       Announce ann,
       std::shared_ptr<AnnounceNode> nodePtr);
+  folly::coro::Task<void> publishToSession(
+      std::shared_ptr<MoQSession> session,
+      std::shared_ptr<MoQForwarder> forwarder,
+      PublishRequest pub);
 
   void unannounce(const TrackNamespace& trackNamespace, AnnounceNode* node);
 
