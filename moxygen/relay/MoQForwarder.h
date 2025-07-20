@@ -228,6 +228,7 @@ class MoQForwarder : public TrackConsumer {
   void removeSession(
       const std::shared_ptr<MoQSession>& session,
       folly::Optional<SubscribeDone> subDone = folly::none) {
+    XLOG(DBG1) << __func__ << " session=" << session.get();
     auto subIt = subscribers_.find(session.get());
     if (subIt == subscribers_.end()) {
       // ?
@@ -383,6 +384,7 @@ class MoQForwarder : public TrackConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
       SubscribeDone subDone) override {
+    XLOG(DBG1) << __func__ << " subDone reason=" << subDone.reasonPhrase;
     forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       removeSession(sub->session, subDone);
     });
