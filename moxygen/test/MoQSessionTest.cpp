@@ -339,7 +339,6 @@ INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,
     testing::Values(
-        VersionParams{{kVersionDraft08}, kVersionDraft08},
         VersionParams{{kVersionDraft09}, kVersionDraft09},
         VersionParams{{kVersionDraft10}, kVersionDraft10},
         VersionParams{{kVersionDraft11}, kVersionDraft11},
@@ -408,7 +407,6 @@ INSTANTIATE_TEST_SUITE_P(
     MoQVersionNegotiationTest,
     MoQVersionNegotiationTest,
     testing::Values(
-        VersionParams{{kVersionDraft08}, kVersionDraft08},
         VersionParams{{kVersionDraft09}, kVersionDraft09},
         VersionParams{{kVersionDraft10}, kVersionDraft10},
         VersionParams{{kVersionDraft11}, kVersionDraft11},
