@@ -17,6 +17,14 @@ class MoQRelayClient {
   explicit MoQRelayClient(std::unique_ptr<MoQClient> client)
       : moqClient_(std::move(client)) {}
 
+  folly::coro::Task<void> ready() {
+    co_await ready_;
+    if (!moqClient_->moqSession_) {
+      XLOG(ERR) << "Session is dead now #sad";
+      co_yield folly::coro::co_error(std::runtime_error("Session is dead"));
+    }
+  }
+
   folly::coro::Task<void> run(
       std::shared_ptr<Publisher> publisher,
       std::shared_ptr<Subscriber> subscriber,
@@ -35,6 +43,7 @@ class MoQRelayClient {
       // could parallelize
       if (!moqClient_->moqSession_) {
         XLOG(ERR) << "Session is dead now #sad";
+        ready_.post();
         co_return;
       }
       for (auto& ns : namespaces) {
@@ -49,6 +58,7 @@ class MoQRelayClient {
           announceHandles_.emplace_back(std::move(res.value()));
         }
       }
+      ready_.post();
       if (isPublisher) {
         while (moqClient_->moqSession_) {
           co_await folly::coro::sleep(std::chrono::seconds(30));
@@ -84,6 +94,7 @@ class MoQRelayClient {
  private:
   std::unique_ptr<MoQClient> moqClient_;
   std::vector<std::shared_ptr<Subscriber::AnnounceHandle>> announceHandles_;
+  folly::coro::Baton ready_;
 };
 
 } // namespace moxygen

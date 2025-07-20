@@ -33,6 +33,7 @@ DEFINE_bool(jrfetch, false, "Joining relative fetch");
 DEFINE_bool(jafetch, false, "Joining absolute fetch");
 DEFINE_bool(forward, true, "Forward flag for subscriptions");
 DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
+DEFINE_bool(accept_publish, false, "Accept PUBLISH");
 
 namespace {
 using namespace moxygen;
@@ -146,6 +147,18 @@ class MoQTextClient : public Subscriber,
           /*subscribeHandler=*/shared_from_this(),
           FLAGS_v11Plus);
 
+      if (FLAGS_accept_publish) {
+        auto res = co_await moqClient_->moqSession_->subscribeAnnounces(
+            {RequestID(0), fullTrackName_.trackNamespace, {}});
+        if (res.hasError()) {
+          XLOG(ERR) << "SubscribeAnnounces error: " << res.error().reasonPhrase;
+          co_return;
+        }
+        subAnnHandle_ = std::move(res.value());
+        co_await subTextHandler_->baton;
+        co_return;
+      }
+
       Publisher::SubscribeResult track;
       if (FLAGS_jafetch || FLAGS_jrfetch) {
         FetchType fetchType = FLAGS_jafetch ? FetchType::ABSOLUTE_JOINING
@@ -255,6 +268,37 @@ class MoQTextClient : public Subscriber,
             announce.requestID, std::move(announce.trackNamespace)}));
   }
 
+  Subscriber::PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> handle) override {
+    XLOG(DBG1) << __func__ << " ns=" << pub.fullTrackName.trackNamespace;
+    if (!FLAGS_accept_publish) {
+      return folly::makeUnexpected(PublishError{
+          pub.requestID, PublishErrorCode::UNINTERESTED, "don't care"});
+    }
+    if (subscription_) {
+      return folly::makeUnexpected(PublishError{
+          pub.requestID,
+          PublishErrorCode::UNINTERESTED,
+          "Already subscribed to a track"});
+    }
+    subscription_ = std::move(handle);
+    PublishConsumerAndReplyTask ret{
+        pubTextReceiver_,
+        folly::coro::makeTask(
+            folly::Expected<PublishOk, PublishError>(PublishOk{
+                pub.requestID,
+                /*forward=*/true,
+                kDefaultPriority,
+                pub.groupOrder,
+                pub.largest ? LocationType::AbsoluteStart
+                            : LocationType::LargestObject,
+                pub.largest,
+                folly::none,
+                {}}))};
+    return std::move(ret);
+  }
+
   void goaway(Goaway goaway) override {
     XLOG(INFO) << "Goaway uri=" << goaway.newSessionUri;
     stop();
@@ -263,10 +307,16 @@ class MoQTextClient : public Subscriber,
   void stop() {
     subTextHandler_->baton.post();
     fetchTextHandler_->baton.post();
+    pubTextHandler_->baton.post();
+
     // TODO: maybe need fetchCancel
     if (subscription_) {
       subscription_->unsubscribe();
       subscription_.reset();
+    }
+    if (subAnnHandle_) {
+      subAnnHandle_->unsubscribeAnnounces();
+      subAnnHandle_.reset();
     }
     if (moqClient_->moqSession_) {
       moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -276,11 +326,18 @@ class MoQTextClient : public Subscriber,
   std::unique_ptr<MoQClient> moqClient_;
   FullTrackName fullTrackName_;
   std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
+  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subAnnHandle_;
   std::shared_ptr<TextHandler> subTextHandler_{
+      std::make_shared<TextHandler>(/*fetch=*/false)};
+  std::shared_ptr<TextHandler> pubTextHandler_{
       std::make_shared<TextHandler>(/*fetch=*/false)};
   std::shared_ptr<TextHandler> fetchTextHandler_{
       std::make_shared<TextHandler>(/*fetch=*/true)};
   std::shared_ptr<ObjectReceiver> subTextReceiver_{
+      std::make_shared<ObjectReceiver>(
+          ObjectReceiver::SUBSCRIBE,
+          subTextHandler_)};
+  std::shared_ptr<ObjectReceiver> pubTextReceiver_{
       std::make_shared<ObjectReceiver>(
           ObjectReceiver::SUBSCRIBE,
           subTextHandler_)};
