@@ -1042,6 +1042,13 @@ class MoQFrameParser {
       SubgroupIDFormat format,
       bool includeExtensions) const noexcept;
 
+  // Parses the stream header and if it's a subgroup type,
+  // parses and returns the Track Alias.  For non-subgroups,
+  // returns folly::none.
+  folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+  parseSubgroupTypeAndAlias(folly::io::Cursor& cursor, size_t length)
+      const noexcept;
+
   folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
       folly::io::Cursor& cursor,
       const ObjectHeader& headerTemplate) const noexcept;

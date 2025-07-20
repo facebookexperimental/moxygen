@@ -580,6 +580,30 @@ MoQFrameParser::parseDatagramObjectHeader(
   return objectHeader;
 }
 
+folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+MoQFrameParser::parseSubgroupTypeAndAlias(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
+  auto type = quic::decodeQuicInteger(cursor);
+  if (!type) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= type->second;
+  if ((type->first & folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) ==
+          0 &&
+      (type->first &
+       folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0 &&
+      type->first != folly::to_underlying(StreamType::SUBGROUP_HEADER)) {
+    return folly::none;
+  }
+  auto trackAlias = quic::decodeQuicInteger(cursor, length);
+  if (!trackAlias) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= trackAlias->second;
+  return TrackAlias(trackAlias->first);
+}
+
 folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
     SubgroupIDFormat format,

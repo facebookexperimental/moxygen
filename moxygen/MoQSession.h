@@ -27,6 +27,10 @@
 
 namespace moxygen {
 
+namespace detail {
+class ObjectStreamCallback;
+}
+
 struct BufferingThresholds {
   // A value of 0 means no threshold
   uint64_t perSubscription{0};
@@ -336,6 +340,11 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle);
+  folly::coro::Task<folly::Expected<bool, MoQPublishError>> headerParsed(
+      MoQObjectStreamCodec& codec,
+      detail::ObjectStreamCallback& callback,
+      proxygen::WebTransport::StreamData& streamData);
+
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
@@ -516,6 +525,8 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       subscribeAnnounces_;
   folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
       bufferedDatagrams_;
+  folly::F14FastMap<TrackAlias, std::list<TimedBaton*>, TrackAlias::hash>
+      bufferedSubgroups_;
 
   uint64_t closedRequests_{0};
   // TODO: Make this value configurable. maxConcurrentRequests_ represents

@@ -1882,7 +1882,7 @@ MoQSession::getFetchTrackReceiveState(RequestID requestID) {
   return trackIt->second;
 }
 
-namespace {
+namespace detail {
 class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   // TODO: MoQConsumers should have a "StreamConsumer" that both
   // SubgroupConsumer and FetchConsumer can inherit.  In that case we can
@@ -1926,12 +1926,17 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     currentStreamId_ = id;
   }
 
+  void setSubscribeTrackReceiveState(
+      std::shared_ptr<MoQSession::SubscribeTrackReceiveState> state) {
+    subscribeState_ = std::move(state);
+  }
+
   void onSubgroup(
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
       Priority priority) override {
-    subscribeState_ = session_->getSubscribeTrackReceiveState(alias);
+    XCHECK(subscribeState_);
     session_->onSubscriptionStreamOpenedByPeer();
     if (!subscribeState_) {
       error_ = MoQPublishError(
@@ -2202,7 +2207,49 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   uint64_t currentStreamId_{0};
   ObjectHeader currentObj_;
 };
-} // namespace
+} // namespace detail
+
+folly::coro::Task<folly::Expected<bool, MoQPublishError>>
+MoQSession::headerParsed(
+    MoQObjectStreamCodec& codec,
+    detail::ObjectStreamCallback& callback,
+    proxygen::WebTransport::StreamData& streamData) {
+  auto parseResult = codec.parseSubgroupTypeAndAlias(
+      std::move(streamData.data), streamData.fin);
+  if (parseResult.hasError()) {
+    if (parseResult.error() == ErrorCode::PARSE_UNDERFLOW) {
+      co_return false;
+    } else {
+      MoQPublishError err(
+          MoQPublishError::CANCELLED, "Error parsing subgroup type and alias");
+      co_return folly::makeUnexpected(err);
+    }
+  }
+  auto trackAlias = parseResult.value();
+  if (!trackAlias) {
+    // it's fetch
+    co_return true;
+  }
+  auto state = getSubscribeTrackReceiveState(*trackAlias);
+  if (!state) {
+    TimedBaton baton;
+    auto res =
+        bufferedSubgroups_.emplace(*trackAlias, std::list<TimedBaton*>());
+    res.first->second.push_back(&baton);
+    constexpr std::chrono::milliseconds kUnknownAliasTimeout(5000);
+    auto waitRes = co_await co_awaitTry(baton.wait(kUnknownAliasTimeout));
+    if (waitRes.hasException()) {
+      MoQPublishError err(
+          MoQPublishError::CANCELLED, "Timed out waiting for unknown alias");
+      co_return folly::makeUnexpected(err);
+    } else {
+      state = getSubscribeTrackReceiveState(*trackAlias);
+      XCHECK(state);
+    }
+  }
+  callback.setSubscribeTrackReceiveState(std::move(state));
+  co_return true;
+}
 
 folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     std::shared_ptr<MoQSession> session,
@@ -2216,7 +2263,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   auto token = co_await folly::coro::co_current_cancellation_token;
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
-  ObjectStreamCallback dcb(session, /*by ref*/ token);
+  detail::ObjectStreamCallback dcb(session, /*by ref*/ token);
   if (logger_) {
     dcb.setLogger(logger_);
   }
@@ -2225,6 +2272,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   codec.setStreamId(id);
 
   bool fin = false;
+  bool headerParsed = false;
   while (!fin && !token.isCancellationRequested()) {
     auto streamData =
         co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
@@ -2251,9 +2299,22 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       if (streamData->data || streamData->fin) {
         fin = streamData->fin;
         folly::Optional<MoQPublishError> err;
+        if (!headerParsed) {
+          auto res =
+              co_await this->headerParsed(codec, dcb, streamData.value());
+          if (res.hasError()) {
+            err = res.error();
+          }
+          headerParsed = *res;
+          if (!headerParsed) {
+            continue;
+          }
+        }
         try {
-          codec.onIngress(std::move(streamData->data), streamData->fin);
-          err = dcb.error();
+          if (!err) {
+            codec.onIngress(std::move(streamData->data), streamData->fin);
+            err = dcb.error();
+          }
         } catch (const std::exception& ex) {
           err = MoQPublishError(
               MoQPublishError::CANCELLED,
@@ -2478,14 +2539,23 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
               << " sess=" << this;
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
   }
-  auto datagramsIt = bufferedDatagrams_.find(subOk.trackAlias);
+  auto trackAlias = subOk.trackAlias;
+  trackReceiveState->subscribeOK(std::move(subOk));
+  auto datagramsIt = bufferedDatagrams_.find(trackAlias);
   if (datagramsIt != bufferedDatagrams_.end()) {
     for (auto& datagram : datagramsIt->second) {
       onDatagram(std::move(datagram));
     }
     bufferedDatagrams_.erase(datagramsIt);
   }
-  trackReceiveState->subscribeOK(std::move(subOk));
+
+  auto subgroupsIt = bufferedSubgroups_.find(trackAlias);
+  if (subgroupsIt != bufferedSubgroups_.end()) {
+    for (auto* baton : subgroupsIt->second) {
+      baton->signal();
+    }
+    bufferedSubgroups_.erase(subgroupsIt);
+  }
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
