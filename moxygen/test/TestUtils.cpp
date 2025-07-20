@@ -111,6 +111,34 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeSubscribeDone(
       writeBuf,
       SubscribeDone({0, SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 7, ""}));
+  res = moqFrameWriter.writePublish(
+      writeBuf,
+      PublishRequest(
+          {0,
+           FullTrackName({TrackNamespace({"hello"}), "world"}),
+           255,
+           GroupOrder::Default,
+           folly::none,
+           0,
+           getTestTrackRequestParameters(moqFrameWriter)}));
+  res = moqFrameWriter.writePublishOk(
+      writeBuf,
+      PublishOk(
+          {0,
+           false,
+           128,
+           GroupOrder::Default,
+           LocationType::LargestObject,
+           folly::none,
+           folly::none,
+           getTestTrackRequestParameters(moqFrameWriter)}));
+  res = moqFrameWriter.writePublishError(
+      writeBuf,
+      PublishError({
+          0,
+          PublishErrorCode::INTERNAL_ERROR,
+          "server error",
+      }));
   res = moqFrameWriter.writeAnnounce(
       writeBuf,
       Announce(

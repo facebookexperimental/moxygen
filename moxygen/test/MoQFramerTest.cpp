@@ -106,6 +106,18 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r7);
 
     skip(cursor, 1);
+    auto r8a = parser_.parsePublish(cursor, frameLength(cursor));
+    testUnderflowResult(r8a);
+
+    skip(cursor, 1);
+    auto r8b = parser_.parsePublishOk(cursor, frameLength(cursor));
+    testUnderflowResult(r8b);
+
+    skip(cursor, 1);
+    auto r8c = parser_.parsePublishError(cursor, frameLength(cursor));
+    testUnderflowResult(r8c);
+
+    skip(cursor, 1);
     auto r9 = parser_.parseAnnounce(cursor, frameLength(cursor));
     testUnderflowResult(r9);
 
