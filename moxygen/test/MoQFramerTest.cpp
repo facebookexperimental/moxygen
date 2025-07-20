@@ -29,6 +29,14 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     return StreamType(frameType->first);
   }
 
+  DatagramType parseDatagramType(folly::io::Cursor& cursor) {
+    auto frameType = quic::decodeQuicInteger(cursor);
+    if (!frameType) {
+      throw std::runtime_error("Failed to decode frame type");
+    }
+    return DatagramType(frameType->first);
+  }
+
   void skip(folly::io::Cursor& cursor, size_t i) {
     if (!cursor.canAdvance(i)) {
       throw TestUnderflow();
@@ -277,10 +285,10 @@ TEST_P(MoQFramerTest, ParseObjectHeader) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
+  auto dgType = parseDatagramType(cursor);
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false));
   auto length = cursor.totalLength();
-  auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
+  auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -307,10 +315,10 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), getDatagramType(GetParam(), false, false));
+  auto dgType = parseDatagramType(cursor);
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), false, false, false));
   auto length = cursor.totalLength();
-  auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, getDatagramType(GetParam(), false, false), length);
+  auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -403,7 +411,8 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     uint64_t expectedPayloadLen) {
   for (size_t i = 1; i <= writeBuf.chainLength(); ++i) {
     folly::io::Cursor cursor(writeBuf.front());
-    auto datagramType = getDatagramType(GetParam(), isStatus, hasExtensions);
+    auto datagramType =
+        getDatagramType(GetParam(), isStatus, hasExtensions, false);
     auto decodedType = quic::decodeQuicInteger(cursor, i);
     EXPECT_TRUE(decodedType.has_value());
     EXPECT_EQ(decodedType->first, folly::to_underlying(datagramType));
@@ -530,10 +539,10 @@ TEST_P(MoQFramerTest, ZeroLengthNormal) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
+  auto dgType = parseDatagramType(cursor);
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false));
   auto length = cursor.totalLength();
-  auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
+  auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
