@@ -314,7 +314,7 @@ TEST_P(MoQCodecTest, StreamTypeUnderflow) {
 
 TEST_P(MoQCodecTest, UnknownStreamType) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  uint8_t bad = 0x12;
+  uint8_t bad = 0x22;
   writeBuf.append(&bad, 1);
 
   EXPECT_CALL(

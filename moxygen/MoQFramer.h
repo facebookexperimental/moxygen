@@ -168,19 +168,42 @@ enum class StreamType : uint64_t {
   OBJECT_DATAGRAM_STATUS_EXT = 0x3,
   SUBGROUP_HEADER = 0x4, // draft-10 and earlier
   FETCH_HEADER = 0x5,
-  SUBGROUP_HEADER_MASK = 0x8,
-  SUBGROUP_HEADER_SG_ZERO = 0x8,
-  SUBGROUP_HEADER_SG_ZERO_EXT = 0x9,
-  SUBGROUP_HEADER_SG_FIRST = 0xA,
-  SUBGROUP_HEADER_SG_FIRST_EXT = 0xB,
-  SUBGROUP_HEADER_SG = 0xC,
-  SUBGROUP_HEADER_SG_EXT = 0xD,
+  SUBGROUP_HEADER_MASK_V11 = 0x8,
+  SUBGROUP_HEADER_SG_ZERO_V11 = 0x8,
+  SUBGROUP_HEADER_SG_ZERO_EXT_V11 = 0x9,
+  SUBGROUP_HEADER_SG_FIRST_V11 = 0xA,
+  SUBGROUP_HEADER_SG_FIRST_EXT_V11 = 0xB,
+  SUBGROUP_HEADER_SG_V11 = 0xC,
+  SUBGROUP_HEADER_SG_EXT_V11 = 0xD,
+
+  SUBGROUP_HEADER_MASK = 0x10,
+  SUBGROUP_HEADER_SG_ZERO = 0x10,
+  SUBGROUP_HEADER_SG_ZERO_EXT = 0x11,
+  SUBGROUP_HEADER_SG_FIRST = 0x12,
+  SUBGROUP_HEADER_SG_FIRST_EXT = 0x13,
+  SUBGROUP_HEADER_SG = 0x14,
+  SUBGROUP_HEADER_SG_EXT = 0x15,
+  SUBGROUP_HEADER_SG_ZERO_EOG = 0x18,
+  SUBGROUP_HEADER_SG_ZERO_EXT_EOG = 0x19,
+  SUBGROUP_HEADER_SG_FIRST_EOG = 0x1A,
+  SUBGROUP_HEADER_SG_FIRST_EXT_EOG = 0x1B,
+  SUBGROUP_HEADER_SG_EOG = 0x1C,
+  SUBGROUP_HEADER_SG_EXT_EOG = 0x1D,
 };
 
 // Subgroup Bit Fields
 constexpr uint8_t SG_HAS_EXTENSIONS = 0x1;
 constexpr uint8_t SG_SUBGROUP_VALUE = 0x2;
 constexpr uint8_t SG_HAS_SUBGROUP_ID = 0x4;
+constexpr uint8_t SG_HAS_END_OF_GROUP = 0x8;
+
+enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
+
+struct SubgroupOptions {
+  bool hasExtensions{false};
+  SubgroupIDFormat subgroupIDFormat{SubgroupIDFormat::Present};
+  bool hasEndOfGroup{false};
+};
 
 std::ostream& operator<<(std::ostream& os, FrameType type);
 
@@ -920,19 +943,67 @@ struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
 
-enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
 inline StreamType getSubgroupStreamType(
     uint64_t version,
     SubgroupIDFormat format,
-    bool includeExtensions) {
-  if (getDraftMajorVersion(version) < 11) {
+    bool includeExtensions,
+    bool endOfGroup) {
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
     return StreamType::SUBGROUP_HEADER;
+  } else if (majorVersion == 11) {
+    return StreamType(
+        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11) |
+        (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
+        (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
+        (includeExtensions ? SG_HAS_EXTENSIONS : 0));
+  } else {
+    return StreamType(
+        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
+        (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
+        (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
+        (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
+        (endOfGroup ? SG_HAS_END_OF_GROUP : 0));
   }
-  return StreamType(
-      folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
-      (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
-      (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
-      (includeExtensions ? SG_HAS_EXTENSIONS : 0));
+}
+inline folly::Optional<SubgroupOptions> getSubgroupOptions(
+    uint64_t version,
+    StreamType streamType) {
+  SubgroupOptions options;
+  auto streamTypeInt = folly::to_underlying(streamType);
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
+    if (streamType != StreamType::SUBGROUP_HEADER) {
+      return folly::none;
+    }
+    options.hasExtensions = false;
+    options.subgroupIDFormat = SubgroupIDFormat::Present;
+    options.hasEndOfGroup = false;
+    return options;
+  } else if (majorVersion == 11) {
+    if ((streamTypeInt &
+         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0) {
+      return folly::none;
+    }
+    streamTypeInt &=
+        ~folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11);
+  } else {
+    if ((streamTypeInt &
+         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) == 0) {
+      return folly::none;
+    }
+    streamTypeInt &= ~folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK);
+    options.hasEndOfGroup =
+        folly::to_underlying(streamType) & SG_HAS_END_OF_GROUP;
+  }
+
+  options.hasExtensions = streamTypeInt & SG_HAS_EXTENSIONS;
+  options.subgroupIDFormat = streamTypeInt & SG_HAS_SUBGROUP_ID
+      ? SubgroupIDFormat::Present
+      : (streamTypeInt & SG_SUBGROUP_VALUE) ? SubgroupIDFormat::FirstObject
+                                            : SubgroupIDFormat::Zero;
+  options.hasEndOfGroup = false;
+  return options;
 }
 
 inline StreamType

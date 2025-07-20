@@ -543,7 +543,7 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto streamType =
-      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false);
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false, false);
   auto result = writer_.writeSubgroupHeader(
       writeBuf, expectedObjectHeader, SubgroupIDFormat::Zero, false);
   EXPECT_TRUE(result.hasValue());
@@ -721,8 +721,8 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  auto streamType =
-      getSubgroupStreamType(GetParam(), SubgroupIDFormat::FirstObject, false);
+  auto streamType = getSubgroupStreamType(
+      GetParam(), SubgroupIDFormat::FirstObject, false, false);
   auto hasExtensions = getDraftMajorVersion(GetParam()) < 11;
   auto parsedST = parseStreamType(cursor);
   EXPECT_EQ(parsedST, streamType)
