@@ -68,7 +68,9 @@ void MoQServer::createMoQQuicSession(
   co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
 }
 
-folly::Try<ServerSetup> MoQServer::onClientSetup(ClientSetup setup) {
+folly::Try<ServerSetup> MoQServer::onClientSetup(
+    ClientSetup setup,
+    std::shared_ptr<MoQSession>) {
   XLOG(INFO) << "ClientSetup";
   uint64_t negotiatedVersion = 0;
   // Iterate over supported versions and set the highest version within the
