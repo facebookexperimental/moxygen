@@ -1875,7 +1875,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
   }
   length -= extLen->second;
   if (extLen->first > length) {
-    XLOG(ERR) << "Extension block length provided exceeds remaining length";
+    XLOG(ERR) << "Extension block length provided exceeds remaining length. length: " << length << ", extLen->first: " << extLen->first;
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   // Parse the extensions
