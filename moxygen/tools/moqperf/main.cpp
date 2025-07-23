@@ -17,10 +17,6 @@
 #include <moxygen/tools/moqperf/MoQPerfServer.h>
 #include <moxygen/tools/moqperf/MoQPerfUtils.h>
 
-#include <folly/Conv.h>
-#include <folly/container/F14Map.h>
-#include <folly/container/F14Set.h>
-
 // server (addr, port)
 DEFINE_string(server_addr, "", "Server's address");
 DEFINE_int32(server_port, 16001, "Server's port");
