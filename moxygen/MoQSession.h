@@ -47,6 +47,8 @@ class MoQSession : public Subscriber,
                    public proxygen::WebTransportHandler,
                    public std::enable_shared_from_this<MoQSession> {
  public:
+  using SubscriptionHandle = moxygen::SubscriptionHandle;
+
   struct MoQSessionRequestData : public folly::RequestData {
     explicit MoQSessionRequestData(std::shared_ptr<MoQSession> s)
         : session(std::move(s)) {}

@@ -20,6 +20,8 @@ class MoQRelay : public Publisher,
                  public std::enable_shared_from_this<MoQRelay>,
                  public MoQForwarder::Callback {
  public:
+  using SubscriptionHandle = moxygen::SubscriptionHandle;
+
   explicit MoQRelay(bool enableCache) {
     if (enableCache) {
       cache_ = std::make_unique<MoQCache>();
