@@ -121,6 +121,14 @@ enum class AnnounceErrorCode : uint32_t {
   UNINTERESTED = 4,
 };
 
+enum class PublishErrorCode : uint32_t {
+  INTERNAL_ERROR = 0,
+  UNAUTHORIZED = 1,
+  TIMEOUT = 2,
+  NOT_SUPPORTED = 3,
+  UNINTERESTED = 4,
+};
+
 enum class ResetStreamErrorCode : uint32_t {
   INTERNAL_ERROR = 0,
   DELIVERY_TIMEOUT = 1,
@@ -135,9 +143,9 @@ enum class FrameType : uint64_t {
   SUBSCRIBE = 3,
   SUBSCRIBE_OK = 4,
   SUBSCRIBE_ERROR = 5,
-  ANNOUNCE = 6,
-  ANNOUNCE_OK = 7,
-  ANNOUNCE_ERROR = 8,
+  ANNOUNCE = 0x6,
+  ANNOUNCE_OK = 0x7,
+  ANNOUNCE_ERROR = 0x8,
   UNANNOUNCE = 9,
   UNSUBSCRIBE = 0xA,
   SUBSCRIBE_DONE = 0xB,
@@ -155,32 +163,68 @@ enum class FrameType : uint64_t {
   FETCH_OK = 0x18,
   FETCH_ERROR = 0x19,
   REQUESTS_BLOCKED = 0x1A,
+  PUBLISH = 0x1D,
+  PUBLISH_OK = 0x1E,
+  PUBLISH_ERROR = 0x1F,
   CLIENT_SETUP = 0x20,
   SERVER_SETUP = 0x21,
   LEGACY_CLIENT_SETUP = 0x40,
   LEGACY_SERVER_SETUP = 0x41,
 };
 
-enum class StreamType : uint64_t {
+enum class DatagramType : uint64_t {
+  OBJECT_DATAGRAM_NO_EXT_V11 = 0x0,
+  OBJECT_DATAGRAM_EXT_V11 = 0x1,
+  OBJECT_DATAGRAM_STATUS_V11 = 0x2,
+  OBJECT_DATAGRAM_STATUS_EXT_V11 = 0x3,
+
   OBJECT_DATAGRAM_NO_EXT = 0x0,
   OBJECT_DATAGRAM_EXT = 0x1,
-  OBJECT_DATAGRAM_STATUS = 0x2,
-  OBJECT_DATAGRAM_STATUS_EXT = 0x3,
+  OBJECT_DATAGRAM_NO_EXT_EOG = 0x2,
+  OBJECT_DATAGRAM_EXT_EOG = 0x3,
+  OBJECT_DATAGRAM_STATUS = 0x20,
+  OBJECT_DATAGRAM_STATUS_EXT = 0x21,
+};
+
+enum class StreamType : uint64_t {
   SUBGROUP_HEADER = 0x4, // draft-10 and earlier
   FETCH_HEADER = 0x5,
-  SUBGROUP_HEADER_MASK = 0x8,
-  SUBGROUP_HEADER_SG_ZERO = 0x8,
-  SUBGROUP_HEADER_SG_ZERO_EXT = 0x9,
-  SUBGROUP_HEADER_SG_FIRST = 0xA,
-  SUBGROUP_HEADER_SG_FIRST_EXT = 0xB,
-  SUBGROUP_HEADER_SG = 0xC,
-  SUBGROUP_HEADER_SG_EXT = 0xD,
+  SUBGROUP_HEADER_MASK_V11 = 0x8,
+  SUBGROUP_HEADER_SG_ZERO_V11 = 0x8,
+  SUBGROUP_HEADER_SG_ZERO_EXT_V11 = 0x9,
+  SUBGROUP_HEADER_SG_FIRST_V11 = 0xA,
+  SUBGROUP_HEADER_SG_FIRST_EXT_V11 = 0xB,
+  SUBGROUP_HEADER_SG_V11 = 0xC,
+  SUBGROUP_HEADER_SG_EXT_V11 = 0xD,
+
+  SUBGROUP_HEADER_MASK = 0x10,
+  SUBGROUP_HEADER_SG_ZERO = 0x10,
+  SUBGROUP_HEADER_SG_ZERO_EXT = 0x11,
+  SUBGROUP_HEADER_SG_FIRST = 0x12,
+  SUBGROUP_HEADER_SG_FIRST_EXT = 0x13,
+  SUBGROUP_HEADER_SG = 0x14,
+  SUBGROUP_HEADER_SG_EXT = 0x15,
+  SUBGROUP_HEADER_SG_ZERO_EOG = 0x18,
+  SUBGROUP_HEADER_SG_ZERO_EXT_EOG = 0x19,
+  SUBGROUP_HEADER_SG_FIRST_EOG = 0x1A,
+  SUBGROUP_HEADER_SG_FIRST_EXT_EOG = 0x1B,
+  SUBGROUP_HEADER_SG_EOG = 0x1C,
+  SUBGROUP_HEADER_SG_EXT_EOG = 0x1D,
 };
 
 // Subgroup Bit Fields
 constexpr uint8_t SG_HAS_EXTENSIONS = 0x1;
 constexpr uint8_t SG_SUBGROUP_VALUE = 0x2;
 constexpr uint8_t SG_HAS_SUBGROUP_ID = 0x4;
+constexpr uint8_t SG_HAS_END_OF_GROUP = 0x8;
+
+enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
+
+struct SubgroupOptions {
+  bool hasExtensions{false};
+  SubgroupIDFormat subgroupIDFormat{SubgroupIDFormat::Present};
+  bool hasEndOfGroup{false};
+};
 
 std::ostream& operator<<(std::ostream& os, FrameType type);
 
@@ -738,6 +782,33 @@ struct SubscribeDone {
   std::string reasonPhrase;
 };
 
+struct PublishRequest {
+  RequestID requestID{0};
+  FullTrackName fullTrackName;
+  TrackAlias trackAlias{0};
+  GroupOrder groupOrder{GroupOrder::Default};
+  folly::Optional<AbsoluteLocation> largest;
+  bool forward{true};
+  std::vector<TrackRequestParameter> params;
+};
+
+struct PublishOk {
+  RequestID requestID;
+  bool forward;
+  uint8_t subscriberPriority;
+  GroupOrder groupOrder;
+  LocationType locType;
+  folly::Optional<AbsoluteLocation> start;
+  folly::Optional<uint64_t> endGroup;
+  std::vector<TrackRequestParameter> params;
+};
+
+struct PublishError {
+  RequestID requestID;
+  PublishErrorCode errorCode;
+  std::string reasonPhrase;
+};
+
 struct Announce {
   RequestID requestID;
   TrackNamespace trackNamespace;
@@ -920,27 +991,111 @@ struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
 
-enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
 inline StreamType getSubgroupStreamType(
     uint64_t version,
     SubgroupIDFormat format,
-    bool includeExtensions) {
-  if (getDraftMajorVersion(version) < 11) {
+    bool includeExtensions,
+    bool endOfGroup) {
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
     return StreamType::SUBGROUP_HEADER;
+  } else if (majorVersion == 11) {
+    return StreamType(
+        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11) |
+        (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
+        (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
+        (includeExtensions ? SG_HAS_EXTENSIONS : 0));
+  } else {
+    return StreamType(
+        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
+        (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
+        (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
+        (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
+        (endOfGroup ? SG_HAS_END_OF_GROUP : 0));
   }
-  return StreamType(
-      folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
-      (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
-      (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
-      (includeExtensions ? SG_HAS_EXTENSIONS : 0));
+}
+inline folly::Optional<SubgroupOptions> getSubgroupOptions(
+    uint64_t version,
+    StreamType streamType) {
+  SubgroupOptions options;
+  auto streamTypeInt = folly::to_underlying(streamType);
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
+    if (streamType != StreamType::SUBGROUP_HEADER) {
+      return folly::none;
+    }
+    options.hasExtensions = false;
+    options.subgroupIDFormat = SubgroupIDFormat::Present;
+    options.hasEndOfGroup = false;
+    return options;
+  } else if (majorVersion == 11) {
+    if ((streamTypeInt &
+         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0) {
+      return folly::none;
+    }
+    streamTypeInt &=
+        ~folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11);
+  } else {
+    if ((streamTypeInt &
+         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) == 0) {
+      return folly::none;
+    }
+    streamTypeInt &= ~folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK);
+    options.hasEndOfGroup =
+        folly::to_underlying(streamType) & SG_HAS_END_OF_GROUP;
+  }
+
+  options.hasExtensions = streamTypeInt & SG_HAS_EXTENSIONS;
+  options.subgroupIDFormat = streamTypeInt & SG_HAS_SUBGROUP_ID
+      ? SubgroupIDFormat::Present
+      : (streamTypeInt & SG_SUBGROUP_VALUE) ? SubgroupIDFormat::FirstObject
+                                            : SubgroupIDFormat::Zero;
+  options.hasEndOfGroup = false;
+  return options;
 }
 
-inline StreamType
-getDatagramType(uint64_t version, bool status, bool includeExtensions) {
-  return getDraftMajorVersion(version) < 11
-      ? (status ? StreamType::OBJECT_DATAGRAM_STATUS
-                : StreamType::OBJECT_DATAGRAM_EXT)
-      : (StreamType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0)));
+inline bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
+    return datagramType ==
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_NO_EXT_V11) ||
+        datagramType ==
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_V11) ||
+        datagramType ==
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_V11);
+  } else if (majorVersion == 11) {
+    return datagramType <=
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11);
+  } else {
+    return (
+        datagramType <=
+            folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_EOG) ||
+        (datagramType >=
+             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) &&
+         datagramType <=
+             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT)));
+  }
+}
+
+inline DatagramType getDatagramType(
+    uint64_t version,
+    bool status,
+    bool includeExtensions,
+    bool endOfGroup) {
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
+    return (
+        status ? DatagramType::OBJECT_DATAGRAM_STATUS_V11
+               : DatagramType::OBJECT_DATAGRAM_EXT_V11);
+  } else if (majorVersion == 11) {
+    return DatagramType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0));
+  } else if (status) {
+    return DatagramType(
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) |
+        (includeExtensions ? 0x1 : 0));
+  } else {
+    return DatagramType((includeExtensions ? 0x1 : 0) | (endOfGroup ? 0x4 : 0));
+  }
 }
 
 folly::Expected<std::string, ErrorCode> parseFixedString(
@@ -960,7 +1115,7 @@ class MoQFrameParser {
   // datagram only
   folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
       folly::io::Cursor& cursor,
-      StreamType streamType,
+      DatagramType datagramType,
       size_t& length) const noexcept;
 
   folly::Expected<RequestID, ErrorCode> parseFetchHeader(
@@ -970,6 +1125,13 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       SubgroupIDFormat format,
       bool includeExtensions) const noexcept;
+
+  // Parses the stream header and if it's a subgroup type,
+  // parses and returns the Track Alias.  For non-subgroups,
+  // returns folly::none.
+  folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+  parseSubgroupTypeAndAlias(folly::io::Cursor& cursor, size_t length)
+      const noexcept;
 
   folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
       folly::io::Cursor& cursor,
@@ -1002,6 +1164,18 @@ class MoQFrameParser {
       size_t length) const noexcept;
 
   folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
+  folly::Expected<PublishRequest, ErrorCode> parsePublish(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
+  folly::Expected<PublishOk, ErrorCode> parsePublishOk(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
+  folly::Expected<PublishError, ErrorCode> parsePublishError(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -1205,6 +1379,18 @@ class MoQFrameWriter {
   WriteResult writeUnsubscribe(
       folly::IOBufQueue& writeBuf,
       const Unsubscribe& unsubscribe) const noexcept;
+
+  WriteResult writePublish(
+      folly::IOBufQueue& writeBuf,
+      const PublishRequest& publish) const noexcept;
+
+  WriteResult writePublishOk(
+      folly::IOBufQueue& writeBuf,
+      const PublishOk& publishOk) const noexcept;
+
+  WriteResult writePublishError(
+      folly::IOBufQueue& writeBuf,
+      const PublishError& publishError) const noexcept;
 
   WriteResult writeMaxRequestID(
       folly::IOBufQueue& writeBuf,

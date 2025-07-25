@@ -13,6 +13,10 @@
     "cmake.deleteBuildDirOnCleanConfigure": false,
     "testMate.cpp.test.executables": "{build,Build,BUILD,out,Out,OUT,moxygen}/**/*{test,Test,TEST}*",
     "files.associations": {
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "__locale": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "regex": "cpp"
     }
 }

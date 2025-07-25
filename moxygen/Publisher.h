@@ -37,10 +37,31 @@ namespace moxygen {
 class FetchConsumer;
 class TrackConsumer;
 
+class SubscriptionHandle {
+ public:
+  SubscriptionHandle() = default;
+  explicit SubscriptionHandle(SubscribeOk ok) : subscribeOk_(std::move(ok)) {}
+  virtual ~SubscriptionHandle() = default;
+
+  virtual void unsubscribe() = 0;
+  virtual void subscribeUpdate(SubscribeUpdate subUpdate) = 0;
+
+  const SubscribeOk& subscribeOk() const {
+    return *subscribeOk_;
+  }
+
+ protected:
+  void setSubscribeOk(SubscribeOk subOk) {
+    subscribeOk_ = std::move(subOk);
+  }
+  folly::Optional<SubscribeOk> subscribeOk_;
+};
+
 // Represents a publisher on which the caller can invoke TRACK_STATUS_REQUEST,
 // SUBSCRIBE, FETCH and SUBSCRIBE_ANNOUNCES.
 class Publisher {
  public:
+  using SubscriptionHandle = moxygen::SubscriptionHandle;
   virtual ~Publisher() = default;
 
   // Send/respond to TRACK_STATUS_REQUEST
@@ -56,26 +77,6 @@ class Publisher {
 
   // On successful SUBSCRIBE, a SubscriptionHandle is returned, which the
   // caller can use to UNSUBSCRIBE or SUBSCRIBE_UPDATE.
-  class SubscriptionHandle {
-   public:
-    SubscriptionHandle() = default;
-    explicit SubscriptionHandle(SubscribeOk ok) : subscribeOk_(std::move(ok)) {}
-    virtual ~SubscriptionHandle() = default;
-
-    virtual void unsubscribe() = 0;
-    virtual void subscribeUpdate(SubscribeUpdate subUpdate) = 0;
-
-    const SubscribeOk& subscribeOk() const {
-      return *subscribeOk_;
-    }
-
-   protected:
-    void setSubscribeOk(SubscribeOk subOk) {
-      subscribeOk_ = std::move(subOk);
-    }
-    folly::Optional<SubscribeOk> subscribeOk_;
-  };
-
   // Send/respond to a SUBSCRIBE
   using SubscribeResult =
       folly::Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>;

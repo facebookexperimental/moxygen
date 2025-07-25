@@ -136,6 +136,20 @@ void MoQCodec::onIngressEnd(
   ingress_.move();
 }
 
+folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+MoQObjectStreamCodec::parseSubgroupTypeAndAlias(
+    std::unique_ptr<folly::IOBuf> data,
+    bool eom) noexcept {
+  ingress_.append(std::move(data));
+  folly::io::Cursor cursor(ingress_.front());
+  auto res =
+      moqFrameParser_.parseSubgroupTypeAndAlias(cursor, ingress_.chainLength());
+  if (res.hasError() && res.error() == ErrorCode::PARSE_UNDERFLOW && eom) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return res;
+}
+
 void MoQObjectStreamCodec::onIngress(
     std::unique_ptr<folly::IOBuf> data,
     bool endOfStream) {
@@ -157,18 +171,14 @@ void MoQObjectStreamCodec::onIngress(
         cursor = newCursor;
         streamType_ = StreamType(type->first);
         auto version = moqFrameParser_.getVersion();
-        if (version && getDraftMajorVersion(*version) >= 11 &&
-            type->first &
-                folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) {
-          subgroupFormat_ =
-              ((type->first & SG_HAS_SUBGROUP_ID)
-                   ? SubgroupIDFormat::Present
-                   : ((type->first & SG_SUBGROUP_VALUE)
-                          ? SubgroupIDFormat::FirstObject
-                          : SubgroupIDFormat::Zero));
-          includeExtensions_ = type->first & SG_HAS_EXTENSIONS;
-          streamType_ = StreamType::SUBGROUP_HEADER;
-          parseState_ = ParseState::OBJECT_STREAM;
+        if (streamType_ != StreamType::FETCH_HEADER) {
+          auto options = getSubgroupOptions(*version, streamType_);
+          if (options) {
+            streamType_ = StreamType::SUBGROUP_HEADER;
+            subgroupFormat_ = options->subgroupIDFormat;
+            includeExtensions_ = options->hasExtensions;
+            parseState_ = ParseState::OBJECT_STREAM;
+          } // else unknown stream type
         }
         switch (streamType_) {
           case StreamType::SUBGROUP_HEADER:
@@ -460,6 +470,39 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       if (res) {
         if (callback_) {
           callback_->onSubscribeDone(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::PUBLISH: {
+      auto res = moqFrameParser_.parsePublish(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onPublish(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::PUBLISH_OK: {
+      auto res = moqFrameParser_.parsePublishOk(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onPublishOk(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::PUBLISH_ERROR: {
+      auto res = moqFrameParser_.parsePublishError(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onPublishError(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());

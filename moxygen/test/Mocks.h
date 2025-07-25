@@ -31,6 +31,9 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onSubscribeError, (SubscribeError subscribeError));
   MOCK_METHOD(void, onSubscribeDone, (SubscribeDone subscribeDone));
   MOCK_METHOD(void, onUnsubscribe, (Unsubscribe unsubscribe));
+  MOCK_METHOD(void, onPublish, (PublishRequest publish));
+  MOCK_METHOD(void, onPublishOk, (PublishOk publishOk));
+  MOCK_METHOD(void, onPublishError, (PublishError publishError));
   MOCK_METHOD(void, onMaxRequestID, (MaxRequestID maxSubId));
   MOCK_METHOD(void, onRequestsBlocked, (RequestsBlocked subscribesBlocked));
   MOCK_METHOD(void, onFetch, (Fetch fetch));
@@ -235,7 +238,7 @@ class MockSubgroupConsumer : public SubgroupConsumer {
       (override));
 };
 
-class MockSubscriptionHandle : public Publisher::SubscriptionHandle {
+class MockSubscriptionHandle : public SubscriptionHandle {
  public:
   explicit MockSubscriptionHandle(SubscribeOk ok)
       : SubscriptionHandle(std::move(ok)) {}
@@ -314,6 +317,12 @@ class MockPublisher : public Publisher {
 class MockSubscriber : public Subscriber {
  public:
   MOCK_METHOD(
+      PublishResult,
+      publish,
+      (PublishRequest, std::shared_ptr<SubscriptionHandle>),
+      (override));
+
+  MOCK_METHOD(
       folly::coro::Task<AnnounceResult>,
       announce,
       (Announce, std::shared_ptr<AnnounceCallback>),
@@ -363,6 +372,12 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
   MOCK_METHOD(void, onSubscriptionStreamClosed, (), (override));
 
   MOCK_METHOD(void, recordAnnounceLatency, (uint64_t), (override));
+
+  MOCK_METHOD(void, recordPublishLatency, (uint64_t), (override));
+
+  MOCK_METHOD(void, onPublishError, (PublishErrorCode), (override));
+
+  MOCK_METHOD(void, onPublishSuccess, (), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -410,6 +425,12 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, recordSubscribeLatency, (uint64_t), (override));
 
   MOCK_METHOD(void, recordFetchLatency, (uint64_t), (override));
+
+  MOCK_METHOD(void, onPublish, (), (override));
+
+  MOCK_METHOD(void, onPublishOk, (), (override));
+
+  MOCK_METHOD(void, onPublishError, (PublishErrorCode), (override));
 };
 
 } // namespace moxygen

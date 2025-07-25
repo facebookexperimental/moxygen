@@ -28,6 +28,7 @@ DEFINE_string(
     "stream-per-object(spo), datagram");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
+DEFINE_bool(publish, false, "publish the date track");
 
 namespace {
 using namespace moxygen;
@@ -69,11 +70,84 @@ class MoQDateServer : public MoQServer,
             std::chrono::seconds(FLAGS_relay_transaction_timeout),
             FLAGS_v11Plus))
         .start();
+    if (FLAGS_publish) {
+      co_withExecutor(
+          evb,
+          [this]() -> folly::coro::Task<void> {
+            co_await relayClient_->ready();
+            co_await publish(relayClient_->getSession());
+          }())
+          .start();
+    }
     return true;
+  }
+
+  folly::coro::Task<void> publish(std::shared_ptr<MoQSession> session) {
+    updateLargest();
+    PublishRequest pub{
+        RequestID(0),
+        dateTrackName(),
+        TrackAlias(0),
+        GroupOrder::OldestFirst,
+        nowLocation(),
+        false,
+        {}};
+    auto sub = forwarder_.addSubscriber(session, pub);
+    auto guard = folly::makeGuard([this, session] {
+      XLOG(DBG1) << "Removing session";
+      forwarder_.removeSession(session);
+    });
+    XLOG(ERR) << "invoke publish";
+    auto pubInitial = session->publish(pub, sub);
+    if (pubInitial.hasError()) {
+      XLOG(ERR) << pubInitial.error().reasonPhrase;
+      co_return;
+    }
+    XLOG(ERR) << "await reply";
+    auto pubResult = co_await std::move(pubInitial->reply);
+    if (pubResult.hasError()) {
+      XLOG(ERR) << pubResult.error().reasonPhrase;
+      co_return;
+    }
+    XLOG(ERR) << "dismiss guard";
+    guard.dismiss();
+
+    sub->trackConsumer = std::move(pubInitial->consumer);
+    folly::Optional<AbsoluteLocation> end;
+    if (pubResult->endGroup) {
+      end = AbsoluteLocation{*pubResult->endGroup, 0};
+    }
+    sub->range = toSubscribeRange(
+        pubResult->start, end, pubResult->locType, forwarder_.largest());
+    sub->shouldForward = pubResult->forward;
+    XLOG(DBG1) << "shouldForward=" << uint32_t(sub->shouldForward);
+    if (!loopRunning_) {
+      loopRunning_ = true;
+      co_withExecutor(session->getEventBase(), publishDateLoop()).start();
+    }
   }
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
+  }
+
+  folly::Try<ServerSetup> onClientSetup(
+      ClientSetup clientSetup,
+      std::shared_ptr<MoQSession> clientSession) override {
+    try {
+      auto res =
+          MoQServer::onClientSetup(std::move(clientSetup), clientSession);
+      if (FLAGS_publish && !res.hasException() &&
+          moxygen::getDraftMajorVersion(res->selectedVersion) >= 12) {
+        folly::coro::co_withExecutor(
+            clientSession->getEventBase(), publish(clientSession))
+            .start();
+      }
+      return res;
+    } catch (const std::exception& ex) {
+      XLOG(ERR) << ex.what();
+      throw;
+    }
   }
 
   std::pair<uint64_t, uint64_t> now() {

@@ -30,3 +30,4 @@ moqflvreceiverclient
 FlvParserTests
 MoQMiTests
 DeJitterTests
+MoQCacheTests

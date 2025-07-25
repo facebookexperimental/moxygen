@@ -29,6 +29,14 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     return StreamType(frameType->first);
   }
 
+  DatagramType parseDatagramType(folly::io::Cursor& cursor) {
+    auto frameType = quic::decodeQuicInteger(cursor);
+    if (!frameType) {
+      throw std::runtime_error("Failed to decode frame type");
+    }
+    return DatagramType(frameType->first);
+  }
+
   void skip(folly::io::Cursor& cursor, size_t i) {
     if (!cursor.canAdvance(i)) {
       throw TestUnderflow();
@@ -104,6 +112,18 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     skip(cursor, 1);
     auto r7 = parser_.parseSubscribeDone(cursor, frameLength(cursor));
     testUnderflowResult(r7);
+
+    skip(cursor, 1);
+    auto r8a = parser_.parsePublish(cursor, frameLength(cursor));
+    testUnderflowResult(r8a);
+
+    skip(cursor, 1);
+    auto r8b = parser_.parsePublishOk(cursor, frameLength(cursor));
+    testUnderflowResult(r8b);
+
+    skip(cursor, 1);
+    auto r8c = parser_.parsePublishError(cursor, frameLength(cursor));
+    testUnderflowResult(r8c);
 
     skip(cursor, 1);
     auto r9 = parser_.parseAnnounce(cursor, frameLength(cursor));
@@ -265,10 +285,10 @@ TEST_P(MoQFramerTest, ParseObjectHeader) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
+  auto dgType = parseDatagramType(cursor);
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false));
   auto length = cursor.totalLength();
-  auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
+  auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -295,10 +315,10 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), getDatagramType(GetParam(), false, false));
+  auto dgType = parseDatagramType(cursor);
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), false, false, false));
   auto length = cursor.totalLength();
-  auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, getDatagramType(GetParam(), false, false), length);
+  auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -391,7 +411,8 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     uint64_t expectedPayloadLen) {
   for (size_t i = 1; i <= writeBuf.chainLength(); ++i) {
     folly::io::Cursor cursor(writeBuf.front());
-    auto datagramType = getDatagramType(GetParam(), isStatus, hasExtensions);
+    auto datagramType =
+        getDatagramType(GetParam(), isStatus, hasExtensions, false);
     auto decodedType = quic::decodeQuicInteger(cursor, i);
     EXPECT_TRUE(decodedType.has_value());
     EXPECT_EQ(decodedType->first, folly::to_underlying(datagramType));
@@ -518,10 +539,10 @@ TEST_P(MoQFramerTest, ZeroLengthNormal) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  EXPECT_EQ(parseStreamType(cursor), StreamType::OBJECT_DATAGRAM_STATUS);
+  auto dgType = parseDatagramType(cursor);
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false));
   auto length = cursor.totalLength();
-  auto parseResult = parser_.parseDatagramObjectHeader(
-      cursor, StreamType::OBJECT_DATAGRAM_STATUS, length);
+  auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(std::get<TrackAlias>(parseResult->trackIdentifier), TrackAlias(22));
   EXPECT_EQ(parseResult->group, 33);
@@ -543,7 +564,7 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
       4};
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto streamType =
-      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false);
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false, false);
   auto result = writer_.writeSubgroupHeader(
       writeBuf, expectedObjectHeader, SubgroupIDFormat::Zero, false);
   EXPECT_TRUE(result.hasValue());
@@ -721,8 +742,8 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  auto streamType =
-      getSubgroupStreamType(GetParam(), SubgroupIDFormat::FirstObject, false);
+  auto streamType = getSubgroupStreamType(
+      GetParam(), SubgroupIDFormat::FirstObject, false, false);
   auto hasExtensions = getDraftMajorVersion(GetParam()) < 11;
   auto parsedST = parseStreamType(cursor);
   EXPECT_EQ(parsedST, streamType)
@@ -1055,13 +1076,19 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       cursor.reset(toParse.get());
       auto parseResult = parser_.parseSubscribeRequest(
           cursor, len - (origTokenLengthBytes - tokenLengthBytes));
+      if (j == 0) {
+        // clear token cache when registering
+        parser_.setTokenCacheMaxSize(0);
+        parser_.setTokenCacheMaxSize(100);
+      }
       EXPECT_FALSE(parseResult.hasValue());
     }
     if (j == 1 || j == 2) { // register / delete mutate cache state
       auto toParse = front->clone();
       auto shortTokenLengthBuf = folly::IOBuf::create(2);
       uint8_t tokenLengthBytes = 0;
-      CHECK(quic::encodeQuicInteger(tokenLengths[j] + 1, [&](auto val) {
+      auto newLength = j == 1 ? tokenLengths[j] + 1 : 5;
+      CHECK(quic::encodeQuicInteger(newLength, [&](auto val) {
         if (sizeof(val) == 1) {
           shortTokenLengthBuf->writableData()[0] = val;
         } else {
@@ -1078,7 +1105,9 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       cursor.reset(toParse.get());
       auto parseResult = parser_.parseSubscribeRequest(
           cursor, len - (origTokenLengthBytes - tokenLengthBytes) + 1);
-      EXPECT_FALSE(parseResult.hasValue()) << j;
+      EXPECT_FALSE(parseResult.hasValue())
+          << j
+          << " len=" << len - (origTokenLengthBytes - tokenLengthBytes) + 1;
     }
     auto toParse = front->clone();
     toParse->appendToChain(std::move(tokenLengthBuf));

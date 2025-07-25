@@ -12,6 +12,8 @@
 
 #include <folly/logging/xlog.h>
 
+#include <utility>
+
 namespace {
 using namespace moxygen;
 constexpr std::chrono::seconds kSetupTimeout(5);
@@ -328,8 +330,8 @@ StreamPublisherImpl::StreamPublisherImpl(
     : StreamPublisherImpl(publisher) {
   CHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
-  streamType_ =
-      getSubgroupStreamType(publisher->getVersion(), format, includeExtensions);
+  streamType_ = getSubgroupStreamType(
+      publisher->getVersion(), format, includeExtensions, false);
   header_.trackIdentifier = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -790,7 +792,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     if (!trackAlias_) {
       trackAlias_ = handle->subscribeOk().trackAlias;
     }
-    handle_ = std::move(handle);
+    subscriptionHandle_ = std::move(handle);
     if (pendingSubscribeDone_) {
       // If subscribeDone is called before publishHandler_->subscribe() returns,
       // catch the DONE here and defer it until after we send subscribe OK.
@@ -811,26 +813,30 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   void onTooManyBytesBuffered() override;
 
   void subscribeUpdate(SubscribeUpdate subscribeUpdate) {
-    if (!handle_) {
+    if (!subscriptionHandle_) {
       XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
                 << requestID_ << " trackPub=" << this;
       // TODO: I think we need to buffer it?
     } else {
-      forward_ = subscribeUpdate.forward;
-      for (auto [_, subgroupPublisher] : subgroups_) {
-        subgroupPublisher->setForward(forward_);
-      }
-      handle_->subscribeUpdate(std::move(subscribeUpdate));
+      setForward(subscribeUpdate.forward);
+      subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate));
+    }
+  }
+
+  void setForward(bool forward) {
+    forward_ = forward;
+    for (auto [_, subgroupPublisher] : subgroups_) {
+      subgroupPublisher->setForward(forward_);
     }
   }
 
   void unsubscribe() {
-    if (!handle_) {
+    if (!subscriptionHandle_) {
       XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
                 << requestID_ << " trackPub=" << this;
       // TODO: cancel handleSubscribe?
     } else {
-      handle_->unsubscribe();
+      subscriptionHandle_->unsubscribe();
     }
     resetAllSubgroups(ResetStreamErrorCode::CANCELLED);
   }
@@ -888,7 +894,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
-  std::shared_ptr<Publisher::SubscriptionHandle> handle_;
+  std::shared_ptr<SubscriptionHandle> subscriptionHandle_;
   folly::Optional<TrackAlias> trackAlias_;
   folly::Optional<SubscribeDone> pendingSubscribeDone_;
   folly::F14FastMap<
@@ -1174,11 +1180,7 @@ MoQSession::TrackPublisherImpl::datagram(
   }
 
   if (logger_) {
-    if (getDatagramType(
-            getVersion(),
-            header.status == ObjectStatus::NORMAL,
-            header.extensions.size() > 0) !=
-        StreamType::OBJECT_DATAGRAM_STATUS) {
+    if (header.status == ObjectStatus::NORMAL) {
       logger_->logObjectDatagramCreated(header, payload);
     } else {
       logger_->logObjectDatagramStatusCreated(header);
@@ -1222,7 +1224,7 @@ MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
   }
   state_ = State::DONE;
   subDone.requestID = requestID_;
-  if (!handle_) {
+  if (!subscriptionHandle_) {
     // subscribeDone called from inside the subscribe handler,
     // before subscribeOk.
     pendingSubscribeDone_ = std::move(subDone);
@@ -1266,15 +1268,21 @@ class MoQSession::SubscribeTrackReceiveState
       FullTrackName fullTrackName,
       RequestID requestID,
       std::shared_ptr<TrackConsumer> callback,
-      std::shared_ptr<MLogger> logger = nullptr)
+      std::shared_ptr<MLogger> logger = nullptr,
+      bool publish = false)
       : TrackReceiveStateBase(std::move(fullTrackName), requestID),
-        callback_(std::move(callback)) {
+        callback_(std::move(callback)),
+        publish_(publish) {
     logger_ = logger;
+  }
+
+  bool isPublish() {
+    return publish_;
   }
 
   folly::coro::Future<SubscribeResult> subscribeFuture() {
     auto contract = folly::coro::makePromiseContract<SubscribeResult>();
-    promise_ = std::move(contract.first);
+    subscribePromise_ = std::move(contract.first);
     return std::move(contract.second);
   }
 
@@ -1301,14 +1309,14 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
   void subscribeOK(SubscribeOk subscribeOK) {
-    promise_.setValue(std::move(subscribeOK));
+    subscribePromise_.setValue(std::move(subscribeOK));
   }
 
   void subscribeError(SubscribeError subErr) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
-    if (!promise_.isFulfilled()) {
+    if (!subscribePromise_.isFulfilled()) {
       subErr.requestID = requestID_;
-      promise_.setValue(folly::makeUnexpected(std::move(subErr)));
+      subscribePromise_.setValue(folly::makeUnexpected(std::move(subErr)));
     } else {
       subscribeDone(
           {requestID_,
@@ -1364,10 +1372,13 @@ class MoQSession::SubscribeTrackReceiveState
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<TrackConsumer> callback_;
-  folly::coro::Promise<SubscribeResult> promise_;
+  folly::coro::Promise<SubscribeResult> subscribePromise_;
   folly::Optional<SubscribeDone> pendingSubscribeDone_;
   uint64_t streamCount_{0};
   uint64_t currentStreamId_{0};
+
+  // Indicates whether receiveState is for Publish
+  bool publish_;
 };
 
 class MoQSession::FetchTrackReceiveState
@@ -1520,19 +1531,23 @@ void MoQSession::cleanup() {
         ResetStreamErrorCode::SESSION_CLOSED);
   }
   for (auto& [reqID, trackReceiveState] : pendingSubscribeTracks_) {
-    trackReceiveState->subscribeError(
-        {reqID,
-         SubscribeErrorCode::INTERNAL_ERROR,
-         "session closed",
-         folly::none});
+    if (!trackReceiveState->isPublish()) {
+      trackReceiveState->subscribeError(
+          {reqID,
+           SubscribeErrorCode::INTERNAL_ERROR,
+           "session closed",
+           folly::none});
+    }
   }
   pendingSubscribeTracks_.clear();
   for (auto& subTrack : subTracks_) {
-    subTrack.second->subscribeError(
-        {/*TrackReceiveState fills in subId*/ 0,
-         SubscribeErrorCode::INTERNAL_ERROR,
-         "session closed",
-         folly::none});
+    if (!subTrack.second->isPublish()) {
+      subTrack.second->subscribeError(
+          {/*TrackReceiveState fills in subId*/ 0,
+           SubscribeErrorCode::INTERNAL_ERROR,
+           "session closed",
+           folly::none});
+    }
   }
   subTracks_.clear();
   for (auto& fetch : fetches_) {
@@ -1561,6 +1576,11 @@ void MoQSession::cleanup() {
          "session closed"})));
   }
   pendingSubscribeAnnounces_.clear();
+  for (auto& [reqID, pendingPub] : pendingPublish_) {
+    pendingPub.setValue(folly::makeUnexpected(PublishError(
+        {reqID, PublishErrorCode::INTERNAL_ERROR, "session closed"})));
+  }
+  pendingPublish_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
@@ -1793,8 +1813,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
           kMaxSendTokenCacheSize,
           getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)),
       /*evict=*/true);
-  auto serverSetup =
-      serverSetupCallback_->onClientSetup(std::move(clientSetup));
+  auto serverSetup = serverSetupCallback_->onClientSetup(
+      std::move(clientSetup), shared_from_this());
   if (!serverSetup.hasValue()) {
     XLOG(ERR) << "Server setup callback failed sess=" << this
               << " err=" << serverSetup.exception().what();
@@ -1882,7 +1902,7 @@ MoQSession::getFetchTrackReceiveState(RequestID requestID) {
   return trackIt->second;
 }
 
-namespace {
+namespace detail {
 class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   // TODO: MoQConsumers should have a "StreamConsumer" that both
   // SubgroupConsumer and FetchConsumer can inherit.  In that case we can
@@ -1926,18 +1946,24 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     currentStreamId_ = id;
   }
 
+  void setSubscribeTrackReceiveState(
+      std::shared_ptr<MoQSession::SubscribeTrackReceiveState> state) {
+    subscribeState_ = std::move(state);
+  }
+
   void onSubgroup(
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
       Priority priority) override {
-    subscribeState_ = session_->getSubscribeTrackReceiveState(alias);
+    XCHECK(subscribeState_);
     session_->onSubscriptionStreamOpenedByPeer();
     if (!subscribeState_) {
       error_ = MoQPublishError(
           MoQPublishError::CANCELLED, "Subgroup for unknown track");
       return;
     }
+
     token_ = folly::cancellation_token_merge(
         token_, subscribeState_->getCancelToken());
     auto callback = subscribeState_->getSubscribeCallback();
@@ -2051,6 +2077,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     }
 
     bool finStream = false;
+    // Handle subscription/fetch consumers
     auto res = invokeCallbackNoGroup(
         &SubgroupConsumer::objectPayload,
         &FetchConsumer::objectPayload,
@@ -2074,6 +2101,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       return;
     }
     folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    // Handle subscription/fetch consumers
     switch (status) {
       case ObjectStatus::NORMAL:
         break;
@@ -2167,9 +2195,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       return !fetchState_->getFetchCallback();
     } else if (subscribeState_) {
       return !subgroupCallback_ || !subscribeState_->getSubscribeCallback();
-    } else {
-      return true;
     }
+    return true;
   }
 
   void endOfSubgroup(bool deliverCallback = false) {
@@ -2202,7 +2229,50 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   uint64_t currentStreamId_{0};
   ObjectHeader currentObj_;
 };
-} // namespace
+
+} // namespace detail
+
+folly::coro::Task<folly::Expected<bool, MoQPublishError>>
+MoQSession::headerParsed(
+    MoQObjectStreamCodec& codec,
+    detail::ObjectStreamCallback& callback,
+    proxygen::WebTransport::StreamData& streamData) {
+  auto parseResult = codec.parseSubgroupTypeAndAlias(
+      std::move(streamData.data), streamData.fin);
+  if (parseResult.hasError()) {
+    if (parseResult.error() == ErrorCode::PARSE_UNDERFLOW) {
+      co_return false;
+    } else {
+      MoQPublishError err(
+          MoQPublishError::CANCELLED, "Error parsing subgroup type and alias");
+      co_return folly::makeUnexpected(err);
+    }
+  }
+  auto trackAlias = parseResult.value();
+  if (!trackAlias) {
+    // it's fetch
+    co_return true;
+  }
+  auto state = getSubscribeTrackReceiveState(*trackAlias);
+  if (!state) {
+    TimedBaton baton;
+    auto res =
+        bufferedSubgroups_.emplace(*trackAlias, std::list<TimedBaton*>());
+    res.first->second.push_back(&baton);
+    constexpr std::chrono::milliseconds kUnknownAliasTimeout(5000);
+    auto waitRes = co_await co_awaitTry(baton.wait(kUnknownAliasTimeout));
+    if (waitRes.hasException()) {
+      MoQPublishError err(
+          MoQPublishError::CANCELLED, "Timed out waiting for unknown alias");
+      co_return folly::makeUnexpected(err);
+    } else {
+      state = getSubscribeTrackReceiveState(*trackAlias);
+      XCHECK(state);
+    }
+  }
+  callback.setSubscribeTrackReceiveState(std::move(state));
+  co_return true;
+}
 
 folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     std::shared_ptr<MoQSession> session,
@@ -2216,7 +2286,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   auto token = co_await folly::coro::co_current_cancellation_token;
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
-  ObjectStreamCallback dcb(session, /*by ref*/ token);
+  detail::ObjectStreamCallback dcb(session, /*by ref*/ token);
   if (logger_) {
     dcb.setLogger(logger_);
   }
@@ -2225,6 +2295,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   codec.setStreamId(id);
 
   bool fin = false;
+  bool headerParsed = false;
   while (!fin && !token.isCancellationRequested()) {
     auto streamData =
         co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
@@ -2251,9 +2322,22 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       if (streamData->data || streamData->fin) {
         fin = streamData->fin;
         folly::Optional<MoQPublishError> err;
+        if (!headerParsed) {
+          auto res =
+              co_await this->headerParsed(codec, dcb, streamData.value());
+          if (res.hasError()) {
+            err = res.error();
+          }
+          headerParsed = *res;
+          if (!headerParsed) {
+            continue;
+          }
+        }
         try {
-          codec.onIngress(std::move(streamData->data), streamData->fin);
-          err = dcb.error();
+          if (!err) {
+            codec.onIngress(std::move(streamData->data), streamData->fin);
+            err = dcb.error();
+          }
         } catch (const std::exception& ex) {
           err = MoQPublishError(
               MoQPublishError::CANCELLED,
@@ -2386,7 +2470,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
     return;
   }
-  if (closeSessionIfRequestIDInvalid(requestID, false, false)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, false, false)) {
     return;
   }
 
@@ -2416,7 +2500,8 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   }
 
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribe);
-  if (closeSessionIfRequestIDInvalid(unsubscribe.requestID, false, false)) {
+  if (closeSessionIfRequestIDInvalid(
+          unsubscribe.requestID, false, false, false)) {
     return;
   }
   if (!publishHandler_) {
@@ -2444,6 +2529,45 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   }
 }
 
+void MoQSession::onPublishOk(PublishOk publishOk) {
+  XLOG(DBG1) << __func__ << " reqID=" << publishOk.requestID
+             << " sess=" << this;
+  auto pubIt = pendingPublish_.find(publishOk.requestID);
+  if (pubIt == pendingPublish_.end()) {
+    XLOG(ERR) << "No matching publish reqID=" << publishOk.requestID
+              << " sess=" << this;
+    return;
+  }
+  pubIt->second.setValue(std::move(publishOk));
+  pendingPublish_.erase(pubIt);
+}
+
+void MoQSession::onPublishError(PublishError publishError) {
+  XLOG(DBG1) << __func__ << " reqID=" << publishError.requestID
+             << " sess=" << this;
+
+  auto pendIt = pendingPublish_.find(publishError.requestID);
+  if (pendIt == pendingPublish_.end()) {
+    XLOG(ERR) << "No matching publish reqID=" << publishError.requestID
+              << " sess=" << this;
+    for (const auto& pair : pendingPublish_) {
+      XLOG(ERR) << "  reqID=" << pair.first;
+    }
+    return;
+  }
+  auto requestId = publishError.requestID;
+  pendIt->second.setValue(folly::makeUnexpected(std::move(publishError)));
+  pendingPublish_.erase(pendIt);
+
+  auto pubIt = pubTracks_.find(requestId);
+  if (pubIt == pubTracks_.end()) {
+    XLOG(ERR) << "Invalid Publish OK, id=" << requestId;
+    return;
+  }
+  pubIt->second->setSession(nullptr);
+  pubTracks_.erase(pubIt);
+}
+
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   XLOG(DBG1) << __func__ << " id=" << subOk.requestID << " sess=" << this;
 
@@ -2464,7 +2588,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     subOk.trackAlias = trackReceiveState->getTrackAlias();
   }
 
-  auto res = subIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
+  auto res = reqIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
   if (!res.second) {
     XLOG(ERR) << "Request ID already mapped to alias reqID=" << subOk.requestID
               << " sess=" << this;
@@ -2478,14 +2602,23 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
               << " sess=" << this;
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
   }
-  auto datagramsIt = bufferedDatagrams_.find(subOk.trackAlias);
+  auto trackAlias = subOk.trackAlias;
+  trackReceiveState->subscribeOK(std::move(subOk));
+  auto datagramsIt = bufferedDatagrams_.find(trackAlias);
   if (datagramsIt != bufferedDatagrams_.end()) {
     for (auto& datagram : datagramsIt->second) {
       onDatagram(std::move(datagram));
     }
     bufferedDatagrams_.erase(datagramsIt);
   }
-  trackReceiveState->subscribeOK(std::move(subOk));
+
+  auto subgroupsIt = bufferedSubgroups_.find(trackAlias);
+  if (subgroupsIt != bufferedSubgroups_.end()) {
+    for (auto* baton : subgroupsIt->second) {
+      baton->signal();
+    }
+    bufferedSubgroups_.erase(subgroupsIt);
+  }
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
@@ -2508,6 +2641,118 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
   checkForCloseOnDrain();
 }
 
+class MoQSession::ReceiverSubscriptionHandle
+    : public Publisher::SubscriptionHandle {
+ public:
+  ReceiverSubscriptionHandle(
+      SubscribeOk ok,
+      TrackAlias alias,
+      std::shared_ptr<MoQSession> session)
+      : SubscriptionHandle(std::move(ok)),
+        trackAlias_(alias),
+        session_(std::move(session)) {}
+
+  void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
+    if (session_) {
+      subscribeUpdate.requestID = subscribeOk_->requestID;
+      session_->subscribeUpdate(subscribeUpdate);
+    }
+  }
+
+  void unsubscribe() override {
+    if (session_) {
+      session_->unsubscribe({subscribeOk_->requestID});
+      session_.reset();
+    }
+  }
+
+ private:
+  TrackAlias trackAlias_;
+  std::shared_ptr<MoQSession> session_;
+};
+
+void MoQSession::onPublish(PublishRequest publish) {
+  XLOG(DBG1) << __func__ << " reqID=" << publish.requestID << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublish);
+  if (closeSessionIfRequestIDInvalid(publish.requestID, false, true)) {
+    return;
+  }
+
+  if (!subscribeHandler_) {
+    XLOG(DBG1) << __func__ << "No subscriber callback set";
+    PublishError(
+        {publish.requestID,
+         PublishErrorCode::NOT_SUPPORTED,
+         "Not a subscriber"});
+  }
+
+  auto publishHandle = std::make_shared<ReceiverSubscriptionHandle>(
+      SubscribeOk{publish.requestID}, publish.trackAlias, shared_from_this());
+
+  // Use single coroutine pattern like working onAnnounce
+  co_withExecutor(
+      evb_, handlePublish(std::move(publish), std::move(publishHandle)))
+      .start();
+}
+
+folly::coro::Task<void> MoQSession::handlePublish(
+    PublishRequest publish,
+    std::shared_ptr<Publisher::SubscriptionHandle> publishHandle) {
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  // Capture params before moving publish
+  auto requestID = publish.requestID;
+  auto alias = publish.trackAlias;
+  auto ftn = publish.fullTrackName;
+
+  // PubError if error occurs
+  auto publishErr =
+      PublishError{requestID, PublishErrorCode::INTERNAL_ERROR, ""};
+
+  try {
+    // Call publish handler synchronously (now returns PublishResult)
+    auto publishResult =
+        subscribeHandler_->publish(std::move(publish), publishHandle);
+
+    if (publishResult.hasError()) {
+      XLOG(DBG1) << "Application publish error err="
+                 << publishResult.error().reasonPhrase;
+      publishErr.errorCode = publishResult.error().errorCode;
+      publishErr.reasonPhrase = publishResult.error().reasonPhrase;
+    } else {
+      // Extract the initiator and process reply with co_await
+      auto& initiator = publishResult.value();
+      // Create SubscribeTrackReceiveState
+      if (initiator.consumer) {
+        // Need in order to obtain Alias Later on
+        reqIdToTrackAlias_.emplace(requestID, alias);
+
+        // Add ReceiveState to subTracks_
+        auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
+            ftn, requestID, initiator.consumer, logger_, true);
+        subTracks_.emplace(alias, trackReceiveState);
+      }
+      // Process the async reply - this is the only async part
+      auto replyResult =
+          co_await folly::coro::co_awaitTry(std::move(initiator.reply));
+      if (replyResult.hasException()) {
+        XLOG(ERR) << "Exception in publish reply ex="
+                  << replyResult.exception().what().toStdString();
+        publishErr.reasonPhrase = replyResult.exception().what().toStdString();
+      } else if (replyResult->hasError()) {
+        publishErr.reasonPhrase = replyResult->error().reasonPhrase;
+      } else {
+        publishOk(replyResult->value());
+        co_return;
+      }
+    }
+  } catch (const std::exception& ex) {
+    XLOG(ERR) << "Exception in Subscriber publish callback ex=" << ex.what();
+    publishErr.reasonPhrase = ex.what();
+  }
+  publishError(publishErr);
+}
+
 void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   XLOG(DBG1) << "SubscribeDone id=" << subscribeDone.requestID
              << " code=" << folly::to_underlying(subscribeDone.statusCode)
@@ -2518,8 +2763,10 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   }
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onSubscribeDone, subscribeDone.statusCode);
-  auto trackAliasIt = subIdToTrackAlias_.find(subscribeDone.requestID);
-  if (trackAliasIt == subIdToTrackAlias_.end()) {
+
+  // Handle regular subscription SUBSCRIBE_DONE
+  auto trackAliasIt = reqIdToTrackAlias_.find(subscribeDone.requestID);
+  if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
     XLOG(ERR) << "No matching subscribe ID=" << subscribeDone.requestID
               << " sess=" << this;
@@ -2540,13 +2787,13 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
     XLOG(DFATAL) << "trackAliasIt but no trackReceiveStateIt for id="
                  << subscribeDone.requestID << " sess=" << this;
   }
-  subIdToTrackAlias_.erase(trackAliasIt);
+  reqIdToTrackAlias_.erase(trackAliasIt);
   checkForCloseOnDrain();
 }
 
 void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
   subTracks_.erase(alias);
-  subIdToTrackAlias_.erase(id);
+  reqIdToTrackAlias_.erase(id);
   checkForCloseOnDrain();
 }
 
@@ -2790,6 +3037,7 @@ void MoQSession::onAnnounce(Announce ann) {
           true)) {
     return;
   }
+
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << "No subscriber callback set";
     announceError(
@@ -3167,7 +3415,7 @@ void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
   }
 }
 
-folly::coro::Task<Publisher::TrackStatusResult> MoQSession::trackStatus(
+folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
     TrackStatusRequest trackStatusRequest) {
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
@@ -3244,7 +3492,7 @@ void MoQSession::onGoaway(Goaway goaway) {
     publishHandler_->goaway(goaway);
   }
   // This doesn't work if the application made a single object inherit both
-  // classes but provided separate intances.  But that's unlikely.
+  // classes but provided separate instances.  But that's unlikely.
   if (subscribeHandler_ &&
       typeid(subscribeHandler_.get()) != typeid(publishHandler_.get())) {
     subscribeHandler_->goaway(goaway);
@@ -3314,6 +3562,102 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
   }
 }
 
+Subscriber::PublishResult MoQSession::publish(
+    PublishRequest pub,
+    std::shared_ptr<SubscriptionHandle> handle) {
+  XLOG(DBG1) << __func__ << " reqID=" << pub.requestID
+             << " track=" << pub.fullTrackName.trackName << " sess=" << this;
+
+  // Reject new publish attempts if session is draining
+  if (draining_) {
+    XLOG(DBG1) << "Rejecting publish request, session draining sess=" << this;
+    return folly::makeUnexpected(PublishError{
+        pub.requestID, PublishErrorCode::INTERNAL_ERROR, "Session draining"});
+  }
+
+  if (!handle) {
+    XLOG(DBG1) << "Rejecting publish request, no subscription handle sess="
+               << this;
+    return folly::makeUnexpected(PublishError{
+        pub.requestID,
+        PublishErrorCode::INTERNAL_ERROR,
+        "No subscription handle"});
+  }
+
+  auto publishStartTime = std::chrono::steady_clock::now();
+  SCOPE_EXIT {
+    auto duration = (std::chrono::steady_clock::now() - publishStartTime);
+    auto durationMsec =
+        std::chrono::duration_cast<std::chrono::milliseconds>(duration);
+    MOQ_PUBLISHER_STATS(
+        publisherStatsCallback_, recordPublishLatency, durationMsec.count());
+  };
+
+  aliasifyAuthTokens(pub.params);
+  pub.requestID = getNextRequestID(/*legacyAction=*/false);
+  pub.trackAlias = TrackAlias(pub.requestID.value);
+  XLOG(DBG1) << "publish() got requestID=" << pub.requestID
+             << " nextRequestID_=" << nextRequestID_
+             << " peerMaxRequestID_=" << peerMaxRequestID_ << " sess=" << this;
+  auto res = moqFrameWriter_.writePublish(controlWriteBuf_, pub);
+  if (!res) {
+    XLOG(ERR) << "writePublish failed sess=" << this;
+    return folly::makeUnexpected(PublishError{
+        pub.requestID, PublishErrorCode::INTERNAL_ERROR, "local write failed"});
+  }
+  controlWriteEvent_.signal();
+
+  // Create TrackConsumer for the publisher to write data
+  auto trackPublisher = std::make_shared<TrackPublisherImpl>(
+      this,
+      pub.fullTrackName,
+      pub.requestID,
+      pub.trackAlias,
+      0, // priority
+      pub.groupOrder,
+      *negotiatedVersion_,
+      moqSettings_.bufferingThresholds.perSubscription,
+      pub.forward);
+
+  // Set publishHandle in trackPublisher so it can cancel on unsubscribes
+  trackPublisher->setSubscriptionHandle(handle);
+
+  // Store the track publisher for later lookup
+  pubTracks_.emplace(pub.requestID, trackPublisher);
+
+  // Create Contract and place in pending publishes
+  auto contract = folly::coro::makePromiseContract<
+      folly::Expected<PublishOk, PublishError>>();
+  pendingPublish_.emplace(pub.requestID, std::move(contract.first));
+
+  // Build replyTask that co_awaits the future and handles cleanup
+  auto replyTask = folly::coro::co_invoke(
+      [fut = std::move(contract.second),
+       rid = pub.requestID,
+       trackPublisher,
+       this]() mutable
+      -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
+        auto result = co_await std::move(fut);
+        if (result.hasValue()) {
+          auto it = pubTracks_.find(rid);
+          if (it != pubTracks_.end()) {
+            // If Receive PublishOk is received, update the trackPublisher
+            // If Receive PublishError, the session is reset in onPublishError()
+            trackPublisher->setForward(result.value().forward);
+            trackPublisher->setGroupOrder(result.value().groupOrder);
+            trackPublisher->setSubPriority(result.value().subscriberPriority);
+          }
+        }
+        trackPublisher.reset();
+        co_return result;
+      });
+
+  // Return PublishConsumerAndReplyTask immediately (no co_await)
+  return Subscriber::PublishConsumerAndReplyTask{
+      std::static_pointer_cast<TrackConsumer>(trackPublisher),
+      std::move(replyTask)};
+}
+
 void MoQSession::announceOk(const AnnounceOk& annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
 
@@ -3348,6 +3692,49 @@ void MoQSession::announceError(const AnnounceError& announceError) {
   }
 
   controlWriteEvent_.signal();
+}
+
+void MoQSession::publishOk(const PublishOk& pubOk) {
+  XLOG(DBG1) << __func__ << " reqID=" << pubOk.requestID << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishOk);
+
+  auto res = moqFrameWriter_.writePublishOk(controlWriteBuf_, pubOk);
+  if (!res) {
+    XLOG(ERR) << "writePublishOk failed sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+}
+
+void MoQSession::publishError(const PublishError& publishError) {
+  XLOG(DBG1) << __func__ << " reqID=" << publishError.requestID
+             << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(
+      subscriberStatsCallback_, onPublishError, publishError.errorCode);
+  auto res = moqFrameWriter_.writePublishError(controlWriteBuf_, publishError);
+  if (!res) {
+    XLOG(ERR) << "writePublishError failed sess=" << this;
+    return;
+  }
+  controlWriteEvent_.signal();
+
+  auto aliasRes = reqIdToTrackAlias_.find(publishError.requestID);
+  if (aliasRes == reqIdToTrackAlias_.end()) {
+    XLOG(ERR) << "No track alias found for requestId="
+              << publishError.requestID;
+    return;
+  }
+
+  auto subIt = subTracks_.find(aliasRes->second);
+  if (subIt == subTracks_.end()) {
+    XLOG(ERR) << "No sub tracks for reqID=" << publishError.requestID
+              << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  subTracks_.erase(subIt);
+  reqIdToTrackAlias_.erase(aliasRes);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::unannounce(const Unannounce& unann) {
@@ -3514,36 +3901,6 @@ void MoQSession::unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn) {
   controlWriteEvent_.signal();
 }
 
-class MoQSession::ReceiverSubscriptionHandle
-    : public Publisher::SubscriptionHandle {
- public:
-  ReceiverSubscriptionHandle(
-      SubscribeOk ok,
-      TrackAlias alias,
-      std::shared_ptr<MoQSession> session)
-      : SubscriptionHandle(std::move(ok)),
-        trackAlias_(alias),
-        session_(std::move(session)) {}
-
-  void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
-    if (session_) {
-      subscribeUpdate.requestID = subscribeOk_->requestID;
-      session_->subscribeUpdate(subscribeUpdate);
-    }
-  }
-
-  void unsubscribe() override {
-    if (session_) {
-      session_->unsubscribe({subscribeOk_->requestID});
-      session_.reset();
-    }
-  }
-
- private:
-  TrackAlias trackAlias_;
-  std::shared_ptr<MoQSession> session_;
-};
-
 RequestID MoQSession::getNextRequestID(bool legacyAction) {
   if (legacyAction && getDraftMajorVersion(*getNegotiatedVersion()) < 11) {
     return legacyNextRequestID_++;
@@ -3592,6 +3949,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   TrackAlias trackAlias = reqID.value;
   sub.trackAlias = trackAlias;
   aliasifyAuthTokens(sub.params);
+
   auto wres = moqFrameWriter_.writeSubscribeRequest(controlWriteBuf_, sub);
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
@@ -3687,8 +4045,8 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribe);
-  auto trackAliasIt = subIdToTrackAlias_.find(unsubscribe.requestID);
-  if (trackAliasIt == subIdToTrackAlias_.end()) {
+  auto trackAliasIt = reqIdToTrackAlias_.find(unsubscribe.requestID);
+  if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
     XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.requestID
               << " sess=" << this;
@@ -3707,7 +4065,7 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   // cancel() should send STOP_SENDING on any open streams for this subscription
   trackIt->second->cancel();
   subTracks_.erase(trackIt);
-  subIdToTrackAlias_.erase(trackAliasIt);
+  reqIdToTrackAlias_.erase(trackAliasIt);
   auto res = moqFrameWriter_.writeUnsubscribe(controlWriteBuf_, unsubscribe);
   if (!res) {
     XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
@@ -3741,10 +4099,10 @@ void MoQSession::subscribeDone(const SubscribeDone& subDone) {
     return;
   }
   pubTracks_.erase(it);
+
   auto res = moqFrameWriter_.writeSubscribeDone(controlWriteBuf_, subDone);
   if (!res) {
     XLOG(ERR) << "writeSubscribeDone failed sess=" << this;
-    // TODO: any control write failure should probably result in close()
     return;
   }
 
@@ -3809,17 +4167,17 @@ void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
   }
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeUpdate);
-  auto trackAliasIt = subIdToTrackAlias_.find(subUpdate.requestID);
-  if (trackAliasIt == subIdToTrackAlias_.end()) {
+  auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.requestID);
+  if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.requestID
+    XLOG(ERR) << "No matching request ID=" << subUpdate.requestID
               << " sess=" << this;
     return;
   }
   auto trackIt = subTracks_.find(trackAliasIt->second);
   if (trackIt == subTracks_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.requestID
+    XLOG(ERR) << "No matching track Alias=" << trackAliasIt->second
               << " sess=" << this;
     return;
   }
@@ -3885,8 +4243,8 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     if (pendingIt != pendingSubscribeTracks_.end()) {
       state = pendingIt->second;
     } else {
-      auto subIt = subIdToTrackAlias_.find(joining->joiningRequestID);
-      if (subIt != subIdToTrackAlias_.end()) {
+      auto subIt = reqIdToTrackAlias_.find(joining->joiningRequestID);
+      if (subIt != reqIdToTrackAlias_.end()) {
         state = getSubscribeTrackReceiveState(subIt->second);
       }
     }
@@ -4100,8 +4458,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  if (type->first >
-      folly::to_underlying(StreamType::OBJECT_DATAGRAM_STATUS_EXT)) {
+
+  if (!isValidDatagramType(*negotiatedVersion_, type->first)) {
     XLOG(ERR) << __func__ << " Bad datagram header type=" << type->first;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
@@ -4110,18 +4468,19 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   MoQFrameParser parser;
   parser.initializeVersion(*negotiatedVersion_);
   auto res = parser.parseDatagramObjectHeader(
-      cursor, StreamType(type->first), remainingLength);
+      cursor, DatagramType(type->first), remainingLength);
   if (res.hasError()) {
     XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  if (remainingLength != *res->length) {
+  auto& objHeader = res.value();
+  if (remainingLength != *objHeader.length) {
     XLOG(ERR) << __func__ << " Bad datagram: Length mismatch";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
+  auto alias = std::get_if<TrackAlias>(&objHeader.trackIdentifier);
   XCHECK(alias);
   auto state = getSubscribeTrackReceiveState(*alias).get();
   if (!state) {
@@ -4144,20 +4503,16 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
   readBuf.trimStart(readBuf.chainLength() - remainingLength);
   if (logger_) {
-    if (getDatagramType(
-            *negotiatedVersion_,
-            (*res).status == ObjectStatus::NORMAL,
-            (*res).extensions.size() > 0) !=
-        StreamType::OBJECT_DATAGRAM_STATUS) {
-      logger_->logObjectDatagramParsed(std::move(*res), std::move(payload));
+    if (objHeader.status == ObjectStatus::NORMAL) {
+      logger_->logObjectDatagramParsed(objHeader, std::move(payload));
     } else {
-      logger_->logObjectDatagramStatusParsed(std::move(*res));
+      logger_->logObjectDatagramStatusParsed(objHeader);
     }
   }
   if (state) {
     auto callback = state->getSubscribeCallback();
     if (callback) {
-      callback->datagram(std::move(*res), readBuf.move());
+      callback->datagram(objHeader, readBuf.move());
     }
   }
 }
@@ -4165,12 +4520,13 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
 bool MoQSession::closeSessionIfRequestIDInvalid(
     RequestID requestID,
     bool skipCheck,
-    bool isNewRequest) {
+    bool isNewRequest,
+    bool parityMatters) {
   if (skipCheck) {
     return false;
   }
 
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
+  if (parityMatters && getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
       ((requestID.value % 2) == 1) !=
           (dir_ == MoQControlCodec::Direction::CLIENT)) {
     XLOG(ERR) << "Invalid requestID parity: " << requestID << " sess=" << this;
@@ -4279,4 +4635,5 @@ void MoQSession::aliasifyAuthTokens(
     }
   }
 }
+
 } // namespace moxygen

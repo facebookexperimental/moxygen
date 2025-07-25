@@ -35,9 +35,13 @@
 
 namespace moxygen {
 
+class TrackConsumer;
+class SubscriptionHandle;
+
 // Represents a subscriber on which the caller can invoke ANNOUNCE
 class Subscriber {
  public:
+  using SubscriptionHandle = moxygen::SubscriptionHandle;
   virtual ~Subscriber() = default;
 
   // On successful ANNOUNCE, an AnnounceHandle is returned, which the caller
@@ -86,6 +90,24 @@ class Subscriber {
             ann.trackNamespace,
             AnnounceErrorCode::NOT_SUPPORTED,
             "unimplemented"}));
+  }
+
+  // Result of a PUBLISH request containing consumer and async reply
+  struct PublishConsumerAndReplyTask {
+    std::shared_ptr<TrackConsumer> consumer;
+    folly::coro::Task<folly::Expected<PublishOk, PublishError>> reply;
+  };
+
+  // Send/respond to a PUBLISH - synchronous API o that the publisher can
+  // immediately start sending data instead of waiting for a PUBLISH_OK from the
+  // peer
+  using PublishResult =
+      folly::Expected<PublishConsumerAndReplyTask, PublishError>;
+  virtual PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> /*handle*/ = nullptr) {
+    return folly::makeUnexpected(PublishError{
+        pub.requestID, PublishErrorCode::NOT_SUPPORTED, "unimplemented"});
   }
 
   virtual void goaway(Goaway /*goaway*/) {}

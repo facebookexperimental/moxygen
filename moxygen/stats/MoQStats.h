@@ -129,6 +129,15 @@ class MoQPublisherStatsCallback : public MoQStatsCallback {
  public:
   // Record the time it takes from request to response for an ANNOUNCE
   virtual void recordAnnounceLatency(uint64_t latencyMsec) = 0;
+
+  // Record the time it takes from request to response for a PUBLISH
+  virtual void recordPublishLatency(uint64_t latencyMsec) = 0;
+
+  // Called when PUBLISH receives PUBLISH_ERROR response
+  virtual void onPublishError(PublishErrorCode errorCode) = 0;
+
+  // Called when PUBLISH receives PUBLISH_OK response
+  virtual void onPublishSuccess() = 0;
 };
 
 class MoQSubscriberStatsCallback : public MoQStatsCallback {
@@ -138,6 +147,15 @@ class MoQSubscriberStatsCallback : public MoQStatsCallback {
 
   // Record the time it takes from request to response for a FETCH
   virtual void recordFetchLatency(uint64_t latencyMsec) = 0;
+
+  // Called when receiving a PUBLISH message
+  virtual void onPublish() = 0;
+
+  // Called when sending PUBLISH_OK response
+  virtual void onPublishOk() = 0;
+
+  // Called when sending PUBLISH_ERROR response
+  virtual void onPublishError(PublishErrorCode errorCode) = 0;
 };
 
 #define MOQ_PUBLISHER_STATS(publisherStatsCallback, method, ...) \
