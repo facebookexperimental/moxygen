@@ -2042,7 +2042,8 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
   auto streamType = getSubgroupStreamType(
       *version_,
       objectHeader.subgroup == 0 ? SubgroupIDFormat::Zero : format,
-      includeExtensions);
+      includeExtensions,
+      /*endOfGroup=*/false);
   auto streamTypeInt = folly::to_underlying(streamType);
   writeVarint(writeBuf, streamTypeInt, size, error);
   writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);

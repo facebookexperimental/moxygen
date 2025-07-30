@@ -328,8 +328,8 @@ StreamPublisherImpl::StreamPublisherImpl(
     : StreamPublisherImpl(publisher) {
   CHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
-  streamType_ =
-      getSubgroupStreamType(publisher->getVersion(), format, includeExtensions);
+  streamType_ = getSubgroupStreamType(
+      publisher->getVersion(), format, includeExtensions, false);
   header_.trackIdentifier = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);

@@ -157,18 +157,14 @@ void MoQObjectStreamCodec::onIngress(
         cursor = newCursor;
         streamType_ = StreamType(type->first);
         auto version = moqFrameParser_.getVersion();
-        if (version && getDraftMajorVersion(*version) >= 11 &&
-            type->first &
-                folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) {
-          subgroupFormat_ =
-              ((type->first & SG_HAS_SUBGROUP_ID)
-                   ? SubgroupIDFormat::Present
-                   : ((type->first & SG_SUBGROUP_VALUE)
-                          ? SubgroupIDFormat::FirstObject
-                          : SubgroupIDFormat::Zero));
-          includeExtensions_ = type->first & SG_HAS_EXTENSIONS;
-          streamType_ = StreamType::SUBGROUP_HEADER;
-          parseState_ = ParseState::OBJECT_STREAM;
+        if (streamType_ != StreamType::FETCH_HEADER) {
+          auto options = getSubgroupOptions(*version, streamType_);
+          if (options) {
+            streamType_ = StreamType::SUBGROUP_HEADER;
+            subgroupFormat_ = options->subgroupIDFormat;
+            includeExtensions_ = options->hasExtensions;
+            parseState_ = ParseState::OBJECT_STREAM;
+          } // else unknown stream type
         }
         switch (streamType_) {
           case StreamType::SUBGROUP_HEADER:
