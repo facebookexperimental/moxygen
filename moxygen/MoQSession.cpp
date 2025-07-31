@@ -1882,7 +1882,7 @@ MoQSession::getFetchTrackReceiveState(RequestID requestID) {
   return trackIt->second;
 }
 
-namespace {
+namespace detail {
 class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   // TODO: MoQConsumers should have a "StreamConsumer" that both
   // SubgroupConsumer and FetchConsumer can inherit.  In that case we can
@@ -1926,12 +1926,17 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     currentStreamId_ = id;
   }
 
+  void setSubscribeTrackReceiveState(
+      std::shared_ptr<MoQSession::SubscribeTrackReceiveState> state) {
+    subscribeState_ = std::move(state);
+  }
+
   void onSubgroup(
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
       Priority priority) override {
-    subscribeState_ = session_->getSubscribeTrackReceiveState(alias);
+    XCHECK(subscribeState_);
     session_->onSubscriptionStreamOpenedByPeer();
     if (!subscribeState_) {
       error_ = MoQPublishError(
@@ -1942,6 +1947,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         token_, subscribeState_->getCancelToken());
     auto callback = subscribeState_->getSubscribeCallback();
     if (!callback) {
+      XLOG(DBG2) << "No callback for subgroup";
       return;
     }
     auto res = callback->beginSubgroup(group, subgroup, priority);
@@ -2202,7 +2208,58 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   uint64_t currentStreamId_{0};
   ObjectHeader currentObj_;
 };
-} // namespace
+} // namespace detail
+
+folly::coro::Task<folly::Expected<bool, MoQPublishError>>
+MoQSession::headerParsed(
+    MoQObjectStreamCodec& codec,
+    detail::ObjectStreamCallback& callback,
+    proxygen::WebTransport::StreamData& streamData) {
+  auto parseResult = codec.parseSubgroupTypeAndAlias(
+      std::move(streamData.data), streamData.fin);
+  if (parseResult.hasError()) {
+    if (parseResult.error() == ErrorCode::PARSE_UNDERFLOW) {
+      XLOG(DBG4) << "Underflow on uni stream header";
+      co_return false;
+    } else {
+      MoQPublishError err(
+          MoQPublishError::CANCELLED, "Error parsing subgroup type and alias");
+      co_return folly::makeUnexpected(err);
+    }
+  }
+  auto trackAlias = parseResult.value();
+  if (!trackAlias) {
+    // it's fetch
+    co_return true;
+  }
+  auto state = getSubscribeTrackReceiveState(*trackAlias);
+  if (!state) {
+    XLOG(DBG4) << "No receive state for alias=" << *trackAlias << " waiting";
+    TimedBaton baton;
+    auto res =
+        bufferedSubgroups_.emplace(*trackAlias, std::list<TimedBaton*>());
+    res.first->second.push_back(&baton);
+    constexpr std::chrono::milliseconds kUnknownAliasTimeout(5000);
+    auto waitRes = co_await co_awaitTry(baton.wait(kUnknownAliasTimeout));
+    if (waitRes.hasException()) {
+      // TODO: Remove the baton we created from bufferedSubgroups_. The removal
+      // would be a lot easier once we've implemented a TimedBaton/TimedBarrier
+      // that allows multiple waiters on the same object.
+      MoQPublishError err(
+          MoQPublishError::CANCELLED, "Timed out waiting for unknown alias");
+      co_return folly::makeUnexpected(err);
+    } else {
+      state = getSubscribeTrackReceiveState(*trackAlias);
+      if (!state->getSubscribeCallback()) {
+        co_return folly::makeUnexpected(MoQPublishError(
+            MoQPublishError::CANCELLED, "Canceled or unusbscribed"));
+      }
+      XCHECK(state);
+    }
+  }
+  callback.setSubscribeTrackReceiveState(std::move(state));
+  co_return true;
+}
 
 folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     std::shared_ptr<MoQSession> session,
@@ -2214,9 +2271,21 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   });
   co_await folly::coro::co_safe_point;
   auto token = co_await folly::coro::co_current_cancellation_token;
+
+  if (!negotiatedVersion_.hasValue()) {
+    auto versionBaton = std::make_shared<moxygen::TimedBaton>();
+    subgroupsWaitingForVersion_.push_back(versionBaton);
+    constexpr std::chrono::milliseconds kVersionTimeout(5000);
+    auto waitRes = co_await co_awaitTry(versionBaton->wait(kVersionTimeout));
+    if (waitRes.hasException()) {
+      readHandle->stopSending(0);
+      co_return;
+    }
+  }
+
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
-  ObjectStreamCallback dcb(session, /*by ref*/ token);
+  detail::ObjectStreamCallback dcb(session, /*by ref*/ token);
   if (logger_) {
     dcb.setLogger(logger_);
   }
@@ -2225,6 +2294,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   codec.setStreamId(id);
 
   bool fin = false;
+  bool headerParsed = false;
   while (!fin && !token.isCancellationRequested()) {
     auto streamData =
         co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
@@ -2251,9 +2321,23 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       if (streamData->data || streamData->fin) {
         fin = streamData->fin;
         folly::Optional<MoQPublishError> err;
+        if (!headerParsed) {
+          auto res =
+              co_await this->headerParsed(codec, dcb, streamData.value());
+          if (res.hasError()) {
+            err = res.error();
+          } else {
+            headerParsed = *res;
+            if (!headerParsed) {
+              continue;
+            }
+          }
+        }
         try {
-          codec.onIngress(std::move(streamData->data), streamData->fin);
-          err = dcb.error();
+          if (!err) {
+            codec.onIngress(std::move(streamData->data), streamData->fin);
+            err = dcb.error();
+          }
         } catch (const std::exception& ex) {
           err = MoQPublishError(
               MoQPublishError::CANCELLED,
@@ -2478,14 +2562,23 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
               << " sess=" << this;
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
   }
-  auto datagramsIt = bufferedDatagrams_.find(subOk.trackAlias);
+  auto trackAlias = subOk.trackAlias;
+  trackReceiveState->subscribeOK(std::move(subOk));
+  auto datagramsIt = bufferedDatagrams_.find(trackAlias);
   if (datagramsIt != bufferedDatagrams_.end()) {
     for (auto& datagram : datagramsIt->second) {
       onDatagram(std::move(datagram));
     }
     bufferedDatagrams_.erase(datagramsIt);
   }
-  trackReceiveState->subscribeOK(std::move(subOk));
+
+  auto subgroupsIt = bufferedSubgroups_.find(trackAlias);
+  if (subgroupsIt != bufferedSubgroups_.end()) {
+    for (auto* baton : subgroupsIt->second) {
+      baton->signal();
+    }
+    bufferedSubgroups_.erase(subgroupsIt);
+  }
 }
 
 void MoQSession::onSubscribeError(SubscribeError subErr) {
@@ -3608,7 +3701,19 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
       fullTrackName, reqID, callback, logger_);
   pendingSubscribeTracks_.emplace(reqID, trackReceiveState);
-  auto subscribeResult = co_await trackReceiveState->subscribeFuture();
+  auto subscribeResultTry =
+      co_await co_awaitTry(trackReceiveState->subscribeFuture());
+  if (subscribeResultTry.hasException()) {
+    // likely cancellation
+    XLOG(ERR) << "subscribeFuture exception=" << subscribeResultTry.exception();
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_,
+        onSubscribeError,
+        SubscribeErrorCode::INTERNAL_ERROR);
+    trackReceiveState->cancel();
+    co_yield folly::coro::co_error(subscribeResultTry.exception());
+  }
+  auto subscribeResult = subscribeResultTry.value();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " requestID=" << reqID;
   if (subscribeResult.hasError()) {
@@ -4204,6 +4309,10 @@ void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
   negotiatedVersion_ = negotiatedVersion;
   moqFrameWriter_.initializeVersion(*negotiatedVersion_);
   controlCodec_.initializeVersion(*negotiatedVersion_);
+  for (auto versionBaton : subgroupsWaitingForVersion_) {
+    versionBaton->signal();
+  }
+  subgroupsWaitingForVersion_.clear();
 }
 
 /*static*/

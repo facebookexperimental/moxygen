@@ -136,6 +136,20 @@ void MoQCodec::onIngressEnd(
   ingress_.move();
 }
 
+folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+MoQObjectStreamCodec::parseSubgroupTypeAndAlias(
+    std::unique_ptr<folly::IOBuf> data,
+    bool eom) noexcept {
+  ingress_.append(std::move(data));
+  folly::io::Cursor cursor(ingress_.front());
+  auto res =
+      moqFrameParser_.parseSubgroupTypeAndAlias(cursor, ingress_.chainLength());
+  if (res.hasError() && res.error() == ErrorCode::PARSE_UNDERFLOW && eom) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return res;
+}
+
 void MoQObjectStreamCodec::onIngress(
     std::unique_ptr<folly::IOBuf> data,
     bool endOfStream) {

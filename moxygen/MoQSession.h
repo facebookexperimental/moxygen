@@ -27,6 +27,10 @@
 
 namespace moxygen {
 
+namespace detail {
+class ObjectStreamCallback;
+}
+
 struct BufferingThresholds {
   // A value of 0 means no threshold
   uint64_t perSubscription{0};
@@ -336,6 +340,11 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle);
+  folly::coro::Task<folly::Expected<bool, MoQPublishError>> headerParsed(
+      MoQObjectStreamCodec& codec,
+      detail::ObjectStreamCallback& callback,
+      proxygen::WebTransport::StreamData& streamData);
+
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
@@ -516,6 +525,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       subscribeAnnounces_;
   folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
       bufferedDatagrams_;
+  folly::F14FastMap<TrackAlias, std::list<TimedBaton*>, TrackAlias::hash>
+      bufferedSubgroups_;
+  // TODO: The reason we have multiple TimedBatons here is that the TimedBaton
+  // doesn't support multiple waiters. Would be better to make a primitive that
+  // supports multiple waiters. A "TimedBarrier"?
+  std::list<std::shared_ptr<moxygen::TimedBaton>> subgroupsWaitingForVersion_;
 
   uint64_t closedRequests_{0};
   // TODO: Make this value configurable. maxConcurrentRequests_ represents

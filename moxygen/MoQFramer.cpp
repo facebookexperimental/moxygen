@@ -581,6 +581,42 @@ MoQFrameParser::parseDatagramObjectHeader(
   return objectHeader;
 }
 
+folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+MoQFrameParser::parseSubgroupTypeAndAlias(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
+  CHECK(version_.hasValue())
+      << "The version must be set before parsing subgroup type and alias";
+
+  auto type = quic::decodeQuicInteger(cursor);
+  if (!type) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= type->second;
+
+  if (getDraftMajorVersion(*version_) >= 12 &&
+      (type->first & folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) ==
+          0) {
+    return folly::none;
+  } else if (
+      getDraftMajorVersion(*version_) == 11 &&
+      (type->first &
+       folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0) {
+    return folly::none;
+  } else if (
+      getDraftMajorVersion(*version_) < 11 &&
+      (type->first != folly::to_underlying(StreamType::SUBGROUP_HEADER))) {
+    return folly::none;
+  }
+
+  auto trackAlias = quic::decodeQuicInteger(cursor, length);
+  if (!trackAlias) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= trackAlias->second;
+  return TrackAlias(trackAlias->first);
+}
+
 folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
     SubgroupIDFormat format,

@@ -186,6 +186,11 @@ class MoQObjectStreamCodec : public MoQCodec {
     callback_ = callback;
   }
 
+  folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
+  parseSubgroupTypeAndAlias(
+      std::unique_ptr<folly::IOBuf> data,
+      bool eom) noexcept;
+
   void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
  private:

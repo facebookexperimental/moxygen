@@ -6,6 +6,7 @@
 
 #include "moxygen/MoQSession.h"
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Sleep.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
@@ -234,6 +235,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
               EXPECT_CALL(
                   *getSubscriberStatsCallback(oppositeDirection(direction)),
                   recordSubscribeLatency(_));
+              pub->setTrackAlias(TrackAlias(sub.requestID.value));
               if (error) {
                 EXPECT_CALL(
                     *getPublisherStatsCallback(direction),
@@ -243,7 +245,6 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                 EXPECT_CALL(
                     *getPublisherStatsCallback(direction), onSubscribeSuccess())
                     .RetiresOnSaturation();
-                pub->setTrackAlias(TrackAlias(sub.requestID.value));
               }
               return lambda(sub, pub);
             }))
@@ -2143,6 +2144,207 @@ CO_TEST_P_X(MoQSessionTest, TestOnObjectPayload) {
       getTrackEndedSubscribeDone(subscribeRequest.requestID));
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+using V12PlusTests = MoQSessionTest;
+
+INSTANTIATE_TEST_SUITE_P(
+    V12PlusTests,
+    V12PlusTests,
+    testing::Values(VersionParams{{kVersionDraft12}, kVersionDraft12}));
+
+CO_TEST_P_X(V12PlusTests, SubscribeOKAfterSubgroup) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+
+  expectSubscribe(
+      [&trackConsumer, &mockSubscriptionHandle, this](
+          const auto& sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+        auto pubResult = pub->objectStream(
+            ObjectHeader(TrackAlias(0), 0, 0, 0, 0, 10),
+            moxygen::test::makeBuf(10));
+        EXPECT_FALSE(pubResult.hasError());
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        return folly::coro::co_invoke(
+            [mockSubscriptionHandle]() -> TaskSubscribeResult {
+              co_await folly::coro::co_reschedule_on_current_executor;
+              co_return mockSubscriptionHandle;
+            });
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  expectSubscribeDone();
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(V12PlusTests, SubscribeOKArrivesOneByteAtATime) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+
+  expectSubscribe(
+      [&subgroupConsumer, &trackConsumer, this](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+        auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        co_await folly::coro::co_reschedule_on_current_executor;
+
+        serverWt_->writeHandles[2]->setImmediateDelivery(false);
+        sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
+        for (auto i = 0; i < 3; i++) {
+          serverWt_->writeHandles[2]->deliverInflightData(1);
+          co_await folly::coro::co_reschedule_on_current_executor;
+        }
+        serverWt_->writeHandles[2]->setImmediateDelivery(true);
+        serverWt_->writeHandles[2]->deliverInflightData();
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  expectSubscribeDone();
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(V12PlusTests, SubscribeOKNeverArrives) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+
+  expectSubscribe(
+      [&trackConsumer, this](
+          const auto& sub, const auto& pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+            .Times(0);
+        auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        sgp->object(0, moxygen::test::makeBuf(10));
+        return folly::coro::co_invoke([]() -> TaskSubscribeResult {
+          co_await folly::coro::co_reschedule_on_current_executor;
+          co_return folly::makeUnexpected(SubscribeError{
+              RequestID(0),
+              SubscribeErrorCode::INTERNAL_ERROR,
+              "Subscribe OK never arrived",
+              folly::none});
+        });
+      },
+      MoQControlCodec::Direction::SERVER,
+      SubscribeErrorCode::INTERNAL_ERROR);
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasError());
+  // Verify that the publisher's WebTransport received a stop sending on the
+  // object stream
+  auto waits = 0;
+  while (!serverWt_->writeHandles[2]->getWriteErr().hasValue() && waits++ < 6) {
+    co_await folly::coro::sleep(std::chrono::seconds(1));
+  }
+  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().hasValue());
+  EXPECT_EQ(serverWt_->writeHandles[2]->stopSendingErrorCode().value(), 0);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(V12PlusTests, SubscriberCancelsBeforeSubscribeOK) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  folly::coro::Baton streamBaton;
+  expectSubscribe(
+      [&trackConsumer, &mockSubscriptionHandle, &streamBaton, this](
+          const auto& sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        sgp->object(0, moxygen::test::makeBuf(10));
+        streamBaton.post();
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        return folly::coro::co_invoke(
+            [mockSubscriptionHandle]() -> TaskSubscribeResult {
+              co_await folly::coro::co_reschedule_on_current_executor;
+              co_return mockSubscriptionHandle;
+            });
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0)).Times(0);
+  folly::CancellationSource cancelSource;
+  auto subscribeFut =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          folly::coro::co_withCancellation(
+              cancelSource.getToken(),
+              clientSession_->subscribe(subscribeRequest, subscribeCallback_)))
+          .start()
+          .via(&eventBase_);
+  co_await folly::coro::co_reschedule_on_current_executor;
+  cancelSource.requestCancellation();
+  EXPECT_THROW(co_await std::move(subscribeFut), folly::OperationCancelled);
+  // Verify that the publisher's WebTransport received a stop sending on the
+  // object stream
+  co_await streamBaton;
+  auto waits = 0;
+  while (!serverWt_->writeHandles[2]->getWriteErr().hasValue() && waits++ < 6) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(250));
+  }
+  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().hasValue());
+  EXPECT_EQ(serverWt_->writeHandles[2]->stopSendingErrorCode().value(), 0);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  // This don't get called by session
+  clientSubscriberStatsCallback_->recordSubscribeLatency(0);
 }
 
 // Missing Test Cases
