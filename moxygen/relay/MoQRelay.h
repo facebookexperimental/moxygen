@@ -34,6 +34,10 @@ class MoQRelay : public Publisher,
       SubscribeRequest subReq,
       std::shared_ptr<TrackConsumer> consumer) override;
 
+  PublishResult publish(
+      PublishRequest pubReq,
+      std::shared_ptr<SubscriptionHandle> handle = nullptr) override;
+
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override;
@@ -51,6 +55,17 @@ class MoQRelay : public Publisher,
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
     removeSession(MoQSession::getRequestSession());
   }
+
+  class RelaySubscriptionHandle : public Publisher::SubscriptionHandle {
+   public:
+    explicit RelaySubscriptionHandle() : Publisher::SubscriptionHandle() {}
+
+    // To Be Implemented
+    void unsubscribe() override {}
+
+    // To Be Implemented
+    void subscribeUpdate(SubscribeUpdate update) override {}
+  };
 
  private:
   class AnnouncesSubscription;
@@ -76,8 +91,14 @@ class MoQRelay : public Publisher,
             announcements;
     // The session that ANNOUNCEd this node
     std::shared_ptr<MoQSession> sourceSession;
+
+    // Forward For PUBLISH on this node, map is (trackName -> MoQForwarder)
+    folly::F14FastMap<std::string, std::shared_ptr<MoQForwarder>>
+        publishForwarders_;
+
     MoQRelay& relay_;
   };
+
   AnnounceNode announceRoot_{*this};
   enum class MatchType { Exact, Prefix };
   std::shared_ptr<AnnounceNode> findNamespaceNode(
@@ -86,6 +107,11 @@ class MoQRelay : public Publisher,
       MatchType matchType = MatchType::Exact,
       std::vector<std::shared_ptr<MoQSession>>* sessions = nullptr);
   std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
+
+  // Searches prefix announce tree starting at node, and checks each node to see
+  // if it has a MoQForwarder (Active PUBLISH) and returns them in a vector
+  std::vector<std::shared_ptr<MoQForwarder>> getAllPublishForwardersStartingAt(
+      const AnnounceNode& node);
 
   struct RelaySubscription {
     RelaySubscription(

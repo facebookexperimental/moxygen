@@ -30,6 +30,7 @@ DEFINE_string(
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 DEFINE_bool(publish, false, "Send PUBLISH to subscriber");
+DEFINE_string(ns, "moq-date", "Namespace for date track");
 
 namespace {
 using namespace moxygen;
@@ -38,6 +39,17 @@ uint8_t extTestBuff[5] = {0x01, 0x02, 0x03, 0x04, 0x05};
 static const Extensions kExtensions{
     {0xacedecade, 1977},
     {0xdeadbeef, folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}};
+
+class DateSubscriptionHandle : public Publisher::SubscriptionHandle {
+ public:
+  explicit DateSubscriptionHandle() : Publisher::SubscriptionHandle() {}
+
+  // To Be Implemented
+  void unsubscribe() override {}
+
+  // To Be Implemented
+  void subscribeUpdate(SubscribeUpdate update) override {}
+};
 
 class MoQDateServer : public MoQServer,
                       public Publisher,
@@ -73,11 +85,11 @@ class MoQDateServer : public MoQServer,
             .start());
     relayClient_
         ->run(
-            /*publisher=*/shared_from_this(), {TrackNamespace({"moq-date"})})
+            /*publisher=*/shared_from_this(), {TrackNamespace(FLAGS_ns, "/")})
         .scheduleOn(evb)
         .start();
     if (FLAGS_publish) {
-      callPublish(TrackNamespace({"moq-date"}), 0).scheduleOn(evb).start();
+      callPublish(TrackNamespace(FLAGS_ns, "/"), 0).scheduleOn(evb).start();
     }
     return true;
   }
@@ -147,7 +159,11 @@ class MoQDateServer : public MoQServer,
 
     // Use relayClient_ to publish to relayServer
     auto session = relayClient_->getSession();
-    auto publishResponse = session->publish(req);
+
+    // Create a default handle
+    auto handle = std::make_shared<DateSubscriptionHandle>();
+
+    auto publishResponse = session->publish(req, handle);
     if (!publishResponse.hasValue()) {
       XLOG(ERR) << "Publish error: " << publishResponse.error().reasonPhrase;
       co_return req;
@@ -159,6 +175,18 @@ class MoQDateServer : public MoQServer,
       XLOG(ERR) << "Subgroup error: " << subConsumer.error().what();
       co_return req;
     }
+
+    // Transform PubReq to SubReq
+    SubscribeRequest subReq = {
+        .requestID = req.requestID,
+        .fullTrackName = req.fullTrackName,
+        .groupOrder = req.groupOrder,
+        .locType = LocationType::LargestObject,
+        .forward = req.forward,
+        .trackAlias = req.trackAlias};
+
+    // Add as a subscriber to forwarder
+    forwarder_.addSubscriber(session, subReq, consumer);
 
     if (!loopRunning_) {
       loopRunning_ = true;

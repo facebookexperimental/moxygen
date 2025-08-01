@@ -26,6 +26,14 @@ class MoQForwarder : public TrackConsumer {
     return fullTrackName_;
   }
 
+  folly::Optional<TrackAlias> trackAlias() const {
+    return trackAlias_;
+  }
+
+  GroupOrder groupOrder() const {
+    return groupOrder_;
+  }
+
   void setGroupOrder(GroupOrder order) {
     groupOrder_ = order;
   }
