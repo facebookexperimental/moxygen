@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
@@ -28,6 +29,7 @@ DEFINE_string(
     "stream-per-object(spo), datagram");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
+DEFINE_bool(publish, false, "Send PUBLISH to subscriber");
 
 namespace {
 using namespace moxygen;
@@ -59,16 +61,24 @@ class MoQDateServer : public MoQServer,
         (FLAGS_quic_transport
              ? std::make_unique<MoQClient>(evb, url)
              : std::make_unique<MoQWebTransportClient>(evb, url)));
-    co_withExecutor(
-        evb,
-        relayClient_->run(
-            /*publisher=*/shared_from_this(),
-            /*subscriber=*/nullptr,
-            {TrackNamespace({"moq-date"})},
-            std::chrono::milliseconds(FLAGS_relay_connect_timeout),
-            std::chrono::seconds(FLAGS_relay_transaction_timeout),
-            FLAGS_v11Plus))
+    folly::coro::blockingWait(
+        relayClient_
+            ->setup(
+                /*publisher=*/shared_from_this(),
+                /*subscriber=*/nullptr,
+                std::chrono::milliseconds(FLAGS_relay_connect_timeout),
+                std::chrono::seconds(FLAGS_relay_transaction_timeout),
+                FLAGS_v11Plus)
+            .scheduleOn(evb)
+            .start());
+    relayClient_
+        ->run(
+            /*publisher=*/shared_from_this(), {TrackNamespace({"moq-date"})})
+        .scheduleOn(evb)
         .start();
+    if (FLAGS_publish) {
+      callPublish(TrackNamespace({"moq-date"}), 0).scheduleOn(evb).start();
+    }
     return true;
   }
 
@@ -115,6 +125,49 @@ class MoQDateServer : public MoQServer,
         std::move(trackStatusRequest.fullTrackName),
         TrackStatusCode::IN_PROGRESS,
         largest};
+  }
+
+  folly::coro::Task<PublishRequest> callPublish(
+      TrackNamespace ns,
+      uint64_t requestId) {
+    // Form PublishRequest
+    PublishRequest req{
+        requestId,
+        FullTrackName{ns, "date"},
+        TrackAlias(requestId),
+        GroupOrder::Default,
+        folly::none,
+        true,
+        {}};
+
+    XLOG(INFO) << "PublishRequest track ns=" << req.fullTrackName.trackName
+               << " name=" << req.fullTrackName.trackName
+               << " requestID=" << req.requestID
+               << " track alias=" << req.trackAlias;
+
+    // Use relayClient_ to publish to relayServer
+    auto session = relayClient_->getSession();
+    auto publishResponse = session->publish(req);
+    if (!publishResponse.hasValue()) {
+      XLOG(ERR) << "Publish error: " << publishResponse.error().reasonPhrase;
+      co_return req;
+    }
+    auto consumer = publishResponse.value().consumer;
+    // Begin a subgroup on consumer
+    auto subConsumer = consumer->beginSubgroup(0, 0, 128);
+    if (subConsumer.hasError()) {
+      XLOG(ERR) << "Subgroup error: " << subConsumer.error().what();
+      co_return req;
+    }
+
+    if (!loopRunning_) {
+      loopRunning_ = true;
+      publishDateLoop(subConsumer.value())
+          .scheduleOn(session->getEventBase())
+          .start();
+    }
+
+    co_return req;
   }
 
   folly::coro::Task<SubscribeResult> subscribe(
@@ -315,9 +368,13 @@ class MoQDateServer : public MoQServer,
     }
   }
 
-  folly::coro::Task<void> publishDateLoop() {
+  folly::coro::Task<void> publishDateLoop(
+      std::shared_ptr<SubgroupConsumer> subConsumer = nullptr) {
     auto cancelToken = co_await folly::coro::co_current_cancellation_token;
     std::shared_ptr<SubgroupConsumer> subgroupPublisher;
+    if (subConsumer) {
+      subgroupPublisher = subConsumer;
+    }
     while (!cancelToken.isCancellationRequested()) {
       if (forwarder_.empty()) {
         forwarder_.setLargest(nowLocation());
@@ -446,6 +503,7 @@ int main(int argc, char* argv[]) {
   if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
     return 1;
   }
+
   evb.loopForever();
   return 0;
 }

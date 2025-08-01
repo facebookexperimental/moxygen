@@ -8,6 +8,7 @@
 
 // MoQVideoPublisher.cpp
 
+#include <folly/coro/BlockingWait.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <proxygen/lib/utils/URL.h>
@@ -165,15 +166,21 @@ bool MoQVideoPublisher::setup(const std::string& connectURL, bool v11Plus) {
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
       std::make_unique<MoQClient>(evbThread_->getEventBase(), url));
+
+  folly::coro::blockingWait(co_withExecutor(
+                                evbThread_->getEventBase(),
+                                relayClient_->setup(
+                                    /*publisher=*/shared_from_this(),
+                                    /*subscriber=*/nullptr,
+                                    kConnectTimeout,
+                                    kTransactionTimeout,
+                                    v11Plus))
+                                .start());
   co_withExecutor(
       evbThread_->getEventBase(),
       relayClient_->run(
           /*publisher=*/shared_from_this(),
-          /*subscriber=*/nullptr,
-          {videoForwarder_.fullTrackName().trackNamespace},
-          kConnectTimeout,
-          kTransactionTimeout,
-          v11Plus))
+          {videoForwarder_.fullTrackName().trackNamespace}))
       .start();
   return true;
 }

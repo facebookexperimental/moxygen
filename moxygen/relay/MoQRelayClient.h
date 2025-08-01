@@ -17,21 +17,25 @@ class MoQRelayClient {
   explicit MoQRelayClient(std::unique_ptr<MoQClient> client)
       : moqClient_(std::move(client)) {}
 
-  folly::coro::Task<void> run(
+  folly::coro::Task<void> setup(
       std::shared_ptr<Publisher> publisher,
       std::shared_ptr<Subscriber> subscriber,
-      std::vector<TrackNamespace> namespaces,
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
       std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60),
       bool v11Plus = true) {
+    co_await moqClient_->setupMoQSession(
+        connectTimeout,
+        transactionTimeout,
+        std::move(publisher),
+        std::move(subscriber),
+        v11Plus);
+  }
+
+  folly::coro::Task<void> run(
+      std::shared_ptr<Publisher> publisher,
+      std::vector<TrackNamespace> namespaces) {
     try {
       bool isPublisher = bool(publisher);
-      co_await moqClient_->setupMoQSession(
-          connectTimeout,
-          transactionTimeout,
-          std::move(publisher),
-          std::move(subscriber),
-          v11Plus);
       // could parallelize
       if (!moqClient_->moqSession_) {
         XLOG(ERR) << "Session is dead now #sad";
