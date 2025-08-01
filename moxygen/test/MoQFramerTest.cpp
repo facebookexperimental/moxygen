@@ -1055,13 +1055,19 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       cursor.reset(toParse.get());
       auto parseResult = parser_.parseSubscribeRequest(
           cursor, len - (origTokenLengthBytes - tokenLengthBytes));
+      if (j == 0) {
+        // clear token cache when registering
+        parser_.setTokenCacheMaxSize(0);
+        parser_.setTokenCacheMaxSize(100);
+      }
       EXPECT_FALSE(parseResult.hasValue());
     }
     if (j == 1 || j == 2) { // register / delete mutate cache state
       auto toParse = front->clone();
       auto shortTokenLengthBuf = folly::IOBuf::create(2);
       uint8_t tokenLengthBytes = 0;
-      CHECK(quic::encodeQuicInteger(tokenLengths[j] + 1, [&](auto val) {
+      auto newLength = j == 1 ? tokenLengths[j] + 1 : 5;
+      CHECK(quic::encodeQuicInteger(newLength, [&](auto val) {
         if (sizeof(val) == 1) {
           shortTokenLengthBuf->writableData()[0] = val;
         } else {
@@ -1078,7 +1084,9 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       cursor.reset(toParse.get());
       auto parseResult = parser_.parseSubscribeRequest(
           cursor, len - (origTokenLengthBytes - tokenLengthBytes) + 1);
-      EXPECT_FALSE(parseResult.hasValue()) << j;
+      EXPECT_FALSE(parseResult.hasValue())
+          << j
+          << " len=" << len - (origTokenLengthBytes - tokenLengthBytes) + 1;
     }
     auto toParse = front->clone();
     toParse->appendToChain(std::move(tokenLengthBuf));

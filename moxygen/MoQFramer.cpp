@@ -252,11 +252,8 @@ folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
       length -= tokenType->second;
       token->tokenType = tokenType->first;
 
-      auto tokenValue = parseFixedString(cursor, length);
-      if (!tokenValue) {
-        return folly::makeUnexpected(tokenValue.error());
-      }
-      token->tokenValue = std::move(tokenValue.value());
+      token->tokenValue = cursor.readFixedString(length);
+      length -= token->tokenValue.size();
       // ClientSetup is allowed to send REGISTERs that exceed the server's
       // limit, which are treated as USE_VALUE
       if (paramsType != ParamsType::ClientSetup ||
@@ -292,12 +289,8 @@ folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
       }
       length -= tokenType->second;
       token->tokenType = tokenType->first;
-
-      auto tokenValue = parseFixedString(cursor, length);
-      if (!tokenValue) {
-        return folly::makeUnexpected(tokenValue.error());
-      }
-      token->tokenValue = std::move(tokenValue.value());
+      token->tokenValue = cursor.readFixedString(length);
+      length -= token->tokenValue.size();
     } break;
     default:
       XLOG(ERR) << "Unknown Auth Token op code=" << aliasType->first;
@@ -1932,7 +1925,8 @@ std::string MoQFrameWriter::encodeRegisterToken(
   writeVarint(writeBuf, folly::to_underlying(AliasType::REGISTER), size, error);
   writeVarint(writeBuf, alias, size, error);
   writeVarint(writeBuf, tokenType, size, error);
-  writeFixedString(writeBuf, tokenValue, size, error);
+  writeBuf.append(tokenValue);
+  size += tokenValue.size();
   XCHECK(!error) << "Error encoding register token";
   return writeBuf.move()->moveToFbString().toStdString();
 }
@@ -1950,7 +1944,8 @@ std::string MoQFrameWriter::encodeTokenValue(
         writeBuf, folly::to_underlying(AliasType::USE_VALUE), size, error);
     writeVarint(writeBuf, tokenType, size, error);
   }
-  writeFixedString(writeBuf, tokenValue, size, error);
+  writeBuf.append(tokenValue);
+  size += tokenValue.size();
   XCHECK(!error) << "Error encoding token value";
   return writeBuf.move()->moveToFbString().toStdString();
 }
