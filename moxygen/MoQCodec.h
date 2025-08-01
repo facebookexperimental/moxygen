@@ -62,6 +62,9 @@ class MoQControlCodec : public MoQCodec {
     virtual void onSubscribeError(SubscribeError subscribeError) = 0;
     virtual void onSubscribeDone(SubscribeDone subscribeDone) = 0;
     virtual void onUnsubscribe(Unsubscribe unsubscribe) = 0;
+    virtual void onPublish(PublishRequest publish) = 0;
+    virtual void onPublishOk(PublishOk publishOk) = 0;
+    virtual void onPublishError(PublishError publishError) = 0;
     virtual void onMaxRequestID(MaxRequestID maxSubId) = 0;
     virtual void onRequestsBlocked(RequestsBlocked subscribesBlocked) = 0;
     virtual void onFetch(Fetch fetch) = 0;
@@ -110,6 +113,9 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::UNANNOUNCE:
       case FrameType::UNSUBSCRIBE:
       case FrameType::SUBSCRIBE_DONE:
+      case FrameType::PUBLISH:
+      case FrameType::PUBLISH_OK:
+      case FrameType::PUBLISH_ERROR:
       case FrameType::ANNOUNCE_CANCEL:
       case FrameType::TRACK_STATUS_REQUEST:
       case FrameType::TRACK_STATUS:

@@ -46,6 +46,9 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribeError(testing::_));
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeDone(testing::_));
+    EXPECT_CALL(callback, onPublish(testing::_));
+    EXPECT_CALL(callback, onPublishOk(testing::_));
+    EXPECT_CALL(callback, onPublishError(testing::_));
     EXPECT_CALL(callback, onAnnounce(testing::_));
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
     EXPECT_CALL(callback, onAnnounceError(testing::_));
@@ -62,7 +65,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
     EXPECT_CALL(callback, onFetchError(testing::_));
-    EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(28);
 
     codec.onIngress(std::move(allMsgs), true);
   }
@@ -93,6 +96,9 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribeError(testing::_));
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeDone(testing::_));
+    EXPECT_CALL(callback, onPublish(testing::_));
+    EXPECT_CALL(callback, onPublishOk(testing::_));
+    EXPECT_CALL(callback, onPublishError(testing::_));
     EXPECT_CALL(callback, onAnnounce(testing::_));
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
     EXPECT_CALL(callback, onAnnounceError(testing::_));
@@ -109,7 +115,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
     EXPECT_CALL(callback, onFetchError(testing::_));
-    EXPECT_CALL(callback, onFrame(testing::_)).Times(25);
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(28);
     while (!readBuf.empty()) {
       codec.onIngress(readBuf.split(1), false);
     }

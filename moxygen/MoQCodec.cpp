@@ -476,6 +476,39 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
+    case FrameType::PUBLISH: {
+      auto res = moqFrameParser_.parsePublish(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onPublish(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::PUBLISH_OK: {
+      auto res = moqFrameParser_.parsePublishOk(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onPublishOk(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::PUBLISH_ERROR: {
+      auto res = moqFrameParser_.parsePublishError(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onPublishError(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
     case FrameType::MAX_REQUEST_ID: {
       auto res = moqFrameParser_.parseMaxRequestID(cursor, curFrameLength_);
       if (res) {

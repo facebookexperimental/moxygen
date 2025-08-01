@@ -29,7 +29,7 @@ namespace moxygen {
 
 namespace detail {
 class ObjectStreamCallback;
-}
+} // namespace detail
 
 struct BufferingThresholds {
   // A value of 0 means no threshold
@@ -41,10 +41,10 @@ struct MoQSettings {
   BufferingThresholds bufferingThresholds{};
 };
 
-class MoQSession : public MoQControlCodec::ControlCallback,
-                   public proxygen::WebTransportHandler,
+class MoQSession : public Subscriber,
                    public Publisher,
-                   public Subscriber,
+                   public MoQControlCodec::ControlCallback,
+                   public proxygen::WebTransportHandler,
                    public std::enable_shared_from_this<MoQSession> {
  public:
   struct MoQSessionRequestData : public folly::RequestData {
@@ -113,6 +113,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void setSubscribeHandler(std::shared_ptr<Subscriber> subscribeHandler) {
     subscribeHandler_ = std::move(subscribeHandler);
   }
+
+  Subscriber::PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> handle = nullptr) override;
 
   folly::Optional<uint64_t> getNegotiatedVersion() const {
     return negotiatedVersion_;
@@ -250,6 +254,10 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       groupOrder_ = groupOrder;
     }
 
+    void setSession(MoQSession* session) {
+      session_ = session;
+    }
+
     virtual void terminatePublish(
         SubscribeDone subDone,
         ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
@@ -329,7 +337,6 @@ class MoQSession : public MoQControlCodec::ControlCallback,
  private:
   static const folly::RequestToken& sessionRequestToken();
   std::shared_ptr<MLogger> logger_ = nullptr;
-
   void setRequestSession() {
     folly::RequestContext::get()->setContextData(
         sessionRequestToken(),
@@ -385,6 +392,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void announceCancel(const AnnounceCancel& annCan);
   void unannounce(const Unannounce& unannounce);
 
+  folly::coro::Task<void> handlePublish(
+      PublishRequest publish,
+      std::shared_ptr<Publisher::SubscriptionHandle> publishHandle);
+  void publishOk(const PublishOk& pubOk);
+  void publishError(const PublishError& publishError);
+
   class ReceiverSubscriptionHandle;
   class ReceiverFetchHandle;
 
@@ -395,6 +408,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   void onSubscribeOk(SubscribeOk subscribeOk) override;
   void onSubscribeError(SubscribeError subscribeError) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;
+  void onPublish(PublishRequest publish) override;
+  void onPublishOk(PublishOk publishOk) override;
+  void onPublishError(PublishError publishError) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
   void onMaxRequestID(MaxRequestID maxSubId) override;
   void onRequestsBlocked(RequestsBlocked requestsBlocked) override;
@@ -474,7 +490,7 @@ class MoQSession : public MoQControlCodec::ControlCallback,
       std::shared_ptr<FetchTrackReceiveState>,
       RequestID::hash>
       fetches_;
-  folly::F14FastMap<RequestID, TrackAlias, RequestID::hash> subIdToTrackAlias_;
+  folly::F14FastMap<RequestID, TrackAlias, RequestID::hash> reqIdToTrackAlias_;
 
   struct PendingAnnounce {
     TrackNamespace trackNamespace;
@@ -493,6 +509,12 @@ class MoQSession : public MoQControlCodec::ControlCallback,
           folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>,
       RequestID::hash>
       pendingSubscribeAnnounces_;
+
+  folly::F14FastMap<
+      RequestID,
+      folly::coro::Promise<folly::Expected<PublishOk, PublishError>>,
+      RequestID::hash>
+      pendingPublish_;
 
   // Track Status
   folly::
