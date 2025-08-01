@@ -1035,14 +1035,15 @@ folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
     return folly::makeUnexpected(reas.error());
   }
   subscribeError.reasonPhrase = std::move(reas.value());
-
-  auto retryAlias = quic::decodeQuicInteger(cursor, length);
-  if (!retryAlias) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= retryAlias->second;
-  if (subscribeError.errorCode == SubscribeErrorCode::RETRY_TRACK_ALIAS) {
-    subscribeError.retryAlias = retryAlias->first;
+  if (getDraftMajorVersion(*version_) < 12) {
+    auto retryAlias = quic::decodeQuicInteger(cursor, length);
+    if (!retryAlias) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= retryAlias->second;
+    if (subscribeError.errorCode == SubscribeErrorCode::RETRY_TRACK_ALIAS) {
+      subscribeError.retryAlias = retryAlias->first;
+    }
   }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -2461,7 +2462,9 @@ WriteResult MoQFrameWriter::writeSubscribeError(
   writeVarint(
       writeBuf, folly::to_underlying(subscribeError.errorCode), size, error);
   writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
-  writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
+  if (getDraftMajorVersion(*version_) < 12) {
+    writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
+  }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
