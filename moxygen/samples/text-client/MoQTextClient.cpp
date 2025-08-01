@@ -33,6 +33,10 @@ DEFINE_bool(jrfetch, false, "Joining relative fetch");
 DEFINE_bool(jafetch, false, "Joining absolute fetch");
 DEFINE_bool(forward, true, "Forward flag for subscriptions");
 DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
+DEFINE_bool(
+    publish,
+    false,
+    "If client will act as a receiver for publish call (don't call subscribe and call sub_announce)");
 
 namespace {
 using namespace moxygen;
@@ -134,6 +138,39 @@ class MoQTextClient : public Subscriber,
                 : std::make_unique<MoQWebTransportClient>(evb, std::move(url))),
         fullTrackName_(std::move(ftn)) {}
 
+  folly::coro::Task<MoQSession::SubscribeAnnouncesResult> subscribeAnnounces(
+      SubscribeAnnounces subAnn) {
+    auto res = co_await moqClient_->moqSession_->subscribeAnnounces(subAnn);
+    if (res.hasValue()) {
+      subAnnouncesHandle_ = res.value();
+    }
+    co_return res;
+  }
+
+  // Response To PUBLISH
+  PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> handle = nullptr) override {
+    moxygen::PublishOk publishOk;
+    publishOk.requestID = pub.requestID;
+
+    // Default Params for Now
+    publishOk.forward = true;
+    publishOk.subscriberPriority = kDefaultPriority;
+    publishOk.groupOrder = moxygen::GroupOrder::Default;
+    publishOk.locType = moxygen::LocationType::AbsoluteStart;
+    publishOk.start = moxygen::AbsoluteLocation(0, 0);
+
+    // Build a PublishResponse
+    moxygen::Subscriber::PublishConsumerAndReplyTask publishResponse{
+        subTextReceiver_,
+        folly::coro::makeTask(
+            folly::Expected<moxygen::PublishOk, moxygen::PublishError>(
+                publishOk))};
+
+    return publishResponse;
+  }
+
   folly::coro::Task<void> run(SubscribeRequest sub) noexcept {
     XLOG(INFO) << __func__;
     auto g =
@@ -145,6 +182,13 @@ class MoQTextClient : public Subscriber,
           /*publishHandler=*/nullptr,
           /*subscribeHandler=*/shared_from_this(),
           FLAGS_v11Plus);
+
+      if (FLAGS_publish) {
+        SubscribeAnnounces subAnn{
+            sub.requestID, sub.fullTrackName.trackNamespace, sub.params};
+        co_await subscribeAnnounces(subAnn);
+        co_return;
+      }
 
       Publisher::SubscribeResult track;
       if (FLAGS_jafetch || FLAGS_jrfetch) {
@@ -285,6 +329,7 @@ class MoQTextClient : public Subscriber,
           ObjectReceiver::SUBSCRIBE,
           subTextHandler_)};
   std::shared_ptr<ObjectReceiver> fetchTextReceiver_;
+  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subAnnouncesHandle_;
 };
 } // namespace
 
