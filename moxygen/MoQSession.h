@@ -75,7 +75,9 @@ class MoQSession : public MoQControlCodec::ControlCallback,
   class ServerSetupCallback {
    public:
     virtual ~ServerSetupCallback() = default;
-    virtual folly::Try<ServerSetup> onClientSetup(ClientSetup clientSetup) = 0;
+    virtual folly::Try<ServerSetup> onClientSetup(
+        ClientSetup clientSetup,
+        std::shared_ptr<MoQSession> session) = 0;
   };
 
   explicit MoQSession(

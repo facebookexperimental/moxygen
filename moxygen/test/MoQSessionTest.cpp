@@ -100,7 +100,9 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
   }
 
-  folly::Try<ServerSetup> onClientSetup(ClientSetup setup) override {
+  folly::Try<ServerSetup> onClientSetup(
+      ClientSetup setup,
+      std::shared_ptr<MoQSession>) override {
     if (invalidVersion_) {
       return folly::Try<ServerSetup>(std::runtime_error("invalid version"));
     }

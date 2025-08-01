@@ -1793,8 +1793,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
           kMaxSendTokenCacheSize,
           getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)),
       /*evict=*/true);
-  auto serverSetup =
-      serverSetupCallback_->onClientSetup(std::move(clientSetup));
+  auto serverSetup = serverSetupCallback_->onClientSetup(
+      std::move(clientSetup), shared_from_this());
   if (!serverSetup.hasValue()) {
     XLOG(ERR) << "Server setup callback failed sess=" << this
               << " err=" << serverSetup.exception().what();

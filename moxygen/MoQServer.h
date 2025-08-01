@@ -48,6 +48,10 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   void stop();
 
+  folly::Try<ServerSetup> onClientSetup(
+      ClientSetup clientSetup,
+      std::shared_ptr<MoQSession> session) override;
+
  private:
   folly::coro::Task<void> handleClientSession(
       std::shared_ptr<MoQSession> clientSession);
@@ -110,8 +114,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   [[nodiscard]] const std::string& getEndpoint() const {
     return endpoint_;
   }
-
-  folly::Try<ServerSetup> onClientSetup(ClientSetup clientSetup) override;
 
   void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
 
