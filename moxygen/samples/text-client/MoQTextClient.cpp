@@ -4,15 +4,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/base64.h>
+#include <folly/coro/Sleep.h>
+#include <folly/init/Init.h>
+#include <folly/io/async/AsyncSignalHandler.h>
 #include <folly/portability/GFlags.h>
+#include <signal.h>
 #include <moxygen/MoQClient.h>
 #include <moxygen/MoQWebTransportClient.h>
 #include <moxygen/ObjectReceiver.h>
-
-#include <folly/base64.h>
-#include <folly/init/Init.h>
-#include <folly/io/async/AsyncSignalHandler.h>
-#include <signal.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
@@ -37,6 +37,11 @@ DEFINE_bool(
     publish,
     false,
     "If client will act as a receiver for publish call (don't call subscribe and call sub_announce)");
+DEFINE_bool(
+    unsubscribe,
+    false,
+    "If client will unsubscribe from PUBLISH track after a specified time");
+DEFINE_uint64(unsubscribe_time, 30, "Time to unsubscribe in seconds");
 
 namespace {
 using namespace moxygen;
@@ -150,7 +155,7 @@ class MoQTextClient : public Subscriber,
   // Response To PUBLISH
   PublishResult publish(
       PublishRequest pub,
-      std::shared_ptr<SubscriptionHandle> handle = nullptr) override {
+      std::shared_ptr<SubscriptionHandle> handle) override {
     moxygen::PublishOk publishOk;
     publishOk.requestID = pub.requestID;
 
@@ -160,6 +165,10 @@ class MoQTextClient : public Subscriber,
     publishOk.groupOrder = moxygen::GroupOrder::Default;
     publishOk.locType = moxygen::LocationType::AbsoluteStart;
     publishOk.start = moxygen::AbsoluteLocation(0, 0);
+
+    if (handle) {
+      subHandles_.push_back(handle);
+    }
 
     // Build a PublishResponse
     moxygen::Subscriber::PublishConsumerAndReplyTask publishResponse{
@@ -187,6 +196,16 @@ class MoQTextClient : public Subscriber,
         SubscribeAnnounces subAnn{
             sub.requestID, sub.fullTrackName.trackNamespace, sub.params};
         co_await subscribeAnnounces(subAnn);
+
+        if (FLAGS_unsubscribe) {
+          co_await folly::coro::sleep(
+              std::chrono::seconds(FLAGS_unsubscribe_time));
+
+          for (auto& handle : subHandles_) {
+            handle->unsubscribe();
+          }
+        }
+
         co_return;
       }
 
@@ -330,6 +349,7 @@ class MoQTextClient : public Subscriber,
           subTextHandler_)};
   std::shared_ptr<ObjectReceiver> fetchTextReceiver_;
   std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subAnnouncesHandle_;
+  std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> subHandles_;
 };
 } // namespace
 

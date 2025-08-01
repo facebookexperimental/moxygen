@@ -188,8 +188,9 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
         .forward = true};
 
     // Initialize PUBLISH Tracks on session
-    auto pubRes =
-        session->publish(pubReq, std::make_shared<RelaySubscriptionHandle>());
+    auto pubRes = session->publish(
+        pubReq,
+        std::make_shared<RelaySubscriptionHandle>(moqForwarder, session));
     if (pubRes.hasValue()) {
       SubscribeRequest subReq = {
           .requestID = subNs.requestID,
@@ -419,8 +420,9 @@ Subscriber::PublishResult MoQRelay::publish(
 
   for (auto& session : sessions) {
     // Initialize PUBLISH Tracks on sessions
-    auto pubRes =
-        session->publish(pubReq, std::make_shared<RelaySubscriptionHandle>());
+    auto pubRes = session->publish(
+        pubReq,
+        std::make_shared<RelaySubscriptionHandle>(moqForwarder, session));
     if (pubRes.hasError()) {
       return folly::makeUnexpected(PublishError(
           {pubReq.requestID,

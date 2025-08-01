@@ -56,15 +56,27 @@ class MoQRelay : public Publisher,
     removeSession(MoQSession::getRequestSession());
   }
 
+  // Relay SubscriptionHandles use a Forwarder to allow clients to remove
+  // themselves as SUBSCRIBERs from a PUBLISH call
   class RelaySubscriptionHandle : public Publisher::SubscriptionHandle {
    public:
-    explicit RelaySubscriptionHandle() : Publisher::SubscriptionHandle() {}
+    explicit RelaySubscriptionHandle(
+        std::shared_ptr<MoQForwarder> forwarder,
+        std::shared_ptr<MoQSession> session)
+        : Publisher::SubscriptionHandle(),
+          forwarder_(forwarder),
+          session_(session) {}
 
-    // To Be Implemented
-    void unsubscribe() override {}
+    void unsubscribe() override {
+      forwarder_->removeSession(session_);
+    }
 
     // To Be Implemented
     void subscribeUpdate(SubscribeUpdate update) override {}
+
+   private:
+    std::shared_ptr<MoQForwarder> forwarder_;
+    std::shared_ptr<MoQSession> session_;
   };
 
  private:
