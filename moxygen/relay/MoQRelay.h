@@ -34,10 +34,6 @@ class MoQRelay : public Publisher,
       SubscribeRequest subReq,
       std::shared_ptr<TrackConsumer> consumer) override;
 
-  PublishResult publish(
-      PublishRequest pubReq,
-      std::shared_ptr<SubscriptionHandle> handle = nullptr) override;
-
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override;
@@ -49,35 +45,16 @@ class MoQRelay : public Publisher,
       Announce ann,
       std::shared_ptr<Subscriber::AnnounceCallback>) override;
 
+  PublishResult publish(
+      PublishRequest pubReq,
+      std::shared_ptr<SubscriptionHandle> handle = nullptr) override;
+
   void removeSession(const std::shared_ptr<MoQSession>& session);
 
   void goaway(Goaway goaway) override {
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
     removeSession(MoQSession::getRequestSession());
   }
-
-  // Relay SubscriptionHandles use a Forwarder to allow clients to remove
-  // themselves as SUBSCRIBERs from a PUBLISH call
-  class RelaySubscriptionHandle : public Publisher::SubscriptionHandle {
-   public:
-    explicit RelaySubscriptionHandle(
-        std::shared_ptr<MoQForwarder> forwarder,
-        std::shared_ptr<MoQSession> session)
-        : Publisher::SubscriptionHandle(),
-          forwarder_(forwarder),
-          session_(session) {}
-
-    void unsubscribe() override {
-      forwarder_->removeSession(session_);
-    }
-
-    // To Be Implemented
-    void subscribeUpdate(SubscribeUpdate update) override {}
-
-   private:
-    std::shared_ptr<MoQForwarder> forwarder_;
-    std::shared_ptr<MoQSession> session_;
-  };
 
  private:
   class AnnouncesSubscription;
@@ -95,6 +72,9 @@ class MoQRelay : public Publisher,
     using Subscriber::AnnounceHandle::setAnnounceOk;
 
     folly::F14FastMap<std::string, std::shared_ptr<AnnounceNode>> children;
+
+    // Maps a track name to a the session performing the PUBLISH
+    folly::F14FastMap<std::string, std::shared_ptr<MoQSession>> publishes;
     // Sessions with a SUBSCRIBE_ANNOUNCES here
     folly::F14FastSet<std::shared_ptr<MoQSession>> sessions;
     // All active ANNOUNCEs for this node (includes prefix sessions)
@@ -103,10 +83,6 @@ class MoQRelay : public Publisher,
             announcements;
     // The session that ANNOUNCEd this node
     std::shared_ptr<MoQSession> sourceSession;
-
-    // Forward For PUBLISH on this node, map is (trackName -> MoQForwarder)
-    folly::F14FastMap<std::string, std::shared_ptr<MoQForwarder>>
-        publishForwarders_;
 
     MoQRelay& relay_;
   };
@@ -120,11 +96,6 @@ class MoQRelay : public Publisher,
       std::vector<std::shared_ptr<MoQSession>>* sessions = nullptr);
   std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
 
-  // Searches prefix announce tree starting at node, and checks each node to see
-  // if it has a MoQForwarder (Active PUBLISH) and returns them in a vector
-  std::vector<std::shared_ptr<MoQForwarder>> getAllPublishForwardersStartingAt(
-      const AnnounceNode& node);
-
   struct RelaySubscription {
     RelaySubscription(
         std::shared_ptr<MoQForwarder> f,
@@ -136,6 +107,7 @@ class MoQRelay : public Publisher,
     RequestID requestID{0};
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
     folly::coro::SharedPromise<folly::Unit> promise;
+    bool isPublish{false};
   };
 
   void onEmpty(MoQForwarder* forwarder) override;
@@ -144,6 +116,11 @@ class MoQRelay : public Publisher,
       std::shared_ptr<MoQSession> session,
       Announce ann,
       std::shared_ptr<AnnounceNode> nodePtr);
+
+  folly::coro::Task<void> publishToSession(
+      std::shared_ptr<MoQSession> session,
+      std::shared_ptr<MoQForwarder> forwarder,
+      PublishRequest pub);
 
   void unannounce(const TrackNamespace& trackNamespace, AnnounceNode* node);
 

@@ -12,35 +12,6 @@ constexpr uint8_t kDefaultUpstreamPriority = 128;
 
 namespace moxygen {
 
-std::vector<std::shared_ptr<MoQForwarder>>
-MoQRelay::getAllPublishForwardersStartingAt(const AnnounceNode& node) {
-  std::vector<std::shared_ptr<MoQForwarder>> moqForwaders;
-  std::queue<AnnounceNode> q;
-  q.push(node);
-
-  // Simple BFS to find all the Available MoQForwards (ACTIVE PUBLISH CALLS)
-  // For example, in a prefix tree, if a node is sub_announced to
-  // /moq-date/date_1, It may be forwarded a PUBLISH from any node that
-  // starts with /moq-date/date_1/*
-  while (!q.empty()) {
-    AnnounceNode curr = q.front();
-    q.pop();
-
-    // If node has an active PUBLISHES, add forward
-    if (!curr.publishForwarders_.empty()) {
-      for (const auto& [key, moqForwarder] : curr.publishForwarders_) {
-        moqForwaders.push_back(moqForwarder);
-      }
-    }
-
-    // Add children to queue
-    for (const auto& child : curr.children) {
-      q.push(*child.second);
-    }
-  }
-  return moqForwaders;
-}
-
 std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
@@ -135,6 +106,124 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   // TODO: prune Announce tree
 }
 
+Subscriber::PublishResult MoQRelay::publish(
+    PublishRequest pub,
+    std::shared_ptr<SubscriptionHandle> handle) {
+  XLOG(DBG1) << __func__ << " ns=" << pub.fullTrackName.trackNamespace;
+  if (!pub.fullTrackName.trackNamespace.startsWith(allowedNamespacePrefix_)) {
+    return folly::makeUnexpected(PublishError{
+        pub.requestID, PublishErrorCode::UNINTERESTED, "bad namespace"});
+  }
+
+  if (subscriptions_.contains(pub.fullTrackName)) {
+    return folly::makeUnexpected(PublishError{
+        pub.requestID,
+        PublishErrorCode::INTERNAL_ERROR,
+        "Duplicate publish, multi-publisher not supported"});
+  }
+
+  if (pub.fullTrackName.trackNamespace.empty()) {
+    return folly::makeUnexpected(PublishError(
+        {pub.requestID,
+         PublishErrorCode::INTERNAL_ERROR,
+         "namespace required"}));
+  }
+
+  // Find All Nodes that SubscribeAnnounced to this namespace (including prefix
+  // ns)
+  std::vector<std::shared_ptr<MoQSession>> sessions = {};
+  auto nodePtr = findNamespaceNode(
+      pub.fullTrackName.trackNamespace,
+      /*createMissingNodes=*/true,
+      MatchType::Exact,
+      &sessions);
+
+  auto session = MoQSession::getRequestSession();
+  auto res = nodePtr->publishes.emplace(pub.fullTrackName.trackName, session);
+  XCHECK(res.second) << "Duplicate publish";
+
+  // Create Forwarder for this publish
+  auto forwarder =
+      std::make_shared<MoQForwarder>(pub.fullTrackName, folly::none);
+
+  // Set Forwarder Params
+  forwarder->setGroupOrder(pub.groupOrder);
+
+  auto subRes = subscriptions_.emplace(
+      std::piecewise_construct,
+      std::forward_as_tuple(pub.fullTrackName),
+      std::forward_as_tuple(forwarder, session));
+  auto& rsub = subRes.first->second;
+  rsub.promise.setValue(folly::unit);
+  rsub.requestID = pub.requestID;
+  rsub.handle = std::move(handle);
+  rsub.isPublish = true;
+
+  uint64_t nSubscribers = 0;
+  for (auto& outSession : sessions) {
+    if (outSession != session) {
+      nSubscribers++;
+      auto evb = outSession->getEventBase();
+      co_withExecutor(evb, publishToSession(outSession, forwarder, pub))
+          .start();
+    }
+  }
+  forwarder->setCallback(shared_from_this());
+
+  return PublishConsumerAndReplyTask(
+      forwarder,
+      folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(PublishOk{
+          pub.requestID,
+          /*forward=*/(nSubscribers > 0),
+          kDefaultPriority,
+          pub.groupOrder,
+          LocationType::AbsoluteRange,
+          kLocationMin,
+          kLocationMax.group,
+          {}}));
+}
+
+folly::coro::Task<void> MoQRelay::publishToSession(
+    std::shared_ptr<MoQSession> session,
+    std::shared_ptr<MoQForwarder> forwarder,
+    PublishRequest pub) {
+  pub.forward = false;
+  auto subscriber = forwarder->addSubscriber(session, pub);
+  auto guard = folly::makeGuard(
+      [forwarder, session] { forwarder->removeSession(session); });
+  if (pub.largest) {
+    subscriber->updateLargest(*pub.largest);
+  }
+  subscriber->setPublisherGroupOrder(pub.groupOrder);
+
+  auto pubInitial = session->publish(pub, subscriber);
+  if (pubInitial.hasError()) {
+    XLOG(ERR) << "Publish failed err=" << pubInitial.error().reasonPhrase;
+    co_return;
+  }
+  subscriber->trackConsumer = std::move(pubInitial->consumer);
+  auto pubResult = co_await co_awaitTry(std::move(pubInitial->reply));
+  if (pubResult.hasException()) {
+    XLOG(ERR) << "Publish failed err=" << pubResult.exception().what();
+    co_return;
+  }
+  if (pubResult.value().hasError()) {
+    XLOG(ERR) << "Publish failed err="
+              << pubResult.value().error().reasonPhrase;
+    co_return;
+  }
+  guard.dismiss();
+  XLOG(DBG1) << "Publish OK sess=" << session.get();
+  auto& pubOk = pubResult.value().value();
+  folly::Optional<AbsoluteLocation> end;
+  if (pubOk.endGroup) {
+    end = AbsoluteLocation{*pubOk.endGroup, 0};
+  }
+  subscriber->range =
+      toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder->largest());
+  subscriber->shouldForward = pubOk.forward;
+}
+
 class MoQRelay::AnnouncesSubscription
     : public Publisher::SubscribeAnnouncesHandle {
  public:
@@ -175,36 +264,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
   nodePtr->sessions.emplace(session);
 
-  // Get all possible forwards to PUBLISH on for node
-  auto moqForwarders = getAllPublishForwardersStartingAt(*nodePtr);
-
-  for (const auto& moqForwarder : moqForwarders) {
-    PublishRequest pubReq = {
-        .requestID = subNs.requestID,
-        .fullTrackName = moqForwarder->fullTrackName(),
-        .trackAlias = moqForwarder->trackAlias().value_or(
-            TrackAlias(subNs.requestID.value)),
-        .groupOrder = moqForwarder->groupOrder(),
-        .forward = true};
-
-    // Initialize PUBLISH Tracks on session
-    auto pubRes = session->publish(
-        pubReq,
-        std::make_shared<RelaySubscriptionHandle>(moqForwarder, session));
-    if (pubRes.hasValue()) {
-      SubscribeRequest subReq = {
-          .requestID = subNs.requestID,
-          .fullTrackName = moqForwarder->fullTrackName(),
-          .groupOrder = moqForwarder->groupOrder(),
-          .locType = LocationType::LargestObject,
-          .forward = true,
-          .trackAlias = moqForwarder->trackAlias().value_or(
-              TrackAlias(subNs.requestID.value))};
-      moqForwarder->addSubscriber(session, subReq, pubRes.value().consumer);
-    }
-  }
-
-  // Find all nested Announcements and forward
+  // Find all nested Announcements/Publishes and forward
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<AnnounceNode>>> nodes{
       {subNs.trackNamespacePrefix, nodePtr}};
   auto evb = session->getEventBase();
@@ -217,6 +277,40 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
           evb,
           announceToSession(session, {subNs.requestID, prefix, {}}, nodePtr))
           .start();
+    }
+    PublishRequest pub{
+        0,
+        FullTrackName{prefix, ""},
+        TrackAlias(0), // filled in by library
+        GroupOrder::Default,
+        folly::none,
+        /*forward=*/false,
+        {}};
+    for (auto& publishEntry : nodePtr->publishes) {
+      auto& publishSession = publishEntry.second;
+      pub.fullTrackName.trackName = publishEntry.first;
+      auto subscriptionIt = subscriptions_.find(pub.fullTrackName);
+      if (subscriptionIt == subscriptions_.end()) {
+        XLOG(ERR) << "Invalid state, no subscription for publish ftn="
+                  << pub.fullTrackName;
+        continue;
+      }
+      auto& forwarder = subscriptionIt->second.forwarder;
+      if (forwarder->empty()) {
+        subscriptionIt->second.handle->subscribeUpdate(
+            {subscriptionIt->second.handle->subscribeOk().requestID,
+             kLocationMin,
+             kLocationMax.group,
+             kDefaultPriority,
+             /*forward=*/true,
+             {}});
+      }
+      pub.groupOrder = forwarder->groupOrder();
+      pub.largest = forwarder->largest();
+      if (publishSession != session) {
+        evb = publishSession->getEventBase();
+        co_withExecutor(evb, publishToSession(session, forwarder, pub)).start();
+      }
     }
     for (auto& nextNodeIt : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
@@ -372,85 +466,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
   }
 }
 
-Subscriber::PublishResult MoQRelay::publish(
-    PublishRequest pubReq,
-    std::shared_ptr<SubscriptionHandle> handle) {
-  if (pubReq.fullTrackName.trackNamespace.empty()) {
-    return folly::makeUnexpected(PublishError(
-        {pubReq.requestID,
-         PublishErrorCode::INTERNAL_ERROR,
-         "namespace required"}));
-  }
-
-  auto upstreamSession =
-      findAnnounceSession(pubReq.fullTrackName.trackNamespace);
-  if (!upstreamSession) {
-    return folly::makeUnexpected(PublishError(
-        {pubReq.requestID,
-         PublishErrorCode::UNAUTHORIZED,
-         "no such namespace has been announced"}));
-  }
-
-  // Find All Nodes that SubscribeAnnounced to this namespace (including prefix
-  // ns)
-  std::vector<std::shared_ptr<MoQSession>> sessions = {};
-  auto nodePtr = findNamespaceNode(
-      pubReq.fullTrackName.trackNamespace, true, MatchType::Exact, &sessions);
-
-  // Create Forwarder for this publish
-  auto moqForwarder =
-      std::make_shared<MoQForwarder>(pubReq.fullTrackName, folly::none);
-
-  // Set Forwarder Params
-  moqForwarder->setTrackAlias(pubReq.trackAlias);
-  moqForwarder->setGroupOrder(pubReq.groupOrder);
-
-  // Set Forwarder for this node
-  nodePtr->publishForwarders_.emplace(
-      pubReq.fullTrackName.trackName, moqForwarder);
-
-  // Create a SubReq to create a Subscriber for this Forwarder
-  SubscribeRequest subReq = {
-      .requestID = pubReq.requestID,
-      .fullTrackName = pubReq.fullTrackName,
-      .groupOrder = pubReq.groupOrder,
-      .locType = LocationType::LargestObject,
-      .forward = pubReq.forward,
-      .trackAlias = pubReq.trackAlias};
-
-  for (auto& session : sessions) {
-    // Initialize PUBLISH Tracks on sessions
-    auto pubRes = session->publish(
-        pubReq,
-        std::make_shared<RelaySubscriptionHandle>(moqForwarder, session));
-    if (pubRes.hasError()) {
-      return folly::makeUnexpected(PublishError(
-          {pubReq.requestID,
-           pubRes.error().errorCode,
-           folly::to<std::string>(
-               "publish failed: ", pubRes.error().reasonPhrase)}));
-    }
-
-    // Add Subscriber to Forwarder
-    auto subscriber = moqForwarder->addSubscriber(
-        session, subReq, std::move(pubRes.value().consumer));
-  }
-  moqForwarder->setCallback(shared_from_this());
-
-  return PublishConsumerAndReplyTask(
-      moqForwarder,
-      folly::coro::makeTask<
-          folly::Expected<moxygen::PublishOk, moxygen::PublishError>>(
-          moxygen::PublishOk{
-              pubReq.requestID,
-              true,
-              kDefaultPriority,
-              pubReq.groupOrder,
-              moxygen::LocationType::AbsoluteStart,
-              moxygen::AbsoluteLocation{0, 0},
-              {}}));
-}
-
 folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> consumer) {
@@ -529,9 +544,24 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
     }
     XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
     if (subscription.handle) {
-      subscription.handle->unsubscribe();
+      if (subscription.isPublish) {
+        // if it's publish, don't unsubscribe, just subscribeUpdate
+        // forward=false
+        XLOG(DBG1) << "Updating upstream subscription forward=false";
+        subscription.handle->subscribeUpdate(
+            {subscription.handle->subscribeOk().requestID,
+             kLocationMin,
+             kLocationMax.group,
+             kDefaultPriority,
+             /*forward=*/false,
+             {}});
+      } else {
+        subscription.handle->unsubscribe();
+      }
     }
-    subscriptionIt = subscriptions_.erase(subscriptionIt);
+    if (!subscription.isPublish) {
+      subscriptionIt = subscriptions_.erase(subscriptionIt);
+    }
     return;
   }
 }
@@ -567,6 +597,14 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
         });
       }
       nodePtr->announcements.clear();
+    }
+    for (auto pubIt = nodePtr->publishes.begin();
+         pubIt != nodePtr->publishes.end();) {
+      if (pubIt->second == session) {
+        pubIt = nodePtr->publishes.erase(pubIt);
+      } else {
+        ++pubIt;
+      }
     }
     for (auto& nextNode : nodePtr->children) {
       TrackNamespace nodePrefix(prefix);
