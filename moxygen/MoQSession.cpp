@@ -839,11 +839,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   void terminatePublish(SubscribeDone subDone, ResetStreamErrorCode code)
       override {
-    LOG(INFO) << "CALLING TERM PUB";
     resetAllSubgroups(code);
-    LOG(INFO) << "Passed Resest";
     subscribeDone(std::move(subDone));
-    LOG(INFO) << "PASS SUBDONE";
   }
 
   void resetAllSubgroups(ResetStreamErrorCode code) {
@@ -4112,7 +4109,7 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
 folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::PublisherImpl::subscribeDone(SubscribeDone subscribeDone) {
   CHECK(session_) << "session_ is NULL in subscribeDone";
-  LOG(INFO) << __func__ << " sess=" << session_;
+  XLOG(DBG1) << __func__ << " sess=" << session_;
   session_->subscribeDone(subscribeDone);
   return folly::unit;
 }
@@ -4121,7 +4118,6 @@ void MoQSession::subscribeDone(const SubscribeDone& subDone) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onSubscribeDone, subDone.statusCode);
-  LOG(INFO) << "CALLING SUBSCRIBE_DONE - " << subDone.requestID;
   auto it = pubTracks_.find(subDone.requestID);
   if (it == pubTracks_.end()) {
     XLOG(ERR) << "subscribeDone for invalid id=" << subDone.requestID
