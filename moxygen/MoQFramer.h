@@ -172,11 +172,21 @@ enum class FrameType : uint64_t {
   LEGACY_SERVER_SETUP = 0x41,
 };
 
-enum class StreamType : uint64_t {
+enum class DatagramType : uint64_t {
+  OBJECT_DATAGRAM_NO_EXT_V11 = 0x0,
+  OBJECT_DATAGRAM_EXT_V11 = 0x1,
+  OBJECT_DATAGRAM_STATUS_V11 = 0x2,
+  OBJECT_DATAGRAM_STATUS_EXT_V11 = 0x3,
+
   OBJECT_DATAGRAM_NO_EXT = 0x0,
   OBJECT_DATAGRAM_EXT = 0x1,
-  OBJECT_DATAGRAM_STATUS = 0x2,
-  OBJECT_DATAGRAM_STATUS_EXT = 0x3,
+  OBJECT_DATAGRAM_NO_EXT_EOG = 0x2,
+  OBJECT_DATAGRAM_EXT_EOG = 0x3,
+  OBJECT_DATAGRAM_STATUS = 0x20,
+  OBJECT_DATAGRAM_STATUS_EXT = 0x21,
+};
+
+enum class StreamType : uint64_t {
   SUBGROUP_HEADER = 0x4, // draft-10 and earlier
   FETCH_HEADER = 0x5,
   SUBGROUP_HEADER_MASK_V11 = 0x8,
@@ -1044,12 +1054,48 @@ inline folly::Optional<SubgroupOptions> getSubgroupOptions(
   return options;
 }
 
-inline StreamType
-getDatagramType(uint64_t version, bool status, bool includeExtensions) {
-  return getDraftMajorVersion(version) < 11
-      ? (status ? StreamType::OBJECT_DATAGRAM_STATUS
-                : StreamType::OBJECT_DATAGRAM_EXT)
-      : (StreamType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0)));
+inline bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
+    return datagramType ==
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_NO_EXT_V11) ||
+        datagramType ==
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_V11) ||
+        datagramType ==
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_V11);
+  } else if (majorVersion == 11) {
+    return datagramType <=
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11);
+  } else {
+    return (
+        datagramType <=
+            folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_EOG) ||
+        (datagramType >=
+             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) &&
+         datagramType <=
+             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT)));
+  }
+}
+
+inline DatagramType getDatagramType(
+    uint64_t version,
+    bool status,
+    bool includeExtensions,
+    bool endOfGroup) {
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 11) {
+    return (
+        status ? DatagramType::OBJECT_DATAGRAM_STATUS_V11
+               : DatagramType::OBJECT_DATAGRAM_EXT_V11);
+  } else if (majorVersion == 11) {
+    return DatagramType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0));
+  } else if (status) {
+    return DatagramType(
+        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) |
+        (includeExtensions ? 0x1 : 0));
+  } else {
+    return DatagramType((includeExtensions ? 0x1 : 0) | (endOfGroup ? 0x4 : 0));
+  }
 }
 
 folly::Expected<std::string, ErrorCode> parseFixedString(
@@ -1069,7 +1115,7 @@ class MoQFrameParser {
   // datagram only
   folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
       folly::io::Cursor& cursor,
-      StreamType streamType,
+      DatagramType datagramType,
       size_t& length) const noexcept;
 
   folly::Expected<RequestID, ErrorCode> parseFetchHeader(
