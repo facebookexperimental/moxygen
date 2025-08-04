@@ -82,8 +82,8 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseIntParam(
     size_t& length,
     uint64_t version,
     uint64_t key);
-bool datagramTypeHasExtensions(uint64_t version, StreamType streamType);
-bool datagramTypeIsStatus(StreamType streamType);
+bool datagramTypeHasExtensions(uint64_t version, DatagramType streamType);
+bool datagramTypeIsStatus(uint64_t version, DatagramType streamType);
 
 void writeFixedString(
     folly::IOBufQueue& writeBuf,
@@ -503,21 +503,22 @@ folly::Expected<RequestID, ErrorCode> MoQFrameParser::parseFetchHeader(
   return RequestID(requestID->first);
 }
 
-bool datagramTypeHasExtensions(uint64_t version, StreamType streamType) {
+bool datagramTypeHasExtensions(uint64_t version, DatagramType datagramType) {
   return getDraftMajorVersion(version) < 11 ||
-      streamType == StreamType::OBJECT_DATAGRAM_EXT ||
-      streamType == StreamType::OBJECT_DATAGRAM_STATUS_EXT;
+      (folly::to_underlying(datagramType) & 0x1);
 }
 
-bool datagramTypeIsStatus(StreamType streamType) {
-  return streamType == StreamType::OBJECT_DATAGRAM_STATUS ||
-      streamType == StreamType::OBJECT_DATAGRAM_STATUS_EXT;
+bool datagramTypeIsStatus(uint64_t version, DatagramType datagramType) {
+  return getDraftMajorVersion(version) < 12
+      ? datagramType == DatagramType::OBJECT_DATAGRAM_STATUS_V11 ||
+          datagramType == DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11
+      : (folly::to_underlying(datagramType) & 0x20);
 }
 
 folly::Expected<ObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
-    StreamType streamType,
+    DatagramType datagramType,
     size_t& length) const noexcept {
   ObjectHeader objectHeader;
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
@@ -543,14 +544,14 @@ MoQFrameParser::parseDatagramObjectHeader(
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
   length -= 1;
-  if (datagramTypeHasExtensions(*version_, streamType)) {
+  if (datagramTypeHasExtensions(*version_, datagramType)) {
     auto ext = parseExtensions(cursor, length, objectHeader);
     if (!ext) {
       return folly::makeUnexpected(ext.error());
     }
   }
 
-  if (datagramTypeIsStatus(streamType)) {
+  if (datagramTypeIsStatus(*version_, datagramType)) {
     auto status = quic::decodeQuicInteger(cursor, length);
     if (!status) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -2449,7 +2450,8 @@ WriteResult MoQFrameWriter::writeDatagramObject(
         << "non-empty objectPayload with no header length";
     writeVarint(
         writeBuf,
-        folly::to_underlying(getDatagramType(*version_, true, hasExtensions)),
+        folly::to_underlying(
+            getDatagramType(*version_, true, hasExtensions, false)),
         size,
         error);
     writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
@@ -2465,7 +2467,8 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   } else {
     writeVarint(
         writeBuf,
-        folly::to_underlying(getDatagramType(*version_, false, hasExtensions)),
+        folly::to_underlying(
+            getDatagramType(*version_, false, hasExtensions, false)),
         size,
         error);
     writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
@@ -3246,11 +3249,6 @@ const char* getFrameTypeString(FrameType type) {
 
 const char* getStreamTypeString(StreamType type) {
   switch (type) {
-    case StreamType::OBJECT_DATAGRAM_EXT:
-    case StreamType::OBJECT_DATAGRAM_NO_EXT:
-    case StreamType::OBJECT_DATAGRAM_STATUS:
-    case StreamType::OBJECT_DATAGRAM_STATUS_EXT:
-      return "OBJECT_DATAGRAM";
     case StreamType::SUBGROUP_HEADER:
     case StreamType::SUBGROUP_HEADER_SG:
     case StreamType::SUBGROUP_HEADER_SG_EXT:

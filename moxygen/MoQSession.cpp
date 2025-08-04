@@ -1179,11 +1179,7 @@ MoQSession::TrackPublisherImpl::datagram(
   }
 
   if (logger_) {
-    if (getDatagramType(
-            getVersion(),
-            header.status == ObjectStatus::NORMAL,
-            header.extensions.size() > 0) !=
-        StreamType::OBJECT_DATAGRAM_STATUS) {
+    if (header.status == ObjectStatus::NORMAL) {
       logger_->logObjectDatagramCreated(header, payload);
     } else {
       logger_->logObjectDatagramStatusCreated(header);
@@ -4492,8 +4488,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  if (type->first >
-      folly::to_underlying(StreamType::OBJECT_DATAGRAM_STATUS_EXT)) {
+
+  if (!isValidDatagramType(*negotiatedVersion_, type->first)) {
     XLOG(ERR) << __func__ << " Bad datagram header type=" << type->first;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
@@ -4502,18 +4498,19 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   MoQFrameParser parser;
   parser.initializeVersion(*negotiatedVersion_);
   auto res = parser.parseDatagramObjectHeader(
-      cursor, StreamType(type->first), remainingLength);
+      cursor, DatagramType(type->first), remainingLength);
   if (res.hasError()) {
     XLOG(ERR) << __func__ << " Bad Datagram: Failed to parse object header";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  if (remainingLength != *res->length) {
+  auto& objHeader = res.value();
+  if (remainingLength != *objHeader.length) {
     XLOG(ERR) << __func__ << " Bad datagram: Length mismatch";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto alias = std::get_if<TrackAlias>(&res->trackIdentifier);
+  auto alias = std::get_if<TrackAlias>(&objHeader.trackIdentifier);
   XCHECK(alias);
   auto state = getSubscribeTrackReceiveState(*alias).get();
   if (!state) {
@@ -4536,20 +4533,16 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
   readBuf.trimStart(readBuf.chainLength() - remainingLength);
   if (logger_) {
-    if (getDatagramType(
-            *negotiatedVersion_,
-            (*res).status == ObjectStatus::NORMAL,
-            (*res).extensions.size() > 0) !=
-        StreamType::OBJECT_DATAGRAM_STATUS) {
-      logger_->logObjectDatagramParsed(std::move(*res), std::move(payload));
+    if (objHeader.status == ObjectStatus::NORMAL) {
+      logger_->logObjectDatagramParsed(objHeader, payload);
     } else {
-      logger_->logObjectDatagramStatusParsed(std::move(*res));
+      logger_->logObjectDatagramStatusParsed(objHeader);
     }
   }
   if (state) {
     auto callback = state->getSubscribeCallback();
     if (callback) {
-      callback->datagram(std::move(*res), readBuf.move());
+      callback->datagram(objHeader, readBuf.move());
     }
   }
 }
