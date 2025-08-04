@@ -401,7 +401,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     auto forwarder =
         std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
     forwarder->setCallback(shared_from_this());
-    subscriptions_.emplace(
+    auto emplaceRes = subscriptions_.emplace(
         std::piecewise_construct,
         std::forward_as_tuple(subReq.fullTrackName),
         std::forward_as_tuple(forwarder, upstreamSession));
@@ -421,6 +421,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     // As per the spec, we must set forward = true in the subscribe request
     // to the upstream.
     subReq.forward = true;
+
+    emplaceRes.first->second.requestID = upstreamSession->peekNextRequestID();
     auto subRes = co_await upstreamSession->subscribe(
         subReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
     if (subRes.hasError()) {

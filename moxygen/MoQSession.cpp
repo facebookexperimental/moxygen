@@ -2873,7 +2873,7 @@ void MoQSession::onFetch(Fetch fetch) {
     return;
   }
   if (standalone) {
-    if (standalone->end < standalone->start) {
+    if (standalone->end <= standalone->start) {
       // If the end object is zero this indicates a fetch for the entire group,
       // which is valid as long as the start and end group are the same.
       if (!(standalone->end.group == standalone->start.group &&

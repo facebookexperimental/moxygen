@@ -333,6 +333,9 @@ class MoQSession : public Subscriber,
       RequestID requestID);
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
+  RequestID peekNextRequestID() const {
+    return nextRequestID_;
+  }
 
  private:
   static const folly::RequestToken& sessionRequestToken();
