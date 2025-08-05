@@ -457,7 +457,8 @@ class MoQSession : public Subscriber,
   bool closeSessionIfRequestIDInvalid(
       RequestID requestID,
       bool skipCheck,
-      bool isNewRequest);
+      bool isNewRequest,
+      bool parityMatters = true);
 
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
   void aliasifyAuthTokens(

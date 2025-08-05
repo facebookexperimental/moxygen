@@ -2810,6 +2810,67 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
+  try {
+    co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+    PublishRequest pub{
+        RequestID(0),
+        FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+        TrackAlias(100),
+        GroupOrder::Default,
+        AbsoluteLocation{0, 100}, // largest
+        true,                     // forward
+        {}                        // params
+    };
+    std::shared_ptr<SubscriptionHandle> capturedHandle;
+    // Setup server to respond with PUBLISH_OK
+    EXPECT_CALL(*serverSubscriber, publish(_, _))
+        .WillOnce(testing::Invoke(
+            [&](const PublishRequest& actualPub,
+                std::shared_ptr<SubscriptionHandle> subHandle)
+                -> Subscriber::PublishResult {
+              capturedHandle = std::move(subHandle);
+              return makePublishOkResult(actualPub);
+            }));
+
+    auto handle = makePublishHandle();
+
+    // Initiate publish
+    auto publishResult = clientSession_->publish(std::move(pub), handle);
+    EXPECT_TRUE(publishResult.hasValue()) << "Publish should succeed initially";
+
+    // Wait for server processing to finish
+    auto replyRes = co_await std::move(publishResult.value().reply);
+    EXPECT_TRUE(replyRes.hasValue()) << "Publish should succeed";
+
+    // Now send a SubscribeUpdate
+    SubscribeUpdate subscribeUpdate{
+        RequestID(0),
+        AbsoluteLocation{0, 0},
+        10,
+        kDefaultPriority + 1,
+        true,
+        {}};
+
+    EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
+    EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
+
+    folly::coro::Baton subscribeUpdateInvoked;
+    EXPECT_CALL(*handle, subscribeUpdate).WillOnce(testing::Invoke([&](auto) {
+      subscribeUpdateInvoked.post();
+    }));
+    capturedHandle->subscribeUpdate(subscribeUpdate);
+
+    co_await subscribeUpdateInvoked;
+
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  } catch (...) {
+    XCHECK(false) << "Exception thrown: "
+                  << folly::exceptionStr(std::current_exception());
+  }
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)

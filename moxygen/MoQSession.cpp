@@ -818,11 +818,15 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
                 << requestID_ << " trackPub=" << this;
       // TODO: I think we need to buffer it?
     } else {
-      forward_ = subscribeUpdate.forward;
-      for (auto [_, subgroupPublisher] : subgroups_) {
-        subgroupPublisher->setForward(forward_);
-      }
+      setForward(subscribeUpdate.forward);
       subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate));
+    }
+  }
+
+  void setForward(bool forward) {
+    forward_ = forward;
+    for (const auto& [_, subgroupPublisher] : subgroups_) {
+      subgroupPublisher->setForward(forward_);
     }
   }
 
@@ -2489,7 +2493,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
     return;
   }
-  if (closeSessionIfRequestIDInvalid(requestID, false, false)) {
+  if (closeSessionIfRequestIDInvalid(requestID, false, false, false)) {
     return;
   }
 
@@ -2519,7 +2523,8 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   }
 
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribe);
-  if (closeSessionIfRequestIDInvalid(unsubscribe.requestID, false, false)) {
+  if (closeSessionIfRequestIDInvalid(
+          unsubscribe.requestID, false, false, false)) {
     return;
   }
   if (!publishHandler_) {
@@ -3649,7 +3654,10 @@ Subscriber::PublishResult MoQSession::publish(
 
   // Build replyTask that co_awaits the future and handles cleanup
   auto replyTask = folly::coro::co_invoke(
-      [fut = std::move(contract.second), rid = pub.requestID, this]() mutable
+      [fut = std::move(contract.second),
+       rid = pub.requestID,
+       trackPublisher,
+       this]() mutable
       -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
         auto result = co_await std::move(fut);
         if (result.hasValue()) {
@@ -3657,11 +3665,12 @@ Subscriber::PublishResult MoQSession::publish(
           if (it != pubTracks_.end()) {
             // If Receive PublishOk is received, update the trackPublisher
             // If Receive PublishError, the session is reset in onPublishError()
-            auto trackPub = it->second;
-            trackPub->setGroupOrder(result.value().groupOrder);
-            trackPub->setSubPriority(result.value().subscriberPriority);
+            trackPublisher->setForward(result.value().forward);
+            trackPublisher->setGroupOrder(result.value().groupOrder);
+            trackPublisher->setSubPriority(result.value().subscriberPriority);
           }
         }
+        trackPublisher.reset();
         co_return result;
       });
 
@@ -4196,14 +4205,14 @@ void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
   auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.requestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.requestID
+    XLOG(ERR) << "No matching request ID=" << subUpdate.requestID
               << " sess=" << this;
     return;
   }
   auto trackIt = subTracks_.find(trackAliasIt->second);
   if (trackIt == subTracks_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subUpdate.requestID
+    XLOG(ERR) << "No matching track Alias=" << trackAliasIt->second
               << " sess=" << this;
     return;
   }
@@ -4546,12 +4555,13 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
 bool MoQSession::closeSessionIfRequestIDInvalid(
     RequestID requestID,
     bool skipCheck,
-    bool isNewRequest) {
+    bool isNewRequest,
+    bool parityMatters) {
   if (skipCheck) {
     return false;
   }
 
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
+  if (parityMatters && getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
       ((requestID.value % 2) == 1) !=
           (dir_ == MoQControlCodec::Direction::CLIENT)) {
     XLOG(ERR) << "Invalid requestID parity: " << requestID << " sess=" << this;
