@@ -107,7 +107,7 @@ class MoQFlvStreamerClient
             // Send audio data in a thread (stream per object). Clone it since
             // we can have multiple subscribers
             auto itemClone = item->clone();
-            moqClient_->getEventBase()->runInEventBaseThread(
+            moqClient_->getEventBase()->add(
                 [self(this), itemClone(std::move(itemClone))]() mutable {
                   self->publishVideo(std::move(itemClone));
                 });
@@ -121,7 +121,7 @@ class MoQFlvStreamerClient
             // Send audio data in a thread (stream per object). Clone it since
             // we can have multiple subscribers
             auto itemClone = item->clone();
-            moqClient_->getEventBase()->runInEventBaseThread(
+            moqClient_->getEventBase()->add(
                 [self(this), itemClone(std::move(itemClone))]() mutable {
                   self->publishAudio(std::move(itemClone));
                 });

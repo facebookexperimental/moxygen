@@ -32,8 +32,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
   auto alias = subscribeRequest.trackAlias.value_or(
       TrackAlias(subscribeRequest.requestID.value));
   callback->setTrackAlias(alias);
-  co_withExecutor(
-      session->getEventBase(), writeLoop(callback, subscribeRequest))
+  co_withExecutor(session->getExecutor(), writeLoop(callback, subscribeRequest))
       .start();
   SubscribeOk ok{
       subscribeRequest.requestID,
@@ -52,7 +51,7 @@ folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
   CHECK(!requestId_.hasValue()) << "Cannot get more than one fetch, as of now";
   auto session = MoQSession::getRequestSession();
   co_withExecutor(
-      session->getEventBase(),
+      session->getExecutor(),
 
       writeLoopFetch(callback, fetchRequest))
       .start();

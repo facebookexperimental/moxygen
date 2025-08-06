@@ -79,7 +79,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   // Start a Co-routine to send objects back according to spec
   auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
   callback->setTrackAlias(alias);
-  co_withExecutor(subSession_->getEventBase(), onSubscribe(sub, callback))
+  co_withExecutor(subSession_->getExecutor(), onSubscribe(sub, callback))
       .start();
 
   // Return a SubscribeOk
@@ -443,7 +443,7 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
   fetchSession_ = MoQSession::getRequestSession();
 
   // Start a Co-routine
-  co_withExecutor(fetchSession_->getEventBase(), onFetch(fetch, fetchCallback))
+  co_withExecutor(fetchSession_->getExecutor(), onFetch(fetch, fetchCallback))
       .start();
 
   FetchOk ok;

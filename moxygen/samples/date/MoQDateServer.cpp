@@ -191,7 +191,7 @@ class MoQDateServer : public MoQServer,
     if (!loopRunning_) {
       loopRunning_ = true;
       publishDateLoop(subConsumer.value())
-          .scheduleOn(session->getEventBase())
+          .scheduleOn(session->getExecutor())
           .start();
     }
 
@@ -226,7 +226,7 @@ class MoQDateServer : public MoQServer,
     auto session = MoQSession::getRequestSession();
     if (!loopRunning_) {
       loopRunning_ = true;
-      co_withExecutor(session->getEventBase(), publishDateLoop()).start();
+      co_withExecutor(session->getExecutor(), publishDateLoop()).start();
     }
 
     co_return forwarder_.addSubscriber(
@@ -295,7 +295,7 @@ class MoQDateServer : public MoQServer,
         largest,
         {}});
     co_withExecutor(
-        clientSession->getEventBase(),
+        clientSession->getExecutor(),
         folly::coro::co_withCancellation(
             fetchHandle->cancelSource.getToken(),
             catchup(std::move(consumer), {standalone->start, standalone->end})))

@@ -70,8 +70,9 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   nodePtr->setAnnounceOk({ann.requestID, ann.trackNamespace});
   for (auto& outSession : sessions) {
     if (outSession != session) {
-      auto evb = outSession->getEventBase();
-      co_withExecutor(evb, announceToSession(outSession, ann, nodePtr)).start();
+      auto exec = outSession->getExecutor();
+      co_withExecutor(exec, announceToSession(outSession, ann, nodePtr))
+          .start();
     }
   }
   co_return nodePtr;
@@ -97,8 +98,8 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   XCHECK(nodePtr);
   nodePtr->sourceSession = nullptr;
   for (auto& announcement : nodePtr->announcements) {
-    auto evb = announcement.first->getEventBase();
-    evb->runInEventBaseThread([announceHandle = announcement.second] {
+    auto exec = announcement.first->getExecutor();
+    exec->add([announceHandle = announcement.second] {
       announceHandle->unannounce();
     });
   }
@@ -163,8 +164,8 @@ Subscriber::PublishResult MoQRelay::publish(
   for (auto& outSession : sessions) {
     if (outSession != session) {
       nSubscribers++;
-      auto evb = outSession->getEventBase();
-      co_withExecutor(evb, publishToSession(outSession, forwarder, pub))
+      auto exec = outSession->getExecutor();
+      co_withExecutor(exec, publishToSession(outSession, forwarder, pub))
           .start();
     }
   }
@@ -267,14 +268,14 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   // Find all nested Announcements/Publishes and forward
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<AnnounceNode>>> nodes{
       {subNs.trackNamespacePrefix, nodePtr}};
-  auto evb = session->getEventBase();
+  auto exec = session->getExecutor();
   while (!nodes.empty()) {
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
       // TODO: Auth/params
       co_withExecutor(
-          evb,
+          exec,
           announceToSession(session, {subNs.requestID, prefix, {}}, nodePtr))
           .start();
     }
@@ -308,8 +309,9 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
       pub.groupOrder = forwarder->groupOrder();
       pub.largest = forwarder->largest();
       if (publishSession != session) {
-        evb = publishSession->getEventBase();
-        co_withExecutor(evb, publishToSession(session, forwarder, pub)).start();
+        exec = publishSession->getExecutor();
+        co_withExecutor(exec, publishToSession(session, forwarder, pub))
+            .start();
       }
     }
     for (auto& nextNodeIt : nodePtr->children) {
@@ -593,8 +595,8 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
       // This session is unannouncing
       nodePtr->sourceSession = nullptr;
       for (auto& announcement : nodePtr->announcements) {
-        auto evb = announcement.first->getEventBase();
-        evb->runInEventBaseThread([announceHandle = announcement.second] {
+        auto exec = announcement.first->getExecutor();
+        exec->add([announceHandle = announcement.second] {
           announceHandle->unannounce();
         });
       }

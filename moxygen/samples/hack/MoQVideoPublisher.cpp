@@ -232,7 +232,7 @@ void MoQVideoPublisher::publishVideoFrame(
     std::chrono::microseconds ptsUs,
     uint64_t flags,
     Payload payload) {
-  evbThread_->getEventBase()->runInEventBaseThread(
+  evbThread_->getEventBase()->add(
       [this, ptsUs, flags, payload = std::move(payload)]() mutable {
         publishFrameImpl(ptsUs, flags, std::move(payload));
       });
@@ -284,7 +284,7 @@ void MoQVideoPublisher::publishFrameImpl(
 }
 
 void MoQVideoPublisher::endPublish() {
-  evbThread_->getEventBase()->runInEventBaseThread([this] {
+  evbThread_->getEventBase()->add([this] {
     videoForwarder_.subscribeDone(
         {0, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"});
   });
@@ -346,7 +346,7 @@ void MoQVideoPublisher::publishAudioFrame(
     std::chrono::microseconds ptsUs,
     uint64_t flags,
     Payload payload) {
-  evbThread_->getEventBase()->runInEventBaseThread(
+  evbThread_->getEventBase()->add(
       [this, ptsUs, flags, payload = std::move(payload)]() mutable {
         publishAudioFrameImpl(ptsUs, flags, std::move(payload));
       });

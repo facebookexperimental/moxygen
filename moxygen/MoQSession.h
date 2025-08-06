@@ -82,10 +82,10 @@ class MoQSession : public Subscriber,
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      folly::EventBase* evb)
+      folly::Executor* exec)
       : dir_(MoQControlCodec::Direction::CLIENT),
         wt_(wt),
-        evb_(evb),
+        exec_(exec),
         nextRequestID_(0),
         nextExpectedPeerRequestID_(1),
         controlCodec_(dir_, this) {}
@@ -93,10 +93,10 @@ class MoQSession : public Subscriber,
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
-      folly::EventBase* evb)
+      folly::Executor* exec)
       : dir_(MoQControlCodec::Direction::SERVER),
         wt_(wt),
-        evb_(evb),
+        exec_(exec),
         nextRequestID_(1),
         nextExpectedPeerRequestID_(0),
         serverSetupCallback_(&serverSetupCallback),
@@ -122,8 +122,8 @@ class MoQSession : public Subscriber,
     return negotiatedVersion_;
   }
 
-  [[nodiscard]] folly::EventBase* getEventBase() const {
-    return evb_;
+  [[nodiscard]] folly::Executor* getExecutor() const {
+    return exec_;
   }
 
   folly::CancellationToken getCancelToken() const {
@@ -473,7 +473,7 @@ class MoQSession : public Subscriber,
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
-  folly::EventBase* evb_{nullptr}; // keepalive?
+  folly::Executor* exec_{nullptr}; // keepalive?
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
 

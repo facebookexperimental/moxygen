@@ -90,7 +90,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
           "Invalid chat announce"});
     }
     co_withExecutor(
-        moqClient_.moqSession_->getEventBase(),
+        moqClient_.moqSession_->getExecutor(),
         subscribeToUser(std::move(announce.trackNamespace)))
         .start();
   } else {
@@ -167,14 +167,14 @@ void MoQChatClient::publishLoop() {
     std::getline(std::cin, input);
     if (token.isCancellationRequested()) {
       XLOG(DBG1) << "Detected deleted moqSession, cleaning up";
-      evb->runInEventBaseThread([this] {
+      evb->add([this] {
         announceHandle_.reset();
         subscribeAnnounceHandle_.reset();
         publisher_.reset();
       });
       break;
     }
-    evb->runInEventBaseThread([this, input] {
+    evb->add([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
         announceHandle_->unannounce();

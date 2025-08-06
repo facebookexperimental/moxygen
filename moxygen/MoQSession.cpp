@@ -7,7 +7,6 @@
 #include "moxygen/MoQSession.h"
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
-#include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/EventBase.h>
 
 #include <folly/logging/xlog.h>
@@ -1616,12 +1615,12 @@ void MoQSession::start() {
         cancellationSource_.getToken(),
         controlStream.writeHandle->getCancelToken());
     co_withExecutor(
-        evb_,
+        exec_,
         folly::coro::co_withCancellation(
             std::move(mergeToken), controlWriteLoop(controlStream.writeHandle)))
         .start();
     co_withExecutor(
-        evb_,
+        exec_,
         co_withCancellation(
             cancellationSource_.getToken(),
             controlReadLoop(controlStream.readHandle)))
@@ -1751,10 +1750,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   auto deletedToken = cancellationSource_.getToken();
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::cancellation_token_merge(deletedToken, token);
-  folly::EventBaseThreadTimekeeper tk(*evb_);
   auto serverSetup = co_await co_awaitTry(folly::coro::co_withCancellation(
-      mergeToken,
-      folly::coro::timeout(std::move(setupFuture), kSetupTimeout, &tk)));
+      mergeToken, folly::coro::timeout(std::move(setupFuture), kSetupTimeout)));
   if (mergeToken.isCancellationRequested()) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
   }
@@ -1858,7 +1855,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   auto token = co_await folly::coro::co_current_cancellation_token;
   while (!fin && !token.isCancellationRequested()) {
     auto streamData = co_await folly::coro::co_awaitTry(
-        readHandle->readStreamData().via(evb_));
+        readHandle->readStreamData().via(exec_));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception())
                 << " id=" << streamId << " sess=" << this;
@@ -2323,7 +2320,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
         co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
             token,
             folly::coro::toTaskInterruptOnCancel(
-                readHandle->readStreamData().via(evb_))));
+                readHandle->readStreamData().via(exec_))));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception()) << " id=" << id
                 << " sess=" << this;
@@ -2432,7 +2429,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
   co_withExecutor(
-      evb_,
+      exec_,
       handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher)))
       .start();
 }
@@ -2714,7 +2711,7 @@ void MoQSession::onPublish(PublishRequest publish) {
 
   // Use single coroutine pattern like working onAnnounce
   co_withExecutor(
-      evb_, handlePublish(std::move(publish), std::move(publishHandle)))
+      exec_, handlePublish(std::move(publish), std::move(publishHandle)))
       .start();
 }
 
@@ -2924,7 +2921,7 @@ void MoQSession::onFetch(Fetch fetch) {
   fetchPublisher->initialize();
   pubTracks_.emplace(fetch.requestID, fetchPublisher);
   co_withExecutor(
-      evb_, handleFetch(std::move(fetch), std::move(fetchPublisher)))
+      exec_, handleFetch(std::move(fetch), std::move(fetchPublisher)))
       .start();
 }
 
@@ -3069,7 +3066,7 @@ void MoQSession::onAnnounce(Announce ann) {
          AnnounceErrorCode::NOT_SUPPORTED,
          "Not a subscriber"});
   }
-  co_withExecutor(evb_, handleAnnounce(std::move(ann))).start();
+  co_withExecutor(exec_, handleAnnounce(std::move(ann))).start();
 }
 
 folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
@@ -3261,7 +3258,7 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
          "Not a publisher"});
     return;
   }
-  co_withExecutor(evb_, handleSubscribeAnnounces(std::move(sa))).start();
+  co_withExecutor(exec_, handleSubscribeAnnounces(std::move(sa))).start();
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
@@ -3397,7 +3394,7 @@ void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
          TrackStatusCode::UNKNOWN,
          folly::none});
   } else {
-    co_withExecutor(evb_, handleTrackStatus(std::move(trackStatusRequest)))
+    co_withExecutor(exec_, handleTrackStatus(std::move(trackStatusRequest)))
         .start();
   }
 }
@@ -4433,7 +4430,7 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
   }
   // maybe not SUBGROUP_HEADER, but at least not control
   co_withExecutor(
-      evb_,
+      exec_,
       co_withCancellation(
           cancellationSource_.getToken(),
           unidirectionalReadLoop(shared_from_this(), rh)))
@@ -4455,14 +4452,14 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
 
     bh.writeHandle->setPriority(0, 0, false);
     co_withExecutor(
-        evb_,
+        exec_,
         co_withCancellation(
             cancellationSource_.getToken(), controlReadLoop(bh.readHandle)))
         .start();
     auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
     co_withExecutor(
-        evb_,
+        exec_,
         folly::coro::co_withCancellation(
             std::move(mergeToken), controlWriteLoop(bh.writeHandle)))
         .start();

@@ -908,10 +908,9 @@ CO_TEST_P_X(MoQSessionTest, FetchBadLength) {
     contract.first.setValue();
     return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
   });
-  folly::EventBaseThreadTimekeeper tk(*clientSession_->getEventBase());
   EXPECT_THROW(
       co_await folly::coro::timeout(
-          std::move(contract.second), std::chrono::milliseconds(100), &tk),
+          std::move(contract.second), std::chrono::milliseconds(100)),
       folly::FutureTimeout);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
