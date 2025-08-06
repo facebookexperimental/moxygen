@@ -893,7 +893,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
-  std::shared_ptr<SubscriptionHandle> subscriptionHandle_;
+  std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
   folly::Optional<TrackAlias> trackAlias_;
   folly::Optional<SubscribeDone> pendingSubscribeDone_;
   folly::F14FastMap<
@@ -3583,7 +3583,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
 
 Subscriber::PublishResult MoQSession::publish(
     PublishRequest pub,
-    std::shared_ptr<SubscriptionHandle> handle) {
+    std::shared_ptr<Publisher::SubscriptionHandle> handle) {
   XLOG(DBG1) << __func__ << " reqID=" << pub.requestID
              << " track=" << pub.fullTrackName.trackName << " sess=" << this;
 

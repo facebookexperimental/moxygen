@@ -47,7 +47,7 @@ class MoQRelay : public Publisher,
 
   PublishResult publish(
       PublishRequest pubReq,
-      std::shared_ptr<SubscriptionHandle> handle = nullptr) override;
+      std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
 
   void removeSession(const std::shared_ptr<MoQSession>& session);
 
