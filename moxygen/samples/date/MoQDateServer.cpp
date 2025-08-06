@@ -69,10 +69,13 @@ class MoQDateServer : public MoQServer,
       return false;
     }
     auto evb = getWorkerEvbs()[0];
+    if (!moqEvb_) {
+      moqEvb_ = std::make_unique<MoQFollyExecutorImpl>(evb);
+    }
     relayClient_ = std::make_unique<MoQRelayClient>(
         (FLAGS_quic_transport
-             ? std::make_unique<MoQClient>(evb, url)
-             : std::make_unique<MoQWebTransportClient>(evb, url)));
+             ? std::make_unique<MoQClient>(moqEvb_.get(), url)
+             : std::make_unique<MoQWebTransportClient>(moqEvb_.get(), url)));
     folly::coro::blockingWait(
         relayClient_
             ->setup(
@@ -86,7 +89,7 @@ class MoQDateServer : public MoQServer,
     relayClient_
         ->run(
             /*publisher=*/shared_from_this(), {TrackNamespace(FLAGS_ns, "/")})
-        .scheduleOn(evb)
+        .scheduleOn(moqEvb_.get())
         .start();
     if (FLAGS_publish) {
       callPublish(TrackNamespace(FLAGS_ns, "/"), 0).scheduleOn(evb).start();
@@ -511,6 +514,7 @@ class MoQDateServer : public MoQServer,
   std::unique_ptr<MoQRelayClient> relayClient_;
   Mode mode_{Mode::STREAM_PER_GROUP};
   bool loopRunning_{false};
+  std::unique_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 } // namespace
 int main(int argc, char* argv[]) {

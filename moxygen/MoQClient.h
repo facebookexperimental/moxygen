@@ -22,11 +22,11 @@ class Subscriber;
 
 class MoQClient : public proxygen::WebTransportHandler {
  public:
-  MoQClient(folly::EventBase* evb, proxygen::URL url)
-      : evb_(evb), url_(std::move(url)) {}
+  MoQClient(MoQExecutor* exec, proxygen::URL url)
+      : exec_(exec), url_(std::move(url)) {}
 
-  folly::EventBase* getEventBase() {
-    return evb_;
+  MoQExecutor* getEventBase() {
+    return exec_;
   }
 
   std::shared_ptr<MoQSession> moqSession_;
@@ -60,7 +60,7 @@ class MoQClient : public proxygen::WebTransportHandler {
       proxygen::WebTransport::StreamReadHandle* handle) override;
   void onDatagram(std::unique_ptr<folly::IOBuf>) override;
 
-  folly::EventBase* evb_{nullptr};
+  MoQExecutor* exec_{nullptr};
   proxygen::URL url_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
 };

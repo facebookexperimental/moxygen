@@ -7,6 +7,7 @@
 #pragma once
 
 #include <moxygen/MoQClient.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 
@@ -14,8 +15,8 @@ namespace moxygen {
 
 class MoQWebTransportClient : public MoQClient {
  public:
-  MoQWebTransportClient(folly::EventBase* evb, proxygen::URL url)
-      : MoQClient((evb), std::move(url)) {}
+  MoQWebTransportClient(MoQFollyExecutorImpl* exec, proxygen::URL url)
+      : MoQClient((exec), std::move(url)) {}
 
   folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,
@@ -72,9 +73,10 @@ class MoQWebTransportClient : public MoQClient {
 };
 
 inline std::unique_ptr<MoQClient>
-makeMoQClient(folly::EventBase* evb, proxygen::URL url, bool useQuic) {
-  return useQuic ? std::make_unique<MoQClient>(evb, std::move(url))
-                 : std::make_unique<MoQWebTransportClient>(evb, std::move(url));
+makeMoQClient(MoQFollyExecutorImpl* exec, proxygen::URL url, bool useQuic) {
+  return useQuic
+      ? std::make_unique<MoQClient>(exec, std::move(url))
+      : std::make_unique<MoQWebTransportClient>(exec, std::move(url));
 }
 
 } // namespace moxygen

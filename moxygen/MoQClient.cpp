@@ -5,6 +5,7 @@
  */
 
 #include <moxygen/MoQClient.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 
 #include <moxygen/util/QuicConnector.h>
 
@@ -48,7 +49,7 @@ folly::coro::Task<void> MoQClient::setupMoQSession(
   proxygen::WebTransport* wt = nullptr;
   // Establish QUIC connection
   auto quicClient = co_await QuicConnector::connectQuic(
-      evb_,
+      exec_->getTypedExecutor<MoQFollyExecutorImpl>()->getBackingEventBase(),
       folly::SocketAddress(
           url_.getHost(), url_.getPort(), true), // blocking DNS,
       connect_timeout,
@@ -76,7 +77,7 @@ folly::coro::Task<ServerSetup> MoQClient::completeSetupMoQSession(
     std::shared_ptr<Subscriber> subscribeHandler,
     bool v11Plus) {
   //  Create MoQSession and Setup MoQSession parameters
-  moqSession_ = std::make_shared<MoQSession>(wt, evb_);
+  moqSession_ = std::make_shared<MoQSession>(wt, exec_);
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->setLogger(logger_);

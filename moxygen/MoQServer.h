@@ -7,7 +7,8 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
-#include "moxygen/mlog/MLogger.h"
+#include <moxygen/events/MoQFollyExecutorImpl.h>
+#include <moxygen/mlog/MLogger.h>
 
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBaseManager.h>
@@ -120,5 +121,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   quic::samples::HQServerParams params_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
+  std::unique_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 } // namespace moxygen

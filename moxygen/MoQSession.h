@@ -7,7 +7,8 @@
 #pragma once
 
 #include <proxygen/lib/http/webtransport/WebTransport.h>
-#include "moxygen/MoQCodec.h"
+#include <moxygen/MoQCodec.h>
+#include <moxygen/events/MoQExecutor.h>
 
 #include <folly/MaybeManagedPtr.h>
 #include <folly/container/F14Set.h>
@@ -82,7 +83,7 @@ class MoQSession : public Subscriber,
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      folly::Executor* exec)
+      MoQExecutor* exec)
       : dir_(MoQControlCodec::Direction::CLIENT),
         wt_(wt),
         exec_(exec),
@@ -93,7 +94,7 @@ class MoQSession : public Subscriber,
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
-      folly::Executor* exec)
+      MoQExecutor* exec)
       : dir_(MoQControlCodec::Direction::SERVER),
         wt_(wt),
         exec_(exec),
@@ -473,7 +474,7 @@ class MoQSession : public Subscriber,
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
-  folly::Executor* exec_{nullptr}; // keepalive?
+  MoQExecutor* exec_{nullptr};
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
 

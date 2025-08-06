@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClient.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/Subscriber.h"
@@ -86,6 +87,7 @@ class MoQTestClient : public moxygen::Subscriber,
   void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase);
 
  private:
+  MoQFollyExecutorImpl moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;

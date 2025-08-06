@@ -11,6 +11,7 @@
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <moxygen/MoQFramer.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
 
@@ -27,10 +28,10 @@ class MoQVideoPublisher
       FullTrackName fullVideoTrackName,
       FullTrackName fullAudioTrackName,
       uint64_t timescale = 30)
-      : videoForwarder_(std::move(fullVideoTrackName)),
-        audioForwarder_(std::move(fullAudioTrackName)) {
-    evbThread_ = std::make_unique<folly::ScopedEventBaseThread>();
-  }
+      : evbThread_(std::make_unique<folly::ScopedEventBaseThread>()),
+        moqExecutor_(evbThread_->getEventBase()),
+        videoForwarder_(std::move(fullVideoTrackName)),
+        audioForwarder_(std::move(fullAudioTrackName)) {}
 
   bool setup(const std::string& connectURL, bool v11Plus = true);
 
@@ -71,6 +72,7 @@ class MoQVideoPublisher
       Payload payload);
 
   std::unique_ptr<folly::ScopedEventBaseThread> evbThread_;
+  MoQFollyExecutorImpl moqExecutor_;
   std::unique_ptr<MoQRelayClient> relayClient_;
   // uint64_t timescale_{30};
   MoQForwarder videoForwarder_;

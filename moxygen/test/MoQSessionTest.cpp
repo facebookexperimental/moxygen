@@ -13,7 +13,7 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
-
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/test/Mocks.h>
 #include <moxygen/test/TestHelpers.h>
 #include <moxygen/test/TestUtils.h>
@@ -103,11 +103,12 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   void SetUp() override {
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-    clientSession_ = std::make_shared<MoQSession>(clientWt_.get(), &eventBase_);
+    clientSession_ =
+        std::make_shared<MoQSession>(clientWt_.get(), &moqEventBase_);
     serverWt_->setPeerHandler(clientSession_.get());
 
     serverSession_ =
-        std::make_shared<MoQSession>(serverWt_.get(), *this, &eventBase_);
+        std::make_shared<MoQSession>(serverWt_.get(), *this, &moqEventBase_);
     clientWt_->setPeerHandler(serverSession_.get());
 
     fetchCallback_ = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -343,6 +344,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
 
   folly::EventBase eventBase_;
+  MoQFollyExecutorImpl moqEventBase_{&eventBase_};
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt_;
   std::shared_ptr<MoQSession> clientSession_;

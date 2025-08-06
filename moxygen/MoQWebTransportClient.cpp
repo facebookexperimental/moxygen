@@ -43,7 +43,7 @@ proxygen::HTTPMessage getWebTransportConnectRequest(const proxygen::URL& url) {
 }
 
 folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
-    folly::EventBase* evb,
+    moxygen::MoQFollyExecutorImpl* exec,
     const proxygen::URL& url,
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout) {
@@ -86,7 +86,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
        {proxygen::SettingsId::_HQ_DATAGRAM_RFC, 1},
        {proxygen::SettingsId::ENABLE_WEBTRANSPORT, 1}});
   hqConnector.connect(
-      evb,
+      exec->getBackingEventBase(),
       folly::none,
       folly::SocketAddress(url.getHost(), url.getPort(), true), // blocking DNS,
       std::move(fizzContext),
@@ -114,7 +114,10 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
   proxygen::WebTransport* wt = nullptr;
   // Establish H3 connection
   auto session = co_await connectH3WithWebtransport(
-      evb_, url_, connect_timeout, transaction_timeout);
+      exec_->getTypedExecutor<MoQFollyExecutorImpl>(),
+      url_,
+      connect_timeout,
+      transaction_timeout);
 
   // Establish WebTransport session
   auto txn = session->newTransaction(&httpHandler_);

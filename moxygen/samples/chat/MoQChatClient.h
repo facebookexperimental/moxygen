@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClient.h"
 
 namespace moxygen {
@@ -76,6 +77,7 @@ class MoQChatClient : public Publisher,
   std::string username_;
   std::string deviceId_;
   std::string timestampString_;
+  MoQFollyExecutorImpl executor_;
   MoQClient moqClient_;
   folly::Optional<RequestID> chatRequestID_;
   folly::Optional<TrackAlias> chatTrackAlias_;

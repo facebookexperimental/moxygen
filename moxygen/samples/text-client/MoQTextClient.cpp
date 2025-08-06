@@ -136,7 +136,7 @@ class TextHandler : public ObjectReceiverCallback {
 class MoQTextClient : public Subscriber,
                       public std::enable_shared_from_this<MoQTextClient> {
  public:
-  MoQTextClient(folly::EventBase* evb, proxygen::URL url, FullTrackName ftn)
+  MoQTextClient(MoQFollyExecutorImpl* evb, proxygen::URL url, FullTrackName ftn)
       : moqClient_(
             FLAGS_quic_transport
                 ? std::make_unique<MoQClient>(evb, std::move(url))
@@ -368,8 +368,10 @@ int main(int argc, char* argv[]) {
       << "Can specify at most one of jafetch or jrfetch or fetch";
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
+  std::unique_ptr<MoQFollyExecutorImpl> moqEvb =
+      std::make_unique<MoQFollyExecutorImpl>(&eventBase);
   auto textClient = std::make_shared<MoQTextClient>(
-      &eventBase,
+      moqEvb.get(),
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}));
 

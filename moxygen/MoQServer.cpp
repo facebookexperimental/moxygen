@@ -62,10 +62,14 @@ void MoQServer::createMoQQuicSession(
     evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
               ->getBackingEventBase();
   }
-  auto moqSession = std::make_shared<MoQSession>(wt, *this, evb);
+  if (!moqEvb_) {
+    moqEvb_ = std::make_unique<MoQFollyExecutorImpl>(evb);
+  }
+  auto moqSession = std::make_shared<MoQSession>(wt, *this, moqEvb_.get());
   qWtPtr->setHandler(moqSession.get());
   // the handleClientSession coro this session moqSession
-  co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
+  co_withExecutor(moqEvb_.get(), handleClientSession(std::move(moqSession)))
+      .start();
 }
 
 folly::Try<ServerSetup> MoQServer::onClientSetup(
@@ -156,10 +160,16 @@ void MoQServer::Handler::onHeadersComplete(
     txn_->sendAbort();
     return;
   }
-  auto evb = folly::EventBaseManager::get()->getEventBase();
-  clientSession_ = std::make_shared<MoQSession>(wt, server_, evb);
+  if (!server_.moqEvb_) {
+    auto evb = folly::EventBaseManager::get()->getEventBase();
+    server_.moqEvb_ = std::make_unique<MoQFollyExecutorImpl>(evb);
+  }
+  clientSession_ =
+      std::make_shared<MoQSession>(wt, server_, server_.moqEvb_.get());
 
-  co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();
+  co_withExecutor(
+      server_.moqEvb_.get(), server_.handleClientSession(clientSession_))
+      .start();
 }
 
 void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {

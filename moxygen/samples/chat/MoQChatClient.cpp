@@ -32,8 +32,8 @@ MoQChatClient::MoQChatClient(
       timestampString_(
           folly::to<std::string>(std::chrono::system_clock::to_time_t(
               std::chrono::system_clock::now()))),
-
-      moqClient_(evb, std::move(url)) {}
+      executor_(evb),
+      moqClient_(&executor_, std::move(url)) {}
 
 folly::coro::Task<void> MoQChatClient::run() noexcept {
   XLOG(INFO) << __func__;

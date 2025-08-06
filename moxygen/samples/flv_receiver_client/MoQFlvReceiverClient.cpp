@@ -366,7 +366,8 @@ class MoQFlvReceiverClient
       proxygen::URL url,
       bool useQuic,
       const std::string& flvOutPath)
-      : moqClient_(makeMoQClient(evb, std::move(url), useQuic)),
+      : moqExecutor_(evb),
+        moqClient_(makeMoQClient(&moqExecutor_, std::move(url), useQuic)),
         flvOutPath_(flvOutPath) {}
 
   folly::coro::Task<void> run() noexcept {
@@ -496,6 +497,7 @@ class MoQFlvReceiverClient
   }
 
  private:
+  MoQFollyExecutorImpl moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<Publisher::SubscriptionHandle> audioSubscribeHandle_;
   std::shared_ptr<Publisher::SubscriptionHandle> videoSubscribeHandle_;

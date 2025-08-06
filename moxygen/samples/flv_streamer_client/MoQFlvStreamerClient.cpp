@@ -39,7 +39,9 @@ class MoQFlvStreamerClient
       proxygen::URL url,
       FullTrackName fvtn,
       FullTrackName fatn)
-      : moqClient_(makeMoQClient(evb, std::move(url), /*useQuic=*/false)),
+      : moqExecutor_(evb),
+        moqClient_(
+            makeMoQClient(&moqExecutor_, std::move(url), /*useQuic=*/false)),
         fullVideoTrackName_(std::move(fvtn)),
         fullAudioTrackName_(std::move(fatn)) {}
 
@@ -269,6 +271,7 @@ class MoQFlvStreamerClient
   static const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
   static const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
+  MoQFollyExecutorImpl moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   FullTrackName fullVideoTrackName_;

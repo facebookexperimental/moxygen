@@ -24,7 +24,8 @@ const uint64_t kDefaultEndGroup = 10;
 const TrackAlias kDefaultTrackAlias = TrackAlias(0);
 
 MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
-    : moqClient_(std::make_unique<MoQClient>(evb, std::move(url))) {}
+    : moqExecutor_(evb),
+      moqClient_(std::make_unique<MoQClient>(&moqExecutor_, std::move(url))) {}
 
 void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   moqClient_->setLogger(logger);

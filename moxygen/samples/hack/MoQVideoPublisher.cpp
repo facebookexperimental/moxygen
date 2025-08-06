@@ -165,7 +165,7 @@ bool MoQVideoPublisher::setup(const std::string& connectURL, bool v11Plus) {
     return false;
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
-      std::make_unique<MoQClient>(evbThread_->getEventBase(), url));
+      std::make_unique<MoQClient>(&moqExecutor_, url));
 
   folly::coro::blockingWait(co_withExecutor(
                                 evbThread_->getEventBase(),

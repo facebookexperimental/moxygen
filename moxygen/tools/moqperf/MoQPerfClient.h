@@ -10,6 +10,7 @@
 
 #include <moxygen/MoQClient.h>
 #include <moxygen/Subscriber.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/tools/moqperf/MoQPerfParams.h>
 
 #include <utility>
@@ -219,6 +220,7 @@ class MoQPerfClient : public moxygen::Subscriber,
   void drain();
 
  private:
+  moxygen::MoQFollyExecutorImpl moqExecutor_;
   moxygen::MoQClient moqClient_;
   std::chrono::milliseconds connectTimeout_;
   std::chrono::milliseconds transactionTimeout_;
