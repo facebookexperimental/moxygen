@@ -109,7 +109,7 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
 
 Subscriber::PublishResult MoQRelay::publish(
     PublishRequest pub,
-    std::shared_ptr<SubscriptionHandle> handle) {
+    std::shared_ptr<Publisher::SubscriptionHandle> handle) {
   XLOG(DBG1) << __func__ << " ns=" << pub.fullTrackName.trackNamespace;
   if (!pub.fullTrackName.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     return folly::makeUnexpected(PublishError{

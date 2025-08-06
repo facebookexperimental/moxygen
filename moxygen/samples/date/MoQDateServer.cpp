@@ -182,11 +182,11 @@ class MoQDateServer : public MoQServer,
     // Transform PubReq to SubReq
     SubscribeRequest subReq = {
         .requestID = req.requestID,
+        .trackAlias = req.trackAlias,
         .fullTrackName = req.fullTrackName,
         .groupOrder = req.groupOrder,
-        .locType = LocationType::LargestObject,
         .forward = req.forward,
-        .trackAlias = req.trackAlias};
+        .locType = LocationType::LargestObject};
 
     // Add as a subscriber to forwarder
     forwarder_.addSubscriber(session, subReq, consumer);
