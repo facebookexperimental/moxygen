@@ -104,11 +104,11 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
     clientSession_ =
-        std::make_shared<MoQSession>(clientWt_.get(), &moqEventBase_);
+        std::make_shared<MoQSession>(clientWt_.get(), &MoQExecutor_);
     serverWt_->setPeerHandler(clientSession_.get());
 
     serverSession_ =
-        std::make_shared<MoQSession>(serverWt_.get(), *this, &moqEventBase_);
+        std::make_shared<MoQSession>(serverWt_.get(), *this, &MoQExecutor_);
     clientWt_->setPeerHandler(serverSession_.get());
 
     fetchCallback_ = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -344,7 +344,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
 
   folly::EventBase eventBase_;
-  MoQFollyExecutorImpl moqEventBase_{&eventBase_};
+  MoQFollyExecutorImpl MoQExecutor_{&eventBase_};
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt_;
   std::shared_ptr<MoQSession> clientSession_;
