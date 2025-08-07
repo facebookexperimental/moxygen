@@ -335,6 +335,9 @@ struct TrackAlias {
   bool operator==(const TrackAlias& a) const {
     return value == a.value;
   }
+  bool operator!=(const TrackAlias& a) const {
+    return !(*this == a);
+  }
   struct hash {
     size_t operator()(const TrackAlias& a) const {
       return std::hash<uint64_t>{}(a.value);

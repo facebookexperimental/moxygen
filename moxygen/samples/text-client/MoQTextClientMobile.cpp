@@ -394,8 +394,9 @@ int main(int argc, char* argv[]) {
       moqEvb, std::move(url), moxygen::FullTrackName({ns, FLAGS_track_name}));
 
   auto subParams = flags2params();
-  textClient
-      ->run(SubscribeRequest::make(
+  co_withExecutor(
+      moqEvb.get(),
+      textClient->run(SubscribeRequest::make(
           moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
           0,
           GroupOrder::OldestFirst,
@@ -403,9 +404,9 @@ int main(int argc, char* argv[]) {
           subParams.locType,
           subParams.start,
           subParams.endGroup,
-          {}))
-      .scheduleOn(moqEvb.get())
-      .start();
+          {})))
+      .start()
+      .via(moqEvb.get());
 
   moqEvb->loopForever();
 }
