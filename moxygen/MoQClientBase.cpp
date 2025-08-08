@@ -90,7 +90,7 @@ ClientSetup MoQClientBase::getClientSetup(
   const uint32_t kDefaultMaxRequestID = 100;
   const uint32_t kMaxAuthTokenCacheSize = 1024;
   static const std::vector<uint64_t> pre11Versions = {
-      kVersionDraft08, kVersionDraft09, kVersionDraft10};
+      kVersionDraft09, kVersionDraft10};
   static const std::vector<uint64_t> post11Versions = {kVersionDraft11};
 
   ClientSetup clientSetup{

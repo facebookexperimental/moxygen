@@ -9,7 +9,6 @@
 #include <folly/logging/xlog.h>
 
 namespace {
-constexpr uint64_t kMaxExtensions = 16;
 constexpr uint64_t kMaxExtensionLength = 1024;
 
 bool isDraftVariant(uint64_t version) {
@@ -1881,50 +1880,28 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
   CHECK(version_.hasValue())
       << "The version must be set before parsing extensions";
 
-  if (getDraftMajorVersion(*version_) <= 8) {
-    // We're not using draft 9 or any of its sub-versions
-    // Parse the number of extensions
-    auto numExt = quic::decodeQuicInteger(cursor, length);
-    if (!numExt) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= numExt->second;
-    if (numExt->first > kMaxExtensions) {
-      XLOG(ERR) << "numExt > kMaxExtensions =" << numExt->first;
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    // Parse the extensions
-    for (auto i = 0u; i < numExt->first; i++) {
-      auto maybeExtension = parseExtension(cursor, length);
-      if (maybeExtension.hasError()) {
-        return folly::makeUnexpected(maybeExtension.error());
-      }
-      objectHeader.extensions.emplace_back(std::move(*maybeExtension));
-    }
-  } else {
-    // Parse the length of the extension block
-    auto extLen = quic::decodeQuicInteger(cursor, length);
-    if (!extLen) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= extLen->second;
-    if (extLen->first > length) {
-      XLOG(ERR) << "Extension block length provided exceeds remaining length";
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    // Parse the extensions
-    size_t extensionBlockLength = extLen->first;
-    while (extensionBlockLength > 0) {
-      // This won't infinite loop because we're parsing out at least a
-      // QuicInteger each time.
-      auto maybeExtension = parseExtension(cursor, extensionBlockLength);
-      if (maybeExtension.hasError()) {
-        return folly::makeUnexpected(maybeExtension.error());
-      }
-      objectHeader.extensions.emplace_back(std::move(*maybeExtension));
-    }
-    length -= extLen->first;
+  // Parse the length of the extension block
+  auto extLen = quic::decodeQuicInteger(cursor, length);
+  if (!extLen) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
+  length -= extLen->second;
+  if (extLen->first > length) {
+    XLOG(ERR) << "Extension block length provided exceeds remaining length";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  // Parse the extensions
+  size_t extensionBlockLength = extLen->first;
+  while (extensionBlockLength > 0) {
+    // This won't infinite loop because we're parsing out at least a
+    // QuicInteger each time.
+    auto maybeExtension = parseExtension(cursor, extensionBlockLength);
+    if (maybeExtension.hasError()) {
+      return folly::makeUnexpected(maybeExtension.error());
+    }
+    objectHeader.extensions.emplace_back(std::move(*maybeExtension));
+  }
+  length -= extLen->first;
   return folly::unit;
 }
 
@@ -2327,19 +2304,11 @@ void MoQFrameWriter::writeExtensions(
     const std::vector<Extension>& extensions,
     size_t& size,
     bool& error) const noexcept {
-  if (getDraftMajorVersion(*version_) <= 8) {
-    // Not draft 9 or any of its sub-versions. Write out the number of
-    // extensions
-    writeVarint(writeBuf, extensions.size(), size, error);
-  } else {
-    // This is draft 9 or one of its sub-versions. Write out the size of
-    // the extension block.
-    auto extLen = getExtensionSize(extensions, error);
-    if (error) {
-      return;
-    }
-    writeVarint(writeBuf, extLen, size, error);
+  auto extLen = getExtensionSize(extensions, error);
+  if (error) {
+    return;
   }
+  writeVarint(writeBuf, extLen, size, error);
   for (const auto& ext : extensions) {
     writeVarint(writeBuf, ext.type, size, error);
     if (ext.isOddType()) {
