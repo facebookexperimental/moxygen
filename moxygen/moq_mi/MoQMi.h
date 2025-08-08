@@ -9,7 +9,6 @@
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/IOBufQueue.h>
-#include <gtest/gtest.h>
 #include <moxygen/moq_mi/MediaItem.h>
 #include <cstdint>
 #include <variant>
@@ -192,9 +191,7 @@ class MoQMi {
   static std::unique_ptr<MoqMiObject> encodeToMoQMi(
       std::unique_ptr<MediaItem> item) noexcept;
 
- private:
-  static const size_t kMaxQuicIntSize = 32;
-
+  // Not really part of the public API, but used by the tests
   static std::unique_ptr<folly::IOBuf> encodeMoqMiAVCCMetadata(
       const MediaItem& item) noexcept;
   static std::unique_ptr<folly::IOBuf> encodeMoqMiAACLCMetadata(
@@ -204,6 +201,9 @@ class MoQMi {
       const folly::IOBuf& extValue) noexcept;
   static std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> decodeMoqMiAACLCMetadata(
       const folly::IOBuf& extValue) noexcept;
+
+ private:
+  static const size_t kMaxQuicIntSize = 32;
 
   static void writeVarint(
       folly::IOBufQueue& buf,
@@ -216,13 +216,6 @@ class MoQMi {
       std::unique_ptr<folly::IOBuf> data,
       size_t& size,
       bool& error) noexcept;
-
-  FRIEND_TEST(MoQMiTest, EncodeVideoH264TestNoMetadata);
-  FRIEND_TEST(MoQMiTest, EncodeVideoH264TestWithMetadata);
-  FRIEND_TEST(MoQMiTest, EncodeAudioAAC);
-  FRIEND_TEST(MoQMiTest, DecodeVideoH264TestWithExtradata);
-  FRIEND_TEST(MoQMiTest, DecodeVideoH264TestNoMetadata);
-  FRIEND_TEST(MoQMiTest, DecodeAudioAAC);
 };
 
 } // namespace moxygen
