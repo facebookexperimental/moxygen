@@ -471,6 +471,7 @@ class MoQSession : public Subscriber,
   uint8_t getRequestIDMultiplier() const {
     return (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) ? 2 : 1;
   }
+  void deliverBufferedData(TrackAlias trackAlias);
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;

@@ -2626,6 +2626,10 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   }
   auto trackAlias = subOk.trackAlias;
   trackReceiveState->subscribeOK(std::move(subOk));
+  deliverBufferedData(trackAlias);
+}
+
+void MoQSession::deliverBufferedData(TrackAlias trackAlias) {
   auto datagramsIt = bufferedDatagrams_.find(trackAlias);
   if (datagramsIt != bufferedDatagrams_.end()) {
     auto datagrams = std::move(datagramsIt->second);
@@ -2746,16 +2750,6 @@ folly::coro::Task<void> MoQSession::handlePublish(
     } else {
       // Extract the initiator and process reply with co_await
       auto& initiator = publishResult.value();
-      // Create SubscribeTrackReceiveState
-      if (initiator.consumer) {
-        // Need in order to obtain Alias Later on
-        reqIdToTrackAlias_.emplace(requestID, alias);
-
-        // Add ReceiveState to subTracks_
-        auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
-            ftn, requestID, initiator.consumer, logger_, true);
-        subTracks_.emplace(alias, trackReceiveState);
-      }
       // Process the async reply - this is the only async part
       auto replyResult =
           co_await folly::coro::co_awaitTry(std::move(initiator.reply));
@@ -2766,7 +2760,16 @@ folly::coro::Task<void> MoQSession::handlePublish(
       } else if (replyResult->hasError()) {
         publishErr.reasonPhrase = replyResult->error().reasonPhrase;
       } else {
+        // Create SubscribeTrackReceiveState
+        // Need in order to obtain Alias Later on
+        reqIdToTrackAlias_.emplace(requestID, alias);
+
+        // Add ReceiveState to subTracks_
+        auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
+            ftn, requestID, initiator.consumer, logger_, true);
+        subTracks_.emplace(alias, trackReceiveState);
         publishOk(replyResult->value());
+        deliverBufferedData(alias);
         co_return;
       }
     }

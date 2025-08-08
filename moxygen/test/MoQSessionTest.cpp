@@ -2935,6 +2935,73 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
   EXPECT_FALSE(res.hasError());
 }
 
+CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+      {}                        // params
+  };
+
+  std::shared_ptr<SubscriptionHandle> capturedHandle;
+
+  // Setup server to respond with PUBLISH_OK after a delay
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(testing::Invoke(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle> subHandle)
+              -> Subscriber::PublishResult {
+            capturedHandle = std::move(subHandle);
+            auto trackConsumer = std::make_shared<MockTrackConsumer>();
+            // Verify that data is not delivered until PUBLISH_OK is returned
+            EXPECT_CALL(*trackConsumer, datagram(_, _)).Times(0);
+
+            // Delay PUBLISH_OK response
+            return Subscriber::PublishConsumerAndReplyTask{
+                trackConsumer, // Assuming a nullptr consumer for demonstration
+                folly::coro::co_invoke(
+                    [actualPub, trackConsumer]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await folly::coro::sleep(
+                          std::chrono::milliseconds(100));
+                      // Now data should be delivered
+                      EXPECT_CALL(*trackConsumer, datagram(_, _))
+                          .WillOnce(testing::Return(folly::unit));
+                      co_return PublishOk{
+                          actualPub.requestID,
+                          true,
+                          128,
+                          GroupOrder::Default,
+                          LocationType::LargestObject,
+                          folly::none,
+                          folly::none,
+                          {}};
+                    })};
+          }));
+
+  auto handle = makePublishHandle();
+
+  // Initiate publish
+  auto publishResult = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(publishResult.hasValue()) << "Publish should succeed initially";
+
+  // Publish data on the handle after publish returns
+  publishResult->consumer->datagram(
+      ObjectHeader(kUselessAlias, 0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
+
+  // Wait for server processing to finish
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasValue()) << "Publish should succeed";
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
