@@ -6,7 +6,7 @@
  *
  */
 
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 #include "folly/Expected.h"
 #include "folly/coro/BlockingWait.h"
 #include "moxygen/moqtest/MoQTestServer.h"

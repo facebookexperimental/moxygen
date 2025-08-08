@@ -5,7 +5,7 @@
  */
 
 #include <folly/Expected.h>
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 #include <moxygen/MoQTokenCache.h>
 
 using namespace moxygen;

@@ -6,7 +6,7 @@
  *
  */
 
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 #include "moxygen/moqtest/Types.h"
 #include "moxygen/moqtest/Utils.h"
 

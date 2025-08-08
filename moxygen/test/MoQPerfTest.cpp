@@ -6,7 +6,7 @@
  *
  */
 
-#include <gtest/gtest.h>
+#include <folly/portability/GTest.h>
 #include "moxygen/MoQFramer.h"
 #include "moxygen/tools/moqperf/MoQPerfParams.h"
 #include "moxygen/tools/moqperf/MoQPerfUtils.h"
