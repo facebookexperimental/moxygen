@@ -35,6 +35,26 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
+add_library(moqfollyexecutorimpl
+    events/MoQFollyExecutorImpl.cpp
+)
+
+target_include_directories(
+    moqfollyexecutorimpl PUBLIC
+    $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+
+target_compile_options(
+    moqfollyexecutorimpl PRIVATE
+    ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+
+target_link_libraries(
+    moqfollyexecutorimpl PUBLIC
+    Folly::folly
+    mvfst::mvfst_events
+)
+
 add_library(moxygenserver
     MoQServer.cpp)
 
@@ -53,10 +73,12 @@ target_link_libraries(
     moxygen
     proxygen::proxygenhqserver
     proxygen::quicwebtransport
+    moqfollyexecutorimpl
 )
 
 add_library(moxygenclient
     MoQClient.cpp
+    MoQClientBase.cpp
     util/QuicConnector.cpp
 )
 
@@ -75,6 +97,7 @@ target_link_libraries(
     moxygen
     proxygen::proxygenhqserver
     proxygen::quicwebtransport
+    moqfollyexecutorimpl
 )
 
 add_library(moxygenwtclient
@@ -96,6 +119,7 @@ target_link_libraries(
     moxygenclient
     proxygen::proxygenhqserver
 )
+
 
 add_subdirectory(mlog)
 add_subdirectory(relay)

@@ -52,4 +52,5 @@ moxygen_add_test(TARGET MoQSessionTests
     moqtestutils
     moxygen
     mlogger
+    moqfollyexecutorimpl
 )
