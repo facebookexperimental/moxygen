@@ -388,13 +388,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
            SubscribeErrorCode::TRACK_NOT_EXIST,
            "no such namespace"}));
     }
-    if (session.get() == upstreamSession.get()) {
-      // message error
-      co_return folly::makeUnexpected(SubscribeError(
-          {subReq.requestID,
-           SubscribeErrorCode::INTERNAL_ERROR,
-           "self subscribe"}));
-    }
     subReq.priority = kDefaultUpstreamPriority;
     subReq.groupOrder = GroupOrder::Default;
     // We only subscribe upstream with LargestObject. This is to satisfy other
