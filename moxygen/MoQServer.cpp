@@ -18,7 +18,8 @@ MoQServer::MoQServer(
     uint16_t port,
     std::string cert,
     std::string key,
-    std::string endpoint)
+    std::string endpoint,
+    std::vector<folly::EventBase*> evbs)
     : endpoint_(std::move(endpoint)) {
   params_.localAddress.emplace();
   params_.localAddress->setFromLocalPort(port);
@@ -37,7 +38,7 @@ MoQServer::MoQServer(
         createMoQQuicSession(std::move(quicSocket));
       });
   hqServer_ = std::make_unique<HQServer>(params_, std::move(factory));
-  hqServer_->start();
+  hqServer_->start(std::move(evbs));
 }
 
 void MoQServer::stop() {
