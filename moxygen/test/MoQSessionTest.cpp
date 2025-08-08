@@ -2872,6 +2872,71 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
   }
 }
 
+CO_TEST_P_X(MoQSessionTest, UnsubscribeWithinSubscribeDone) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        trackConsumer = pub;
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribe());
+
+  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+      .WillOnce(testing::Invoke([&](const auto&) {
+        subscribeDone_.post();
+        subscribeHandler->unsubscribe();
+        return folly::unit;
+      }));
+
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
+  co_await setupMoQSession();
+
+  // Set up a subscription
+  RequestID reqID;
+  std::shared_ptr<TrackConsumer> handle;
+  expectSubscribe([&reqID, &handle](auto sub, auto pub) -> TaskSubscribeResult {
+    reqID = sub.requestID;
+    // Publish a datagram
+    pub->datagram(
+        ObjectHeader(kUselessAlias, 0, 0, 0, 0, 11),
+        folly::IOBuf::copyBuffer("hello world"));
+
+    handle = std::move(pub);
+    handle->subscribeDone(getTrackEndedSubscribeDone(reqID));
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _))
+      .WillOnce(testing::Invoke([&]() {
+        clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+        handle->subscribeDone(getTrackEndedSubscribeDone(reqID));
+        return folly::unit;
+      }));
+  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)

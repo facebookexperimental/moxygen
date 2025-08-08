@@ -1549,6 +1549,8 @@ void MoQSession::cleanup() {
     }
   }
   subTracks_.clear();
+  // We parse a subscribeDone after cleanup
+  reqIdToTrackAlias_.clear();
   for (auto& fetch : fetches_) {
     // TODO: there needs to be a way to queue an error in TrackReceiveState,
     // both from here, when close races the FETCH stream, and from readLoop
@@ -2626,18 +2628,20 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   trackReceiveState->subscribeOK(std::move(subOk));
   auto datagramsIt = bufferedDatagrams_.find(trackAlias);
   if (datagramsIt != bufferedDatagrams_.end()) {
-    for (auto& datagram : datagramsIt->second) {
+    auto datagrams = std::move(datagramsIt->second);
+    bufferedDatagrams_.erase(datagramsIt);
+    for (auto& datagram : datagrams) {
       onDatagram(std::move(datagram));
     }
-    bufferedDatagrams_.erase(datagramsIt);
   }
 
   auto subgroupsIt = bufferedSubgroups_.find(trackAlias);
   if (subgroupsIt != bufferedSubgroups_.end()) {
-    for (auto* baton : subgroupsIt->second) {
+    auto subgroups = std::move(subgroupsIt->second);
+    bufferedSubgroups_.erase(subgroupsIt);
+    for (auto* baton : subgroups) {
       baton->signal();
     }
-    bufferedSubgroups_.erase(subgroupsIt);
   }
 }
 
@@ -2797,18 +2801,18 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   // TODO: there could still be objects in flight.  Removing from maps now
   // will prevent their delivery.  I think the only way to handle this is with
   // timeouts.
-  auto trackReceiveStateIt = subTracks_.find(trackAliasIt->second);
+  auto alias = trackAliasIt->second;
+  auto reqId = subscribeDone.requestID;
+  auto trackReceiveStateIt = subTracks_.find(alias);
   if (trackReceiveStateIt != subTracks_.end()) {
     auto state = trackReceiveStateIt->second;
     if (state->subscribeDone(std::move(subscribeDone))) {
-      subTracks_.erase(trackReceiveStateIt);
+      removeSubscriptionState(alias, reqId);
     }
   } else {
     XLOG(DFATAL) << "trackAliasIt but no trackReceiveStateIt for id="
                  << subscribeDone.requestID << " sess=" << this;
   }
-  reqIdToTrackAlias_.erase(trackAliasIt);
-  checkForCloseOnDrain();
 }
 
 void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
@@ -3743,17 +3747,7 @@ void MoQSession::publishError(const PublishError& publishError) {
               << publishError.requestID;
     return;
   }
-
-  auto subIt = subTracks_.find(aliasRes->second);
-  if (subIt == subTracks_.end()) {
-    XLOG(ERR) << "No sub tracks for reqID=" << publishError.requestID
-              << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-  subTracks_.erase(subIt);
-  reqIdToTrackAlias_.erase(aliasRes);
-  checkForCloseOnDrain();
+  removeSubscriptionState(aliasRes->second, publishError.requestID);
 }
 
 void MoQSession::unannounce(const Unannounce& unann) {
