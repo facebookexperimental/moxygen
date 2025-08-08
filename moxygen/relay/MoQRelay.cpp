@@ -139,6 +139,19 @@ Subscriber::PublishResult MoQRelay::publish(
       MatchType::Exact,
       &sessions);
 
+  auto it = subscriptions_.find(pub.fullTrackName);
+  if (it != subscriptions_.end()) {
+    // someone already announced this FTN, we don't support multipublisher
+    XLOG(DBG1) << "New publisher for existing subscription";
+    nodePtr->publishes.erase(pub.fullTrackName.trackName);
+    it->second.handle->unsubscribe();
+    it->second.forwarder->subscribeDone(
+        {RequestID(0),
+         SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+         0, // filled in by session
+         "upstream disconnect"});
+    subscriptions_.erase(it);
+  }
   auto session = MoQSession::getRequestSession();
   auto res = nodePtr->publishes.emplace(pub.fullTrackName.trackName, session);
   XCHECK(res.second) << "Duplicate publish";
