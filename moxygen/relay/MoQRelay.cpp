@@ -184,7 +184,7 @@ Subscriber::PublishResult MoQRelay::publish(
   }
   forwarder->setCallback(shared_from_this());
 
-  return PublishConsumerAndReplyTask(
+  return PublishConsumerAndReplyTask{
       forwarder,
       folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(PublishOk{
           pub.requestID,
@@ -194,7 +194,7 @@ Subscriber::PublishResult MoQRelay::publish(
           LocationType::AbsoluteRange,
           kLocationMin,
           kLocationMax.group,
-          {}}));
+          {}})};
 }
 
 folly::coro::Task<void> MoQRelay::publishToSession(

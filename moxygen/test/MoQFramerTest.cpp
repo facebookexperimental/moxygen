@@ -1056,7 +1056,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
     EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
 
     len = frameLength(cursor, false);
-    for (auto i = 0; i < tokenLengths[j] - 1; ++i) {
+    for (size_t i = 0; i < tokenLengths[j] - 1; ++i) {
       auto toParse = front->clone();
       auto shortTokenLengthBuf = folly::IOBuf::create(2);
       uint8_t tokenLengthBytes = 0;

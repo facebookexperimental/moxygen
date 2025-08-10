@@ -24,9 +24,7 @@ target_compile_options(
 )
 target_link_libraries(
   moqtextclient PUBLIC
-  Folly::folly
   moxygenwtclient
-  mlogger
 )
 
 install(

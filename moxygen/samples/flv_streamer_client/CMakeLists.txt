@@ -24,11 +24,9 @@ target_compile_options(
 )
 target_link_libraries(
   moqflvstreamerclient PUBLIC
-  Folly::folly
   moxygenwtclient
   flvparser
   moqmi
-  mlogger
 )
 
 install(
