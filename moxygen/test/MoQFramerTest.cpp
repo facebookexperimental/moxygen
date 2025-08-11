@@ -710,6 +710,179 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
   }
 }
 
+TEST(MoQFramerTest, ParseClientSetupParamsUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Add version
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
+
+  // Signify 2 bytes Varint but append only 1 byte to trigger underflow
+  writeVarint(writeBuf, 2, size, error);
+  writeBuf.append("\x40", 1);
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseClientSetupNoOfVersionsUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  writeBuf.append("\xC0\x00", 2);
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseClientSetupVersionUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 2, size, error);
+  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeBuf.append("\xC0\x00", 2);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseClientSetupNoOfParamsUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, kVersionDraft10, size, error);
+
+  writeBuf.append("\xC0\x00", 2);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseClientSetupParamsUnderflowString) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, folly::to_underlying(SetupKey::PATH), size, error);
+
+  // Signify 2 byte string but append only 1 byte to trigger underflow
+  writeVarint(writeBuf, 2, size, error);
+  writeBuf.append("s", 1);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseClientSetupParamsIncorrectLength) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, folly::to_underlying(SetupKey::PATH), size, error);
+
+  writeVarint(writeBuf, 1, size, error);
+  writeBuf.append("s", 1);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength() + 1);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST(MoQFramerTest, ParseClientSetupParamsUnderflowOlderVers) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, 1, size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(SetupKey::MAX_REQUEST_ID), size, error);
+
+  // signifying 4 byte string but append only 2 bytes to trigger underflow
+  writeVarint(writeBuf, 2, size, error);
+  writeBuf.append("\x80\x00", 2);
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseServerSetupVersionUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeBuf.append("\xC0\x00", 2);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseServerSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerTest, ParseServerSetupNoOfParamsUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, kVersionDraft10, size, error);
+
+  writeBuf.append("\xC0\x00", 2);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  auto result =
+      parser.parseServerSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
 TEST_P(MoQFramerTest, All) {
   auto allMsgs = moxygen::test::writeAllMessages(writer_, GetParam());
   allMsgs->coalesce();
