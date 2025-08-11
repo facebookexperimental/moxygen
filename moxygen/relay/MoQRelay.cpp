@@ -138,6 +138,8 @@ Subscriber::PublishResult MoQRelay::publish(
       /*createMissingNodes=*/true,
       MatchType::Exact,
       &sessions);
+  sessions.insert(
+      sessions.end(), nodePtr->sessions.begin(), nodePtr->sessions.end());
 
   auto it = subscriptions_.find(pub.fullTrackName);
   if (it != subscriptions_.end()) {
