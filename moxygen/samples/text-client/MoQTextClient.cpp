@@ -206,6 +206,8 @@ class MoQTextClient : public Subscriber,
           }
         }
 
+        co_await subTextHandler_->baton;
+
         co_return;
       }
 
