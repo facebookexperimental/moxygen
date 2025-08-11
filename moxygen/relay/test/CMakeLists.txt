@@ -9,6 +9,7 @@ if(NOT BUILD_TESTS)
 endif()
 
 moxygen_add_test(TARGET MoQCacheTests
+  PREFIX "MoQCache"
   SOURCES
     MoQCacheTests.cpp
   DEPENDS

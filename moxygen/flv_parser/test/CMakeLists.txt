@@ -9,11 +9,11 @@ if(NOT BUILD_TESTS)
 endif()
 
 moxygen_add_test(TARGET FlvParserTests
+  PREFIX "FlvParser"
   SOURCES
     FlvReaderTest.cpp
     FlvSequentialReaderTest.cpp
   DEPENDS
     flvparser
     moqmi
-    Folly::folly
 )

@@ -38,8 +38,6 @@ class FlvWriter {
 
   std::ofstream f_;
   bool headerWrote_{false};
-  bool audioHeaderWritten_{false};
-  bool videoHeaderWritten_{false};
 };
 
 } // namespace moxygen::flv

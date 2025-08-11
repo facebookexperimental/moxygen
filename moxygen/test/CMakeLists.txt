@@ -36,21 +36,20 @@ target_link_libraries(moqtestutils PUBLIC moxygen)
 
 
 moxygen_add_test(TARGET MoQTests
+  PREFIX "MoQ"
   SOURCES
     MoQFramerTest.cpp
     MoQCodecTest.cpp
   DEPENDS
     moqtestutils
-    moxygen
     testmain
 )
 
 moxygen_add_test(TARGET MoQSessionTests
+  PREFIX "MoQSession"
   SOURCES
     MoQSessionTest.cpp
   DEPENDS
     moqtestutils
-    moxygen
-    mlogger
     moqfollyexecutorimpl
 )

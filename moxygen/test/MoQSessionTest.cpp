@@ -2283,8 +2283,7 @@ CO_TEST_P_X(V12PlusTests, SubscribeOKArrivesOneByteAtATime) {
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
 
   expectSubscribe(
-      [&subgroupConsumer, &trackConsumer, this](
-          auto sub, auto pub) -> TaskSubscribeResult {
+      [&trackConsumer, this](auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
         EXPECT_CALL(
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());

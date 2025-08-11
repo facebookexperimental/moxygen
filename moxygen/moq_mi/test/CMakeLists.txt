@@ -9,11 +9,11 @@ if(NOT BUILD_TESTS)
 endif()
 
 moxygen_add_test(TARGET MoQMiTests
+  PREFIX "MoQMi"
   SOURCES
     MoQMiTest.cpp
   DEPENDS
     moqmi
     flvparser
     proxygen::proxygen
-    Folly::folly
 )
