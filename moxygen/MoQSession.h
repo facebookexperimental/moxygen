@@ -107,6 +107,11 @@ class MoQSession : public Subscriber,
     moqSettings_ = settings;
   }
 
+  void setVersion(uint64_t version) {
+    negotiatedVersion_ = version;
+    setupComplete_ = true;
+  }
+
   void setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
     publishHandler_ = std::move(publishHandler);
   }

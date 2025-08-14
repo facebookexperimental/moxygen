@@ -301,6 +301,9 @@ constexpr uint64_t kVersionDraft12 = 0xff00000C;
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
 // version 8 and minor version 2.
 uint64_t getDraftMajorVersion(uint64_t version);
+constexpr std::array<uint64_t, 2> kSupportedVersions{
+    kVersionDraft11,
+    kVersionDraft12};
 
 void writeVarint(
     folly::IOBufQueue& buf,
