@@ -136,6 +136,13 @@ class MoQSession : public Subscriber,
     return cancellationSource_.getToken();
   }
 
+  folly::SocketAddress getPeerAddress() const {
+    if (wt_) {
+      return wt_->getPeerAddress();
+    }
+    return folly::SocketAddress();
+  }
+
   ~MoQSession() override;
 
   void start();
