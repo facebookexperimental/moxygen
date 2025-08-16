@@ -22,20 +22,8 @@ uint64_t getLocationTypeValue(
     return folly::to_underlying(locationType);
   }
 
-  if (moxygen::getDraftMajorVersion(version) < 11) {
-    // In draft < 11, LargestGroup maps to 1
-    return 1;
-  } else {
-    return folly::to_underlying(locationType);
-  }
+  return folly::to_underlying(locationType);
 }
-
-// Used below draft 11
-enum class LegacyTrackRequestParamKey : uint64_t {
-  AUTHORIZATION = 2,
-  DELIVERY_TIMEOUT = 3,
-  MAX_CACHE_DURATION = 4,
-};
 
 // Used in draft 11 and above
 enum class TrackRequestParamKey11 : uint64_t {
@@ -121,27 +109,17 @@ uint64_t getDraftMajorVersion(uint64_t version) {
 uint64_t getAuthorizationParamKey(uint64_t version) {
   if (getDraftMajorVersion(version) >= 12) {
     return folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
-  } else if (getDraftMajorVersion(version) >= 11) {
-    return folly::to_underlying(TrackRequestParamKey11::AUTHORIZATION_TOKEN);
   } else {
-    return folly::to_underlying(LegacyTrackRequestParamKey::AUTHORIZATION);
+    return folly::to_underlying(TrackRequestParamKey11::AUTHORIZATION_TOKEN);
   }
 }
 
 uint64_t getDeliveryTimeoutParamKey(uint64_t version) {
-  if (getDraftMajorVersion(version) >= 11) {
-    return folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
-  } else {
-    return folly::to_underlying(LegacyTrackRequestParamKey::DELIVERY_TIMEOUT);
-  }
+  return folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
 }
 
 uint64_t getMaxCacheDurationParamKey(uint64_t version) {
-  if (getDraftMajorVersion(version) >= 11) {
-    return folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION);
-  } else {
-    return folly::to_underlying(LegacyTrackRequestParamKey::MAX_CACHE_DURATION);
-  }
+  return folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION);
 }
 
 std::string toString(LocationType loctype) {
@@ -354,16 +332,6 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseIntParam(
   Parameter p;
   p.key = key;
   auto res = quic::decodeQuicInteger(cursor, length);
-  if (getDraftMajorVersion(version) < 11) {
-    if (!res) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= res->second;
-    if (res->first > length) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    res = quic::decodeQuicInteger(cursor, res->first);
-  }
   if (!res) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
@@ -430,11 +398,13 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     auto majorVersion = getDraftMajorVersion(version->first);
+    if (majorVersion < 11) {
+      XLOG(WARN) << "Peer advertised unsupported version " << version->first
+                 << " (major=" << majorVersion << "), minimum supported is 11";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
     if (majorVersion < 12) {
       serializationVersion = kVersionDraft11;
-      if (majorVersion < 11) {
-        serializationVersion = kVersionDraft10;
-      }
     }
     clientSetup.supportedVersions.push_back(version->first);
     length -= version->second;
@@ -470,6 +440,12 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= version->second;
+  auto majorVersion = getDraftMajorVersion(version->first);
+  if (majorVersion < 11) {
+    XLOG(WARN) << "Peer selected unsupported version " << version->first
+               << " (major=" << majorVersion << "), minimum supported is 11";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   serverSetup.selectedVersion = version->first;
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -503,8 +479,7 @@ folly::Expected<RequestID, ErrorCode> MoQFrameParser::parseFetchHeader(
 }
 
 bool datagramTypeHasExtensions(uint64_t version, DatagramType datagramType) {
-  return getDraftMajorVersion(version) < 11 ||
-      (folly::to_underlying(datagramType) & 0x1);
+  return (folly::to_underlying(datagramType) & 0x1);
 }
 
 bool datagramTypeIsStatus(uint64_t version, DatagramType datagramType) {
@@ -596,10 +571,6 @@ MoQFrameParser::parseSubgroupTypeAndAlias(
       (type->first &
        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0) {
     return folly::none;
-  } else if (
-      getDraftMajorVersion(*version_) < 11 &&
-      (type->first != folly::to_underlying(StreamType::SUBGROUP_HEADER))) {
-    return folly::none;
   }
 
   auto trackAlias = quic::decodeQuicInteger(cursor, length);
@@ -631,8 +602,7 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
   length -= group->second;
   objectHeader.group = group->first;
   bool parseObjectID = false;
-  if (getDraftMajorVersion(*version_) < 11 ||
-      format == SubgroupIDFormat::Present) {
+  if (format == SubgroupIDFormat::Present) {
     auto subgroup = quic::decodeQuicInteger(cursor, length);
     if (!subgroup) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -754,7 +724,7 @@ MoQFrameParser::parseSubgroupObjectHeader(
   length -= id->second;
   objectHeader.id = id->first;
 
-  if (getDraftMajorVersion(*version_) < 11 || includeExtensions) {
+  if (includeExtensions) {
     auto ext = parseExtensions(cursor, length, objectHeader);
     if (!ext) {
       return folly::makeUnexpected(ext.error());
@@ -821,27 +791,18 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   }
   subscribeRequest.groupOrder = static_cast<GroupOrder>(order);
   length -= 2;
-  if (getDraftMajorVersion(*version_) >= 11) {
-    if (length < 1) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    uint8_t forwardFlag = cursor.readBE<uint8_t>();
-    if (forwardFlag > 1) {
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    subscribeRequest.forward = (forwardFlag == 1);
-    length--;
+  if (length < 1) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
+  uint8_t forwardFlag = cursor.readBE<uint8_t>();
+  if (forwardFlag > 1) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  subscribeRequest.forward = (forwardFlag == 1);
+  length--;
   auto locType = quic::decodeQuicInteger(cursor, length);
   if (!locType) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  // LocationType == 1 was present in draft 8 and below as LargestGroup. Draft
-  // 11 and above have LocationType::NextGroupStart. Draft 9 and 10 don't have
-  // LocationType == 1, but we treat it as LargestGroup.
-  if (locType->first == folly::to_underlying(LocationType::NextGroupStart) &&
-      getDraftMajorVersion(*version_) < 11) {
-    locType->first = folly::to_underlying(LocationType::LargestGroup);
   }
   switch (locType->first) {
     case folly::to_underlying(LocationType::LargestObject):
@@ -920,17 +881,15 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
   subscribeUpdate.priority = cursor.readBE<uint8_t>();
   length--;
 
-  if (getDraftMajorVersion(*version_) >= 11) {
-    if (length < 2) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    uint8_t forwardFlag = cursor.readBE<uint8_t>();
-    if (forwardFlag > 1) {
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    subscribeUpdate.forward = (forwardFlag == 1);
-    length--;
+  if (length < 2) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
+  uint8_t forwardFlag = cursor.readBE<uint8_t>();
+  if (forwardFlag > 1) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  subscribeUpdate.forward = (forwardFlag == 1);
+  length--;
 
   auto numParams = quic::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1626,11 +1585,6 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
       fetchType->first > folly::to_underlying(FetchType::ABSOLUTE_JOINING)) {
     XLOG(ERR) << "fetchType = 0 or fetchType > JONING =" << fetchType->first;
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  } else if (
-      fetchType->first == folly::to_underlying(FetchType::ABSOLUTE_JOINING) &&
-      getDraftMajorVersion(*version_) < 11) {
-    // Absolute joining is only supported in draft-11 and later
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   length -= fetchType->second;
 
@@ -2037,20 +1991,13 @@ void writeSize(
     size_t size,
     bool& error,
     uint64_t versionIn) {
-  if (getDraftMajorVersion(versionIn) < 11 && (size > 1 << 14)) {
-    // Size check for versions < 11
-    LOG(ERROR) << "Control message size exceeds max sz=" << size;
-    error = true;
-    return;
-  } else if (
-      getDraftMajorVersion(versionIn) >= 11 && (size > ((1 << 16) - 1))) {
+  if (size > ((1 << 16) - 1)) {
     // Size check for versions >= 11
     LOG(ERROR) << "Control message size exceeds max sz=" << size;
     error = true;
     return;
   }
-  size_t bitmask = (getDraftMajorVersion(versionIn) >= 11) ? 0 : 0x4000;
-  uint16_t sizeVal = folly::Endian::big(uint16_t(bitmask | size));
+  uint16_t sizeVal = folly::Endian::big(uint16_t(size));
   memcpy(sizePtr, &sizeVal, 2);
 }
 
@@ -2132,9 +2079,16 @@ WriteResult writeClientSetup(
     uint64_t version) noexcept {
   size_t size = 0;
   bool error = false;
-  FrameType frameType = (getDraftMajorVersion(version) >= 11)
-      ? FrameType::CLIENT_SETUP
-      : FrameType::LEGACY_CLIENT_SETUP;
+
+  // Check that all supported versions are >= 11
+  for (auto ver : clientSetup.supportedVersions) {
+    auto majorVersion = getDraftMajorVersion(ver);
+    XCHECK_GE(majorVersion, 11)
+        << "Supported version " << ver << " (major=" << majorVersion
+        << ") is not supported. Minimum version is 11.";
+  }
+
+  FrameType frameType = FrameType::CLIENT_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
@@ -2143,9 +2097,6 @@ WriteResult writeClientSetup(
     auto majorVersion = getDraftMajorVersion(ver);
     if (majorVersion < 12) {
       serializationVersion = kVersionDraft11;
-      if (majorVersion < 11) {
-        serializationVersion = kVersionDraft10;
-      }
     }
     writeVarint(writeBuf, ver, size, error);
   }
@@ -2164,15 +2115,6 @@ WriteResult writeClientSetup(
     }
     writeVarint(writeBuf, param.key, size, error);
     if ((param.key & 0x01) == 0) {
-      if (getDraftMajorVersion(serializationVersion) < 11) {
-        auto ret = quic::getQuicIntegerSize(param.asUint64);
-        if (ret.hasError()) {
-          XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
-          return folly::makeUnexpected(
-              quic::TransportErrorCode::INTERNAL_ERROR);
-        }
-        writeVarint(writeBuf, ret.value(), size, error);
-      }
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
       writeFixedString(writeBuf, param.asString, size, error);
@@ -2191,9 +2133,15 @@ WriteResult writeServerSetup(
     uint64_t version) noexcept {
   size_t size = 0;
   bool error = false;
-  FrameType frameType = (getDraftMajorVersion(version) >= 11)
-      ? FrameType::SERVER_SETUP
-      : FrameType::LEGACY_SERVER_SETUP;
+
+  // Check that selected version is >= 11
+  auto majorVersion = getDraftMajorVersion(serverSetup.selectedVersion);
+  XCHECK_GE(majorVersion, 11)
+      << "Selected version " << serverSetup.selectedVersion
+      << " (major=" << majorVersion
+      << ") is not supported. Minimum version is 11.";
+
+  FrameType frameType = FrameType::SERVER_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
   writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
 
@@ -2211,15 +2159,6 @@ WriteResult writeServerSetup(
     }
     writeVarint(writeBuf, param.key, size, error);
     if ((param.key & 0x01) == 0) {
-      if (getDraftMajorVersion(serverSetup.selectedVersion) < 11) {
-        auto ret = quic::getQuicIntegerSize(param.asUint64);
-        if (ret.hasError()) {
-          XLOG(ERR) << "Invalid max requestID: " << param.asUint64;
-          return folly::makeUnexpected(
-              quic::TransportErrorCode::INTERNAL_ERROR);
-        }
-        writeVarint(writeBuf, ret.value(), size, error);
-      }
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
       writeFixedString(writeBuf, param.asString, size, error);
@@ -2248,8 +2187,7 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
   writeVarint(writeBuf, streamTypeInt, size, error);
   writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
   writeVarint(writeBuf, objectHeader.group, size, error);
-  if (streamType == StreamType::SUBGROUP_HEADER ||
-      streamTypeInt & SG_HAS_SUBGROUP_ID) {
+  if (streamTypeInt & SG_HAS_SUBGROUP_ID) {
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
   writeBuf.append(&objectHeader.priority, 1);
@@ -2371,7 +2309,7 @@ TrackRequestParameter getAuthParam(
     folly::Optional<uint64_t> registerToken) {
   return TrackRequestParameter(
       {getAuthorizationParamKey(version),
-       getDraftMajorVersion(version) < 11 ? token : "",
+       "",
        0,
        {tokenType, std::move(token), registerToken}});
 }
@@ -2391,14 +2329,6 @@ void MoQFrameWriter::writeTrackRequestParams(
     } else if (
         param.key == getDeliveryTimeoutParamKey(*version_) ||
         param.key == getMaxCacheDurationParamKey(*version_)) {
-      if (getDraftMajorVersion(*version_) < 11) {
-        auto res = quic::getQuicIntegerSize(param.asUint64);
-        if (!res) {
-          error = true;
-          return;
-        }
-        writeVarint(writeBuf, res.value(), size, error);
-      }
       writeVarint(writeBuf, param.asUint64, size, error);
     }
   }
@@ -2428,7 +2358,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
-    if (getDraftMajorVersion(*version_) < 11 || hasExtensions) {
+    if (hasExtensions) {
       writeExtensions(writeBuf, objectHeader.extensions, size, error);
     }
     writeVarint(
@@ -2445,7 +2375,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
-    if (getDraftMajorVersion(*version_) < 11 || hasExtensions) {
+    if (hasExtensions) {
       writeExtensions(writeBuf, objectHeader.extensions, size, error);
     }
     writeBuf.append(std::move(objectPayload));
@@ -2472,8 +2402,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
   } else {
     writeVarint(writeBuf, objectHeader.id, size, error);
   }
-  if (folly::to_underlying(streamType) & 0x1 ||
-      streamType == StreamType::SUBGROUP_HEADER) {
+  if (folly::to_underlying(streamType) & 0x1) {
     // includes FETCH, watch out if we add more types!
     writeExtensions(writeBuf, objectHeader.extensions, size, error);
   }
@@ -3103,12 +3032,6 @@ WriteResult MoQFrameWriter::writeFetch(
   } else {
     CHECK(joining);
 
-    if (joining->fetchType == FetchType::ABSOLUTE_JOINING &&
-        getDraftMajorVersion(*version_) < 11) {
-      // Absolute joining is only supported in draft-11 and above
-      return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-    }
-
     writeVarint(
         writeBuf, folly::to_underlying(joining->fetchType), size, error);
     writeVarint(writeBuf, joining->joiningRequestID.value, size, error);
@@ -3218,7 +3141,6 @@ const char* getFrameTypeString(FrameType type) {
 
 const char* getStreamTypeString(StreamType type) {
   switch (type) {
-    case StreamType::SUBGROUP_HEADER:
     case StreamType::SUBGROUP_HEADER_SG:
     case StreamType::SUBGROUP_HEADER_SG_EXT:
     case StreamType::SUBGROUP_HEADER_SG_FIRST:
@@ -3326,14 +3248,7 @@ std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
 
 bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
   auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion < 11) {
-    return datagramType ==
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_NO_EXT_V11) ||
-        datagramType ==
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_V11) ||
-        datagramType ==
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_V11);
-  } else if (majorVersion == 11) {
+  if (majorVersion == 11) {
     return datagramType <=
         folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11);
   } else {

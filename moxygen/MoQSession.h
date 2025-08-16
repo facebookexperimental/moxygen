@@ -426,10 +426,9 @@ class MoQSession : public Subscriber,
       std::vector<Parameter>& params,
       const folly::Optional<uint64_t>& forceVersion = folly::none);
   RequestID getRequestID(RequestID id, const FullTrackName& ftn);
-  RequestID getNextRequestID(bool legacyAction = false);
-  void maybeAddLegacyRequestIDMapping(const FullTrackName& ftn, RequestID id);
+  RequestID getNextRequestID();
   uint8_t getRequestIDMultiplier() const {
-    return (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) ? 2 : 1;
+    return 2;
   }
   void deliverBufferedData(TrackAlias trackAlias);
 
@@ -487,10 +486,6 @@ class MoQSession : public Subscriber,
       F14FastMap<RequestID, folly::coro::Promise<TrackStatus>, RequestID::hash>
           trackStatuses_;
 
-  // For <= v10
-  folly::F14FastMap<FullTrackName, RequestID, FullTrackName::hash>
-      fullTrackNameToRequestID_;
-
   // Subscriber ID -> metadata about a publish track
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
       pubTracks_;
@@ -539,8 +534,7 @@ class MoQSession : public Subscriber,
   // less than maxRequestID.
   uint64_t nextRequestID_{0};
   uint64_t nextExpectedPeerRequestID_{0};
-  // For request IDs for messages that didn't use subscribe ID in v<11
-  uint64_t legacyNextRequestID_{quic::kEightByteLimit + 1};
+
   uint64_t maxRequestID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};

@@ -51,7 +51,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     res = writeClientSetup(
         writeBuf,
         ClientSetup(
-            {{1},
+            {{version},
              {
                  {folly::to_underlying(SetupKey::PATH), "/foo", 0},
                  {folly::to_underlying(SetupKey::MAX_REQUEST_ID), "", 100},
@@ -62,7 +62,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     res = writeServerSetup(
         writeBuf,
         ServerSetup(
-            {1,
+            {version,
              {
                  {folly::to_underlying(SetupKey::PATH), "/foo", 0},
              }}),

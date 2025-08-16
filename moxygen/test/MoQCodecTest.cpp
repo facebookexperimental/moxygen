@@ -272,7 +272,7 @@ TEST_P(MoQCodecTest, TruncatedObject) {
       writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
-      StreamType::SUBGROUP_HEADER,
+      StreamType::SUBGROUP_HEADER_SG,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
 
@@ -290,7 +290,7 @@ TEST_P(MoQCodecTest, TruncatedObjectPayload) {
       writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
-      StreamType::SUBGROUP_HEADER,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
       ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
       nullptr);
 
@@ -387,7 +387,7 @@ TEST_P(MoQCodecTest, ClientGetsClientSetup) {
   writeClientSetup(
       writeBuf,
       ClientSetup(
-          {{1},
+          {{GetParam()},
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
                {folly::to_underlying(SetupKey::MAX_REQUEST_ID), "", 100},
@@ -418,7 +418,7 @@ TEST_P(MoQCodecTest, TwoSetups) {
   writeServerSetup(
       writeBuf,
       ServerSetup(
-          {1,
+          {GetParam(),
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
            }}),
@@ -438,7 +438,7 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
   writeServerSetup(
       writeBuf,
       ServerSetup(
-          {1,
+          {GetParam(),
            {
                {folly::to_underlying(SetupKey::PATH), "/foo", 0},
            }}),
@@ -452,10 +452,5 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(
-        kVersionDraft08,
-        kVersionDraft09,
-        kVersionDraft10,
-        kVersionDraft11,
-        kVersionDraft12));
+    ::testing::Values(kVersionDraft11, kVersionDraft12));
 } // namespace moxygen::test

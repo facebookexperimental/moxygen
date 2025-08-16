@@ -38,7 +38,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
       uint64_t subgroupID = 0,
       uint8_t priority = 0)
       : callback_(callback),
-        streamType_(StreamType::SUBGROUP_HEADER),
+        streamType_(StreamType::SUBGROUP_HEADER_SG),
         header_(TrackAlias(0), groupID, subgroupID, 0, priority) {}
 
   void setFetchGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {

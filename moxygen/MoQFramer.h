@@ -186,7 +186,6 @@ enum class DatagramType : uint64_t {
 };
 
 enum class StreamType : uint64_t {
-  SUBGROUP_HEADER = 0x4, // draft-10 and earlier
   FETCH_HEADER = 0x5,
   SUBGROUP_HEADER_MASK_V11 = 0x8,
   SUBGROUP_HEADER_SG_ZERO_V11 = 0x8,
@@ -288,13 +287,12 @@ constexpr uint64_t kVersionDraft08_exp7 = 0xff080007; // Draft 8 Error Codes
 constexpr uint64_t kVersionDraft08_exp8 = 0xff080008; // Draft 8 Sub Done codes
 constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
 
-// kVersionDraftCurrent is only used in test cases. Elsewhere, we use the more
-// specific constants.
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft08;
 constexpr uint64_t kVersionDraft09 = 0xff000009;
 constexpr uint64_t kVersionDraft10 = 0xff00000A;
 constexpr uint64_t kVersionDraft11 = 0xff00000B;
 constexpr uint64_t kVersionDraft12 = 0xff00000C;
+
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft11;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -980,9 +978,7 @@ inline StreamType getSubgroupStreamType(
     bool includeExtensions,
     bool endOfGroup) {
   auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion < 11) {
-    return StreamType::SUBGROUP_HEADER;
-  } else if (majorVersion == 11) {
+  if (majorVersion == 11) {
     return StreamType(
         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11) |
         (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
@@ -1003,15 +999,7 @@ inline folly::Optional<SubgroupOptions> getSubgroupOptions(
   SubgroupOptions options;
   auto streamTypeInt = folly::to_underlying(streamType);
   auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion < 11) {
-    if (streamType != StreamType::SUBGROUP_HEADER) {
-      return folly::none;
-    }
-    options.hasExtensions = false;
-    options.subgroupIDFormat = SubgroupIDFormat::Present;
-    options.hasEndOfGroup = false;
-    return options;
-  } else if (majorVersion == 11) {
+  if (majorVersion == 11) {
     if ((streamTypeInt &
          folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0) {
       return folly::none;
@@ -1045,11 +1033,7 @@ inline DatagramType getDatagramType(
     bool includeExtensions,
     bool endOfGroup) {
   auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion < 11) {
-    return (
-        status ? DatagramType::OBJECT_DATAGRAM_STATUS_V11
-               : DatagramType::OBJECT_DATAGRAM_EXT_V11);
-  } else if (majorVersion == 11) {
+  if (majorVersion == 11) {
     return DatagramType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0));
   } else if (status) {
     return DatagramType(

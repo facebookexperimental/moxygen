@@ -174,14 +174,14 @@ void MoQObjectStreamCodec::onIngress(
         if (streamType_ != StreamType::FETCH_HEADER) {
           auto options = getSubgroupOptions(*version, streamType_);
           if (options) {
-            streamType_ = StreamType::SUBGROUP_HEADER;
+            streamType_ = StreamType::SUBGROUP_HEADER_SG;
             subgroupFormat_ = options->subgroupIDFormat;
             includeExtensions_ = options->hasExtensions;
             parseState_ = ParseState::OBJECT_STREAM;
           } // else unknown stream type
         }
         switch (streamType_) {
-          case StreamType::SUBGROUP_HEADER:
+          case StreamType::SUBGROUP_HEADER_SG:
             parseState_ = ParseState::OBJECT_STREAM;
             break;
           case StreamType::FETCH_HEADER:
@@ -246,7 +246,7 @@ void MoQObjectStreamCodec::onIngress(
           res = moqFrameParser_.parseFetchObjectHeader(
               newCursor, curObjectHeader_);
         } else {
-          DCHECK(streamType_ == StreamType::SUBGROUP_HEADER);
+          DCHECK(streamType_ == StreamType::SUBGROUP_HEADER_SG);
           res = moqFrameParser_.parseSubgroupObjectHeader(
               newCursor, curObjectHeader_, subgroupFormat_, includeExtensions_);
         }
@@ -364,8 +364,13 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
   XLOG(DBG4) << "parsing frame type=" << folly::to_underlying(curFrameType_);
   if (!seenSetup_) {
     switch (curFrameType_) {
-      case FrameType::CLIENT_SETUP:
-      case FrameType::LEGACY_CLIENT_SETUP: {
+      case FrameType::LEGACY_CLIENT_SETUP:
+      case FrameType::LEGACY_SERVER_SETUP:
+        XLOG(WARN) << "Skipping unexpected legacy setup frame "
+                   << curFrameType_;
+        cursor.skip(curFrameLength_);
+        break;
+      case FrameType::CLIENT_SETUP: {
         if (dir_ == Direction::CLIENT) {
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }
@@ -380,8 +385,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
         }
         break;
       }
-      case FrameType::SERVER_SETUP:
-      case FrameType::LEGACY_SERVER_SETUP: {
+      case FrameType::SERVER_SETUP: {
         if (dir_ == Direction::SERVER) {
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
         }

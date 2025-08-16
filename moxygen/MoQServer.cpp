@@ -80,7 +80,7 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(
   uint64_t negotiatedVersion = 0;
   // Iterate over supported versions and set the highest version within the
   // range
-  constexpr uint64_t kVersionMin = kVersionDraft09;
+  constexpr uint64_t kVersionMin = kVersionDraft11;
   constexpr uint64_t kVersionMax = kVersionDraft12;
   uint64_t highestVersion = 0;
   for (const auto& version : setup.supportedVersions) {

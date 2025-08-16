@@ -210,7 +210,7 @@ class MoQObjectStreamCodec : public MoQCodec {
     // OBJECT_PAYLOAD_NO_LENGTH
   };
   ParseState parseState_{ParseState::STREAM_HEADER_TYPE};
-  StreamType streamType_{StreamType::SUBGROUP_HEADER};
+  StreamType streamType_{StreamType::SUBGROUP_HEADER_SG};
   SubgroupIDFormat subgroupFormat_{SubgroupIDFormat::Present};
   bool includeExtensions_{true};
   ObjectCallback* callback_;

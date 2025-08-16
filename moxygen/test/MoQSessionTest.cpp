@@ -299,7 +299,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
   // GCC barfs when using struct brace initializers inside a coroutine?
   // Helper function to make ClientSetup with MAX_REQUEST_ID
-  ClientSetup getClientSetup(uint64_t initialMaxRequestID = 2) {
+  ClientSetup getClientSetup(uint64_t initialMaxRequestID) {
     ClientSetup setup{
         .supportedVersions = getClientSupportedVersions(),
         .params = {
@@ -333,7 +333,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   }
 
   uint8_t getRequestIDMultiplier() const {
-    return GetParam().serverVersion >= kVersionDraft11 ? 2 : 1;
+    return 2;
   }
 
   using TestLogicFn = std::function<void(
@@ -373,8 +373,6 @@ INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,
     testing::Values(
-        VersionParams{{kVersionDraft09}, kVersionDraft09},
-        VersionParams{{kVersionDraft10}, kVersionDraft10},
         VersionParams{{kVersionDraft11}, kVersionDraft11},
         VersionParams{{kVersionDraft12}, kVersionDraft12}));
 
@@ -487,12 +485,8 @@ INSTANTIATE_TEST_SUITE_P(
     MoQVersionNegotiationTest,
     MoQVersionNegotiationTest,
     testing::Values(
-        VersionParams{{kVersionDraft09}, kVersionDraft09},
-        VersionParams{{kVersionDraft10}, kVersionDraft10},
         VersionParams{{kVersionDraft11}, kVersionDraft11},
-        VersionParams{{kVersionDraft12}, kVersionDraft12},
-        VersionParams{{kVersionDraft10, kVersionDraft11}, kVersionDraft10},
-        VersionParams{{kVersionDraft10, kVersionDraft11}, kVersionDraft11}));
+        VersionParams{{kVersionDraft12}, kVersionDraft12}));
 
 TEST_P(MoQVersionNegotiationTest, Setup) {
   folly::coro::blockingWait(setupMoQSession(), getExecutor());
@@ -512,8 +506,8 @@ CO_TEST_P_X(CurrentVersionOnly, SetupTimeout) {
 CO_TEST_P_X(CurrentVersionOnly, ServerSetupFail) {
   failServerSetup_ = true;
   clientSession_->start();
-  auto serverSetup =
-      co_await co_awaitTry(clientSession_->setup(getClientSetup()));
+  auto serverSetup = co_await co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -546,16 +540,16 @@ INSTANTIATE_TEST_SUITE_P(
 CO_TEST_P_X(InvalidServerVersionTest, InvalidServerVersion) {
   clientSession_->start();
   co_await folly::coro::co_reschedule_on_current_executor;
-  auto serverSetup =
-      co_await co_awaitTry(clientSession_->setup(getClientSetup()));
+  auto serverSetup = co_await co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
 CO_TEST_P_X(InvalidServerVersionTest, ServerSetupUnsupportedVersion) {
   clientSession_->start();
-  auto serverSetup =
-      co_await co_awaitTry(clientSession_->setup(getClientSetup()));
+  auto serverSetup = co_await co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

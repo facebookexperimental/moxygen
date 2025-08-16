@@ -53,31 +53,22 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   size_t frameLength(folly::io::Cursor& cursor, bool checkAdvance = true) {
-    if (getDraftMajorVersion(GetParam()) >= 11) {
-      if (!cursor.canAdvance(2)) {
-        throw TestUnderflow();
-      }
-      size_t res = cursor.readBE<uint16_t>();
-      if (checkAdvance && !cursor.canAdvance(res)) {
-        throw TestUnderflow();
-      }
-      return res;
-    } else {
-      auto res = quic::decodeQuicInteger(cursor);
-      if (res && (!checkAdvance || cursor.canAdvance(res->first))) {
-        return res->first;
-      } else {
-        throw TestUnderflow();
-      }
+    if (!cursor.canAdvance(2)) {
+      throw TestUnderflow();
     }
+    size_t res = cursor.readBE<uint16_t>();
+    if (checkAdvance && !cursor.canAdvance(res)) {
+      throw TestUnderflow();
+    }
+    return res;
   }
 
   void parseAll(folly::io::Cursor& cursor, bool eom) {
-    skip(cursor, (getDraftMajorVersion(GetParam()) >= 11) ? 1 : 2);
+    skip(cursor, 1);
     auto r1 = parser_.parseClientSetup(cursor, frameLength(cursor));
     testUnderflowResult(r1);
 
-    skip(cursor, (getDraftMajorVersion(GetParam()) >= 11) ? 1 : 2);
+    skip(cursor, 1);
     auto r2 = parser_.parseServerSetup(cursor, frameLength(cursor));
     testUnderflowResult(r2);
 
@@ -336,7 +327,7 @@ TEST(MoQFramerTest, ParseServerSetupQuicIntegerLength) {
   bool error = false;
 
   // Encode the selected version
-  uint64_t version = kVersionDraft10;
+  uint64_t version = kVersionDraftCurrent;
   writeVarint(writeBuf, version, size, error);
 
   // Encode the number of parameters
@@ -374,7 +365,7 @@ TEST(MoQFramerTest, ParseServerSetupLengthParseParam) {
   bool error = false;
 
   // Encode the selected version
-  uint64_t version = kVersionDraft10;
+  uint64_t version = kVersionDraftCurrent;
   writeVarint(writeBuf, version, size, error);
 
   // Encode the number of parameters
@@ -691,9 +682,7 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
     auto buffer = writeBuf.move();
     auto cursor = folly::io::Cursor(buffer.get());
     auto frameType = quic::decodeQuicInteger(cursor);
-    uint64_t expectedFrameType = (getDraftMajorVersion(GetParam()) >= 11)
-        ? folly::to_underlying(FrameType::CLIENT_SETUP)
-        : folly::to_underlying(FrameType::LEGACY_CLIENT_SETUP);
+    uint64_t expectedFrameType = folly::to_underlying(FrameType::CLIENT_SETUP);
     EXPECT_EQ(frameType->first, expectedFrameType);
     auto parseClientSetupResult =
         parser_.parseClientSetup(cursor, frameLength(cursor));
@@ -750,7 +739,7 @@ TEST(MoQFramerTest, ParseClientSetupVersionUnderflow) {
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, 2, size, error);
-  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
   writeBuf.append("\xC0\x00", 2);
 
   auto buffer = writeBuf.move();
@@ -768,7 +757,7 @@ TEST(MoQFramerTest, ParseClientSetupNoOfParamsUnderflow) {
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
 
   writeBuf.append("\xC0\x00", 2);
 
@@ -787,7 +776,7 @@ TEST(MoQFramerTest, ParseClientSetupParamsUnderflowString) {
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
   writeVarint(writeBuf, 1, size, error);
   writeVarint(writeBuf, folly::to_underlying(SetupKey::PATH), size, error);
 
@@ -810,7 +799,7 @@ TEST(MoQFramerTest, ParseClientSetupParamsIncorrectLength) {
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
   writeVarint(writeBuf, 1, size, error);
   writeVarint(writeBuf, folly::to_underlying(SetupKey::PATH), size, error);
 
@@ -825,29 +814,6 @@ TEST(MoQFramerTest, ParseClientSetupParamsIncorrectLength) {
       parser.parseClientSetup(cursor, buffer->computeChainDataLength() + 1);
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
-}
-
-TEST(MoQFramerTest, ParseClientSetupParamsUnderflowOlderVers) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-  writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraft10, size, error);
-  writeVarint(writeBuf, 1, size, error);
-  writeVarint(
-      writeBuf, folly::to_underlying(SetupKey::MAX_REQUEST_ID), size, error);
-
-  // signifying 4 byte string but append only 2 bytes to trigger underflow
-  writeVarint(writeBuf, 2, size, error);
-  writeBuf.append("\x80\x00", 2);
-  auto buffer = writeBuf.move();
-  folly::io::Cursor cursor(buffer.get());
-
-  MoQFrameParser parser;
-  auto result =
-      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
-  EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
 }
 
 TEST(MoQFramerTest, ParseServerSetupVersionUnderflow) {
@@ -869,7 +835,7 @@ TEST(MoQFramerTest, ParseServerSetupNoOfParamsUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
-  writeVarint(writeBuf, kVersionDraft10, size, error);
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
 
   writeBuf.append("\xC0\x00", 2);
 
@@ -917,7 +883,7 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
 
   auto streamType = getSubgroupStreamType(
       GetParam(), SubgroupIDFormat::FirstObject, false, false);
-  auto hasExtensions = getDraftMajorVersion(GetParam()) < 11;
+  auto hasExtensions = (folly::to_underlying(streamType) & 0x1);
   auto parsedST = parseStreamType(cursor);
   EXPECT_EQ(parsedST, streamType)
       << GetParam() << " " << folly::to_underlying(parsedST) << " "
@@ -945,15 +911,13 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   TrackStatusRequest tsr;
   tsr.fullTrackName = FullTrackName({TrackNamespace({"hello"}), "world"});
   std::vector<TrackRequestParameter> params;
-  if (getDraftMajorVersion(GetParam()) >= 11) {
-    // Add some parameters to the TrackStatusRequest.
-    params.push_back(
-        {getAuthorizationParamKey(GetParam()),
-         writer_.encodeTokenValue(0, "stampolli"),
-         0,
-         {}});
-    params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
-  }
+  // Add some parameters to the TrackStatusRequest.
+  params.push_back(
+      {getAuthorizationParamKey(GetParam()),
+       writer_.encodeTokenValue(0, "stampolli"),
+       0,
+       {}});
+  params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
   tsr.params = params;
   auto writeResult = writer_.writeTrackStatusRequest(writeBuf, tsr);
   EXPECT_TRUE(writeResult.hasValue());
@@ -969,15 +933,12 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
   EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
   EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
-  if (getDraftMajorVersion(GetParam()) >= 11) {
-    EXPECT_EQ(parseResult->params.size(), 2);
-    EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
-    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
-    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
-    EXPECT_EQ(
-        parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
-    EXPECT_EQ(parseResult->params[1].asUint64, 999);
-  }
+  EXPECT_EQ(parseResult->params.size(), 2);
+  EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
+  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
+  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
+  EXPECT_EQ(parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
+  EXPECT_EQ(parseResult->params[1].asUint64, 999);
 }
 
 TEST_P(MoQFramerTest, ParseTrackStatus) {
@@ -1006,25 +967,16 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS));
   auto parseResult = parser_.parseTrackStatus(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
-  if (getDraftMajorVersion(GetParam()) >= 11) {
-    EXPECT_EQ(parseResult->requestID, 7);
-  } else {
-    EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
-    EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
-    EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
-  }
+  EXPECT_EQ(parseResult->requestID, 7);
   EXPECT_EQ(parseResult->largestGroupAndObject->group, 19);
   EXPECT_EQ(parseResult->largestGroupAndObject->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
-  if (getDraftMajorVersion(GetParam()) >= 11) {
-    EXPECT_EQ(parseResult->params.size(), 2);
-    EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
-    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
-    EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
-    EXPECT_EQ(
-        parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
-    EXPECT_EQ(parseResult->params[1].asUint64, 999);
-  }
+  EXPECT_EQ(parseResult->params.size(), 2);
+  EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
+  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
+  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
+  EXPECT_EQ(parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
+  EXPECT_EQ(parseResult->params[1].asUint64, 999);
 }
 
 static std::string encodeToken(
@@ -1297,12 +1249,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(
-        kVersionDraft08,
-        kVersionDraft09,
-        kVersionDraft10,
-        kVersionDraft11,
-        kVersionDraft12));
+    ::testing::Values(kVersionDraft11, kVersionDraft12));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,

@@ -1742,17 +1742,13 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
-  // TODO: Potentially rethink what we're doing here. If the client
-  // supports any version < 11, we send a < 11 setup.
+  // Choose serialization version based on supported v11 vs v12
   uint64_t setupSerializationVersion = kVersionDraft12;
   for (auto supportedVersion : setup.supportedVersions) {
     auto majorVersion = getDraftMajorVersion(supportedVersion);
     if (majorVersion < 12) {
       setupSerializationVersion = kVersionDraft11;
-      if (majorVersion < 11) {
-        setupSerializationVersion = supportedVersion;
-        break;
-      }
+      break;
     }
   }
   // This sets the receive token cache size, but it's necesarily empty
@@ -1797,9 +1793,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   setupComplete_ = true;
   XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
-  if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
-    nextExpectedPeerRequestID_ = 0;
-  }
+
   co_return *serverSetup;
 }
 
@@ -1843,12 +1837,21 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
+
+  // Check if selected version is < 11 and handle appropriately
+  auto majorVersion = getDraftMajorVersion(serverSetup->selectedVersion);
+  if (majorVersion < 11) {
+    XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
+              << " (major=" << majorVersion
+              << ") is not supported. Minimum version is 11. sess=" << this;
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+    return;
+  }
+
   initializeNegotiatedVersion(serverSetup->selectedVersion);
   XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
-  if (getDraftMajorVersion(serverSetup->selectedVersion) < 11) {
-    nextRequestID_ = 0;
-  }
+
   // This sets the receive cache size and may evict received tokens
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
@@ -2433,8 +2436,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     return;
   }
   // TODO: Check for duplicate alias
-  bool forward = (getDraftMajorVersion(*negotiatedVersion_) < 11) ||
-      subscribeRequest.forward;
+  bool forward = subscribeRequest.forward;
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
       subscribeRequest.fullTrackName,
@@ -3081,10 +3083,7 @@ void MoQSession::onAnnounce(Announce ann) {
         ann, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
   }
 
-  if (closeSessionIfRequestIDInvalid(
-          ann.requestID,
-          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
-          true)) {
+  if (closeSessionIfRequestIDInvalid(ann.requestID, false, true)) {
     return;
   }
 
@@ -3134,29 +3133,8 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
   }
 }
 
-void MoQSession::maybeAddLegacyRequestIDMapping(
-    const FullTrackName& ftn,
-    RequestID id) {
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) {
-    return;
-  } else {
-    fullTrackNameToRequestID_[ftn] = id;
-  }
-}
-
 RequestID MoQSession::getRequestID(RequestID id, const FullTrackName& ftn) {
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 11) {
-    return id;
-  } else {
-    auto it = fullTrackNameToRequestID_.find(ftn);
-    if (it == fullTrackNameToRequestID_.end()) {
-      return std::numeric_limits<uint64_t>::max();
-    } else {
-      auto ret = it->second;
-      fullTrackNameToRequestID_.erase(it);
-      return ret;
-    }
-  }
+  return id;
 }
 
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
@@ -3273,10 +3251,7 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
     logger_->logSubscribeAnnounces(
         sa, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
   }
-  if (closeSessionIfRequestIDInvalid(
-          sa.requestID,
-          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
-          true)) {
+  if (closeSessionIfRequestIDInvalid(sa.requestID, false, true)) {
     return;
   }
   if (!publishHandler_) {
@@ -3411,9 +3386,7 @@ void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
         ControlMessageType::PARSED);
   }
   if (closeSessionIfRequestIDInvalid(
-          trackStatusRequest.requestID,
-          getDraftMajorVersion(*getNegotiatedVersion()) < 11,
-          true)) {
+          trackStatusRequest.requestID, false, true)) {
     return;
   }
   if (!publishHandler_) {
@@ -3470,9 +3443,7 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
              << "sess=" << this;
   aliasifyAuthTokens(trackStatusRequest.params);
-  trackStatusRequest.requestID = getNextRequestID(/*legacyAction=*/true);
-  maybeAddLegacyRequestIDMapping(
-      trackStatusRequest.fullTrackName, trackStatusRequest.requestID);
+  trackStatusRequest.requestID = getNextRequestID();
 
   auto res = moqFrameWriter_.writeTrackStatusRequest(
       controlWriteBuf_, trackStatusRequest);
@@ -3576,9 +3547,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
   };
   auto trackNamespace = ann.trackNamespace;
   aliasifyAuthTokens(ann.params);
-  ann.requestID = getNextRequestID(/*legacyAction=*/true);
-  maybeAddLegacyRequestIDMapping(
-      FullTrackName({ann.trackNamespace, "announce"}), ann.requestID);
+  ann.requestID = getNextRequestID();
   auto res = moqFrameWriter_.writeAnnounce(controlWriteBuf_, ann);
   if (!res) {
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
@@ -3643,7 +3612,7 @@ Subscriber::PublishResult MoQSession::publish(
   };
 
   aliasifyAuthTokens(pub.params);
-  pub.requestID = getNextRequestID(/*legacyAction=*/false);
+  pub.requestID = getNextRequestID();
   pub.trackAlias = TrackAlias(pub.requestID.value);
   XLOG(DBG1) << "publish() got requestID=" << pub.requestID
              << " nextRequestID_=" << nextRequestID_
@@ -3848,9 +3817,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
              << " sess=" << this;
   auto trackNamespace = sa.trackNamespacePrefix;
   aliasifyAuthTokens(sa.params);
-  sa.requestID = getNextRequestID(/*legacyAction=*/true);
-  maybeAddLegacyRequestIDMapping(
-      FullTrackName({sa.trackNamespacePrefix, "subannounce"}), sa.requestID);
+  sa.requestID = getNextRequestID();
 
   auto res = moqFrameWriter_.writeSubscribeAnnounces(controlWriteBuf_, sa);
   if (!res) {
@@ -3940,10 +3907,7 @@ void MoQSession::unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn) {
   controlWriteEvent_.signal();
 }
 
-RequestID MoQSession::getNextRequestID(bool legacyAction) {
-  if (legacyAction && getDraftMajorVersion(*getNegotiatedVersion()) < 11) {
-    return legacyNextRequestID_++;
-  }
+RequestID MoQSession::getNextRequestID() {
   if (nextRequestID_ >= peerMaxRequestID_) {
     XLOG(WARN) << "Issuing request that will fail; nextRequestID_="
                << nextRequestID_ << " peerMaxRequestID_=" << peerMaxRequestID_
@@ -4578,7 +4542,7 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
     return false;
   }
 
-  if (parityMatters && getDraftMajorVersion(*getNegotiatedVersion()) >= 11 &&
+  if (parityMatters &&
       ((requestID.value % 2) == 1) !=
           (dir_ == MoQControlCodec::Direction::CLIENT)) {
     XLOG(ERR) << "Invalid requestID parity: " << requestID << " sess=" << this;
@@ -4648,13 +4612,7 @@ void MoQSession::aliasifyAuthTokens(
   if (!version) {
     return;
   }
-  auto majorVersion = getDraftMajorVersion(*version);
-  if (majorVersion < 11) {
-    XLOG(DBG4)
-        << "Not appliying aliasifyAuthTokens since version detected is < 11 ("
-        << majorVersion << ")";
-    return;
-  }
+
   auto authParamKey = getAuthorizationParamKey(*version);
   for (auto it = params.begin(); it != params.end(); ++it) {
     if (it->key == authParamKey) {
