@@ -399,19 +399,7 @@ struct TrackIdentifierHash {
   }
 };
 
-inline uint64_t value(const TrackIdentifier& trackIdentifier) {
-  return std::visit(
-      [](const auto& value) {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, TrackAlias>) {
-          return value.value;
-        } else if constexpr (std::is_same_v<T, RequestID>) {
-          return value.value;
-        }
-        return std::numeric_limits<uint64_t>::max();
-      },
-      trackIdentifier);
-}
+uint64_t value(const TrackIdentifier& trackIdentifier);
 
 struct Extension {
   // Even type => holds value in intValue
@@ -474,9 +462,7 @@ struct Extension {
 };
 
 using Extensions = std::vector<Extension>;
-inline Extensions noExtensions() {
-  return Extensions();
-}
+Extensions noExtensions();
 struct ObjectHeader {
   ObjectHeader() = default;
   ObjectHeader(
@@ -943,18 +929,10 @@ struct Fetch {
   std::variant<StandaloneFetch, JoiningFetch> args;
 };
 
-inline std::pair<StandaloneFetch*, JoiningFetch*> fetchType(Fetch& fetch) {
-  auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
-  auto joining = std::get_if<JoiningFetch>(&fetch.args);
-  return {standalone, joining};
-}
+std::pair<StandaloneFetch*, JoiningFetch*> fetchType(Fetch& fetch);
 
-inline std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
-    const Fetch& fetch) {
-  auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
-  auto joining = std::get_if<JoiningFetch>(&fetch.args);
-  return {standalone, joining};
-}
+std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
+    const Fetch& fetch);
 
 struct FetchCancel {
   RequestID requestID;
@@ -1059,28 +1037,7 @@ inline folly::Optional<SubgroupOptions> getSubgroupOptions(
   return options;
 }
 
-inline bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
-  auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion < 11) {
-    return datagramType ==
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_NO_EXT_V11) ||
-        datagramType ==
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_V11) ||
-        datagramType ==
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_V11);
-  } else if (majorVersion == 11) {
-    return datagramType <=
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11);
-  } else {
-    return (
-        datagramType <=
-            folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_EOG) ||
-        (datagramType >=
-             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) &&
-         datagramType <=
-             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT)));
-  }
-}
+bool isValidDatagramType(uint64_t version, uint64_t datagramType);
 
 inline DatagramType getDatagramType(
     uint64_t version,

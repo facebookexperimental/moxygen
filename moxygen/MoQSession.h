@@ -52,21 +52,9 @@ class MoQSession : public Subscriber,
     std::shared_ptr<MoQSession> session;
   };
 
-  static std::shared_ptr<MoQSession> getRequestSession() {
-    auto reqData =
-        folly::RequestContext::get()->getContextData(sessionRequestToken());
-    XCHECK(reqData);
-    auto sessionData = dynamic_cast<MoQSessionRequestData*>(reqData);
-    XCHECK(sessionData);
-    XCHECK(sessionData->session);
-    return sessionData->session;
-  }
+  static std::shared_ptr<MoQSession> getRequestSession();
 
-  void setServerMaxTokenCacheSizeGuess(size_t size) {
-    if (!setupComplete_ && dir_ == MoQControlCodec::Direction::CLIENT) {
-      tokenCache_.setMaxSize(size);
-    }
-  }
+  void setServerMaxTokenCacheSizeGuess(size_t size);
 
   class ServerSetupCallback {
    public:
@@ -78,42 +66,17 @@ class MoQSession : public Subscriber,
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      MoQExecutor* exec)
-      : dir_(MoQControlCodec::Direction::CLIENT),
-        wt_(wt),
-        exec_(exec),
-        nextRequestID_(0),
-        nextExpectedPeerRequestID_(1),
-        controlCodec_(dir_, this) {}
+      MoQExecutor* exec);
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
-      MoQExecutor* exec)
-      : dir_(MoQControlCodec::Direction::SERVER),
-        wt_(wt),
-        exec_(exec),
-        nextRequestID_(1),
-        nextExpectedPeerRequestID_(0),
-        serverSetupCallback_(&serverSetupCallback),
-        controlCodec_(dir_, this) {}
+      MoQExecutor* exec);
 
-  void setMoqSettings(MoQSettings settings) {
-    moqSettings_ = settings;
-  }
-
-  void setVersion(uint64_t version) {
-    negotiatedVersion_ = version;
-    setupComplete_ = true;
-  }
-
-  void setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
-    publishHandler_ = std::move(publishHandler);
-  }
-
-  void setSubscribeHandler(std::shared_ptr<Subscriber> subscribeHandler) {
-    subscribeHandler_ = std::move(subscribeHandler);
-  }
+  void setVersion(uint64_t version);
+  void setMoqSettings(MoQSettings settings);
+  void setPublishHandler(std::shared_ptr<Publisher> publishHandler);
+  void setSubscribeHandler(std::shared_ptr<Subscriber> subscribeHandler);
 
   Subscriber::PublishResult publish(
       PublishRequest pub,
@@ -148,23 +111,13 @@ class MoQSession : public Subscriber,
 
   folly::coro::Task<ServerSetup> setup(ClientSetup setup);
 
-  void setMaxConcurrentRequests(uint64_t maxConcurrent) {
-    if (maxConcurrent > maxConcurrentRequests_) {
-      auto delta = maxConcurrent - maxConcurrentRequests_;
-      maxRequestID_ += delta;
-      sendMaxRequestID(/*signalWriteLoop=*/true);
-    }
-  }
+  void setMaxConcurrentRequests(uint64_t maxConcurrent);
 
   uint64_t maxRequestID() const {
     return maxRequestID_;
   }
 
-  static GroupOrder resolveGroupOrder(
-      GroupOrder pubOrder,
-      GroupOrder subOrder) {
-    return subOrder == GroupOrder::Default ? pubOrder : subOrder;
-  }
+  static GroupOrder resolveGroupOrder(GroupOrder pubOrder, GroupOrder subOrder);
 
   folly::coro::Task<TrackStatusResult> trackStatus(
       TrackStatusRequest trackStatusRequest) override;

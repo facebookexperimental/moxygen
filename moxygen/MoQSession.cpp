@@ -1497,6 +1497,29 @@ class MoQSession::PublisherAnnounceHandle : public Subscriber::AnnounceHandle {
   std::shared_ptr<MoQSession> session_;
 };
 
+// Constructors
+MoQSession::MoQSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    MoQExecutor* exec)
+    : dir_(MoQControlCodec::Direction::CLIENT),
+      wt_(wt),
+      exec_(exec),
+      nextRequestID_(0),
+      nextExpectedPeerRequestID_(1),
+      controlCodec_(dir_, this) {}
+
+MoQSession::MoQSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    ServerSetupCallback& serverSetupCallback,
+    MoQExecutor* exec)
+    : dir_(MoQControlCodec::Direction::SERVER),
+      wt_(wt),
+      exec_(exec),
+      nextRequestID_(1),
+      nextExpectedPeerRequestID_(0),
+      serverSetupCallback_(&serverSetupCallback),
+      controlCodec_(dir_, this) {}
+
 MoQSession::~MoQSession() {
   cleanup();
   XLOG(DBG1) << __func__ << " sess=" << this;
@@ -4667,6 +4690,55 @@ void MoQSession::aliasifyAuthTokens(
       }
     }
   }
+}
+
+// Static methods
+std::shared_ptr<MoQSession> MoQSession::getRequestSession() {
+  auto reqData =
+      folly::RequestContext::get()->getContextData(sessionRequestToken());
+  XCHECK(reqData);
+  auto sessionData = dynamic_cast<MoQSessionRequestData*>(reqData);
+  XCHECK(sessionData);
+  XCHECK(sessionData->session);
+  return sessionData->session;
+}
+
+GroupOrder MoQSession::resolveGroupOrder(
+    GroupOrder pubOrder,
+    GroupOrder subOrder) {
+  return subOrder == GroupOrder::Default ? pubOrder : subOrder;
+}
+
+void MoQSession::setServerMaxTokenCacheSizeGuess(size_t size) {
+  if (!setupComplete_ && dir_ == MoQControlCodec::Direction::CLIENT) {
+    tokenCache_.setMaxSize(size);
+  }
+}
+
+void MoQSession::setMaxConcurrentRequests(uint64_t maxConcurrent) {
+  if (maxConcurrent > maxConcurrentRequests_) {
+    auto delta = maxConcurrent - maxConcurrentRequests_;
+    maxRequestID_ += delta;
+    sendMaxRequestID(/*signalWriteLoop=*/true);
+  }
+}
+
+void MoQSession::setVersion(uint64_t version) {
+  negotiatedVersion_ = version;
+  setupComplete_ = true;
+}
+
+void MoQSession::setMoqSettings(MoQSettings settings) {
+  moqSettings_ = settings;
+}
+
+void MoQSession::setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
+  publishHandler_ = std::move(publishHandler);
+}
+
+void MoQSession::setSubscribeHandler(
+    std::shared_ptr<Subscriber> subscribeHandler) {
+  subscribeHandler_ = std::move(subscribeHandler);
 }
 
 } // namespace moxygen
