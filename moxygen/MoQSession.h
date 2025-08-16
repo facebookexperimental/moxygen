@@ -11,11 +11,8 @@
 #include <moxygen/events/MoQExecutor.h>
 
 #include <folly/MaybeManagedPtr.h>
-#include <folly/container/F14Set.h>
-#include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Task.h>
-#include <folly/coro/UnboundedQueue.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
@@ -23,8 +20,6 @@
 #include <moxygen/stats/MoQStats.h>
 #include "moxygen/mlog/MLogger.h"
 #include "moxygen/util/TimedBaton.h"
-
-#include <boost/variant.hpp>
 
 namespace moxygen {
 

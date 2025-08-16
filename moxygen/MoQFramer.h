@@ -7,7 +7,6 @@
 #pragma once
 
 #include <folly/Optional.h>
-#include <folly/Range.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBufQueue.h>
