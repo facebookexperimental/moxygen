@@ -89,7 +89,8 @@ class MoQFlvStreamerClient
     XLOG(INFO) << __func__;
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    folly::Executor::KeepAlive keepAlive(moqClient_->getEventBase());
+    auto keepAlive = folly::getKeepAliveToken(moqClient_->getEventBase());
+
     flv::FlvSequentialReader flvSeqReader(FLAGS_input_flv_file);
     while (moqClient_->moqSession_) {
       auto item = flvSeqReader.getNextItem();
