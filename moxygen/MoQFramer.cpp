@@ -3136,7 +3136,6 @@ const char* getFrameTypeString(FrameType type) {
       return "Unknown";
   }
   LOG(FATAL) << "Unreachable";
-  return "";
 }
 
 const char* getStreamTypeString(StreamType type) {
@@ -3155,7 +3154,6 @@ const char* getStreamTypeString(StreamType type) {
       return "Unknown";
   }
   LOG(FATAL) << "Unreachable";
-  return "";
 }
 
 const char* getObjectStatusString(ObjectStatus objectStatus) {
@@ -3175,7 +3173,6 @@ const char* getObjectStatusString(ObjectStatus objectStatus) {
       return "Unknown";
   }
   LOG(FATAL) << "Unreachable";
-  return "";
 }
 } // namespace
 
