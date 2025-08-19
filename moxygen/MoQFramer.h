@@ -7,13 +7,17 @@
 #pragma once
 
 #include <folly/Optional.h>
+#include <folly/Range.h>
+#include <folly/String.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQTokenCache.h>
 
+#include <quic/QuicException.h>
 #include <quic/codec/QuicInteger.h>
+#include <quic/folly_utils/Utils.h>
 #include <vector>
 
 namespace moxygen {

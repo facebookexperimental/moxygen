@@ -23,7 +23,7 @@ void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
   while (!connError_ && remainingLength > 0) {
     switch (parseState_) {
       case ParseState::FRAME_HEADER_TYPE: {
-        auto type = quic::decodeQuicInteger(cursor);
+        auto type = quic::follyutils::decodeQuicInteger(cursor);
         if (!type) {
           XLOG(DBG6) << __func__ << " underflow";
           connError_ = ErrorCode::PARSE_UNDERFLOW;
@@ -78,7 +78,7 @@ void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
           bytesParsed = 2;
         } else {
           // Parse the length as a varint
-          auto decodeResult = quic::decodeQuicInteger(cursor);
+          auto decodeResult = quic::follyutils::decodeQuicInteger(cursor);
           if (!decodeResult) {
             XLOG(DBG6) << __func__ << " underflow";
             connError_ = ErrorCode::PARSE_UNDERFLOW;
@@ -162,7 +162,7 @@ void MoQObjectStreamCodec::onIngress(
     switch (parseState_) {
       case ParseState::STREAM_HEADER_TYPE: {
         auto newCursor = cursor;
-        auto type = quic::decodeQuicInteger(newCursor);
+        auto type = quic::follyutils::decodeQuicInteger(newCursor);
         if (!type) {
           XLOG(DBG6) << __func__ << " underflow";
           connError_ = ErrorCode::PARSE_UNDERFLOW;

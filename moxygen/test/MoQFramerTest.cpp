@@ -22,7 +22,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   StreamType parseStreamType(folly::io::Cursor& cursor) {
-    auto frameType = quic::decodeQuicInteger(cursor);
+    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     if (!frameType) {
       throw std::runtime_error("Failed to decode frame type");
     }
@@ -30,7 +30,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   DatagramType parseDatagramType(folly::io::Cursor& cursor) {
-    auto frameType = quic::decodeQuicInteger(cursor);
+    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     if (!frameType) {
       throw std::runtime_error("Failed to decode frame type");
     }
@@ -404,7 +404,7 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     folly::io::Cursor cursor(writeBuf.front());
     auto datagramType =
         getDatagramType(GetParam(), isStatus, hasExtensions, false);
-    auto decodedType = quic::decodeQuicInteger(cursor, i);
+    auto decodedType = quic::follyutils::decodeQuicInteger(cursor, i);
     EXPECT_TRUE(decodedType.has_value());
     EXPECT_EQ(decodedType->first, folly::to_underlying(datagramType));
 
@@ -681,7 +681,7 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
         << "Failed to write client setup for maxRequestID:" << maxRequestID;
     auto buffer = writeBuf.move();
     auto cursor = folly::io::Cursor(buffer.get());
-    auto frameType = quic::decodeQuicInteger(cursor);
+    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     uint64_t expectedFrameType = folly::to_underlying(FrameType::CLIENT_SETUP);
     EXPECT_EQ(frameType->first, expectedFrameType);
     auto parseClientSetupResult =
@@ -924,7 +924,7 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
-  auto frameType = quic::decodeQuicInteger(cursor);
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
       frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_REQUEST));
   auto parseResult =
@@ -963,7 +963,7 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
-  auto frameType = quic::decodeQuicInteger(cursor);
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS));
   auto parseResult = parser_.parseTrackStatus(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
@@ -1061,7 +1061,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenTest) {
   std::vector<std::string> expectedTokenValue = {
       "abc", "def", "", "def", "xyz"};
   for (int i = 0; i < 5; ++i) {
-    auto frameType = quic::decodeQuicInteger(cursor);
+    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
     auto parseResult =
         parser_.parseSubscribeRequest(cursor, frameLength(cursor));
@@ -1118,7 +1118,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenErrorCases) {
       ErrorCode::AUTH_TOKEN_CACHE_OVERFLOW};
   // Parse and verify each token
   for (int i = 0; i < 5; ++i) {
-    auto frameType = quic::decodeQuicInteger(cursor);
+    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
     auto parseResult =
         parser_.parseSubscribeRequest(cursor, frameLength(cursor));
@@ -1177,7 +1177,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
     auto tail = writeBufs[j].move();
     folly::io::Cursor cursor(frameHeader.get());
 
-    auto frameType = quic::decodeQuicInteger(cursor);
+    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
 
     len = frameLength(cursor, false);

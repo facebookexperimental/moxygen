@@ -4467,7 +4467,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   readBuf.append(std::move(datagram));
   size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
-  auto type = quic::decodeQuicInteger(cursor);
+  auto type = quic::follyutils::decodeQuicInteger(cursor);
   if (!type) {
     XLOG(ERR) << __func__ << " Bad datagram header failed to parse type l="
               << readBuf.chainLength() << " sess=" << this;

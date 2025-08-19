@@ -225,27 +225,27 @@ std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiAACLCMetadata(
 std::unique_ptr<MoQMi::VideoH264AVCCWCPData> MoQMi::decodeMoqMiAVCCMetadata(
     const folly::IOBuf& extValue) noexcept {
   folly::io::Cursor cursor(&extValue);
-  auto seqId = quic::decodeQuicInteger(cursor);
+  auto seqId = quic::follyutils::decodeQuicInteger(cursor);
   if (!seqId) {
     return nullptr;
   }
-  auto pts = quic::decodeQuicInteger(cursor);
+  auto pts = quic::follyutils::decodeQuicInteger(cursor);
   if (!pts) {
     return nullptr;
   }
-  auto dts = quic::decodeQuicInteger(cursor);
+  auto dts = quic::follyutils::decodeQuicInteger(cursor);
   if (!dts) {
     return nullptr;
   }
-  auto timescale = quic::decodeQuicInteger(cursor);
+  auto timescale = quic::follyutils::decodeQuicInteger(cursor);
   if (!timescale) {
     return nullptr;
   }
-  auto duration = quic::decodeQuicInteger(cursor);
+  auto duration = quic::follyutils::decodeQuicInteger(cursor);
   if (!duration) {
     return nullptr;
   }
-  auto wallclock = quic::decodeQuicInteger(cursor);
+  auto wallclock = quic::follyutils::decodeQuicInteger(cursor);
   if (!wallclock) {
     return nullptr;
   }
@@ -263,31 +263,31 @@ std::unique_ptr<MoQMi::VideoH264AVCCWCPData> MoQMi::decodeMoqMiAVCCMetadata(
 std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> MoQMi::decodeMoqMiAACLCMetadata(
     const folly::IOBuf& extValue) noexcept {
   folly::io::Cursor cursor(&extValue);
-  auto seqId = quic::decodeQuicInteger(cursor);
+  auto seqId = quic::follyutils::decodeQuicInteger(cursor);
   if (!seqId) {
     return nullptr;
   }
-  auto pts = quic::decodeQuicInteger(cursor);
+  auto pts = quic::follyutils::decodeQuicInteger(cursor);
   if (!pts) {
     return nullptr;
   }
-  auto timescale = quic::decodeQuicInteger(cursor);
+  auto timescale = quic::follyutils::decodeQuicInteger(cursor);
   if (!timescale) {
     return nullptr;
   }
-  auto sampleFreq = quic::decodeQuicInteger(cursor);
+  auto sampleFreq = quic::follyutils::decodeQuicInteger(cursor);
   if (!sampleFreq) {
     return nullptr;
   }
-  auto numChannels = quic::decodeQuicInteger(cursor);
+  auto numChannels = quic::follyutils::decodeQuicInteger(cursor);
   if (!numChannels) {
     return nullptr;
   }
-  auto duration = quic::decodeQuicInteger(cursor);
+  auto duration = quic::follyutils::decodeQuicInteger(cursor);
   if (!duration) {
     return nullptr;
   }
-  auto wallclock = quic::decodeQuicInteger(cursor);
+  auto wallclock = quic::follyutils::decodeQuicInteger(cursor);
   if (!wallclock) {
     return nullptr;
   }
