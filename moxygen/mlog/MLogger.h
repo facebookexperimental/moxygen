@@ -150,13 +150,19 @@ class MLogger {
       MOQTStreamType type,
       folly::Optional<Owner> owner);
   void logObjectDatagramCreated(
+      TrackAlias trackAlias,
       const ObjectHeader& header,
       const Payload& payload);
   void logObjectDatagramParsed(
+      TrackAlias trackAlias,
       const ObjectHeader& header,
       const Payload& payload);
-  void logObjectDatagramStatusCreated(const ObjectHeader& header);
-  void logObjectDatagramStatusParsed(const ObjectHeader& header);
+  void logObjectDatagramStatusCreated(
+      TrackAlias trackAlias,
+      const ObjectHeader& header);
+  void logObjectDatagramStatusParsed(
+      TrackAlias trackAlias,
+      const ObjectHeader& header);
   void logSubgroupHeaderCreated(
       uint64_t streamId,
       TrackAlias trackAlias,
@@ -171,10 +177,12 @@ class MLogger {
       uint8_t publisherPriority);
   void logSubgroupObjectCreated(
       uint64_t streamId,
+      TrackAlias trackAlias,
       const ObjectHeader& objHeader,
       Payload payload);
   void logSubgroupObjectParsed(
       uint64_t streamId,
+      TrackAlias trackAlias,
       const ObjectHeader& objHeader,
       Payload payload);
   void logFetchHeaderCreated(

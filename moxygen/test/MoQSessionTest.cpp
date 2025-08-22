@@ -69,6 +69,9 @@ Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
 
 Subscriber::PublishResult makePublishOkResult(const auto& pub) {
   auto mockConsumer = std::make_shared<MockTrackConsumer>();
+  EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+      .WillRepeatedly(testing::Return(
+          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
 
   // Create PublishOk directly
   PublishOk publishOk{
@@ -114,6 +117,13 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     fetchCallback_ = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
     subscribeCallback_ =
         std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+
+    // Set default behavior for setTrackAlias to return success
+    ON_CALL(*subscribeCallback_, setTrackAlias(_))
+        .WillByDefault(testing::Return(
+            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    EXPECT_CALL(*subscribeCallback_, setTrackAlias(_))
+        .Times(testing::AtLeast(0));
 
     clientSubscriberStatsCallback_ = std::make_shared<MockSubscriberStats>();
     clientSession_->setSubscriberStatsCallback(clientSubscriberStatsCallback_);
@@ -360,6 +370,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   uint64_t initialMaxRequestID_{kTestMaxRequestID * getRequestIDMultiplier()};
   bool failServerSetup_{false};
   bool invalidVersion_{false};
+  TrackAlias nextAlias_{12345};
   std::shared_ptr<testing::StrictMock<MockFetchConsumer>> fetchCallback_;
   std::shared_ptr<testing::StrictMock<MockTrackConsumer>> subscribeCallback_;
   folly::coro::Baton subscribeDone_;
@@ -593,8 +604,7 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
-        ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11),
-        folly::IOBuf::copyBuffer("hello world"));
+        ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
@@ -668,7 +678,7 @@ CO_TEST_P_X(V11PlusTests, AbsoluteJoiningFetch) {
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     for (uint32_t group = 6; group < 10; group++) {
       pub->datagram(
-          ObjectHeader(kUselessAlias, group, 0, 0, 0, 11),
+          ObjectHeader(group, 0, 0, 0, 11),
           folly::IOBuf::copyBuffer("hello world"));
     }
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
@@ -1231,6 +1241,18 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
       std::make_shared<testing::StrictMock<MockTrackConsumer>>();
   auto trackPublisher3 =
       std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+  // Expect setTrackAlias to be called for each publisher and return folly::unit
+  // if called
+  EXPECT_CALL(*trackPublisher1, setTrackAlias(_))
+      .WillRepeatedly(testing::Return(
+          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*trackPublisher2, setTrackAlias(_))
+      .WillRepeatedly(testing::Return(
+          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*trackPublisher3, setTrackAlias(_))
+      .WillRepeatedly(testing::Return(
+          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+
   EXPECT_CALL(
       *clientSubscriberStatsCallback_,
       onSubscribeError(SubscribeErrorCode::UNAUTHORIZED));
@@ -1276,11 +1298,9 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
-        ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11),
-        folly::IOBuf::copyBuffer("hello world"));
+        ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
     pub->datagram(
-        ObjectHeader(kUselessAlias, 0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST),
-        nullptr);
+        ObjectHeader(0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST), nullptr);
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
@@ -1358,11 +1378,9 @@ CO_TEST_P_X(V11PlusTests, SubscribeForwardingFalse) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     auto pubResult1 = pub->datagram(
-        ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11),
-        folly::IOBuf::copyBuffer("hello world"));
+        ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
     EXPECT_TRUE(pubResult1.hasError());
-    auto pubResult2 =
-        pub->objectStream(ObjectHeader(kUselessAlias, 0, 0, 1, 0, 11), nullptr);
+    auto pubResult2 = pub->objectStream(ObjectHeader(0, 0, 1, 0, 11), nullptr);
     EXPECT_TRUE(pubResult2.hasError());
     auto pubResult3 = pub->beginSubgroup(0, 0, 0);
     EXPECT_TRUE(pubResult3.hasError());
@@ -1464,8 +1482,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
       EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
           .Times(2);
       pub->objectStream(
-          ObjectHeader(kUselessAlias, 0, 0, 0, 0, 10),
-          moxygen::test::makeBuf(10));
+          ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
       auto sgp = pub->beginSubgroup(0, 1, 0).value();
       sgp->object(1, moxygen::test::makeBuf(10));
       sgp->object(2, moxygen::test::makeBuf(10), noExtensions(), true);
@@ -1515,9 +1532,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneAPIErrors) {
     EXPECT_EQ(
         pub->awaitStreamCredit().error().code, MoQPublishError::API_ERROR);
     EXPECT_EQ(
-        pub->datagram(
-               ObjectHeader(kUselessAlias, 2, 2, 2, 2, 10),
-               moxygen::test::makeBuf(10))
+        pub->datagram(ObjectHeader(2, 2, 2, 2, 10), moxygen::test::makeBuf(10))
             .error()
             .code,
         MoQPublishError::API_ERROR);
@@ -2238,9 +2253,9 @@ CO_TEST_P_X(V12PlusTests, SubscribeOKAfterSubgroup) {
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
         EXPECT_CALL(
             *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+        pub->setTrackAlias(TrackAlias(nextAlias_.value++));
         auto pubResult = pub->objectStream(
-            ObjectHeader(TrackAlias(0), 0, 0, 0, 0, 10),
-            moxygen::test::makeBuf(10));
+            ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
         EXPECT_FALSE(pubResult.hasError());
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
@@ -2629,6 +2644,11 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
           [](PublishRequest actualPub,
              std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
             auto mockConsumer = std::make_shared<MockTrackConsumer>();
+            // Set default behavior for setTrackAlias to return success
+            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                .WillRepeatedly(testing::Return(
+                    folly::Expected<folly::Unit, MoQPublishError>(
+                        folly::unit)));
 
             // Create the PublishOk directly instead of using a coroutine
             PublishOk expectedOk{
@@ -2906,8 +2926,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
     reqID = sub.requestID;
     // Publish a datagram
     pub->datagram(
-        ObjectHeader(kUselessAlias, 0, 0, 0, 0, 11),
-        folly::IOBuf::copyBuffer("hello world"));
+        ObjectHeader(0, 0, 0, 0, 11), folly::IOBuf::copyBuffer("hello world"));
 
     handle = std::move(pub);
     handle->subscribeDone(getTrackEndedSubscribeDone(reqID));
@@ -2916,7 +2935,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
   EXPECT_CALL(*subscribeCallback_, datagram(_, _))
-      .WillOnce(testing::Invoke([&]() {
+      .WillOnce(testing::Invoke([&](auto, auto) {
         clientSession_->close(SessionCloseErrorCode::NO_ERROR);
         handle->subscribeDone(getTrackEndedSubscribeDone(reqID));
         return folly::unit;
@@ -2951,6 +2970,11 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
               -> Subscriber::PublishResult {
             capturedHandle = std::move(subHandle);
             auto trackConsumer = std::make_shared<MockTrackConsumer>();
+            // Set default behavior for setTrackAlias to return success
+            EXPECT_CALL(*trackConsumer, setTrackAlias(_))
+                .WillRepeatedly(testing::Return(
+                    folly::Expected<folly::Unit, MoQPublishError>(
+                        folly::unit)));
             // Verify that data is not delivered until PUBLISH_OK is returned
             EXPECT_CALL(*trackConsumer, datagram(_, _)).Times(0);
 
@@ -2985,8 +3009,9 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
   EXPECT_TRUE(publishResult.hasValue()) << "Publish should succeed initially";
 
   // Publish data on the handle after publish returns
+  publishResult->consumer->setTrackAlias(nextAlias_.value++);
   publishResult->consumer->datagram(
-      ObjectHeader(kUselessAlias, 0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
+      ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
 
   // Wait for server processing to finish
   auto replyRes = co_await std::move(publishResult.value().reply);

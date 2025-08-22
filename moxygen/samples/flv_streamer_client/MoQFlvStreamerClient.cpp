@@ -199,7 +199,6 @@ class MoQFlvStreamerClient
       return;
     }
     ObjectHeader objHeader = ObjectHeader{
-        TrackAlias(0), // filled by session
         largestAudio_.group++,
         /*subgroupIn=*/0,
         largestAudio_.object,

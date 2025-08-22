@@ -455,7 +455,6 @@ class MoQDateServer : public MoQServer,
     uint64_t subgroup = second;
     uint64_t object = second;
     ObjectHeader header{
-        TrackAlias(0),
         group,
         subgroup,
         object,
@@ -480,7 +479,6 @@ class MoQDateServer : public MoQServer,
   void publishDategram(uint64_t group, uint64_t second) {
     uint64_t object = second;
     ObjectHeader header{
-        TrackAlias(0),
         group,
         0, // subgroup unused for datagrams
         object,

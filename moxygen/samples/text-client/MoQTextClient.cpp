@@ -87,8 +87,10 @@ class TextHandler : public ObjectReceiverCallback {
  public:
   explicit TextHandler(bool fetch) : fetch_(fetch) {}
   ~TextHandler() override = default;
-  FlowControlState onObject(const ObjectHeader& header, Payload payload)
-      override {
+  FlowControlState onObject(
+      folly::Optional<TrackAlias> /*trackAlias*/,
+      const ObjectHeader& header,
+      Payload payload) override {
     for (const auto& ext : header.extensions) {
       if (ext.type & 0x1) {
         ext.arrayValue->coalesce();
@@ -108,7 +110,9 @@ class TextHandler : public ObjectReceiverCallback {
     }
     return FlowControlState::UNBLOCKED;
   }
-  void onObjectStatus(const ObjectHeader& objHeader) override {
+  void onObjectStatus(
+      folly::Optional<TrackAlias> /*trackAlias*/,
+      const ObjectHeader& objHeader) override {
     std::cout << "ObjectStatus=" << uint32_t(objHeader.status) << std::endl;
   }
   void onEndOfStream() override {

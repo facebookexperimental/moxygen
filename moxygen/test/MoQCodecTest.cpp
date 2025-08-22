@@ -220,7 +220,8 @@ TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
-      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
 
   EXPECT_CALL(objectStreamCodecCallback_, onSubgroup(TrackAlias(1), 2, 3, 5));
@@ -235,7 +236,8 @@ TEST_P(MoQCodecTest, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
-      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
 
   EXPECT_CALL(objectStreamCodecCallback_, onSubgroup(TrackAlias(1), 2, 3, 5));
@@ -252,7 +254,8 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
-      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
       nullptr);
 
   EXPECT_CALL(objectStreamCodecCallback_, onSubgroup(TrackAlias(1), 2, 3, 5));
@@ -269,11 +272,11 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
 TEST_P(MoQCodecTest, TruncatedObject) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG,
-      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
+      ObjectHeader(2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello")); // missing " world"
 
   EXPECT_CALL(
@@ -287,11 +290,11 @@ TEST_P(MoQCodecTest, TruncatedObject) {
 TEST_P(MoQCodecTest, TruncatedObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, ObjectHeader(TrackAlias(1), 2, 3, 4, 5));
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG_EXT,
-      ObjectHeader(TrackAlias(1), 2, 3, 4, 5, 11),
+      ObjectHeader(2, 3, 4, 5, 11),
       nullptr);
 
   EXPECT_CALL(
@@ -332,7 +335,8 @@ TEST_P(MoQCodecTest, UnknownStreamType) {
 TEST_P(MoQCodecTest, Fetch) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   RequestID requestID(1);
-  ObjectHeader obj(requestID, 2, 3, 4, 5);
+  ObjectHeader obj(
+      2, 3, 4, 5); // Fetch context - TrackAlias(0) passed separately
   StreamType streamType = StreamType::FETCH_HEADER;
   auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
   obj.length = 5;

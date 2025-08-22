@@ -178,8 +178,10 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
       : trackMediaType_(TrackType(mediaType)),
         dejitterBufferSizeMs_(dejitterBufferSizeMs) {}
   ~TrackReceiverHandler() override = default;
-  FlowControlState onObject(const ObjectHeader& objHeader, Payload payload)
-      override {
+  FlowControlState onObject(
+      folly::Optional<TrackAlias> /*trackAlias*/,
+      const ObjectHeader& objHeader,
+      Payload payload) override {
     if (payload) {
       std::tuple<
           folly::Optional<MoQMi::MoqMiItem>,
@@ -261,7 +263,9 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
     }
     return FlowControlState::UNBLOCKED;
   }
-  void onObjectStatus(const ObjectHeader& objHeader) override {
+  void onObjectStatus(
+      folly::Optional<TrackAlias> /*trackAlias*/,
+      const ObjectHeader& objHeader) override {
     std::cout << trackMediaType_.toStr()
               << " ObjectStatus=" << uint32_t(objHeader.status) << std::endl;
   }

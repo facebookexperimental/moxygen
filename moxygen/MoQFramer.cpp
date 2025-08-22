@@ -489,7 +489,7 @@ bool datagramTypeIsStatus(uint64_t version, DatagramType datagramType) {
       : (folly::to_underlying(datagramType) & 0x20);
 }
 
-folly::Expected<ObjectHeader, ErrorCode>
+folly::Expected<DatagramObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
     DatagramType datagramType,
@@ -500,7 +500,7 @@ MoQFrameParser::parseDatagramObjectHeader(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= trackAlias->second;
-  objectHeader.trackIdentifier = TrackAlias(trackAlias->first);
+
   auto group = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!group) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -546,7 +546,8 @@ MoQFrameParser::parseDatagramObjectHeader(
     objectHeader.status = ObjectStatus::NORMAL;
     objectHeader.length = length;
   }
-  return objectHeader;
+  return DatagramObjectHeader(
+      TrackAlias(trackAlias->first), std::move(objectHeader));
 }
 
 folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
@@ -581,26 +582,31 @@ MoQFrameParser::parseSubgroupTypeAndAlias(
   return TrackAlias(trackAlias->first);
 }
 
-folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
+folly::Expected<MoQFrameParser::SubgroupHeaderResult, ErrorCode>
+MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
     SubgroupIDFormat format,
     bool /* includeExtensions*/) const noexcept {
   auto length = cursor.totalLength();
-  ObjectHeader objectHeader;
+  SubgroupHeaderResult result;
+  ObjectHeader& objectHeader = result.objectHeader;
   objectHeader.group = std::numeric_limits<uint64_t>::max(); // unset
   objectHeader.id = std::numeric_limits<uint64_t>::max();    // unset
-  auto trackAlias = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!trackAlias) {
+
+  auto parsedTrackAlias = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!parsedTrackAlias) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  length -= trackAlias->second;
-  objectHeader.trackIdentifier = TrackAlias(trackAlias->first);
+  length -= parsedTrackAlias->second;
+  result.trackAlias = TrackAlias(parsedTrackAlias->first);
+
   auto group = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!group) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= group->second;
   objectHeader.group = group->first;
+
   bool parseObjectID = false;
   if (format == SubgroupIDFormat::Present) {
     auto subgroup = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -628,9 +634,8 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseSubgroupHeader(
     }
     objectHeader.subgroup = objectHeader.id = id->first;
   }
-  return objectHeader;
+  return result;
 }
-
 folly::Expected<folly::Unit, ErrorCode>
 MoQFrameParser::parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
@@ -2173,6 +2178,7 @@ WriteResult writeServerSetup(
 
 WriteResult MoQFrameWriter::writeSubgroupHeader(
     folly::IOBufQueue& writeBuf,
+    TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
     SubgroupIDFormat format,
     bool includeExtensions) const noexcept {
@@ -2185,7 +2191,7 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
       /*endOfGroup=*/false);
   auto streamTypeInt = folly::to_underlying(streamType);
   writeVarint(writeBuf, streamTypeInt, size, error);
-  writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
+  writeVarint(writeBuf, trackAlias.value, size, error);
   writeVarint(writeBuf, objectHeader.group, size, error);
   if (streamTypeInt & SG_HAS_SUBGROUP_ID) {
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
@@ -2214,12 +2220,14 @@ WriteResult MoQFrameWriter::writeFetchHeader(
 
 WriteResult MoQFrameWriter::writeSingleObjectStream(
     folly::IOBufQueue& writeBuf,
+    TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
   bool v11Plus = getDraftMajorVersion(*version_) >= 11;
   bool hasExtensions = !v11Plus || objectHeader.extensions.size() > 0;
   auto res = writeSubgroupHeader(
       writeBuf,
+      trackAlias,
       objectHeader,
       v11Plus && objectHeader.subgroup == objectHeader.id
           ? SubgroupIDFormat::FirstObject
@@ -2336,6 +2344,7 @@ void MoQFrameWriter::writeTrackRequestParams(
 
 WriteResult MoQFrameWriter::writeDatagramObject(
     folly::IOBufQueue& writeBuf,
+    TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
   size_t size = 0;
@@ -2353,7 +2362,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
             getDatagramType(*version_, true, hasExtensions, false)),
         size,
         error);
-    writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
+    writeVarint(writeBuf, trackAlias.value, size, error);
     writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
@@ -2370,7 +2379,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
             getDatagramType(*version_, false, hasExtensions, false)),
         size,
         error);
-    writeVarint(writeBuf, value(objectHeader.trackIdentifier), size, error);
+    writeVarint(writeBuf, trackAlias.value, size, error);
     writeVarint(writeBuf, objectHeader.group, size, error);
     writeVarint(writeBuf, objectHeader.id, size, error);
     writeBuf.append(&objectHeader.priority, 1);
@@ -3202,8 +3211,7 @@ std::ostream& operator<<(std::ostream& os, RequestID id) {
 }
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
-  os << " trackIdentifier=" << value(header.trackIdentifier)
-     << " group=" << header.group << " subgroup=" << header.subgroup
+  os << " group=" << header.group << " subgroup=" << header.subgroup
      << " id=" << header.id << " priority=" << uint32_t(header.priority)
      << " status=" << getObjectStatusString(header.status) << " length="
      << (header.length.hasValue() ? std::to_string(header.length.value())
@@ -3212,20 +3220,6 @@ std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
 }
 
 // Moved inline functions to reduce binary bloat
-uint64_t value(const TrackIdentifier& trackIdentifier) {
-  return std::visit(
-      [](const auto& value) {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, TrackAlias>) {
-          return value.value;
-        } else if constexpr (std::is_same_v<T, RequestID>) {
-          return value.value;
-        }
-        return std::numeric_limits<uint64_t>::max();
-      },
-      trackIdentifier);
-}
-
 Extensions noExtensions() {
   return Extensions();
 }

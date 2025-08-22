@@ -373,7 +373,6 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
 
       // Build object header
       ObjectHeader header;
-      header.trackIdentifier = alias;
       header.group = groupNum;
       header.id = objectId;
       header.extensions = extensions;

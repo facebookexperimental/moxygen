@@ -380,28 +380,7 @@ struct RequestID {
 };
 std::ostream& operator<<(std::ostream& os, RequestID id);
 
-struct UnitializedIdentifier {
-  bool operator==(const UnitializedIdentifier&) const {
-    return false;
-  }
-};
-using TrackIdentifier =
-    std::variant<UnitializedIdentifier, TrackAlias, RequestID>;
-struct TrackIdentifierHash {
-  size_t operator()(const TrackIdentifier& trackIdentifier) const {
-    XCHECK_GT(trackIdentifier.index(), 0llu);
-    auto trackAlias = std::get_if<TrackAlias>(&trackIdentifier);
-    if (trackAlias) {
-      return folly::hash::hash_combine(
-          trackIdentifier.index(), trackAlias->value);
-    } else {
-      return folly::hash::hash_combine(
-          trackIdentifier.index(), std::get<RequestID>(trackIdentifier).value);
-    }
-  }
-};
-
-uint64_t value(const TrackIdentifier& trackIdentifier);
+// TrackIdentifier variant removed - ObjectHeader now uses TrackAlias directly
 
 struct Extension {
   // Even type => holds value in intValue
@@ -465,10 +444,10 @@ struct Extension {
 
 using Extensions = std::vector<Extension>;
 Extensions noExtensions();
+
 struct ObjectHeader {
   ObjectHeader() = default;
   ObjectHeader(
-      TrackIdentifier trackIdentifierIn,
       uint64_t groupIn,
       uint64_t subgroupIn,
       uint64_t idIn,
@@ -476,8 +455,7 @@ struct ObjectHeader {
       ObjectStatus statusIn = ObjectStatus::NORMAL,
       std::vector<Extension> extensionsIn = noExtensions(),
       folly::Optional<uint64_t> lengthIn = folly::none)
-      : trackIdentifier(trackIdentifierIn),
-        group(groupIn),
+      : group(groupIn),
         subgroup(subgroupIn),
         id(idIn),
         priority(priorityIn),
@@ -485,22 +463,19 @@ struct ObjectHeader {
         extensions(std::move(extensionsIn)),
         length(std::move(lengthIn)) {}
   ObjectHeader(
-      TrackIdentifier trackIdentifierIn,
       uint64_t groupIn,
       uint64_t subgroupIn,
       uint64_t idIn,
       uint8_t priorityIn,
       uint64_t lengthIn,
       std::vector<Extension> extensionsIn = noExtensions())
-      : trackIdentifier(trackIdentifierIn),
-        group(groupIn),
+      : group(groupIn),
         subgroup(subgroupIn),
         id(idIn),
         priority(priorityIn),
         status(ObjectStatus::NORMAL),
         extensions(std::move(extensionsIn)),
         length(lengthIn) {}
-  TrackIdentifier trackIdentifier;
   uint64_t group;
   uint64_t subgroup{0}; // meaningless for Datagram
   uint64_t id;
@@ -511,11 +486,20 @@ struct ObjectHeader {
 
   // == Operator For Datagram Testing
   bool operator==(const ObjectHeader& other) const {
-    return trackIdentifier == other.trackIdentifier && group == other.group &&
-        subgroup == other.subgroup && id == other.id &&
-        priority == other.priority && status == other.status &&
-        extensions == other.extensions && length == other.length;
+    return group == other.group && subgroup == other.subgroup &&
+        id == other.id && priority == other.priority &&
+        status == other.status && extensions == other.extensions &&
+        length == other.length;
   }
+};
+
+// Struct to hold both TrackAlias and ObjectHeader for datagram parsing
+struct DatagramObjectHeader {
+  TrackAlias trackAlias;
+  ObjectHeader objectHeader;
+
+  DatagramObjectHeader(TrackAlias alias, ObjectHeader header)
+      : trackAlias(alias), objectHeader(std::move(header)) {}
 };
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
@@ -1063,7 +1047,7 @@ class MoQFrameParser {
       size_t length) noexcept;
 
   // datagram only
-  folly::Expected<ObjectHeader, ErrorCode> parseDatagramObjectHeader(
+  folly::Expected<DatagramObjectHeader, ErrorCode> parseDatagramObjectHeader(
       folly::io::Cursor& cursor,
       DatagramType datagramType,
       size_t& length) const noexcept;
@@ -1071,7 +1055,12 @@ class MoQFrameParser {
   folly::Expected<RequestID, ErrorCode> parseFetchHeader(
       folly::io::Cursor& cursor) const noexcept;
 
-  folly::Expected<ObjectHeader, ErrorCode> parseSubgroupHeader(
+  struct SubgroupHeaderResult {
+    TrackAlias trackAlias;
+    ObjectHeader objectHeader;
+  };
+
+  folly::Expected<SubgroupHeaderResult, ErrorCode> parseSubgroupHeader(
       folly::io::Cursor& cursor,
       SubgroupIDFormat format,
       bool includeExtensions) const noexcept;
@@ -1278,6 +1267,7 @@ class MoQFrameWriter {
  public:
   WriteResult writeSubgroupHeader(
       folly::IOBufQueue& writeBuf,
+      TrackAlias trackAlias,
       const ObjectHeader& objectHeader,
       SubgroupIDFormat format = SubgroupIDFormat::Present,
       bool includeExtensions = true) const noexcept;
@@ -1288,10 +1278,12 @@ class MoQFrameWriter {
   WriteResult writeStreamHeader(
       folly::IOBufQueue& writeBuf,
       StreamType streamType,
+      TrackAlias trackAlias,
       const ObjectHeader& objectHeader) const noexcept;
 
   WriteResult writeDatagramObject(
       folly::IOBufQueue& writeBuf,
+      TrackAlias trackAlias,
       const ObjectHeader& objectHeader,
       std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
 
@@ -1303,6 +1295,7 @@ class MoQFrameWriter {
 
   WriteResult writeSingleObjectStream(
       folly::IOBufQueue& writeBuf,
+      TrackAlias trackAlias,
       const ObjectHeader& objectHeader,
       std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
 

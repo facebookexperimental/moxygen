@@ -181,8 +181,7 @@ void MoQChatClient::publishLoop() {
         subscribeAnnounceHandle_->unsubscribeAnnounces();
         if (publisher_) {
           publisher_->objectStream(
-              {*chatTrackAlias_,
-               nextGroup_++,
+              {nextGroup_++,
                /*subgroupIn=*/0,
                /*idIn=*/0,
                /*priorityIn=*/0,
@@ -197,8 +196,7 @@ void MoQChatClient::publishLoop() {
         moqClient_.moqSession_.reset();
       } else if (publisher_) {
         publisher_->objectStream(
-            {*chatTrackAlias_,
-             nextGroup_++,
+            {nextGroup_++,
              /*subgroupIn=*/0,
              /*idIn=*/0,
              /*priorityIn=*/0,
@@ -262,7 +260,10 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
     explicit ChatObjectHandler(MoQChatClient& client, std::string username)
         : client_(client), username_(username) {}
     ~ChatObjectHandler() override = default;
-    FlowControlState onObject(const ObjectHeader&, Payload payload) override {
+    FlowControlState onObject(
+        folly::Optional<TrackAlias> /* trackAlias */,
+        const ObjectHeader&,
+        Payload payload) override {
       if (payload) {
         std::cout << username_ << ": ";
         payload->coalesce();
@@ -270,7 +271,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
       }
       return FlowControlState::UNBLOCKED;
     }
-    void onObjectStatus(const ObjectHeader&) override {}
+    void onObjectStatus(
+        folly::Optional<TrackAlias> /* trackAlias */,
+        const ObjectHeader&) override {}
     void onEndOfStream() override {}
     void onError(ResetStreamErrorCode error) override {
       std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;

@@ -406,7 +406,6 @@ void MoQVideoPublisher::publishAudioFrameToMoQ(
   }
 
   ObjectHeader objHeader = ObjectHeader{
-      TrackAlias(0),
       /*groupIn=*/id,
       /*subgroupIn=*/0,
       /*idIn=*/0,

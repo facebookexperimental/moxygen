@@ -26,6 +26,8 @@ class MoQCacheTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // Code to set up test environment, if needed
+    ON_CALL(*trackConsumer_, setTrackAlias(_))
+        .WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, datagram(_, _)).WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, objectStream(_, _))
         .WillByDefault(Return(folly::unit));
@@ -108,20 +110,14 @@ class MoQCacheTest : public ::testing::Test {
         if (endOfGroup) {
           writeback->datagram(
               ObjectHeader(
-                  TrackAlias(0),
-                  start.group,
-                  0,
-                  start.object,
-                  0,
-                  ObjectStatus::END_OF_GROUP),
+                  start.group, 0, start.object, 0, ObjectStatus::END_OF_GROUP),
               nullptr);
         }
         start.group += groupIncrement;
         start.object = 0;
       } else {
         writeback->datagram(
-            ObjectHeader(TrackAlias(0), start.group, 0, start.object, 0, 100),
-            makeBuf(100));
+            ObjectHeader(start.group, 0, start.object, 0, 100), makeBuf(100));
         start.object += objectIncrement;
       }
     }
@@ -380,8 +376,7 @@ CO_TEST_F(MoQCacheTest, TestFetchEndBeyondEndOfTrack) {
   populateCacheRange({0, 0}, {0, 5});
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
   writeback->datagram(
-      ObjectHeader(TrackAlias(0), 0, 0, 5, 0, ObjectStatus::END_OF_TRACK),
-      nullptr);
+      ObjectHeader(0, 0, 5, 0, ObjectStatus::END_OF_TRACK), nullptr);
   writeback.reset();
   expectFetchObjects({0, 0}, {0, 5}, false);
   EXPECT_CALL(*consumer_, endOfTrackAndGroup(0, 0, 5, _))
@@ -602,11 +597,9 @@ CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExistObjectsAndGroups) {
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
 
   writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 0, 0, 0, 0, ObjectStatus::OBJECT_NOT_EXIST),
-      nullptr);
+      ObjectHeader(0, 0, 0, 0, ObjectStatus::OBJECT_NOT_EXIST), nullptr);
   writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 0, 0, 1, 0, ObjectStatus::END_OF_GROUP),
-      nullptr);
+      ObjectHeader(0, 0, 1, 0, ObjectStatus::END_OF_GROUP), nullptr);
 
   // Simulate GROUP_NOT_EXIST using groupNotExist method
   writeback->groupNotExists(1, 0, 0);
@@ -626,15 +619,12 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
   for (int i = 0; i < 5; ++i) {
     writeback->objectStream(
-        ObjectHeader(TrackAlias(0), i, 0, 0, 0, ObjectStatus::OBJECT_NOT_EXIST),
-        nullptr);
+        ObjectHeader(i, 0, 0, 0, ObjectStatus::OBJECT_NOT_EXIST), nullptr);
   }
-  writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 5, 0, 0, 0, 10), makeBuf(10));
+  writeback->objectStream(ObjectHeader(5, 0, 0, 0, 10), makeBuf(10));
 
   writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 6, 0, 0, 0, ObjectStatus::END_OF_TRACK),
-      nullptr);
+      ObjectHeader(6, 0, 0, 0, ObjectStatus::END_OF_TRACK), nullptr);
 
   writeback.reset();
 
@@ -642,13 +632,12 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
   writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
 
   // Attempt to overwrite missing objects with normal objects using objectStream
-  auto result = writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 0, 0, 0, 0, 100), makeBuf(100));
+  auto result =
+      writeback->objectStream(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
 
-  result = writeback->datagram(
-      ObjectHeader(TrackAlias(0), 1, 0, 0, 0, 100), makeBuf(100));
+  result = writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
 
@@ -666,21 +655,18 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
 
   // Payload size changed
-  result = writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 5, 0, 0, 0, 20), makeBuf(20));
+  result = writeback->objectStream(ObjectHeader(5, 0, 0, 0, 20), makeBuf(20));
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
 
   // Beyond End of track
-  result = writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 7, 0, 0, 0, 20), makeBuf(20));
+  result = writeback->objectStream(ObjectHeader(7, 0, 0, 0, 20), makeBuf(20));
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
 
   // End of track not largest
   result = writeback->objectStream(
-      ObjectHeader(TrackAlias(0), 5, 0, 1, 0, ObjectStatus::END_OF_TRACK),
-      makeBuf(20));
+      ObjectHeader(5, 0, 1, 0, ObjectStatus::END_OF_TRACK), makeBuf(20));
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
 

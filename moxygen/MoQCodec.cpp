@@ -155,7 +155,7 @@ void MoQObjectStreamCodec::onIngress(
     bool endOfStream) {
   onIngressStart(std::move(data));
   folly::io::Cursor cursor(ingress_.front());
-  bool isFetch = std::get_if<RequestID>(&curObjectHeader_.trackIdentifier);
+
   while (!connError_ &&
          ((ingress_.chainLength() > 0 && !cursor.isAtEnd())/* ||
           (endOfStream && parseState_ == ParseState::OBJECT_PAYLOAD_NO_LENGTH)*/)) {
@@ -206,8 +206,6 @@ void MoQObjectStreamCodec::onIngress(
           break;
         }
         auto requestID = res.value();
-        curObjectHeader_.trackIdentifier = requestID;
-        isFetch = true;
         if (callback_) {
           callback_->onFetchHeader(requestID);
         }
@@ -219,18 +217,18 @@ void MoQObjectStreamCodec::onIngress(
         auto newCursor = cursor;
         auto res = moqFrameParser_.parseSubgroupHeader(
             newCursor, subgroupFormat_, includeExtensions_);
+
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
           break;
         }
-        curObjectHeader_ = res.value();
-        auto trackAlias =
-            std::get_if<TrackAlias>(&curObjectHeader_.trackIdentifier);
-        XCHECK(trackAlias);
+        curObjectHeader_ = res->objectHeader;
+        // In non-fetch contexts, trackAlias should be set by the parser
+        XCHECK_EQ(streamType_, StreamType::SUBGROUP_HEADER_SG);
         if (callback_) {
           callback_->onSubgroup(
-              *trackAlias,
+              res->trackAlias,
               curObjectHeader_.group,
               curObjectHeader_.subgroup,
               curObjectHeader_.priority);
@@ -303,7 +301,7 @@ void MoQObjectStreamCodec::onIngress(
                 std::move(curObjectHeader_.extensions));
           }
           if (curObjectHeader_.status == ObjectStatus::END_OF_TRACK ||
-              (!isFetch &&
+              (streamType_ == StreamType::SUBGROUP_HEADER_SG &&
                curObjectHeader_.status == ObjectStatus::END_OF_GROUP)) {
             parseState_ = ParseState::STREAM_FIN_DELIVERED;
           } else {

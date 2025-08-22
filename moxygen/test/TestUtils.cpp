@@ -234,9 +234,9 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
   // writes a subgroup header, object without extensions, object with
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5);
+  ObjectHeader obj(2, 3, 4, 5);
   auto res = moqFrameWriter.writeSubgroupHeader(
-      writeBuf, obj, SubgroupIDFormat::Present, true);
+      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
   obj.length = 11;
   res = moqFrameWriter.writeStreamObject(
       writeBuf,
@@ -271,7 +271,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
   // extensions, status without extensions, status with extensions
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter.writeFetchHeader(writeBuf, RequestID(1));
-  ObjectHeader obj(TrackAlias(1), 2, 3, 4, 5, 11);
+  ObjectHeader obj(2, 3, 4, 5, 11);
   res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,

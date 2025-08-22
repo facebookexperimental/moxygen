@@ -450,25 +450,31 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
 
+  // Expect setTrackAlias call
+  EXPECT_CALL(*mockConsumer, setTrackAlias(*sub.trackAlias))
+      .WillOnce(testing::Return(
+          folly::Expected<folly::Unit, moxygen::MoQPublishError>(folly::unit)));
+
   // Build Expect Calls
   for (int groupNum = 1; groupNum >= 0; groupNum--) {
     for (int objectId = 1; objectId >= 0; objectId--) {
-      // Set expectations for datagram
+      // Set expectations for setTrackAlias and datagram
       moxygen::ObjectHeader expectedHeader;
-      expectedHeader.trackIdentifier =
-          moxygen::TrackIdentifier(*sub.trackAlias);
       expectedHeader.group = groupNum;
       expectedHeader.id = objectId;
       expectedHeader.extensions = moxygen::getExtensions(
           params_.testIntegerExtension, params_.testVariableExtension);
 
       int objectSize = moxygen::getObjectSize(objectId, &params_);
+
       EXPECT_CALL(*mockConsumer, datagram(expectedHeader, testing::_))
           .Times(1)
-          .WillOnce(testing::Invoke([expectedHeader, objectId, objectSize](
+          .WillOnce(testing::Invoke([expectedHeader,
+                                     objectId,
+                                     objectSize,
+                                     expectedTrackAlias = *sub.trackAlias](
                                         auto header, auto objectPayload) {
             // Check Object Header
-            EXPECT_EQ(expectedHeader.trackIdentifier, header.trackIdentifier);
             EXPECT_EQ(expectedHeader.group, header.group);
             EXPECT_EQ(expectedHeader.id, header.id);
             EXPECT_EQ(expectedHeader.extensions, header.extensions);

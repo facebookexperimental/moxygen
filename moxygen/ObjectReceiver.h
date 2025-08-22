@@ -17,9 +17,12 @@ class ObjectReceiverCallback {
   virtual ~ObjectReceiverCallback() = default;
   enum class FlowControlState { BLOCKED, UNBLOCKED };
   virtual FlowControlState onObject(
+      folly::Optional<TrackAlias> trackAlias,
       const ObjectHeader& objHeader,
       Payload payload) = 0;
-  virtual void onObjectStatus(const ObjectHeader& objHeader) = 0;
+  virtual void onObjectStatus(
+      folly::Optional<TrackAlias> trackAlias,
+      const ObjectHeader& objHeader) = 0;
   virtual void onEndOfStream() = 0;
   virtual void onError(ResetStreamErrorCode) = 0;
   virtual void onSubscribeDone(SubscribeDone done) = 0;
@@ -30,16 +33,19 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
   StreamType streamType_;
   ObjectHeader header_;
   folly::IOBufQueue payload_{folly::IOBufQueue::cacheChainLength()};
+  folly::Optional<TrackAlias> trackAlias_;
 
  public:
   explicit ObjectSubgroupReceiver(
       std::shared_ptr<ObjectReceiverCallback> callback,
+      folly::Optional<TrackAlias> trackAlias = folly::none,
       uint64_t groupID = 0,
       uint64_t subgroupID = 0,
       uint8_t priority = 0)
       : callback_(callback),
         streamType_(StreamType::SUBGROUP_HEADER_SG),
-        header_(TrackAlias(0), groupID, subgroupID, 0, priority) {}
+        header_(groupID, subgroupID, 0, priority),
+        trackAlias_(trackAlias) {}
 
   void setFetchGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
     streamType_ = StreamType::FETCH_HEADER;
@@ -52,7 +58,8 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.id = objectID;
     header_.status = ObjectStatus::NORMAL;
     header_.extensions = std::move(ext);
-    auto fcState = callback_->onObject(header_, std::move(payload));
+    auto fcState =
+        callback_->onObject(trackAlias_, header_, std::move(payload));
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
       if (streamType_ == StreamType::FETCH_HEADER) {
         return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
@@ -70,7 +77,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.id = objectID;
     header_.status = ObjectStatus::OBJECT_NOT_EXIST;
     header_.extensions = std::move(ext);
-    callback_->onObjectStatus(header_);
+    callback_->onObjectStatus(trackAlias_, header_);
     return folly::unit;
   }
 
@@ -93,7 +100,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     // TODO: add common component for state verification
     payload_.append(std::move(payload));
     if (payload_.chainLength() == header_.length) {
-      auto fcState = callback_->onObject(header_, payload_.move());
+      auto fcState = callback_->onObject(trackAlias_, header_, payload_.move());
       if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
         // Is it bad that we can't return DONE here?
         return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
@@ -109,7 +116,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.id = endOfGroupObjectID;
     header_.status = ObjectStatus::END_OF_GROUP;
     header_.extensions = std::move(ext);
-    callback_->onObjectStatus(header_);
+    callback_->onObjectStatus(trackAlias_, header_);
     return folly::unit;
   }
 
@@ -119,7 +126,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.id = endOfTrackObjectID;
     header_.status = ObjectStatus::END_OF_TRACK;
     header_.extensions = std::move(ext);
-    callback_->onObjectStatus(header_);
+    callback_->onObjectStatus(trackAlias_, header_);
     return folly::unit;
   }
 
@@ -136,6 +143,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
 class ObjectReceiver : public TrackConsumer, public FetchConsumer {
   std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
   folly::Optional<ObjectSubgroupReceiver> fetchPublisher_;
+  folly::Optional<TrackAlias> trackAlias_;
 
  public:
   enum Type { SUBSCRIBE, FETCH };
@@ -144,13 +152,13 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
       std::shared_ptr<ObjectReceiverCallback> callback)
       : callback_(callback) {
     if (t == FETCH) {
-      fetchPublisher_.emplace(callback);
+      fetchPublisher_.emplace(callback, trackAlias_);
     }
   }
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
-      TrackAlias) override {
-    // who cares
+      TrackAlias alias) override {
+    trackAlias_ = alias;
     return folly::unit;
   }
 
@@ -158,7 +166,7 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
   beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
       override {
     return std::make_shared<ObjectSubgroupReceiver>(
-        callback_, groupID, subgroupID, priority);
+        callback_, trackAlias_, groupID, subgroupID, priority);
   }
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
@@ -169,7 +177,7 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
       Payload payload) override {
-    auto fcState = callback_->onObject(header, std::move(payload));
+    auto fcState = callback_->onObject(trackAlias_, header, std::move(payload));
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
       return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
     }
@@ -181,21 +189,22 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
       uint64_t subgroup,
       Priority pri,
       Extensions ext) override {
-    callback_->onObjectStatus(ObjectHeader(
-        TrackAlias(0),
-        groupID,
-        subgroup,
-        0,
-        pri,
-        ObjectStatus::END_OF_GROUP,
-        std::move(ext)));
+    callback_->onObjectStatus(
+        trackAlias_,
+        ObjectHeader(
+            groupID,
+            subgroup,
+            0,
+            pri,
+            ObjectStatus::END_OF_GROUP,
+            std::move(ext)));
     return folly::unit;
   }
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
       Payload payload) override {
-    (void)callback_->onObject(header, std::move(payload));
+    (void)callback_->onObject(trackAlias_, header, std::move(payload));
     return folly::unit;
   }
 

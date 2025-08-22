@@ -64,9 +64,12 @@ class MoQTestClient : public moxygen::Subscriber,
 
   // Override Vritual Functions for now to return basic print statements
   virtual FlowControlState onObject(
+      folly::Optional<TrackAlias> trackAlias,
       const ObjectHeader& objHeader,
       Payload payload) override;
-  virtual void onObjectStatus(const ObjectHeader& objHeader) override;
+  virtual void onObjectStatus(
+      folly::Optional<TrackAlias> trackAlias,
+      const ObjectHeader& objHeader) override;
   virtual void onEndOfStream() override;
   virtual void onError(ResetStreamErrorCode) override;
   virtual void onSubscribeDone(SubscribeDone done) override;

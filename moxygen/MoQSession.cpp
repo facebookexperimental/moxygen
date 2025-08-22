@@ -284,6 +284,7 @@ class StreamPublisherImpl
   folly::Optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   StreamType streamType_;
+  TrackAlias trackAlias_{0}; // Store track alias separately from ObjectHeader
   ObjectHeader header_;
   folly::Optional<uint64_t> currentLengthRemaining_;
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
@@ -306,7 +307,6 @@ StreamPublisherImpl::StreamPublisherImpl(
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
-          publisher->requestID(),
           0,
           0,
           std::numeric_limits<uint64_t>::max(),
@@ -331,7 +331,7 @@ StreamPublisherImpl::StreamPublisherImpl(
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
   streamType_ = getSubgroupStreamType(
       publisher->getVersion(), format, includeExtensions, false);
-  header_.trackIdentifier = alias;
+  trackAlias_ = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
   logger_ = logger;
@@ -348,7 +348,7 @@ StreamPublisherImpl::StreamPublisherImpl(
 
   writeBuf_.move(); // clear FETCH_HEADER
   (void)moqFrameWriter_.writeSubgroupHeader(
-      writeBuf_, header_, format, includeExtensions);
+      writeBuf_, trackAlias_, header_, format, includeExtensions);
 }
 
 // Private methods
@@ -520,7 +520,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
   if (logger_) {
     if (streamType_ != StreamType::FETCH_HEADER) {
       logger_->logSubgroupObjectCreated(
-          writeHandle_->getID(), header_, payload->clone());
+          writeHandle_->getID(), trackAlias_, header_, payload->clone());
     } else {
       logger_->logFetchObjectCreated(
           writeHandle_->getID(), header_, payload->clone());
@@ -1095,6 +1095,10 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::objectStream(
     const ObjectHeader& objHeader,
     Payload payload) {
+  if (!trackAlias_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Must set track alias first"));
+  }
   XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
   auto subgroup = beginSubgroup(
       objHeader.group,
@@ -1148,7 +1152,6 @@ MoQSession::TrackPublisherImpl::groupNotExists(
   }
   return objectStream(
       ObjectHeader(
-          *trackAlias_,
           groupID,
           subgroupID,
           0,
@@ -1180,9 +1183,9 @@ MoQSession::TrackPublisherImpl::datagram(
 
   if (logger_) {
     if (header.status == ObjectStatus::NORMAL) {
-      logger_->logObjectDatagramCreated(header, payload);
+      logger_->logObjectDatagramCreated(*trackAlias_, header, payload);
     } else {
-      logger_->logObjectDatagramStatusCreated(header);
+      logger_->logObjectDatagramStatusCreated(*trackAlias_, header);
     }
   }
 
@@ -1196,8 +1199,8 @@ MoQSession::TrackPublisherImpl::datagram(
   DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
   (void)moqFrameWriter_.writeDatagramObject(
       writeBuf,
+      *trackAlias_,
       ObjectHeader(
-          *trackAlias_,
           header.group,
           header.id,
           header.id,
@@ -1982,6 +1985,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t subgroup,
       Priority priority) override {
     XCHECK(subscribeState_);
+    trackAlias_ = alias; // Store for use in onObjectBegin logging
     session_->onSubscriptionStreamOpenedByPeer();
     if (!subscribeState_) {
       error_ = MoQPublishError(
@@ -2048,7 +2052,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       obj.extensions = extensions;
       if (objectComplete && subscribeState_) {
         logger_->logSubgroupObjectParsed(
-            currentStreamId_, obj, initialPayload->clone());
+            currentStreamId_, trackAlias_, obj, initialPayload->clone());
       } else if (objectComplete && fetchState_) {
         logger_->logFetchObjectParsed(
             currentStreamId_, obj, initialPayload->clone());
@@ -2095,7 +2099,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     if (logger_ && objectComplete) {
       if (subscribeState_) {
         logger_->logSubgroupObjectParsed(
-            currentStreamId_, currentObj_, payload->clone());
+            currentStreamId_, trackAlias_, currentObj_, payload->clone());
       } else if (fetchState_) {
         logger_->logFetchObjectParsed(
             currentStreamId_, currentObj_, payload->clone());
@@ -2253,6 +2257,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   std::shared_ptr<MoQSession::FetchTrackReceiveState> fetchState_;
   folly::Optional<MoQPublishError> error_;
   uint64_t currentStreamId_{0};
+  TrackAlias trackAlias_{0};
   ObjectHeader currentObj_;
 };
 
@@ -2651,6 +2656,9 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   }
   auto trackAlias = subOk.trackAlias;
   trackReceiveState->subscribeOK(std::move(subOk));
+  if (trackReceiveState->getSubscribeCallback()) {
+    trackReceiveState->getSubscribeCallback()->setTrackAlias(trackAlias);
+  }
   deliverBufferedData(trackAlias);
 }
 
@@ -2792,6 +2800,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
         // Add ReceiveState to subTracks_
         auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
             ftn, requestID, initiator.consumer, logger_, true);
+        initiator.consumer->setTrackAlias(alias);
         subTracks_.emplace(alias, trackReceiveState);
         publishOk(replyResult->value());
         deliverBufferedData(alias);
@@ -4491,27 +4500,26 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     return;
   }
   auto& objHeader = res.value();
-  if (remainingLength != *objHeader.length) {
+  if (remainingLength != *objHeader.objectHeader.length) {
     XLOG(ERR) << __func__ << " Bad datagram: Length mismatch";
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto alias = std::get_if<TrackAlias>(&objHeader.trackIdentifier);
-  XCHECK(alias);
-  auto state = getSubscribeTrackReceiveState(*alias).get();
+  auto alias = objHeader.trackAlias;
+  auto state = getSubscribeTrackReceiveState(alias).get();
   if (!state) {
     constexpr size_t kMaxBufferedTracks = 10;
     constexpr size_t kMaxBufferedDatagramsPerTrack = 30;
     if (bufferedDatagrams_.size() > kMaxBufferedTracks) {
       XLOG(DBG2) << " Too many buffered tracks, dropping datagram for alias="
-                 << *alias << " sess = " << this;
+                 << alias << " sess = " << this;
       return;
     }
-    auto it = bufferedDatagrams_.emplace(*alias, std::list<Payload>());
+    auto it = bufferedDatagrams_.emplace(alias, std::list<Payload>());
     if (it.first->second.size() > kMaxBufferedDatagramsPerTrack) {
       XLOG(DBG2)
           << " Too many buffered datagrams for track, dropping datagram for alias="
-          << *alias << " sess = " << this;
+          << alias << " sess = " << this;
       return;
     }
     it.first->second.push_back(readBuf.move());
@@ -4519,16 +4527,18 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
   readBuf.trimStart(readBuf.chainLength() - remainingLength);
   if (logger_) {
-    if (objHeader.status == ObjectStatus::NORMAL) {
-      logger_->logObjectDatagramParsed(objHeader, payload);
+    if (objHeader.objectHeader.status == ObjectStatus::NORMAL) {
+      logger_->logObjectDatagramParsed(
+          objHeader.trackAlias, objHeader.objectHeader, payload);
     } else {
-      logger_->logObjectDatagramStatusParsed(objHeader);
+      logger_->logObjectDatagramStatusParsed(
+          objHeader.trackAlias, objHeader.objectHeader);
     }
   }
   if (state) {
     auto callback = state->getSubscribeCallback();
     if (callback) {
-      callback->datagram(objHeader, readBuf.move());
+      callback->datagram(objHeader.objectHeader, readBuf.move());
     }
   }
 }

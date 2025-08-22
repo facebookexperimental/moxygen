@@ -722,10 +722,11 @@ void MLogger::logStreamTypeSet(
 }
 
 void MLogger::logObjectDatagramCreated(
+    TrackAlias trackAlias,
     const ObjectHeader& header,
     const Payload& payload) {
   MOQTObjectDatagramCreated baseMsg;
-  baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
+  baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
@@ -737,10 +738,11 @@ void MLogger::logObjectDatagramCreated(
 }
 
 void MLogger::logObjectDatagramParsed(
+    TrackAlias trackAlias,
     const ObjectHeader& header,
     const Payload& payload) {
   MOQTObjectDatagramParsed baseMsg;
-  baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
+  baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
@@ -753,9 +755,11 @@ void MLogger::logObjectDatagramParsed(
   addObjectDatagramParsedLog(std::move(baseMsg));
 }
 
-void MLogger::logObjectDatagramStatusCreated(const ObjectHeader& header) {
+void MLogger::logObjectDatagramStatusCreated(
+    TrackAlias trackAlias,
+    const ObjectHeader& header) {
   MOQTObjectDatagramStatusCreated baseMsg;
-  baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
+  baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
@@ -766,9 +770,11 @@ void MLogger::logObjectDatagramStatusCreated(const ObjectHeader& header) {
   addObjectDatagramStatusCreatedLog(std::move(baseMsg));
 }
 
-void MLogger::logObjectDatagramStatusParsed(const ObjectHeader& header) {
+void MLogger::logObjectDatagramStatusParsed(
+    TrackAlias trackAlias,
+    const ObjectHeader& header) {
   MOQTObjectDatagramStatusParsed baseMsg;
-  baseMsg.trackAlias = std::get<TrackAlias>(header.trackIdentifier).value;
+  baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
@@ -811,6 +817,7 @@ void MLogger::logSubgroupHeaderParsed(
 
 void MLogger::logSubgroupObjectCreated(
     uint64_t streamId,
+    TrackAlias trackAlias,
     const ObjectHeader& objHeader,
     Payload payload) {
   MOQTSubgroupObjectCreated baseMsg;
@@ -829,6 +836,7 @@ void MLogger::logSubgroupObjectCreated(
 
 void MLogger::logSubgroupObjectParsed(
     uint64_t streamId,
+    TrackAlias trackAlias,
     const ObjectHeader& objHeader,
     Payload payload) {
   MOQTSubgroupObjectParsed baseMsg;
