@@ -1382,6 +1382,9 @@ folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
     return folly::makeUnexpected(res.error());
   }
   unannounce.trackNamespace = TrackNamespace(std::move(res.value()));
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return unannounce;
 }
 
