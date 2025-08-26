@@ -187,7 +187,7 @@ class MockFetchConsumer : public FetchConsumer {
   MOCK_METHOD(void, reset, (ResetStreamErrorCode), (override));
 
   MOCK_METHOD(
-      (folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>),
+      (folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>),
       awaitReadyToConsume,
       (),
       (override));
@@ -233,7 +233,7 @@ class MockSubgroupConsumer : public SubgroupConsumer {
       (override));
   MOCK_METHOD(void, reset, (ResetStreamErrorCode), (override));
   MOCK_METHOD(
-      (folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>),
+      (folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>),
       awaitReadyToConsume,
       (),
       (override));

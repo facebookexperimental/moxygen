@@ -95,9 +95,9 @@ MoQPerfClientFetchConsumer::endOfFetch() {
 
 void MoQPerfClientFetchConsumer::reset(ResetStreamErrorCode error) {}
 
-folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
 MoQPerfClientFetchConsumer::awaitReadyToConsume() {
-  return folly::makeSemiFuture();
+  return folly::makeSemiFuture<uint64_t>(0);
 }
 
 MoQPerfClient::MoQPerfClient(

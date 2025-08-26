@@ -519,7 +519,7 @@ CO_TEST_F(MoQCacheTest, TestConsumerObjectBlocked) {
               MoQPublishError(MoQPublishError::BLOCKED));
         });
     EXPECT_CALL(*consumer_, awaitReadyToConsume())
-        .WillOnce(Return(folly::makeSemiFuture(folly::unit)));
+        .WillOnce(Return(uint64_t(0)));
     expectFetchObjects({0, 1}, {0, 2}, false);
   }
   auto res =

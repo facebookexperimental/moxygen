@@ -191,7 +191,7 @@ class MoQPerfClientFetchConsumer : public FetchConsumer {
 
   virtual void reset(ResetStreamErrorCode error) override;
 
-  virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() override;
 
  private:

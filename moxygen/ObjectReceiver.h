@@ -291,12 +291,12 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
     return fetchPublisher_->reset(error);
   }
 
-  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() override {
     // TODO: Consider extending ObjectReceiverCallback with a mechanism
     // to trigger backpressure here.  For now, FETCH consumers that want
     // actual backpressure need to implement FetchConsumer directly.
-    return folly::makeSemiFuture();
+    return folly::makeSemiFuture<uint64_t>(0);
   }
 };
 

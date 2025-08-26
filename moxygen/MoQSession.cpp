@@ -210,7 +210,7 @@ class StreamPublisherImpl
     return endOfSubgroup();
   }
 
-  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() override;
 
   folly::Expected<folly::Unit, MoQPublishError> publishStatus(
@@ -691,7 +691,7 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
   onStreamComplete();
 }
 
-folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
 StreamPublisherImpl::awaitReadyToConsume() {
   if (!writeHandle_) {
     return folly::makeUnexpected(

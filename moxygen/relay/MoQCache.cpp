@@ -651,7 +651,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     updateInProgress();
   }
 
-  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() override {
     // Currently we fill at the consumer's rate.  We could also allow some
     // buffering here and fill at a higher rate.

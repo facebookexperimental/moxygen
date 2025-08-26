@@ -132,9 +132,9 @@ class SubgroupConsumer {
   // pace data according to the rate at which the consumer is consuming it. If
   // the publisher ignores this signal (which is perfectly valid), it may get
   // a TOO_FAR_BEHIND if the client is unable to keep up.
-  virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() {
-    return folly::makeSemiFuture();
+    return folly::makeSemiFuture<uint64_t>(0);
   }
 };
 
@@ -296,7 +296,7 @@ class FetchConsumer {
   virtual void reset(ResetStreamErrorCode error) = 0;
 
   // Wait for the fetch to become writable
-  virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() = 0;
 };
 
