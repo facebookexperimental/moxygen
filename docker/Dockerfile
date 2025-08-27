@@ -57,7 +57,10 @@ RUN ./scripts/create-server-certs.sh
 # Set default environment variables
 ENV MOQ_LOG_LEVEL=DBG
 ENV MOQ_PORT=4433
+ENV CERT_FILE=./certs/certificate.pem
+ENV KEY_FILE=./certs/certificate.key
+ENV MOQ_ENDPOINT=/moq
 
 EXPOSE ${MOQ_PORT}/udp
 
-CMD ["sh", "-c", "./_build/bin/moqrelayserver -port ${MOQ_PORT} -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint \"/moq\" --logging ${MOQ_LOG_LEVEL}"]
+CMD ["sh", "-c", "./_build/bin/moqrelayserver -port ${MOQ_PORT} -cert ${CERT_FILE} -key ${KEY_FILE} -endpoint \"${MOQ_ENDPOINT}\" --logging ${MOQ_LOG_LEVEL}"]
