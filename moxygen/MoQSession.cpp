@@ -8,6 +8,7 @@
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
 #include <folly/io/async/EventBase.h>
+#include <quic/common/CircularDeque.h>
 
 #include <folly/logging/xlog.h>
 
@@ -77,7 +78,8 @@ class StreamPublisherImpl
   // first published object.
   explicit StreamPublisherImpl(
       std::shared_ptr<MoQSession::PublisherImpl> publisher,
-      std::shared_ptr<MLogger> logger = nullptr);
+      std::shared_ptr<MLogger> logger = nullptr,
+      std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr);
 
   // Subscribe constructor
   StreamPublisherImpl(
@@ -88,7 +90,8 @@ class StreamPublisherImpl
       uint64_t subgroupID,
       SubgroupIDFormat format,
       bool includeExtensions,
-      std::shared_ptr<MLogger> logger = nullptr);
+      std::shared_ptr<MLogger> logger = nullptr,
+      std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr);
 
   // SubgroupConsumer overrides
   // Note where the interface uses finSubgroup, this class uses finStream,
@@ -220,11 +223,56 @@ class StreamPublisherImpl
       bool finStream);
 
   void onByteEvent(quic::StreamId id, uint64_t offset) noexcept override {
+    // Notify delivery callback for all objects delivered up to this offset
+    if (deliveryCallback_) {
+      while (!pendingDeliveries_.empty()) {
+        auto& pendingDelivery = pendingDeliveries_.front();
+
+        if (pendingDelivery.endOffset <= offset) {
+          folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
+          if (streamType_ != StreamType::FETCH_HEADER) {
+            maybeTrackAlias = trackAlias_;
+          }
+          deliveryCallback_->onDelivered(
+              maybeTrackAlias,
+              pendingDelivery.groupId,
+              pendingDelivery.subgroupId,
+              pendingDelivery.objectId);
+          pendingDeliveries_.pop_front();
+        } else {
+          break;
+        }
+      }
+    }
     onByteEventCommon(id, offset);
   }
 
   void onByteEventCanceled(quic::StreamId id, uint64_t offset) noexcept
       override {
+    // Notify delivery cancelled for all objects delivered after this offset.
+    // If delivery has been cancelled for an offset (e.g. by a reset), then
+    // delivery must be cancelled for all offsets higher than the cancelled
+    // offset as well;
+    if (deliveryCallback_) {
+      while (!pendingDeliveries_.empty()) {
+        auto& pendingDelivery = pendingDeliveries_.back();
+
+        if (pendingDelivery.endOffset >= offset) {
+          folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
+          if (streamType_ != StreamType::FETCH_HEADER) {
+            maybeTrackAlias = trackAlias_;
+          }
+          deliveryCallback_->onDeliveryCancelled(
+              maybeTrackAlias,
+              pendingDelivery.groupId,
+              pendingDelivery.subgroupId,
+              pendingDelivery.objectId);
+          pendingDeliveries_.pop_back();
+        } else {
+          break;
+        }
+      }
+    }
     onByteEventCommon(id, offset);
   }
 
@@ -234,6 +282,20 @@ class StreamPublisherImpl
 
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
+  std::shared_ptr<DeliveryCallback> deliveryCallback_ = nullptr;
+
+  // Track objects and their end offsets for delivery callbacks
+  struct ObjectDeliveryInfo {
+    uint64_t groupId;
+    uint64_t subgroupId;
+    uint64_t objectId;
+    uint64_t endOffset;
+
+    ObjectDeliveryInfo(uint64_t g, uint64_t sg, uint64_t o, uint64_t offset)
+        : groupId(g), subgroupId(sg), objectId(o), endOffset(offset) {}
+  };
+  quic::CircularDeque<ObjectDeliveryInfo> pendingDeliveries_;
+
   void onByteEventCommon(quic::StreamId id, uint64_t offset) {
     uint64_t bytesDeliveredOrCanceled = offset + 1;
     if (bytesDeliveredOrCanceled > bytesDeliveredOrCanceled_) {
@@ -275,7 +337,9 @@ class StreamPublisherImpl
       Payload payload,
       const Extensions& extensions,
       bool finStream);
-  folly::Expected<folly::Unit, MoQPublishError> writeToStream(bool finStream);
+  folly::Expected<folly::Unit, MoQPublishError> writeToStream(
+      bool finStream,
+      bool endObject = false);
 
   void onStreamComplete();
 
@@ -303,7 +367,8 @@ class StreamPublisherImpl
 
 StreamPublisherImpl::StreamPublisherImpl(
     std::shared_ptr<MoQSession::PublisherImpl> publisher,
-    std::shared_ptr<MLogger> logger)
+    std::shared_ptr<MLogger> logger,
+    std::shared_ptr<DeliveryCallback> deliveryCallback)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
@@ -313,6 +378,7 @@ StreamPublisherImpl::StreamPublisherImpl(
           0,
           ObjectStatus::NORMAL) {
   logger_ = logger;
+  deliveryCallback_ = deliveryCallback;
   moqFrameWriter_.initializeVersion(publisher->getVersion());
   (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->requestID());
 }
@@ -325,8 +391,9 @@ StreamPublisherImpl::StreamPublisherImpl(
     uint64_t subgroupID,
     SubgroupIDFormat format,
     bool includeExtensions,
-    std::shared_ptr<MLogger> logger)
-    : StreamPublisherImpl(publisher) {
+    std::shared_ptr<MLogger> logger,
+    std::shared_ptr<DeliveryCallback> deliveryCallback)
+    : StreamPublisherImpl(publisher, nullptr, deliveryCallback) {
   CHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
   streamType_ = getSubgroupStreamType(
@@ -383,6 +450,7 @@ void StreamPublisherImpl::setWriteHandle(
 void StreamPublisherImpl::onStreamComplete() {
   XCHECK_EQ(writeHandle_, nullptr);
   streamComplete_ = true;
+
   if (publisher_) {
     publisher_->onStreamComplete(header_);
   }
@@ -419,13 +487,14 @@ StreamPublisherImpl::writeCurrentObject(
   // copy is gratuitous
   header_.extensions = extensions;
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
+  bool entireObjectWritten = (!currentLengthRemaining_.hasValue());
   (void)moqFrameWriter_.writeStreamObject(
       writeBuf_, streamType_, header_, std::move(payload));
-  return writeToStream(finStream);
+  return writeToStream(finStream, entireObjectWritten);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
-StreamPublisherImpl::writeToStream(bool finStream) {
+StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
   if (streamType_ != StreamType::FETCH_HEADER &&
       !publisher_->canBufferBytes(writeBuf_.chainLength())) {
     publisher_->onTooManyBytesBuffered();
@@ -445,6 +514,13 @@ StreamPublisherImpl::writeToStream(bool finStream) {
   proxygen::WebTransport::ByteEventCallback* deliveryCallback = nullptr;
   if (!writeBuf_.empty() || finStream) {
     deliveryCallback = this;
+
+    if (deliveryCallback_ && endObject) {
+      uint64_t endOffset = bytesWritten_ + writeBuf_.chainLength() - 1;
+      pendingDeliveries_.emplace_back(
+          header_.group, header_.subgroup, header_.id, endOffset);
+    }
+
     bytesWritten_ += writeBuf_.chainLength();
     publisher_->onBytesBuffered(writeBuf_.chainLength());
     if (refCountForCallbacks_ == 0) {
@@ -592,7 +668,8 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
     return validateObjectPublishRes;
   }
   writeBuf_.append(std::move(payload));
-  auto writeRes = writeToStream(finStream);
+  bool entireObjectWritten = (!currentLengthRemaining_.hasValue());
+  auto writeRes = writeToStream(finStream, entireObjectWritten);
   if (writeRes.hasValue()) {
     return validateObjectPublishRes.value();
   } else {
@@ -887,6 +964,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
       SubscribeDone subDone) override;
 
+  void setDeliveryCallback(std::shared_ptr<DeliveryCallback> callback) override;
+
   void setLogger(std::shared_ptr<MLogger> logger) {
     logger_ = logger;
   }
@@ -904,6 +983,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   enum class State { OPEN, DONE };
   State state_{State::OPEN};
   bool forward_;
+  std::shared_ptr<DeliveryCallback> deliveryCallback_;
 };
 
 class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
@@ -926,8 +1006,8 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
             bytesBufferedThreshold) {}
 
   void initialize() {
-    streamPublisher_ =
-        std::make_shared<StreamPublisherImpl>(shared_from_this(), logger_);
+    streamPublisher_ = std::make_shared<StreamPublisherImpl>(
+        shared_from_this(), logger_, nullptr);
   }
 
   std::shared_ptr<StreamPublisherImpl> getStreamPublisher() const {
@@ -1043,7 +1123,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       subgroupID,
       format,
       includeExtensions,
-      logger_);
+      logger_,
+      deliveryCallback_);
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
@@ -1234,6 +1315,11 @@ MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
   }
   subDone.streamCount = streamCount_;
   return PublisherImpl::subscribeDone(std::move(subDone));
+}
+
+void MoQSession::TrackPublisherImpl::setDeliveryCallback(
+    std::shared_ptr<DeliveryCallback> callback) {
+  deliveryCallback_ = std::move(callback);
 }
 
 // Receive State

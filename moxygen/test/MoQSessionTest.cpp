@@ -3020,6 +3020,212 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Mock delivery callback for testing
+class MockDeliveryCallback : public DeliveryCallback {
+ public:
+  MOCK_METHOD(
+      void,
+      onDelivered,
+      (const folly::Optional<TrackAlias>&,
+       uint64_t groupId,
+       uint64_t subgroupId,
+       uint64_t objectId),
+      (override));
+
+  MOCK_METHOD(
+      void,
+      onDeliveryCancelled,
+      (const folly::Optional<TrackAlias>&,
+       uint64_t groupId,
+       uint64_t subgroupId,
+       uint64_t objectId),
+      (override));
+};
+
+CO_TEST_P_X(MoQSessionTest, DeliveryCallbackBasic) {
+  co_await setupMoQSession();
+  auto deliveryCallback =
+      std::make_shared<testing::StrictMock<MockDeliveryCallback>>();
+
+  expectSubscribe(
+      [this, deliveryCallback](auto sub, auto pub) -> TaskSubscribeResult {
+        // Set the delivery callback
+        pub->setDeliveryCallback(deliveryCallback);
+
+        eventBase_.add(
+            [this, pub, sub, serverWt = serverWt_.get(), deliveryCallback] {
+              EXPECT_CALL(
+                  *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+              EXPECT_CALL(
+                  *clientSubscriberStatsCallback_,
+                  onSubscriptionStreamOpened());
+              auto sgp = pub->beginSubgroup(0, 0, 0).value();
+
+              // Buffer data to control delivery timing
+              serverWt->writeHandles[2]->setImmediateDelivery(false);
+              auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
+              EXPECT_TRUE(objectResult.hasValue());
+
+              // Manually trigger delivery - this should invoke the callback
+              // Expect the delivery callback to be invoked for the object
+              EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0))
+                  .WillOnce(testing::Return());
+              serverWt->writeHandles[2]->deliverInflightData();
+
+              sgp->endOfSubgroup();
+              serverWt->writeHandles[2]->deliverInflightData();
+              pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+            });
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+  expectSubscribeDone();
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, DeliveryCallbackObjectSplitInTwo) {
+  co_await setupMoQSession();
+  auto deliveryCallback =
+      std::make_shared<testing::StrictMock<MockDeliveryCallback>>();
+
+  expectSubscribe(
+      [this, deliveryCallback](auto sub, auto pub) -> TaskSubscribeResult {
+        // Set the delivery callback
+        pub->setDeliveryCallback(deliveryCallback);
+
+        eventBase_.add(
+            [this, pub, sub, serverWt = serverWt_.get(), deliveryCallback] {
+              EXPECT_CALL(
+                  *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+              EXPECT_CALL(
+                  *clientSubscriberStatsCallback_,
+                  onSubscriptionStreamOpened());
+              auto sgp = pub->beginSubgroup(0, 0, 0).value();
+
+              serverWt->writeHandles[2]->setImmediateDelivery(false);
+
+              // Begin object with initial payload (5 bytes) out of total 10
+              // bytes
+              auto beginObjectResult =
+                  sgp->beginObject(0, 10, moxygen::test::makeBuf(5));
+              EXPECT_TRUE(beginObjectResult.hasValue());
+
+              serverWt->writeHandles[2]->deliverInflightData();
+
+              // Expect the delivery callback to be invoked for the object
+              EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0)).Times(1);
+
+              // Send remaining payload (5 bytes) to complete the object
+              auto payloadResult =
+                  sgp->objectPayload(moxygen::test::makeBuf(5));
+              EXPECT_TRUE(payloadResult.hasValue());
+
+              serverWt->writeHandles[2]->deliverInflightData();
+
+              sgp->endOfSubgroup();
+              serverWt->writeHandles[2]->deliverInflightData();
+              pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+            });
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+  expectSubscribeDone();
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, DeliveryCallbackMultipleStreams) {
+  co_await setupMoQSession();
+  auto deliveryCallback =
+      std::make_shared<testing::StrictMock<MockDeliveryCallback>>();
+
+  expectSubscribe(
+      [this, deliveryCallback, serverWt = serverWt_.get()](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        // Set the delivery callback
+        pub->setDeliveryCallback(deliveryCallback);
+
+        eventBase_.add([this, pub, sub, deliveryCallback, serverWt] {
+          EXPECT_CALL(
+              *serverPublisherStatsCallback_, onSubscriptionStreamOpened())
+              .Times(testing::AtLeast(1));
+          EXPECT_CALL(
+              *clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+              .Times(testing::AtLeast(1));
+
+          // Create multiple subgroups and objects across different streams
+          // Stream 1: Group 0, Subgroup 0
+          auto sgp1 = pub->beginSubgroup(0, 0, 0).value();
+          auto objectResult1 = sgp1->object(0, moxygen::test::makeBuf(10));
+          EXPECT_TRUE(objectResult1.hasValue());
+          auto objectResult2 = sgp1->object(1, moxygen::test::makeBuf(20));
+          EXPECT_TRUE(objectResult2.hasValue());
+          sgp1->endOfSubgroup();
+
+          // Stream 2: Group 0, Subgroup 1
+          auto sgp2 = pub->beginSubgroup(0, 1, 0).value();
+          auto objectResult3 = sgp2->object(0, moxygen::test::makeBuf(15));
+          EXPECT_TRUE(objectResult3.hasValue());
+          sgp2->endOfSubgroup();
+
+          // Stream 3: Group 1, Subgroup 0
+          auto sgp3 = pub->beginSubgroup(1, 0, 0).value();
+          auto objectResult4 = sgp3->object(0, moxygen::test::makeBuf(25));
+          EXPECT_TRUE(objectResult4.hasValue());
+          sgp3->endOfSubgroup();
+
+          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        });
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  // Set up mock subgroup consumers for each subgroup
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  auto sg2 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  auto sg3 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, object(1, _, _, _)).WillOnce(testing::Return(folly::unit));
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 1, 0))
+      .WillOnce(testing::Return(sg2));
+  EXPECT_CALL(*sg2, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(1, 0, 0))
+      .WillOnce(testing::Return(sg3));
+  EXPECT_CALL(*sg3, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+
+  expectSubscribeDone();
+
+  EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0));
+  EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 1));
+  EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 1, 0));
+  EXPECT_CALL(*deliveryCallback, onDelivered(_, 1, 0, 0));
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)

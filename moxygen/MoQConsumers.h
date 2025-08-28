@@ -13,6 +13,27 @@
 
 namespace moxygen {
 
+// Callback interface for delivery notifications
+class DeliveryCallback {
+ public:
+  virtual ~DeliveryCallback() = default;
+
+  // Called when an object has been delivered successfully
+  virtual void onDelivered(
+      const folly::Optional<TrackAlias>& maybeTrackAlias,
+      uint64_t groupId,
+      uint64_t subgroupId,
+      uint64_t objectId) = 0;
+
+  // Called when we, for instance, reset the stream, and can't
+  // guarantee delivery of the object.
+  virtual void onDeliveryCancelled(
+      const folly::Optional<TrackAlias>& maybeTrackAlias,
+      uint64_t groupId,
+      uint64_t subgroupId,
+      uint64_t objectId) = 0;
+};
+
 // MoQ Consumers
 //
 // These interfaces are used both for writing and reading track data.
@@ -195,6 +216,12 @@ class TrackConsumer {
   // send any new datagrams for this track.
   virtual folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
       SubscribeDone subDone) = 0;
+
+  // Set a callback to be notified when objects are delivered.
+  virtual void setDeliveryCallback(std::shared_ptr<DeliveryCallback> callback) {
+    // Default implementation is a no-op. This is only implemented by the
+    // library-provided implementation of TrackConsumer.
+  }
 };
 
 // Interface for Publishing and Receiving objects for a Fetch
