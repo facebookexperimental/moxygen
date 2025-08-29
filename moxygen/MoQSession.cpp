@@ -1542,6 +1542,52 @@ class MoQSession::FetchTrackReceiveState
   uint64_t currentStreamId_{0};
 };
 
+void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
+  switch (type_) {
+    case Type::SUBSCRIBE_TRACK: {
+      if (!storage_.subscribeTrack_->isPublish()) {
+        storage_.subscribeTrack_->subscribeError(
+            {reqID,
+             SubscribeErrorCode::INTERNAL_ERROR,
+             "session closed",
+             folly::none});
+      }
+      break;
+    }
+    case Type::ANNOUNCE: {
+      storage_.announce_.promise.setValue(folly::makeUnexpected(AnnounceError(
+          {reqID,
+           storage_.announce_.trackNamespace,
+           AnnounceErrorCode::INTERNAL_ERROR,
+           "session closed"})));
+      break;
+    }
+    case Type::SUBSCRIBE_ANNOUNCES: {
+      storage_.subscribeAnnounces_.setValue(
+          folly::makeUnexpected(SubscribeAnnouncesError(
+              {reqID,
+               TrackNamespace(),
+               SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+               "session closed"})));
+      break;
+    }
+    case Type::PUBLISH: {
+      storage_.publish_.setValue(folly::makeUnexpected(PublishError(
+          {reqID, PublishErrorCode::INTERNAL_ERROR, "session closed"})));
+      break;
+    }
+    case Type::TRACK_STATUS: {
+      storage_.trackStatus_.setValue(TrackStatus{
+          .requestID = reqID,
+          .fullTrackName = FullTrackName(),
+          .statusCode = TrackStatusCode::TRACK_NOT_EXIST,
+          .largestGroupAndObject = folly::none,
+          .params = {}});
+      break;
+    }
+  }
+}
+
 using folly::coro::co_awaitTry;
 using folly::coro::co_error;
 
@@ -1641,16 +1687,6 @@ void MoQSession::cleanup() {
              "Session Closed"}),
         ResetStreamErrorCode::SESSION_CLOSED);
   }
-  for (auto& [reqID, trackReceiveState] : pendingSubscribeTracks_) {
-    if (!trackReceiveState->isPublish()) {
-      trackReceiveState->subscribeError(
-          {reqID,
-           SubscribeErrorCode::INTERNAL_ERROR,
-           "session closed",
-           folly::none});
-    }
-  }
-  pendingSubscribeTracks_.clear();
   for (auto& subTrack : subTracks_) {
     if (!subTrack.second->isPublish()) {
       subTrack.second->subscribeError(
@@ -1673,27 +1709,11 @@ void MoQSession::cleanup() {
          "session closed"});
   }
   fetches_.clear();
-  for (auto& [reqID, pendingAnn] : pendingAnnounce_) {
-    pendingAnn.promise.setValue(folly::makeUnexpected(AnnounceError(
-        {reqID,
-         TrackNamespace(),
-         AnnounceErrorCode::INTERNAL_ERROR,
-         "session closed"})));
+  // Handle all pending requests in consolidated map
+  for (auto& [reqID, pendingState] : pendingRequests_) {
+    pendingState.deliverError(reqID);
   }
-  pendingAnnounce_.clear();
-  for (auto& [reqID, pendingSn] : pendingSubscribeAnnounces_) {
-    pendingSn.setValue(folly::makeUnexpected(SubscribeAnnouncesError(
-        {reqID,
-         TrackNamespace(),
-         SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-         "session closed"})));
-  }
-  pendingSubscribeAnnounces_.clear();
-  for (auto& [reqID, pendingPub] : pendingPublish_) {
-    pendingPub.setValue(folly::makeUnexpected(PublishError(
-        {reqID, PublishErrorCode::INTERNAL_ERROR, "session closed"})));
-  }
-  pendingPublish_.clear();
+  pendingRequests_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
@@ -2670,32 +2690,49 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
 void MoQSession::onPublishOk(PublishOk publishOk) {
   XLOG(DBG1) << __func__ << " reqID=" << publishOk.requestID
              << " sess=" << this;
-  auto pubIt = pendingPublish_.find(publishOk.requestID);
-  if (pubIt == pendingPublish_.end()) {
+  auto pubIt = pendingRequests_.find(publishOk.requestID);
+  if (pubIt == pendingRequests_.end()) {
     XLOG(ERR) << "No matching publish reqID=" << publishOk.requestID
               << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  pubIt->second.setValue(std::move(publishOk));
-  pendingPublish_.erase(pubIt);
+
+  auto* publishPtr = pubIt->second.tryGetPublish();
+  if (!publishPtr) {
+    XLOG(ERR) << "Request ID " << publishOk.requestID
+              << " is not a publish request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  publishPtr->setValue(std::move(publishOk));
+  pendingRequests_.erase(pubIt);
 }
 
 void MoQSession::onPublishError(PublishError publishError) {
   XLOG(DBG1) << __func__ << " reqID=" << publishError.requestID
              << " sess=" << this;
 
-  auto pendIt = pendingPublish_.find(publishError.requestID);
-  if (pendIt == pendingPublish_.end()) {
+  auto pendIt = pendingRequests_.find(publishError.requestID);
+  if (pendIt == pendingRequests_.end()) {
     XLOG(ERR) << "No matching publish reqID=" << publishError.requestID
               << " sess=" << this;
-    for (const auto& pair : pendingPublish_) {
-      XLOG(ERR) << "  reqID=" << pair.first;
-    }
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
+
+  auto* publishPtr = pendIt->second.tryGetPublish();
+  if (!publishPtr) {
+    XLOG(ERR) << "Request ID " << publishError.requestID
+              << " is not a publish request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
   auto requestId = publishError.requestID;
-  pendIt->second.setValue(folly::makeUnexpected(std::move(publishError)));
-  pendingPublish_.erase(pendIt);
+  publishPtr->setValue(folly::makeUnexpected(std::move(publishError)));
+  pendingRequests_.erase(pendIt);
 
   auto pubIt = pubTracks_.find(requestId);
   if (pubIt == pubTracks_.end()) {
@@ -2713,15 +2750,22 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     logger_->logSubscribeOk(subOk, ControlMessageType::PARSED);
   }
 
-  auto it = pendingSubscribeTracks_.find(subOk.requestID);
-  if (it == pendingSubscribeTracks_.end()) {
+  auto it = pendingRequests_.find(subOk.requestID);
+  if (it == pendingRequests_.end()) {
     XLOG(ERR) << "No matching subscribe ID=" << subOk.requestID
               << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto trackReceiveState = std::move(it->second);
-  pendingSubscribeTracks_.erase(it);
+  auto* trackPtr = it->second.tryGetSubscribeTrack();
+  if (!trackPtr) {
+    XLOG(ERR) << "Request ID " << subOk.requestID
+              << " is not a subscribe track request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  auto trackReceiveState = std::move(*trackPtr);
+  pendingRequests_.erase(it);
   if (getDraftMajorVersion(*getNegotiatedVersion()) < 12) {
     subOk.trackAlias = trackReceiveState->getTrackAlias();
   }
@@ -2775,15 +2819,22 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
     logger_->logSubscribeError(subErr, ControlMessageType::PARSED);
   }
 
-  auto it = pendingSubscribeTracks_.find(subErr.requestID);
-  if (it == pendingSubscribeTracks_.end()) {
+  auto it = pendingRequests_.find(subErr.requestID);
+  if (it == pendingRequests_.end()) {
     XLOG(ERR) << "No matching request ID=" << subErr.requestID
               << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto trackReceiveState = std::move(it->second);
-  pendingSubscribeTracks_.erase(it);
+  auto* trackPtr = it->second.tryGetSubscribeTrack();
+  if (!trackPtr) {
+    XLOG(ERR) << "Request ID " << subErr.requestID
+              << " is not a subscribe track request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  auto trackReceiveState = std::move(*trackPtr);
+  pendingRequests_.erase(it);
   trackReceiveState->subscribeError(std::move(subErr));
   checkForCloseOnDrain();
 }
@@ -3228,10 +3279,6 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
   }
 }
 
-RequestID MoQSession::getRequestID(RequestID id, const FullTrackName& ftn) {
-  return id;
-}
-
 void MoQSession::onAnnounceOk(AnnounceOk annOk) {
   XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
 
@@ -3240,25 +3287,33 @@ void MoQSession::onAnnounceOk(AnnounceOk annOk) {
         annOk, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
   }
 
-  auto reqID = getRequestID(
-      annOk.requestID, FullTrackName({annOk.trackNamespace, "announce"}));
-  auto annIt = pendingAnnounce_.find(reqID);
-  if (annIt == pendingAnnounce_.end()) {
+  auto reqID = annOk.requestID;
+  auto annIt = pendingRequests_.find(reqID);
+  if (annIt == pendingRequests_.end()) {
     // unknown
     XLOG(ERR) << "No matching announce reqID=" << reqID
               << " trackNamespace=" << annOk.trackNamespace << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
 
-  publisherAnnounces_[annIt->second.trackNamespace] =
-      std::move(annIt->second.callback);
-  annOk.trackNamespace = annIt->second.trackNamespace;
-  annIt->second.promise.setValue(std::move(annOk));
-  pendingAnnounce_.erase(annIt);
+  auto* announcePtr = annIt->second.tryGetAnnounce();
+  if (!announcePtr) {
+    XLOG(ERR) << "Request ID " << reqID
+              << " is not an announce request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  publisherAnnounces_[announcePtr->trackNamespace] =
+      std::move(announcePtr->callback);
+  annOk.trackNamespace = announcePtr->trackNamespace;
+  announcePtr->promise.setValue(std::move(annOk));
+  pendingRequests_.erase(annIt);
 }
 
 void MoQSession::onAnnounceError(AnnounceError announceError) {
-  XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
+  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
              << " sess=" << this;
 
   if (logger_) {
@@ -3267,20 +3322,26 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
-  auto reqID = getRequestID(
-      announceError.requestID,
-      FullTrackName({announceError.trackNamespace, "announce"}));
-  auto annIt = pendingAnnounce_.find(reqID);
-  if (annIt == pendingAnnounce_.end()) {
+  auto reqID = announceError.requestID.value;
+  auto annIt = pendingRequests_.find(reqID);
+  if (annIt == pendingRequests_.end()) {
     // unknown
-    XLOG(ERR) << "No matching announce requestID=" << reqID
-              << " trackNamespace=" << announceError.trackNamespace
-              << " sess=" << this;
+    XLOG(ERR) << "No matching announce requestID=" << reqID << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  annIt->second.promise.setValue(
+
+  auto* announcePtr = annIt->second.tryGetAnnounce();
+  if (!announcePtr) {
+    XLOG(ERR) << "Request ID " << reqID
+              << " is not an announce request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  announcePtr->promise.setValue(
       folly::makeUnexpected(std::move(announceError)));
-  pendingAnnounce_.erase(annIt);
+  pendingRequests_.erase(annIt);
 }
 
 void MoQSession::onUnannounce(Unannounce unAnn) {
@@ -3402,25 +3463,32 @@ void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
     logger_->logSubscribeAnnouncesOk(
         saOk, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
   }
-  auto reqID = getRequestID(
-      saOk.requestID,
-      FullTrackName({saOk.trackNamespacePrefix, "subannounce"}));
-  auto saIt = pendingSubscribeAnnounces_.find(reqID);
-  if (saIt == pendingSubscribeAnnounces_.end()) {
+  auto reqID = saOk.requestID;
+  auto saIt = pendingRequests_.find(reqID);
+  if (saIt == pendingRequests_.end()) {
     // unknown
     XLOG(ERR) << "No matching subscribeAnnounces reqID=" << reqID
               << " trackNamespace=" << saOk.trackNamespacePrefix
               << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  saIt->second.setValue(std::move(saOk));
-  pendingSubscribeAnnounces_.erase(saIt);
+
+  auto* subscribeAnnouncesPtr = saIt->second.tryGetSubscribeAnnounces();
+  if (!subscribeAnnouncesPtr) {
+    XLOG(ERR) << "Request ID " << reqID
+              << " is not a subscribe announces request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  subscribeAnnouncesPtr->setValue(std::move(saOk));
+  pendingRequests_.erase(saIt);
 }
 
 void MoQSession::onSubscribeAnnouncesError(
     SubscribeAnnouncesError subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__
-             << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
+  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
              << " sess=" << this;
   if (logger_) {
     logger_->logSubscribeAnnouncesError(
@@ -3428,22 +3496,27 @@ void MoQSession::onSubscribeAnnouncesError(
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
-  auto reqID = getRequestID(
-      subscribeAnnouncesError.requestID,
-      FullTrackName(
-          {subscribeAnnouncesError.trackNamespacePrefix, "subannounce"}));
-  auto saIt = pendingSubscribeAnnounces_.find(reqID);
-  if (saIt == pendingSubscribeAnnounces_.end()) {
+  auto reqID = subscribeAnnouncesError.requestID.value;
+  auto saIt = pendingRequests_.find(reqID);
+  if (saIt == pendingRequests_.end()) {
     // unknown
     XLOG(ERR) << "No matching subscribeAnnounces reqID=" << reqID
-              << " trackNamespace="
-              << subscribeAnnouncesError.trackNamespacePrefix
               << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  saIt->second.setValue(
+
+  auto* subscribeAnnouncesPtr = saIt->second.tryGetSubscribeAnnounces();
+  if (!subscribeAnnouncesPtr) {
+    XLOG(ERR) << "Request ID " << reqID
+              << " is not a subscribe announces request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  subscribeAnnouncesPtr->setValue(
       folly::makeUnexpected(std::move(subscribeAnnouncesError)));
-  pendingSubscribeAnnounces_.erase(saIt);
+  pendingRequests_.erase(saIt);
 }
 
 void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
@@ -3555,8 +3628,9 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<TrackStatus>();
-  trackStatuses_.emplace(
-      trackStatusRequest.requestID, std::move(contract.first));
+  pendingRequests_.emplace(
+      trackStatusRequest.requestID,
+      PendingRequestState::makeTrackStatus(std::move(contract.first)));
   co_return co_await std::move(contract.second);
 }
 
@@ -3564,8 +3638,8 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << " code=" << uint64_t(trackStatus.statusCode)
              << " sess=" << this;
-  auto reqID = getRequestID(trackStatus.requestID, trackStatus.fullTrackName);
-  auto trackStatusIt = trackStatuses_.find(reqID);
+  auto reqID = trackStatus.requestID;
+  auto trackStatusIt = pendingRequests_.find(reqID);
 
   if (logger_) {
     logger_->logTrackStatus(
@@ -3573,14 +3647,24 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
-  if (trackStatusIt == trackStatuses_.end()) {
+  if (trackStatusIt == pendingRequests_.end()) {
     XLOG(ERR) << __func__
               << " Couldn't find a pending TrackStatusRequest for reqID="
               << reqID << " ftn=" << trackStatus.fullTrackName;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  trackStatusIt->second.setValue(std::move(trackStatus));
-  trackStatuses_.erase(trackStatusIt);
+
+  auto* trackStatusPtr = trackStatusIt->second.tryGetTrackStatus();
+  if (!trackStatusPtr) {
+    XLOG(ERR) << "Request ID " << reqID
+              << " is not a track status request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  trackStatusPtr->setValue(std::move(trackStatus));
+  pendingRequests_.erase(trackStatusIt);
 }
 
 void MoQSession::onGoaway(Goaway goaway) {
@@ -3640,7 +3724,6 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     MOQ_PUBLISHER_STATS(
         publisherStatsCallback_, recordAnnounceLatency, durationMsec.count());
   };
-  auto trackNamespace = ann.trackNamespace;
   aliasifyAuthTokens(ann.params);
   ann.requestID = getNextRequestID();
   auto res = moqFrameWriter_.writeAnnounce(controlWriteBuf_, ann);
@@ -3648,19 +3731,19 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
     co_return folly::makeUnexpected(AnnounceError(
         {ann.requestID,
-         std::move(trackNamespace),
+         ann.trackNamespace,
          AnnounceErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<AnnounceOk, AnnounceError>>();
-  pendingAnnounce_.emplace(
+  pendingRequests_.emplace(
       ann.requestID,
-      PendingAnnounce(
+      PendingRequestState::makeAnnounce(PendingAnnounce(
           {std::move(ann.trackNamespace),
            std::move(contract.first),
-           std::move(announceCallback)}));
+           std::move(announceCallback)})));
   auto announceResult = co_await std::move(contract.second);
   if (announceResult.hasError()) {
     MOQ_PUBLISHER_STATS(
@@ -3741,7 +3824,9 @@ Subscriber::PublishResult MoQSession::publish(
   // Create Contract and place in pending publishes
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<PublishOk, PublishError>>();
-  pendingPublish_.emplace(pub.requestID, std::move(contract.first));
+  pendingRequests_.emplace(
+      pub.requestID,
+      PendingRequestState::makePublish(std::move(contract.first)));
 
   // Build replyTask that co_awaits the future and handles cleanup
   auto replyTask = folly::coro::co_invoke(
@@ -3788,7 +3873,7 @@ void MoQSession::announceOk(const AnnounceOk& annOk) {
 }
 
 void MoQSession::announceError(const AnnounceError& announceError) {
-  XLOG(DBG1) << __func__ << " ns=" << announceError.trackNamespace
+  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onAnnounceError, announceError.errorCode);
@@ -3852,19 +3937,24 @@ void MoQSession::unannounce(const Unannounce& unann) {
   if (it == publisherAnnounces_.end()) {
     // Not established but could be pending
     auto pendingIt = std::find_if(
-        pendingAnnounce_.begin(),
-        pendingAnnounce_.end(),
+        pendingRequests_.begin(),
+        pendingRequests_.end(),
         [&unann](const auto& pair) {
-          return pair.second.trackNamespace == unann.trackNamespace;
+          if (auto* announcePtr = pair.second.tryGetAnnounce()) {
+            return announcePtr->trackNamespace == unann.trackNamespace;
+          }
+          return false;
         });
 
-    if (pendingIt != pendingAnnounce_.end()) {
-      pendingIt->second.promise.setValue(folly::makeUnexpected(AnnounceError(
-          {pendingIt->first,
-           unann.trackNamespace,
-           AnnounceErrorCode::INTERNAL_ERROR,
-           "Unannounce before announce"})));
-      pendingAnnounce_.erase(pendingIt);
+    if (pendingIt != pendingRequests_.end()) {
+      if (auto* announcePtr = pendingIt->second.tryGetAnnounce()) {
+        announcePtr->promise.setValue(folly::makeUnexpected(AnnounceError(
+            {pendingIt->first,
+             unann.trackNamespace,
+             AnnounceErrorCode::INTERNAL_ERROR,
+             "Unannounce before announce"})));
+      }
+      pendingRequests_.erase(pendingIt);
     } else {
       XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
       return;
@@ -3919,7 +4009,7 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
     XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
     co_return folly::makeUnexpected(SubscribeAnnouncesError(
         {0,
-         std::move(trackNamespace),
+         trackNamespace,
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
@@ -3929,7 +4019,9 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
   controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>();
-  pendingSubscribeAnnounces_.emplace(sa.requestID, std::move(contract.first));
+  pendingRequests_.emplace(
+      sa.requestID,
+      PendingRequestState::makeSubscribeAnnounces(std::move(contract.first)));
   auto subAnnResult = co_await std::move(contract.second);
   if (subAnnResult.hasError()) {
     MOQ_SUBSCRIBER_STATS(
@@ -3963,8 +4055,7 @@ void MoQSession::subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk) {
 
 void MoQSession::subscribeAnnouncesError(
     const SubscribeAnnouncesError& subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__
-             << " prefix=" << subscribeAnnouncesError.trackNamespacePrefix
+  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_,
@@ -4035,8 +4126,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     SubscribeError subscribeError = {
         std::numeric_limits<uint64_t>::max(),
         SubscribeErrorCode::INTERNAL_ERROR,
-        "Draining session",
-        folly::none};
+        "Draining session"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
     co_return folly::makeUnexpected(subscribeError);
@@ -4052,10 +4142,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
     SubscribeError subscribeError = {
-        reqID,
-        SubscribeErrorCode::INTERNAL_ERROR,
-        "local write failed",
-        folly::none};
+        reqID, SubscribeErrorCode::INTERNAL_ERROR, "local write failed"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
     co_return folly::makeUnexpected(subscribeError);
@@ -4063,7 +4150,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
       fullTrackName, reqID, callback, logger_);
-  pendingSubscribeTracks_.emplace(reqID, trackReceiveState);
+  pendingRequests_.emplace(
+      reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
   auto subscribeResultTry =
       co_await co_awaitTry(trackReceiveState->subscribeFuture());
   if (subscribeResultTry.hasException()) {
@@ -4350,9 +4438,11 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   FullTrackName fullTrackName = fetch.fullTrackName;
   if (joining) {
     std::shared_ptr<SubscribeTrackReceiveState> state;
-    auto pendingIt = pendingSubscribeTracks_.find(joining->joiningRequestID);
-    if (pendingIt != pendingSubscribeTracks_.end()) {
-      state = pendingIt->second;
+    auto pendingIt = pendingRequests_.find(joining->joiningRequestID);
+    if (pendingIt != pendingRequests_.end()) {
+      if (auto* trackPtr = pendingIt->second.tryGetSubscribeTrack()) {
+        state = *trackPtr;
+      }
     } else {
       auto subIt = reqIdToTrackAlias_.find(joining->joiningRequestID);
       if (subIt != reqIdToTrackAlias_.end()) {

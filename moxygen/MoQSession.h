@@ -425,7 +425,6 @@ class MoQSession : public Subscriber,
   void aliasifyAuthTokens(
       std::vector<Parameter>& params,
       const folly::Optional<uint64_t>& forceVersion = folly::none);
-  RequestID getRequestID(RequestID id, const FullTrackName& ftn);
   RequestID getNextRequestID();
   uint8_t getRequestIDMultiplier() const {
     return 2;
@@ -444,11 +443,6 @@ class MoQSession : public Subscriber,
       std::shared_ptr<SubscribeTrackReceiveState>,
       TrackAlias::hash>
       subTracks_;
-  folly::F14FastMap<
-      RequestID,
-      std::shared_ptr<SubscribeTrackReceiveState>,
-      RequestID::hash>
-      pendingSubscribeTracks_;
 
   folly::F14FastMap<
       RequestID,
@@ -463,28 +457,187 @@ class MoQSession : public Subscriber,
     std::shared_ptr<AnnounceCallback> callback;
   };
 
-  // Publisher State
-  // Track Namespace -> Promise<AnnounceOK>
-  folly::F14FastMap<RequestID, PendingAnnounce, RequestID::hash>
-      pendingAnnounce_;
+  // Consolidated pending request state using bespoke discriminated union
+  class PendingRequestState {
+   public:
+    enum class Type : uint8_t {
+      SUBSCRIBE_TRACK,
+      ANNOUNCE,
+      SUBSCRIBE_ANNOUNCES,
+      PUBLISH,
+      TRACK_STATUS
+    };
 
-  folly::F14FastMap<
-      RequestID,
+   private:
+    Type type_;
+    union Storage {
+      Storage() {}  // Empty constructor
+      ~Storage() {} // Empty destructor - handled by PendingRequestState
+
+      std::shared_ptr<SubscribeTrackReceiveState> subscribeTrack_;
+      PendingAnnounce announce_;
       folly::coro::Promise<
-          folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>,
-      RequestID::hash>
-      pendingSubscribeAnnounces_;
+          folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
+          subscribeAnnounces_;
+      folly::coro::Promise<folly::Expected<PublishOk, PublishError>> publish_;
+      folly::coro::Promise<TrackStatus> trackStatus_;
+    } storage_;
 
-  folly::F14FastMap<
-      RequestID,
-      folly::coro::Promise<folly::Expected<PublishOk, PublishError>>,
-      RequestID::hash>
-      pendingPublish_;
+   public:
+    // Factory methods for type-safe construction
+    static PendingRequestState makeSubscribeTrack(
+        std::shared_ptr<SubscribeTrackReceiveState> state) {
+      PendingRequestState result;
+      result.type_ = Type::SUBSCRIBE_TRACK;
+      new (&result.storage_.subscribeTrack_) auto(std::move(state));
+      return result;
+    }
 
-  // Track Status
-  folly::
-      F14FastMap<RequestID, folly::coro::Promise<TrackStatus>, RequestID::hash>
-          trackStatuses_;
+    static PendingRequestState makeAnnounce(PendingAnnounce announce) {
+      PendingRequestState result;
+      result.type_ = Type::ANNOUNCE;
+      new (&result.storage_.announce_) PendingAnnounce(std::move(announce));
+      return result;
+    }
+
+    static PendingRequestState makeSubscribeAnnounces(
+        folly::coro::Promise<
+            folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
+            promise) {
+      PendingRequestState result;
+      result.type_ = Type::SUBSCRIBE_ANNOUNCES;
+      new (&result.storage_.subscribeAnnounces_) auto(std::move(promise));
+      return result;
+    }
+
+    static PendingRequestState makePublish(
+        folly::coro::Promise<folly::Expected<PublishOk, PublishError>>
+            promise) {
+      PendingRequestState result;
+      result.type_ = Type::PUBLISH;
+      new (&result.storage_.publish_) auto(std::move(promise));
+      return result;
+    }
+
+    static PendingRequestState makeTrackStatus(
+        folly::coro::Promise<TrackStatus> promise) {
+      PendingRequestState result;
+      result.type_ = Type::TRACK_STATUS;
+      new (&result.storage_.trackStatus_) auto(std::move(promise));
+      return result;
+    }
+
+    // Helper for move construction/assignment
+    void moveFrom(PendingRequestState&& other) {
+      type_ = other.type_;
+      switch (type_) {
+        case Type::SUBSCRIBE_TRACK:
+          new (&storage_.subscribeTrack_) auto(
+              std::move(other.storage_.subscribeTrack_));
+          break;
+        case Type::ANNOUNCE:
+          new (&storage_.announce_)
+              PendingAnnounce(std::move(other.storage_.announce_));
+          break;
+        case Type::SUBSCRIBE_ANNOUNCES:
+          new (&storage_.subscribeAnnounces_) auto(
+              std::move(other.storage_.subscribeAnnounces_));
+          break;
+        case Type::PUBLISH:
+          new (&storage_.publish_) auto(std::move(other.storage_.publish_));
+          break;
+        case Type::TRACK_STATUS:
+          new (&storage_.trackStatus_) auto(
+              std::move(other.storage_.trackStatus_));
+          break;
+      }
+    }
+
+    // Move constructor
+    PendingRequestState(PendingRequestState&& other) noexcept {
+      moveFrom(std::move(other));
+    }
+
+    // Move assignment
+    PendingRequestState& operator=(PendingRequestState&& other) noexcept {
+      if (this != &other) {
+        this->~PendingRequestState();
+        moveFrom(std::move(other));
+      }
+      return *this;
+    }
+    // Destructor
+    ~PendingRequestState() {
+      switch (type_) {
+        case Type::SUBSCRIBE_TRACK:
+          storage_.subscribeTrack_.~shared_ptr();
+          break;
+        case Type::ANNOUNCE:
+          storage_.announce_.~PendingAnnounce();
+          break;
+        case Type::SUBSCRIBE_ANNOUNCES:
+          storage_.subscribeAnnounces_.~Promise();
+          break;
+        case Type::PUBLISH:
+          storage_.publish_.~Promise();
+          break;
+        case Type::TRACK_STATUS:
+          storage_.trackStatus_.~Promise();
+          break;
+      }
+    }
+
+    // Duck typing access - overloaded functions for each type
+    std::shared_ptr<SubscribeTrackReceiveState>* tryGetSubscribeTrack() {
+      return type_ == Type::SUBSCRIBE_TRACK ? &storage_.subscribeTrack_
+                                            : nullptr;
+    }
+
+    const std::shared_ptr<SubscribeTrackReceiveState>* tryGetSubscribeTrack()
+        const {
+      return type_ == Type::SUBSCRIBE_TRACK ? &storage_.subscribeTrack_
+                                            : nullptr;
+    }
+
+    PendingAnnounce* tryGetAnnounce() {
+      return type_ == Type::ANNOUNCE ? &storage_.announce_ : nullptr;
+    }
+
+    const PendingAnnounce* tryGetAnnounce() const {
+      return type_ == Type::ANNOUNCE ? &storage_.announce_ : nullptr;
+    }
+
+    folly::coro::Promise<
+        folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>*
+    tryGetSubscribeAnnounces() {
+      return type_ == Type::SUBSCRIBE_ANNOUNCES ? &storage_.subscribeAnnounces_
+                                                : nullptr;
+    }
+
+    folly::coro::Promise<folly::Expected<PublishOk, PublishError>>*
+    tryGetPublish() {
+      return type_ == Type::PUBLISH ? &storage_.publish_ : nullptr;
+    }
+
+    folly::coro::Promise<TrackStatus>* tryGetTrackStatus() {
+      return type_ == Type::TRACK_STATUS ? &storage_.trackStatus_ : nullptr;
+    }
+
+    Type getType() const {
+      return type_;
+    }
+
+    // Delivers an error to the pending request based on its type
+    void deliverError(RequestID reqID);
+
+   private:
+    // Private default constructor - use factory methods
+    PendingRequestState() = default;
+  };
+
+  // Consolidated pending requests map
+  folly::F14FastMap<RequestID, PendingRequestState, RequestID::hash>
+      pendingRequests_;
 
   // Subscriber ID -> metadata about a publish track
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
