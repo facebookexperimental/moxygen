@@ -1547,26 +1547,19 @@ void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
     case Type::SUBSCRIBE_TRACK: {
       if (!storage_.subscribeTrack_->isPublish()) {
         storage_.subscribeTrack_->subscribeError(
-            {reqID,
-             SubscribeErrorCode::INTERNAL_ERROR,
-             "session closed",
-             folly::none});
+            {reqID, SubscribeErrorCode::INTERNAL_ERROR, "session closed"});
       }
       break;
     }
     case Type::ANNOUNCE: {
       storage_.announce_.promise.setValue(folly::makeUnexpected(AnnounceError(
-          {reqID,
-           storage_.announce_.trackNamespace,
-           AnnounceErrorCode::INTERNAL_ERROR,
-           "session closed"})));
+          {reqID, AnnounceErrorCode::INTERNAL_ERROR, "session closed"})));
       break;
     }
     case Type::SUBSCRIBE_ANNOUNCES: {
       storage_.subscribeAnnounces_.setValue(
           folly::makeUnexpected(SubscribeAnnouncesError(
               {reqID,
-               TrackNamespace(),
                SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
                "session closed"})));
       break;
@@ -1692,8 +1685,7 @@ void MoQSession::cleanup() {
       subTrack.second->subscribeError(
           {/*TrackReceiveState fills in subId*/ 0,
            SubscribeErrorCode::INTERNAL_ERROR,
-           "session closed",
-           folly::none});
+           "session closed"});
     }
   }
   subTracks_.clear();
@@ -3236,10 +3228,7 @@ void MoQSession::onAnnounce(Announce ann) {
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << "No subscriber callback set";
     announceError(
-        {ann.requestID,
-         ann.trackNamespace,
-         AnnounceErrorCode::NOT_SUPPORTED,
-         "Not a subscriber"});
+        {ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "Not a subscriber"});
   }
   co_withExecutor(exec_, handleAnnounce(std::move(ann))).start();
 }
@@ -3257,7 +3246,6 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
               << announceResult.exception().what().toStdString();
     announceError(
         {announce.requestID,
-         announce.trackNamespace,
          AnnounceErrorCode::INTERNAL_ERROR,
          announceResult.exception().what().toStdString()});
     co_return;
@@ -3266,13 +3254,11 @@ folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
     XLOG(DBG1) << "Application announce error err="
                << announceResult->error().reasonPhrase;
     auto annErr = std::move(announceResult->error());
-    annErr.requestID = announce.requestID;           // In case app got it wrong
-    annErr.trackNamespace = announce.trackNamespace; // In case app got it wrong
+    annErr.requestID = announce.requestID; // In case app got it wrong
     announceError(annErr);
   } else {
     auto handle = std::move(announceResult->value());
     auto announceOkMsg = handle->announceOk();
-    announceOkMsg.trackNamespace = announce.trackNamespace;
     announceOk(announceOkMsg);
     // TODO: what about UNANNOUNCE before ANNOUNCE_OK
     subscriberAnnounces_[announce.trackNamespace] = std::move(handle);
@@ -3319,6 +3305,7 @@ void MoQSession::onAnnounceError(AnnounceError announceError) {
   if (logger_) {
     logger_->logAnnounceError(
         announceError,
+        TrackNamespace(), // TODO: real namespace from pendingRequest
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
@@ -3414,7 +3401,6 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     subscribeAnnouncesError(
         {sa.requestID,
-         sa.trackNamespacePrefix,
          SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
          "Not a publisher"});
     return;
@@ -3434,7 +3420,6 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
               << subAnnResult.exception().what().toStdString();
     subscribeAnnouncesError(
         {subAnn.requestID,
-         subAnn.trackNamespacePrefix,
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          subAnnResult.exception().what().toStdString()});
     co_return;
@@ -3444,8 +3429,6 @@ folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
                << subAnnResult->error().reasonPhrase;
     auto subAnnErr = std::move(subAnnResult->error());
     subAnnErr.requestID = subAnn.requestID; // In case app got it wrong
-    subAnnErr.trackNamespacePrefix =
-        subAnn.trackNamespacePrefix; // In case app got it wrong
     subscribeAnnouncesError(subAnnErr);
   } else {
     auto handle = std::move(subAnnResult->value());
@@ -3493,6 +3476,7 @@ void MoQSession::onSubscribeAnnouncesError(
   if (logger_) {
     logger_->logSubscribeAnnouncesError(
         subscribeAnnouncesError,
+        TrackNamespace(), // TODO: use namespace from pendingRequest
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
@@ -3731,7 +3715,6 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
     XLOG(ERR) << "writeAnnounce failed sess=" << this;
     co_return folly::makeUnexpected(AnnounceError(
         {ann.requestID,
-         ann.trackNamespace,
          AnnounceErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
@@ -3886,7 +3869,9 @@ void MoQSession::announceError(const AnnounceError& announceError) {
 
   // Log AnnounceError
   if (logger_) {
-    logger_->logAnnounceError(announceError);
+    logger_->logAnnounceError(
+        announceError, TrackNamespace() // TODO: pass real namespace
+    );
   }
 
   controlWriteEvent_.signal();
@@ -3950,7 +3935,6 @@ void MoQSession::unannounce(const Unannounce& unann) {
       if (auto* announcePtr = pendingIt->second.tryGetAnnounce()) {
         announcePtr->promise.setValue(folly::makeUnexpected(AnnounceError(
             {pendingIt->first,
-             unann.trackNamespace,
              AnnounceErrorCode::INTERNAL_ERROR,
              "Unannounce before announce"})));
       }
@@ -4009,7 +3993,6 @@ MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
     XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
     co_return folly::makeUnexpected(SubscribeAnnouncesError(
         {0,
-         trackNamespace,
          SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
          "local write failed"}));
   }
@@ -4069,7 +4052,9 @@ void MoQSession::subscribeAnnouncesError(
   }
 
   if (logger_) {
-    logger_->logSubscribeAnnouncesError(subscribeAnnouncesError);
+    logger_->logSubscribeAnnouncesError(
+        subscribeAnnouncesError, TrackNamespace() // TODO: pass real namespace
+    );
   }
 
   controlWriteEvent_.signal();

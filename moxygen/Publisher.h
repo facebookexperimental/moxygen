@@ -87,8 +87,7 @@ class Publisher {
         folly::makeUnexpected(SubscribeError{
             sub.requestID,
             SubscribeErrorCode::NOT_SUPPORTED,
-            "unimplemented",
-            folly::none}));
+            "unimplemented"}));
   }
 
   // On successful FETCH, a FetchHandle is returned, which the caller can use
@@ -154,7 +153,6 @@ class Publisher {
     return folly::coro::makeTask<SubscribeAnnouncesResult>(
         folly::makeUnexpected(SubscribeAnnouncesError{
             subAnn.requestID,
-            subAnn.trackNamespacePrefix,
             SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
             "unimplemented"}));
   }

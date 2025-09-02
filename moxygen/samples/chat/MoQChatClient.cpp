@@ -66,7 +66,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
       subscribeAnnounceHandle_ = std::move(sa.value());
     } else {
-      XLOG(INFO) << "SubscribeAnnounces id=" << sa.error().trackNamespacePrefix
+      XLOG(INFO) << "SubscribeAnnounces reqID=" << sa.error().requestID.value
                  << " code=" << folly::to_underlying(sa.error().errorCode)
                  << " reason=" << sa.error().reasonPhrase;
     }
@@ -85,7 +85,6 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
     if (announce.trackNamespace.size() != 5) {
       co_return folly::makeUnexpected(AnnounceError{
           announce.requestID,
-          announce.trackNamespace,
           AnnounceErrorCode::UNINTERESTED,
           "Invalid chat announce"});
     }
@@ -95,10 +94,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
         .start();
   } else {
     co_return folly::makeUnexpected(AnnounceError{
-        announce.requestID,
-        announce.trackNamespace,
-        AnnounceErrorCode::UNINTERESTED,
-        "don't care"});
+        announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
       AnnounceOk{announce.requestID, announce.trackNamespace},

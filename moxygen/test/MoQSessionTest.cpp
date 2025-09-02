@@ -1215,10 +1215,7 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
     expectSubscribe(
         [](auto sub, auto) -> TaskSubscribeResult {
           co_return folly::makeUnexpected(SubscribeError{
-              sub.requestID,
-              SubscribeErrorCode::UNAUTHORIZED,
-              "bad",
-              folly::none});
+              sub.requestID, SubscribeErrorCode::UNAUTHORIZED, "bad"});
         },
         MoQControlCodec::Direction::SERVER,
         SubscribeErrorCode::UNAUTHORIZED);
@@ -1675,7 +1672,6 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAnnouncesError) {
               -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
             SubscribeAnnouncesError subAnnError{
                 subAnn.requestID,
-                subAnn.trackNamespacePrefix,
                 SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
                 "not supported"};
             co_return folly::makeUnexpected(subAnnError);
@@ -2085,7 +2081,6 @@ CO_TEST_P_X(MoQSessionTest, AnnounceError) {
               -> folly::coro::Task<Subscriber::AnnounceResult> {
             co_return folly::makeUnexpected(AnnounceError{
                 ann.requestID,
-                ann.trackNamespace,
                 AnnounceErrorCode::UNAUTHORIZED,
                 "Unauthorized"});
           }));
@@ -2352,8 +2347,7 @@ CO_TEST_P_X(V12PlusTests, SubscribeOKNeverArrives) {
           co_return folly::makeUnexpected(SubscribeError{
               RequestID(0),
               SubscribeErrorCode::INTERNAL_ERROR,
-              "Subscribe OK never arrived",
-              folly::none});
+              "Subscribe OK never arrived"});
         });
       },
       MoQControlCodec::Direction::SERVER,

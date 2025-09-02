@@ -531,7 +531,6 @@ folly::coro::Task<MoQSession::AnnounceResult> MoQTestClient::announce(
   if (track.hasError()) {
     AnnounceError error{
         requestID_,
-        TrackNamespace{},
         AnnounceErrorCode::INTERNAL_ERROR,
         "Parameters couldn't be converted to TrackNamespace"};
     co_return folly::makeUnexpected(error);

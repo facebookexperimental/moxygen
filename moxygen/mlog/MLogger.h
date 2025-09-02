@@ -85,6 +85,7 @@ class MLogger {
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounceError(
       const AnnounceError& req,
+      const TrackNamespace& trackNamespace,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounceCancel(
@@ -142,6 +143,7 @@ class MLogger {
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnouncesError(
       const SubscribeAnnouncesError& req,
+      const TrackNamespace& trackNamespace,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
 

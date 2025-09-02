@@ -66,15 +66,7 @@ enum class SessionCloseErrorCode : uint32_t {
 
 using ErrorCode = SessionCloseErrorCode;
 
-enum class SubscribeErrorCode : uint32_t {
-  INTERNAL_ERROR = 0,
-  UNAUTHORIZED = 1,
-  TIMEOUT = 2,
-  NOT_SUPPORTED = 3,
-  TRACK_NOT_EXIST = 4,
-  INVALID_RANGE = 5,
-  RETRY_TRACK_ALIAS = 6,
-};
+// SubscribeErrorCode is now an alias for RequestErrorCode - see below
 
 enum class SubscribeDoneStatusCode : uint32_t {
   INTERNAL_ERROR = 0x0,
@@ -96,40 +88,35 @@ enum class TrackStatusCode : uint32_t {
   UNKNOWN = 0x4
 };
 
-enum class FetchErrorCode : uint32_t {
+// FetchErrorCode is now an alias for RequestErrorCode - see below
+
+// SubscribeAnnouncesErrorCode is now an alias for RequestErrorCode - see below
+
+// AnnounceErrorCode is now an alias for RequestErrorCode - see below
+
+// PublishError is now an alias for RequestError - see below
+
+// Consolidated error code enum for all request types
+enum class RequestErrorCode : uint32_t {
+  // Shared error codes (same semantic meaning across request types)
   INTERNAL_ERROR = 0,
   UNAUTHORIZED = 1,
   TIMEOUT = 2,
   NOT_SUPPORTED = 3,
   TRACK_NOT_EXIST = 4,
   INVALID_RANGE = 5,
+
+  // Fetch-specific codes
   NO_OBJECTS = 6,
-  //
-  CANCELLED = std::numeric_limits<uint32_t>::max()
-};
 
-enum class SubscribeAnnouncesErrorCode : uint32_t {
-  INTERNAL_ERROR = 0,
-  UNAUTHORIZED = 1,
-  TIMEOUT = 2,
-  NOT_SUPPORTED = 3,
-  NAMESPACE_PREFIX_UNKNOWN = 4,
-};
+  // SubscribeAnnounces-specific codes
+  NAMESPACE_PREFIX_UNKNOWN = 4, // Same value as TRACK_NOT_EXIST
 
-enum class AnnounceErrorCode : uint32_t {
-  INTERNAL_ERROR = 0,
-  UNAUTHORIZED = 1,
-  TIMEOUT = 2,
-  NOT_SUPPORTED = 3,
-  UNINTERESTED = 4,
-};
+  // Announce-specific codes
+  UNINTERESTED = 4, // Same value as TRACK_NOT_EXIST
 
-enum class PublishErrorCode : uint32_t {
-  INTERNAL_ERROR = 0,
-  UNAUTHORIZED = 1,
-  TIMEOUT = 2,
-  NOT_SUPPORTED = 3,
-  UNINTERESTED = 4,
+  // Special values
+  CANCELLED = std::numeric_limits<uint32_t>::max(),
 };
 
 enum class ResetStreamErrorCode : uint32_t {
@@ -741,12 +728,7 @@ struct SubscribeOk {
   std::vector<TrackRequestParameter> params;
 };
 
-struct SubscribeError {
-  RequestID requestID;
-  SubscribeErrorCode errorCode;
-  std::string reasonPhrase;
-  folly::Optional<uint64_t> retryAlias{folly::none};
-};
+// SubscribeError is now an alias for RequestError - see below
 
 struct Unsubscribe {
   RequestID requestID;
@@ -780,11 +762,7 @@ struct PublishOk {
   std::vector<TrackRequestParameter> params;
 };
 
-struct PublishError {
-  RequestID requestID;
-  PublishErrorCode errorCode;
-  std::string reasonPhrase;
-};
+// PublishError is now an alias for RequestError - see below
 
 struct Announce {
   RequestID requestID;
@@ -797,12 +775,7 @@ struct AnnounceOk {
   TrackNamespace trackNamespace;
 };
 
-struct AnnounceError {
-  RequestID requestID;
-  TrackNamespace trackNamespace;
-  AnnounceErrorCode errorCode;
-  std::string reasonPhrase;
-};
+// AnnounceError is now an alias for RequestError - see below
 
 struct Unannounce {
   TrackNamespace trackNamespace;
@@ -810,7 +783,7 @@ struct Unannounce {
 
 struct AnnounceCancel {
   TrackNamespace trackNamespace;
-  AnnounceErrorCode errorCode;
+  RequestErrorCode errorCode;
   std::string reasonPhrase;
 };
 
@@ -932,11 +905,7 @@ struct FetchOk {
   std::vector<TrackRequestParameter> params;
 };
 
-struct FetchError {
-  RequestID requestID;
-  FetchErrorCode errorCode;
-  std::string reasonPhrase;
-};
+// FetchError is now an alias for RequestError - see below
 
 struct SubscribeAnnounces {
   RequestID requestID;
@@ -949,16 +918,32 @@ struct SubscribeAnnouncesOk {
   TrackNamespace trackNamespacePrefix;
 };
 
-struct SubscribeAnnouncesError {
-  RequestID requestID;
-  TrackNamespace trackNamespacePrefix;
-  SubscribeAnnouncesErrorCode errorCode;
-  std::string reasonPhrase;
-};
+// SubscribeAnnouncesError is now an alias for RequestError - see below
 
 struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
+
+// Consolidated request error structure
+struct RequestError {
+  RequestID requestID;
+  RequestErrorCode errorCode;
+  std::string reasonPhrase;
+};
+
+// Type aliases for backward compatibility
+using SubscribeError = RequestError;
+using FetchError = RequestError;
+using SubscribeAnnouncesError = RequestError;
+using AnnounceError = RequestError;
+using PublishError = RequestError;
+
+// Error code aliases
+using SubscribeErrorCode = RequestErrorCode;
+using FetchErrorCode = RequestErrorCode;
+using SubscribeAnnouncesErrorCode = RequestErrorCode;
+using AnnounceErrorCode = RequestErrorCode;
+using PublishErrorCode = RequestErrorCode;
 
 inline StreamType getSubgroupStreamType(
     uint64_t version,
@@ -1186,6 +1171,12 @@ class MoQFrameParser {
   parseSubscribeAnnouncesError(folly::io::Cursor& cursor, size_t length)
       const noexcept;
 
+  // Unified request error parsing function
+  folly::Expected<RequestError, ErrorCode> parseRequestError(
+      folly::io::Cursor& cursor,
+      size_t length,
+      FrameType frameType) const noexcept;
+
   folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
@@ -1403,6 +1394,12 @@ class MoQFrameWriter {
   WriteResult writeFetchError(
       folly::IOBufQueue& writeBuf,
       const FetchError& fetchError) const noexcept;
+
+  // Unified request error writing function
+  WriteResult writeRequestError(
+      folly::IOBufQueue& writeBuf,
+      const RequestError& requestError,
+      FrameType frameType) const noexcept;
 
   std::string encodeUseAlias(uint64_t alias) const;
 

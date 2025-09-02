@@ -102,7 +102,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeSubscribeError(
       writeBuf,
       SubscribeError(
-          {0, SubscribeErrorCode::TRACK_NOT_EXIST, "not found", folly::none}));
+          {RequestID(0), SubscribeErrorCode::TRACK_NOT_EXIST, "not found"}));
   res = moqFrameWriter.writeUnsubscribe(
       writeBuf,
       Unsubscribe({
@@ -152,10 +152,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeAnnounceError(
       writeBuf,
       AnnounceError(
-          {1,
-           TrackNamespace({"hello"}),
-           AnnounceErrorCode::INTERNAL_ERROR,
-           "server error"}));
+          {RequestID(1), AnnounceErrorCode::INTERNAL_ERROR, "server error"}));
   res = moqFrameWriter.writeAnnounceCancel(
       writeBuf,
       AnnounceCancel(
@@ -197,8 +194,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeSubscribeAnnouncesError(
       writeBuf,
       SubscribeAnnouncesError(
-          {2,
-           TrackNamespace({"hello"}),
+          {RequestID(2),
            SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
            "server error"}));
   res = moqFrameWriter.writeUnsubscribeAnnounces(

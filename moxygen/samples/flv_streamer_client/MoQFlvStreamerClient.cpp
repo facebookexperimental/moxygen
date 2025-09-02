@@ -63,8 +63,8 @@ class MoQFlvStreamerClient
         announceHandle_ = std::move(annResp.value());
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
       } else {
-        XLOG(INFO) << "Announce error trackNamespace="
-                   << annResp.error().trackNamespace << " code="
+        XLOG(INFO) << "Announce error reqID=" << annResp.error().requestID.value
+                   << " code="
                    << folly::to_underlying(annResp.error().errorCode)
                    << " reason=" << annResp.error().reasonPhrase;
       }

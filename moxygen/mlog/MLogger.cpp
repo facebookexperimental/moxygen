@@ -358,11 +358,12 @@ void MLogger::logAnnounceOk(
 
 void MLogger::logAnnounceError(
     const AnnounceError& req,
+    const TrackNamespace& trackNamespace,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceError>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespace.trackNamespace, type);
+      trackNamespace.trackNamespace, type);
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {
@@ -469,9 +470,7 @@ void MLogger::logSubscribeError(
   } else {
     baseMsg->reason = req.reasonPhrase;
   }
-  if (req.retryAlias.has_value()) {
-    baseMsg->trackAlias = req.retryAlias.value();
-  }
+  // retryAlias removed in unified RequestError - not available for logging
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -604,11 +603,12 @@ void MLogger::logSubscribeAnnouncesOk(
 
 void MLogger::logSubscribeAnnouncesError(
     const SubscribeAnnouncesError& req,
+    const TrackNamespace& trackNamespace,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesError>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespacePrefix.trackNamespace, type);
+      trackNamespace.trackNamespace, type);
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {

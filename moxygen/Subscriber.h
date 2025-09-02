@@ -86,10 +86,7 @@ class Subscriber {
       std::shared_ptr<AnnounceCallback> = nullptr) {
     return folly::coro::makeTask<AnnounceResult>(
         folly::makeUnexpected(AnnounceError{
-            ann.requestID,
-            ann.trackNamespace,
-            AnnounceErrorCode::NOT_SUPPORTED,
-            "unimplemented"}));
+            ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "unimplemented"}));
   }
 
   // Result of a PUBLISH request containing consumer and async reply

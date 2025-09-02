@@ -52,10 +52,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     co_return folly::makeUnexpected(AnnounceError{
-        ann.requestID,
-        ann.trackNamespace,
-        AnnounceErrorCode::UNINTERESTED,
-        "bad namespace"});
+        ann.requestID, AnnounceErrorCode::UNINTERESTED, "bad namespace"});
   }
   std::vector<std::shared_ptr<MoQSession>> sessions;
   auto nodePtr = findNamespaceNode(
@@ -271,7 +268,6 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   if (subNs.trackNamespacePrefix.empty()) {
     co_return folly::makeUnexpected(SubscribeAnnouncesError{
         subNs.requestID,
-        subNs.trackNamespacePrefix,
         SubscribeAnnouncesErrorCode::NAMESPACE_PREFIX_UNKNOWN,
         "empty"});
   }

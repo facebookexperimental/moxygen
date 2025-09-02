@@ -979,40 +979,7 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
 folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  SubscribeError subscribeError;
-  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!requestID) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= requestID->second;
-  subscribeError.requestID = requestID->first;
-
-  auto errorCode = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!errorCode) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= errorCode->second;
-  subscribeError.errorCode = SubscribeErrorCode(errorCode->first);
-
-  auto reas = parseFixedString(cursor, length);
-  if (!reas) {
-    return folly::makeUnexpected(reas.error());
-  }
-  subscribeError.reasonPhrase = std::move(reas.value());
-  if (getDraftMajorVersion(*version_) < 12) {
-    auto retryAlias = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!retryAlias) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= retryAlias->second;
-    if (subscribeError.errorCode == SubscribeErrorCode::RETRY_TRACK_ALIAS) {
-      subscribeError.retryAlias = retryAlias->first;
-    }
-  }
-  if (length > 0) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  return subscribeError;
+  return parseRequestError(cursor, length, FrameType::SUBSCRIBE_ERROR);
 }
 
 folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
@@ -1246,31 +1213,7 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
 folly::Expected<PublishError, ErrorCode> MoQFrameParser::parsePublishError(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  PublishError publishError;
-  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!requestID) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= requestID->second;
-  publishError.requestID = requestID->first;
-
-  auto errorCode = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!errorCode) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= errorCode->second;
-  publishError.errorCode = static_cast<PublishErrorCode>(errorCode->first);
-
-  auto reasonPhrase = parseFixedString(cursor, length);
-  if (!reasonPhrase) {
-    return folly::makeUnexpected(reasonPhrase.error());
-  }
-  publishError.reasonPhrase = std::move(*reasonPhrase);
-
-  if (length > 0) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  return publishError;
+  return parseRequestError(cursor, length, FrameType::PUBLISH_ERROR);
 }
 
 folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
@@ -1337,40 +1280,7 @@ folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
 folly::Expected<AnnounceError, ErrorCode> MoQFrameParser::parseAnnounceError(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  AnnounceError announceError;
-  if (getDraftMajorVersion(*version_) >= 11) {
-    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!requestID) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= requestID->second;
-    announceError.requestID = requestID->first;
-  } else {
-    announceError.requestID = 0;
-    auto res = parseFixedTuple(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
-    }
-    announceError.trackNamespace = TrackNamespace(std::move(res.value()));
-  }
-
-  auto errorCode = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!errorCode) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= errorCode->second;
-  announceError.errorCode = AnnounceErrorCode(errorCode->first);
-
-  auto res2 = parseFixedString(cursor, length);
-  if (!res2) {
-    return folly::makeUnexpected(res2.error());
-  }
-  announceError.reasonPhrase = std::move(res2.value());
-
-  if (length > 0) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  return announceError;
+  return parseRequestError(cursor, length, FrameType::ANNOUNCE_ERROR);
 }
 
 folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
@@ -1714,31 +1624,7 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
 folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  FetchError fetchError;
-  auto res = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  fetchError.requestID = res->first;
-  length -= res->second;
-
-  auto res2 = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!res2) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  fetchError.errorCode = FetchErrorCode(res2->first);
-  length -= res2->second;
-
-  auto res3 = parseFixedString(cursor, length);
-  if (!res3) {
-    return folly::makeUnexpected(res3.error());
-  }
-  fetchError.reasonPhrase = std::move(res3.value());
-  if (length > 0) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-
-  return fetchError;
+  return parseRequestError(cursor, length, FrameType::FETCH_ERROR);
 }
 
 folly::Expected<SubscribeAnnounces, ErrorCode>
@@ -1768,15 +1654,70 @@ folly::Expected<SubscribeAnnouncesError, ErrorCode>
 MoQFrameParser::parseSubscribeAnnouncesError(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  auto res = parseAnnounceError(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+  return parseRequestError(
+      cursor, length, FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
+}
+
+// Unified request error parsing function
+folly::Expected<RequestError, ErrorCode> MoQFrameParser::parseRequestError(
+    folly::io::Cursor& cursor,
+    size_t length,
+    FrameType frameType) const noexcept {
+  RequestError requestError;
+  // XCHECK that frameType is one of the allowed types for this function
+  XCHECK(
+      frameType == FrameType::SUBSCRIBE_ERROR ||
+      frameType == FrameType::ANNOUNCE_ERROR ||
+      frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
+      frameType == FrameType::PUBLISH_ERROR ||
+      frameType == FrameType::FETCH_ERROR)
+      << "Invalid frameType passed to parseRequestError: "
+      << static_cast<int>(frameType);
+
+  // All error types follow the same pattern: requestID → errorCode →
+  // reasonPhrase
+
+  // Parse requestID
+  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!requestID) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  return SubscribeAnnouncesError(
-      {res->requestID,
-       std::move(res->trackNamespace),
-       SubscribeAnnouncesErrorCode(folly::to_underlying(res->errorCode)),
-       std::move(res->reasonPhrase)});
+  length -= requestID->second;
+  requestError.requestID = requestID->first;
+
+  // Parse errorCode
+  auto errorCode = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!errorCode) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= errorCode->second;
+  requestError.errorCode = RequestErrorCode(errorCode->first);
+
+  // Parse reasonPhrase
+  auto reasonPhrase = parseFixedString(cursor, length);
+  if (!reasonPhrase) {
+    return folly::makeUnexpected(reasonPhrase.error());
+  }
+  requestError.reasonPhrase = std::move(reasonPhrase.value());
+
+  // Handle frame-specific additional fields
+  if (frameType == FrameType::SUBSCRIBE_ERROR &&
+      getDraftMajorVersion(*version_) < 12) {
+    // v11 has retryAlias field that we parse and discard, v12 doesn't have it
+    auto retryAlias = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!retryAlias) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= retryAlias->second;
+    // Discard retryAlias - not stored in RequestError
+  }
+
+  // Check for leftover bytes
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  return requestError;
 }
 
 folly::Expected<UnsubscribeAnnounces, ErrorCode>
@@ -2556,23 +2497,8 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
 WriteResult MoQFrameWriter::writeSubscribeError(
     folly::IOBufQueue& writeBuf,
     const SubscribeError& subscribeError) const noexcept {
-  CHECK(version_.hasValue())
-      << "Version needs to be set to write subscribe error";
-  size_t size = 0;
-  bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ERROR, error);
-  writeVarint(writeBuf, subscribeError.requestID.value, size, error);
-  writeVarint(
-      writeBuf, folly::to_underlying(subscribeError.errorCode), size, error);
-  writeFixedString(writeBuf, subscribeError.reasonPhrase, size, error);
-  if (getDraftMajorVersion(*version_) < 12) {
-    writeVarint(writeBuf, subscribeError.retryAlias.value_or(0), size, error);
-  }
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  return size;
+  return writeRequestError(
+      writeBuf, subscribeError, FrameType::SUBSCRIBE_ERROR);
 }
 
 WriteResult MoQFrameWriter::writeMaxRequestID(
@@ -2743,20 +2669,7 @@ WriteResult MoQFrameWriter::writePublishOk(
 WriteResult MoQFrameWriter::writePublishError(
     folly::IOBufQueue& writeBuf,
     const PublishError& publishError) const noexcept {
-  CHECK(version_.hasValue())
-      << "Version needs to be set to write publish error";
-  size_t size = 0;
-  bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_ERROR, error);
-  writeVarint(writeBuf, publishError.requestID.value, size, error);
-  writeVarint(
-      writeBuf, folly::to_underlying(publishError.errorCode), size, error);
-  writeFixedString(writeBuf, publishError.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  return size;
+  return writeRequestError(writeBuf, publishError, FrameType::PUBLISH_ERROR);
 }
 
 WriteResult MoQFrameWriter::writeAnnounce(
@@ -2800,24 +2713,7 @@ WriteResult MoQFrameWriter::writeAnnounceOk(
 WriteResult MoQFrameWriter::writeAnnounceError(
     folly::IOBufQueue& writeBuf,
     const AnnounceError& announceError) const noexcept {
-  CHECK(version_.hasValue())
-      << "Version needs to be set to write announce error";
-  size_t size = 0;
-  bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_ERROR, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeVarint(writeBuf, announceError.requestID.value, size, error);
-  } else {
-    writeTrackNamespace(writeBuf, announceError.trackNamespace, size, error);
-  }
-  writeVarint(
-      writeBuf, folly::to_underlying(announceError.errorCode), size, error);
-  writeFixedString(writeBuf, announceError.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  return size;
+  return writeRequestError(writeBuf, announceError, FrameType::ANNOUNCE_ERROR);
 }
 
 WriteResult MoQFrameWriter::writeUnannounce(
@@ -2974,29 +2870,8 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
 WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnouncesError& subscribeAnnouncesError) const noexcept {
-  CHECK(version_.hasValue())
-      << "Version needs to be set to write subscribe announces error";
-  size_t size = 0;
-  bool error = false;
-  auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_ERROR, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeVarint(writeBuf, subscribeAnnouncesError.requestID.value, size, error);
-  } else {
-    writeTrackNamespace(
-        writeBuf, subscribeAnnouncesError.trackNamespacePrefix, size, error);
-  }
-  writeVarint(
-      writeBuf,
-      folly::to_underlying(subscribeAnnouncesError.errorCode),
-      size,
-      error);
-  writeFixedString(writeBuf, subscribeAnnouncesError.reasonPhrase, size, error);
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  return size;
+  return writeRequestError(
+      writeBuf, subscribeAnnouncesError, FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
 }
 
 WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
@@ -3099,14 +2974,43 @@ WriteResult MoQFrameWriter::writeFetchOk(
 WriteResult MoQFrameWriter::writeFetchError(
     folly::IOBufQueue& writeBuf,
     const FetchError& fetchError) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write fetch error";
+  return writeRequestError(writeBuf, fetchError, FrameType::FETCH_ERROR);
+}
+
+// Unified request error writing function
+WriteResult MoQFrameWriter::writeRequestError(
+    folly::IOBufQueue& writeBuf,
+    const RequestError& requestError,
+    FrameType frameType) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write request error";
+  // XCHECK that frameType is one of the allowed types for this function
+  XCHECK(
+      frameType == FrameType::SUBSCRIBE_ERROR ||
+      frameType == FrameType::ANNOUNCE_ERROR ||
+      frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
+      frameType == FrameType::PUBLISH_ERROR ||
+      frameType == FrameType::FETCH_ERROR)
+      << "Invalid frameType passed to writeRequestError: "
+      << static_cast<int>(frameType);
+
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_ERROR, error);
-  writeVarint(writeBuf, fetchError.requestID.value, size, error);
+  auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
+
+  writeVarint(writeBuf, requestError.requestID.value, size, error);
   writeVarint(
-      writeBuf, folly::to_underlying(fetchError.errorCode), size, error);
-  writeFixedString(writeBuf, fetchError.reasonPhrase, size, error);
+      writeBuf, folly::to_underlying(requestError.errorCode), size, error);
+  writeFixedString(writeBuf, requestError.reasonPhrase, size, error);
+
+  // Handle different frame types without switch statement
+  if (frameType == FrameType::SUBSCRIBE_ERROR) {
+    // Only v11 needs retryAlias field (write as 0), v12 doesn't have it
+    if (getDraftMajorVersion(*version_) < 12) {
+      writeVarint(writeBuf, 0, size, error); // retryAlias = 0
+    }
+  }
+
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
