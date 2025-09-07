@@ -920,7 +920,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   void terminatePublish(SubscribeDone subDone, ResetStreamErrorCode code)
       override {
     resetAllSubgroups(code);
-    subscribeDone(std::move(subDone));
+    if (!subscriptionHandle_) {
+      session_->subscribeError(
+          {subDone.requestID, SubscribeErrorCode::INTERNAL_ERROR, "terminate"});
+    } else {
+      subscribeDone(std::move(subDone));
+    }
   }
 
   void resetAllSubgroups(ResetStreamErrorCode code) {
