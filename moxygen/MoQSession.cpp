@@ -2869,11 +2869,12 @@ void MoQSession::onPublish(PublishRequest publish) {
   }
 
   if (!subscribeHandler_) {
-    XLOG(DBG1) << __func__ << "No subscriber callback set";
-    PublishError(
-        {publish.requestID,
-         PublishErrorCode::NOT_SUPPORTED,
-         "Not a subscriber"});
+    XLOG(DBG1) << __func__ << " No subscriber callback set";
+    publishError(PublishError{
+        publish.requestID,
+        PublishErrorCode::NOT_SUPPORTED,
+        "Not a subscriber"});
+    return;
   }
 
   auto publishHandle = std::make_shared<ReceiverSubscriptionHandle>(
@@ -2931,7 +2932,11 @@ folly::coro::Task<void> MoQSession::handlePublish(
             ftn, requestID, initiator.consumer, logger_, true);
         initiator.consumer->setTrackAlias(alias);
         subTracks_.emplace(alias, trackReceiveState);
-        publishOk(replyResult->value());
+        // Ensure the PublishOk we send back corresponds to the inbound
+        // publish request (requestID), not the republish's requestID.
+        auto pubOk = replyResult->value();
+        pubOk.requestID = requestID;
+        publishOk(pubOk);
         deliverBufferedData(alias);
         co_return;
       }
@@ -3226,9 +3231,10 @@ void MoQSession::onAnnounce(Announce ann) {
   }
 
   if (!subscribeHandler_) {
-    XLOG(DBG1) << __func__ << "No subscriber callback set";
+    XLOG(DBG1) << __func__ << " No subscriber callback set";
     announceError(
         {ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "Not a subscriber"});
+    return;
   }
   co_withExecutor(exec_, handleAnnounce(std::move(ann))).start();
 }
