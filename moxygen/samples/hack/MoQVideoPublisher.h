@@ -8,9 +8,13 @@
 
 #pragma once
 
+#include <folly/CancellationToken.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
+#include <folly/synchronization/Baton.h>
 #include <moxygen/MoQFramer.h>
+#include <moxygen/MoQSession.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/Subscriber.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
@@ -33,7 +37,11 @@ class MoQVideoPublisher
         videoForwarder_(std::move(fullVideoTrackName)),
         audioForwarder_(std::move(fullAudioTrackName)) {}
 
-  bool setup(const std::string& connectURL, bool v11Plus = true);
+  // Setup the relay client and MoQ session. Optionally install a Subscriber
+  // so that the publisher session can also accept inbound PUBLISH (e.g., echo)
+  bool setup(
+      const std::string& connectURL,
+      std::shared_ptr<Subscriber> subscriber = nullptr);
 
   /**
    * Publishes a single frame of the video stream.
@@ -71,6 +79,11 @@ class MoQVideoPublisher
       uint64_t flags,
       Payload payload);
 
+  // Proper member function to handle initial audio PUBLISH on the EB
+  folly::coro::Task<void> initialAudioPublish(
+      std::shared_ptr<MoQSession> session,
+      FullTrackName ftn);
+
   std::unique_ptr<folly::ScopedEventBaseThread> evbThread_;
   MoQFollyExecutorImpl moqExecutor_;
   std::unique_ptr<MoQRelayClient> relayClient_;
@@ -78,6 +91,11 @@ class MoQVideoPublisher
   MoQForwarder videoForwarder_;
   MoQForwarder audioForwarder_;
   AbsoluteLocation largestVideo_{0, 0};
+  std::shared_ptr<TrackConsumer> audioTrackPublisher_;
+  bool audioPublishReady_{false};
+  bool running_{false};
+  folly::CancellationSource cancel_;
+
   AbsoluteLocation largestAudio_{0, 0};
   std::shared_ptr<SubgroupConsumer> videoSgPub_;
   std::shared_ptr<SubgroupConsumer> audioSgPub_;
@@ -86,6 +104,11 @@ class MoQVideoPublisher
   folly::Optional<uint64_t> lastVideoPts_;
   folly::Optional<uint64_t> lastAudioPts_;
   std::unique_ptr<folly::IOBuf> savedMetadata_;
+
+  // Relay run coordination: ensure we don't destroy on EB thread and we can
+  // wait for run() to finish on stop
+  folly::Baton<> runDone_;
+  std::atomic<bool> relayStarted_{false};
 };
 
 } // namespace moxygen

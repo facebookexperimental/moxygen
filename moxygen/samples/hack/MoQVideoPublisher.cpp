@@ -153,12 +153,29 @@ std::unique_ptr<folly::IOBuf> convertMetadata(
 } // namespace
 
 namespace moxygen {
+class LocalSubscriptionHandle : public SubscriptionHandle {
+ public:
+  explicit LocalSubscriptionHandle(RequestID rid, TrackAlias alias) {
+    SubscribeOk ok{
+        /*requestID=*/rid,
+        /*trackAlias=*/alias,
+        /*expires=*/std::chrono::milliseconds(0),
+        /*groupOrder=*/GroupOrder::OldestFirst,
+        /*largest=*/folly::none,
+        /*params=*/{}};
+    setSubscribeOk(std::move(ok));
+  }
+  void unsubscribe() override {}
+  void subscribeUpdate(SubscribeUpdate) override {}
+};
 
 const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
 const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
 // Implementation of setup function
-bool MoQVideoPublisher::setup(const std::string& connectURL, bool v11Plus) {
+bool MoQVideoPublisher::setup(
+    const std::string& connectURL,
+    std::shared_ptr<Subscriber> subscriber) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << connectURL;
@@ -167,22 +184,118 @@ bool MoQVideoPublisher::setup(const std::string& connectURL, bool v11Plus) {
   relayClient_ = std::make_unique<MoQRelayClient>(
       std::make_unique<MoQClient>(&moqExecutor_, url));
 
+  cancel_ = folly::CancellationSource();
+  running_ = true;
   folly::coro::blockingWait(co_withExecutor(
                                 evbThread_->getEventBase(),
                                 relayClient_->setup(
                                     /*publisher=*/shared_from_this(),
-                                    /*subscriber=*/nullptr,
+                                    /*subscriber=*/subscriber,
                                     kConnectTimeout,
-                                    kTransactionTimeout,
-                                    v11Plus))
+                                    kTransactionTimeout))
                                 .start());
-  co_withExecutor(
-      evbThread_->getEventBase(),
-      relayClient_->run(
-          /*publisher=*/shared_from_this(),
-          {videoForwarder_.fullTrackName().trackNamespace}))
-      .start();
+  {
+    auto* evb = evbThread_->getEventBase();
+    relayStarted_.store(true, std::memory_order_relaxed);
+    std::weak_ptr<MoQVideoPublisher> selfWeak = shared_from_this();
+    auto selfPub =
+        shared_from_this(); // publish callbacks may need publisher reference
+    auto ns = videoForwarder_.fullTrackName().trackNamespace;
+    co_withExecutor(
+        evb,
+        folly::coro::co_invoke(
+            [selfWeak, selfPub, ns]() -> folly::coro::Task<void> {
+              auto selfOwner = selfWeak.lock();
+              if (!selfOwner)
+                co_return;
+              auto relay = selfOwner->relayClient_.get();
+              if (!relay) {
+                selfOwner->runDone_.post();
+                co_return;
+              }
+              try {
+                co_await folly::coro::co_withCancellation(
+                    selfOwner->cancel_.getToken(), relay->run(selfPub, {ns}));
+              } catch (const folly::OperationCancelled&) {
+                XLOG(DBG1) << "relay->run cancelled";
+              }
+              if (selfOwner) {
+                selfOwner->runDone_.post();
+              }
+              co_return;
+            }))
+        .start();
+  }
+  // Initiate PUBLISH for audio track on the EventBase thread so server can
+  // receive data without requiring a downstream SUBSCRIBE
+  if (auto session = relayClient_->getSession()) {
+    auto ftn = audioForwarder_.fullTrackName();
+    auto* evb = evbThread_->getEventBase();
+    co_withExecutor(evb, initialAudioPublish(session, ftn)).start();
+  } else {
+    XLOG(ERR) << "No session available for audio publish";
+  }
+
   return true;
+}
+
+folly::coro::Task<void> MoQVideoPublisher::initialAudioPublish(
+    std::shared_ptr<MoQSession> session,
+    FullTrackName ftn) {
+  PublishRequest pub;
+  pub.fullTrackName = std::move(ftn);
+  pub.groupOrder = GroupOrder::OldestFirst;
+  pub.forward = true;
+
+  auto handle =
+      std::make_shared<LocalSubscriptionHandle>(RequestID(0), TrackAlias(0));
+  auto res = session->publish(std::move(pub), handle);
+  if (!res) {
+    XLOG(ERR) << "PUBLISH(audio) failed: code="
+              << folly::to_underlying(res.error().errorCode)
+              << " reason=" << res.error().reasonPhrase;
+    co_return;
+  }
+  audioTrackPublisher_ = std::move(res->consumer);
+  audioPublishReady_ = true;
+  // TODO: reply can be success but set forward=0. In that case, we should
+  // set audioPublishReady_ back to false and wait for a SUBSCRIBE_UPDATE
+  // to re-enable it when forward becomes 1 again.
+  // Await reply in background on EB and clear readiness on error
+  {
+    auto replyTask = folly::coro::co_withCancellation(
+        cancel_.getToken(), std::move(res->reply));
+    auto* replyEvb = evbThread_->getEventBase();
+    std::weak_ptr<MoQVideoPublisher> selfWeak = shared_from_this();
+    co_withExecutor(
+        replyEvb,
+        folly::coro::co_invoke(
+            [selfWeak, replyTask = std::move(replyTask)]() mutable
+            -> folly::coro::Task<void> {
+              try {
+                auto reply = co_await std::move(replyTask);
+                if (reply.hasError()) {
+                  auto self = selfWeak.lock();
+                  if (!self)
+                    co_return;
+                  self->audioPublishReady_ = false;
+                  self->audioTrackPublisher_.reset();
+                } else {
+                  // TODO: if reply->forward == false, set publishReady=false
+                  // and wait for SUBSCRIBE_UPDATE to re-enable it.
+                }
+              } catch (const std::exception&) {
+                auto self = selfWeak.lock();
+                if (!self)
+                  co_return;
+                self->audioPublishReady_ = false;
+                self->audioTrackPublisher_.reset();
+              }
+              co_return;
+            }))
+        .start();
+  }
+  co_return;
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
@@ -232,9 +345,17 @@ void MoQVideoPublisher::publishVideoFrame(
     std::chrono::microseconds ptsUs,
     uint64_t flags,
     Payload payload) {
+  std::weak_ptr<MoQVideoPublisher> selfWeak = shared_from_this();
   evbThread_->getEventBase()->add(
-      [this, ptsUs, flags, payload = std::move(payload)]() mutable {
-        publishFrameImpl(ptsUs, flags, std::move(payload));
+      [selfWeak, ptsUs, flags, payload = std::move(payload)]() mutable {
+        auto self = selfWeak.lock();
+        if (!self) {
+          return;
+        }
+        if (!self->running_) {
+          return;
+        }
+        self->publishFrameImpl(ptsUs, flags, std::move(payload));
       });
 }
 
@@ -284,10 +405,45 @@ void MoQVideoPublisher::publishFrameImpl(
 }
 
 void MoQVideoPublisher::endPublish() {
-  evbThread_->getEventBase()->add([this] {
-    videoForwarder_.subscribeDone(
-        {0, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"});
+  // Ensure we cancel and wait for relay->run() coroutine exit before tearing
+  // down the EB thread, to avoid join() deadlock.
+  std::weak_ptr<MoQVideoPublisher> selfWeak = shared_from_this();
+  evbThread_->getEventBase()->add([selfWeak] {
+    if (auto self = selfWeak.lock()) {
+      self->running_ = false;
+      // Request cancellation for any in-flight EB coroutines
+      self->cancel_.requestCancellation();
+    }
   });
+
+  // Give relay->run() a chance to observe cancellation and exit its loop
+  // before we continue shutdown on the EB thread.
+  evbThread_->getEventBase()->runInEventBaseThreadAndWait([selfWeak] {
+    if (auto self = selfWeak.lock()) {
+      if (!self->videoForwarder_.empty()) {
+        self->videoForwarder_.subscribeDone(
+            {0, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"});
+      }
+      self->audioPublishReady_ = false;
+      self->audioTrackPublisher_.reset();
+    }
+  });
+
+  // Wait for the relay run loop to finish so that destruction doesn't happen
+  // on the EB thread and join() is safe.
+  if (relayStarted_.load(std::memory_order_relaxed)) {
+    runDone_.wait();
+  }
+
+  // After run loop has stopped, tear down session on EB thread to avoid races
+  if (relayClient_) {
+    std::weak_ptr<MoQVideoPublisher> selfWeak2 = shared_from_this();
+    evbThread_->getEventBase()->runInEventBaseThreadAndWait([selfWeak2] {
+      if (auto self2 = selfWeak2.lock()) {
+        self2->relayClient_->shutdown();
+      }
+    });
+  }
 }
 
 void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
@@ -346,9 +502,17 @@ void MoQVideoPublisher::publishAudioFrame(
     std::chrono::microseconds ptsUs,
     uint64_t flags,
     Payload payload) {
+  std::weak_ptr<MoQVideoPublisher> selfWeak = shared_from_this();
   evbThread_->getEventBase()->add(
-      [this, ptsUs, flags, payload = std::move(payload)]() mutable {
-        publishAudioFrameImpl(ptsUs, flags, std::move(payload));
+      [selfWeak, ptsUs, flags, payload = std::move(payload)]() mutable {
+        auto self = selfWeak.lock();
+        if (!self) {
+          return;
+        }
+        if (!self->running_) {
+          return;
+        }
+        self->publishAudioFrameImpl(ptsUs, flags, std::move(payload));
       });
 }
 
@@ -356,8 +520,8 @@ void MoQVideoPublisher::publishAudioFrameImpl(
     std::chrono::microseconds ptsUs,
     uint64_t flags,
     Payload payload) {
-  if (audioForwarder_.empty()) {
-    XLOG(ERR) << "No subscriber for audio track ";
+  if (!audioTrackPublisher_ || !audioPublishReady_) {
+    XLOG(DBG1) << "Audio publish path not established yet";
     return;
   }
 
@@ -374,7 +538,8 @@ void MoQVideoPublisher::publishAudioFrameImpl(
   if (lastAudioPts_) {
     item->duration = item->pts - *lastAudioPts_;
 
-    // Sanity check: if duration is unreasonably large or zero, use a default
+    // Sanity check: if duration is unreasonably large or zero, use a
+    // default
     if (item->duration <= 0 || item->duration > 100000) {
       // Default frame duration for AAC at 44.1kHz (approximately 23.2ms per
       // frame) = (1024 samples per AAC frame) * 1000000 / 44100 sample rate
@@ -413,7 +578,11 @@ void MoQVideoPublisher::publishAudioFrameToMoQ(
       ObjectStatus::NORMAL,
       std::move(moqMiObj->extensions)};
 
-  audioForwarder_.objectStream(objHeader, std::move(moqMiObj->payload));
+  if (auto res = audioTrackPublisher_->objectStream(
+          objHeader, std::move(moqMiObj->payload));
+      !res) {
+    XLOG(ERR) << "audio objectStream error: " << res.error().describe();
+  }
 }
 
 } // namespace moxygen
