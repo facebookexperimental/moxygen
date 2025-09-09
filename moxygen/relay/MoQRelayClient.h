@@ -80,9 +80,19 @@ class MoQRelayClient {
 
   void shutdown() {
     for (auto& handle : announceHandles_) {
-      handle->unannounce();
+      if (handle) {
+        handle->unannounce();
+      }
     }
     announceHandles_.clear();
+    if (moqClient_ && moqClient_->moqSession_) {
+      // Break strong references held by the session to the Publisher/Subscriber
+      moqClient_->moqSession_->setPublishHandler(nullptr);
+      moqClient_->moqSession_->setSubscribeHandler(nullptr);
+      // Close the session cleanly after relay run has stopped
+      moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+      moqClient_->moqSession_.reset();
+    }
   }
 
  private:

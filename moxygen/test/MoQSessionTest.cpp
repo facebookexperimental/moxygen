@@ -13,7 +13,10 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
+#include <moxygen/MoQClient.h>
 #include <moxygen/MoQClientBase.h>
+#include <moxygen/relay/MoQRelayClient.h>
+
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/test/Mocks.h>
 #include <moxygen/test/TestHelpers.h>
@@ -3356,6 +3359,28 @@ TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
   client.test_onNewUniStream(readH.get());
   client.test_onDatagram(folly::IOBuf::copyBuffer("hi"));
   client.test_goaway(Goaway{"/newSession"});
+}
+
+TEST(MoQRelayClientTest, ShutdownClearsHandlersAndResetsSession) {
+  folly::EventBase evb;
+  MoQFollyExecutorImpl exec(&evb);
+
+  // Create a session and wire it into a MoQClient used by MoQRelayClient
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = std::make_shared<MoQSession>(clientWt.get(), &exec);
+
+  auto moqClient = std::make_unique<MoQClient>(
+      &exec, proxygen::URL("https://example.com:443/"));
+  moqClient->moqSession_ = session;
+
+  MoQRelayClient relay(std::move(moqClient));
+  ASSERT_NE(relay.getSession(), nullptr);
+
+  // After shutdown, the client session pointer must be reset to prevent any
+  // further usage after the relay stops.
+  relay.shutdown();
+  EXPECT_EQ(relay.getSession(), nullptr);
 }
 
 // Missing Test Cases
