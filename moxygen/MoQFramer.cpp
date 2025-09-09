@@ -1896,7 +1896,9 @@ void writeFixedString(
     size_t& size,
     bool& error) {
   writeVarint(writeBuf, str.size(), size, error);
-  if (!error) {
+  // Avoid appending a zero-length string, which can lead to undefined behavior
+  // on some platforms when passing a null data pointer with length 0.
+  if (!error && !str.empty()) {
     writeBuf.append(str);
     size += str.size();
   }
