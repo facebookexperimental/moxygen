@@ -13,6 +13,7 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
+#include <moxygen/MoQClientBase.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/test/Mocks.h>
 #include <moxygen/test/TestHelpers.h>
@@ -3305,6 +3306,56 @@ CO_TEST_P_X(MoQSessionTest, DeliveryCallbackMultipleStreams) {
 
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// New tests for MoQClientBase guarding WT callbacks after session reset
+class DummyMoQClientBase : public MoQClientBase {
+ public:
+  using MoQClientBase::MoQClientBase;
+
+  void test_onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bidi) {
+    MoQClientBase::onNewBidiStream(std::move(bidi));
+  }
+  void test_onNewUniStream(proxygen::WebTransport::StreamReadHandle* handle) {
+    MoQClientBase::onNewUniStream(handle);
+  }
+  void test_onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
+    MoQClientBase::onDatagram(std::move(datagram));
+  }
+  void test_goaway(const Goaway& goaway) {
+    MoQClientBase::goaway(goaway);
+  }
+
+ protected:
+  folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
+      folly::SocketAddress /*connectAddr*/,
+      std::chrono::milliseconds /*timeoutMs*/,
+      std::shared_ptr<fizz::CertificateVerifier> /*verifier*/,
+      std::string /*alpn*/) override {
+    co_return nullptr;
+  }
+};
+
+TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
+  folly::EventBase evb;
+  MoQFollyExecutorImpl exec(&evb);
+  proxygen::URL url("https://example.com:443/");
+
+  DummyMoQClientBase client(&exec, std::move(url));
+
+  // Ensure no session is set (simulating post-reset state)
+  client.moqSession_.reset();
+
+  // Prepare fake WT stream handles
+  auto readH = std::make_unique<proxygen::test::FakeStreamHandle>(1);
+  auto writeH = std::make_unique<proxygen::test::FakeStreamHandle>(1);
+  proxygen::WebTransport::BidiStreamHandle bidi{readH.get(), writeH.get()};
+
+  // These should be safely ignored and must not crash when moqSession_ is null
+  client.test_onNewBidiStream(bidi);
+  client.test_onNewUniStream(readH.get());
+  client.test_onDatagram(folly::IOBuf::copyBuffer("hi"));
+  client.test_goaway(Goaway{"/newSession"});
 }
 
 // Missing Test Cases

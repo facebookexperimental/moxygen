@@ -127,22 +127,36 @@ void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) {
 void MoQClientBase::onNewBidiStream(
     proxygen::WebTransport::BidiStreamHandle bidi) {
   XLOG(DBG1) << __func__;
+  if (!moqSession_) {
+    XLOG(DBG1) << "onNewBidiStream after session reset; ignoring";
+    return;
+  }
   moqSession_->onNewBidiStream(std::move(bidi));
 }
 
 void MoQClientBase::onNewUniStream(
     proxygen::WebTransport::StreamReadHandle* stream) {
   XLOG(DBG1) << __func__;
+  if (!moqSession_) {
+    XLOG(DBG1) << "onNewUniStream after session reset; ignoring";
+    return;
+  }
   moqSession_->onNewUniStream(stream);
 }
 
 void MoQClientBase::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
+  if (!moqSession_) {
+    XLOG(DBG1) << "onDatagram after session reset; ignoring";
+    return;
+  }
   moqSession_->onDatagram(std::move(datagram));
 }
 
 void MoQClientBase::goaway(const Goaway& goaway) {
   XLOG(DBG1) << __func__;
-
+  if (!moqSession_) {
+    return;
+  }
   moqSession_->goaway(goaway);
 }
 
