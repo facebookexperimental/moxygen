@@ -1843,6 +1843,14 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
+  if (shouldIncludeMoqtImplementationParam(setup.supportedVersions)) {
+    setup.params.emplace_back(SetupParameter(
+        {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
+         getMoQTImplementationString(),
+         0,
+         {}}));
+  }
+
   // Choose serialization version based on supported v11 vs v12
   uint64_t setupSerializationVersion = kVersionDraft12;
   for (auto supportedVersion : setup.supportedVersions) {
@@ -1924,6 +1932,12 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     logger_->logClientSetup(clientSetup, ControlMessageType::PARSED);
   }
 
+  auto moqtImplementation = getMoQTImplementationIfPresent(clientSetup.params);
+  if (moqtImplementation) {
+    XLOG(DBG1) << "Client MOQT_IMPLEMENTATION=" << *moqtImplementation
+               << " sess=" << this;
+  }
+
   peerMaxRequestID_ = getMaxRequestIDIfPresent(clientSetup.params);
   tokenCache_.setMaxSize(
       std::min(
@@ -1937,6 +1951,14 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
               << " err=" << serverSetup.exception().what();
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
+  }
+
+  if (getDraftMajorVersion(serverSetup->selectedVersion) >= 14) {
+    serverSetup->params.emplace_back(SetupParameter(
+        {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
+         getMoQTImplementationString(),
+         0,
+         {}}));
   }
 
   // Check if selected version is < 11 and handle appropriately
@@ -4768,6 +4790,34 @@ uint64_t MoQSession::getMaxRequestIDIfPresent(
     }
   }
   return 0;
+}
+
+/*static*/
+folly::Optional<std::string> MoQSession::getMoQTImplementationIfPresent(
+    const std::vector<SetupParameter>& params) {
+  for (const auto& param : params) {
+    if (param.key == folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION)) {
+      return param.asString;
+    }
+  }
+  return folly::none;
+}
+
+/*static*/
+std::string MoQSession::getMoQTImplementationString() {
+  return fmt::format(
+      "Meta MoQ C++ Draft-{}", getDraftMajorVersion(kVersionDraftCurrent));
+}
+
+/*static*/
+bool MoQSession::shouldIncludeMoqtImplementationParam(
+    const std::vector<uint64_t>& supportedVersions) {
+  for (const auto& version : supportedVersions) {
+    if (getDraftMajorVersion(version) >= 14) {
+      return true;
+    }
+  }
+  return false;
 }
 
 uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(

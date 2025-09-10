@@ -224,6 +224,7 @@ enum class SetupKey : uint64_t {
   MAX_REQUEST_ID = 2,
   AUTHORIZATION_TOKEN = 3,
   MAX_AUTH_TOKEN_CACHE_SIZE = 4,
+  MOQT_IMPLEMENTATION = 7
 };
 
 enum class AliasType : uint8_t {

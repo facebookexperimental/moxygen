@@ -119,6 +119,8 @@ class MoQSession : public Subscriber,
 
   static GroupOrder resolveGroupOrder(GroupOrder pubOrder, GroupOrder subOrder);
 
+  static std::string getMoQTImplementationString();
+
   folly::coro::Task<TrackStatusResult> trackStatus(
       TrackStatusRequest trackStatusRequest) override;
 
@@ -412,6 +414,10 @@ class MoQSession : public Subscriber,
       const std::vector<SetupParameter>& params);
   static uint64_t getMaxAuthTokenCacheSizeIfPresent(
       const std::vector<SetupParameter>& params);
+  static folly::Optional<std::string> getMoQTImplementationIfPresent(
+      const std::vector<SetupParameter>& params);
+  static bool shouldIncludeMoqtImplementationParam(
+      const std::vector<uint64_t>& supportedVersions);
 
   //  Closes the session if the requestID is invalid, that is,
   //  requestID <= maxRequestID_;
