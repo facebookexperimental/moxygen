@@ -310,7 +310,8 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
       auto& forwarder = subscriptionIt->second.forwarder;
       if (forwarder->empty()) {
         subscriptionIt->second.handle->subscribeUpdate(
-            {subscriptionIt->second.handle->subscribeOk().requestID,
+            {RequestID(0),
+             subscriptionIt->second.handle->subscribeOk().requestID,
              kLocationMin,
              kLocationMax.group,
              kDefaultPriority,
@@ -557,7 +558,8 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
         // forward=false
         XLOG(DBG1) << "Updating upstream subscription forward=false";
         subscription.handle->subscribeUpdate(
-            {subscription.handle->subscribeOk().requestID,
+            {RequestID(0),
+             subscription.handle->subscribeOk().requestID,
              kLocationMin,
              kLocationMax.group,
              kDefaultPriority,

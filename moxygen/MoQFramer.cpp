@@ -867,6 +867,17 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
   }
   subscribeUpdate.requestID = requestID->first;
   length -= requestID->second;
+
+  if (getDraftMajorVersion(*version_) >= 14) {
+    auto subscriptionRequestID =
+        quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!subscriptionRequestID) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    subscribeUpdate.subscriptionRequestID = subscriptionRequestID->first;
+    length -= subscriptionRequestID->second;
+  }
+
   auto start = parseAbsoluteLocation(cursor, length);
   if (!start) {
     return folly::makeUnexpected(start.error());
@@ -2448,6 +2459,9 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);
   writeVarint(writeBuf, update.requestID.value, size, error);
+  if (getDraftMajorVersion(*version_) >= 14) {
+    writeVarint(writeBuf, update.subscriptionRequestID.value, size, error);
+  }
   writeVarint(writeBuf, update.start.group, size, error);
   writeVarint(writeBuf, update.start.object, size, error);
   writeVarint(writeBuf, update.endGroup, size, error);

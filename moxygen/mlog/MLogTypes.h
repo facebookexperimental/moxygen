@@ -155,6 +155,7 @@ class MOQTSubscribeUpdate : public MOQTBaseControlMessage {
     type = "subscribe_update";
   }
   folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
   uint64_t subscribeId{0};
   uint64_t startGroup{};
   uint64_t startObject{};

@@ -1355,6 +1355,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
 
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
+      RequestID(0),
       AbsoluteLocation{0, 0},
       10,
       kDefaultPriority + 1,
@@ -1447,6 +1448,7 @@ CO_TEST_P_X(V11PlusTests, SubscribeUpdateForwardingFalse) {
 
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
+      RequestID(0),
       AbsoluteLocation{0, 0},
       10,
       kDefaultPriority,
@@ -2857,6 +2859,7 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
     // Now send a SubscribeUpdate
     SubscribeUpdate subscribeUpdate{
         RequestID(0),
+        RequestID(0),
         AbsoluteLocation{0, 0},
         10,
         kDefaultPriority + 1,
@@ -3381,6 +3384,64 @@ TEST(MoQRelayClientTest, ShutdownClearsHandlersAndResetsSession) {
   // further usage after the relay stops.
   relay.shutdown();
   EXPECT_EQ(relay.getSession(), nullptr);
+}
+
+using V14PlusTests = MoQSessionTest;
+INSTANTIATE_TEST_SUITE_P(
+    V14PlusTests,
+    V14PlusTests,
+    testing::Values(
+        VersionParams{{kVersionDraft12, kVersionDraft14}, kVersionDraft14}));
+
+CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectSubscribeDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+
+  SubscribeUpdate subscribeUpdate{
+      RequestID(0), // Will be assigned by session based on version
+      subscribeRequest.requestID,
+      AbsoluteLocation{0, 0},
+      10,
+      kDefaultPriority + 1,
+      true,
+      {}};
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+
+  subscribeHandler->subscribeUpdate(subscribeUpdate);
+  folly::coro::Baton subscribeUpdateInvoked;
+  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
+      .WillOnce(testing::Invoke([&](const auto& actualUpdate) {
+        // Verify that subscriptionRequestID has original requestID value
+        EXPECT_EQ(
+            actualUpdate.subscriptionRequestID.value,
+            subscribeRequest.requestID.value);
+        // Verify that requestID has been assigned by session
+        EXPECT_EQ(
+            actualUpdate.requestID.value, subscribeRequest.requestID.value + 2);
+        subscribeUpdateInvoked.post();
+      }));
+  co_await subscribeUpdateInvoked;
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
 // Missing Test Cases

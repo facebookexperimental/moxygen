@@ -117,6 +117,7 @@ folly::dynamic MOQTSubscribe::toDynamic() const {
 folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
+  obj["requestId"] = std::to_string(requestId);
   obj["subscribeId"] = std::to_string(subscribeId);
   obj["startGroup"] = std::to_string(startGroup);
   obj["startObject"] = std::to_string(startObject);

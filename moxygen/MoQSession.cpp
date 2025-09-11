@@ -2627,7 +2627,18 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.requestID
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeUpdate);
-  const auto requestID = subscribeUpdate.requestID;
+  auto subscriptionRequestID = subscribeUpdate.requestID;
+
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
+    subscriptionRequestID = subscribeUpdate.subscriptionRequestID;
+
+    // RequestID meaning has changed, check validity
+    if (closeSessionIfRequestIDInvalid(
+            subscribeUpdate.requestID, false, true)) {
+      return;
+    }
+  }
+
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     return;
@@ -2637,28 +2648,30 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     logger_->logSubscribeUpdate(subscribeUpdate, ControlMessageType::PARSED);
   }
 
-  auto it = pubTracks_.find(requestID);
-  if (it == pubTracks_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << requestID << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(
+          subscriptionRequestID, false, false, false)) {
     return;
   }
-  if (closeSessionIfRequestIDInvalid(requestID, false, false, false)) {
+  auto it = pubTracks_.find(subscriptionRequestID);
+  if (it == pubTracks_.end()) {
+    XLOG(ERR) << "No matching subscribe ID=" << subscriptionRequestID
+              << " sess=" << this;
     return;
   }
 
   it->second->setSubPriority(subscribeUpdate.priority);
   // TODO: update priority of tracks in flight
-  auto pubTrackIt = pubTracks_.find(requestID);
+  auto pubTrackIt = pubTracks_.find(subscriptionRequestID);
   if (pubTrackIt == pubTracks_.end()) {
-    XLOG(ERR) << "SubscribeUpdate track not found id=" << requestID
+    XLOG(ERR) << "SubscribeUpdate track not found id=" << subscriptionRequestID
               << " sess=" << this;
     return;
   }
   auto trackPublisher =
       dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
   if (!trackPublisher) {
-    XLOG(ERR) << "RequestID in SubscribeUpdate is for a FETCH, id=" << requestID
-              << " sess=" << this;
+    XLOG(ERR) << "SubscriptionRequestID in SubscribeUpdate is for a FETCH, id="
+              << subscriptionRequestID << " sess=" << this;
   } else {
     trackPublisher->subscribeUpdate(std::move(subscribeUpdate));
   }
@@ -2866,7 +2879,12 @@ class MoQSession::ReceiverSubscriptionHandle
 
   void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
     if (session_) {
-      subscribeUpdate.requestID = subscribeOk_->requestID;
+      subscribeUpdate.subscriptionRequestID = subscribeOk_->requestID;
+      if (getDraftMajorVersion(*(session_->getNegotiatedVersion())) >= 14) {
+        subscribeUpdate.requestID = session_->getNextRequestID();
+      } else {
+        subscribeUpdate.requestID = subscribeOk_->requestID;
+      }
       session_->subscribeUpdate(subscribeUpdate);
     }
   }
@@ -4379,10 +4397,10 @@ void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
   }
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeUpdate);
-  auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.requestID);
+  auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.subscriptionRequestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching request ID=" << subUpdate.requestID
+    XLOG(ERR) << "No matching request ID=" << subUpdate.subscriptionRequestID
               << " sess=" << this;
     return;
   }

@@ -1241,10 +1241,58 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
   }
 }
 
+TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeUpdate subscribeUpdate;
+  subscribeUpdate.requestID = RequestID(123);
+  subscribeUpdate.subscriptionRequestID = RequestID(456);
+  subscribeUpdate.start = AbsoluteLocation{10, 20};
+  subscribeUpdate.endGroup = 30;
+  subscribeUpdate.priority = 5;
+  subscribeUpdate.forward = true;
+  subscribeUpdate.params = {};
+
+  auto writeResult = writer_.writeSubscribeUpdate(writeBuf, subscribeUpdate);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_UPDATE));
+
+  auto parseResult = parser_.parseSubscribeUpdate(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  if (getDraftMajorVersion(GetParam()) >= 14) {
+    // Version >= 14: Both requestID and subscriptionRequestID are
+    // written/parsed
+    EXPECT_EQ(parseResult->requestID.value, 123);
+    EXPECT_EQ(parseResult->subscriptionRequestID.value, 456);
+  } else {
+    // Version < 14: Only requestID is on wire, subscriptionRequestID not set by
+    // parser
+    EXPECT_EQ(
+        parseResult->requestID.value,
+        123); // First field on wire goes to requestID
+    EXPECT_EQ(
+        parseResult->subscriptionRequestID.value,
+        0); // Not set by parser for v<14
+  }
+
+  EXPECT_EQ(parseResult->start.group, 10);
+  EXPECT_EQ(parseResult->start.object, 20);
+  EXPECT_EQ(parseResult->endGroup, 30);
+  EXPECT_EQ(parseResult->priority, 5);
+  EXPECT_EQ(parseResult->forward, true);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraft11, kVersionDraft12));
+    ::testing::Values(kVersionDraft11, kVersionDraft12, kVersionDraft14));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,

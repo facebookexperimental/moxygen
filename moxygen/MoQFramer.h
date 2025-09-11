@@ -283,6 +283,8 @@ constexpr uint64_t kVersionDraft09 = 0xff000009;
 constexpr uint64_t kVersionDraft10 = 0xff00000A;
 constexpr uint64_t kVersionDraft11 = 0xff00000B;
 constexpr uint64_t kVersionDraft12 = 0xff00000C;
+constexpr uint64_t kVersionDraft13 = 0xff00000D;
+constexpr uint64_t kVersionDraft14 = 0xff00000E;
 
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft11;
 
@@ -712,6 +714,7 @@ struct SubscribeRequest {
 
 struct SubscribeUpdate {
   RequestID requestID;
+  RequestID subscriptionRequestID;
   AbsoluteLocation start;
   uint64_t endGroup;
   uint8_t priority{kDefaultPriority};

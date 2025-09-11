@@ -83,6 +83,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       writeBuf,
       SubscribeUpdate(
           {0,
+           0,
            {1, 2},
            3,
            255,
