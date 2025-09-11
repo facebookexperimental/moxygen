@@ -50,6 +50,9 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   void stop();
 
+  // Sets/unsets "reject connections" flag on the underlying QUIC server
+  void rejectNewConnections(bool reject);
+
   folly::Try<ServerSetup> onClientSetup(
       ClientSetup clientSetup,
       std::shared_ptr<MoQSession> session) override;

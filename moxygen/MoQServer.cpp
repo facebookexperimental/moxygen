@@ -45,6 +45,12 @@ void MoQServer::stop() {
   hqServer_->stop();
 }
 
+void MoQServer::rejectNewConnections(bool reject) {
+  if (hqServer_) {
+    hqServer_->rejectNewConnections(reject);
+  }
+}
+
 void MoQServer::createMoQQuicSession(
     std::shared_ptr<quic::QuicSocket> quicSocket) {
   auto qevb = quicSocket->getEventBase();
