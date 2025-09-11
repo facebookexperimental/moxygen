@@ -67,6 +67,9 @@ class MoQVideoPublisher
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback) override;
 
+  // Returns {srtt_us, lrtt_us} for the current session transport. 0 if unknown.
+  std::pair<uint64_t, uint64_t> getRttMicros();
+
  private:
   void publishFrameToMoQ(std::unique_ptr<MediaItem> item);
   void publishFrameImpl(

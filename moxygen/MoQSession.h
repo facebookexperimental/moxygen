@@ -101,6 +101,13 @@ class MoQSession : public Subscriber,
     return folly::SocketAddress();
   }
 
+  [[nodiscard]] quic::TransportInfo getTransportInfo() const {
+    if (wt_) {
+      return wt_->getTransportInfo();
+    }
+    return {};
+  }
+
   ~MoQSession() override;
 
   void start();

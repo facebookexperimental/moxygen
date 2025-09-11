@@ -144,6 +144,12 @@ std::unique_ptr<folly::IOBuf> serializeAVCDecoderConfigurationRecord(
   return configRecord;
 }
 
+// Mirror note: changes under fbcode/ are mirrored to xplat/ on amend/commit.
+
+// RTT plumbing: expose current SRTT/LRTT for UI polling
+
+// Returns {srtt_us, lrtt_us}; queries session transport info on EB thread
+
 std::unique_ptr<folly::IOBuf> convertMetadata(
     std::unique_ptr<folly::IOBuf> metadata) {
   auto [spsNalus, ppsNalus] = parseSPSandPPS(*metadata);
@@ -171,6 +177,24 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
 
 const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
 const uint8_t VIDEO_STREAM_PRIORITY = 200;
+
+std::pair<uint64_t, uint64_t> MoQVideoPublisher::getRttMicros() {
+  uint64_t srtt = 0;
+  uint64_t lrtt = 0;
+  auto* evb = evbThread_ ? evbThread_->getEventBase() : nullptr;
+  if (!evb || !relayClient_) {
+    return {srtt, lrtt};
+  }
+  // Query on EB thread to avoid races
+  evb->runInEventBaseThreadAndWait([&]() {
+    if (auto session = relayClient_->getSession()) {
+      auto ti = session->getTransportInfo();
+      srtt = static_cast<uint64_t>(ti.srtt.count());
+      lrtt = static_cast<uint64_t>(ti.lrtt.count());
+    }
+  });
+  return {srtt, lrtt};
+}
 
 // Implementation of setup function
 bool MoQVideoPublisher::setup(
