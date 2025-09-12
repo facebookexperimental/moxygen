@@ -35,6 +35,7 @@ struct BufferingThresholds {
 
 struct MoQSettings {
   BufferingThresholds bufferingThresholds{};
+  bool stampServerTimestamps{false};
 };
 
 class MoQSession : public Subscriber,
@@ -75,6 +76,10 @@ class MoQSession : public Subscriber,
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
+  // Accessor used by PublisherImpl and others
+  const MoQSettings& getMoqSettings() const {
+    return moqSettings_;
+  }
   void setPublishHandler(std::shared_ptr<Publisher> publishHandler);
   void setSubscribeHandler(std::shared_ptr<Subscriber> subscribeHandler);
 
@@ -267,6 +272,13 @@ class MoQSession : public Subscriber,
 
     void onBytesUnbuffered(uint64_t amount) {
       bytesBuffered_ -= amount;
+    }
+
+    const MoQSettings* getMoqSettings() const {
+      if (session_) {
+        return &session_->getMoqSettings();
+      }
+      return nullptr;
     }
 
    protected:

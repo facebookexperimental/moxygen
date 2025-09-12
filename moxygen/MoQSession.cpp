@@ -10,6 +10,8 @@
 #include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
 
+#include <moxygen/extensions/FbTimestampExt.h>
+
 #include <folly/logging/xlog.h>
 
 #include <utility>
@@ -486,6 +488,11 @@ StreamPublisherImpl::writeCurrentObject(
   header_.length = length;
   // copy is gratuitous
   header_.extensions = extensions;
+  if (const auto* s = publisher_->getMoqSettings();
+      s && s->stampServerTimestamps && header_.status == ObjectStatus::NORMAL) {
+    fbext::appendIntExtIfMissing(
+        header_.extensions, fbext::kExtFbTsServerSendUs, fbext::nowUsMono());
+  }
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
   bool entireObjectWritten = (!currentLengthRemaining_.hasValue());
   (void)moqFrameWriter_.writeStreamObject(
@@ -603,6 +610,12 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     }
   }
 
+  if (const auto* s = publisher_->getMoqSettings();
+      s && s->stampServerTimestamps) {
+    fbext::appendIntExtIfMissing(
+        extensions, fbext::kExtFbTsServerRecvUs, fbext::nowUsMono());
+  }
+
   return writeCurrentObject(
       objectID, length, std::move(payload), extensions, finStream);
 }
@@ -643,6 +656,13 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     return folly::makeUnexpected(validateObjectPublishRes.error());
   }
   header_.status = ObjectStatus::NORMAL;
+
+  if (const auto* s = publisher_->getMoqSettings();
+      s && s->stampServerTimestamps) {
+    fbext::appendIntExtIfMissing(
+        extensions, fbext::kExtFbTsServerRecvUs, fbext::nowUsMono());
+  }
+
   return writeCurrentObject(
       objectID,
       length,
@@ -1181,13 +1201,19 @@ MoQSession::TrackPublisherImpl::objectStream(
         MoQPublishError::API_ERROR, "Must set track alias first"));
   }
   XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
+  Extensions extensions = objHeader.extensions;
+  if (const auto* s = getMoqSettings(); s && s->stampServerTimestamps &&
+      objHeader.status == ObjectStatus::NORMAL) {
+    fbext::appendIntExtIfMissing(
+        extensions, fbext::kExtFbTsServerRecvUs, fbext::nowUsMono());
+  }
   auto subgroup = beginSubgroup(
       objHeader.group,
       objHeader.subgroup,
       objHeader.priority,
       objHeader.subgroup == objHeader.id ? SubgroupIDFormat::FirstObject
                                          : SubgroupIDFormat::Present,
-      !objHeader.extensions.empty());
+      !extensions.empty());
   if (subgroup.hasError()) {
     return folly::makeUnexpected(std::move(subgroup.error()));
   }
@@ -1197,7 +1223,7 @@ MoQSession::TrackPublisherImpl::objectStream(
       return subgroup.value()->object(
           objHeader.id,
           std::move(payload),
-          objHeader.extensions,
+          extensions,
           /*finSubgroup=*/true);
     case ObjectStatus::OBJECT_NOT_EXIST:
       return subgroup.value()->objectNotExists(

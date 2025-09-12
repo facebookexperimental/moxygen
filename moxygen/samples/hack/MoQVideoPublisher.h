@@ -18,6 +18,9 @@
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
 
 namespace moxygen {
 
@@ -70,6 +73,14 @@ class MoQVideoPublisher
   // Returns {srtt_us, lrtt_us} for the current session transport. 0 if unknown.
   std::pair<uint64_t, uint64_t> getRttMicros();
 
+  // Optional: enable/disable vendor timestamp extensions (t0 on publish)
+  void setUseTimestampExtensions(bool enable) {
+    useTimestampExt_.store(enable, std::memory_order_relaxed);
+  }
+
+  // Record client-send timestamp (t0) keyed by audio PTS (microseconds)
+  void noteClientAudioSendTs(uint64_t ptsUs, uint64_t t0Us);
+
  private:
   void publishFrameToMoQ(std::unique_ptr<MediaItem> item);
   void publishFrameImpl(
@@ -112,6 +123,13 @@ class MoQVideoPublisher
   // wait for run() to finish on stop
   folly::Baton<> runDone_;
   std::atomic<bool> relayStarted_{false};
+
+  // Optional vendor timestamp extensions (default disabled)
+  std::atomic<bool> useTimestampExt_{false};
+
+  // Temporary map of PTS->client-send ts (t0), filled at JNI boundary
+  std::mutex t0Mutex_;
+  std::unordered_map<uint64_t, uint64_t> t0ByPts_;
 };
 
 } // namespace moxygen

@@ -25,6 +25,11 @@ MoQAudioEchoServer::MoQAudioEchoServer(
 
 void MoQAudioEchoServer::onNewSession(
     std::shared_ptr<MoQSession> clientSession) {
+  // Enable server timestamp stamping for echo sample
+  MoQSettings settings;
+  settings.stampServerTimestamps = true;
+  clientSession->setMoqSettings(settings);
+
   clientSession->setPublishHandler(handler_);
   clientSession->setSubscribeHandler(handler_);
 }
