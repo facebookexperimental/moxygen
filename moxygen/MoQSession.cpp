@@ -777,10 +777,8 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
     // TODO: stream header is pending, reliable reset?
     XLOG(WARN) << "Stream header pending on subgroup=" << header_;
   }
-  if (writeHandle_) {
-    auto writeHandle = writeHandle_;
-    writeHandle_ = nullptr;
-    writeHandle->resetStream(uint32_t(error));
+  if (auto* wh = std::exchange(writeHandle_, nullptr)) {
+    wh->resetStream(uint32_t(error));
   } else {
     // Can happen on STOP_SENDING or prior to first fetch write
     XLOG(ERR) << "reset with no write handle: sgp=" << this;
@@ -1047,9 +1045,8 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
     // and retireRequestID
     reset(ResetStreamErrorCode::CANCELLED);
-    if (handle_) {
-      handle_->fetchCancel();
-      handle_ = nullptr;
+    if (auto handle = std::exchange(handle_, nullptr)) {
+      handle->fetchCancel();
     }
   }
 
@@ -1809,13 +1806,10 @@ void MoQSession::checkForCloseOnDrain() {
 
 void MoQSession::close(SessionCloseErrorCode error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (wt_) {
+  if (auto wt = std::exchange(wt_, nullptr)) {
     // TODO: The error code should be propagated to
     // whatever implemented proxygen::WebTransport.
     // TxnWebTransport current just ignores the errorCode
-    auto wt = wt_;
-    wt_ = nullptr;
-
     cleanup();
 
     wt->closeSession(folly::to_underlying(error));
@@ -4395,9 +4389,7 @@ void MoQSession::sendMaxRequestID(bool signalWriteLoop) {
 }
 
 void MoQSession::PublisherImpl::fetchComplete() {
-  auto session = session_;
-  session_ = nullptr;
-  session->fetchComplete(requestID_);
+  std::exchange(session_, nullptr)->fetchComplete(requestID_);
 }
 
 void MoQSession::fetchComplete(RequestID requestID) {
