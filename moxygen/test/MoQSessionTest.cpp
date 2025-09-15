@@ -3314,6 +3314,17 @@ CO_TEST_P_X(MoQSessionTest, DeliveryCallbackMultipleStreams) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, EmptyUnidirectionalStream) {
+  co_await setupMoQSession();
+
+  auto wh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  wh->writeStreamData(
+      /*data=*/nullptr, /*fin=*/true, /*byteEventCallback=*/nullptr);
+
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // New tests for MoQClientBase guarding WT callbacks after session reset
 class DummyMoQClientBase : public MoQClientBase {
  public:

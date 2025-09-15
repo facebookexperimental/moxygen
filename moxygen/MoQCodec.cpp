@@ -140,8 +140,10 @@ folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
 MoQObjectStreamCodec::parseSubgroupTypeAndAlias(
     std::unique_ptr<folly::IOBuf> data,
     bool eom) noexcept {
+  XCHECK(data || eom);
   ingress_.append(std::move(data));
-  folly::io::Cursor cursor(ingress_.front());
+  folly::IOBuf empty;
+  folly::io::Cursor cursor(ingress_.empty() ? &empty : ingress_.front());
   auto res =
       moqFrameParser_.parseSubgroupTypeAndAlias(cursor, ingress_.chainLength());
   if (res.hasError() && res.error() == ErrorCode::PARSE_UNDERFLOW && eom) {

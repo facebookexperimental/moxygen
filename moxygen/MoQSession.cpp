@@ -1768,7 +1768,7 @@ void MoQSession::start() {
         controlStream.writeHandle->getCancelToken());
     co_withExecutor(
         exec_,
-        folly::coro::co_withCancellation(
+        co_withCancellation(
             std::move(mergeToken), controlWriteLoop(controlStream.writeHandle)))
         .start();
     co_withExecutor(
@@ -1906,7 +1906,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   auto deletedToken = cancellationSource_.getToken();
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::cancellation_token_merge(deletedToken, token);
-  auto serverSetup = co_await co_awaitTry(folly::coro::co_withCancellation(
+  auto serverSetup = co_await co_awaitTry(co_withCancellation(
       mergeToken, folly::coro::timeout(std::move(setupFuture), kSetupTimeout)));
   if (mergeToken.isCancellationRequested()) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
@@ -2031,24 +2031,23 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   bool fin = false;
   auto token = co_await folly::coro::co_current_cancellation_token;
   while (!fin && !token.isCancellationRequested()) {
-    auto streamData = co_await folly::coro::co_awaitTry(
-        readHandle->readStreamData().via(exec_));
+    auto streamData =
+        co_await co_awaitTry(readHandle->readStreamData().via(exec_));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception())
                 << " id=" << streamId << " sess=" << this;
       break;
-    } else {
-      if (streamData->data || streamData->fin) {
-        try {
-          controlCodec_.onIngress(std::move(streamData->data), streamData->fin);
-        } catch (const std::exception& ex) {
-          XLOG(FATAL) << "exception thrown from onIngress ex="
-                      << folly::exceptionStr(ex);
-        }
-      }
-      fin = streamData->fin;
-      XLOG_IF(DBG3, fin) << "End of stream id=" << streamId << " sess=" << this;
     }
+    if (streamData->data || streamData->fin) {
+      try {
+        controlCodec_.onIngress(std::move(streamData->data), streamData->fin);
+      } catch (const std::exception& ex) {
+        XLOG(FATAL) << "exception thrown from onIngress ex="
+                    << folly::exceptionStr(ex);
+      }
+    }
+    fin = streamData->fin;
+    XLOG_IF(DBG3, fin) << "End of stream id=" << streamId << " sess=" << this;
   }
   // TODO: close session on control exit
 }
@@ -2495,11 +2494,10 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   bool fin = false;
   bool headerParsed = false;
   while (!fin && !token.isCancellationRequested()) {
-    auto streamData =
-        co_await folly::coro::co_awaitTry(folly::coro::co_withCancellation(
-            token,
-            folly::coro::toTaskInterruptOnCancel(
-                readHandle->readStreamData().via(exec_))));
+    auto streamData = co_await co_awaitTry(co_withCancellation(
+        token,
+        folly::coro::toTaskInterruptOnCancel(
+            readHandle->readStreamData().via(exec_))));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception()) << " id=" << id
                 << " sess=" << this;
@@ -2516,43 +2514,40 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
                   << "stream id=" << id << " sess=" << this;
       }
       break;
-    } else {
-      if (streamData->data || streamData->fin) {
-        fin = streamData->fin;
-        folly::Optional<MoQPublishError> err;
-        if (!headerParsed) {
-          auto res =
-              co_await this->headerParsed(codec, dcb, streamData.value());
-          if (res.hasError()) {
-            err = res.error();
-          } else {
-            headerParsed = *res;
-            if (!headerParsed) {
-              continue;
-            }
-          }
-        }
-        try {
-          if (!err) {
-            codec.onIngress(std::move(streamData->data), streamData->fin);
-            err = dcb.error();
-          }
-        } catch (const std::exception& ex) {
-          err = MoQPublishError(
-              MoQPublishError::CANCELLED,
-              folly::exceptionStr(ex).toStdString());
-        }
-        XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
-        if (err) {
-          XLOG(ERR) << "Error parsing/consuming stream, " << err->describe()
-                    << " id=" << id << " sess=" << this;
-          if (!fin) {
-            readHandle->stopSending(/*error=*/0);
-            break;
-          }
-        }
-      } // else empty read
     }
+    if (streamData->data || streamData->fin) {
+      fin = streamData->fin;
+      folly::Optional<MoQPublishError> err;
+      if (!headerParsed) {
+        auto res = co_await this->headerParsed(codec, dcb, streamData.value());
+        if (res.hasError()) {
+          err = res.error();
+        } else {
+          headerParsed = *res;
+          if (!headerParsed) {
+            continue;
+          }
+        }
+      }
+      try {
+        if (!err) {
+          codec.onIngress(std::move(streamData->data), streamData->fin);
+          err = dcb.error();
+        }
+      } catch (const std::exception& ex) {
+        err = MoQPublishError(
+            MoQPublishError::CANCELLED, folly::exceptionStr(ex).toStdString());
+      }
+      XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
+      if (err) {
+        XLOG(ERR) << "Error parsing/consuming stream, " << err->describe()
+                  << " id=" << id << " sess=" << this;
+        if (!fin) {
+          readHandle->stopSending(/*error=*/0);
+          break;
+        }
+      }
+    } // else empty read
   }
 }
 
@@ -4686,7 +4681,7 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
     co_withExecutor(
         exec_,
-        folly::coro::co_withCancellation(
+        co_withCancellation(
             std::move(mergeToken), controlWriteLoop(bh.writeHandle)))
         .start();
   }
