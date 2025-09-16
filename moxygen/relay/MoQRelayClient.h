@@ -60,7 +60,7 @@ class MoQRelayClient {
             break;
           }
           Announce ann;
-          ann.trackNamespace.trackNamespace.push_back("ping");
+          ann.trackNamespace.trackNamespace.emplace_back("ping");
           auto handle = co_await moqClient_->moqSession_->announce(ann);
           if (handle.hasError()) {
             break;
