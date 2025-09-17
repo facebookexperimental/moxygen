@@ -555,7 +555,8 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
       expectedObjectHeader,
       folly::IOBuf::copyBuffer("EFGH"));
   EXPECT_TRUE(result.hasValue());
-
+  // Update objectID to play nice with delta encoding.
+  expectedObjectHeader.id = 45;
   // Test ObjectStatus::OBJECT_NOT_EXIST
   expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
   expectedObjectHeader.length = 0;
@@ -593,7 +594,7 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
   EXPECT_EQ(parseResult->group, 33);
-  EXPECT_EQ(parseResult->id, 44);
+  EXPECT_EQ(parseResult->id, 45);
   EXPECT_EQ(parseResult->priority, 55);
   EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
 }
@@ -852,6 +853,7 @@ TEST_P(MoQFramerTest, All) {
     toParse->trimEnd(len - 1 - i);
     folly::io::Cursor cursor(toParse.get());
     try {
+      parser_.reset();
       parseAll(cursor, i == len - 1);
     } catch (const TestUnderflow&) {
       // expected

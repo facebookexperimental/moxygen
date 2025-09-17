@@ -1198,6 +1198,11 @@ class MoQFrameParser {
     tokenCache_.setMaxSize(size, /*evict=*/true);
   }
 
+  // Test only
+  void reset() {
+    previousObjectID_ = folly::none;
+  }
+
  private:
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
@@ -1237,6 +1242,7 @@ class MoQFrameParser {
 
   folly::Optional<uint64_t> version_;
   mutable MoQTokenCache tokenCache_;
+  mutable folly::Optional<uint64_t> previousObjectID_;
 };
 
 //// Egress ////
@@ -1445,6 +1451,7 @@ class MoQFrameWriter {
       bool& error) const noexcept;
 
   folly::Optional<uint64_t> version_;
+  mutable folly::Optional<uint64_t> previousObjectID_;
 };
 
 } // namespace moxygen

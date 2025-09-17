@@ -728,6 +728,18 @@ MoQFrameParser::parseSubgroupObjectHeader(
   }
   length -= id->second;
   objectHeader.id = id->first;
+  XCHECK(version_.hasValue())
+      << "The version must be set before parsing subgroup object header";
+  if (getDraftMajorVersion(*version_) >= 14) {
+    // Delta encoded object ID
+    uint64_t objectIDDelta = id->first;
+    if (previousObjectID_.has_value()) {
+      objectHeader.id = previousObjectID_.value() + objectIDDelta + 1;
+    } else {
+      objectHeader.id = objectIDDelta;
+    }
+    previousObjectID_ = objectHeader.id;
+  }
 
   if (includeExtensions) {
     auto ext = parseExtensions(cursor, length, objectHeader);
@@ -2357,6 +2369,8 @@ WriteResult MoQFrameWriter::writeStreamObject(
     StreamType streamType,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
+  XCHECK(version_.hasValue())
+      << "The version must be set before writing stream object";
   size_t size = 0;
   bool error = false;
   if (streamType == StreamType::FETCH_HEADER) {
@@ -2366,7 +2380,25 @@ WriteResult MoQFrameWriter::writeStreamObject(
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
   } else {
-    writeVarint(writeBuf, objectHeader.id, size, error);
+    if (getDraftMajorVersion(*version_) >= 14) {
+      // Delta encoding of object ID
+      uint64_t objectIDDelta;
+      if (previousObjectID_.has_value()) {
+        if (objectHeader.id > previousObjectID_.value()) {
+          objectIDDelta = objectHeader.id - previousObjectID_.value() - 1;
+        } else {
+          // received same or lower ObjectID, error
+          return folly::makeUnexpected(
+              quic::TransportErrorCode::PROTOCOL_VIOLATION);
+        }
+      } else {
+        objectIDDelta = objectHeader.id;
+      }
+      previousObjectID_ = objectHeader.id;
+      writeVarint(writeBuf, objectIDDelta, size, error);
+    } else {
+      writeVarint(writeBuf, objectHeader.id, size, error);
+    }
   }
   if (folly::to_underlying(streamType) & 0x1) {
     // includes FETCH, watch out if we add more types!
