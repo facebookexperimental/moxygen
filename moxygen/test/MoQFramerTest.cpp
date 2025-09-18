@@ -277,7 +277,7 @@ TEST_P(MoQFramerTest, ParseObjectHeader) {
   folly::io::Cursor cursor(serialized.get());
 
   auto dgType = parseDatagramType(cursor);
-  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false));
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false, false));
   auto length = cursor.totalLength();
   auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
@@ -307,7 +307,7 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   folly::io::Cursor cursor(serialized.get());
 
   auto dgType = parseDatagramType(cursor);
-  EXPECT_EQ(dgType, getDatagramType(GetParam(), false, false, false));
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), false, false, false, false));
   auto length = cursor.totalLength();
   auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());
@@ -403,7 +403,7 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
   for (size_t i = 1; i <= writeBuf.chainLength(); ++i) {
     folly::io::Cursor cursor(writeBuf.front());
     auto datagramType =
-        getDatagramType(GetParam(), isStatus, hasExtensions, false);
+        getDatagramType(GetParam(), isStatus, hasExtensions, false, false);
     auto decodedType = quic::follyutils::decodeQuicInteger(cursor, i);
     EXPECT_TRUE(decodedType.has_value());
     EXPECT_EQ(decodedType->first, folly::to_underlying(datagramType));
@@ -518,7 +518,7 @@ TEST_P(MoQFramerTest, ZeroLengthNormal) {
   folly::io::Cursor cursor(serialized.get());
 
   auto dgType = parseDatagramType(cursor);
-  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false));
+  EXPECT_EQ(dgType, getDatagramType(GetParam(), true, false, false, false));
   auto length = cursor.totalLength();
   auto parseResult = parser_.parseDatagramObjectHeader(cursor, dgType, length);
   EXPECT_TRUE(parseResult.hasValue());

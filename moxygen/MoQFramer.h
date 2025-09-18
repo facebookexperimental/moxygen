@@ -207,6 +207,12 @@ constexpr uint8_t SG_SUBGROUP_VALUE = 0x2;
 constexpr uint8_t SG_HAS_SUBGROUP_ID = 0x4;
 constexpr uint8_t SG_HAS_END_OF_GROUP = 0x8;
 
+// Datagram Type Bit Fields
+constexpr uint8_t DG_HAS_EXTENSIONS = 0x1;
+constexpr uint8_t DG_HAS_STATUS_V11 = 0x2;
+constexpr uint8_t DG_HAS_END_OF_GROUP = 0x2;
+constexpr uint8_t DG_OBJECT_ID_ZERO = 0x4;
+
 enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
 
 struct SubgroupOptions {
@@ -1008,16 +1014,23 @@ inline DatagramType getDatagramType(
     uint64_t version,
     bool status,
     bool includeExtensions,
-    bool endOfGroup) {
+    bool endOfGroup,
+    bool isObjectIdZero) {
   auto majorVersion = getDraftMajorVersion(version);
   if (majorVersion == 11) {
-    return DatagramType((status ? 0x2 : 0) | (includeExtensions ? 0x1 : 0));
+    return DatagramType(
+        (status ? DG_HAS_STATUS_V11 : 0) |
+        (includeExtensions ? DG_HAS_EXTENSIONS : 0));
   } else if (status) {
     return DatagramType(
         folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) |
-        (includeExtensions ? 0x1 : 0));
+        (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
+        (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0));
   } else {
-    return DatagramType((includeExtensions ? 0x1 : 0) | (endOfGroup ? 0x4 : 0));
+    return DatagramType(
+        (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
+        (endOfGroup ? DG_HAS_END_OF_GROUP : 0) |
+        (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0));
   }
 }
 

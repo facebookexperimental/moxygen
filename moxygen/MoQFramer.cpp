@@ -71,6 +71,7 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseIntParam(
     uint64_t key);
 bool datagramTypeHasExtensions(uint64_t version, DatagramType streamType);
 bool datagramTypeIsStatus(uint64_t version, DatagramType streamType);
+bool datagramObjectIdZero(uint64_t version, DatagramType datagramType);
 
 void writeFixedString(
     folly::IOBufQueue& writeBuf,
@@ -489,6 +490,14 @@ bool datagramTypeIsStatus(uint64_t version, DatagramType datagramType) {
       : (folly::to_underlying(datagramType) & 0x20);
 }
 
+bool datagramObjectIdZero(uint64_t version, DatagramType datagramType) {
+  // 0 objectID type bit only supported in ver-14 and above
+  if (getDraftMajorVersion(version) < 14) {
+    return false;
+  }
+  return (folly::to_underlying(datagramType) & DG_OBJECT_ID_ZERO);
+}
+
 folly::Expected<DatagramObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
@@ -507,12 +516,19 @@ MoQFrameParser::parseDatagramObjectHeader(
   }
   length -= group->second;
   objectHeader.group = group->first;
-  auto id = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!id) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+
+  if (!datagramObjectIdZero(*version_, datagramType)) {
+    auto id = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!id) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= id->second;
+    objectHeader.id = id->first;
+  } else {
+    // objectID=0 is not on the wire
+    objectHeader.id = 0;
   }
-  length -= id->second;
-  objectHeader.id = id->first;
+
   if (length == 0 || !cursor.canAdvance(1)) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
@@ -2320,6 +2336,11 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   bool error = false;
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   bool hasExtensions = objectHeader.extensions.size() > 0;
+
+  // Set this only if version >= 14. Else ObjId is always written on the wire
+  bool isObjectIdZero =
+      (objectHeader.id == 0 && (getDraftMajorVersion(version_.value()) >= 14));
+
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
       << "non-zero length objects require NORMAL status";
   if (objectHeader.status != ObjectStatus::NORMAL || !hasLength) {
@@ -2327,13 +2348,18 @@ WriteResult MoQFrameWriter::writeDatagramObject(
         << "non-empty objectPayload with no header length";
     writeVarint(
         writeBuf,
-        folly::to_underlying(
-            getDatagramType(*version_, true, hasExtensions, false)),
+        folly::to_underlying(getDatagramType(
+            *version_, true, hasExtensions, false, isObjectIdZero)),
         size,
         error);
     writeVarint(writeBuf, trackAlias.value, size, error);
     writeVarint(writeBuf, objectHeader.group, size, error);
-    writeVarint(writeBuf, objectHeader.id, size, error);
+
+    // Only put non-zero object ID on the wire
+    if (!isObjectIdZero) {
+      writeVarint(writeBuf, objectHeader.id, size, error);
+    }
+
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
     if (hasExtensions) {
@@ -2344,13 +2370,15 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   } else {
     writeVarint(
         writeBuf,
-        folly::to_underlying(
-            getDatagramType(*version_, false, hasExtensions, false)),
+        folly::to_underlying(getDatagramType(
+            *version_, false, hasExtensions, false, isObjectIdZero)),
         size,
         error);
     writeVarint(writeBuf, trackAlias.value, size, error);
     writeVarint(writeBuf, objectHeader.group, size, error);
-    writeVarint(writeBuf, objectHeader.id, size, error);
+    if (!isObjectIdZero) {
+      writeVarint(writeBuf, objectHeader.id, size, error);
+    }
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
     if (hasExtensions) {
