@@ -1934,6 +1934,21 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
     logger_->logServerSetup(serverSetup, ControlMessageType::PARSED);
   }
 
+  // Validate that server MUST NOT send AUTHORITY parameter
+  auto authorityParam = std::find_if(
+      serverSetup.params.begin(),
+      serverSetup.params.end(),
+      [](const SetupParameter& p) {
+        return p.key == folly::to_underlying(SetupKey::AUTHORITY);
+      });
+
+  if (authorityParam != serverSetup.params.end()) {
+    XLOG(ERR)
+        << "Parameter AUTHORITY not allowed in server setup, closing session";
+    close(SessionCloseErrorCode::INVALID_AUTHORITY);
+    return;
+  }
+
   initializeNegotiatedVersion(serverSetup.selectedVersion);
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(
@@ -1964,12 +1979,25 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
           kMaxSendTokenCacheSize,
           getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)),
       /*evict=*/true);
-  auto serverSetup = serverSetupCallback_->onClientSetup(
-      std::move(clientSetup), shared_from_this());
+
+  auto serverSetup =
+      serverSetupCallback_->onClientSetup(clientSetup, shared_from_this());
   if (!serverSetup.hasValue()) {
+    auto errorMsg = serverSetup.exception().what();
     XLOG(ERR) << "Server setup callback failed sess=" << this
-              << " err=" << serverSetup.exception().what();
+              << " err=" << errorMsg;
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+    return;
+  }
+
+  // Validate authority with the negotiated version
+  auto authorityValidation = serverSetupCallback_->validateAuthority(
+      clientSetup, serverSetup->selectedVersion, shared_from_this());
+  if (!authorityValidation.hasValue()) {
+    SessionCloseErrorCode errorCode = authorityValidation.error();
+    XLOG(ERR) << "Authority validation failed sess=" << this
+              << " errorCode=" << static_cast<uint64_t>(errorCode);
+    close(errorCode);
     return;
   }
 

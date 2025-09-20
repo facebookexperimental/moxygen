@@ -78,16 +78,61 @@ void MoQServer::createMoQQuicSession(
   co_withExecutor(moqEvb_.get(), handleClientSession(std::move(moqSession)))
       .start();
 }
+bool MoQServer::isValidAuthorityFormat(const std::string& authority) {
+  // TODO: Implement RFC 3986 authority format validation
+  return !authority.empty();
+}
+
+bool MoQServer::isSupportedAuthority(const std::string& authority) {
+  // TODO: Implement server-side authority support validation
+  return true;
+}
+
+folly::Expected<folly::Unit, SessionCloseErrorCode>
+MoQServer::validateAuthority(
+    const ClientSetup& setup,
+    uint64_t negotiatedVersion,
+    std::shared_ptr<MoQSession>) {
+  if (getDraftMajorVersion(negotiatedVersion) >= 14) {
+    // Find and validate AUTHORITY
+    auto authorityParam = std::find_if(
+        setup.params.begin(), setup.params.end(), [](const SetupParameter& p) {
+          return p.key == folly::to_underlying(SetupKey::AUTHORITY);
+        });
+
+    bool hasAuthority = (authorityParam != setup.params.end());
+
+    if (hasAuthority) {
+      std::string authority = authorityParam->asString;
+
+      // MALFORMED_AUTHORITY validation
+      if (!isValidAuthorityFormat(authority)) {
+        XLOG(ERR) << "Malformed authority format: " << authority;
+        return folly::makeUnexpected(
+            SessionCloseErrorCode::MALFORMED_AUTHORITY);
+      }
+
+      // INVALID_AUTHORITY validation
+      if (!isSupportedAuthority(authority)) {
+        XLOG(ERR) << "Unsupported authority: " << authority;
+        return folly::makeUnexpected(SessionCloseErrorCode::INVALID_AUTHORITY);
+      }
+    }
+  }
+
+  return folly::unit;
+}
 
 folly::Try<ServerSetup> MoQServer::onClientSetup(
     ClientSetup setup,
     std::shared_ptr<MoQSession>) {
   XLOG(INFO) << "ClientSetup";
+
   uint64_t negotiatedVersion = 0;
   // Iterate over supported versions and set the highest version within the
   // range
   constexpr uint64_t kVersionMin = kVersionDraft11;
-  constexpr uint64_t kVersionMax = kVersionDraft12;
+  constexpr uint64_t kVersionMax = kVersionDraft14;
   uint64_t highestVersion = 0;
   for (const auto& version : setup.supportedVersions) {
     if (version >= kVersionMin && version <= kVersionMax) {

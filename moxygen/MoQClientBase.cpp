@@ -33,6 +33,17 @@ class InsecureVerifierDangerousDoNotUseInProduction
 } // namespace proxygen
 
 namespace moxygen {
+/*static*/
+bool MoQClientBase::shouldSendAuthorityParam(
+    const std::vector<uint64_t>& supportedVersions) {
+  for (const auto& version : supportedVersions) {
+    if (getDraftMajorVersion(version) >= 14) {
+      return true;
+    }
+  }
+  return false;
+}
+
 folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
@@ -92,7 +103,7 @@ ClientSetup MoQClientBase::getClientSetup(
   static const std::vector<uint64_t> pre11Versions = {
       kVersionDraft09, kVersionDraft10};
   static const std::vector<uint64_t> post11Versions = {
-      kVersionDraft11, kVersionDraft12};
+      kVersionDraft11, kVersionDraft12, kVersionDraft13, kVersionDraft14};
 
   ClientSetup clientSetup{
       v11Plus ? post11Versions : pre11Versions,
@@ -107,7 +118,21 @@ ClientSetup MoQClientBase::getClientSetup(
 
   if (path) {
     clientSetup.params.emplace_back(
-        SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0}));
+        SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0, {}}));
+  }
+
+  if (shouldSendAuthorityParam(clientSetup.supportedVersions)) {
+    // Add AUTHORITY parameter for Direct QUIC with moqt:// scheme only
+    if (path.has_value() && url_.getScheme() == "moqt") {
+      // Extract authority from URI as per RFC 3986
+      std::string authority = url_.getHost();
+      if (url_.getPort() != 0 && url_.getPort() != 443) {
+        authority += ":" + std::to_string(url_.getPort());
+      }
+
+      clientSetup.params.emplace_back(SetupParameter(
+          {folly::to_underlying(SetupKey::AUTHORITY), authority, 0}));
+    }
   }
 
   return clientSetup;

@@ -57,7 +57,17 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       ClientSetup clientSetup,
       std::shared_ptr<MoQSession> session) override;
 
+  folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+      const ClientSetup& clientSetup,
+      uint64_t negotiatedVersion,
+      std::shared_ptr<MoQSession> session) override;
+
  private:
+  // AUTHORITY parameter validation methods
+  // Not called for HTTP inside proxygen, we leave it to applications.
+  bool isValidAuthorityFormat(const std::string& authority);
+  bool isSupportedAuthority(const std::string& authority);
+
   folly::coro::Task<void> handleClientSession(
       std::shared_ptr<MoQSession> clientSession);
 

@@ -60,6 +60,8 @@ enum class SessionCloseErrorCode : uint32_t {
   MALFORMED_AUTH_TOKEN = 0x16,
   UNKNOWN_AUTH_TOKEN_ALIAS = 0x17,
   EXPIRED_AUTH_TOKEN = 0x18,
+  INVALID_AUTHORITY = 0x19,
+  MALFORMED_AUTHORITY = 0x1A,
 
   PARSE_UNDERFLOW = std::numeric_limits<uint32_t>::max(),
 };
@@ -230,6 +232,7 @@ enum class SetupKey : uint64_t {
   MAX_REQUEST_ID = 2,
   AUTHORIZATION_TOKEN = 3,
   MAX_AUTH_TOKEN_CACHE_SIZE = 4,
+  AUTHORITY = 5,
   MOQT_IMPLEMENTATION = 7
 };
 

@@ -142,6 +142,14 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
   }
 
+  folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+      const ClientSetup& /* clientSetup */,
+      uint64_t /* negotiatedVersion */,
+      std::shared_ptr<MoQSession> /* session */) override {
+    // For test purposes, always return success
+    return folly::unit;
+  }
+
   folly::Try<ServerSetup> onClientSetup(
       ClientSetup setup,
       std::shared_ptr<MoQSession>) override {

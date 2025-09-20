@@ -44,6 +44,8 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   std::shared_ptr<MLogger> logger_ = nullptr;
 
  protected:
+  static bool shouldSendAuthorityParam(
+      const std::vector<uint64_t>& supportedVersions);
   virtual folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
   connectQuic(
       folly::SocketAddress connectAddr,
