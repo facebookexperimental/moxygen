@@ -35,8 +35,12 @@ MoQServer::MoQServer(
           wangle::ConnectionManager*) {
         createMoQQuicSession(std::move(quicSocket));
       });
-  hqServer_ =
-      std::make_unique<HQServer>(params_, std::move(factory), cert, key);
+  hqServer_ = std::make_unique<HQServer>(
+      params_,
+      std::move(factory),
+      cert,
+      key,
+      fizz::server::ClientAuthMode::None);
   hqServer_->start(std::move(evbs));
 }
 
