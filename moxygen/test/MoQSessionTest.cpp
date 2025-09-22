@@ -3464,6 +3464,31 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, ServerClosesDuringSubscribeHandler) {
+  co_await setupMoQSession();
+
+  // The server's subscribe handler will close the server session immediately
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    // Close the server session as soon as the subscribe handler is invoked
+    serverSession_->close(SessionCloseErrorCode::INTERNAL_ERROR);
+    // Optionally, return a valid handle (should not matter)
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  // The client should see an error or session closure
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  // The result may be an error due to the server closing the session
+  EXPECT_TRUE(res.hasError());
+  // Optionally, check the error code if available
+  if (res.hasError()) {
+    EXPECT_EQ(res.error().errorCode, SubscribeErrorCode::INTERNAL_ERROR);
+  }
+  // Ensure the client session is also closed
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Missing Test Cases
 // ===
 // getTrack by alias (subscribe with stream)
