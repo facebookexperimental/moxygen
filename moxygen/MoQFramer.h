@@ -1256,6 +1256,11 @@ class MoQFrameParser {
       size_t& length,
       ObjectHeader& objectHeader) const noexcept;
 
+  folly::Expected<folly::Unit, ErrorCode> parseExtensionKvPairs(
+      folly::io::Cursor& cursor,
+      ObjectHeader& objectHeader,
+      size_t extensionBlockLength) const noexcept;
+
   folly::Expected<Extension, ErrorCode> parseExtension(
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
