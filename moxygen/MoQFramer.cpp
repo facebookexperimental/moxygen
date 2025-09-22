@@ -3227,8 +3227,8 @@ bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
         folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11);
   } else {
     return (
-        datagramType <=
-            folly::to_underlying(DatagramType::OBJECT_DATAGRAM_EXT_EOG) ||
+        datagramType <= folly::to_underlying(
+                            DatagramType::OBJECT_DATAGRAM_EXT_EOG_ID_ZERO) ||
         (datagramType >=
              folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) &&
          datagramType <=

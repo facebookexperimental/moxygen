@@ -397,7 +397,8 @@ INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     testing::Values(
         VersionParams{{kVersionDraft11}, kVersionDraft11},
-        VersionParams{{kVersionDraft12}, kVersionDraft12}));
+        VersionParams{{kVersionDraft12}, kVersionDraft12},
+        VersionParams{{kVersionDraft14}, kVersionDraft14}));
 
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
