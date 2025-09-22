@@ -1850,18 +1850,19 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensionKvPairs(
   while (extensionBlockLength > 0) {
     // This won't infinite loop because we're parsing out at least a
     // QuicInteger each time.
-    auto maybeExtension = parseExtension(cursor, extensionBlockLength);
-    if (maybeExtension.hasError()) {
-      return folly::makeUnexpected(maybeExtension.error());
+    auto parseExtensionResult =
+        parseExtension(cursor, extensionBlockLength, objectHeader);
+    if (parseExtensionResult.hasError()) {
+      return folly::makeUnexpected(parseExtensionResult.error());
     }
-    objectHeader.extensions.emplace_back(std::move(*maybeExtension));
   }
   return folly::unit;
 }
 
-folly::Expected<Extension, ErrorCode> MoQFrameParser::parseExtension(
+folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
     folly::io::Cursor& cursor,
-    size_t& length) const noexcept {
+    size_t& length,
+    ObjectHeader& objectHeader) const noexcept {
   auto type = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!type) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1892,7 +1893,9 @@ folly::Expected<Extension, ErrorCode> MoQFrameParser::parseExtension(
     length -= iVal->second;
     ext.intValue = iVal->first;
   }
-  return ext;
+
+  objectHeader.extensions.emplace_back(std::move(ext));
+  return folly::unit;
 }
 
 folly::Expected<std::vector<std::string>, ErrorCode>

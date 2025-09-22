@@ -1261,9 +1261,10 @@ class MoQFrameParser {
       ObjectHeader& objectHeader,
       size_t extensionBlockLength) const noexcept;
 
-  folly::Expected<Extension, ErrorCode> parseExtension(
+  folly::Expected<folly::Unit, ErrorCode> parseExtension(
       folly::io::Cursor& cursor,
-      size_t& length) const noexcept;
+      size_t& length,
+      ObjectHeader& objectHeader) const noexcept;
 
   folly::Optional<uint64_t> version_;
   mutable MoQTokenCache tokenCache_;
