@@ -24,8 +24,6 @@ MoQServer::MoQServer(
   params_.localAddress.emplace();
   params_.localAddress->setFromLocalPort(port);
   params_.serverThreads = 1;
-  params_.certificateFilePath = std::move(cert);
-  params_.keyFilePath = std::move(key);
   params_.txnTimeout = std::chrono::seconds(60);
   params_.supportedAlpns = {"h3", "moq-00"};
   auto factory = std::make_unique<HQServerTransportFactory>(
@@ -37,7 +35,8 @@ MoQServer::MoQServer(
           wangle::ConnectionManager*) {
         createMoQQuicSession(std::move(quicSocket));
       });
-  hqServer_ = std::make_unique<HQServer>(params_, std::move(factory));
+  hqServer_ =
+      std::make_unique<HQServer>(params_, std::move(factory), cert, key);
   hqServer_->start(std::move(evbs));
 }
 
