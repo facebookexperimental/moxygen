@@ -2916,7 +2916,7 @@ class MoQSession::ReceiverSubscriptionHandle
       SubscribeOk ok,
       TrackAlias alias,
       std::shared_ptr<MoQSession> session)
-      : SubscriptionHandle(std::move(ok)),
+      : Publisher::SubscriptionHandle(std::move(ok)),
         trackAlias_(alias),
         session_(std::move(session)) {}
 
