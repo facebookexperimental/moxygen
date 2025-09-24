@@ -240,8 +240,9 @@ bool MoQVideoPublisher::setup(
         folly::coro::co_invoke(
             [selfWeak, selfPub, ns]() -> folly::coro::Task<void> {
               auto selfOwner = selfWeak.lock();
-              if (!selfOwner)
+              if (!selfOwner) {
                 co_return;
+              }
               auto relay = selfOwner->relayClient_.get();
               if (!relay) {
                 selfOwner->runDone_.post();
@@ -310,8 +311,9 @@ folly::coro::Task<void> MoQVideoPublisher::initialAudioPublish(
                 auto reply = co_await std::move(replyTask);
                 if (reply.hasError()) {
                   auto self = selfWeak.lock();
-                  if (!self)
+                  if (!self) {
                     co_return;
+                  }
                   self->audioPublishReady_ = false;
                   self->audioTrackPublisher_.reset();
                 } else {
@@ -320,8 +322,9 @@ folly::coro::Task<void> MoQVideoPublisher::initialAudioPublish(
                 }
               } catch (const std::exception&) {
                 auto self = selfWeak.lock();
-                if (!self)
+                if (!self) {
                   co_return;
+                }
                 self->audioPublishReady_ = false;
                 self->audioTrackPublisher_.reset();
               }

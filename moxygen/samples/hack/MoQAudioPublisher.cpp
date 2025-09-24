@@ -106,8 +106,9 @@ bool MoQAudioPublisher::setup(
         folly::coro::co_invoke(
             [selfWeak, selfPub, ns]() -> folly::coro::Task<void> {
               auto selfOwner = selfWeak.lock();
-              if (!selfOwner)
+              if (!selfOwner) {
                 co_return;
+              }
               auto relay = selfOwner->relayClient_.get();
               if (!relay) {
                 selfOwner->runDone_.post();
