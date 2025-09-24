@@ -126,6 +126,54 @@ MoQServer::validateAuthority(
   return folly::unit;
 }
 
+void MoQServer::setHostId(uint32_t hostId) {
+  hqServer_->setHostId(hostId);
+}
+
+void MoQServer::setProcessId(quic::ProcessId processId) {
+  hqServer_->setProcessId(processId);
+}
+
+void MoQServer::setConnectionIdVersion(quic::ConnectionIdVersion version) {
+  hqServer_->setConnectionIdVersion(version);
+}
+
+void MoQServer::waitUntilInitialized() {
+  hqServer_->waitUntilInitialized();
+}
+
+void MoQServer::allowBeingTakenOver(const folly::SocketAddress& addr) {
+  hqServer_->allowBeingTakenOver(addr);
+}
+
+int MoQServer::getTakeoverHandlerSocketFD() const {
+  return hqServer_->getTakeoverHandlerSocketFD();
+}
+
+std::vector<int> MoQServer::getAllListeningSocketFDs() const {
+  return hqServer_->getAllListeningSocketFDs();
+}
+
+void MoQServer::setListeningFDs(const std::vector<int>& fds) {
+  hqServer_->setListeningFDs(fds);
+}
+
+quic::ProcessId MoQServer::getProcessId() const {
+  return hqServer_->getProcessId();
+}
+
+quic::TakeoverProtocolVersion MoQServer::getTakeoverProtocolVersion() const {
+  return hqServer_->getTakeoverProtocolVersion();
+}
+
+void MoQServer::startPacketForwarding(const folly::SocketAddress& addr) {
+  hqServer_->startPacketForwarding(addr);
+}
+
+void MoQServer::pauseRead() {
+  hqServer_->pauseRead();
+}
+
 folly::Try<ServerSetup> MoQServer::onClientSetup(
     ClientSetup setup,
     std::shared_ptr<MoQSession>) {

@@ -50,9 +50,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   void stop();
 
-  // Sets/unsets "reject connections" flag on the underlying QUIC server
-  void rejectNewConnections(bool reject);
-
   folly::Try<ServerSetup> onClientSetup(
       ClientSetup clientSetup,
       std::shared_ptr<MoQSession> session) override;
@@ -61,6 +58,29 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       const ClientSetup& clientSetup,
       uint64_t negotiatedVersion,
       std::shared_ptr<MoQSession> session) override;
+
+  // Takeover runtime wrapper methods - forward to underlying QuicServer
+  // Takeover part 1: Methods called on the old instance.
+  void allowBeingTakenOver(const folly::SocketAddress& addr);
+  int getTakeoverHandlerSocketFD() const;
+  std::vector<int> getAllListeningSocketFDs() const;
+
+  // Takeover part 2: Methods called during the initialization of the new
+  // process.
+  void setListeningFDs(const std::vector<int>& fds);
+  void setProcessId(quic::ProcessId pid);
+  void setHostId(uint32_t hostId);
+  void setConnectionIdVersion(quic::ConnectionIdVersion version);
+  void waitUntilInitialized();
+
+  // Takeover part 3: Methods called during the packet forwarding setup.
+  quic::ProcessId getProcessId() const;
+  quic::TakeoverProtocolVersion getTakeoverProtocolVersion() const;
+  void startPacketForwarding(const folly::SocketAddress& addr);
+
+  // Takeover part 4: Methods called on the old instance to wind down.
+  void rejectNewConnections(bool reject);
+  void pauseRead();
 
  private:
   // AUTHORITY parameter validation methods
