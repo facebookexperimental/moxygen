@@ -301,6 +301,43 @@ void MoQAudioPublisher::publishAudioFrameToMoQ(
 }
 
 void MoQAudioPublisher::endPublish() {
+  XLOG(DBG1) << "endPublish(): EOU sync publish before teardown";
+  // Publish an end-of-utterance control synchronously on EB to avoid race
+  {
+    std::weak_ptr<MoQAudioPublisher> selfWeak = shared_from_this();
+    evbThread_->getEventBase()->runInEventBaseThreadAndWait([selfWeak] {
+      if (auto self = selfWeak.lock()) {
+        bool ready = self->audioPublishReady_;
+        bool hasPub = (bool)self->audioTrackPublisher_;
+        XLOG(INFO) << "endPublish(): EOU sync path ready=" << ready
+                   << " hasPublisher=" << (hasPub ? 1 : 0)
+                   << " nextSeqId=" << self->audioSeqId_;
+        if (!ready || !hasPub) {
+          XLOG(WARN)
+              << "endPublish(): EOU sync publish skipped; path not ready";
+        } else {
+          uint64_t grp = self->audioSeqId_++;
+          XLOG(INFO) << "EOU sync publish: group=" << grp << " id=0";
+          ObjectHeader hdr{
+              /*groupIn=*/grp,
+              /*subgroupIn=*/0,
+              /*idIn=*/0,
+              AUDIO_STREAM_PRIORITY,
+              ObjectStatus::NORMAL,
+              /*extensionsIn=*/{}};
+          Payload emptyPayload;
+          auto res = self->audioTrackPublisher_->objectStream(
+              hdr, std::move(emptyPayload));
+          if (!res) {
+            XLOG(ERR) << "EOU sync publish error: " << res.error().describe();
+          } else {
+            XLOG(INFO) << "EOU sync publish: objectStream ok group=" << grp;
+          }
+        }
+      }
+    });
+  }
+
   std::weak_ptr<MoQAudioPublisher> selfWeak = shared_from_this();
   evbThread_->getEventBase()->add([selfWeak] {
     if (auto self = selfWeak.lock()) {
@@ -328,6 +365,41 @@ void MoQAudioPublisher::endPublish() {
       }
     });
   }
+}
+void MoQAudioPublisher::signalEndOfUtterance() {
+  std::weak_ptr<MoQAudioPublisher> selfWeak = shared_from_this();
+  evbThread_->getEventBase()->add([selfWeak]() {
+    if (auto self = selfWeak.lock()) {
+      bool ready = self->audioPublishReady_;
+      bool hasPub = (bool)self->audioTrackPublisher_;
+      XLOG(INFO) << "signalEndOfUtterance(): invoked ready=" << ready
+                 << " hasPublisher=" << (hasPub ? 1 : 0)
+                 << " nextSeqId=" << self->audioSeqId_;
+      if (!self->audioTrackPublisher_ || !self->audioPublishReady_) {
+        XLOG(WARN) << "EOU control: publish path not ready (skip)";
+        return;
+      }
+      // Construct zero-length AUDIO control marker with explicit length=0
+      uint64_t grp = self->audioSeqId_++;
+      XLOG(INFO) << "EOU publish: group=" << grp << " id=0";
+      ObjectHeader hdr{
+          /*groupIn=*/grp,
+          /*subgroupIn=*/0,
+          /*idIn=*/0,
+          AUDIO_STREAM_PRIORITY,
+          ObjectStatus::NORMAL,
+          /*extensionsIn=*/{}};
+      // Null payload yields length==0 on wire
+      Payload emptyPayload;
+      auto res = self->audioTrackPublisher_->objectStream(
+          hdr, std::move(emptyPayload));
+      if (!res) {
+        XLOG(ERR) << "EOU control publish error: " << res.error().describe();
+      } else {
+        XLOG(INFO) << "EOU publish: objectStream ok group=" << grp;
+      }
+    }
+  });
 }
 
 } // namespace moxygen

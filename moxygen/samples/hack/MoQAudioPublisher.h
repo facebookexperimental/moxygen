@@ -50,6 +50,9 @@ class MoQAudioPublisher
 
   void endPublish();
 
+  // Publish a reliable zero-length control object to signal end-of-utterance
+  void signalEndOfUtterance();
+
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback) override;
