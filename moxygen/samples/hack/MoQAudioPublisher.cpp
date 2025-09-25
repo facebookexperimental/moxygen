@@ -237,16 +237,16 @@ void MoQAudioPublisher::publishAudioFrameImpl(
   item->timescale = 1000000;
   item->pts = ptsUs.count();
   item->dts = item->pts;
-  item->sampleFreq = 44100;
+  item->sampleFreq = 24000;
   item->numChannels = 1;
 
   if (lastAudioPts_) {
     item->duration = item->pts - *lastAudioPts_;
     if (item->duration <= 0 || item->duration > 100000) {
-      item->duration = 23220; // default for AAC 44.1kHz
+      item->duration = 42666; // default for AAC 24kHz
     }
   } else {
-    item->duration = 23220; // default for first frame
+    item->duration = 42666; // default for first frame at 24kHz
   }
 
   lastAudioPts_ = item->pts;
