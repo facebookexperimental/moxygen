@@ -17,6 +17,22 @@ class MoQClient : public MoQClientBase {
   MoQClient(MoQExecutor* exec, proxygen::URL url)
       : MoQClientBase(exec, std::move(url)) {}
 
+  [[nodiscard]] quic::
+      Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>
+      getConnectionFlowControl() const {
+    if (!quicWebTransport_) {
+      return quic::make_unexpected(quic::LocalErrorCode::CONNECTION_CLOSED);
+    }
+    return quicWebTransport_->getConnectionFlowControl();
+  }
+
+  [[nodiscard]] folly::Optional<quic::TransportInfo> getTransportInfo() const {
+    if (!quicWebTransport_) {
+      return folly::none;
+    }
+    return quicWebTransport_->getTransportInfo();
+  }
+
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
       folly::SocketAddress connectAddr,
