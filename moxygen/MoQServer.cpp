@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQServer.h"
+#include <proxygen/lib/http/session/HQSession.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
 
@@ -26,7 +27,6 @@ MoQServer::MoQServer(
   params_.localAddress->setFromLocalPort(port);
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
-  params_.supportedAlpns = {"h3", "moq-00"};
   auto factory = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
   factory->addAlpnHandler(
@@ -36,12 +36,14 @@ MoQServer::MoQServer(
           wangle::ConnectionManager*) {
         createMoQQuicSession(std::move(quicSocket));
       });
+  const std::vector<std::string> supportedAlpns = {"h3", "moq-00"};
   hqServer_ = std::make_unique<HQServer>(
       params_,
       std::move(factory),
       cert,
       key,
-      fizz::server::ClientAuthMode::None);
+      fizz::server::ClientAuthMode::None,
+      supportedAlpns);
   hqServer_->start(std::move(evbs));
 }
 
