@@ -23,6 +23,7 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   if (FLAGS_log) {
     auto server = std::make_shared<moxygen::MoQTestServer>(FLAGS_port);
+    server->start();
     server->logger_ =
         std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::SERVER);
     server->logger_->setPath(FLAGS_mlog_path);
@@ -33,6 +34,7 @@ int main(int argc, char** argv) {
     return 0;
   } else {
     auto server = std::make_shared<moxygen::MoQTestServer>(FLAGS_port);
+    server->start();
     folly::EventBase evb;
     evb.loopForever();
   }

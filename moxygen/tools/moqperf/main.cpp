@@ -132,6 +132,7 @@ int main(int argc, char** argv) {
   } else if (FLAGS_mode == "server") {
     auto moqPerfServer =
         std::make_shared<MoQPerfServer>(FLAGS_server_port, "", "");
+    moqPerfServer->start();
     std::cout << "\nEnter anything to exit." << std::endl;
     std::string input;
     std::getline(std::cin, input);

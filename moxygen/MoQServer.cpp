@@ -20,8 +20,7 @@ MoQServer::MoQServer(
     uint16_t port,
     std::string cert,
     std::string key,
-    std::string endpoint,
-    std::vector<folly::EventBase*> evbs)
+    std::string endpoint)
     : endpoint_(std::move(endpoint)) {
   params_.localAddress.emplace();
   params_.localAddress->setFromLocalPort(port);
@@ -44,6 +43,9 @@ MoQServer::MoQServer(
       key,
       fizz::server::ClientAuthMode::None,
       supportedAlpns);
+}
+
+void MoQServer::start(std::vector<folly::EventBase*> evbs) {
   hqServer_->start(std::move(evbs));
 }
 

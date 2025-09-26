@@ -530,6 +530,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   auto server = std::make_shared<MoQDateServer>(mode);
+  server->start();
   if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
     return 1;
   }

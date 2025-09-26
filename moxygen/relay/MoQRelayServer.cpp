@@ -20,7 +20,7 @@ DEFINE_bool(enable_cache, false, "Enable relay cache");
 namespace {
 using namespace moxygen;
 
-class MoQRelayServer : MoQServer {
+class MoQRelayServer : public MoQServer {
  public:
   MoQRelayServer()
       : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, FLAGS_endpoint) {}
@@ -43,6 +43,7 @@ class MoQRelayServer : MoQServer {
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
   MoQRelayServer moqRelayServer;
+  moqRelayServer.start();
   folly::EventBase evb;
   evb.loopForever();
   return 0;

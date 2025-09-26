@@ -28,8 +28,9 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       uint16_t port,
       std::string cert,
       std::string key,
-      std::string endpoint,
-      std::vector<folly::EventBase*> evbs = {});
+      std::string endpoint);
+
+  void start(std::vector<folly::EventBase*> evbs = {});
 
   MoQServer(const MoQServer&) = delete;
   MoQServer(MoQServer&&) = delete;
