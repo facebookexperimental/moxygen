@@ -1666,6 +1666,13 @@ MoQSession::MoQSession(
 
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    std::unique_ptr<MoQExecutor> execOwned)
+    : MoQSession(wt, execOwned.get()) {
+  execOwned_ = std::move(execOwned);
+}
+
+MoQSession::MoQSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     ServerSetupCallback& serverSetupCallback,
     MoQExecutor* exec)
     : dir_(MoQControlCodec::Direction::SERVER),
@@ -1675,6 +1682,14 @@ MoQSession::MoQSession(
       nextExpectedPeerRequestID_(0),
       serverSetupCallback_(&serverSetupCallback),
       controlCodec_(dir_, this) {}
+
+MoQSession::MoQSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    ServerSetupCallback& serverSetupCallback,
+    std::unique_ptr<MoQExecutor> execOwned)
+    : MoQSession(wt, serverSetupCallback, execOwned.get()) {
+  execOwned_ = std::move(execOwned);
+}
 
 MoQSession::~MoQSession() {
   cleanup();

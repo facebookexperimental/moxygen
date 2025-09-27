@@ -75,11 +75,19 @@ class MoQSession : public Subscriber,
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       MoQExecutor* exec);
+  explicit MoQSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      std::unique_ptr<MoQExecutor> execOwned);
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
       MoQExecutor* exec);
+
+  explicit MoQSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      ServerSetupCallback& serverSetupCallback,
+      std::unique_ptr<MoQExecutor> execOwned);
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
@@ -466,6 +474,7 @@ class MoQSession : public Subscriber,
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
   MoQExecutor* exec_{nullptr};
+  std::unique_ptr<MoQExecutor> execOwned_;
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
 

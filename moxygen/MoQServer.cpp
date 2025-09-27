@@ -8,6 +8,7 @@
 #include <proxygen/lib/http/session/HQSession.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 
 #include <utility>
 
@@ -72,19 +73,13 @@ void MoQServer::createMoQQuicSession(
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
   auto qWtPtr = quicWebTransport.get();
   std::shared_ptr<proxygen::WebTransport> wt(std::move(quicWebTransport));
-  folly::EventBase* evb{nullptr};
-  if (qevb) {
-    evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
-              ->getBackingEventBase();
-  }
-  if (!moqEvb_) {
-    moqEvb_ = std::make_unique<MoQFollyExecutorImpl>(evb);
-  }
-  auto moqSession = std::make_shared<MoQSession>(wt, *this, moqEvb_.get());
+  auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
+                 ->getBackingEventBase();
+  auto moqSession = std::make_shared<MoQSession>(
+      wt, *this, std::make_unique<MoQFollyExecutorImpl>(evb));
   qWtPtr->setHandler(moqSession.get());
   // the handleClientSession coro this session moqSession
-  co_withExecutor(moqEvb_.get(), handleClientSession(std::move(moqSession)))
-      .start();
+  co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
 }
 bool MoQServer::isValidAuthorityFormat(const std::string& authority) {
   // TODO: Implement RFC 3986 authority format validation
@@ -279,16 +274,10 @@ void MoQServer::Handler::onHeadersComplete(
     txn_->sendAbort();
     return;
   }
-  if (!server_.moqEvb_) {
-    auto evb = folly::EventBaseManager::get()->getEventBase();
-    server_.moqEvb_ = std::make_unique<MoQFollyExecutorImpl>(evb);
-  }
-  clientSession_ =
-      std::make_shared<MoQSession>(wt, server_, server_.moqEvb_.get());
-
-  co_withExecutor(
-      server_.moqEvb_.get(), server_.handleClientSession(clientSession_))
-      .start();
+  auto evb = folly::EventBaseManager::get()->getEventBase();
+  clientSession_ = std::make_shared<MoQSession>(
+      wt, server_, std::make_unique<MoQFollyExecutorImpl>(evb));
+  co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();
 }
 
 void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {
