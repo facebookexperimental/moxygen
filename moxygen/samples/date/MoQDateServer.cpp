@@ -28,7 +28,6 @@ DEFINE_string(
     "Transmission mode for track: stream-per-group (spg), "
     "stream-per-object(spo), datagram");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
-DEFINE_bool(v11Plus, true, "Negotiate versions 11 or higher");
 DEFINE_bool(publish, false, "Send PUBLISH to subscriber");
 DEFINE_string(ns, "moq-date", "Namespace for date track");
 
@@ -82,8 +81,7 @@ class MoQDateServer : public MoQServer,
                 /*publisher=*/shared_from_this(),
                 /*subscriber=*/nullptr,
                 std::chrono::milliseconds(FLAGS_relay_connect_timeout),
-                std::chrono::seconds(FLAGS_relay_transaction_timeout),
-                FLAGS_v11Plus)
+                std::chrono::seconds(FLAGS_relay_transaction_timeout))
             .scheduleOn(evb)
             .start());
     relayClient_

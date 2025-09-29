@@ -21,14 +21,12 @@ class MoQRelayClient {
       std::shared_ptr<Publisher> publisher,
       std::shared_ptr<Subscriber> subscriber,
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
-      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60),
-      bool v11Plus = true) {
+      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60)) {
     co_await moqClient_->setupMoQSession(
         connectTimeout,
         transactionTimeout,
         std::move(publisher),
-        std::move(subscriber),
-        v11Plus);
+        std::move(subscriber));
   }
 
   folly::coro::Task<void> run(

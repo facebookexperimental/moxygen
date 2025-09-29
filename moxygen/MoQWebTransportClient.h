@@ -22,8 +22,7 @@ class MoQWebTransportClient : public MoQClient {
       std::chrono::milliseconds connect_timeout,
       std::chrono::milliseconds transaction_timeout,
       std::shared_ptr<Publisher> publishHandler,
-      std::shared_ptr<Subscriber> subscribeHandler,
-      bool v11Plus) noexcept override;
+      std::shared_ptr<Subscriber> subscribeHandler) noexcept override;
 
   class HTTPHandler : public proxygen::HTTPTransactionHandler {
    public:

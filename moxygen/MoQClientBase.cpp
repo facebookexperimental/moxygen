@@ -48,8 +48,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<Publisher> publishHandler,
-    std::shared_ptr<Subscriber> subscribeHandler,
-    bool v11Plus) noexcept {
+    std::shared_ptr<Subscriber> subscribeHandler) noexcept {
   proxygen::WebTransport* wt = nullptr;
   // Establish QUIC connection
   auto quicClient = co_await connectQuic(
@@ -69,23 +68,21 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       wt,
       url_.getPath(),
       std::move(publishHandler),
-      std::move(subscribeHandler),
-      v11Plus);
+      std::move(subscribeHandler));
 }
 
 folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
     proxygen::WebTransport* wt,
     const folly::Optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
-    std::shared_ptr<Subscriber> subscribeHandler,
-    bool v11Plus) {
+    std::shared_ptr<Subscriber> subscribeHandler) {
   //  Create MoQSession and Setup MoQSession parameters
   moqSession_ = std::make_shared<MoQSession>(wt, exec_);
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->setLogger(logger_);
   moqSession_->start();
-  ClientSetup clientSetup = getClientSetup(pathParam, v11Plus);
+  ClientSetup clientSetup = getClientSetup(pathParam);
   if (logger_) {
     logger_->logClientSetup(clientSetup);
   }
@@ -93,20 +90,17 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
 }
 
 ClientSetup MoQClientBase::getClientSetup(
-    const folly::Optional<std::string>& path,
-    bool v11Plus) {
+    const folly::Optional<std::string>& path) {
   // Setup MoQSession parameters
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxRequestID = 100;
   const uint32_t kMaxAuthTokenCacheSize = 1024;
-  static const std::vector<uint64_t> pre11Versions = {
-      kVersionDraft09, kVersionDraft10};
   static const std::vector<uint64_t> post11Versions = {
       kVersionDraft11, kVersionDraft12, kVersionDraft13, kVersionDraft14};
 
   ClientSetup clientSetup{
-      v11Plus ? post11Versions : pre11Versions,
+      post11Versions,
       {{folly::to_underlying(SetupKey::MAX_REQUEST_ID),
         "",
         kDefaultMaxRequestID,

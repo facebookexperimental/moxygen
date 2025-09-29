@@ -2223,15 +2223,13 @@ WriteResult MoQFrameWriter::writeSingleObjectStream(
     TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
-  bool v11Plus = getDraftMajorVersion(*version_) >= 11;
-  bool hasExtensions = !v11Plus || objectHeader.extensions.size() > 0;
+  bool hasExtensions = objectHeader.extensions.size() > 0;
   auto res = writeSubgroupHeader(
       writeBuf,
       trackAlias,
       objectHeader,
-      v11Plus && objectHeader.subgroup == objectHeader.id
-          ? SubgroupIDFormat::FirstObject
-          : SubgroupIDFormat::Present,
+      objectHeader.subgroup == objectHeader.id ? SubgroupIDFormat::FirstObject
+                                               : SubgroupIDFormat::Present,
       hasExtensions);
   if (res) {
     return writeStreamObject(

@@ -109,8 +109,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<Publisher> publishHandler,
-    std::shared_ptr<Subscriber> subscribeHandler,
-    bool v11Plus) noexcept {
+    std::shared_ptr<Subscriber> subscribeHandler) noexcept {
   proxygen::WebTransport* wt = nullptr;
   // Establish H3 connection
   auto session = co_await connectH3WithWebtransport(
@@ -131,11 +130,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
   wt = wtTry.value();
 
   co_await completeSetupMoQSession(
-      wt,
-      folly::none,
-      std::move(publishHandler),
-      std::move(subscribeHandler),
-      v11Plus);
+      wt, folly::none, std::move(publishHandler), std::move(subscribeHandler));
 }
 
 void MoQWebTransportClient::HTTPHandler::onHeadersComplete(
