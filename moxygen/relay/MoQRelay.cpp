@@ -509,11 +509,17 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   auto upstreamSession =
       findAnnounceSession(fetch.fullTrackName.trackNamespace);
   if (!upstreamSession) {
-    // no such namespace has been announced
-    co_return folly::makeUnexpected(FetchError(
-        {fetch.requestID,
-         FetchErrorCode::TRACK_NOT_EXIST,
-         "no such namespace"}));
+    // Attempt to find matching upstream subscription (from publish)
+    auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
+    if (subscriptionIt != subscriptions_.end()) {
+      upstreamSession = subscriptionIt->second.upstream;
+    } else {
+      // no such namespace has been announced
+      co_return folly::makeUnexpected(FetchError(
+          {fetch.requestID,
+           FetchErrorCode::TRACK_NOT_EXIST,
+           "no such namespace"}));
+    }
   }
   if (session.get() == upstreamSession.get()) {
     co_return folly::makeUnexpected(FetchError(
