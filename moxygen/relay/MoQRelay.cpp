@@ -113,13 +113,6 @@ Subscriber::PublishResult MoQRelay::publish(
         pub.requestID, PublishErrorCode::UNINTERESTED, "bad namespace"});
   }
 
-  if (subscriptions_.contains(pub.fullTrackName)) {
-    return folly::makeUnexpected(PublishError{
-        pub.requestID,
-        PublishErrorCode::INTERNAL_ERROR,
-        "Duplicate publish, multi-publisher not supported"});
-  }
-
   if (pub.fullTrackName.trackNamespace.empty()) {
     return folly::makeUnexpected(PublishError(
         {pub.requestID,
@@ -629,7 +622,8 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
   for (auto subscriptionIt = subscriptions_.begin();
        subscriptionIt != subscriptions_.end();) {
     auto& subscription = subscriptionIt->second;
-    subscriptionIt++;
+    auto curIt = subscriptionIt++;
+    bool isPublish = subscription.isPublish;
     // these actions may erase the current subscription
     if (subscription.upstream.get() == session.get()) {
       subscription.forwarder->subscribeDone(
@@ -637,6 +631,9 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
            0, // filled in by session
            "upstream disconnect"});
+      if (isPublish) {
+        subscriptions_.erase(curIt);
+      }
     } else {
       subscription.forwarder->removeSession(session);
     }
