@@ -8,41 +8,72 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
+#include <moxygen/MoQFramer.h>
+#include <cstdint>
+#include <list>
+#include <optional>
+
 namespace moxygen {
 
-#include <map>
-
-template <typename T1, typename T2>
+template <typename T2>
 class FetchIntervalSet {
  public:
   struct Interval {
-    T1 start; // can be updated
-    T1 end;
+    AbsoluteLocation start; // can be updated
+    AbsoluteLocation end;
     T2 value;
+
+    bool operator==(const Interval& other) const {
+      return start == other.start && end == other.end && value == other.value;
+    }
+
+    bool operator<(const Interval& other) const {
+      return start < other.start;
+    }
   };
 
-  using IntervalMap = std::map<T1, Interval>;
-  // Insert a new interval into the set
-  typename IntervalMap::iterator insert(T1 start, T1 end, T2 value) {
-    XLOG(DBG1) << "insert " << start << " " << end;
-    return intervals_.emplace(start, Interval{start, end, value}).first;
+  using IntervalList = std::list<Interval>;
+  using IntervalMap = folly::F14FastMap<uint64_t, IntervalList>;
+
+  // Insert a new interval at the end of the list
+  typename IntervalList::iterator
+  insert(AbsoluteLocation start, AbsoluteLocation end, T2 value) {
+    Interval interval{start, end, value};
+    auto [it, inserted] = intervals_.emplace(start.group, IntervalList{});
+    auto& list = it->second;
+    list.push_back(interval);
+    return std::prev(list.end());
   }
 
-  void erase(typename IntervalMap::iterator it) {
-    XLOG(DBG1) << "erase " << it->first;
-    intervals_.erase(it);
-  }
-
-  // Get the data associated with the given index
-  T2* getValue(T1 index) {
-    for (auto& entry : intervals_) {
-      XLOG(DBG1) << "Checking entry " << index << " " << entry.first << " "
-                 << entry.second.end;
-      if (index >= entry.second.start && index < entry.second.end) {
-        return &entry.second.value;
+  // Erase an interval from the set given the group id and the iterator
+  void erase(uint64_t key, typename IntervalList::iterator it) {
+    auto setIt = intervals_.find(key);
+    if (setIt != intervals_.end()) {
+      setIt->second.erase(it);
+      if (setIt->second.empty()) {
+        intervals_.erase(setIt);
       }
     }
-    return nullptr;
+  }
+
+  // Get an optional iterator to the interval associated with the given key and
+  // index
+  std::optional<typename IntervalList::iterator> getValue(
+      uint64_t key,
+      AbsoluteLocation index) {
+    auto values = intervals_.find(key);
+    if (values == intervals_.end()) {
+      return std::nullopt;
+    }
+
+    // Check in intervals to see if any of the intervals overlap with the given
+    for (auto it = values->second.begin(); it != values->second.end(); ++it) {
+      if (index >= it->start && index < it->end) {
+        return it;
+      }
+    }
+    return std::nullopt;
   }
 
  private:

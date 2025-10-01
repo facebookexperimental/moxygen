@@ -904,4 +904,159 @@ CO_TEST_F(MoQCacheTest, TestFetchWithCacheGapAndUpstreamNoObjects) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 3}));
 }
 
+// Unit tests for cache hits, cache miss, and partial hits/misses spanning
+// groups
+
+CO_TEST_F(MoQCacheTest, TestFetchAllHitAcrossGroups) {
+  // Populate two groups fully in cache: group 0 [0,0-0,10), group 1 [1,0-1,10)
+  populateCacheRange({0, 0}, {2, 10}, 10, 1, 1, true);
+  // Expect all objects to be served from cache, no upstream
+  expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 10}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchAllMissAcrossGroups) {
+  // Test case for fetch when track is present, but no overlap
+  // populateCacheRange({0, 0}, {0, 1});
+  expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  expectFetchObjects({0, 0}, {2, 10}, true, 10, 1, 1, true);
+  serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningAcrossGroups) {
+  populateCacheRange({0, 0}, {1, 5}, 10, 1, 1, true);
+  expectUpstreamFetch({1, 5}, {2, 6}, 0, AbsoluteLocation{2, 6});
+  expectFetchObjects({0, 0}, {1, 5}, false, 10, 1, 1, true);
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 6}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 6}));
+  expectFetchObjects({1, 5}, {2, 6}, true, 10, 1, 1, true);
+  serveCacheRangeFromUpstream({1, 5}, {2, 6}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitEndAcrossGroups) {
+  populateCacheRange({1, 5}, {2, 10}, 10, 1, 1, true);
+  expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
+  expectUpstreamFetch({0, 0}, {1, 5}, 0, AbsoluteLocation{2, 9});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 10}));
+  co_await folly::coro::co_reschedule_on_current_executor;
+  serveCacheRangeFromUpstream({0, 0}, {1, 5}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitMiddleAcrossGroups) {
+  // Cache: group 0 [0,0-0,10), group 2 [2,0-2,5)
+  populateCacheRange({0, 0}, {0, 8});
+  populateCacheRange({2, 2}, {2, 5});
+  // Upstream needed for [0,10-2,0)
+  expectFetchObjects({0, 0}, {2, 5}, false, 10, 1, 1, true);
+  expectUpstreamFetch({0, 8}, {2, 2}, 0, AbsoluteLocation{2, 2});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 5}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 5}));
+  co_await folly::coro::co_reschedule_on_current_executor;
+  serveCacheRangeFromUpstream({0, 8}, {2, 2}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchMissSingleGroupBoundary) {
+  // Cache: group 0 [0,0-0,5)
+  populateCacheRange({0, 0}, {0, 5});
+  // Upstream needed for [0,5-1,3)
+  expectFetchObjects({0, 0}, {1, 3}, true);
+  expectUpstreamFetch({0, 5}, {1, 3}, 0, AbsoluteLocation{1, 3});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {1, 3}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 3}));
+  serveCacheRangeFromUpstream({0, 5}, {1, 3});
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningEndAcrossGroups) {
+  // Cache: group 0 [0,0-0,2), group 1 [1,6-1,8), group 2 [2,9-2,10)
+  populateCacheRange({0, 0}, {0, 2});
+  populateCacheRange({1, 6}, {1, 8});
+  populateCacheRange({2, 9}, {2, 10});
+  expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
+  expectUpstreamFetch({0, 2}, {1, 6}, 0, AbsoluteLocation{1, 6});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 10}));
+  co_await folly::coro::co_reschedule_on_current_executor;
+  expectUpstreamFetch({1, 8}, {2, 9}, 0, AbsoluteLocation{2, 9});
+  serveCacheRangeFromUpstream({0, 2}, {1, 6}, 10, 1, 1, true);
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+  serveCacheRangeFromUpstream({1, 8}, {2, 9}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningWholeGroupAcrossGroups) {
+  // Cache: group 0 [0,0-0,10), group 1 [1,0-1,10)
+  populateCacheRange({0, 0}, {1, 10}, 10, 1, 1, true);
+  expectFetchObjects({0, 0}, {2, 0}, true, 10, 1, 1, true);
+  expectUpstreamFetch({1, 10}, {2, 0}, 0, AbsoluteLocation{1, 10});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 0}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 10}));
+  serveCacheRangeFromUpstream({1, 10}, {2, 0}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchMissNoTrackUpstreamCompleteHitAcrossGroups) {
+  // Test case for fetch when no track is present, full range served by upstream
+  // across groups
+  expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  expectFetchObjects({0, 0}, {2, 10}, true, 10, 1, 1, true);
+  serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchAllHitEOGAcrossGroups) {
+  // Test case for fetch all hit with end of group across multiple groups
+  populateCacheRange({0, 0}, {2, 11}, 10, 1, 1, true);
+  expectFetchObjects({0, 0}, {2, 11}, false, 10, 1, 1, true);
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 0}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 0}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchWritebackAcrossGroups) {
+  // Test case for fetch + writeback across groups
+  expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10});
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  expectFetchObjects({0, 0}, {2, 10}, true, 10, 1, 1, true);
+  serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 1, 1, true);
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
+  res = co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchRangeExactlyAtGroupBoundary) {
+  // Test fetch ranges ending exactly at group boundaries like [0,0-1,0)
+  populateCacheRange({0, 0}, {2, 0}, 10, 1, 1, true);
+
+  expectFetchObjects({0, 0}, {2, 0}, false, 10, 1, 1, true);
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {1, 0}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
+}
 } // namespace moxygen::test

@@ -461,30 +461,69 @@ class MoQCache::FetchWriteback : public FetchConsumer {
         proxyFin_(proxyFin),
         consumer_(std::move(consumer)),
         track_(track) {
-    inProgressIntervalIt_ = track_.fetchInProgress.insert(start_, end_, this);
+    // Handle start group
+    auto setIt = track_.fetchInProgress.insert(
+        start,
+        (start.group == end.group)
+            ? end
+            : AbsoluteLocation{start.group, std::numeric_limits<uint64_t>::max()},
+        this);
+    inProgressItersList_.push_back(setIt);
+    // Handle middle groups (if any)
+    for (auto currGroup = start.group + 1; currGroup < end.group; ++currGroup) {
+      setIt = track_.fetchInProgress.insert(
+          AbsoluteLocation{currGroup, 0},
+          AbsoluteLocation{currGroup, std::numeric_limits<uint64_t>::max()},
+          this);
+      inProgressItersList_.push_back(setIt);
+    }
+    // Handle end group (if different from start)
+    if (end.group != start.group) {
+      setIt = track_.fetchInProgress.insert(
+          AbsoluteLocation{end.group, 0}, end, this);
+      inProgressItersList_.push_back(setIt);
+    }
+    currentInProgressIterator_ = inProgressItersList_.begin();
   }
 
   ~FetchWriteback() override {
     XLOG(DBG1) << "FetchWriteback destructing";
     inProgress_.post();
-    if (inProgressIntervalIt_) {
-      track_.fetchInProgress.erase(*inProgressIntervalIt_);
+    if (!inProgressItersList_.empty() &&
+        currentInProgressIterator_ != inProgressItersList_.end()) {
+      for (auto it = currentInProgressIterator_;
+           it != inProgressItersList_.end();
+           ++it) {
+        track_.fetchInProgress.erase((*it)->start.group, *it);
+      }
     }
     cancelSource_.requestCancellation();
   }
 
   void updateInProgress() {
     inProgress_.post();
-    if (inProgressIntervalIt_) {
-      if (start_ < end_) {
-        inProgressIntervalIt_.value()->second.start = start_;
-        inProgress_.reset();
-      } else {
-        XLOG(DBG1) << "Erasing inProgressIntervalIt_";
-        track_.fetchInProgress.erase(*inProgressIntervalIt_);
-        inProgressIntervalIt_.reset();
+    // Update in progress within the group
+    if (inProgressItersList_.empty() ||
+        currentInProgressIterator_ == inProgressItersList_.end()) {
+      return;
+    }
+    // currIterator has only group level entries
+    auto currIterator = *currentInProgressIterator_;
+    if (start_.group == currIterator->start.group &&
+        start_ < currIterator->end) {
+      // Update the start_ value of this interval
+      (*currentInProgressIterator_)->start = start_;
+      inProgress_.reset();
+    } else {
+      // Remove the iterator from track level tracking
+      track_.fetchInProgress.erase(currIterator->start.group, currIterator);
+      ++currentInProgressIterator_;
+
+      // Iterator has processed the last element
+      if (currentInProgressIterator_ == inProgressItersList_.end()) {
+        inProgressItersList_.clear();
       }
-    } // else, maybe object() after reset()?
+    }
   }
 
   folly::coro::Task<void> waitFor(AbsoluteLocation loc) {
@@ -672,8 +711,9 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   bool proxyFin_{false};
   std::shared_ptr<FetchConsumer> consumer_;
   CacheTrack& track_;
-  folly::Optional<FetchInProgresSet::IntervalMap::iterator>
-      inProgressIntervalIt_;
+  std::vector<FetchInProgressSet::IntervalList::iterator> inProgressItersList_;
+  std::vector<FetchInProgressSet::IntervalList::iterator>::iterator
+      currentInProgressIterator_;
   folly::coro::Baton inProgress_;
   folly::coro::Baton complete_;
   uint64_t currentLength_{0};
@@ -841,11 +881,14 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   });
   while (!token.isCancellationRequested() && current < standalone->end &&
          (!track.endOfTrack || current <= *track.largestGroupAndObject)) {
-    auto writeback = track.fetchInProgress.getValue(current);
-    if (writeback) {
+    auto blockingIntOpt =
+        track.fetchInProgress.getValue(current.group, current);
+    if (blockingIntOpt) {
+      // Extract the value field from the blocking interval
+      auto& writeback = blockingIntOpt.value()->value;
       XLOG(DBG1) << "fetchInProgress for {" << current.group << ","
                  << current.object << "}";
-      co_await (*writeback)->waitFor(current);
+      co_await writeback->waitFor(current);
     }
     auto groupIt = track.groups.find(current.group);
     if (groupIt == track.groups.end()) {
@@ -901,7 +944,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
 
     auto next = current;
     next.object++;
-    if (next.object > group->maxCachedObject && group->endOfGroup) {
+    // Re-find the group to avoid iterator invalidation
+    auto currentGroupIt = track.groups.find(current.group);
+    if (next.object > currentGroupIt->second->maxCachedObject &&
+        currentGroupIt->second->endOfGroup) {
       next.group++;
       next.object = 0;
     } // unless known end of group, continue current and trigger upstream

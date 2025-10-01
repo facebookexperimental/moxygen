@@ -85,13 +85,13 @@ class MoQCache {
   };
 
   // Entry for a track
-  using FetchInProgresSet = FetchIntervalSet<AbsoluteLocation, FetchWriteback*>;
+  using FetchInProgressSet = FetchIntervalSet<FetchWriteback*>;
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::unique_ptr<CacheGroup>> groups;
     bool isLive{false};
     bool endOfTrack{false};
     folly::Optional<AbsoluteLocation> largestGroupAndObject;
-    FetchInProgresSet fetchInProgress;
+    FetchInProgressSet fetchInProgress;
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
