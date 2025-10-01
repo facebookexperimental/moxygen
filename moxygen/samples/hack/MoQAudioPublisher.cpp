@@ -11,7 +11,6 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/io/IOBuf.h>
 #include <proxygen/lib/utils/URL.h>
-#include <moxygen/extensions/FbTimestampExt.h>
 #include <moxygen/moq_mi/MoQMi.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/samples/hack/MoQAudioPublisher.h>
@@ -261,7 +260,8 @@ void MoQAudioPublisher::publishAudioFrameImpl(
 void MoQAudioPublisher::publishAudioFrameToMoQ(
     std::unique_ptr<MediaItem> item) {
   auto id = item->id;
-  auto pts = item->pts;
+  // pts currently unused; encoding uses item->pts in payload
+  // auto pts = item->pts;
   auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
   if (!moqMiObj) {
     XLOG(ERR) << "Failed to encode audio frame";
@@ -275,23 +275,6 @@ void MoQAudioPublisher::publishAudioFrameToMoQ(
       AUDIO_STREAM_PRIORITY,
       ObjectStatus::NORMAL,
       std::move(moqMiObj->extensions)};
-
-  if (useTimestampExt_.load(std::memory_order_relaxed)) {
-    uint64_t t0 = 0;
-    {
-      std::lock_guard<std::mutex> g(t0Mutex_);
-      auto it = t0ByPts_.find(pts);
-      if (it != t0ByPts_.end()) {
-        t0 = it->second;
-        t0ByPts_.erase(it);
-      }
-    }
-    if (t0 == 0) {
-      t0 = fbext::nowUsMono();
-    }
-    fbext::appendIntExtIfMissing(
-        objHeader.extensions, fbext::kExtFbTsClientSendUs, t0);
-  }
 
   if (auto res = audioTrackPublisher_->objectStream(
           objHeader, std::move(moqMiObj->payload));
@@ -367,12 +350,18 @@ void MoQAudioPublisher::endPublish() {
   }
 }
 void MoQAudioPublisher::signalEndOfUtterance() {
+  // Fallback overload: publish zero-length control without extension
+  signalEndOfUtterance(0 /* no clientReleaseUs stamp */);
+}
+
+void MoQAudioPublisher::signalEndOfUtterance(uint64_t clientReleaseUs) {
   std::weak_ptr<MoQAudioPublisher> selfWeak = shared_from_this();
-  evbThread_->getEventBase()->add([selfWeak]() {
+  evbThread_->getEventBase()->add([selfWeak, clientReleaseUs]() {
     if (auto self = selfWeak.lock()) {
       bool ready = self->audioPublishReady_;
       bool hasPub = (bool)self->audioTrackPublisher_;
-      XLOG(INFO) << "signalEndOfUtterance(): invoked ready=" << ready
+      XLOG(INFO) << "signalEndOfUtterance(releaseUs=" << clientReleaseUs
+                 << "): invoked ready=" << ready
                  << " hasPublisher=" << (hasPub ? 1 : 0)
                  << " nextSeqId=" << self->audioSeqId_;
       if (!self->audioTrackPublisher_ || !self->audioPublishReady_) {
@@ -389,6 +378,8 @@ void MoQAudioPublisher::signalEndOfUtterance() {
           AUDIO_STREAM_PRIORITY,
           ObjectStatus::NORMAL,
           /*extensionsIn=*/{}};
+      // Optionally stamp client release timestamp (disabled in hack sample)
+      (void)clientReleaseUs;
       // Null payload yields length==0 on wire
       Payload emptyPayload;
       auto res = self->audioTrackPublisher_->objectStream(

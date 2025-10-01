@@ -12,7 +12,6 @@
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <proxygen/lib/utils/URL.h>
-#include <moxygen/extensions/FbTimestampExt.h>
 #include <moxygen/moq_mi/MoQMi.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/samples/hack/MoQVideoPublisher.h>
@@ -601,7 +600,7 @@ void MoQVideoPublisher::publishAudioFrameImpl(
 void MoQVideoPublisher::publishAudioFrameToMoQ(
     std::unique_ptr<MediaItem> item) {
   auto id = item->id;
-  auto pts = item->pts;
+  // auto pts = item->pts;
   auto moqMiObj = MoQMi::encodeToMoQMi(std::move(item));
   if (!moqMiObj) {
     XLOG(ERR) << "Failed to encode audio frame";
@@ -615,24 +614,6 @@ void MoQVideoPublisher::publishAudioFrameToMoQ(
       AUDIO_STREAM_PRIORITY,
       ObjectStatus::NORMAL,
       std::move(moqMiObj->extensions)};
-
-  // Optionally stamp client-send time (t0) if enabled
-  if (useTimestampExt_.load(std::memory_order_relaxed)) {
-    uint64_t t0 = 0;
-    {
-      std::lock_guard<std::mutex> g(t0Mutex_);
-      auto it = t0ByPts_.find(pts);
-      if (it != t0ByPts_.end()) {
-        t0 = it->second;
-        t0ByPts_.erase(it);
-      }
-    }
-    if (t0 == 0) {
-      t0 = fbext::nowUsMono();
-    }
-    fbext::appendIntExtIfMissing(
-        objHeader.extensions, fbext::kExtFbTsClientSendUs, t0);
-  }
 
   if (auto res = audioTrackPublisher_->objectStream(
           objHeader, std::move(moqMiObj->payload));

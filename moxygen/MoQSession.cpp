@@ -10,8 +10,6 @@
 #include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
 
-#include <moxygen/extensions/FbTimestampExt.h>
-
 #include <folly/logging/xlog.h>
 
 #include <utility>
@@ -488,11 +486,6 @@ StreamPublisherImpl::writeCurrentObject(
   header_.length = length;
   // copy is gratuitous
   header_.extensions = extensions;
-  if (const auto* s = publisher_->getMoqSettings();
-      s && s->stampServerTimestamps && header_.status == ObjectStatus::NORMAL) {
-    fbext::appendIntExtIfMissing(
-        header_.extensions, fbext::kExtFbTsServerSendUs, fbext::nowUsMono());
-  }
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
   bool entireObjectWritten = (!currentLengthRemaining_.hasValue());
   (void)moqFrameWriter_.writeStreamObject(
@@ -610,12 +603,6 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     }
   }
 
-  if (const auto* s = publisher_->getMoqSettings();
-      s && s->stampServerTimestamps) {
-    fbext::appendIntExtIfMissing(
-        extensions, fbext::kExtFbTsServerRecvUs, fbext::nowUsMono());
-  }
-
   return writeCurrentObject(
       objectID, length, std::move(payload), extensions, finStream);
 }
@@ -656,12 +643,6 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     return folly::makeUnexpected(validateObjectPublishRes.error());
   }
   header_.status = ObjectStatus::NORMAL;
-
-  if (const auto* s = publisher_->getMoqSettings();
-      s && s->stampServerTimestamps) {
-    fbext::appendIntExtIfMissing(
-        extensions, fbext::kExtFbTsServerRecvUs, fbext::nowUsMono());
-  }
 
   return writeCurrentObject(
       objectID,
@@ -1204,11 +1185,6 @@ MoQSession::TrackPublisherImpl::objectStream(
   }
   XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
   Extensions extensions = objHeader.extensions;
-  if (const auto* s = getMoqSettings(); s && s->stampServerTimestamps &&
-      objHeader.status == ObjectStatus::NORMAL) {
-    fbext::appendIntExtIfMissing(
-        extensions, fbext::kExtFbTsServerRecvUs, fbext::nowUsMono());
-  }
   auto subgroup = beginSubgroup(
       objHeader.group,
       objHeader.subgroup,

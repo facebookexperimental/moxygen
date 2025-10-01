@@ -54,6 +54,8 @@ class MoQAudioPublisher
 
   // Publish a reliable zero-length control object to signal end-of-utterance
   void signalEndOfUtterance();
+  // Overload that stamps client PTT release (monotonic µs)
+  void signalEndOfUtterance(uint64_t clientReleaseUs);
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,

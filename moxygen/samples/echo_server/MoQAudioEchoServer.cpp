@@ -27,7 +27,8 @@ void MoQAudioEchoServer::onNewSession(
     std::shared_ptr<MoQSession> clientSession) {
   // Enable server timestamp stamping for echo sample
   MoQSettings settings;
-  settings.stampServerTimestamps = true;
+  // TODO: Server timestamp stamping is app-layer; core no longer supports
+  // stampServerTimestamps.
   clientSession->setMoqSettings(settings);
 
   clientSession->setPublishHandler(handler_);

@@ -36,7 +36,6 @@ struct BufferingThresholds {
 
 struct MoQSettings {
   BufferingThresholds bufferingThresholds{};
-  bool stampServerTimestamps{false};
 };
 
 class MoQSession : public Subscriber,
