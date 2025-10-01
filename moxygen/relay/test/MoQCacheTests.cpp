@@ -72,23 +72,28 @@ class MoQCacheTest : public ::testing::Test {
       AbsoluteLocation start,
       AbsoluteLocation end,
       bool endOfTrack,
-      AbsoluteLocation largest) {
+      AbsoluteLocation largest,
+      GroupOrder order = GroupOrder::OldestFirst) {
     auto [p, future] =
         folly::makePromiseContract<std::shared_ptr<FetchConsumer>>();
     EXPECT_CALL(*upstream_, fetch(_, _))
-        .WillOnce(
-            [start, end, endOfTrack, largest, promise = std::move(p), this](
-                auto fetch, auto consumer) mutable {
-              auto [standalone, joining] = fetchType(fetch);
-              EXPECT_EQ(standalone->start, start);
-              EXPECT_EQ(standalone->end, end);
-              upstreamFetchConsumer_ = std::move(consumer);
-              promise.setValue(upstreamFetchConsumer_);
-              upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(
-                  FetchOk{0, GroupOrder::OldestFirst, endOfTrack, largest, {}});
-              return folly::coro::makeTask<Publisher::FetchResult>(
-                  upstreamFetchHandle_);
-            })
+        .WillOnce([start,
+                   end,
+                   endOfTrack,
+                   largest,
+                   order,
+                   promise = std::move(p),
+                   this](auto fetch, auto consumer) mutable {
+          auto [standalone, joining] = fetchType(fetch);
+          EXPECT_EQ(standalone->start, start);
+          EXPECT_EQ(standalone->end, end);
+          upstreamFetchConsumer_ = std::move(consumer);
+          promise.setValue(upstreamFetchConsumer_);
+          upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(
+              FetchOk{0, order, endOfTrack, largest, {}});
+          return folly::coro::makeTask<Publisher::FetchResult>(
+              upstreamFetchHandle_);
+        })
         .RetiresOnSaturation();
     return std::move(future);
   }
@@ -149,6 +154,119 @@ class MoQCacheTest : public ::testing::Test {
     }
     if (endOfFetch) {
       upstreamFetchConsumer_->endOfFetch();
+    }
+  }
+
+  void serveCacheRangeFromUpstreamDescending(
+      AbsoluteLocation end,
+      AbsoluteLocation start,
+      uint64_t objectsPerGroup = 10,
+      uint64_t objectIncrement = 1,
+      uint64_t groupDecrement = 1,
+      bool endOfGroup = false,
+      bool endOfFetch = true) {
+    // For descending groups, we start from the highest group (start.group)
+    // and work down to the lowest group (end.group)
+    AbsoluteLocation current = start;
+    current.object = 0; // Always start from object 0 in each group
+
+    while (current.group >= end.group) {
+      // Check if we've served all objects in the current group
+      if (current.object >= objectsPerGroup * objectIncrement ||
+          current == start) {
+        // Send endOfGroup if requested (but not for the first group)
+        if (endOfGroup && current.group != start.group) {
+          upstreamFetchConsumer_->endOfGroup(current.group, 0, current.object);
+        }
+
+        // Check if we're at the final group before decrementing
+        if (current.group == end.group) {
+          // Exit after processing all objects in the final group
+          break;
+        }
+
+        // Move to the next lower group
+        current.group -= groupDecrement;
+        if (current.group == end.group) {
+          current.object = end.object;
+        } else {
+          current.object = 0; // Reset to object 0 for the new group
+        }
+      } else {
+        // Serve the current object
+        upstreamFetchConsumer_->object(
+            current.group, 0, current.object, makeBuf(100));
+        current.object += objectIncrement;
+      }
+    }
+
+    // Send endOfFetch if requested
+    if (endOfFetch) {
+      upstreamFetchConsumer_->endOfFetch();
+    }
+  }
+
+  void expectFetchObjectsDescending(
+      AbsoluteLocation end,
+      AbsoluteLocation start,
+      bool endOfFetch,
+      uint64_t objectsPerGroup = 10,
+      uint64_t objectIncrement = 1,
+      int64_t groupDecrement = 1,
+      bool endOfGroup = false,
+      std::shared_ptr<moxygen::MockFetchConsumer> consumerIn = nullptr) {
+    auto consumer = consumerIn ? std::move(consumerIn) : consumer_;
+    testing::InSequence enforceOrder;
+
+    // For descending groups, process each group from start.group down to
+    // end.group Within each group, always start from object 0 and go ascending
+    AbsoluteLocation current = start;
+    current.object = 0; // Always start from object 0 in each group
+
+    while (current.group >= end.group) {
+      if (current.object >= objectsPerGroup * objectIncrement) {
+        if (endOfGroup && current.group != start.group) {
+          EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _, _))
+              .WillOnce(
+                  [current](auto group, auto, auto object, const auto&, auto) {
+                    EXPECT_EQ(group, current.group);
+                    EXPECT_EQ(object, current.object);
+                    return folly::unit;
+                  })
+              .RetiresOnSaturation();
+        }
+
+        // Check if we're at the final group before decrementing
+        if (current.group == end.group) {
+          // Exit after processing all objects in the final group
+          break;
+        }
+        current.group -= groupDecrement;
+        if (current.group == end.group) {
+          current.object = end.object;
+        } else {
+          current.object = 0; // Reset to object 0 for the new group
+        }
+      } else {
+        if (current < start) {
+          EXPECT_CALL(*consumer, object(_, _, _, _, _, _))
+              .WillOnce(
+                  [current](
+                      auto group, auto, auto object, auto, const auto&, auto) {
+                    EXPECT_EQ(group, current.group);
+                    EXPECT_EQ(object, current.object);
+                    return folly::unit;
+                  })
+              .RetiresOnSaturation();
+          current.object += objectIncrement;
+        } else {
+          current.object = 0;
+          current.group -= groupDecrement;
+        }
+      }
+    }
+    if (endOfFetch) {
+      EXPECT_CALL(*consumer, endOfFetch()).WillOnce(Return(folly::unit));
     }
   }
 
@@ -1062,4 +1180,220 @@ CO_TEST_F(MoQCacheTest, TestFetchRangeExactlyAtGroupBoundary) {
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
+
+CO_TEST_F(MoQCacheTest, TestFetchAllMissAcrossGroupsDesc) {
+  expectUpstreamFetch(
+      {0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10}, GroupOrder::NewestFirst);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  expectFetchObjectsDescending({0, 0}, {2, 10}, true, 10, 1, 1, true);
+  serveCacheRangeFromUpstreamDescending({0, 0}, {2, 10}, 10, 1, 1, true);
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningAcrossGroupsDesc) {
+  populateCacheRange({0, 0}, {1, 5}, 10, 1, 1, true);
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {2, 0}, {2, 6}, 0, AbsoluteLocation{2, 6}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this, exec](const auto&) {
+        expectFetchObjectsDescending({1, 0}, {2, 6}, false, 10, 1, 1, true);
+        serveCacheRangeFromUpstream({2, 0}, {2, 6}, 10, 1, 1, false);
+
+        expectUpstreamFetch(
+            {1, 5}, {1, 0}, 0, AbsoluteLocation{1, 0}, GroupOrder::NewestFirst)
+            .via(exec)
+            .thenTry([this](const auto&) {
+              serveCacheRangeFromUpstream({1, 5}, {2, 0}, 10, 1, 1, true);
+              expectFetchObjects({0, 0}, {1, 0}, false, 10, 1, 1, true);
+            });
+      });
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 6}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 6}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningGroupBoundaryDesc) {
+  populateCacheRange({0, 0}, {1, 0}, 10, 1, 1, true);
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {1, 0}, {2, 6}, 0, AbsoluteLocation{2, 6}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this](const auto&) {
+        expectFetchObjectsDescending({1, 0}, {2, 6}, false, 10, 1, 1, true);
+        serveCacheRangeFromUpstreamDescending({1, 0}, {2, 6}, 10, 1, 1, true);
+        expectFetchObjects({0, 0}, {1, 0}, false, 10, 1, 1, true);
+      });
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 6}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 6}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchMissTailGroupDesc) {
+  populateCacheRange({3, 0}, {3, 5}, 10, 1, 1, false);
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {1, 0}, {2, 0}, 0, AbsoluteLocation{2, 0}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this](const auto&) {
+        expectFetchObjectsDescending({1, 0}, {3, 0}, true, 10, 1, 1, true);
+        serveCacheRangeFromUpstreamDescending({1, 0}, {3, 0}, 10, 1, 1, true);
+      });
+  expectFetchObjects({3, 0}, {3, 5}, false, 10, 1, 1, true);
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchMissTailObjectsDesc) {
+  populateCacheRange({3, 0}, {3, 5});
+  populateCacheRange({1, 0}, {1, 5});
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {2, 0}, {2, 0}, 0, AbsoluteLocation{2, 0}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this, exec](const auto&) {
+        expectFetchObjectsDescending({2, 0}, {3, 0}, false, 10, 1, 1, true);
+        serveCacheRangeFromUpstreamDescending({2, 0}, {3, 0}, 10, 1, 1, true);
+
+        expectFetchObjects({1, 0}, {1, 5}, false, 10, 1, 1, false);
+        expectUpstreamFetch(
+            {1, 5}, {1, 0}, 0, AbsoluteLocation{1, 0}, GroupOrder::NewestFirst)
+            .via(exec)
+            .thenTry([this](const auto&) {
+              expectFetchObjects({1, 5}, {2, 0}, true, 10, 1, 1, true);
+              serveCacheRangeFromUpstream({1, 5}, {2, 0}, 10, 1, 1, true);
+            });
+      });
+  expectFetchObjects({3, 0}, {3, 5}, false, 10, 1, 1, false);
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialMissTailObjectsDesc) {
+  populateCacheRange({3, 0}, {3, 5});
+  populateCacheRange({1, 0}, {1, 5});
+  populateCacheRange({1, 9}, {2, 0}, 10, 1, 1, true);
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {2, 0}, {2, 0}, 0, AbsoluteLocation{2, 0}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this, exec](const auto&) {
+        expectFetchObjectsDescending({2, 0}, {3, 0}, false, 10, 1, 1, true);
+        serveCacheRangeFromUpstreamDescending({2, 0}, {3, 0}, 10, 1, 1, true);
+
+        expectFetchObjects({1, 0}, {1, 5}, false, 10, 1, 1, false);
+        expectUpstreamFetch(
+            {1, 5}, {1, 9}, 0, AbsoluteLocation{1, 9}, GroupOrder::NewestFirst)
+            .via(exec)
+            .thenTry([this](const auto&) {
+              expectFetchObjects({1, 5}, {1, 9}, false, 10, 1, 1, false);
+              serveCacheRangeFromUpstream({1, 5}, {1, 9}, 10, 1, 1, false);
+              expectFetchObjects({1, 9}, {2, 0}, false, 10, 1, 1, true);
+            });
+      });
+  expectFetchObjects({3, 0}, {3, 5}, false, 10, 1, 1, false);
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialMissThreeUpstreamFetchesDesc) {
+  populateCacheRange({5, 0}, {5, 5});
+  populateCacheRange({1, 7}, {2, 0}, 10, 1, 1, true);
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {5, 5}, {5, 8}, 0, AbsoluteLocation{5, 8}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this, exec](const auto&) {
+        expectFetchObjects({5, 5}, {5, 8}, false, 10, 1, 1, false);
+        serveCacheRangeFromUpstream({5, 5}, {5, 8}, 10, 1, 1, false);
+
+        expectUpstreamFetch(
+            {2, 0}, {4, 0}, 0, AbsoluteLocation{4, 0}, GroupOrder::NewestFirst)
+            .via(exec)
+            .thenTry([this, exec](const auto&) {
+              expectFetchObjectsDescending(
+                  {2, 0}, {5, 0}, false, 10, 1, 1, true);
+              serveCacheRangeFromUpstreamDescending(
+                  {2, 0}, {5, 0}, 10, 1, 1, true);
+
+              expectUpstreamFetch(
+                  {1, 3},
+                  {1, 7},
+                  0,
+                  AbsoluteLocation{1, 7},
+                  GroupOrder::NewestFirst)
+                  .via(exec)
+                  .thenTry([this](const auto&) {
+                    expectFetchObjects({1, 3}, {1, 7}, false, 10, 1, 1, false);
+                    serveCacheRangeFromUpstream(
+                        {1, 3}, {1, 7}, 10, 1, 1, false);
+                    expectFetchObjects({1, 7}, {2, 0}, false, 10, 1, 1, true);
+                  });
+            });
+      });
+  expectFetchObjects({5, 0}, {5, 5}, false, 10, 1, 1, false);
+  auto res = co_await cache_.fetch(
+      getFetch({1, 3}, {5, 8}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{5, 8}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialMissTwoUpstreamFetchesTailDesc) {
+  populateCacheRange({4, 0}, {4, 3});
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {4, 3}, {4, 8}, 0, AbsoluteLocation{4, 8}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([this, exec](const auto&) {
+        expectFetchObjects({4, 4}, {4, 8}, false, 10, 1, 1, false);
+        serveCacheRangeFromUpstream({4, 4}, {4, 8}, 10, 1, 1, false);
+
+        expectUpstreamFetch(
+            {1, 3}, {3, 0}, 0, AbsoluteLocation{3, 0}, GroupOrder::NewestFirst)
+            .via(exec)
+            .thenTry([this, exec](const auto&) {
+              expectFetchObjectsDescending(
+                  {1, 3}, {4, 0}, true, 10, 1, 1, true);
+              serveCacheRangeFromUpstreamDescending(
+                  {1, 3}, {4, 0}, 10, 1, 1, true);
+            });
+      });
+  expectFetchObjects({4, 0}, {4, 3}, false, 10, 1, 1, false);
+  auto res = co_await cache_.fetch(
+      getFetch({1, 3}, {4, 8}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{4, 8}));
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchPartialMissTwoUpstreamFetchesTail) {
+  populateCacheRange({0, 5}, {0, 7});
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch({0, 0}, {0, 5}, 0, AbsoluteLocation{0, 5})
+      .via(exec)
+      .thenTry([this, exec](const auto&) {
+        expectFetchObjects({0, 0}, {0, 5}, false, 10, 1, 1, false);
+        serveCacheRangeFromUpstream({0, 0}, {0, 5}, 10, 1, 1, false);
+        expectFetchObjects({0, 5}, {0, 7}, false, 10, 1, 1, false);
+        expectUpstreamFetch({0, 7}, {0, 9}, 0, AbsoluteLocation{0, 9})
+            .via(exec)
+            .thenTry([this, exec](const auto&) {
+              expectFetchObjects({0, 7}, {0, 9}, true, 10, 1, 1, true);
+              serveCacheRangeFromUpstream({0, 7}, {0, 9}, 10, 1, 1, true);
+            });
+      });
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 9}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 9}));
+}
+
 } // namespace moxygen::test

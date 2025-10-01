@@ -14,6 +14,7 @@
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/MoQFramer.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/util/BidiIterator.h>
 #include <moxygen/util/FetchIntervalSet.h>
 #include <limits>
 
@@ -87,6 +88,10 @@ class MoQCache {
 
   // Entry for a track
   using FetchInProgressSet = FetchIntervalSet<FetchWriteback*>;
+  // Type alias for the complex BidiIterator type used in FetchWriteback
+  using InProgressFetchesIter =
+      BidiIterator<std::vector<FetchInProgressSet::IntervalList::iterator>>;
+
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
     bool isLive{false};
@@ -108,13 +113,7 @@ class MoQCache {
         AbsoluteLocation start,
         AbsoluteLocation end,
         GroupOrder order,
-        std::shared_ptr<CacheTrack> track)
-        : minLocation(start),
-          maxLocation(end),
-          order(order),
-          track_(track),
-          current_(start),
-          end_(end) {}
+        std::shared_ptr<CacheTrack> track);
 
     AbsoluteLocation end();
     void next();
@@ -126,7 +125,7 @@ class MoQCache {
     const AbsoluteLocation minLocation;
     const AbsoluteLocation maxLocation;
     const GroupOrder order;
-    std::shared_ptr<CacheTrack> track_;
+    std::shared_ptr<CacheTrack> track;
 
    private:
     AbsoluteLocation current_;
@@ -134,7 +133,12 @@ class MoQCache {
     bool isValid_ = true;
     mutable uint64_t cachedGroupId_{std::numeric_limits<uint64_t>::max()};
     mutable std::shared_ptr<CacheGroup> cachedGroupPtr_{nullptr};
-    folly::Optional<uint64_t> findGroupEndMaybe() const;
+    mutable uint64_t cachedEndGroupId_{std::numeric_limits<uint64_t>::max()};
+    mutable std::shared_ptr<CacheGroup> cachedEndGroupPtr_{nullptr};
+    folly::Optional<uint64_t> findGroupEndMaybe(
+        uint64_t groupId,
+        uint64_t& cachedGroupId_,
+        std::shared_ptr<CacheGroup>& cachedGroupPtr_) const;
   };
 
   folly::F14FastMap<
