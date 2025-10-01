@@ -18,8 +18,11 @@ namespace moxygen::test {
 
 const FullTrackName kTestTrackName{TrackNamespace{{"foo"}}, "bar"};
 
-Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
-  return Fetch{0, kTestTrackName, start, end};
+Fetch getFetch(
+    AbsoluteLocation start,
+    AbsoluteLocation end,
+    GroupOrder order = GroupOrder::Default) {
+  return Fetch{0, kTestTrackName, start, end, kDefaultPriority, order};
 }
 
 class MoQCacheTest : public ::testing::Test {

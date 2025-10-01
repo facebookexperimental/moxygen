@@ -15,6 +15,7 @@
 #include <moxygen/MoQFramer.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/util/FetchIntervalSet.h>
+#include <limits>
 
 namespace moxygen {
 
@@ -87,7 +88,7 @@ class MoQCache {
   // Entry for a track
   using FetchInProgressSet = FetchIntervalSet<FetchWriteback*>;
   struct CacheTrack {
-    folly::F14FastMap<uint64_t, std::unique_ptr<CacheGroup>> groups;
+    folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
     bool isLive{false};
     bool endOfTrack{false};
     folly::Optional<AbsoluteLocation> largestGroupAndObject;
@@ -99,12 +100,57 @@ class MoQCache {
     CacheGroup& getOrCreateGroup(uint64_t groupID);
   };
 
-  folly::F14FastMap<FullTrackName, CacheTrack, FullTrackName::hash> cache_;
+  // Group-order-aware iterator for traversing groups (objects within groups
+  // always ascending)
+  class FetchRangeIterator {
+   public:
+    FetchRangeIterator(
+        AbsoluteLocation start,
+        AbsoluteLocation end,
+        GroupOrder order,
+        std::shared_ptr<CacheTrack> track)
+        : minLocation(start),
+          maxLocation(end),
+          order(order),
+          track_(track),
+          current_(start),
+          end_(end) {}
+
+    AbsoluteLocation end();
+    void next();
+    const AbsoluteLocation& operator*() const;
+    const AbsoluteLocation* operator->() const;
+    void invalidate();
+    bool isValid() const;
+
+    const AbsoluteLocation minLocation;
+    const AbsoluteLocation maxLocation;
+    const GroupOrder order;
+    std::shared_ptr<CacheTrack> track_;
+
+   private:
+    AbsoluteLocation current_;
+    AbsoluteLocation end_;
+    bool isValid_ = true;
+    mutable uint64_t cachedGroupId_{std::numeric_limits<uint64_t>::max()};
+    mutable std::shared_ptr<CacheGroup> cachedGroupPtr_{nullptr};
+    folly::Optional<uint64_t> findGroupEndMaybe() const;
+  };
+
+  folly::F14FastMap<
+      FullTrackName,
+      std::shared_ptr<CacheTrack>,
+      FullTrackName::hash>
+      cache_;
+
+  folly::Optional<MoQCache::CacheEntry*> getCachedObjectMaybe(
+      CacheTrack& track,
+      AbsoluteLocation obj);
 
   folly::coro::Task<Publisher::FetchResult> fetchImpl(
       std::shared_ptr<FetchHandle> fetchHandle,
       Fetch fetch,
-      CacheTrack& track,
+      std::shared_ptr<CacheTrack> track,
       std::shared_ptr<FetchConsumer> consumer,
       std::shared_ptr<Publisher> upstream);
 
@@ -114,7 +160,7 @@ class MoQCache {
       const AbsoluteLocation& fetchEnd,
       bool lastObject,
       Fetch fetch,
-      CacheTrack& track,
+      std::shared_ptr<CacheTrack> track,
       std::shared_ptr<FetchConsumer> consumer,
       std::shared_ptr<Publisher> upstream);
 

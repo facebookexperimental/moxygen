@@ -178,7 +178,7 @@ MoQCache::CacheTrack::updateLargest(AbsoluteLocation current, bool eot) {
 MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(uint64_t groupID) {
   auto it = groups.find(groupID);
   if (it == groups.end()) {
-    it = groups.emplace(groupID, std::make_unique<CacheGroup>()).first;
+    it = groups.emplace(groupID, std::make_shared<CacheGroup>()).first;
   }
   return *it->second;
 }
@@ -455,14 +455,14 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       AbsoluteLocation end,
       bool proxyFin,
       std::shared_ptr<FetchConsumer> consumer,
-      CacheTrack& track)
+      FetchRangeIterator fetchRangeIt)
       : start_(start),
         end_(end),
         proxyFin_(proxyFin),
         consumer_(std::move(consumer)),
-        track_(track) {
+        fetchRangeIt_(std::move(fetchRangeIt)) {
     // Handle start group
-    auto setIt = track_.fetchInProgress.insert(
+    auto setIt = fetchRangeIt_.track_->fetchInProgress.insert(
         start,
         (start.group == end.group)
             ? end
@@ -471,7 +471,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     inProgressItersList_.push_back(setIt);
     // Handle middle groups (if any)
     for (auto currGroup = start.group + 1; currGroup < end.group; ++currGroup) {
-      setIt = track_.fetchInProgress.insert(
+      setIt = fetchRangeIt_.track_->fetchInProgress.insert(
           AbsoluteLocation{currGroup, 0},
           AbsoluteLocation{currGroup, std::numeric_limits<uint64_t>::max()},
           this);
@@ -479,7 +479,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     }
     // Handle end group (if different from start)
     if (end.group != start.group) {
-      setIt = track_.fetchInProgress.insert(
+      setIt = fetchRangeIt_.track_->fetchInProgress.insert(
           AbsoluteLocation{end.group, 0}, end, this);
       inProgressItersList_.push_back(setIt);
     }
@@ -494,8 +494,9 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       for (auto it = currentInProgressIterator_;
            it != inProgressItersList_.end();
            ++it) {
-        track_.fetchInProgress.erase((*it)->start.group, *it);
+        fetchRangeIt_.track_->fetchInProgress.erase((*it)->start.group, *it);
       }
+      inProgressItersList_.clear();
     }
     cancelSource_.requestCancellation();
   }
@@ -516,22 +517,28 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       inProgress_.reset();
     } else {
       // Remove the iterator from track level tracking
-      track_.fetchInProgress.erase(currIterator->start.group, currIterator);
+      fetchRangeIt_.track_->fetchInProgress.erase(
+          currIterator->start.group, currIterator);
       ++currentInProgressIterator_;
 
       // Iterator has processed the last element
       if (currentInProgressIterator_ == inProgressItersList_.end()) {
         inProgressItersList_.clear();
+        return;
       }
+
+      // Update the start_ value of this interval
+      (*currentInProgressIterator_)->start = *fetchRangeIt_;
+      inProgress_.reset();
     }
   }
 
   folly::coro::Task<void> waitFor(AbsoluteLocation loc) {
-    if (loc >= end_) {
+    if (loc >= fetchRangeIt_.maxLocation) {
       co_return;
     }
     auto token = cancelSource_.getToken();
-    while (!token.isCancellationRequested() && loc >= start_) {
+    while (!token.isCancellationRequested() && loc >= *fetchRangeIt_) {
       co_await inProgress_;
     }
   }
@@ -622,8 +629,8 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finFetch) override {
-    auto& group = track_.getOrCreateGroup(start_.group);
-    auto& object = group.objects[start_.object];
+    auto& group = fetchRangeIt_.track_->getOrCreateGroup(fetchRangeIt_->group);
+    auto& object = group.objects[fetchRangeIt_->object];
     if (object->payload) {
       object->payload->appendChain(payload->clone());
     } else {
@@ -687,6 +694,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     wasReset_ = true;
     complete_.post();
     start_ = end_; // nothing else is coming
+    fetchRangeIt_.invalidate();
     updateInProgress();
   }
 
@@ -710,7 +718,6 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   AbsoluteLocation end_;
   bool proxyFin_{false};
   std::shared_ptr<FetchConsumer> consumer_;
-  CacheTrack& track_;
   std::vector<FetchInProgressSet::IntervalList::iterator> inProgressItersList_;
   std::vector<FetchInProgressSet::IntervalList::iterator>::iterator
       currentInProgressIterator_;
@@ -719,24 +726,26 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   uint64_t currentLength_{0};
   bool wasReset_{false};
   folly::CancellationSource cancelSource_;
+  FetchRangeIterator fetchRangeIt_;
 
   void cacheMissing(AbsoluteLocation current) {
-    while (start_ < current) {
-      auto& group = track_.getOrCreateGroup(start_.group);
-      if (start_.group < current.group) {
-        if (start_.object == 0) {
-          track_.updateLargest({start_.group, 0});
+    while (*fetchRangeIt_ < current) {
+      auto& group =
+          fetchRangeIt_.track_->getOrCreateGroup(fetchRangeIt_->group);
+      if (fetchRangeIt_->group != current.group) {
+        if (fetchRangeIt_->object == 0) {
+          fetchRangeIt_.track_->updateLargest({fetchRangeIt_->group, 0});
           group.cacheMissingStatus(0, ObjectStatus::GROUP_NOT_EXIST);
         } else {
           group.endOfGroup = true;
         }
-        start_.group++;
-        start_.object = 0;
       } else {
-        track_.updateLargest({start_.group, start_.object});
-        group.cacheMissingStatus(start_.object, ObjectStatus::OBJECT_NOT_EXIST);
-        start_.object++;
+        fetchRangeIt_.track_->updateLargest(
+            {fetchRangeIt_->group, fetchRangeIt_->object});
+        group.cacheMissingStatus(
+            fetchRangeIt_->object, ObjectStatus::OBJECT_NOT_EXIST);
       }
+      fetchRangeIt_.next();
     }
   }
 
@@ -749,21 +758,22 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       Payload payload,
       bool complete,
       bool finFetch) {
-    cacheMissing({groupID, objectID});
-    auto& group = track_.getOrCreateGroup(groupID);
+    auto& group = fetchRangeIt_.track_->getOrCreateGroup(groupID);
     auto cacheRes = group.cacheObject(
         subgroupID, objectID, status, extensions, std::move(payload), complete);
+    cacheMissing({groupID, objectID});
     if (cacheRes.hasError()) {
       updateInProgress();
       return cacheRes;
     }
-    auto res = track_.updateLargest({groupID, objectID}, isEndOfTrack(status));
+    auto res = fetchRangeIt_.track_->updateLargest(
+        {groupID, objectID}, isEndOfTrack(status));
     if (!res) {
       updateInProgress();
       return res;
     }
     if (complete) {
-      start_ = AbsoluteLocation{groupID, objectID + 1};
+      fetchRangeIt_.next();
       updateInProgress();
       if (finFetch) {
         cacheMissing(end_);
@@ -779,10 +789,10 @@ std::shared_ptr<TrackConsumer> MoQCache::getSubscribeWriteback(
     std::shared_ptr<TrackConsumer> consumer) {
   auto trackIt = cache_.find(ftn);
   if (trackIt == cache_.end()) {
-    trackIt = cache_.emplace(ftn, CacheTrack()).first;
+    trackIt = cache_.emplace(ftn, std::make_shared<CacheTrack>()).first;
   }
   return std::make_shared<SubscribeWriteback>(
-      std::move(consumer), trackIt->second);
+      std::move(consumer), *trackIt->second);
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
@@ -791,12 +801,15 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     std::shared_ptr<Publisher> upstream) {
   auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
   CHECK(standalone);
-  auto emplaceResult = cache_.emplace(fetch.fullTrackName, CacheTrack());
+  auto emplaceResult =
+      cache_.emplace(fetch.fullTrackName, std::make_shared<CacheTrack>());
   auto trackIt = emplaceResult.first;
-  auto& track = trackIt->second;
+  auto track = trackIt->second;
   if (emplaceResult.second) {
     // track is new (not cached), forward upstream, with writeback
     XLOG(DBG1) << "Cache miss, upstream fetch";
+    FetchRangeIterator fetchRangeIt(
+        standalone->start, standalone->end, fetch.groupOrder, track);
     co_return co_await upstream->fetch(
         fetch,
         std::make_shared<FetchWriteback>(
@@ -804,7 +817,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
             standalone->end,
             true,
             std::move(consumer),
-            track));
+            fetchRangeIt));
   }
   AbsoluteLocation last = standalone->end;
   if (last.object > 0) {
@@ -816,27 +829,23 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     // TODO: handle case where track.largestGroupAndObject is an END_OF_GROUP
     // or END_OF_TRACK
   }
-  if (track.largestGroupAndObject &&
-      (track.isLive || last <= *track.largestGroupAndObject)) {
+  if (track->largestGroupAndObject &&
+      (track->isLive || last <= *track->largestGroupAndObject)) {
     // we can immediately return fetch OK
     XLOG(DBG1) << "Live track or known past data, return FetchOK";
     AbsoluteLocation largestInFetch = standalone->end;
     bool isEndOfTrack = false;
-    if (standalone->end >= *track.largestGroupAndObject) {
-      standalone->end = *track.largestGroupAndObject;
+    if (standalone->end >= *track->largestGroupAndObject) {
+      standalone->end = *track->largestGroupAndObject;
       standalone->end.object++;
       largestInFetch = standalone->end;
-      isEndOfTrack = track.endOfTrack;
+      isEndOfTrack = track->endOfTrack;
       // fetchImpl range exclusive of end
     } else if (largestInFetch.object == 0) {
       largestInFetch.group--;
     }
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk(
-        {fetch.requestID,
-         GroupOrder::OldestFirst,
-         isEndOfTrack,
-         largestInFetch,
-         {}}));
+        {fetch.requestID, fetch.groupOrder, isEndOfTrack, largestInFetch, {}}));
     co_withExecutor(
         co_await folly::coro::co_current_executor,
         folly::coro::co_withCancellation(
@@ -863,7 +872,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
 folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     std::shared_ptr<FetchHandle> fetchHandle,
     Fetch fetch,
-    CacheTrack& track,
+    std::shared_ptr<CacheTrack> track,
     std::shared_ptr<FetchConsumer> consumer,
     std::shared_ptr<Publisher> upstream) {
   auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
@@ -873,16 +882,19 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   CHECK(standalone);
   auto token = co_await folly::coro::co_current_cancellation_token;
   folly::Optional<AbsoluteLocation> fetchStart;
-  auto current = standalone->start;
   bool servedOneObject = false;
   folly::CancellationCallback cancelCallback(token, [consumer] {
     XLOG(DBG1) << "Fetch cancelled";
     consumer->reset(ResetStreamErrorCode::CANCELLED);
   });
-  while (!token.isCancellationRequested() && current < standalone->end &&
-         (!track.endOfTrack || current <= *track.largestGroupAndObject)) {
+  auto lastObject = false;
+  FetchRangeIterator fetchRangeIt(
+      standalone->start, standalone->end, fetch.groupOrder, track);
+  while (!token.isCancellationRequested() &&
+         (*fetchRangeIt) != fetchRangeIt.end()) {
+    auto current = *fetchRangeIt;
     auto blockingIntOpt =
-        track.fetchInProgress.getValue(current.group, current);
+        track->fetchInProgress.getValue(current.group, current);
     if (blockingIntOpt) {
       // Extract the value field from the blocking interval
       auto& writeback = blockingIntOpt.value()->value;
@@ -890,37 +902,20 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
                  << current.object << "}";
       co_await writeback->waitFor(current);
     }
-    auto groupIt = track.groups.find(current.group);
-    if (groupIt == track.groups.end()) {
-      // group not cached, include in range
-      XLOG(DBG1) << "group cache miss for g=" << current.group;
+
+    // Gets cached object if cache hit, else none.
+    auto cachedObjectMaybe = getCachedObjectMaybe(*track, current);
+    if (!cachedObjectMaybe) {
       if (!fetchStart) {
         fetchStart = current;
       }
-      current.group++;
-      current.object = 0;
+      fetchRangeIt.next();
       continue;
     }
-    auto& group = groupIt->second;
-    auto objIt = group->objects.find(current.object);
-    if (objIt == group->objects.end() || !objIt->second->complete) {
-      // object not cached or complete, include in range
-      XLOG(DBG1) << "object cache miss for {" << current.group << ","
-                 << current.object << "}";
-      if (!fetchStart) {
-        fetchStart = current;
-      }
-      current.object++;
-      if (current.object > group->maxCachedObject) {
-        current.group++;
-        current.object = 0;
-      }
-      continue;
-    }
+
     // found the object, first fetch missing range, if any
     XLOG(DBG1) << "object cache HIT for {" << current.group << ","
                << current.object << "}";
-    auto object = objIt->second.get();
     // TODO: once we support eviction, this object may need to be
     // shared_ptr
     if (fetchStart) {
@@ -941,18 +936,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       fetchStart.reset();
     }
     XLOG(DBG1) << "Publish object from cache";
-
-    auto next = current;
-    next.object++;
-    // Re-find the group to avoid iterator invalidation
-    auto currentGroupIt = track.groups.find(current.group);
-    if (next.object > currentGroupIt->second->maxCachedObject &&
-        currentGroupIt->second->endOfGroup) {
-      next.group++;
-      next.object = 0;
-    } // unless known end of group, continue current and trigger upstream
-      // fetch
-    auto lastObject = next >= standalone->end || isEndOfTrack(object->status);
+    auto object = cachedObjectMaybe.value();
+    fetchRangeIt.next();
+    lastObject = (*fetchRangeIt) == fetchRangeIt.end();
     auto res =
         publishObject(object->status, consumer, current, *object, lastObject);
     if (res.hasError()) {
@@ -973,7 +959,6 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       }
     } // else publish success
     servedOneObject |= exists(object->status);
-    current = next;
   }
   if (fetchStart) {
     XLOG(DBG1) << "Fetching missing tail";
@@ -992,7 +977,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         consumer->endOfFetch();
         co_return std::make_shared<FetchHandle>(FetchOk(
             {fetch.requestID,
-             GroupOrder::OldestFirst,
+             fetch.groupOrder,
              false, // standalone->end can't be the end of track
              standalone->end,
              {}}));
@@ -1013,13 +998,14 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         standalone->end.group--;
       }
       bool endOfTrack = false;
-      if (track.endOfTrack && standalone->end >= *track.largestGroupAndObject) {
+      if (track->endOfTrack &&
+          standalone->end >= *track->largestGroupAndObject) {
         endOfTrack = true;
-        standalone->end = *track.largestGroupAndObject;
+        standalone->end = *track->largestGroupAndObject;
       }
       co_return std::make_shared<FetchHandle>(FetchOk(
           {fetch.requestID,
-           GroupOrder::OldestFirst,
+           fetch.groupOrder,
            endOfTrack,
            standalone->end,
            {}}));
@@ -1031,13 +1017,35 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   co_return nullptr;
 }
 
+folly::Optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
+    CacheTrack& track,
+    AbsoluteLocation current) {
+  auto groupIt = track.groups.find(current.group);
+  // Group missing from cache, advance.
+  if (groupIt == track.groups.end()) {
+    // object not cached or incomplete, count as miss.
+    XLOG(DBG1) << "group cache miss for {" << current.group << "}";
+    return folly::none;
+  }
+
+  auto& group = groupIt->second;
+  auto objIt = group->objects.find(current.object);
+  if (objIt == group->objects.end() || !objIt->second->complete) {
+    // object not cached or incomplete, count as miss.
+    XLOG(DBG1) << "object cache miss for {" << current.group << ","
+               << current.object << "}";
+    return folly::none;
+  }
+  return folly::make_optional(objIt->second.get());
+}
+
 folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
     std::shared_ptr<MoQCache::FetchHandle> fetchHandle,
     const AbsoluteLocation& fetchStart,
     const AbsoluteLocation& fetchEnd,
     bool lastObject,
     Fetch fetch,
-    CacheTrack& track,
+    std::shared_ptr<CacheTrack> track,
     std::shared_ptr<FetchConsumer> consumer,
     std::shared_ptr<Publisher> upstream) {
   XLOG(DBG1) << "Fetching upstream for {" << fetchStart.group << ","
@@ -1047,8 +1055,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
   if (adjFetchEnd.object == 0) {
     adjFetchEnd.group--;
   }
+  FetchRangeIterator fetchRangeIt(
+      fetchStart, fetchEnd, fetch.groupOrder, track);
   auto writeback = std::make_shared<FetchWriteback>(
-      fetchStart, adjFetchEnd, lastObject, consumer, track);
+      fetchStart, adjFetchEnd, lastObject, consumer, fetchRangeIt);
   auto res = co_await upstream->fetch(
       Fetch(
           0,
@@ -1075,7 +1085,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
       XLOG(DBG1) << "no fetchHandle and last object";
       fetchHandle = std::make_shared<FetchHandle>(FetchOk(
           {fetch.requestID,
-           GroupOrder::OldestFirst,
+           fetch.groupOrder,
            res.value()->fetchOk().endOfTrack,
            res.value()->fetchOk().endLocation,
            res.value()->fetchOk().params}));
@@ -1118,4 +1128,72 @@ MoQCache::handleBlocked(
   co_return folly::unit;
 }
 
+void MoQCache::FetchRangeIterator::invalidate() {
+  current_ = maxLocation;
+  isValid_ = false;
+}
+
+const AbsoluteLocation& MoQCache::FetchRangeIterator::operator*() const {
+  return current_;
+}
+
+const AbsoluteLocation* MoQCache::FetchRangeIterator::operator->() const {
+  return &current_;
+}
+
+void MoQCache::FetchRangeIterator::next() {
+  if (current_ == end_ || !isValid_) {
+    return;
+  }
+
+  auto groupEnd = findGroupEndMaybe();
+  if (groupEnd && current_.object < groupEnd.value()) {
+    current_.object++;
+  } else {
+    current_.group++;
+    current_.object = 0;
+  }
+}
+
+folly::Optional<uint64_t> MoQCache::FetchRangeIterator::findGroupEndMaybe()
+    const {
+  auto currGroup = current_.group;
+  // This is where iterator ends, so we send that object.
+  if (currGroup == end_.group) {
+    return folly::make_optional(end_.object);
+  }
+
+  // Use cached group pointer to avoid repeated lookups
+  if (cachedGroupId_ != currGroup) {
+    auto groupIt = track_->groups.find(currGroup);
+    if (groupIt == track_->groups.end()) {
+      cachedGroupPtr_ = nullptr;
+    } else {
+      cachedGroupPtr_ = groupIt->second;
+    }
+    cachedGroupId_ = currGroup;
+  }
+
+  if (cachedGroupPtr_ == nullptr) {
+    return folly::none;
+  }
+
+  if (cachedGroupPtr_->endOfGroup) {
+    return folly::make_optional(cachedGroupPtr_->maxCachedObject);
+  } else {
+    // We return the last object in the group.
+    // The iterator will go until there and then decide to move to
+    // the next group.
+    return folly::make_optional(cachedGroupPtr_->maxCachedObject + 1);
+  }
+}
+
+AbsoluteLocation MoQCache::FetchRangeIterator::end() {
+  if ((track_->endOfTrack &&
+       current_ > track_->largestGroupAndObject.value()) ||
+      !isValid_) {
+    return current_;
+  }
+  return end_;
+}
 } // namespace moxygen
