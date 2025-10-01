@@ -1365,54 +1365,24 @@ folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
   return announceCancel;
 }
 
-folly::Expected<TrackStatusRequest, ErrorCode>
-MoQFrameParser::parseTrackStatusRequest(
-    folly::io::Cursor& cursor,
-    size_t length) const noexcept {
-  CHECK(version_.hasValue())
-      << "version_ needs to be set to parse TrackStatusRequest";
-
-  TrackStatusRequest trackStatusRequest;
-  if (getDraftMajorVersion(*version_) >= 11) {
-    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!requestID) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= requestID->second;
-    trackStatusRequest.requestID = requestID->first;
-  } else {
-    trackStatusRequest.requestID = 0;
-  }
-  auto res = parseFullTrackName(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
-  }
-  trackStatusRequest.fullTrackName = std::move(res.value());
-
-  if (getDraftMajorVersion(*version_) >= 11) {
-    auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!numParams) {
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= numParams->second;
-    auto parseParamsResult = parseTrackRequestParams(
-        cursor, length, numParams->first, trackStatusRequest.params);
-    if (!parseParamsResult) {
-      return folly::makeUnexpected(parseParamsResult.error());
-    }
-  }
-  if (length > 0) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  return trackStatusRequest;
-}
-
 folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   CHECK(version_.hasValue()) << "version_ needs to be set to parse TrackStatus";
 
+  if (getDraftMajorVersion(*version_) >= 14) {
+    return parseSubscribeRequest(cursor, length);
+  }
   TrackStatus trackStatus;
+
+  // Fill in defaults for new fields added in v14
+  trackStatus.priority = kDefaultPriority;
+  trackStatus.groupOrder = GroupOrder::Default;
+  trackStatus.forward = true;
+  trackStatus.locType = LocationType::LargestGroup;
+  trackStatus.start = folly::none;
+  trackStatus.endGroup = 0;
+
   if (getDraftMajorVersion(*version_) >= 11) {
     auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!requestID) {
@@ -1422,27 +1392,12 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     trackStatus.requestID = requestID->first;
   } else {
     trackStatus.requestID = 0;
-    auto res = parseFullTrackName(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
-    }
-    trackStatus.fullTrackName = res.value();
   }
-  auto statusCode = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!statusCode) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  auto res = parseFullTrackName(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
   }
-  if (statusCode->first > folly::to_underlying(TrackStatusCode::UNKNOWN)) {
-    XLOG(ERR) << "statusCode > UNKNOWN =" << statusCode->first;
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  trackStatus.statusCode = TrackStatusCode(statusCode->first);
-  length -= statusCode->second;
-  auto location = parseAbsoluteLocation(cursor, length);
-  if (!location) {
-    return folly::makeUnexpected(location.error());
-  }
-  trackStatus.largestGroupAndObject = *location;
+  trackStatus.fullTrackName = std::move(res.value());
 
   if (getDraftMajorVersion(*version_) >= 11) {
     auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -1459,8 +1414,88 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
-
   return trackStatus;
+}
+
+folly::Expected<TrackStatusOk, ErrorCode> MoQFrameParser::parseTrackStatusOk(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
+  CHECK(version_.hasValue())
+      << "version_ needs to be set to parse TrackStatusOk";
+
+  if (getDraftMajorVersion(*version_) >= 14) {
+    auto res = parseSubscribeOk(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    SubscribeOk subOk = res.value();
+    return TrackStatusOk(
+        {subOk.requestID,
+         subOk.trackAlias,
+         subOk.expires,
+         subOk.groupOrder,
+         subOk.largest,
+         subOk.params});
+  }
+
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.trackAlias = TrackAlias{0};
+  trackStatusOk.expires = std::chrono::milliseconds(0);
+  trackStatusOk.groupOrder = GroupOrder::OldestFirst;
+  if (getDraftMajorVersion(*version_) >= 11) {
+    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!requestID) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    trackStatusOk.requestID = requestID->first;
+  } else {
+    trackStatusOk.requestID = 0;
+    auto res = parseFullTrackName(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    trackStatusOk.fullTrackName = res.value();
+  }
+  auto statusCode = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!statusCode) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  if (statusCode->first > folly::to_underlying(TrackStatusCode::UNKNOWN)) {
+    XLOG(ERR) << "statusCode > UNKNOWN =" << statusCode->first;
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  trackStatusOk.statusCode = TrackStatusCode(statusCode->first);
+  length -= statusCode->second;
+  auto location = parseAbsoluteLocation(cursor, length);
+  if (!location) {
+    return folly::makeUnexpected(location.error());
+  }
+  trackStatusOk.largest = *location;
+
+  if (getDraftMajorVersion(*version_) >= 11) {
+    auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!numParams) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= numParams->second;
+    auto parseParamsResult = parseTrackRequestParams(
+        cursor, length, numParams->first, trackStatusOk.params);
+    if (!parseParamsResult) {
+      return folly::makeUnexpected(parseParamsResult.error());
+    }
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  return trackStatusOk;
+}
+
+folly::Expected<TrackStatusError, ErrorCode>
+MoQFrameParser::parseTrackStatusError(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
+  return parseRequestError(cursor, length, FrameType::TRACK_STATUS_ERROR);
 }
 
 folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
@@ -1709,7 +1744,8 @@ folly::Expected<RequestError, ErrorCode> MoQFrameParser::parseRequestError(
       frameType == FrameType::ANNOUNCE_ERROR ||
       frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
       frameType == FrameType::PUBLISH_ERROR ||
-      frameType == FrameType::FETCH_ERROR)
+      frameType == FrameType::FETCH_ERROR ||
+      frameType == FrameType::TRACK_STATUS_ERROR)
       << "Invalid frameType passed to parseRequestError: "
       << static_cast<int>(frameType);
 
@@ -2475,6 +2511,23 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE, error);
+  auto res = writeSubscribeRequestHelper(writeBuf, subscribeRequest);
+  if (!res) {
+    return res;
+  }
+  size += *res;
+  writeSize(sizePtr, size, error, *version_);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeRequest& subscribeRequest) const noexcept {
+  size_t size = 0;
+  bool error = false;
   writeVarint(writeBuf, subscribeRequest.requestID.value, size, error);
   if (getDraftMajorVersion(version_.value()) < 12) {
     XCHECK(subscribeRequest.trackAlias.has_value()) << "Track alias required";
@@ -2518,10 +2571,6 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
   }
 
   writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
   return size;
 }
 
@@ -2559,9 +2608,26 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeOk& subscribeOk) const noexcept {
   CHECK(version_.hasValue()) << "Version needs to be set to write subscribe ok";
-  size_t size = 0;
+  size_t size;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
+  auto res = writeSubscribeOkHelper(writeBuf, subscribeOk);
+  if (!res) {
+    return res;
+  }
+  size = *res;
+  writeSize(sizePtr, size, error, *version_);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writeSubscribeOkHelper(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeOk& subscribeOk) const noexcept {
+  size_t size = 0;
+  bool error = false;
   writeVarint(writeBuf, subscribeOk.requestID.value, size, error);
   if (getDraftMajorVersion(*version_) >= 12) {
     writeVarint(writeBuf, subscribeOk.trackAlias.value, size, error);
@@ -2578,10 +2644,6 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
     writeVarint(writeBuf, subscribeOk.largest->object, size, error);
   }
   writeTrackRequestParams(writeBuf, subscribeOk.params, size, error);
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
   return size;
 }
 
@@ -2841,22 +2903,29 @@ WriteResult MoQFrameWriter::writeAnnounceCancel(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeTrackStatusRequest(
+WriteResult MoQFrameWriter::writeTrackStatus(
     folly::IOBufQueue& writeBuf,
-    const TrackStatusRequest& trackStatusRequest) const noexcept {
+    const TrackStatus& trackStatus) const noexcept {
   CHECK(version_.hasValue())
       << "version_ needs to be set to write TrackStatusRequest";
-
   size_t size = 0;
   bool error = false;
-  auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::TRACK_STATUS_REQUEST, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeVarint(writeBuf, trackStatusRequest.requestID.value, size, error);
-  }
-  writeFullTrackName(writeBuf, trackStatusRequest.fullTrackName, size, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeTrackRequestParams(writeBuf, trackStatusRequest.params, size, error);
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS, error);
+
+  if (getDraftMajorVersion(*version_) >= 14) {
+    auto res = writeSubscribeRequestHelper(writeBuf, trackStatus);
+    if (!res) {
+      return res;
+    }
+    size += *res;
+  } else {
+    if (getDraftMajorVersion(*version_) >= 11) {
+      writeVarint(writeBuf, trackStatus.requestID.value, size, error);
+    }
+    writeFullTrackName(writeBuf, trackStatus.fullTrackName, size, error);
+    if (getDraftMajorVersion(*version_) >= 11) {
+      writeTrackRequestParams(writeBuf, trackStatus.params, size, error);
+    }
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -2865,38 +2934,59 @@ WriteResult MoQFrameWriter::writeTrackStatusRequest(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeTrackStatus(
+WriteResult MoQFrameWriter::writeTrackStatusOk(
     folly::IOBufQueue& writeBuf,
-    const TrackStatus& trackStatus) const noexcept {
+    const TrackStatusOk& trackStatusOk) const noexcept {
   CHECK(version_.hasValue()) << "version_ needs to be set to write TrackStatus";
 
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeVarint(writeBuf, trackStatus.requestID.value, size, error);
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS_OK, error);
+  if (getDraftMajorVersion(*version_) >= 14) {
+    auto res = writeSubscribeOkHelper(
+        writeBuf,
+        SubscribeOk(
+            {trackStatusOk.requestID,
+             trackStatusOk.trackAlias,
+             trackStatusOk.expires,
+             trackStatusOk.groupOrder,
+             trackStatusOk.largest,
+             trackStatusOk.params}));
+    if (!res) {
+      return res;
+    }
+    size += *res;
   } else {
-    writeFullTrackName(writeBuf, trackStatus.fullTrackName, size, error);
-  }
-  writeVarint(
-      writeBuf, folly::to_underlying(trackStatus.statusCode), size, error);
-  if (trackStatus.statusCode == TrackStatusCode::IN_PROGRESS) {
+    if (getDraftMajorVersion(*version_) >= 11) {
+      writeVarint(writeBuf, trackStatusOk.requestID.value, size, error);
+    } else {
+      writeFullTrackName(writeBuf, trackStatusOk.fullTrackName, size, error);
+    }
     writeVarint(
-        writeBuf, trackStatus.largestGroupAndObject->group, size, error);
-    writeVarint(
-        writeBuf, trackStatus.largestGroupAndObject->object, size, error);
-  } else {
-    writeVarint(writeBuf, 0, size, error);
-    writeVarint(writeBuf, 0, size, error);
-  }
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeTrackRequestParams(writeBuf, trackStatus.params, size, error);
+        writeBuf, folly::to_underlying(trackStatusOk.statusCode), size, error);
+    if (trackStatusOk.statusCode == TrackStatusCode::IN_PROGRESS) {
+      writeVarint(writeBuf, trackStatusOk.largest->group, size, error);
+      writeVarint(writeBuf, trackStatusOk.largest->object, size, error);
+    } else {
+      writeVarint(writeBuf, 0, size, error);
+      writeVarint(writeBuf, 0, size, error);
+    }
+    if (getDraftMajorVersion(*version_) >= 11) {
+      writeTrackRequestParams(writeBuf, trackStatusOk.params, size, error);
+    }
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   return size;
+}
+
+WriteResult MoQFrameWriter::writeTrackStatusError(
+    folly::IOBufQueue& writeBuf,
+    const TrackStatusError& trackStatusError) const noexcept {
+  return writeRequestError(
+      writeBuf, trackStatusError, FrameType::TRACK_STATUS_ERROR);
 }
 
 WriteResult MoQFrameWriter::writeGoaway(
@@ -3081,7 +3171,8 @@ WriteResult MoQFrameWriter::writeRequestError(
       frameType == FrameType::ANNOUNCE_ERROR ||
       frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
       frameType == FrameType::PUBLISH_ERROR ||
-      frameType == FrameType::FETCH_ERROR)
+      frameType == FrameType::FETCH_ERROR ||
+      frameType == FrameType::TRACK_STATUS_ERROR)
       << "Invalid frameType passed to writeRequestError: "
       << static_cast<int>(frameType);
 

@@ -141,7 +141,7 @@ class MoQSession : public Subscriber,
   static std::string getMoQTImplementationString();
 
   folly::coro::Task<TrackStatusResult> trackStatus(
-      TrackStatusRequest trackStatusRequest) override;
+      TrackStatus trackStatus) override;
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
@@ -353,8 +353,9 @@ class MoQSession : public Subscriber,
   class TrackPublisherImpl;
   class FetchPublisherImpl;
 
-  folly::coro::Task<void> handleTrackStatus(TrackStatusRequest trackStatusReq);
-  void writeTrackStatus(const TrackStatus& trackStatus);
+  folly::coro::Task<void> handleTrackStatus(TrackStatus trackStatus);
+  void trackStatusOk(const TrackStatusOk& trackStatusOk);
+  void trackStatusError(const TrackStatusError& trackStatusError);
 
   folly::coro::Task<void> handleSubscribe(
       SubscribeRequest sub,
@@ -422,8 +423,9 @@ class MoQSession : public Subscriber,
       SubscribeAnnouncesError announceError) override;
   void onUnsubscribeAnnounces(
       UnsubscribeAnnounces unsubscribeAnnounces) override;
-  void onTrackStatusRequest(TrackStatusRequest trackStatusRequest) override;
   void onTrackStatus(TrackStatus trackStatus) override;
+  void onTrackStatusOk(TrackStatusOk trackStatusOk) override;
+  void onTrackStatusError(TrackStatusError trackStatusError) override;
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
@@ -512,7 +514,8 @@ class MoQSession : public Subscriber,
           folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
           subscribeAnnounces_;
       folly::coro::Promise<folly::Expected<PublishOk, PublishError>> publish_;
-      folly::coro::Promise<TrackStatus> trackStatus_;
+      folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>
+          trackStatus_;
     } storage_;
 
    public:
@@ -552,7 +555,8 @@ class MoQSession : public Subscriber,
     }
 
     static PendingRequestState makeTrackStatus(
-        folly::coro::Promise<TrackStatus> promise) {
+        folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>
+            promise) {
       PendingRequestState result;
       result.type_ = Type::TRACK_STATUS;
       new (&result.storage_.trackStatus_) auto(std::move(promise));
@@ -651,7 +655,8 @@ class MoQSession : public Subscriber,
       return type_ == Type::PUBLISH ? &storage_.publish_ : nullptr;
     }
 
-    folly::coro::Promise<TrackStatus>* tryGetTrackStatus() {
+    folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>*
+    tryGetTrackStatus() {
       return type_ == Type::TRACK_STATUS ? &storage_.trackStatus_ : nullptr;
     }
 

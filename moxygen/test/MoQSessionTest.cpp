@@ -60,6 +60,18 @@ auto makeSubscribeOkResult(
       {}});
 }
 
+auto makeTrackStatusOkResult(
+    const TrackStatus& req,
+    const folly::Optional<AbsoluteLocation>& largest = folly::none) {
+  return TrackStatusOk{
+      req.requestID,
+      TrackAlias(req.requestID.value),
+      std::chrono::milliseconds(0),
+      GroupOrder::OldestFirst,
+      largest,
+      {}};
+}
+
 Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
     const auto& subAnn) {
   return std::make_shared<MockSubscribeAnnouncesHandle>(
@@ -428,8 +440,14 @@ SubscribeDone getTrackEndedSubscribeDone(RequestID id) {
   return {id, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"};
 }
 
-TrackStatusRequest getTrackStatusRequest() {
-  return TrackStatusRequest{RequestID(0), kTestTrackName};
+TrackStatus getTrackStatus() {
+  return TrackStatus{
+      .requestID = RequestID(0),
+      .fullTrackName = kTestTrackName,
+      .groupOrder = GroupOrder::Default,
+      .locType = LocationType::LargestObject,
+      .endGroup = 0,
+      .params = {}};
 }
 
 moxygen::SubscribeAnnounces getSubscribeAnnounces() {
@@ -687,8 +705,9 @@ using V11PlusTests = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     V11PlusTests,
     V11PlusTests,
-    testing::Values(
-        VersionParams{{kVersionDraft11, kVersionDraft12}, kVersionDraft12}));
+    testing::Values(VersionParams{
+        {kVersionDraft11, kVersionDraft12, kVersionDraft14},
+        kVersionDraft14}));
 
 CO_TEST_P_X(V11PlusTests, AbsoluteJoiningFetch) {
   co_await setupMoQSession();
@@ -1204,22 +1223,18 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
 
 // === TRACK STATUS tests ===
 
-CO_TEST_P_X(MoQSessionTest, TrackStatus) {
+CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
-          [](TrackStatusRequest request)
+          [](TrackStatus request)
               -> folly::coro::Task<Publisher::TrackStatusResult> {
-            co_return Publisher::TrackStatusResult{
-                request.requestID,
-                request.fullTrackName,
-                TrackStatusCode::IN_PROGRESS,
-                AbsoluteLocation{}};
+            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
           }));
-  auto res = co_await clientSession_->trackStatus(getTrackStatusRequest());
-  EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
+  auto res = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
@@ -1920,7 +1935,7 @@ CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(testing::Invoke(
-          [this](TrackStatusRequest request)
+          [this](TrackStatus request)
               -> folly::coro::Task<Publisher::TrackStatusResult> {
             EXPECT_EQ(request.params.size(), 5);
             auto verifyParam = [this](
@@ -1939,14 +1954,10 @@ CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
             EXPECT_TRUE(verifyParam(request.params.at(3), "abcd"));
             EXPECT_TRUE(verifyParam(request.params.at(4), "xyzw"))
                 << "'" << request.params.at(4).asAuthToken.tokenValue;
-            co_return Publisher::TrackStatusResult{
-                request.requestID,
-                request.fullTrackName,
-                TrackStatusCode::IN_PROGRESS,
-                AbsoluteLocation{},
-                {}};
+
+            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
           }));
-  TrackStatusRequest request = getTrackStatusRequest();
+  TrackStatus request = getTrackStatus();
   auto addAuthToken = [this](auto& params, const AuthToken& token) {
     params.push_back(
         {getAuthorizationParamKey(getServerSelectedVersion()), "", 0, token});
@@ -1958,7 +1969,7 @@ CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
   addAuthToken(request.params, {0, "abcd", AuthToken::Register});
   addAuthToken(request.params, {0, "xyzw", AuthToken::Register});
   auto res = co_await clientSession_->trackStatus(request);
-  EXPECT_EQ(res.statusCode, TrackStatusCode::IN_PROGRESS);
+  EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
@@ -2074,8 +2085,8 @@ CO_TEST_P_X(MoQSessionTest, NoPublishHandler) {
   auto subAnnResult =
       co_await clientSession_->subscribeAnnounces(getSubscribeAnnounces());
   EXPECT_TRUE(subAnnResult.hasError());
-  auto res = co_await clientSession_->trackStatus(getTrackStatusRequest());
-  EXPECT_EQ(res.statusCode, TrackStatusCode::UNKNOWN);
+  auto res = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_TRUE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

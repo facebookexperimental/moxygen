@@ -65,14 +65,14 @@ class Publisher {
   virtual ~Publisher() = default;
 
   // Send/respond to TRACK_STATUS_REQUEST
-  using TrackStatusResult = TrackStatus;
+  using TrackStatusResult = folly::Expected<TrackStatusOk, TrackStatusError>;
   virtual folly::coro::Task<TrackStatusResult> trackStatus(
-      TrackStatusRequest trackStatusRequest) {
-    return folly::coro::makeTask<TrackStatusResult>(TrackStatus{
-        trackStatusRequest.requestID,
-        trackStatusRequest.fullTrackName,
-        TrackStatusCode::UNKNOWN,
-        folly::none});
+      const TrackStatus trackStatus) {
+    return folly::coro::makeTask<TrackStatusResult>(
+        folly::makeUnexpected<TrackStatusError>(TrackStatusError{
+            trackStatus.requestID,
+            TrackStatusErrorCode::NOT_SUPPORTED,
+            "Track status not implemented"}));
   }
 
   // On successful SUBSCRIBE, a SubscriptionHandle is returned, which the

@@ -682,23 +682,33 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::TRACK_STATUS_REQUEST: {
-      auto res =
-          moqFrameParser_.parseTrackStatusRequest(cursor, curFrameLength_);
+    case FrameType::TRACK_STATUS: {
+      auto res = moqFrameParser_.parseTrackStatus(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onTrackStatusRequest(std::move(res.value()));
+          callback_->onTrackStatus(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::TRACK_STATUS: {
-      auto res = moqFrameParser_.parseTrackStatus(cursor, curFrameLength_);
+    case FrameType::TRACK_STATUS_OK: {
+      auto res = moqFrameParser_.parseTrackStatusOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onTrackStatus(std::move(res.value()));
+          callback_->onTrackStatusOk(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::TRACK_STATUS_ERROR: {
+      auto res = moqFrameParser_.parseTrackStatusError(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onTrackStatusError(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());

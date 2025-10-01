@@ -84,9 +84,9 @@ class MoQControlCodec : public MoQCodec {
         SubscribeAnnouncesError announceError) = 0;
     virtual void onUnsubscribeAnnounces(
         UnsubscribeAnnounces unsubscribeAnnounces) = 0;
-    virtual void onTrackStatusRequest(
-        TrackStatusRequest trackStatusRequest) = 0;
     virtual void onTrackStatus(TrackStatus trackStatus) = 0;
+    virtual void onTrackStatusOk(TrackStatusOk trackStatusOk) = 0;
+    virtual void onTrackStatusError(TrackStatusError trackStatusError) = 0;
     virtual void onGoaway(Goaway goaway) = 0;
   };
 
@@ -117,8 +117,9 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_OK:
       case FrameType::PUBLISH_ERROR:
       case FrameType::ANNOUNCE_CANCEL:
-      case FrameType::TRACK_STATUS_REQUEST:
       case FrameType::TRACK_STATUS:
+      case FrameType::TRACK_STATUS_OK:
+      case FrameType::TRACK_STATUS_ERROR:
       case FrameType::GOAWAY:
       case FrameType::SUBSCRIBE_ANNOUNCES:
       case FrameType::SUBSCRIBE_ANNOUNCES_OK:

@@ -120,24 +120,27 @@ class MoQDateServer : public MoQServer,
   }
 
   folly::coro::Task<TrackStatusResult> trackStatus(
-      TrackStatusRequest trackStatusRequest) override {
-    XLOG(DBG1) << __func__ << trackStatusRequest.fullTrackName;
-    if (trackStatusRequest.fullTrackName != dateTrackName()) {
-      co_return TrackStatus{
-          trackStatusRequest.requestID,
-          std::move(trackStatusRequest.fullTrackName),
-          TrackStatusCode::TRACK_NOT_EXIST,
-          folly::none};
+      TrackStatus trackStatus) override {
+    XLOG(DBG1) << __func__ << trackStatus.fullTrackName;
+    if (trackStatus.fullTrackName != dateTrackName()) {
+      co_return folly::makeUnexpected(TrackStatusError{
+          trackStatus.requestID,
+          TrackStatusErrorCode::TRACK_NOT_EXIST,
+          "The requested track does not exist"});
     }
     // TODO: add other trackSTatus codes
     // TODO: unify this with subscribe. You can get the same information both
     // ways
+    // TODO: This doesn't actually give back the correct status, its just so
+    // that it builds
     auto largest = updateLargest();
-    co_return TrackStatus{
-        trackStatusRequest.requestID,
-        std::move(trackStatusRequest.fullTrackName),
-        TrackStatusCode::IN_PROGRESS,
-        largest};
+    co_return TrackStatusOk{
+        trackStatus.requestID,
+        0,
+        std::chrono::milliseconds(0),
+        GroupOrder::Default,
+        largest,
+        {}};
   }
 
   folly::coro::Task<PublishRequest> callPublish(

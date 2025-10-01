@@ -142,8 +142,9 @@ enum class FrameType : uint64_t {
   UNSUBSCRIBE = 0xA,
   SUBSCRIBE_DONE = 0xB,
   ANNOUNCE_CANCEL = 0xC,
-  TRACK_STATUS_REQUEST = 0xD,
-  TRACK_STATUS = 0xE,
+  TRACK_STATUS = 0xD,
+  TRACK_STATUS_OK = 0xE,
+  TRACK_STATUS_ERROR = 0xF,
   GOAWAY = 0x10,
   SUBSCRIBE_ANNOUNCES = 0x11,
   SUBSCRIBE_ANNOUNCES_OK = 0x12,
@@ -804,18 +805,21 @@ struct AnnounceCancel {
   std::string reasonPhrase;
 };
 
-struct TrackStatusRequest {
-  RequestID requestID;
-  FullTrackName fullTrackName;
-  std::vector<TrackRequestParameter> params; // draft-11 and later
-};
+using TrackStatus = SubscribeRequest;
 
-struct TrackStatus {
+// There are fields in the pre v14 TrackStatusOk (previously named TrackStatus)
+// which are not present in SubscribeOk, so we cannot alias directly yet.
+struct TrackStatusOk {
   RequestID requestID;
+  TrackAlias trackAlias; // >= v12
+  std::chrono::milliseconds expires{};
+  GroupOrder groupOrder{};
+  // context exists is inferred from presence of largest
+  folly::Optional<AbsoluteLocation> largest;
+  std::vector<TrackRequestParameter> params;
+  // < v14 parameters maintained for compatibility
   FullTrackName fullTrackName;
-  TrackStatusCode statusCode;
-  folly::Optional<AbsoluteLocation> largestGroupAndObject;
-  std::vector<TrackRequestParameter> params; // draft-11 and later
+  TrackStatusCode statusCode{};
 };
 
 struct Goaway {
@@ -954,6 +958,7 @@ using FetchError = RequestError;
 using SubscribeAnnouncesError = RequestError;
 using AnnounceError = RequestError;
 using PublishError = RequestError;
+using TrackStatusError = RequestError;
 
 // Error code aliases
 using SubscribeErrorCode = RequestErrorCode;
@@ -961,6 +966,7 @@ using FetchErrorCode = RequestErrorCode;
 using SubscribeAnnouncesErrorCode = RequestErrorCode;
 using AnnounceErrorCode = RequestErrorCode;
 using PublishErrorCode = RequestErrorCode;
+using TrackStatusErrorCode = RequestErrorCode;
 
 inline StreamType getSubgroupStreamType(
     uint64_t version,
@@ -1147,11 +1153,15 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<TrackStatusRequest, ErrorCode> parseTrackStatusRequest(
+  folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
+  folly::Expected<TrackStatusOk, ErrorCode> parseTrackStatusOk(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
+  folly::Expected<TrackStatusError, ErrorCode> parseTrackStatusError(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -1390,13 +1400,17 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const AnnounceCancel& announceCancel) const noexcept;
 
-  WriteResult writeTrackStatusRequest(
-      folly::IOBufQueue& writeBuf,
-      const TrackStatusRequest& trackStatusRequest) const noexcept;
-
   WriteResult writeTrackStatus(
       folly::IOBufQueue& writeBuf,
       const TrackStatus& trackStatus) const noexcept;
+
+  WriteResult writeTrackStatusOk(
+      folly::IOBufQueue& writeBuf,
+      const TrackStatusOk& trackStatusOk) const noexcept;
+
+  WriteResult writeTrackStatusError(
+      folly::IOBufQueue& writeBuf,
+      const TrackStatusError& trackStatusError) const noexcept;
 
   WriteResult writeGoaway(folly::IOBufQueue& writeBuf, const Goaway& goaway)
       const noexcept;
@@ -1475,6 +1489,14 @@ class MoQFrameWriter {
       const std::vector<TrackRequestParameter>& params,
       size_t& size,
       bool& error) const noexcept;
+
+  WriteResult writeSubscribeOkHelper(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeOk& subscribeOk) const noexcept;
+
+  WriteResult writeSubscribeRequestHelper(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeRequest& subscribeRequest) const noexcept;
 
   folly::Optional<uint64_t> version_;
   mutable folly::Optional<uint64_t> previousObjectID_;

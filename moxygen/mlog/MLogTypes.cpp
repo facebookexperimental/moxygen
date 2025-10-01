@@ -230,7 +230,7 @@ folly::dynamic MOQTAnnounceCancel::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTTrackStatusRequest::toDynamic() const {
+folly::dynamic MOQTTrackStatus::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
@@ -391,19 +391,39 @@ folly::dynamic MOQTUnannounce::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTTrackStatus::toDynamic() const {
+folly::dynamic MOQTTrackStatusOk::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
-  obj["trackNamespace"] =
-      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
-  obj["trackName"] = parseTrackName(trackName);
-  obj["statusCode"] = std::to_string(statusCode);
-  if (lastGroupId.hasValue()) {
-    obj["lastGroupId"] = std::to_string(lastGroupId.value());
+  obj["requestId"] = std::to_string(requestId);
+  obj["expires"] = std::to_string(expires);
+  obj["groupOrder"] = std::to_string(groupOrder);
+  obj["contentExists"] = std::to_string(contentExists);
+  if (largestGroupId.has_value()) {
+    obj["largestGroupId"] = std::to_string(largestGroupId.value());
   }
-  if (lastObjectId.hasValue()) {
-    obj["lastObjectId"] = std::to_string(lastObjectId.value());
+  if (largestObjectId.has_value()) {
+    obj["largestObjectId"] = std::to_string(largestObjectId.value());
+  }
+  obj["numberOfParameters"] = std::to_string(numberOfParameters);
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(subscribeParameters.size());
+  for (auto& param : subscribeParameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["trackRequestParameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
+folly::dynamic MOQTTrackStatusError::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["subscribeId"] = std::to_string(requestId);
+  obj["errorCode"] = std::to_string(errorCode);
+  if (reason.hasValue()) {
+    obj["reason"] = reason.value();
+  }
+  if (reasonBytes.hasValue()) {
+    obj["reasonBytes"] = reasonBytes.value();
   }
   return obj;
 }

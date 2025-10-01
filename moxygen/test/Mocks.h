@@ -55,11 +55,9 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
       void,
       onUnsubscribeAnnounces,
       (UnsubscribeAnnounces unsubscribeAnnounces));
-  MOCK_METHOD(
-      void,
-      onTrackStatusRequest,
-      (TrackStatusRequest trackStatusRequest));
   MOCK_METHOD(void, onTrackStatus, (TrackStatus trackStatus));
+  MOCK_METHOD(void, onTrackStatusOk, (TrackStatusOk trackStatusOk));
+  MOCK_METHOD(void, onTrackStatusError, (TrackStatusError trackStatusError));
   MOCK_METHOD(void, onGoaway, (Goaway goaway));
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));
 
@@ -291,7 +289,7 @@ class MockPublisher : public Publisher {
   MOCK_METHOD(
       folly::coro::Task<TrackStatusResult>,
       trackStatus,
-      (TrackStatusRequest),
+      (TrackStatus),
       (override));
 
   MOCK_METHOD(

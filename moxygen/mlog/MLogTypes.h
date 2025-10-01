@@ -238,9 +238,9 @@ class MOQTAnnounceCancel : public MOQTBaseControlMessage {
   folly::Optional<std::string> reasonBytes;
 };
 
-class MOQTTrackStatusRequest : public MOQTBaseControlMessage {
+class MOQTTrackStatus : public MOQTBaseControlMessage {
  public:
-  MOQTTrackStatusRequest() {
+  MOQTTrackStatus() {
     type = "track_status_request";
   }
   folly::dynamic toDynamic() const override;
@@ -375,17 +375,32 @@ class MOQTUnannounce : public MOQTBaseControlMessage {
   std::vector<MOQTByteString> trackNamespace;
 };
 
-class MOQTTrackStatus : public MOQTBaseControlMessage {
+class MOQTTrackStatusOk : public MOQTBaseControlMessage {
  public:
-  MOQTTrackStatus() {
+  MOQTTrackStatusOk() {
     type = "track_status";
   }
   folly::dynamic toDynamic() const override;
-  std::vector<MOQTByteString> trackNamespace;
-  MOQTByteString trackName;
-  uint64_t statusCode{};
-  folly::Optional<uint64_t> lastGroupId;
-  folly::Optional<uint64_t> lastObjectId;
+  uint64_t requestId{0};
+  uint64_t expires{};
+  uint8_t groupOrder{};
+  uint8_t contentExists{};
+  folly::Optional<uint64_t> largestGroupId;
+  folly::Optional<uint64_t> largestObjectId;
+  uint64_t numberOfParameters{};
+  std::vector<MOQTParameter> subscribeParameters;
+};
+
+class MOQTTrackStatusError : public MOQTBaseControlMessage {
+ public:
+  MOQTTrackStatusError() {
+    type = "track_status";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
+  uint64_t errorCode{};
+  folly::Optional<std::string> reason;
+  folly::Optional<std::string> reasonBytes;
 };
 
 class MOQTSubscribeAnnouncesOk : public MOQTBaseControlMessage {

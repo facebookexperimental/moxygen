@@ -137,11 +137,11 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r13);
 
     skip(cursor, 1);
-    auto r14a = parser_.parseTrackStatusRequest(cursor, frameLength(cursor));
+    auto r14a = parser_.parseTrackStatus(cursor, frameLength(cursor));
     testUnderflowResult(r14a);
 
     skip(cursor, 1);
-    auto r14b = parser_.parseTrackStatus(cursor, frameLength(cursor));
+    auto r14b = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
     testUnderflowResult(r14b);
 
     skip(cursor, 1);
@@ -903,29 +903,26 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   cursor.skip(*parseResult->length);
 }
 
-TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
+TEST_P(MoQFramerTest, ParseTrackStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  TrackStatusRequest tsr;
-  tsr.fullTrackName = FullTrackName({TrackNamespace({"hello"}), "world"});
-  std::vector<TrackRequestParameter> params;
-  // Add some parameters to the TrackStatusRequest.
-  params.push_back(
+  TrackStatus ts =
+      TrackStatus::make(FullTrackName({TrackNamespace({"hello"}), "world"}));
+  ts.locType = LocationType::LargestObject;
+  // Add some parameters to the TrackStatus.
+  ts.params.push_back(
       {getAuthorizationParamKey(GetParam()),
        writer_.encodeTokenValue(0, "stampolli"),
        0,
        {}});
-  params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
-  tsr.params = params;
-  auto writeResult = writer_.writeTrackStatusRequest(writeBuf, tsr);
+  ts.params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
+  auto writeResult = writer_.writeTrackStatus(writeBuf, ts);
   EXPECT_TRUE(writeResult.hasValue());
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-  EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_REQUEST));
-  auto parseResult =
-      parser_.parseTrackStatusRequest(cursor, frameLength(cursor));
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS));
+  auto parseResult = parser_.parseTrackStatus(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(parseResult->fullTrackName.trackNamespace.size(), 1);
   EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
@@ -938,35 +935,36 @@ TEST_P(MoQFramerTest, ParseTrackStatusRequest) {
   EXPECT_EQ(parseResult->params[1].asUint64, 999);
 }
 
-TEST_P(MoQFramerTest, ParseTrackStatus) {
+TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  TrackStatus trackStatus;
-  trackStatus.requestID = 7;
-  trackStatus.fullTrackName =
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 7;
+  trackStatusOk.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
-  trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
-  trackStatus.largestGroupAndObject = AbsoluteLocation({19, 77});
+  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatusOk.largest = AbsoluteLocation({19, 77});
+  trackStatusOk.groupOrder = GroupOrder::OldestFirst;
   std::vector<TrackRequestParameter> params;
-  // Add some parameters to the TrackStatusRequest.
+  // Add some parameters to the TrackStatus.
   params.push_back(
       {getAuthorizationParamKey(GetParam()),
        writer_.encodeTokenValue(0, "stampolli"),
        0,
        {}});
   params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
-  trackStatus.params = params;
-  auto writeResult = writer_.writeTrackStatus(writeBuf, trackStatus);
+  trackStatusOk.params = params;
+  auto writeResult = writer_.writeTrackStatusOk(writeBuf, trackStatusOk);
   EXPECT_TRUE(writeResult.hasValue());
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS));
-  auto parseResult = parser_.parseTrackStatus(cursor, frameLength(cursor));
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_OK));
+  auto parseResult = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
   EXPECT_EQ(parseResult->requestID, 7);
-  EXPECT_EQ(parseResult->largestGroupAndObject->group, 19);
-  EXPECT_EQ(parseResult->largestGroupAndObject->object, 77);
+  EXPECT_EQ(parseResult->largest->group, 19);
+  EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
   EXPECT_EQ(parseResult->params.size(), 2);
   EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));

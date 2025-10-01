@@ -165,24 +165,27 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       Unannounce({
           TrackNamespace({"hello"}),
       }));
-  TrackStatusRequest trackStatusRequest;
-  trackStatusRequest.requestID = 3;
-  trackStatusRequest.fullTrackName =
-      FullTrackName({TrackNamespace({"hello"}), "world"});
-  // Params will be ignored for draft-11 and below
-  trackStatusRequest.params = getTestTrackRequestParameters(moqFrameWriter);
-  res = moqFrameWriter.writeTrackStatusRequest(writeBuf, trackStatusRequest);
-
   TrackStatus trackStatus;
   trackStatus.requestID = 3;
   trackStatus.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
-  trackStatus.statusCode = TrackStatusCode::IN_PROGRESS;
-  trackStatus.largestGroupAndObject = AbsoluteLocation({19, 77});
+  trackStatus.groupOrder = GroupOrder::OldestFirst;
+  trackStatus.locType = LocationType::LargestObject;
   // Params will be ignored for draft-11 and below
   trackStatus.params = getTestTrackRequestParameters(moqFrameWriter);
-
   res = moqFrameWriter.writeTrackStatus(writeBuf, trackStatus);
+
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 3;
+  trackStatusOk.fullTrackName =
+      FullTrackName({TrackNamespace({"hello"}), "world"});
+  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatusOk.largest = AbsoluteLocation({19, 77});
+  trackStatusOk.groupOrder = GroupOrder::OldestFirst;
+  // Params will be ignored for draft-11 and below
+  trackStatusOk.params = getTestTrackRequestParameters(moqFrameWriter);
+
+  res = moqFrameWriter.writeTrackStatusOk(writeBuf, trackStatusOk);
   res = moqFrameWriter.writeGoaway(writeBuf, Goaway({"new uri"}));
   res = moqFrameWriter.writeSubscribeAnnounces(
       writeBuf,

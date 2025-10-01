@@ -1574,12 +1574,8 @@ void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
       break;
     }
     case Type::TRACK_STATUS: {
-      storage_.trackStatus_.setValue(TrackStatus{
-          .requestID = reqID,
-          .fullTrackName = FullTrackName(),
-          .statusCode = TrackStatusCode::TRACK_NOT_EXIST,
-          .largestGroupAndObject = folly::none,
-          .params = {}});
+      storage_.trackStatus_.setValue(folly::makeUnexpected(TrackStatusError(
+          {reqID, TrackStatusErrorCode::INTERNAL_ERROR, "session closed"})));
       break;
     }
   }
@@ -3597,115 +3593,142 @@ void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
   }
 }
 
-void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onTrackStatus);
-  XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
-             << " sess=" << this;
-  if (logger_) {
-    logger_->logTrackStatusRequest(
-        trackStatusRequest,
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-  if (closeSessionIfRequestIDInvalid(
-          trackStatusRequest.requestID, false, true)) {
-    return;
-  }
-  if (!publishHandler_) {
-    XLOG(DBG1) << __func__ << "No publisher callback set";
-    writeTrackStatus(
-        {trackStatusRequest.requestID,
-         trackStatusRequest.fullTrackName,
-         TrackStatusCode::UNKNOWN,
-         folly::none});
-  } else {
-    co_withExecutor(
-        exec_.get(), handleTrackStatus(std::move(trackStatusRequest)))
-        .start();
-  }
-}
-
-folly::coro::Task<void> MoQSession::handleTrackStatus(
-    TrackStatusRequest trackStatusReq) {
-  auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->trackStatus(trackStatusReq)));
-  if (trackStatusResult.hasException()) {
-    XLOG(ERR) << "Exception in Publisher callback ex="
-              << trackStatusResult.exception().what().toStdString();
-    writeTrackStatus(
-        {trackStatusReq.requestID,
-         trackStatusReq.fullTrackName,
-         TrackStatusCode::UNKNOWN,
-         folly::none});
-  } else {
-    trackStatusResult->requestID = trackStatusReq.requestID;
-    trackStatusResult->fullTrackName = trackStatusReq.fullTrackName;
-    writeTrackStatus(trackStatusResult.value());
-  }
-  retireRequestID(/*signalWriteLoop=*/false);
-}
-
-void MoQSession::writeTrackStatus(const TrackStatus& trackStatus) {
-  auto res = moqFrameWriter_.writeTrackStatus(controlWriteBuf_, trackStatus);
-
-  if (logger_) {
-    logger_->logTrackStatus(trackStatus);
-  }
-
-  if (!res) {
-    XLOG(ERR) << "writeTrackStatus failed sess=" << this;
-  } else {
-    controlWriteEvent_.signal();
-  }
-}
-
-folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
-    TrackStatusRequest trackStatusRequest) {
-  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
-  XLOG(DBG1) << __func__ << " ftn=" << trackStatusRequest.fullTrackName
-             << "sess=" << this;
-  aliasifyAuthTokens(trackStatusRequest.params);
-  trackStatusRequest.requestID = getNextRequestID();
-
-  auto res = moqFrameWriter_.writeTrackStatusRequest(
-      controlWriteBuf_, trackStatusRequest);
-  if (!res) {
-    XLOG(ERR) << "writeTrackStatusREquest failed sess=" << this;
-    co_return TrackStatusResult{
-        trackStatusRequest.requestID,
-        trackStatusRequest.fullTrackName,
-        TrackStatusCode::UNKNOWN,
-        folly::none};
-  }
-  if (logger_) {
-    logger_->logTrackStatusRequest(trackStatusRequest);
-  }
-  controlWriteEvent_.signal();
-  auto contract = folly::coro::makePromiseContract<TrackStatus>();
-  pendingRequests_.emplace(
-      trackStatusRequest.requestID,
-      PendingRequestState::makeTrackStatus(std::move(contract.first)));
-  co_return co_await std::move(contract.second);
-}
-
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
-             << " code=" << uint64_t(trackStatus.statusCode)
              << " sess=" << this;
-  auto reqID = trackStatus.requestID;
-  auto trackStatusIt = pendingRequests_.find(reqID);
-
   if (logger_) {
     logger_->logTrackStatus(
         trackStatus,
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
+  if (closeSessionIfRequestIDInvalid(trackStatus.requestID, false, true)) {
+    return;
+  }
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << "No publisher callback set";
+    trackStatusError(
+        {trackStatus.requestID,
+         TrackStatusErrorCode::INTERNAL_ERROR,
+         "No publisher callback set"});
+  } else {
+    co_withExecutor(exec_.get(), handleTrackStatus(std::move(trackStatus)))
+        .start();
+  }
+}
+
+folly::coro::Task<void> MoQSession::handleTrackStatus(TrackStatus trackStatus) {
+  auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->trackStatus(trackStatus)));
+  if (trackStatusResult.hasException()) {
+    XLOG(ERR) << "Exception in Publisher callback ex="
+              << trackStatusResult.exception().what().toStdString();
+    trackStatusError(
+        {trackStatus.requestID,
+         TrackStatusErrorCode::INTERNAL_ERROR,
+         trackStatusResult.exception().what().toStdString()});
+  }
+  if (trackStatusResult->hasError()) {
+    XLOG(DBG1) << "Application track status error err="
+               << trackStatusResult->error().reasonPhrase;
+    auto trackStatusErr = std::move(trackStatusResult->error());
+    trackStatusErr.requestID = trackStatus.requestID;
+    trackStatusError(trackStatusErr);
+  } else {
+    auto trackStatOk = std::move(trackStatusResult->value());
+    trackStatOk.requestID = trackStatus.requestID;
+    trackStatOk.fullTrackName = trackStatus.fullTrackName;
+    trackStatusOk(trackStatOk);
+  }
+  retireRequestID(/*signalWriteLoop=*/false);
+}
+
+void MoQSession::trackStatusOk(const TrackStatusOk& trackStatusOk) {
+  auto res =
+      moqFrameWriter_.writeTrackStatusOk(controlWriteBuf_, trackStatusOk);
+
+  if (logger_) {
+    logger_->logTrackStatusOk(trackStatusOk);
+  }
+
+  if (!res) {
+    XLOG(ERR) << "trackStatusOk failed sess=" << this;
+  } else {
+    controlWriteEvent_.signal();
+  }
+}
+
+void MoQSession::trackStatusError(const TrackStatusError& trackStatusError) {
+  auto res =
+      moqFrameWriter_.writeTrackStatusError(controlWriteBuf_, trackStatusError);
+
+  if (logger_) {
+    logger_->logTrackStatusError(trackStatusError);
+  }
+
+  if (!res) {
+    XLOG(ERR) << "trackStatusError failed sess=" << this;
+  } else {
+    controlWriteEvent_.signal();
+  }
+}
+
+folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
+    TrackStatus trackStatus) {
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
+  XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
+             << "sess=" << this;
+  if (draining_) {
+    XLOG(DBG1) << "Rejecting track status request, session draining sess="
+               << this;
+    TrackStatusError trackStatusError{
+        trackStatus.requestID,
+        TrackStatusErrorCode::INTERNAL_ERROR,
+        "Draining session"};
+    co_return folly::makeUnexpected(trackStatusError);
+  }
+  aliasifyAuthTokens(trackStatus.params);
+  trackStatus.requestID = getNextRequestID();
+
+  auto res = moqFrameWriter_.writeTrackStatus(controlWriteBuf_, trackStatus);
+  if (!res) {
+    XLOG(ERR) << "writeTrackStatus failed sess=" << this;
+    co_return folly::makeUnexpected(TrackStatusError{
+        trackStatus.requestID,
+        TrackStatusErrorCode::INTERNAL_ERROR,
+        "local write failed"});
+  }
+  if (logger_) {
+    logger_->logTrackStatus(trackStatus);
+  }
+  controlWriteEvent_.signal();
+  auto contract = folly::coro::makePromiseContract<
+      folly::Expected<TrackStatusOk, TrackStatusError>>();
+  pendingRequests_.emplace(
+      trackStatus.requestID,
+      PendingRequestState::makeTrackStatus(std::move(contract.first)));
+  co_return co_await std::move(contract.second);
+}
+
+void MoQSession::onTrackStatusOk(TrackStatusOk trackStatusOk) {
+  XLOG(DBG1) << __func__ << " ftn=" << trackStatusOk.fullTrackName
+             << " code=" << uint64_t(trackStatusOk.statusCode)
+             << " sess=" << this;
+  auto reqID = trackStatusOk.requestID;
+  auto trackStatusIt = pendingRequests_.find(reqID);
+
+  if (logger_) {
+    logger_->logTrackStatusOk(
+        trackStatusOk,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
   if (trackStatusIt == pendingRequests_.end()) {
     XLOG(ERR) << __func__
               << " Couldn't find a pending TrackStatusRequest for reqID="
-              << reqID << " ftn=" << trackStatus.fullTrackName;
+              << reqID << " ftn=" << trackStatusOk.fullTrackName;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
@@ -3718,7 +3741,39 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
     return;
   }
 
-  trackStatusPtr->setValue(std::move(trackStatus));
+  trackStatusPtr->setValue(std::move(trackStatusOk));
+  pendingRequests_.erase(trackStatusIt);
+}
+
+void MoQSession::onTrackStatusError(TrackStatusError trackStatusError) {
+  XLOG(DBG1) << __func__ << " id=" << trackStatusError.requestID
+             << " sess=" << this;
+  auto reqID = trackStatusError.requestID;
+  auto trackStatusIt = pendingRequests_.find(reqID);
+
+  if (logger_) {
+    logger_->logTrackStatusError(
+        trackStatusError,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
+  if (trackStatusIt == pendingRequests_.end()) {
+    XLOG(ERR) << __func__
+              << " Couldn't find a pending TrackStatusRequest for reqID="
+              << reqID;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  auto* trackStatusPtr = trackStatusIt->second.tryGetTrackStatus();
+  if (!trackStatusPtr) {
+    XLOG(ERR) << "Request ID " << reqID
+              << " is not a track status request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  trackStatusPtr->setValue(folly::makeUnexpected(std::move(trackStatusError)));
   pendingRequests_.erase(trackStatusIt);
 }
 
@@ -4816,7 +4871,7 @@ void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
   negotiatedVersion_ = negotiatedVersion;
   moqFrameWriter_.initializeVersion(*negotiatedVersion_);
   controlCodec_.initializeVersion(*negotiatedVersion_);
-  for (auto versionBaton : subgroupsWaitingForVersion_) {
+  for (const auto& versionBaton : subgroupsWaitingForVersion_) {
     versionBaton->signal();
   }
   subgroupsWaitingForVersion_.clear();

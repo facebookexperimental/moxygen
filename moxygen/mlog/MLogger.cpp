@@ -396,11 +396,11 @@ void MLogger::logAnnounceCancel(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logTrackStatusRequest(
-    const TrackStatusRequest& req,
+void MLogger::logTrackStatus(
+    const TrackStatus& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTTrackStatusRequest>();
+  auto baseMsg = std::make_unique<MOQTTrackStatus>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.fullTrackName.trackNamespace.trackNamespace, type);
   baseMsg->trackName =
@@ -548,19 +548,43 @@ void MLogger::logUnannounce(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logTrackStatus(
-    const TrackStatus& req,
+void MLogger::logTrackStatusOk(
+    const TrackStatusOk& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTTrackStatus>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.fullTrackName.trackNamespace.trackNamespace, type);
-  baseMsg->trackName =
-      convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
-  baseMsg->statusCode = static_cast<uint64_t>(req.statusCode);
-  if (req.largestGroupAndObject.has_value()) {
-    baseMsg->lastGroupId = req.largestGroupAndObject.value().group;
-    baseMsg->lastObjectId = req.largestGroupAndObject.value().object;
+  auto baseMsg = std::make_unique<MOQTTrackStatusOk>();
+  baseMsg->requestId = req.requestID.value;
+  baseMsg->expires = req.expires.count();
+  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+
+  if (req.largest.has_value()) {
+    baseMsg->contentExists = 1;
+    baseMsg->largestGroupId = req.largest.value().group;
+    baseMsg->largestObjectId = req.largest.value().object;
+  } else {
+    baseMsg->contentExists = 0;
+  }
+
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
+}
+
+void MLogger::logTrackStatusError(
+    const TrackStatusError& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTTrackStatusError>();
+
+  baseMsg->requestId = req.requestID.value;
+  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
+
+  if (isHexstring(req.reasonPhrase)) {
+    baseMsg->reasonBytes = req.reasonPhrase;
+  } else {
+    baseMsg->reason = req.reasonPhrase;
   }
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));

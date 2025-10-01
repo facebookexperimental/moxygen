@@ -53,8 +53,8 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
     EXPECT_CALL(callback, onAnnounceError(testing::_));
     EXPECT_CALL(callback, onUnannounce(testing::_));
-    EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
+    EXPECT_CALL(callback, onTrackStatusOk(testing::_));
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
@@ -103,8 +103,8 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
     EXPECT_CALL(callback, onAnnounceError(testing::_));
     EXPECT_CALL(callback, onUnannounce(testing::_));
-    EXPECT_CALL(callback, onTrackStatusRequest(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
+    EXPECT_CALL(callback, onTrackStatusOk(testing::_));
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));

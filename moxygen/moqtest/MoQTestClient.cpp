@@ -543,7 +543,7 @@ folly::coro::Task<MoQSession::AnnounceResult> MoQTestClient::announce(
   co_return std::make_shared<AnnounceHandle>(ok);
 }
 
-folly::coro::Task<void> MoQTestClient::trackStatus(TrackStatusRequest req) {
+folly::coro::Task<void> MoQTestClient::trackStatus(TrackStatus req) {
   co_await moqClient_->moqSession_->trackStatus(req);
 }
 

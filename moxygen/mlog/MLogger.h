@@ -92,8 +92,8 @@ class MLogger {
       const AnnounceCancel& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logTrackStatusRequest(
-      const TrackStatusRequest& req,
+  void logTrackStatus(
+      const TrackStatus& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnounces(
@@ -133,8 +133,12 @@ class MLogger {
       const Unannounce& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logTrackStatus(
-      const TrackStatus& req,
+  void logTrackStatusOk(
+      const TrackStatusOk& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logTrackStatusError(
+      const TrackStatusError& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnouncesOk(
