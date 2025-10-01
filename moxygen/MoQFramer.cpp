@@ -2288,13 +2288,15 @@ size_t MoQFrameWriter::getExtensionSize(
     size += *maybeTypeSize;
     if (ext.type & 0x1) {
       // odd = length prefix
-      auto maybeDataLengthSize = quic::getQuicIntegerSize(ext.intValue);
+      auto dataLen =
+          ext.arrayValue ? ext.arrayValue->computeChainDataLength() : 0;
+      auto maybeDataLengthSize = quic::getQuicIntegerSize(dataLen);
       if (maybeDataLengthSize.hasError()) {
         error = true;
         return 0;
       }
       size += *maybeDataLengthSize;
-      size += ext.arrayValue ? ext.arrayValue->computeChainDataLength() : 0;
+      size += dataLen;
     } else {
       // even = single varint
       auto maybeValueSize = quic::getQuicIntegerSize(ext.intValue);

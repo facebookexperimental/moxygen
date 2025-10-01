@@ -1291,6 +1291,48 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   EXPECT_EQ(parseResult->forward, true);
 }
 
+TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
+  // This verifies that for odd-type extensions (length-prefixed), the length
+  // varint size is computed from the extension payload length, not from
+  // ext.intValue. Using ext.intValue (typically 0) leads to an incorrect
+  // extension block length when the payload length crosses the QUIC varint
+  // boundary (e.g., 64 -> 2-byte varint).
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Build an object with a single odd-type extension whose payload is 64 bytes
+  // so its varint length takes 2 bytes.
+  ObjectHeader obj(2, 3, 4, 5);
+  std::string payload(64, 'x');
+  std::vector<Extension> exts;
+  exts.emplace_back(11, folly::IOBuf::copyBuffer(payload)); // odd type (11)
+  obj.extensions = std::move(exts);
+
+  // Write subgroup header (includeExtensions=true) and the stream object
+  auto res = writer_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+  EXPECT_TRUE(res.hasValue());
+  res = writer_.writeStreamObject(
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, obj, nullptr);
+  EXPECT_TRUE(res.hasValue());
+
+  // Parse and validate
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto streamType = getSubgroupStreamType(
+      GetParam(), SubgroupIDFormat::Present, true, /*endOfGroup=*/false);
+  EXPECT_EQ(parseStreamType(cursor), streamType);
+  auto hdrRes =
+      parser_.parseSubgroupHeader(cursor, SubgroupIDFormat::Present, true);
+  EXPECT_TRUE(hdrRes.hasValue());
+  auto objRes = parser_.parseSubgroupObjectHeader(
+      cursor, hdrRes->objectHeader, SubgroupIDFormat::Present, true);
+  EXPECT_TRUE(objRes.hasValue());
+  ASSERT_EQ(objRes->extensions.size(), 1);
+  EXPECT_TRUE(objRes->extensions[0].isOddType());
+  EXPECT_EQ(objRes->extensions[0].type, 11);
+  EXPECT_EQ(objRes->extensions[0].arrayValue->computeChainDataLength(), 64);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
