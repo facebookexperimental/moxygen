@@ -108,14 +108,18 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                        public MoQSession::ServerSetupCallback {
  public:
   void SetUp() override {
+    MoQExecutor_ = std::make_shared<MoQFollyExecutorImpl>(&eventBase_);
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-    clientSession_ =
-        std::make_shared<MoQSession>(clientWt_.get(), &MoQExecutor_);
+    clientSession_ = std::make_shared<MoQSession>(
+        folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt_.get()),
+        MoQExecutor_);
     serverWt_->setPeerHandler(clientSession_.get());
 
-    serverSession_ =
-        std::make_shared<MoQSession>(serverWt_.get(), *this, &MoQExecutor_);
+    serverSession_ = std::make_shared<MoQSession>(
+        folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt_.get()),
+        *this,
+        MoQExecutor_);
     clientWt_->setPeerHandler(serverSession_.get());
 
     fetchCallback_ = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -366,7 +370,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
 
   folly::EventBase eventBase_;
-  MoQFollyExecutorImpl MoQExecutor_{&eventBase_};
+  std::shared_ptr<MoQFollyExecutorImpl> MoQExecutor_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt_;
   std::shared_ptr<MoQSession> clientSession_;
@@ -3364,10 +3368,10 @@ class DummyMoQClientBase : public MoQClientBase {
 
 TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
   folly::EventBase evb;
-  MoQFollyExecutorImpl exec(&evb);
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
   proxygen::URL url("https://example.com:443/");
 
-  DummyMoQClientBase client(&exec, std::move(url));
+  DummyMoQClientBase client(exec, std::move(url));
 
   // Ensure no session is set (simulating post-reset state)
   client.moqSession_.reset();
@@ -3386,15 +3390,16 @@ TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
 
 TEST(MoQRelayClientTest, ShutdownClearsHandlersAndResetsSession) {
   folly::EventBase evb;
-  MoQFollyExecutorImpl exec(&evb);
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
 
   // Create a session and wire it into a MoQClient used by MoQRelayClient
   auto [clientWt, serverWt] =
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-  auto session = std::make_shared<MoQSession>(clientWt.get(), &exec);
+  auto session = std::make_shared<MoQSession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), exec);
 
   auto moqClient = std::make_unique<MoQClient>(
-      &exec, proxygen::URL("https://example.com:443/"));
+      exec, proxygen::URL("https://example.com:443/"));
   moqClient->moqSession_ = session;
 
   MoQRelayClient relay(std::move(moqClient));

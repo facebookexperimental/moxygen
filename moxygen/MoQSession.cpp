@@ -1656,40 +1656,25 @@ class MoQSession::PublisherAnnounceHandle : public Subscriber::AnnounceHandle {
 // Constructors
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-    MoQExecutor* exec)
+    std::shared_ptr<MoQExecutor> exec)
     : dir_(MoQControlCodec::Direction::CLIENT),
       wt_(wt),
-      exec_(exec),
+      exec_(std::move(exec)),
       nextRequestID_(0),
       nextExpectedPeerRequestID_(1),
       controlCodec_(dir_, this) {}
 
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-    std::unique_ptr<MoQExecutor> execOwned)
-    : MoQSession(wt, execOwned.get()) {
-  execOwned_ = std::move(execOwned);
-}
-
-MoQSession::MoQSession(
-    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     ServerSetupCallback& serverSetupCallback,
-    MoQExecutor* exec)
+    std::shared_ptr<MoQExecutor> exec)
     : dir_(MoQControlCodec::Direction::SERVER),
       wt_(wt),
-      exec_(exec),
+      exec_(std::move(exec)),
       nextRequestID_(1),
       nextExpectedPeerRequestID_(0),
       serverSetupCallback_(&serverSetupCallback),
       controlCodec_(dir_, this) {}
-
-MoQSession::MoQSession(
-    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-    ServerSetupCallback& serverSetupCallback,
-    std::unique_ptr<MoQExecutor> execOwned)
-    : MoQSession(wt, serverSetupCallback, execOwned.get()) {
-  execOwned_ = std::move(execOwned);
-}
 
 MoQSession::~MoQSession() {
   cleanup();
@@ -1784,12 +1769,12 @@ void MoQSession::start() {
         cancellationSource_.getToken(),
         controlStream.writeHandle->getCancelToken());
     co_withExecutor(
-        exec_,
+        exec_.get(),
         co_withCancellation(
             std::move(mergeToken), controlWriteLoop(controlStream.writeHandle)))
         .start();
     co_withExecutor(
-        exec_,
+        exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(),
             controlReadLoop(controlStream.readHandle)))
@@ -2074,7 +2059,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   auto token = co_await folly::coro::co_current_cancellation_token;
   while (!fin && !token.isCancellationRequested()) {
     auto streamData =
-        co_await co_awaitTry(readHandle->readStreamData().via(exec_));
+        co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception())
                 << " id=" << streamId << " sess=" << this;
@@ -2539,7 +2524,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     auto streamData = co_await co_awaitTry(co_withCancellation(
         token,
         folly::coro::toTaskInterruptOnCancel(
-            readHandle->readStreamData().via(exec_))));
+            readHandle->readStreamData().via(exec_.get()))));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception()) << " id=" << id
                 << " sess=" << this;
@@ -2644,7 +2629,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
   co_withExecutor(
-      exec_,
+      exec_.get(),
       handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher)))
       .start();
 }
@@ -2985,7 +2970,7 @@ void MoQSession::onPublish(PublishRequest publish) {
 
   // Use single coroutine pattern like working onAnnounce
   co_withExecutor(
-      exec_, handlePublish(std::move(publish), std::move(publishHandle)))
+      exec_.get(), handlePublish(std::move(publish), std::move(publishHandle)))
       .start();
 }
 
@@ -3199,7 +3184,7 @@ void MoQSession::onFetch(Fetch fetch) {
   fetchPublisher->initialize();
   pubTracks_.emplace(fetch.requestID, fetchPublisher);
   co_withExecutor(
-      exec_, handleFetch(std::move(fetch), std::move(fetchPublisher)))
+      exec_.get(), handleFetch(std::move(fetch), std::move(fetchPublisher)))
       .start();
 }
 
@@ -3339,7 +3324,7 @@ void MoQSession::onAnnounce(Announce ann) {
         {ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "Not a subscriber"});
     return;
   }
-  co_withExecutor(exec_, handleAnnounce(std::move(ann))).start();
+  co_withExecutor(exec_.get(), handleAnnounce(std::move(ann))).start();
 }
 
 folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
@@ -3514,7 +3499,7 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
          "Not a publisher"});
     return;
   }
-  co_withExecutor(exec_, handleSubscribeAnnounces(std::move(sa))).start();
+  co_withExecutor(exec_.get(), handleSubscribeAnnounces(std::move(sa))).start();
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
@@ -3658,7 +3643,8 @@ void MoQSession::onTrackStatusRequest(TrackStatusRequest trackStatusRequest) {
          TrackStatusCode::UNKNOWN,
          folly::none});
   } else {
-    co_withExecutor(exec_, handleTrackStatus(std::move(trackStatusRequest)))
+    co_withExecutor(
+        exec_.get(), handleTrackStatus(std::move(trackStatusRequest)))
         .start();
   }
 }
@@ -4691,7 +4677,7 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
   }
   // maybe not SUBGROUP_HEADER, but at least not control
   co_withExecutor(
-      exec_,
+      exec_.get(),
       co_withCancellation(
           cancellationSource_.getToken(),
           unidirectionalReadLoop(shared_from_this(), rh)))
@@ -4713,14 +4699,14 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
 
     bh.writeHandle->setPriority(0, 0, false);
     co_withExecutor(
-        exec_,
+        exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(), controlReadLoop(bh.readHandle)))
         .start();
     auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
     co_withExecutor(
-        exec_,
+        exec_.get(),
         co_withCancellation(
             std::move(mergeToken), controlWriteLoop(bh.writeHandle)))
         .start();

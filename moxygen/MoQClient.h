@@ -14,8 +14,8 @@ namespace moxygen {
 
 class MoQClient : public MoQClientBase {
  public:
-  MoQClient(MoQExecutor* exec, proxygen::URL url)
-      : MoQClientBase(exec, std::move(url)) {}
+  MoQClient(std::shared_ptr<MoQExecutor> exec, proxygen::URL url)
+      : MoQClientBase(std::move(exec), std::move(url)) {}
 
   [[nodiscard]] quic::
       Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>

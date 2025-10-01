@@ -90,7 +90,7 @@ class MoQTestClient : public moxygen::Subscriber,
   void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase);
 
  private:
-  MoQFollyExecutorImpl moqExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;

@@ -38,9 +38,9 @@ class MoQFlvStreamerClient
       proxygen::URL url,
       FullTrackName fvtn,
       FullTrackName fatn)
-      : moqExecutor_(evb),
+      : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
         moqClient_(
-            makeMoQClient(&moqExecutor_, std::move(url), /*useQuic=*/false)),
+            makeMoQClient(moqExecutor_, std::move(url), /*useQuic=*/false)),
         fullVideoTrackName_(std::move(fvtn)),
         fullAudioTrackName_(std::move(fatn)) {}
 
@@ -87,7 +87,7 @@ class MoQFlvStreamerClient
     XLOG(INFO) << __func__;
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
-    auto keepAlive = folly::getKeepAliveToken(moqClient_->getEventBase());
+    auto keepAlive = folly::getKeepAliveToken(moqClient_->getEventBase().get());
 
     flv::FlvSequentialReader flvSeqReader(FLAGS_input_flv_file);
     while (moqClient_->moqSession_) {
@@ -269,7 +269,7 @@ class MoQFlvStreamerClient
   static const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
   static const uint8_t VIDEO_STREAM_PRIORITY = 200;
 
-  MoQFollyExecutorImpl moqExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   FullTrackName fullVideoTrackName_;

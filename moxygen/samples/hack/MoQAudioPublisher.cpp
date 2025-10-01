@@ -82,7 +82,7 @@ bool MoQAudioPublisher::setup(
     return false;
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
-      std::make_unique<MoQClient>(&moqExecutor_, url));
+      std::make_unique<MoQClient>(moqExecutor_, url));
 
   cancel_ = folly::CancellationSource();
   running_ = true;

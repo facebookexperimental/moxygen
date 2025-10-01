@@ -19,6 +19,7 @@
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -34,7 +35,8 @@ class MoQAudioPublisher
  public:
   explicit MoQAudioPublisher(FullTrackName fullAudioTrackName)
       : evbThread_(std::make_unique<folly::ScopedEventBaseThread>()),
-        moqExecutor_(evbThread_->getEventBase()),
+        moqExecutor_(
+            std::make_shared<MoQFollyExecutorImpl>(evbThread_->getEventBase())),
         audioForwarder_(std::move(fullAudioTrackName)) {}
 
   // Setup the relay client and MoQ session. Optionally install a Subscriber
@@ -81,7 +83,7 @@ class MoQAudioPublisher
       FullTrackName ftn);
 
   std::unique_ptr<folly::ScopedEventBaseThread> evbThread_;
-  MoQFollyExecutorImpl moqExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQRelayClient> relayClient_;
   MoQForwarder audioForwarder_;
   AbsoluteLocation largestAudio_{0, 0};

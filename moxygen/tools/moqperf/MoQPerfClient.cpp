@@ -105,9 +105,9 @@ MoQPerfClient::MoQPerfClient(
     folly::EventBase* evb,
     std::chrono::milliseconds connectTimeout,
     std::chrono::milliseconds transactionTimeout)
-    : moqExecutor_(evb),
+    : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
       moqClient_(
-          &moqExecutor_,
+          moqExecutor_,
           proxygen::URL("", peerAddr.getIPAddress().str(), peerAddr.getPort())),
       connectTimeout_(connectTimeout),
       transactionTimeout_(transactionTimeout) {}

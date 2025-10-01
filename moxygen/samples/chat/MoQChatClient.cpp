@@ -31,8 +31,8 @@ MoQChatClient::MoQChatClient(
       timestampString_(
           folly::to<std::string>(std::chrono::system_clock::to_time_t(
               std::chrono::system_clock::now()))),
-      executor_(evb),
-      moqClient_(&executor_, std::move(url)) {}
+      executor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
+      moqClient_(executor_, std::move(url)) {}
 
 folly::coro::Task<void> MoQChatClient::run() noexcept {
   XLOG(INFO) << __func__;
@@ -154,7 +154,7 @@ void MoQChatClient::publishLoop() {
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   std::string input;
   auto evb = moqClient_.getEventBase();
-  folly::Executor::KeepAlive keepAlive(evb);
+  auto keepAlive = folly::getKeepAliveToken(evb.get());
   auto token = moqClient_.moqSession_->getCancelToken();
   while (!token.isCancellationRequested() && std::cin.good() &&
          !std::cin.eof()) {

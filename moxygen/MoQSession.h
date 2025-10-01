@@ -18,6 +18,7 @@
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
 #include <moxygen/stats/MoQStats.h>
+#include <memory>
 #include "moxygen/mlog/MLogger.h"
 #include "moxygen/util/TimedBaton.h"
 
@@ -74,20 +75,12 @@ class MoQSession : public Subscriber,
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      MoQExecutor* exec);
-  explicit MoQSession(
-      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      std::unique_ptr<MoQExecutor> execOwned);
+      std::shared_ptr<MoQExecutor> exec);
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
-      MoQExecutor* exec);
-
-  explicit MoQSession(
-      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      ServerSetupCallback& serverSetupCallback,
-      std::unique_ptr<MoQExecutor> execOwned);
+      std::shared_ptr<MoQExecutor> exec);
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
@@ -107,7 +100,7 @@ class MoQSession : public Subscriber,
   }
 
   [[nodiscard]] folly::Executor* getExecutor() const {
-    return exec_;
+    return exec_.get();
   }
 
   folly::CancellationToken getCancelToken() const {
@@ -473,8 +466,7 @@ class MoQSession : public Subscriber,
 
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
-  MoQExecutor* exec_{nullptr};
-  std::unique_ptr<MoQExecutor> execOwned_;
+  std::shared_ptr<MoQExecutor> exec_;
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
 

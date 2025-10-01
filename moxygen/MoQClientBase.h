@@ -14,6 +14,7 @@
 #include <quic/client/QuicClientTransport.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/mlog/MLogger.h>
+#include <memory>
 
 namespace moxygen {
 
@@ -23,10 +24,10 @@ class Subscriber;
 
 class MoQClientBase : public proxygen::WebTransportHandler {
  public:
-  MoQClientBase(MoQExecutor* exec, proxygen::URL url)
-      : exec_(exec), url_(std::move(url)) {}
+  MoQClientBase(std::shared_ptr<MoQExecutor> exec, proxygen::URL url)
+      : exec_(std::move(exec)), url_(std::move(url)) {}
 
-  MoQExecutor* getEventBase() {
+  std::shared_ptr<MoQExecutor> getEventBase() {
     return exec_;
   }
 
@@ -66,7 +67,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       proxygen::WebTransport::StreamReadHandle* handle) override;
   void onDatagram(std::unique_ptr<folly::IOBuf>) override;
 
-  MoQExecutor* exec_{nullptr};
+  std::shared_ptr<MoQExecutor> exec_;
   proxygen::URL url_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
 };
