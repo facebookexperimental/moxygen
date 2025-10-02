@@ -4,9 +4,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "moxygen/flv_parser/FlvSequentialReader.h"
 #include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
+#include "moxygen/flv_parser/FlvReader.h"
+#include "moxygen/flv_parser/FlvStreamParser.h"
 #include "moxygen/flv_parser/test/FlvTestUtils.h"
 
 using namespace moxygen::flv;
@@ -20,7 +21,7 @@ const std::string kFlvOkTestFilePath = "resources/testOK1s.flv";
 TEST(FlvSequentialReader, ReadOk) {
   std::string flvTestFilePath = kTestDir + "/" + kFlvOkTestFilePath;
   XLOG(INFO) << "Reading file: " << flvTestFilePath;
-  FlvSequentialReader flvsr(flvTestFilePath);
+  FlvReader flvsr(flvTestFilePath);
   uint32_t numVideoTags = 0;
   uint32_t numAudioTags = 0;
 
@@ -33,7 +34,7 @@ TEST(FlvSequentialReader, ReadOk) {
     } else {
       EXPECT_EQ(tag->timescale, 1000);
       EXPECT_NE(tag->wallclock, 0);
-      if (tag->type == FlvSequentialReader::MediaType::VIDEO) {
+      if (tag->type == FlvStreamParser::MediaType::VIDEO) {
         EXPECT_NE(tag->data, nullptr);
         if (tag->isIdr) {
           EXPECT_NE(
@@ -41,7 +42,7 @@ TEST(FlvSequentialReader, ReadOk) {
               nullptr); // We should send AVCDecoderConfigRecord in each IDR
         }
         numVideoTags++;
-      } else if (tag->type == FlvSequentialReader::MediaType::AUDIO) {
+      } else if (tag->type == FlvStreamParser::MediaType::AUDIO) {
         EXPECT_NE(tag->data, nullptr);
         // We should send channel and sampleFreq info in each frame
         EXPECT_EQ(tag->numChannels, 1);

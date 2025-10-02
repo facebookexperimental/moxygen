@@ -9,7 +9,7 @@ add_library(flvparser
     FlvCommon.cpp
     FlvReader.cpp
     FlvWriter.cpp
-    FlvSequentialReader.cpp
+    FlvStreamParser.cpp
 )
 
 target_include_directories(

@@ -10,7 +10,7 @@
 #include <signal.h>
 #include <filesystem>
 #include "moxygen/MoQWebTransportClient.h"
-#include "moxygen/flv_parser/FlvSequentialReader.h"
+#include "moxygen/flv_parser/FlvReader.h"
 #include "moxygen/moq_mi/MoQMi.h"
 
 DEFINE_string(input_flv_file, "", "FLV input fifo file");
@@ -89,7 +89,7 @@ class MoQFlvStreamerClient
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     auto keepAlive = folly::getKeepAliveToken(moqClient_->getEventBase().get());
 
-    flv::FlvSequentialReader flvSeqReader(FLAGS_input_flv_file);
+    flv::FlvReader flvSeqReader(FLAGS_input_flv_file);
     while (moqClient_->moqSession_) {
       auto item = flvSeqReader.getNextItem();
       if (item == nullptr) {
@@ -103,7 +103,7 @@ class MoQFlvStreamerClient
 
         if (videoPub_ && sub.second->consumer == videoPub_.get()) {
           if (item->data &&
-              (item->type == flv::FlvSequentialReader::MediaType::VIDEO ||
+              (item->type == flv::FlvStreamParser::MediaType::VIDEO ||
                item->isEOF)) {
             // Send audio data in a thread (stream per object). Clone it since
             // we can have multiple subscribers
@@ -117,7 +117,7 @@ class MoQFlvStreamerClient
         if (audioPub_ && sub.second->consumer == audioPub_.get()) {
           // Audio
           if (item->data &&
-              (item->type == flv::FlvSequentialReader::MediaType::AUDIO ||
+              (item->type == flv::FlvStreamParser::MediaType::AUDIO ||
                item->isEOF)) {
             // Send audio data in a thread (stream per object). Clone it since
             // we can have multiple subscribers
@@ -186,7 +186,7 @@ class MoQFlvStreamerClient
     co_return subscription;
   }
 
-  void publishAudio(std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
+  void publishAudio(std::unique_ptr<flv::FlvStreamParser::MediaItem> item) {
     if (item->isEOF) {
       XLOG(INFO) << "FLV audio received EOF";
       return;
@@ -209,7 +209,7 @@ class MoQFlvStreamerClient
     audioPub_->objectStream(objHeader, std::move(moqMiObj->payload));
   }
 
-  void publishVideo(std::unique_ptr<flv::FlvSequentialReader::MediaItem> item) {
+  void publishVideo(std::unique_ptr<flv::FlvStreamParser::MediaItem> item) {
     if (item->isEOF) {
       XLOG(INFO) << "FLV video received EOF";
       if (videoPub_ && videoSgPub_) {

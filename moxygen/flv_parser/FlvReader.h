@@ -9,6 +9,8 @@
 #include <folly/io/IOBuf.h>
 #include <fstream> // std::ifstream
 #include "moxygen/flv_parser/FlvCommon.h"
+#include "moxygen/flv_parser/FlvStreamParser.h"
+#include "moxygen/moq_mi/MediaItem.h"
 
 namespace moxygen::flv {
 
@@ -22,6 +24,7 @@ class FlvReader {
   }
 
   flv::FlvTag readNextTag();
+  std::unique_ptr<FlvStreamParser::MediaItem> getNextItem();
 
  private:
   uint8_t read1Byte();
@@ -32,6 +35,7 @@ class FlvReader {
   std::ifstream f_;
 
   std::unique_ptr<folly::IOBuf> header_;
+  FlvStreamParser parser_;
 };
 
 } // namespace moxygen::flv

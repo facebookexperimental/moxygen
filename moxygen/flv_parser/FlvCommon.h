@@ -324,4 +324,16 @@ std::unique_ptr<flv::FlvAudioTag> createAudioTag(
     uint8_t soundType,
     uint8_t aacPacketType,
     std::unique_ptr<folly::IOBuf> data);
+
+flv::FlvTag createTag(
+    std::unique_ptr<flv::FlvTagBase> tag,
+    std::unique_ptr<folly::IOBuf> data);
+
+std::unique_ptr<flv::FlvTagBase> flvParseTagBase(folly::io::Cursor& cursor);
+flv::FlvTag flvParse(std::unique_ptr<folly::IOBuf> data);
+
+uint8_t read1Byte(folly::io::Cursor& cursor);
+uint32_t read3Bytes(folly::io::Cursor& cursor);
+uint32_t read4Bytes(folly::io::Cursor& cursor);
+
 } // namespace moxygen::flv

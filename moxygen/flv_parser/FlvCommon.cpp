@@ -57,6 +57,130 @@ std::unique_ptr<flv::FlvAudioTag> createAudioTag(
   return audioTag;
 }
 
+flv::FlvTag createTag(
+    std::unique_ptr<flv::FlvTagBase> tag,
+    std::unique_ptr<folly::IOBuf> data) {
+  std::unique_ptr<FlvAudioTag> audioTag;
+  std::unique_ptr<FlvVideoTag> videoTag;
+  std::unique_ptr<FlvScriptTag> scriptTag;
+
+  auto cursor = folly::io::Cursor(data.get());
+
+  if (tag->type == 0x08) {
+    // Audio tag
+    audioTag = std::make_unique<FlvAudioTag>(*tag);
+
+    auto tmp = read1Byte(cursor);
+    audioTag->soundFormat = (tmp >> 4) & 0x0f;
+    audioTag->soundRate = (tmp >> 2) & 0x3;
+    if (audioTag->soundRate > 3) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported audio sampling rate. soundRateIndex {}",
+          audioTag->soundRate));
+    }
+    // audioTag->soundRate = kAudioFreqSamplingIndexMapping[soundRateIndex];
+    audioTag->soundSize = (tmp >> 1) & 0x1;
+    if (audioTag->soundSize > 1) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported audio bits per sample. soundSizeIndex {}",
+          audioTag->soundSize));
+    }
+    // audioTag->soundSize = kAudioBitsPerSampleMapping[soundSizeIndex];
+    audioTag->soundType = tmp & 0x1;
+    if (audioTag->soundType > 1) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported number of channels. soundSizeIndex {}",
+          audioTag->soundType));
+    }
+    // audioTag->soundType = kAudioChannels[soundTypeIndex];
+    if (audioTag->soundFormat != 10 || audioTag->soundRate != 3 ||
+        audioTag->soundSize != 1 || audioTag->soundType != 1) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported audio format, only AAC is supported. soundFormat {}, soundRate {}, soundSize {}, soundType {} (byte: {})",
+          audioTag->soundFormat,
+          audioTag->soundRate,
+          audioTag->soundSize,
+          audioTag->soundType,
+          tmp));
+    }
+
+    audioTag->aacPacketType = read1Byte(cursor);
+    if (audioTag->aacPacketType > 1) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported AAC packet type. packetType {}",
+          audioTag->aacPacketType));
+    }
+
+    // Read data
+    if (tag->size > 2) {
+      data->trimStart(2);
+      data->trimEnd(data->length() - tag->size + 2);
+      audioTag->data = std::move(data);
+    }
+    return audioTag;
+  }
+
+  if (tag->type == 0x09) {
+    // Video tag
+    videoTag = std::make_unique<FlvVideoTag>(*tag);
+
+    auto tmp = read1Byte(cursor);
+    videoTag->frameType = (tmp >> 4) & 0x0f;
+    videoTag->codecId = tmp & 0x0f;
+    if (videoTag->codecId != 0x07) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported video codec. Only h264 supported. CodecId {}",
+          videoTag->codecId));
+    }
+    videoTag->avcPacketType = read1Byte(cursor);
+    if (videoTag->avcPacketType > 2) {
+      throw std::runtime_error(fmt::format(
+          "Unsupported AVC packet type. packetType {}",
+          videoTag->avcPacketType));
+    }
+    videoTag->compositionTime = read3Bytes(cursor);
+
+    // Read data
+    if (tag->size > 5) {
+      data->trimStart(5);
+      data->trimEnd(data->length() - tag->size + 5);
+      videoTag->data = std::move(data);
+    }
+
+    return videoTag;
+  }
+
+  if (tag->type == 0x12) {
+    // Script tag
+    scriptTag = std::make_unique<FlvScriptTag>(*tag);
+    // Read data
+    if (tag->size > 0) {
+      data->trimEnd(data->length() - tag->size);
+      scriptTag->data = std::move(data);
+    }
+    return scriptTag;
+  }
+  return FlvReadCmd::FLV_UNKNOWN_TAG;
+}
+
+std::unique_ptr<FlvTagBase> flvParseTagBase(folly::io::Cursor& cursor) {
+  auto tag = std::make_unique<FlvTagBase>();
+  tag->type = read1Byte(cursor);
+  tag->size = read3Bytes(cursor);
+  auto ltimestamp = read3Bytes(cursor);
+  auto htimestamp = read1Byte(cursor);
+  tag->timestamp = htimestamp << 24 | ltimestamp;
+  tag->streamId = read3Bytes(cursor);
+  return tag;
+}
+
+flv::FlvTag flvParse(std::unique_ptr<folly::IOBuf> data) {
+  auto cursor = folly::io::Cursor(data.get());
+  auto tag = flvParseTagBase(cursor);
+  data->trimStart(11);
+  return createTag(std::move(tag), std::move(data));
+}
+
 std::ostream& operator<<(std::ostream& os, flv::AscHeaderData const& v) {
   os << "ASC header. valid: " << v.valid << ", aot: " << v.aot
      << ", freqIndex: " << v.freqIndex << "(" << v.sampleFreq
@@ -127,6 +251,20 @@ createAscheader(uint8_t aot, uint32_t sampleFreq, uint8_t channels) {
     ret->append(2);
   }
   return ret;
+}
+
+uint8_t read1Byte(folly::io::Cursor& cursor) {
+  return cursor.read<uint8_t>();
+}
+
+uint32_t read3Bytes(folly::io::Cursor& cursor) {
+  uint32_t data = 0;
+  cursor.pull(&data, 3);
+  return folly::Endian::big(data << 8);
+}
+
+uint32_t read4Bytes(folly::io::Cursor& cursor) {
+  return cursor.readBE<uint32_t>();
 }
 
 } // namespace moxygen::flv
