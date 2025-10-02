@@ -48,6 +48,10 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::shared_ptr<MLogger> logger_;
   void setLogger(std::shared_ptr<MLogger> logger);
 
+  // QUIC stats factory setter
+  void setQuicStatsFactory(
+      std::unique_ptr<quic::QuicTransportStatsCallbackFactory> factory);
+
   void stop();
 
   folly::Try<ServerSetup> onClientSetup(

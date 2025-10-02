@@ -273,4 +273,11 @@ void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {
   logger_ = std::move(logger);
 }
 
+void MoQServer::setQuicStatsFactory(
+    std::unique_ptr<quic::QuicTransportStatsCallbackFactory> factory) {
+  if (hqServer_) {
+    hqServer_->setStatsFactory(std::move(factory));
+  }
+}
+
 } // namespace moxygen
