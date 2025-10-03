@@ -256,6 +256,17 @@ void MoQServer::Handler::onHeadersComplete(
   }
   resp.setStatusCode(200);
   resp.getHeaders().add("sec-webtransport-http3-draft", "draft02");
+  std::vector<std::string> supportedProtocols{"moq-00"};
+  if (auto wtAvailableProtocols =
+          HTTPWebTransport::getWTAvailableProtocols(*req)) {
+    if (auto wtProtocol = HTTPWebTransport::negotiateWTProtocol(
+            wtAvailableProtocols.value(), supportedProtocols)) {
+      HTTPWebTransport::setWTProtocol(resp, wtProtocol.value());
+    } else {
+      VLOG(4) << "Failed to negotiate WebTransport protocol";
+      resp.setStatusCode(400);
+    }
+  }
   txn_->sendHeaders(resp);
   auto wt = txn_->getWebTransport();
   if (!wt) {
