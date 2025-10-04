@@ -1871,7 +1871,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
   // Parse the extensions
   size_t extensionBlockLength = extLen->first;
   auto parseExtensionKvPairsResult =
-      parseExtensionKvPairs(cursor, objectHeader, extensionBlockLength);
+      parseExtensionKvPairs(cursor, objectHeader, extensionBlockLength, true);
   if (!parseExtensionKvPairsResult.hasValue()) {
     return folly::makeUnexpected(parseExtensionKvPairsResult.error());
   }
@@ -1882,12 +1882,14 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensionKvPairs(
     folly::io::Cursor& cursor,
     ObjectHeader& objectHeader,
-    size_t extensionBlockLength) const noexcept {
+    size_t extensionBlockLength,
+    bool allowImmutable) const noexcept {
   while (extensionBlockLength > 0) {
     // This won't infinite loop because we're parsing out at least a
     // QuicInteger each time.
-    auto parseExtensionResult =
-        parseExtension(cursor, extensionBlockLength, objectHeader);
+
+    auto parseExtensionResult = parseExtension(
+        cursor, extensionBlockLength, objectHeader, allowImmutable);
     if (parseExtensionResult.hasError()) {
       return folly::makeUnexpected(parseExtensionResult.error());
     }
@@ -1898,14 +1900,35 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensionKvPairs(
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
     folly::io::Cursor& cursor,
     size_t& length,
-    ObjectHeader& objectHeader) const noexcept {
+    ObjectHeader& objectHeader,
+    bool allowImmutable) const noexcept {
   auto type = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!type) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= type->second;
+
+  // We can't have an immutable extension nested within another
+  // immutable extension.
+  if (!allowImmutable && getDraftMajorVersion(*version_) >= 14 &&
+      type->first == kImmutableExtensionType) {
+    XLOG(ERR) << "Immutable extension encountered when not allowed";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
   Extension ext;
   ext.type = type->first;
+
+  // Check if this extension is an immutable extensions container (type 0xB) in
+  // draft >= 14
+  const bool isImmutableContainer =
+      (getDraftMajorVersion(*version_) >= 14 &&
+       ext.type == kImmutableExtensionType);
+  // We are inside an immutable context if the current caller disallows
+  // immutable (i.e., we're parsing inside an immutable container)
+  const bool inImmutableContext =
+      (getDraftMajorVersion(*version_) >= 14 && !allowImmutable);
+
   if (ext.type & 0x1) {
     auto extLen = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!extLen) {
@@ -1919,9 +1942,32 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
       XLOG(ERR) << "extLen > kMaxExtensionLength =" << extLen->first;
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
+
+    // For immutable container, flatten its contents and do not append the
+    // container itself to the extensions list
+    if (isImmutableContainer) {
+      folly::io::Cursor innerCursor = cursor;
+      auto parseInnerResult = parseExtensionKvPairs(
+          innerCursor,
+          objectHeader,
+          extLen->first,
+          /*allowImmutable=*/false);
+      if (parseInnerResult.hasError()) {
+        return folly::makeUnexpected(parseInnerResult.error());
+      }
+      // Advance the outer cursor past the immutable container payload and
+      // consume the bytes from the local length tracker
+      cursor.skip(extLen->first);
+      length -= extLen->first;
+      // Do not push the container itself
+      return folly::unit;
+    }
+
+    // Regular odd-type extension (byte array). Clone the value buffer
     cursor.clone(ext.arrayValue, extLen->first);
     length -= extLen->first;
   } else {
+    // Even-type extension (integer value)
     auto iVal = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!iVal) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1930,7 +1976,12 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
     ext.intValue = iVal->first;
   }
 
-  objectHeader.extensions.emplace_back(std::move(ext));
+  // Insert extension into appropriate collection based on context
+  if (inImmutableContext) {
+    objectHeader.extensions.insertImmutableExtension(std::move(ext));
+  } else {
+    objectHeader.extensions.insertMutableExtension(std::move(ext));
+  }
   return folly::unit;
 }
 
@@ -2414,7 +2465,11 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
     if (hasExtensions) {
-      writeExtensions(writeBuf, objectHeader.extensions, size, error);
+      writeExtensions(
+          writeBuf,
+          objectHeader.extensions.getMutableExtensions(),
+          size,
+          error);
     }
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
@@ -2433,7 +2488,11 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
     if (hasExtensions) {
-      writeExtensions(writeBuf, objectHeader.extensions, size, error);
+      writeExtensions(
+          writeBuf,
+          objectHeader.extensions.getMutableExtensions(),
+          size,
+          error);
     }
     writeBuf.append(std::move(objectPayload));
   }
@@ -2481,7 +2540,8 @@ WriteResult MoQFrameWriter::writeStreamObject(
   }
   if (folly::to_underlying(streamType) & 0x1) {
     // includes FETCH, watch out if we add more types!
-    writeExtensions(writeBuf, objectHeader.extensions, size, error);
+    writeExtensions(
+        writeBuf, objectHeader.extensions.getMutableExtensions(), size, error);
   }
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)

@@ -528,7 +528,7 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
     videoSgPub_->object(
         largestVideo_.object++,
         std::move(moqMiObj->payload),
-        std::move(moqMiObj->extensions));
+        Extensions(std::move(moqMiObj->extensions), {}));
   } else {
     XLOG(ERR) << "Should not happen";
   }
@@ -613,7 +613,7 @@ void MoQVideoPublisher::publishAudioFrameToMoQ(
       /*idIn=*/0,
       AUDIO_STREAM_PRIORITY,
       ObjectStatus::NORMAL,
-      std::move(moqMiObj->extensions)};
+      Extensions(std::move(moqMiObj->extensions), {})};
 
   if (auto res = audioTrackPublisher_->objectStream(
           objHeader, std::move(moqMiObj->payload));

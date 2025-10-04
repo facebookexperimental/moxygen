@@ -36,8 +36,12 @@ using namespace moxygen;
 
 uint8_t extTestBuff[5] = {0x01, 0x02, 0x03, 0x04, 0x05};
 static const Extensions kExtensions{
-    {0xacedecade, 1977},
-    {0xdeadbeef, folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}};
+    std::vector<Extension>{
+        {0xacedecade, 1977},
+        {0xdeadbeef,
+         folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}},
+    {} // empty immutable extensions
+};
 
 class DateSubscriptionHandle : public Publisher::SubscriptionHandle {
  public:
@@ -485,13 +489,12 @@ class MoQDateServer : public MoQServer,
         object,
         /*priorityIn=*/0, // priority
         ObjectStatus::NORMAL,
-        kExtensions,
+        noExtensions(),
         folly::none};
     if (second == 0) {
       forwarder_.datagram(header, minutePayload(group));
     }
     header.id++;
-    header.extensions.clear();
     forwarder_.datagram(header, secondPayload(header.id));
     if (header.id >= 60) {
       header.id++;

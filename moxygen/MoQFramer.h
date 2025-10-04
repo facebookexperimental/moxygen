@@ -27,6 +27,9 @@ const size_t kMaxFrameHeaderSize = 32;
 const size_t kMaxNamespaceLength = 32;
 const uint8_t kDefaultPriority = 128;
 
+// Extension types
+const uint64_t kImmutableExtensionType = 0xB;
+
 //////// Types ////////
 
 using Payload = std::unique_ptr<folly::IOBuf>;
@@ -446,7 +449,69 @@ struct Extension {
   }
 };
 
-using Extensions = std::vector<Extension>;
+class Extensions {
+ private:
+  std::vector<Extension> mutableExtensions;
+  std::vector<Extension> immutableExtensions;
+
+ public:
+  Extensions() = default;
+
+  // Constructor that takes both mutable and immutable extensions
+  Extensions(
+      const std::vector<Extension>& mutableExts,
+      const std::vector<Extension>& immutableExts)
+      : mutableExtensions(mutableExts), immutableExtensions(immutableExts) {}
+
+  // Getter for mutableExtensions (returns reference)
+  std::vector<Extension>& getMutableExtensions() {
+    return mutableExtensions;
+  }
+
+  // Getter for mutableExtensions (returns const reference)
+  const std::vector<Extension>& getMutableExtensions() const {
+    return mutableExtensions;
+  }
+
+  // Getter for immutableExtensions (returns const reference)
+  const std::vector<Extension>& getImmutableExtensions() const {
+    return immutableExtensions;
+  }
+
+  // Member functions to insert extensions
+  void insertMutableExtension(Extension&& ext) {
+    mutableExtensions.emplace_back(std::move(ext));
+  }
+
+  void insertImmutableExtension(Extension&& ext) {
+    immutableExtensions.emplace_back(std::move(ext));
+  }
+
+  void insertMutableExtensions(const std::vector<Extension>& extensions) {
+    mutableExtensions.insert(
+        mutableExtensions.end(), extensions.begin(), extensions.end());
+  }
+
+  void insertImmutableExtensions(const std::vector<Extension>& extensions) {
+    immutableExtensions.insert(
+        immutableExtensions.end(), extensions.begin(), extensions.end());
+  }
+
+  size_t size() const {
+    return mutableExtensions.size() + immutableExtensions.size();
+  }
+
+  bool empty() const {
+    return mutableExtensions.empty() && immutableExtensions.empty();
+  }
+
+  // For backward compatibility and testing
+  bool operator==(const Extensions& other) const {
+    return mutableExtensions == other.mutableExtensions &&
+        immutableExtensions == other.immutableExtensions;
+  }
+};
+
 Extensions noExtensions();
 
 struct ObjectHeader {
@@ -457,7 +522,7 @@ struct ObjectHeader {
       uint64_t idIn,
       uint8_t priorityIn = 128,
       ObjectStatus statusIn = ObjectStatus::NORMAL,
-      std::vector<Extension> extensionsIn = noExtensions(),
+      Extensions extensionsIn = noExtensions(),
       folly::Optional<uint64_t> lengthIn = folly::none)
       : group(groupIn),
         subgroup(subgroupIn),
@@ -472,7 +537,7 @@ struct ObjectHeader {
       uint64_t idIn,
       uint8_t priorityIn,
       uint64_t lengthIn,
-      std::vector<Extension> extensionsIn = noExtensions())
+      Extensions extensionsIn = noExtensions())
       : group(groupIn),
         subgroup(subgroupIn),
         id(idIn),
@@ -485,7 +550,7 @@ struct ObjectHeader {
   uint64_t id;
   uint8_t priority{kDefaultPriority};
   ObjectStatus status{ObjectStatus::NORMAL};
-  std::vector<Extension> extensions;
+  Extensions extensions;
   folly::Optional<uint64_t> length{folly::none};
 
   // == Operator For Datagram Testing
@@ -1215,6 +1280,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
+  folly::Expected<folly::Unit, ErrorCode> parseExtensions(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      ObjectHeader& objectHeader) const noexcept;
+
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";
     version_ = versionIn;
@@ -1261,20 +1331,17 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
 
-  folly::Expected<folly::Unit, ErrorCode> parseExtensions(
-      folly::io::Cursor& cursor,
-      size_t& length,
-      ObjectHeader& objectHeader) const noexcept;
-
   folly::Expected<folly::Unit, ErrorCode> parseExtensionKvPairs(
       folly::io::Cursor& cursor,
       ObjectHeader& objectHeader,
-      size_t extensionBlockLength) const noexcept;
+      size_t extensionBlockLength,
+      bool allowImmutable = true) const noexcept;
 
   folly::Expected<folly::Unit, ErrorCode> parseExtension(
       folly::io::Cursor& cursor,
       size_t& length,
-      ObjectHeader& objectHeader) const noexcept;
+      ObjectHeader& objectHeader,
+      bool allowImmutable = true) const noexcept;
 
   folly::Optional<uint64_t> version_;
   mutable MoQTokenCache tokenCache_;

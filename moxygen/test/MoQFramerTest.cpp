@@ -5,12 +5,23 @@
  */
 
 #include "moxygen/MoQFramer.h"
+#include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include "moxygen/test/TestUtils.h"
 
 using namespace moxygen;
 
 namespace {
+
+// Helper to write a QUIC varint to an IOBufQueue succinctly
+inline void writeVarintTo(folly::IOBufQueue& q, uint64_t v) {
+  folly::io::QueueAppender appender(&q, kMaxFrameHeaderSize);
+  auto appenderOp = [appender = std::move(appender)](auto val) mutable {
+    appender.writeBE(val);
+  };
+  (void)quic::encodeQuicInteger(v, appenderOp);
+}
+
 class TestUnderflow : public std::exception {};
 
 // The parameter is the MoQ version
@@ -197,7 +208,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
         cursor, res->objectHeader, SubgroupIDFormat::Present, true);
     testUnderflowResult(r15a);
     EXPECT_EQ(r15a.value().id, 5);
-    EXPECT_EQ(r15a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(
+        r15a.value().extensions, Extensions(test::getTestExtensions(), {}));
     skip(cursor, *r15a.value().length);
 
     auto r20 = parser_.parseSubgroupObjectHeader(
@@ -208,7 +220,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r20a = parser_.parseSubgroupObjectHeader(
         cursor, res->objectHeader, SubgroupIDFormat::Present, true);
     testUnderflowResult(r20a);
-    EXPECT_EQ(r20a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(
+        r20a.value().extensions, Extensions(test::getTestExtensions(), {}));
     EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK);
 
     skip(cursor, 1);
@@ -226,7 +239,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r22a = parser_.parseFetchObjectHeader(cursor, obj);
     testUnderflowResult(r22a);
     EXPECT_EQ(r22a.value().id, 5);
-    EXPECT_EQ(r22a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(
+        r22a.value().extensions, Extensions(test::getTestExtensions(), {}));
     skip(cursor, *r22a.value().length);
 
     auto r23 = parser_.parseFetchObjectHeader(cursor, obj);
@@ -235,7 +249,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
 
     auto r23a = parser_.parseFetchObjectHeader(cursor, obj);
     testUnderflowResult(r23a);
-    EXPECT_EQ(r23a.value().extensions, test::getTestExtensions());
+    EXPECT_EQ(
+        r23a.value().extensions, Extensions(test::getTestExtensions(), {}));
     EXPECT_EQ(r23a.value().status, ObjectStatus::END_OF_GROUP);
   }
 
@@ -421,7 +436,8 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     }
     if (hasExtensions) {
       EXPECT_EQ(
-          result.value().objectHeader.extensions, test::getTestExtensions());
+          result.value().objectHeader.extensions,
+          Extensions(test::getTestExtensions(), {}));
     }
     return result.value().objectHeader;
   }
@@ -468,7 +484,12 @@ TEST_P(MoQFramerTest, parseFixedString) {
 TEST_P(MoQFramerTest, testParseDatagramObjectHeader2) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(
-      2, 3, 4, 5, ObjectStatus::END_OF_GROUP, test::getTestExtensions());
+      2,
+      3,
+      4,
+      5,
+      ObjectStatus::END_OF_GROUP,
+      Extensions(test::getTestExtensions(), {}));
   writer_.writeDatagramObject(writeBuf, TrackAlias(1), obj, nullptr);
 
   auto pobj = testUnderflowDatagramHelper(writeBuf, true, true, 0);
@@ -490,7 +511,13 @@ TEST_P(MoQFramerTest, testParseDatagramObjectHeader3) {
 TEST_P(MoQFramerTest, testParseDatagramObjectHeader4) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(
-      2, 3, 4, 5, ObjectStatus::NORMAL, test::getTestExtensions(), 11);
+      2,
+      3,
+      4,
+      5,
+      ObjectStatus::NORMAL,
+      Extensions(test::getTestExtensions(), {}),
+      11);
   writer_.writeDatagramObject(
       writeBuf, TrackAlias(1), obj, folly::IOBuf::copyBuffer("hello world"));
 
@@ -1302,8 +1329,8 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
   ObjectHeader obj(2, 3, 4, 5);
   std::string payload(64, 'x');
   std::vector<Extension> exts;
-  exts.emplace_back(11, folly::IOBuf::copyBuffer(payload)); // odd type (11)
-  obj.extensions = std::move(exts);
+  exts.emplace_back(13, folly::IOBuf::copyBuffer(payload)); // odd type (13)
+  obj.extensions.insertMutableExtensions(exts);
 
   // Write subgroup header (includeExtensions=true) and the stream object
   auto res = writer_.writeSubgroupHeader(
@@ -1326,9 +1353,12 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
       cursor, hdrRes->objectHeader, SubgroupIDFormat::Present, true);
   EXPECT_TRUE(objRes.hasValue());
   ASSERT_EQ(objRes->extensions.size(), 1);
-  EXPECT_TRUE(objRes->extensions[0].isOddType());
-  EXPECT_EQ(objRes->extensions[0].type, 11);
-  EXPECT_EQ(objRes->extensions[0].arrayValue->computeChainDataLength(), 64);
+  EXPECT_TRUE(objRes->extensions.getMutableExtensions()[0].isOddType());
+  EXPECT_EQ(objRes->extensions.getMutableExtensions()[0].type, 13);
+  EXPECT_EQ(
+      objRes->extensions.getMutableExtensions()[0]
+          .arrayValue->computeChainDataLength(),
+      64);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1347,6 +1377,198 @@ TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff000008), 0x8);
   EXPECT_EQ(getDraftMajorVersion(0xff00ffff), 0xffff);
 }
+
+// Test class for immutable extensions feature (draft 14+)
+class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
+ public:
+  void SetUp() override {
+    parser_.initializeVersion(GetParam());
+    writer_.initializeVersion(GetParam());
+  }
+
+ protected:
+  MoQFrameParser parser_;
+  MoQFrameWriter writer_;
+
+  // Creates the following extensions (encoded back-to-back):
+  // {type = 20, value = 100, immutable}
+  // {type = 21, value = binary(0xAB,0xCD,0xEF), immutable}
+  // Returns a binary blob suitable as the value for kImmutableExtensionType
+  std::unique_ptr<folly::IOBuf> createImmutableExtensionsBuf() {
+    folly::IOBufQueue immutableBuf{folly::IOBufQueue::cacheChainLength()};
+
+    // Extension type 20 (even => integer value follows), integer value 100
+    writeVarintTo(immutableBuf, 20);  // type
+    writeVarintTo(immutableBuf, 100); // value
+
+    // Extension type 21 (odd => length + bytes), binary value
+    static uint8_t testData[] = {0xAB, 0xCD, 0xEF};
+    writeVarintTo(immutableBuf, 21);                 // type
+    writeVarintTo(immutableBuf, sizeof(testData));   // length
+    immutableBuf.append(testData, sizeof(testData)); // data
+
+    return immutableBuf.move();
+  }
+
+  // Creates a malformed immutable-extensions blob by taking the valid
+  // immutable extensions produced above and appending another extension with
+  // type = kImmutableExtensionType (odd) and an arbitrary byte value. This is
+  // invalid when parsed as nested immutable extensions (parseImmutable=false).
+  std::unique_ptr<folly::IOBuf> createImmutableExtensionsBufMalformed() {
+    // Start with the valid immutable extensions blob
+    auto base = createImmutableExtensionsBuf();
+
+    // Append an additional immutable-extensions container entry with arbitrary
+    // 1-byte payload. This makes the nested immutable blob malformed for our
+    // parser (immutable container found while already parsing immutable).
+    folly::IOBufQueue q{folly::IOBufQueue::cacheChainLength()};
+
+    if (base) {
+      q.append(std::move(base));
+    }
+
+    // Write type = kImmutableExtensionType (odd)
+    writeVarintTo(q, kImmutableExtensionType);
+
+    // Write length = 1, then one arbitrary byte value 0xAA
+    writeVarintTo(q, 1); // length
+    static const uint8_t kArbitrary = 0xAA;
+    q.append(&kArbitrary, 1);
+
+    return q.move();
+  }
+
+  // Creates the following extensions sequence for draft-14+ and returns the
+  // raw encoded bytes (without the outer "extensions block length" prefix):
+  // {type = 10, value = 42, mutable}
+  // {type = kImmutableExtensionType (0xB), value = <binary from above>}
+  // {type = 30, value = 999, mutable}
+  std::unique_ptr<folly::IOBuf> createExtensionsBuf() {
+    folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+
+    // 1) type = 10 (even => integer value follows), value = 42
+    writeVarintTo(buf, 10); // type
+    writeVarintTo(buf, 42); // value
+
+    // 2) type = kImmutableExtensionType (odd => length + bytes), value =
+    //    output of createImmutableExtensionsBuf()
+    auto imm = createImmutableExtensionsBuf();
+    writeVarintTo(buf, kImmutableExtensionType);                 // type
+    writeVarintTo(buf, imm ? imm->computeChainDataLength() : 0); // length
+    if (imm) {
+      buf.append(std::move(imm)); // payload
+    }
+
+    // 3) type = 30 (even => integer value follows), value = 999
+    writeVarintTo(buf, 30);  // type
+    writeVarintTo(buf, 999); // value
+
+    return buf.move();
+  }
+
+  // Identical to createExtensionsBuf, but uses
+  // createImmutableExtensionsBufMalformed() to produce a malformed nested
+  // immutable extensions payload under the kImmutableExtensionType container.
+  std::unique_ptr<folly::IOBuf> createExtensionsBufMalformed() {
+    folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+
+    // 1) type = 10 (even => integer value follows), value = 42
+    writeVarintTo(buf, 10); // type
+    writeVarintTo(buf, 42); // value
+
+    // 2) type = kImmutableExtensionType (odd => length + bytes), value =
+    //    output of createImmutableExtensionsBufMalformed()
+    auto imm = createImmutableExtensionsBufMalformed();
+    writeVarintTo(buf, kImmutableExtensionType);                 // type
+    writeVarintTo(buf, imm ? imm->computeChainDataLength() : 0); // length
+    if (imm) {
+      buf.append(std::move(imm)); // payload
+    }
+
+    // 3) type = 30 (even => integer value follows), value = 999
+    writeVarintTo(buf, 30);  // type
+    writeVarintTo(buf, 999); // value
+
+    return buf.move();
+  }
+};
+
+TEST_P(MoQImmutableExtensionsTest, ParseEncodedExtensionsBlob) {
+  // Build only the extensions block (length + encoded items), then
+  // parseExtensions
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Extensions block: length prefix + encoded blob from createExtensionsBuf()
+  auto blob = createExtensionsBuf();
+  auto blobLen = blob ? blob->computeChainDataLength() : 0;
+  writeVarint(writeBuf, blobLen, size, error);
+  if (blob) {
+    writeBuf.append(std::move(blob));
+  }
+  EXPECT_FALSE(error);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+  size_t length = buffer->computeChainDataLength();
+
+  ObjectHeader obj;
+  auto parseExts = parser_.parseExtensions(cursor, length, obj);
+  EXPECT_TRUE(parseExts.hasValue());
+
+  auto& exts = obj.extensions;
+  EXPECT_EQ(exts.size(), 4) << "Expected 4 flattened extensions";
+
+  // Expected mutable extensions: type 10 value 42, type 30 value 999
+  std::vector<Extension> expectedMutable = {
+      Extension{10, 42}, Extension{30, 999}};
+
+  // Expected immutable extensions: type 20 value 100, type 21 value bytes
+  static const uint8_t kExpectedBin[] = {0xAB, 0xCD, 0xEF};
+  std::vector<Extension> expectedImmutable = {
+      Extension{20, 100},
+      Extension{
+          21, folly::IOBuf::copyBuffer(kExpectedBin, sizeof(kExpectedBin))}};
+
+  // Check that mutable and immutable extensions match expected
+  EXPECT_THAT(
+      exts.getMutableExtensions(), testing::ContainerEq(expectedMutable));
+  EXPECT_THAT(
+      exts.getImmutableExtensions(), testing::ContainerEq(expectedImmutable));
+}
+
+// Only test immutable extensions on draft 14+
+
+TEST_P(MoQImmutableExtensionsTest, ParseMalformedNestedImmutableExtensions) {
+  // Build only the extensions block (length + encoded items) using the
+  // malformed helper that nests an immutable container within immutable.
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  auto blob = createExtensionsBufMalformed();
+  auto blobLen = blob ? blob->computeChainDataLength() : 0;
+  writeVarint(writeBuf, blobLen, size, error);
+  if (blob) {
+    writeBuf.append(std::move(blob));
+  }
+  EXPECT_FALSE(error);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+  size_t length = buffer->computeChainDataLength();
+
+  ObjectHeader obj;
+  auto parseExts = parser_.parseExtensions(cursor, length, obj);
+  EXPECT_TRUE(parseExts.hasError());
+  EXPECT_EQ(parseExts.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQImmutableExtensionsTest,
+    MoQImmutableExtensionsTest,
+    ::testing::Values(kVersionDraft14));
 
 /* Test cases to add
  *

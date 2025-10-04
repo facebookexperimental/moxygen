@@ -182,15 +182,16 @@ TEST_F(
                 EXPECT_EQ(extensions.size(), 2);
 
                 // Check if Integer Extension type is 2*Field
-                EXPECT_EQ(extensions[0].type, 2);
+                auto& mutable_exts = extensions.getMutableExtensions();
+                EXPECT_EQ(mutable_exts[0].type, 2);
 
                 // Check if Variable Extension type is 2*Field + 1
-                EXPECT_EQ(extensions[1].type, 3);
+                EXPECT_EQ(mutable_exts[1].type, 3);
 
                 // Check if Variable Extension is within size range of 1-20
                 bool check =
-                    extensions[1].arrayValue->computeChainDataLength() >= 1 &&
-                    extensions[1].arrayValue->computeChainDataLength() <= 20;
+                    mutable_exts[1].arrayValue->computeChainDataLength() >= 1 &&
+                    mutable_exts[1].arrayValue->computeChainDataLength() <= 20;
                 EXPECT_TRUE(check);
 
                 // Check Payload
@@ -462,8 +463,10 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
       moxygen::ObjectHeader expectedHeader;
       expectedHeader.group = groupNum;
       expectedHeader.id = objectId;
-      expectedHeader.extensions = moxygen::getExtensions(
-          params_.testIntegerExtension, params_.testVariableExtension);
+      expectedHeader.extensions = moxygen::Extensions(
+          moxygen::getExtensions(
+              params_.testIntegerExtension, params_.testVariableExtension),
+          {});
 
       int objectSize = moxygen::getObjectSize(objectId, &params_);
 
@@ -605,15 +608,16 @@ TEST_F(
                 EXPECT_EQ(extensions.size(), 2);
 
                 // Check if Integer Extension type is 2*Field
-                EXPECT_EQ(extensions[0].type, 2);
+                auto& mutable_exts = extensions.getMutableExtensions();
+                EXPECT_EQ(mutable_exts[0].type, 2);
 
                 // Check if Variable Extension type is 2*Field + 1
-                EXPECT_EQ(extensions[1].type, 3);
+                EXPECT_EQ(mutable_exts[1].type, 3);
 
                 // Check if Variable Extension is within size range of 1-20
                 bool check =
-                    extensions[1].arrayValue->computeChainDataLength() >= 1 &&
-                    extensions[1].arrayValue->computeChainDataLength() <= 20;
+                    mutable_exts[1].arrayValue->computeChainDataLength() >= 1 &&
+                    mutable_exts[1].arrayValue->computeChainDataLength() <= 20;
                 EXPECT_TRUE(check);
 
                 // Check Payload

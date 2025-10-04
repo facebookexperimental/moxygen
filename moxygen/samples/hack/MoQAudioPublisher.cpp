@@ -274,7 +274,7 @@ void MoQAudioPublisher::publishAudioFrameToMoQ(
       /*idIn=*/0,
       AUDIO_STREAM_PRIORITY,
       ObjectStatus::NORMAL,
-      std::move(moqMiObj->extensions)};
+      Extensions(std::move(moqMiObj->extensions), {})};
 
   if (auto res = audioTrackPublisher_->objectStream(
           objHeader, std::move(moqMiObj->payload));

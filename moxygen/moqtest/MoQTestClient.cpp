@@ -275,7 +275,8 @@ bool MoQTestClient::validateSubscribedData(
   }
 
   // Validate Extensions have been made
-  auto result = validateExtensions(header.extensions, &params_);
+  auto result =
+      validateExtensions(header.extensions.getMutableExtensions(), &params_);
   if (result.hasError()) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Extension Error="

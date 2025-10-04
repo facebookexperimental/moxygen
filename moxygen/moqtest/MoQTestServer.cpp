@@ -196,7 +196,10 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
         subConsumer->object(
-            objectId, std::move(objectPayload), extensions, false);
+            objectId,
+            std::move(objectPayload),
+            Extensions(extensions, {}),
+            false);
       } else {
         subConsumer->endOfGroup(objectId);
       }
@@ -246,7 +249,10 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
         subConsumer->object(
-            objectId, std::move(objectPayload), extensions, false);
+            objectId,
+            std::move(objectPayload),
+            Extensions(extensions, {}),
+            false);
       } else {
         subConsumer->endOfGroup(objectId);
       }
@@ -312,7 +318,10 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
         subConsumers[index]->object(
-            objectId, std::move(objectPayload), extensions, false);
+            objectId,
+            std::move(objectPayload),
+            Extensions(extensions, {}),
+            false);
 
       } else {
         LOG(INFO) << "Sending End of Group Marker to Subgroup " << !endZero;
@@ -375,7 +384,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
       ObjectHeader header;
       header.group = groupNum;
       header.id = objectId;
-      header.extensions = extensions;
+      header.extensions = Extensions(extensions, {});
 
       auto res = callback->datagram(header, std::move(objectPayload));
       if (res.hasError()) {
@@ -533,11 +542,15 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
             0 /* subgroupId */,
             objectId,
             std::move(objectPayload),
-            extensions,
+            Extensions(extensions, {}),
             false);
       } else {
         callback->endOfGroup(
-            groupNum, 0 /* subgroupId */, objectId, extensions, false);
+            groupNum,
+            0 /* subgroupId */,
+            objectId,
+            Extensions(extensions, {}),
+            false);
       }
 
       // Set Delay Based on Object Frequency
@@ -583,10 +596,11 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
             objectId,
             objectId,
             std::move(objectPayload),
-            extensions,
+            Extensions(extensions, {}),
             false);
       } else {
-        callback->endOfGroup(groupNum, objectId, objectId, extensions, false);
+        callback->endOfGroup(
+            groupNum, objectId, objectId, Extensions(extensions, {}), false);
       }
 
       // Set Delay Based on Object Frequency
@@ -638,10 +652,11 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
             subgroupId,
             objectId,
             std::move(objectPayload),
-            extensions,
+            Extensions(extensions, {}),
             false);
       } else {
-        callback->endOfGroup(groupNum, subgroupId, objectId, extensions, false);
+        callback->endOfGroup(
+            groupNum, subgroupId, objectId, Extensions(extensions, {}), false);
       }
 
       // Set Delay Based on Object Frequency

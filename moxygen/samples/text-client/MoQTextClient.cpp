@@ -90,7 +90,8 @@ class TextHandler : public ObjectReceiverCallback {
       folly::Optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& header,
       Payload payload) override {
-    for (const auto& ext : header.extensions) {
+    const auto& mutable_exts = header.extensions.getMutableExtensions();
+    for (const auto& ext : mutable_exts) {
       if (ext.type & 0x1) {
         ext.arrayValue->coalesce();
         std::cout << "data extension="

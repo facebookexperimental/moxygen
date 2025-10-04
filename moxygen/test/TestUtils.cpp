@@ -16,7 +16,7 @@ std::vector<Extension> getTestExtensions() {
   static uint8_t extTestBuff[3] = {0x01, 0x02, 0x03};
   static std::vector<Extension> extensions = {
       {10, 10},
-      {11, folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}};
+      {13, folly::IOBuf::copyBuffer(extTestBuff, sizeof(extTestBuff))}};
   return extensions;
 }
 
@@ -244,24 +244,39 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
       obj,
       folly::IOBuf::copyBuffer("hello world"));
   obj.id++;
-  obj.extensions = getTestExtensions();
-  obj.length = 15;
+  ObjectHeader objWithExts(
+      obj.group,
+      obj.subgroup,
+      obj.id,
+      obj.priority,
+      obj.status,
+      Extensions(getTestExtensions(), {}),
+      15);
   res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG_EXT,
-      obj,
+      objWithExts,
       folly::IOBuf::copyBuffer("hello world ext"));
   obj.id++;
-  obj.length = folly::none;
-  obj.status = ObjectStatus::OBJECT_NOT_EXIST;
-  obj.extensions.clear();
+  ObjectHeader objNoExts(
+      obj.group,
+      obj.subgroup,
+      obj.id,
+      obj.priority,
+      ObjectStatus::OBJECT_NOT_EXIST,
+      Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, obj, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, objNoExts, nullptr);
   obj.id++;
-  obj.status = ObjectStatus::END_OF_TRACK;
-  obj.extensions = getTestExtensions();
+  ObjectHeader objWithExts2(
+      obj.group,
+      obj.subgroup,
+      obj.id,
+      obj.priority,
+      ObjectStatus::END_OF_TRACK,
+      Extensions(getTestExtensions(), {}));
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, obj, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, objWithExts2, nullptr);
   return writeBuf.move();
 }
 
@@ -278,24 +293,40 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
       obj,
       folly::IOBuf::copyBuffer("hello world"));
   obj.id++;
-  obj.extensions = getTestExtensions();
-  obj.length = 15;
+  ObjectHeader objWithExts3(
+      obj.group,
+      obj.subgroup,
+      obj.id,
+      obj.priority,
+      obj.status,
+      Extensions(getTestExtensions(), {}),
+      15);
   res = moqFrameWriter.writeStreamObject(
       writeBuf,
       StreamType::FETCH_HEADER,
-      obj,
+      objWithExts3,
       folly::IOBuf::copyBuffer("hello world ext"));
   obj.id++;
-  obj.length = folly::none;
-  obj.extensions.clear();
-  obj.status = ObjectStatus::END_OF_GROUP;
+  ObjectHeader objNoExts2(
+      obj.group,
+      obj.subgroup,
+      obj.id,
+      obj.priority,
+      ObjectStatus::END_OF_GROUP,
+      Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+      writeBuf, StreamType::FETCH_HEADER, objNoExts2, nullptr);
   obj.group++;
   obj.id = 0;
-  obj.extensions = getTestExtensions();
+  ObjectHeader objWithExts4(
+      obj.group,
+      obj.subgroup,
+      obj.id,
+      obj.priority,
+      ObjectStatus::END_OF_GROUP,
+      Extensions(getTestExtensions(), {}));
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+      writeBuf, StreamType::FETCH_HEADER, objWithExts4, nullptr);
   return writeBuf.move();
 }
 

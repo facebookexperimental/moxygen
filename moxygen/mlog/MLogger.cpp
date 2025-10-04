@@ -756,8 +756,8 @@ void MLogger::logObjectDatagramCreated(
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
   baseMsg.extensionHeadersLength = header.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(header.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      header.extensions.getMutableExtensions());
   baseMsg.objectPayload = payload->clone();
   addObjectDatagramCreatedLog(std::move(baseMsg));
 }
@@ -772,8 +772,8 @@ void MLogger::logObjectDatagramParsed(
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
   baseMsg.extensionHeadersLength = header.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(header.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      header.extensions.getMutableExtensions());
   std::unique_ptr<folly::IOBuf> objPayload =
       folly::IOBuf::copyBuffer({payload->data(), payload->length()});
   baseMsg.objectPayload = std::move(objPayload);
@@ -789,8 +789,8 @@ void MLogger::logObjectDatagramStatusCreated(
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
   baseMsg.extensionHeadersLength = header.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(header.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      header.extensions.getMutableExtensions());
   baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   addObjectDatagramStatusCreatedLog(std::move(baseMsg));
 }
@@ -804,8 +804,8 @@ void MLogger::logObjectDatagramStatusParsed(
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority;
   baseMsg.extensionHeadersLength = header.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(header.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      header.extensions.getMutableExtensions());
   baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   addObjectDatagramStatusParsedLog(std::move(baseMsg));
 }
@@ -851,8 +851,8 @@ void MLogger::logSubgroupObjectCreated(
   baseMsg.subgroupId = objHeader.id;
   baseMsg.objectId = objHeader.id;
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(objHeader.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      objHeader.extensions.getMutableExtensions());
   baseMsg.objectPayloadLength = payload->length();
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
   baseMsg.objectPayload = payload->clone();
@@ -870,8 +870,8 @@ void MLogger::logSubgroupObjectParsed(
   baseMsg.subgroupId = objHeader.id;
   baseMsg.objectId = objHeader.id;
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(objHeader.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      objHeader.extensions.getMutableExtensions());
   baseMsg.objectPayloadLength = payload->length();
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
   baseMsg.objectPayload = payload->clone();
@@ -907,8 +907,8 @@ void MLogger::logFetchObjectCreated(
   baseMsg.objectId = objHeader.id;
   baseMsg.publisherPriority = objHeader.priority;
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(objHeader.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      objHeader.extensions.getMutableExtensions());
   baseMsg.objectPayloadLength = payload->length();
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
   baseMsg.objectPayload = payload->clone();
@@ -926,8 +926,8 @@ void MLogger::logFetchObjectParsed(
   baseMsg.objectId = objHeader.id;
   baseMsg.publisherPriority = objHeader.priority;
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders =
-      convertExtensionToMoQTExtensionHeaders(objHeader.extensions);
+  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
+      objHeader.extensions.getMutableExtensions());
   baseMsg.objectPayloadLength = payload->length();
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
   baseMsg.objectPayload = payload->clone();

@@ -202,7 +202,7 @@ class MoQFlvStreamerClient
         largestAudio_.object,
         AUDIO_STREAM_PRIORITY,
         ObjectStatus::NORMAL,
-        std::move(moqMiObj->extensions)};
+        Extensions(std::move(moqMiObj->extensions), {})};
 
     XLOG(DBG1) << "Sending audio frame" << objHeader << ", payload size: "
                << moqMiObj->payload->computeChainDataLength();
@@ -259,7 +259,7 @@ class MoQFlvStreamerClient
       videoSgPub_->object(
           largestVideo_.object++,
           std::move(moqMiObj->payload),
-          std::move(moqMiObj->extensions));
+          Extensions(std::move(moqMiObj->extensions), {}));
     } else {
       XLOG(ERR) << "Should not happen";
     }
