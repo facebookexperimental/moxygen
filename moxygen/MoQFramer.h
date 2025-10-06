@@ -1541,15 +1541,22 @@ class MoQFrameWriter {
     return version_;
   }
 
- private:
   void writeExtensions(
+      folly::IOBufQueue& writeBuf,
+      const Extensions& extensions,
+      size_t& size,
+      bool& error) const noexcept;
+
+ private:
+  void writeKeyValuePairs(
       folly::IOBufQueue& writeBuf,
       const std::vector<Extension>& extensions,
       size_t& size,
       bool& error) const noexcept;
 
-  size_t getExtensionSize(const std::vector<Extension>& extensions, bool& error)
-      const noexcept;
+  size_t calculateExtensionVectorSize(
+      const std::vector<Extension>& extensions,
+      bool& error) const noexcept;
 
   void writeTrackRequestParams(
       folly::IOBufQueue& writeBuf,

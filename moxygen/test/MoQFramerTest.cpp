@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQFramer.h"
+
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include "moxygen/test/TestUtils.h"
@@ -1563,6 +1564,99 @@ TEST_P(MoQImmutableExtensionsTest, ParseMalformedNestedImmutableExtensions) {
   auto parseExts = parser_.parseExtensions(cursor, length, obj);
   EXPECT_TRUE(parseExts.hasError());
   EXPECT_EQ(parseExts.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+// Test that immutable extensions are written correctly for draft 14+
+TEST_P(MoQImmutableExtensionsTest, WriteImmutableExtensionsDraft) {
+  // Create extensions with both mutable and immutable extensions
+  std::vector<Extension> mutableExts = {Extension{10, 42}, Extension{30, 999}};
+
+  static const uint8_t kTestBinary[] = {0xAB, 0xCD, 0xEF};
+  std::vector<Extension> immutableExts = {
+      Extension{20, 100},
+      Extension{
+          21, folly::IOBuf::copyBuffer(kTestBinary, sizeof(kTestBinary))}};
+
+  Extensions extensions(mutableExts, immutableExts);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Write extensions using the writer
+  writer_.writeExtensions(writeBuf, extensions, size, error);
+
+  EXPECT_FALSE(error);
+  EXPECT_GT(size, 0)
+      << "Size should be greater than 0 when extensions are written";
+
+  auto buffer = writeBuf.move();
+  EXPECT_TRUE(buffer) << "Buffer should not be null";
+  EXPECT_GT(buffer->computeChainDataLength(), 0)
+      << "Buffer should contain data";
+
+  // Parse the written extensions back to verify they were written correctly
+  folly::io::Cursor cursor(buffer.get());
+  ObjectHeader obj;
+  size_t bufferLength = buffer->computeChainDataLength();
+  auto parseResult = parser_.parseExtensions(cursor, bufferLength, obj);
+
+  EXPECT_TRUE(parseResult.hasValue()) << "Parsing should succeed";
+
+  // Verify both mutable and immutable extensions are present
+  EXPECT_EQ(obj.extensions.size(), 4)
+      << "Should have 4 total extensions (2 mutable + 2 immutable)";
+  EXPECT_THAT(
+      obj.extensions.getMutableExtensions(), testing::ContainerEq(mutableExts));
+  EXPECT_THAT(
+      obj.extensions.getImmutableExtensions(),
+      testing::ContainerEq(immutableExts));
+}
+
+// Test edge case: Extensions with only immutable extensions
+TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
+  // Create extensions with only immutable extensions (no mutable)
+  std::vector<Extension> mutableExts; // empty
+
+  static const uint8_t kTestBinary[] = {0xDE, 0xAD, 0xBE, 0xEF};
+  std::vector<Extension> immutableExts = {
+      Extension{24, 555},
+      Extension{
+          27, folly::IOBuf::copyBuffer(kTestBinary, sizeof(kTestBinary))}};
+
+  Extensions extensions(mutableExts, immutableExts);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Write extensions using the writer
+  writer_.writeExtensions(writeBuf, extensions, size, error);
+
+  EXPECT_FALSE(error);
+  EXPECT_GT(size, 0)
+      << "Size should be greater than 0 even with only immutable extensions";
+
+  auto buffer = writeBuf.move();
+  EXPECT_TRUE(buffer) << "Buffer should not be null";
+  EXPECT_GT(buffer->computeChainDataLength(), 0)
+      << "Buffer should contain data";
+
+  // Parse the written extensions back
+  folly::io::Cursor cursor(buffer.get());
+  ObjectHeader obj;
+  size_t bufferLength = buffer->computeChainDataLength();
+  auto parseResult = parser_.parseExtensions(cursor, bufferLength, obj);
+
+  EXPECT_TRUE(parseResult.hasValue()) << "Parsing should succeed";
+
+  // Verify immutable extensions are present and mutable are empty
+  EXPECT_EQ(obj.extensions.size(), 2) << "Should have 2 immutable extensions";
+  EXPECT_TRUE(obj.extensions.getMutableExtensions().empty())
+      << "Mutable extensions should be empty";
+  EXPECT_THAT(
+      obj.extensions.getImmutableExtensions(),
+      testing::ContainerEq(immutableExts));
 }
 
 INSTANTIATE_TEST_SUITE_P(

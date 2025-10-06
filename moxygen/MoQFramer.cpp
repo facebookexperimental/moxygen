@@ -2330,24 +2330,26 @@ WriteResult MoQFrameWriter::writeSingleObjectStream(
   }
 }
 
-void MoQFrameWriter::writeExtensions(
+void MoQFrameWriter::writeKeyValuePairs(
     folly::IOBufQueue& writeBuf,
     const std::vector<Extension>& extensions,
     size_t& size,
     bool& error) const noexcept {
-  auto extLen = getExtensionSize(extensions, error);
-  if (error) {
-    return;
-  }
-  writeVarint(writeBuf, extLen, size, error);
   for (const auto& ext : extensions) {
     writeVarint(writeBuf, ext.type, size, error);
+    if (error) {
+      return;
+    }
     if (ext.isOddType()) {
       // odd = length prefix
       if (ext.arrayValue) {
         writeVarint(
             writeBuf, ext.arrayValue->computeChainDataLength(), size, error);
+        if (error) {
+          return;
+        }
         writeBuf.append(ext.arrayValue->clone());
+        size += ext.arrayValue->computeChainDataLength();
       } else {
         writeVarint(writeBuf, 0, size, error);
       }
@@ -2355,11 +2357,87 @@ void MoQFrameWriter::writeExtensions(
       // even = single varint
       writeVarint(writeBuf, ext.intValue, size, error);
     }
+    if (error) {
+      return;
+    }
   }
-  return;
 }
 
-size_t MoQFrameWriter::getExtensionSize(
+void MoQFrameWriter::writeExtensions(
+    folly::IOBufQueue& writeBuf,
+    const Extensions& extensions,
+    size_t& size,
+    bool& error) const noexcept {
+  // Calculate total extension length (mutable + immutable blob if present)
+  auto mutableExtLen =
+      calculateExtensionVectorSize(extensions.getMutableExtensions(), error);
+  if (error) {
+    return;
+  }
+
+  size_t immutableBlobLen = 0;
+  size_t immutableExtensionsSize = 0; // Store calculated size for reuse
+  if (getDraftMajorVersion(*version_) >= 14 &&
+      !extensions.getImmutableExtensions().empty()) {
+    // Calculate size of immutable extensions blob:
+    // - Type (kImmutableExtensionType)
+    // - Length
+    // - Key-value pairs data
+    immutableExtensionsSize = calculateExtensionVectorSize(
+        extensions.getImmutableExtensions(), error);
+    if (error) {
+      return;
+    }
+
+    auto maybeTypeSize = quic::getQuicIntegerSize(kImmutableExtensionType);
+    if (maybeTypeSize.hasError()) {
+      error = true;
+      return;
+    }
+
+    auto maybeLengthSize = quic::getQuicIntegerSize(immutableExtensionsSize);
+    if (maybeLengthSize.hasError()) {
+      error = true;
+      return;
+    }
+
+    immutableBlobLen =
+        *maybeTypeSize + *maybeLengthSize + immutableExtensionsSize;
+  }
+
+  auto totalExtLen = mutableExtLen + immutableBlobLen;
+  writeVarint(writeBuf, totalExtLen, size, error);
+  if (error) {
+    return;
+  }
+
+  // Write mutable extensions first
+  writeKeyValuePairs(writeBuf, extensions.getMutableExtensions(), size, error);
+  if (error) {
+    return;
+  }
+
+  // Write immutable extensions blob if present
+  if (getDraftMajorVersion(*version_) >= 14 &&
+      !extensions.getImmutableExtensions().empty()) {
+    writeVarint(writeBuf, kImmutableExtensionType, size, error);
+    if (error) {
+      return;
+    }
+
+    // Use the previously calculated size (no need to recalculate)
+    writeVarint(writeBuf, immutableExtensionsSize, size, error);
+    if (error) {
+      return;
+    }
+
+    // Write the immutable extensions as key-value pairs
+    writeKeyValuePairs(
+        writeBuf, extensions.getImmutableExtensions(), size, error);
+  }
+}
+
+size_t MoQFrameWriter::calculateExtensionVectorSize(
     const std::vector<Extension>& extensions,
     bool& error) const noexcept {
   size_t size = 0;
@@ -2465,11 +2543,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
     if (hasExtensions) {
-      writeExtensions(
-          writeBuf,
-          objectHeader.extensions.getMutableExtensions(),
-          size,
-          error);
+      writeExtensions(writeBuf, objectHeader.extensions, size, error);
     }
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
@@ -2488,11 +2562,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeBuf.append(&objectHeader.priority, 1);
     size += 1;
     if (hasExtensions) {
-      writeExtensions(
-          writeBuf,
-          objectHeader.extensions.getMutableExtensions(),
-          size,
-          error);
+      writeExtensions(writeBuf, objectHeader.extensions, size, error);
     }
     writeBuf.append(std::move(objectPayload));
   }
@@ -2540,8 +2610,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
   }
   if (folly::to_underlying(streamType) & 0x1) {
     // includes FETCH, watch out if we add more types!
-    writeExtensions(
-        writeBuf, objectHeader.extensions.getMutableExtensions(), size, error);
+    writeExtensions(writeBuf, objectHeader.extensions, size, error);
   }
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
