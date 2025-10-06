@@ -72,6 +72,21 @@ void MoQAudioPublisher::noteClientAudioSendTs(uint64_t ptsUs, uint64_t t0Us) {
   t0ByPts_[ptsUs] = t0Us;
 }
 
+std::shared_ptr<MoQSession> MoQAudioPublisher::getSession() const {
+  if (relayClient_) {
+    return relayClient_->getSession();
+  }
+  return nullptr;
+}
+
+folly::Executor::KeepAlive<folly::EventBase> MoQAudioPublisher::getExecutor()
+    const {
+  if (evbThread_) {
+    return folly::getKeepAliveToken(evbThread_->getEventBase());
+  }
+  return nullptr;
+}
+
 bool MoQAudioPublisher::setup(
     const std::string& connectURL,
     std::shared_ptr<Subscriber> subscriber) {

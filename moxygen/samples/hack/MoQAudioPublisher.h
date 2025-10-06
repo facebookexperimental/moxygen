@@ -72,6 +72,12 @@ class MoQAudioPublisher
   // Record client-send timestamp (t0) keyed by audio PTS (microseconds)
   void noteClientAudioSendTs(uint64_t ptsUs, uint64_t t0Us);
 
+  // Get the MoQ session (for reuse by other publishers like image)
+  std::shared_ptr<MoQSession> getSession() const;
+
+  // Get the executor (for reuse by other publishers)
+  folly::Executor::KeepAlive<folly::EventBase> getExecutor() const;
+
  private:
   void publishAudioFrameToMoQ(std::unique_ptr<MediaItem> item);
   void publishAudioFrameImpl(
