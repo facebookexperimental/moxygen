@@ -164,5 +164,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   quic::samples::HQServerParams params_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
+  uint16_t port_;
 };
 } // namespace moxygen

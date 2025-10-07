@@ -36,9 +36,7 @@ MoQServer::MoQServer(
     uint16_t port,
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
     std::string endpoint)
-    : endpoint_(std::move(endpoint)) {
-  params_.localAddress.emplace();
-  params_.localAddress->setFromLocalPort(port);
+    : endpoint_(std::move(endpoint)), port_(port) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
   auto factory = std::make_unique<HQServerTransportFactory>(
@@ -55,7 +53,8 @@ MoQServer::MoQServer(
 }
 
 void MoQServer::start(std::vector<folly::EventBase*> evbs) {
-  hqServer_->start(std::move(evbs));
+  folly::SocketAddress localAddress("::", port_, true);
+  hqServer_->start(localAddress, std::move(evbs));
 }
 
 void MoQServer::stop() {
