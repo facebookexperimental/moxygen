@@ -130,9 +130,9 @@ int main(int argc, char** argv) {
     folly::ScopedEventBaseThread evb;
     runClient(evb.getEventBase());
   } else if (FLAGS_mode == "server") {
-    auto moqPerfServer =
-        std::make_shared<MoQPerfServer>(FLAGS_server_port, "", "");
-    moqPerfServer->start();
+    auto moqPerfServer = std::make_shared<MoQPerfServer>("", "");
+    folly::SocketAddress addr("::", FLAGS_server_port);
+    moqPerfServer->start(addr);
     std::cout << "\nEnter anything to exit." << std::endl;
     std::string input;
     std::getline(std::cin, input);

@@ -22,8 +22,7 @@ using namespace moxygen;
 
 class MoQRelayServer : public MoQServer {
  public:
-  MoQRelayServer()
-      : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, FLAGS_endpoint) {}
+  MoQRelayServer() : MoQServer(FLAGS_cert, FLAGS_key, FLAGS_endpoint) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(relay_);
@@ -43,7 +42,8 @@ class MoQRelayServer : public MoQServer {
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
   MoQRelayServer moqRelayServer;
-  moqRelayServer.start();
+  folly::SocketAddress addr("::", FLAGS_port);
+  moqRelayServer.start(addr);
   folly::EventBase evb;
   evb.loopForever();
   return 0;

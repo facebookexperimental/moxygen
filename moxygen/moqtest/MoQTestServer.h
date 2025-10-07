@@ -69,7 +69,7 @@ class MoQTestServer : public moxygen::Publisher,
                       public moxygen::MoQServer,
                       public std::enable_shared_from_this<MoQTestServer> {
  public:
-  MoQTestServer(uint16_t port);
+  MoQTestServer();
   //  Override onNewSession to set publisher handler to be this object
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {

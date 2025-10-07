@@ -21,11 +21,7 @@ namespace moxygen {
 // Echo server wrapper that wires handler into new sessions
 class MoQAudioEchoServer : public MoQServer {
  public:
-  MoQAudioEchoServer(
-      uint16_t port,
-      std::string cert,
-      std::string key,
-      std::string endpoint);
+  MoQAudioEchoServer(std::string cert, std::string key, std::string endpoint);
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override;
   void terminateClientSession(std::shared_ptr<MoQSession> session) override;

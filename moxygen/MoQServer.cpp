@@ -18,13 +18,8 @@ using namespace proxygen;
 
 namespace moxygen {
 
-MoQServer::MoQServer(
-    uint16_t port,
-    std::string cert,
-    std::string key,
-    std::string endpoint)
+MoQServer::MoQServer(std::string cert, std::string key, std::string endpoint)
     : MoQServer(
-          port,
           quic::samples::createFizzServerContext(
               {"h3", "moq-00"},
               fizz::server::ClientAuthMode::Optional,
@@ -33,12 +28,12 @@ MoQServer::MoQServer(
           std::move(endpoint)) {}
 
 MoQServer::MoQServer(
-    uint16_t port,
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
     std::string endpoint)
-    : endpoint_(std::move(endpoint)), port_(port) {
+    : endpoint_(std::move(endpoint)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
+
   auto factory = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
   factory->addAlpnHandler(
@@ -48,13 +43,15 @@ MoQServer::MoQServer(
           wangle::ConnectionManager*) {
         createMoQQuicSession(std::move(quicSocket));
       });
+  const std::vector<std::string> supportedAlpns = {"h3", "moq-00"};
   hqServer_ =
       std::make_unique<HQServer>(params_, std::move(factory), fizzContext);
 }
 
-void MoQServer::start(std::vector<folly::EventBase*> evbs) {
-  folly::SocketAddress localAddress("::", port_, true);
-  hqServer_->start(localAddress, std::move(evbs));
+void MoQServer::start(
+    const folly::SocketAddress& addr,
+    std::vector<folly::EventBase*> evbs) {
+  hqServer_->start(addr, std::move(evbs));
 }
 
 void MoQServer::stop() {

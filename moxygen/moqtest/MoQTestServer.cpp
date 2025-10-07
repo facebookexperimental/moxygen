@@ -45,9 +45,8 @@ void MoQTestServer::goaway(Goaway goaway) {
   }
 }
 
-MoQTestServer::MoQTestServer(uint16_t port)
+MoQTestServer::MoQTestServer()
     : MoQServer(
-          port,
           quic::samples::createFizzServerContextWithInsecureDefault(
               {"h3", "moq-00"},
               fizz::server::ClientAuthMode::None,

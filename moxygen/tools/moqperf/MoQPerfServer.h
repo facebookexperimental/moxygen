@@ -49,7 +49,7 @@ class MoQPerfServer : public moxygen::Publisher,
                       public moxygen::MoQServer,
                       public std::enable_shared_from_this<MoQPerfServer> {
  public:
-  MoQPerfServer(uint16_t sourcePort, std::string cert, std::string key);
+  MoQPerfServer(std::string cert, std::string key);
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest subscribeRequest,

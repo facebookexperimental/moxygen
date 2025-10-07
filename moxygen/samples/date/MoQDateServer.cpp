@@ -61,7 +61,7 @@ class MoQDateServer : public MoQServer,
   enum class Mode { STREAM_PER_GROUP, STREAM_PER_OBJECT, DATAGRAM };
 
   explicit MoQDateServer(Mode mode)
-      : MoQServer(FLAGS_port, FLAGS_cert, FLAGS_key, "/moq-date"),
+      : MoQServer(FLAGS_cert, FLAGS_key, "/moq-date"),
         forwarder_(dateTrackName()),
         mode_(mode) {}
 
@@ -534,7 +534,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   auto server = std::make_shared<MoQDateServer>(mode);
-  server->start();
+  folly::SocketAddress addr("::", FLAGS_port);
+  server->start(addr);
   if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
     return 1;
   }

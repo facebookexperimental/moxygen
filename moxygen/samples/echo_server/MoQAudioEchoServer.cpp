@@ -17,11 +17,10 @@
 namespace moxygen {
 
 MoQAudioEchoServer::MoQAudioEchoServer(
-    uint16_t port,
     std::string cert,
     std::string key,
     std::string endpoint)
-    : MoQServer(port, std::move(cert), std::move(key), std::move(endpoint)) {}
+    : MoQServer(std::move(cert), std::move(key), std::move(endpoint)) {}
 
 void MoQAudioEchoServer::onNewSession(
     std::shared_ptr<MoQSession> clientSession) {

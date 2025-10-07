@@ -23,18 +23,15 @@ const std::string kDefaultFilePath =
 
 class MoQServer : public MoQSession::ServerSetupCallback {
  public:
-  MoQServer(
-      uint16_t port,
-      std::string cert,
-      std::string key,
-      std::string endpoint);
+  MoQServer(std::string cert, std::string key, std::string endpoint);
 
   MoQServer(
-      uint16_t port,
       std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
       std::string endpoint);
 
-  void start(std::vector<folly::EventBase*> evbs = {});
+  void start(
+      const folly::SocketAddress& addr,
+      std::vector<folly::EventBase*> evbs = {});
 
   MoQServer(const MoQServer&) = delete;
   MoQServer(MoQServer&&) = delete;
@@ -161,6 +158,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
 
+  std::string cert_;
+  std::string key_;
   quic::samples::HQServerParams params_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;

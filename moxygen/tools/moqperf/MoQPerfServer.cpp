@@ -15,15 +15,8 @@ namespace moxygen {
 
 constexpr std::string_view kEndpointName = "blah";
 
-MoQPerfServer::MoQPerfServer(
-    uint16_t sourcePort,
-    std::string cert,
-    std::string key)
-    : MoQServer(
-          sourcePort,
-          std::move(cert),
-          std::move(key),
-          std::string(kEndpointName)) {}
+MoQPerfServer::MoQPerfServer(std::string cert, std::string key)
+    : MoQServer(std::move(cert), std::move(key), std::string(kEndpointName)) {}
 
 folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
     SubscribeRequest subscribeRequest,

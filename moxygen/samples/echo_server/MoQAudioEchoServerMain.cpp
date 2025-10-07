@@ -18,8 +18,9 @@ int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
 
   // Start server
-  moxygen::MoQAudioEchoServer server(
-      FLAGS_port, FLAGS_cert, FLAGS_key, FLAGS_endpoint);
+  moxygen::MoQAudioEchoServer server(FLAGS_cert, FLAGS_key, FLAGS_endpoint);
+  folly::SocketAddress addr("::", FLAGS_port);
+  server.start(addr);
 
   // Run until killed
   folly::EventBase evb;

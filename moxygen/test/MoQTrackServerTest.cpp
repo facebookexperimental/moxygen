@@ -60,7 +60,7 @@ class MoQTrackServerTest : public testing::Test {
 
   moxygen::MoQTestParameters params_;
   moxygen::TrackNamespace track_;
-  moxygen::MoQTestServer server_ = moxygen::MoQTestServer(9999);
+  moxygen::MoQTestServer server_ = moxygen::MoQTestServer();
 };
 
 } // namespace
