@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQServer.h"
+#include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include <proxygen/lib/http/session/HQSession.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
@@ -22,6 +23,19 @@ MoQServer::MoQServer(
     std::string cert,
     std::string key,
     std::string endpoint)
+    : MoQServer(
+          port,
+          quic::samples::createFizzServerContext(
+              {"h3", "moq-00"},
+              fizz::server::ClientAuthMode::Optional,
+              cert,
+              key),
+          std::move(endpoint)) {}
+
+MoQServer::MoQServer(
+    uint16_t port,
+    std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+    std::string endpoint)
     : endpoint_(std::move(endpoint)) {
   params_.localAddress.emplace();
   params_.localAddress->setFromLocalPort(port);
@@ -36,14 +50,8 @@ MoQServer::MoQServer(
           wangle::ConnectionManager*) {
         createMoQQuicSession(std::move(quicSocket));
       });
-  const std::vector<std::string> supportedAlpns = {"h3", "moq-00"};
-  hqServer_ = std::make_unique<HQServer>(
-      params_,
-      std::move(factory),
-      cert,
-      key,
-      fizz::server::ClientAuthMode::None,
-      supportedAlpns);
+  hqServer_ =
+      std::make_unique<HQServer>(params_, std::move(factory), fizzContext);
 }
 
 void MoQServer::start(std::vector<folly::EventBase*> evbs) {

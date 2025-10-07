@@ -29,6 +29,11 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       std::string key,
       std::string endpoint);
 
+  MoQServer(
+      uint16_t port,
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+      std::string endpoint);
+
   void start(std::vector<folly::EventBase*> evbs = {});
 
   MoQServer(const MoQServer&) = delete;

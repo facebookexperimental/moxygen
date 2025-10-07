@@ -8,6 +8,7 @@
 
 #include "moxygen/moqtest/MoQTestServer.h"
 #include <folly/coro/Sleep.h>
+#include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include "moxygen/moqtest/Utils.h"
 
 std::string kCert = "fake_cert";
@@ -45,7 +46,14 @@ void MoQTestServer::goaway(Goaway goaway) {
 }
 
 MoQTestServer::MoQTestServer(uint16_t port)
-    : MoQServer(port, kCert, kKey, kEndpointName) {}
+    : MoQServer(
+          port,
+          quic::samples::createFizzServerContextWithInsecureDefault(
+              {"h3", "moq-00"},
+              fizz::server::ClientAuthMode::None,
+              kCert,
+              kKey),
+          kEndpointName) {}
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     SubscribeRequest sub,
