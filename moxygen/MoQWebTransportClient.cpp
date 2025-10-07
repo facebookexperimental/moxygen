@@ -46,7 +46,8 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
     moxygen::MoQFollyExecutorImpl* exec,
     const proxygen::URL& url,
     std::chrono::milliseconds connect_timeout,
-    std::chrono::milliseconds transaction_timeout) {
+    std::chrono::milliseconds transaction_timeout,
+    const quic::TransportSettings& transportSettings) {
   // Establish an H3 connection
   class ConnectCallback : public proxygen::HQConnector::Callback {
    public:
@@ -72,10 +73,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   ConnectCallback connectCb;
   proxygen::HQConnector hqConnector(&connectCb, transaction_timeout);
-  quic::TransportSettings ts;
-  ts.datagramConfig.enabled = true;
-  // ts.idleTimeout = std::chrono::seconds(10);
-  hqConnector.setTransportSettings(ts);
+  hqConnector.setTransportSettings(transportSettings);
   hqConnector.setSupportedQuicVersions({quic::QuicVersion::QUIC_V1});
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns({"h3"});
@@ -109,14 +107,16 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<Publisher> publishHandler,
-    std::shared_ptr<Subscriber> subscribeHandler) noexcept {
+    std::shared_ptr<Subscriber> subscribeHandler,
+    const quic::TransportSettings& transportSettings) noexcept {
   proxygen::WebTransport* wt = nullptr;
   // Establish H3 connection
   auto session = co_await connectH3WithWebtransport(
       exec_->getTypedExecutor<MoQFollyExecutorImpl>(),
       url_,
       connect_timeout,
-      transaction_timeout);
+      transaction_timeout,
+      transportSettings);
 
   // Establish WebTransport session
   auto txn = session->newTransaction(&httpHandler_);

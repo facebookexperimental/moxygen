@@ -196,7 +196,8 @@ class MoQTextClient : public Subscriber,
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
-          /*subscribeHandler=*/shared_from_this());
+          /*subscribeHandler=*/shared_from_this(),
+          quic::TransportSettings());
 
       if (FLAGS_publish) {
         SubscribeAnnounces subAnn{

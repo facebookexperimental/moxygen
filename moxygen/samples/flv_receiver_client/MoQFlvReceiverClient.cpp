@@ -382,7 +382,8 @@ class MoQFlvReceiverClient
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/nullptr,
-          /*subscribeHandler=*/shared_from_this());
+          /*subscribeHandler=*/shared_from_this(),
+          quic::TransportSettings());
       // Create output file
       flvw_ = std::make_shared<FlvWriterShared>(flvOutPath_);
       trackReceiverHandlerAudio_->setFlvWriterShared(flvw_);

@@ -12,6 +12,7 @@
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <proxygen/lib/utils/URL.h>
 #include <quic/client/QuicClientTransport.h>
+#include <quic/state/TransportSettings.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/mlog/MLogger.h>
 #include <memory>
@@ -36,7 +37,8 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       std::chrono::milliseconds connect_timeout,
       std::chrono::milliseconds transaction_timeout,
       std::shared_ptr<Publisher> publishHandler,
-      std::shared_ptr<Subscriber> subscribeHandler) noexcept;
+      std::shared_ptr<Subscriber> subscribeHandler,
+      const quic::TransportSettings& transportSettings) noexcept;
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
 
@@ -51,7 +53,8 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       folly::SocketAddress connectAddr,
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
-      std::string alpn) = 0;
+      std::string alpn,
+      const quic::TransportSettings& transportSettings) = 0;
 
   folly::coro::Task<ServerSetup> completeSetupMoQSession(
       proxygen::WebTransport* wt,

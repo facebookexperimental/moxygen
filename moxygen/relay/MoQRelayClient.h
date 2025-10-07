@@ -8,6 +8,7 @@
 
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
+#include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClient.h>
 
 namespace moxygen {
@@ -21,12 +22,15 @@ class MoQRelayClient {
       std::shared_ptr<Publisher> publisher,
       std::shared_ptr<Subscriber> subscriber,
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
-      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60)) {
+      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60),
+      const quic::TransportSettings& transportSettings =
+          quic::TransportSettings()) {
     co_await moqClient_->setupMoQSession(
         connectTimeout,
         transactionTimeout,
         std::move(publisher),
-        std::move(subscriber));
+        std::move(subscriber),
+        transportSettings);
   }
 
   folly::coro::Task<void> run(

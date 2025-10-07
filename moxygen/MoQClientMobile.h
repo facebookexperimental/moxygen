@@ -10,6 +10,7 @@
 
 #include <folly/coro/Task.h>
 #include <proxygen/lib/utils/URL.h>
+#include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClientBase.h>
 
 namespace moxygen {
@@ -26,7 +27,8 @@ class MoQClientMobile : public MoQClientBase {
       folly::SocketAddress connectAddr,
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
-      std::string alpn) override;
+      std::string alpn,
+      const quic::TransportSettings& transportSettings) override;
 
  private:
   std::shared_ptr<MoQLibevExecutorImpl> moqlibevEvb_;

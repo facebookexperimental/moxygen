@@ -71,7 +71,8 @@ MoQClientMobile::connectQuic(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    std::string alpn) {
+    std::string alpn,
+    const quic::TransportSettings& transportSettings) {
   auto sock = std::make_unique<quic::LibevQuicAsyncUDPSocket>(moqlibevEvb_);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns({alpn});
@@ -83,13 +84,7 @@ MoQClientMobile::connectQuic(
           .setCertificateVerifier(std::move(verifier))
           .build(),
       /*connectionIdSize=*/0);
-  quic::TransportSettings ts;
-  ts.copaDeltaParam = 0.05;
-  ts.defaultCongestionController = quic::CongestionControlType::Copa;
-  ts.pacingEnabled = true;
-  ts.experimentalPacer = true;
-  ts.datagramConfig.enabled = true;
-  quicClient->setTransportSettings(ts);
+  quicClient->setTransportSettings(transportSettings);
   quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
   folly::CancellationToken cancellationToken =

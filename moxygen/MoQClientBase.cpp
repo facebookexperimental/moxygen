@@ -48,7 +48,8 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<Publisher> publishHandler,
-    std::shared_ptr<Subscriber> subscribeHandler) noexcept {
+    std::shared_ptr<Subscriber> subscribeHandler,
+    const quic::TransportSettings& transportSettings) noexcept {
   proxygen::WebTransport* wt = nullptr;
   // Establish QUIC connection
   auto quicClient = co_await connectQuic(
@@ -57,7 +58,8 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       connect_timeout,
       std::make_shared<
           proxygen::InsecureVerifierDangerousDoNotUseInProduction>(),
-      "moq-00");
+      "moq-00",
+      transportSettings);
 
   // Make WebTransport object
   quicWebTransport_ =

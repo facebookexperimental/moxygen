@@ -54,7 +54,8 @@ class MoQFlvStreamerClient
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
           /*publishHandler=*/shared_from_this(),
-          /*subscribeHandler=*/nullptr);
+          /*subscribeHandler=*/nullptr,
+          quic::TransportSettings());
       // Announce
       auto annResp = co_await moqClient_->moqSession_->announce(std::move(ann));
       if (annResp.hasValue()) {

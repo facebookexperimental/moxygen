@@ -3372,7 +3372,8 @@ class DummyMoQClientBase : public MoQClientBase {
       folly::SocketAddress /*connectAddr*/,
       std::chrono::milliseconds /*timeoutMs*/,
       std::shared_ptr<fizz::CertificateVerifier> /*verifier*/,
-      std::string /*alpn*/) override {
+      std::string /*alpn*/,
+      const quic::TransportSettings& /*transportSettings*/) override {
     co_return nullptr;
   }
 };

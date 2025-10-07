@@ -114,7 +114,11 @@ MoQPerfClient::MoQPerfClient(
 
 folly::coro::Task<void> MoQPerfClient::connect() {
   return moqClient_.setupMoQSession(
-      connectTimeout_, transactionTimeout_, nullptr, shared_from_this());
+      connectTimeout_,
+      transactionTimeout_,
+      nullptr,
+      shared_from_this(),
+      quic::TransportSettings());
 }
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(

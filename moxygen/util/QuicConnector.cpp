@@ -78,7 +78,8 @@ QuicConnector::connectQuic(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    std::string alpn) {
+    std::string alpn,
+    const quic::TransportSettings& transportSettings) {
   auto qEvb = std::make_shared<quic::FollyQuicEventBase>(eventBase);
   auto sock = std::make_unique<quic::FollyQuicAsyncUDPSocket>(qEvb);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
@@ -91,13 +92,7 @@ QuicConnector::connectQuic(
           .setCertificateVerifier(std::move(verifier))
           .build(),
       /*connectionIdSize=*/0);
-  quic::TransportSettings ts;
-  ts.copaDeltaParam = 0.05;
-  ts.defaultCongestionController = quic::CongestionControlType::Copa;
-  ts.pacingEnabled = true;
-  ts.experimentalPacer = true;
-  ts.datagramConfig.enabled = true;
-  quicClient->setTransportSettings(ts);
+  quicClient->setTransportSettings(transportSettings);
   quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
   folly::CancellationToken cancellationToken =

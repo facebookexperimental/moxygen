@@ -43,7 +43,8 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         std::chrono::milliseconds(FLAGS_connect_timeout),
         std::chrono::seconds(FLAGS_transaction_timeout),
         /*publishHandler=*/shared_from_this(),
-        /*subscribeHandler=*/shared_from_this());
+        /*subscribeHandler=*/shared_from_this(),
+        quic::TransportSettings());
     // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.moqSession_->announce(
         {RequestID(0), participantTrackName(username_), {}});

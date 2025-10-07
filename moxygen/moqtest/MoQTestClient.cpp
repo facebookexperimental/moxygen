@@ -43,7 +43,8 @@ folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {
       std::chrono::milliseconds(FLAGS_connect_timeout),
       std::chrono::seconds(FLAGS_transaction_timeout),
       nullptr,
-      shared_from_this());
+      shared_from_this(),
+      quic::TransportSettings());
 
   co_return;
 }

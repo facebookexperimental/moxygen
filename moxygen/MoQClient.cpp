@@ -14,14 +14,18 @@ MoQClient::connectQuic(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    std::string alpn) {
-  return QuicConnector::connectQuic(
+    std::string alpn,
+    const quic::TransportSettings& transportSettings) {
+  auto quicClient = co_await QuicConnector::connectQuic(
       exec_->getTypedExecutor<MoQFollyExecutorImpl>()->getBackingEventBase(),
       folly::SocketAddress(
           url_.getHost(), url_.getPort(), true), // blocking DNS,
       timeoutMs,
       verifier,
-      "moq-00");
+      "moq-00",
+      transportSettings);
+
+  co_return quicClient;
 }
 
 } // namespace moxygen
