@@ -12,9 +12,9 @@ Fig2: Relay architecture overview
 
 ## Installation
 
-- Just execute (probably you will need `sudo` unless you run it like `root`):
+- Just execute:
 ```
-./build.sh
+./build/fbcode_builder/getdeps.py build moxygen
 ```
 
 ## Test preconditions
@@ -38,40 +38,28 @@ cd scripts
 
 - You should see an output like:
 ```
-E0520 13:08:07.722896 7064889 MoQTextClient.cpp:148] Invalid url: localhost:4433/moq-date
-I0520 13:08:07.723534 7064889 MoQTextClient.cpp:27] run
-I0520 13:08:07.723554 7064889 MoQClient.cpp:31] setupMoQSession
-I0520 13:08:07.729465 7064889 MoQClient.cpp:16] connectSuccess
-I0520 13:08:07.731674 7064889 MoQClient.cpp:33] exit setupMoQSession
-I0520 13:08:07.731702 7064889 MoQTextClient.cpp:94] controlReadLoop
-I0520 13:08:07.731714 7064889 MoQSession.h:57] ServerSetup, version=4278190082
-I0520 13:08:07.733063 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733076 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733080 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733082 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733084 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733086 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733089 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733091 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733094 7064889 MoQClient.cpp:137] onWebTransportUniStream
-I0520 13:08:07.733716 7064889 MoQTextClient.cpp:107] readTrack
-7
-6
-5
-4
-3
-2
-1
+I1007 12:05:46.516857 3558180 MoQTextClient.cpp:191] run
+I1007 12:05:46.579533 3558180 MoQTextClient.cpp:250] Largest={29331065, 47}
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+ObjectStatus=3
+int extension=1977
+data extension=AQIDBAU=
+2025-10-07 12:06:
 0
-2024-05-20 13:08:
-I0520 13:08:08.336642 7064889 MoQClient.cpp:137] onWebTransportUniStream
-8
-I0520 13:08:09.344473 7064889 MoQClient.cpp:137] onWebTransportUniStream
-9
-I0520 13:08:10.346489 7064889 MoQClient.cpp:137] onWebTransportUniStream
-10
-I0520 13:08:11.351163 7064889 MoQClient.cpp:137] onWebTransportUniStream
-11
+1
+2
 ```
 
 ## Test with media streamer and media receiver
