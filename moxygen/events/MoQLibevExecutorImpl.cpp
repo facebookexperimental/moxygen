@@ -13,7 +13,7 @@ MoQLibevExecutorImpl::MoQLibevExecutorImpl(
     : quic::LibevQuicEventBase(std::move(loop)) {}
 
 void MoQLibevExecutorImpl::add(folly::Func func) {
-  runInLoop(std::move(func).asStdFunction(), /*thisIteration=*/true);
+  runInLoop(std::move(func).asStdFunction(), /*thisIteration=*/false);
 }
 
 } // namespace moxygen
