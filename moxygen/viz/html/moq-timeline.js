@@ -255,7 +255,7 @@ class MoQTimeline {
     }
 
     /**
-     * Render column headers with true left/right client/server division
+     * Render column headers with client control first, server control second
      */
     renderColumnHeaders() {
         const $header = $('#timeline-header');
@@ -273,19 +273,30 @@ class MoQTimeline {
         `);
 
         // =================
-        // LEFT HALF: ALL CLIENT COLUMNS
+        // COLUMN 1: CLIENT CONTROL (always first)
         // =================
-
-        // Client control column
         $header.append(`
-            <div class="column-header control-column client-half">
+            <div class="column-header control-column client-control-col">
                 <div class="endpoint-label">Client</div>
                 <div class="track-name">Control</div>
             </div>
         `);
-        $columns.append('<div class="event-column control-column client-control client-half" data-column="client-control"></div>');
+        $columns.append('<div class="event-column control-column client-control client-control-col" data-column="client-control"></div>');
 
-        // All client track columns
+        // =================
+        // COLUMN 2: SERVER CONTROL (always second)
+        // =================
+        $header.append(`
+            <div class="column-header control-column server-control-col">
+                <div class="endpoint-label">Server</div>
+                <div class="track-name">Control</div>
+            </div>
+        `);
+        $columns.append('<div class="event-column control-column server-control server-control-col" data-column="server-control"></div>');
+
+        // =================
+        // REMAINING COLUMNS: CLIENT TRACKS
+        // =================
         trackIds.forEach(trackId => {
             const track = this.currentData.tracks[trackId];
             if (track.client_events && track.client_events.length > 0) {
@@ -299,24 +310,27 @@ class MoQTimeline {
             }
         });
 
-        // Add the middle divider column
-        $header.append('<div class="column-header divider-column"><div class="divider-line"></div></div>');
-        $columns.append('<div class="event-column divider-column"><div class="center-divider"></div></div>');
+        // =================
+        // OPTIONAL: Divider between client and server tracks
+        // =================
+        // Check if there are both client and server tracks to show
+        const hasClientTracks = trackIds.some(trackId => 
+            this.currentData.tracks[trackId].client_events && 
+            this.currentData.tracks[trackId].client_events.length > 0
+        );
+        const hasServerTracks = trackIds.some(trackId => 
+            this.currentData.tracks[trackId].server_events && 
+            this.currentData.tracks[trackId].server_events.length > 0
+        );
+
+        if (hasClientTracks && hasServerTracks) {
+            $header.append('<div class="column-header divider-column"><div class="divider-line"></div></div>');
+            $columns.append('<div class="event-column divider-column"><div class="center-divider"></div></div>');
+        }
 
         // =================
-        // RIGHT HALF: ALL SERVER COLUMNS
+        // REMAINING COLUMNS: SERVER TRACKS
         // =================
-
-        // Server control column
-        $header.append(`
-            <div class="column-header control-column server-half">
-                <div class="endpoint-label">Server</div>
-                <div class="track-name">Control</div>
-            </div>
-        `);
-        $columns.append('<div class="event-column control-column server-control server-half" data-column="server-control"></div>');
-
-        // All server track columns
         trackIds.forEach(trackId => {
             const track = this.currentData.tracks[trackId];
             if (track.server_events && track.server_events.length > 0) {
@@ -501,8 +515,18 @@ class MoQTimeline {
             }
         }
 
+        // Determine if this is a control message and add appropriate arrow class
+        let arrowClass = '';
+        if (event.event_category === 'control') {
+            if (event.vantage_point === 'client') {
+                arrowClass = 'arrow-right'; // Client -> Server
+            } else if (event.vantage_point === 'server') {
+                arrowClass = 'arrow-left'; // Server -> Client
+            }
+        }
+
         const $eventBar = $(`
-            <div class="event-bar ${eventClass}"
+            <div class="event-bar ${eventClass} ${arrowClass}"
                  data-event-id="${event.id}"
                  style="top: ${top}px; height: ${height}px; z-index: ${zIndex};">
                 ${label}

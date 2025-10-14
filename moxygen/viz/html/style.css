@@ -226,6 +226,19 @@ input[type="file"] {
     background: linear-gradient(90deg, rgba(212, 237, 218, 0.4), rgba(212, 237, 218, 0.1));
 }
 
+/* First two columns: Client and Server control columns */
+.column-header.client-control-col,
+.event-column.client-control-col {
+    background: linear-gradient(90deg, rgba(227, 242, 253, 0.5), rgba(227, 242, 253, 0.2));
+    border-right: 2px solid #90caf9;
+}
+
+.column-header.server-control-col,
+.event-column.server-control-col {
+    background: linear-gradient(90deg, rgba(212, 237, 218, 0.5), rgba(212, 237, 218, 0.2));
+    border-right: 2px solid #81c784;
+}
+
 /* Heavy Center Divider */
 /* Time Header */
 .column-header.time-header {
@@ -288,9 +301,42 @@ input[type="file"] {
     min-width: 80%;
     left: 10%;
     right: 10%;
-    overflow: hidden;
+    overflow: visible; /* Changed from hidden to visible to show directional arrows */
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Directional arrows for control messages */
+/* Client messages: arrow pointing right (towards server) */
+.event-bar.arrow-right::after {
+    content: '';
+    position: absolute;
+    right: -12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-left: 12px solid white;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    filter: drop-shadow(2px 0 3px rgba(0,0,0,0.5));
+    z-index: 10;
+}
+
+/* Server messages: arrow pointing left (towards client) */
+.event-bar.arrow-left::before {
+    content: '';
+    position: absolute;
+    left: -12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-right: 12px solid white;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    filter: drop-shadow(-2px 0 3px rgba(0,0,0,0.5));
+    z-index: 10;
 }
 
 .event-bar:hover {
