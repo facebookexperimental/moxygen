@@ -469,6 +469,10 @@ input[type="file"] {
     z-index: 10000; /* Above headers (z-index: 10) and tooltips (z-index: 9999) */
 }
 
+.event-details-panel.hidden {
+    display: none;
+}
+
 .legend-panel {
     bottom: 1rem;
 }

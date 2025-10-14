@@ -101,6 +101,19 @@ class MoQTimeline {
             this.resetView();
         });
 
+        // Click outside to hide event details
+        $(document).on('click', (e) => {
+            // Don't hide if clicking on event details panel itself or an event bar
+            if (!$(e.target).closest('#event-details, .event-bar').length) {
+                this.hideEventDetails();
+            }
+        });
+
+        // Prevent clicks on event details panel from propagating
+        $('#event-details').on('click', (e) => {
+            e.stopPropagation();
+        });
+
         // Timeline interactions
         this.setupTimelineInteractions();
     }
@@ -623,7 +636,8 @@ class MoQTimeline {
             // Restore original z-index
             $eventBar.css('z-index', $eventBar.data('original-zindex'));
             this.hideEventTooltip();
-        }).on('click', () => {
+        }).on('click', (e) => {
+            e.stopPropagation();
             this.updateEventDetails(event);
         });
 
@@ -902,6 +916,21 @@ class MoQTimeline {
         `;
 
         $('#event-details .details-content').html(content);
+        this.showEventDetails();
+    }
+
+    /**
+     * Show the event details panel
+     */
+    showEventDetails() {
+        $('#event-details').removeClass('hidden');
+    }
+
+    /**
+     * Hide the event details panel
+     */
+    hideEventDetails() {
+        $('#event-details').addClass('hidden');
     }
 
     /**
