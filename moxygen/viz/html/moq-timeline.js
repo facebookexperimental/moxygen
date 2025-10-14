@@ -29,6 +29,10 @@ class MoQTimeline {
             showObjectIds: true,
             showSizes: true
         };
+        this.trackVisibility = {
+            client: {}, // trackId: boolean (checked/unchecked)
+            server: {}  // trackId: boolean (checked/unchecked)
+        };
 
         this.initializeUI();
         this.setupEventListeners();
@@ -204,6 +208,7 @@ class MoQTimeline {
         try {
             this.currentData = this.parser.parseQLog(qlogData);
             this.generateTrackColors();
+            this.renderTrackSelectionLists();
             this.renderTimeline();
             this.updateEventCount();
         } catch (error) {
@@ -240,6 +245,75 @@ class MoQTimeline {
             if (track && track.className) {
                 root.style.setProperty(`--track-${track.className}-color`, this.trackColors[trackId]);
             }
+        });
+    }
+
+    /**
+     * Render track selection lists with checkboxes
+     */
+    renderTrackSelectionLists() {
+        const $clientList = $('#client-tracks-list');
+        const $serverList = $('#server-tracks-list');
+        $clientList.empty();
+        $serverList.empty();
+
+        const trackIds = Object.keys(this.currentData.tracks);
+
+        trackIds.forEach(trackId => {
+            const track = this.currentData.tracks[trackId];
+            
+            // Add to client list if track has client events (server subscribed)
+            if (track.client_events && track.client_events.length > 0) {
+                // Initialize track visibility to false (unchecked)
+                if (this.trackVisibility.client[trackId] === undefined) {
+                    this.trackVisibility.client[trackId] = false;
+                }
+
+                const $checkbox = $(`
+                    <label>
+                        <input type="checkbox" 
+                               class="track-visibility-toggle" 
+                               data-vantage="client" 
+                               data-track-id="${trackId}"
+                               ${this.trackVisibility.client[trackId] ? 'checked' : ''}>
+                        <span class="track-name">${track.name}</span>
+                    </label>
+                `);
+                $clientList.append($checkbox);
+            }
+
+            // Add to server list if track has server events (client subscribed)
+            if (track.server_events && track.server_events.length > 0) {
+                // Initialize track visibility to false (unchecked)
+                if (this.trackVisibility.server[trackId] === undefined) {
+                    this.trackVisibility.server[trackId] = false;
+                }
+
+                const $checkbox = $(`
+                    <label>
+                        <input type="checkbox" 
+                               class="track-visibility-toggle" 
+                               data-vantage="server" 
+                               data-track-id="${trackId}"
+                               ${this.trackVisibility.server[trackId] ? 'checked' : ''}>
+                        <span class="track-name">${track.name}</span>
+                    </label>
+                `);
+                $serverList.append($checkbox);
+            }
+        });
+
+        // Add event listeners for checkboxes
+        $('.track-visibility-toggle').on('change', (e) => {
+            const $checkbox = $(e.target);
+            const vantage = $checkbox.data('vantage');
+            const trackId = $checkbox.data('track-id');
+            const isChecked = $checkbox.is(':checked');
+
+            this.trackVisibility[vantage][trackId] = isChecked;
+            
+            // Re-render timeline to show/hide columns
+            this.renderTimeline();
         });
     }
 
@@ -299,7 +373,8 @@ class MoQTimeline {
         // =================
         trackIds.forEach(trackId => {
             const track = this.currentData.tracks[trackId];
-            if (track.client_events && track.client_events.length > 0) {
+            // Only show track column if checkbox is checked
+            if (track.client_events && track.client_events.length > 0 && this.trackVisibility.client[trackId]) {
                 $header.append(`
                     <div class="column-header track-column client-half">
                         <div class="endpoint-label">Client</div>
@@ -313,14 +388,16 @@ class MoQTimeline {
         // =================
         // OPTIONAL: Divider between client and server tracks
         // =================
-        // Check if there are both client and server tracks to show
+        // Check if there are both visible client and server tracks to show
         const hasClientTracks = trackIds.some(trackId => 
             this.currentData.tracks[trackId].client_events && 
-            this.currentData.tracks[trackId].client_events.length > 0
+            this.currentData.tracks[trackId].client_events.length > 0 &&
+            this.trackVisibility.client[trackId]
         );
         const hasServerTracks = trackIds.some(trackId => 
             this.currentData.tracks[trackId].server_events && 
-            this.currentData.tracks[trackId].server_events.length > 0
+            this.currentData.tracks[trackId].server_events.length > 0 &&
+            this.trackVisibility.server[trackId]
         );
 
         if (hasClientTracks && hasServerTracks) {
@@ -333,7 +410,8 @@ class MoQTimeline {
         // =================
         trackIds.forEach(trackId => {
             const track = this.currentData.tracks[trackId];
-            if (track.server_events && track.server_events.length > 0) {
+            // Only show track column if checkbox is checked
+            if (track.server_events && track.server_events.length > 0 && this.trackVisibility.server[trackId]) {
                 $header.append(`
                     <div class="column-header track-column server-half">
                         <div class="endpoint-label">Server</div>

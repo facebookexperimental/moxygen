@@ -93,6 +93,74 @@ input[type="file"] {
     color: #555;
 }
 
+/* Track Selection Panel */
+.track-selection-panel {
+    background: white;
+    padding: 1rem 2rem;
+    border-bottom: 1px solid #ddd;
+}
+
+.track-list-container {
+    display: flex;
+    gap: 3rem;
+    justify-content: center;
+    align-items: flex-start;
+}
+
+.track-list {
+    flex: 1;
+    max-width: 400px;
+}
+
+.track-list h3 {
+    font-size: 1.1rem;
+    color: #667eea;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #667eea;
+}
+
+.track-list.client-published h3 {
+    color: #007bff;
+    border-bottom-color: #90caf9;
+}
+
+.track-list.server-published h3 {
+    color: #28a745;
+    border-bottom-color: #81c784;
+}
+
+.track-checkboxes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.track-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-size: 0.9rem;
+}
+
+.track-checkboxes label:hover {
+    background-color: #f0f0f0;
+}
+
+.track-checkboxes input[type="checkbox"] {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+.track-checkboxes .track-name {
+    flex: 1;
+}
+
 /* Timeline Container */
 .timeline-container {
     flex: 1;
