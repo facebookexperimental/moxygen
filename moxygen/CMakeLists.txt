@@ -10,6 +10,7 @@ add_library(moxygen
     MoQCodec.cpp
     MoQSession.cpp
     MoQTokenCache.cpp
+    events/MoQDeliveryTimer.cpp
 )
 
 target_include_directories(
@@ -25,6 +26,7 @@ target_link_libraries(
     Folly::folly
     wangle::wangle
     proxygen::proxygen
+    mvfst::mvfst_events
     mlogger
 )
 

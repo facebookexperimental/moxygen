@@ -8,6 +8,7 @@
 
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <moxygen/MoQCodec.h>
+#include <moxygen/events/MoQDeliveryTimer.h>
 #include <moxygen/events/MoQExecutor.h>
 
 #include <folly/MaybeManagedPtr.h>
@@ -446,6 +447,9 @@ class MoQSession : public Subscriber,
       const std::vector<SetupParameter>& params);
   static bool shouldIncludeMoqtImplementationParam(
       const std::vector<uint64_t>& supportedVersions);
+  static folly::Optional<uint64_t> getDeliveryTimeoutIfPresent(
+      const std::vector<TrackRequestParameter>& params,
+      uint64_t version);
 
   //  Closes the session if the requestID is invalid, that is,
   //  requestID <= maxRequestID_;

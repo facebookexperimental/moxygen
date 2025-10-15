@@ -79,7 +79,8 @@ class StreamPublisherImpl
   explicit StreamPublisherImpl(
       std::shared_ptr<MoQSession::PublisherImpl> publisher,
       std::shared_ptr<MLogger> logger = nullptr,
-      std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr);
+      std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
+      std::unique_ptr<MoQDeliveryTimer> deliveryTimer = nullptr);
 
   // Subscribe constructor
   StreamPublisherImpl(
@@ -91,7 +92,8 @@ class StreamPublisherImpl
       SubgroupIDFormat format,
       bool includeExtensions,
       std::shared_ptr<MLogger> logger = nullptr,
-      std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr);
+      std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
+      std::unique_ptr<MoQDeliveryTimer> deliveryTimer = nullptr);
 
   // SubgroupConsumer overrides
   // Note where the interface uses finSubgroup, this class uses finStream,
@@ -224,11 +226,11 @@ class StreamPublisherImpl
 
   void onByteEvent(quic::StreamId id, uint64_t offset) noexcept override {
     // Notify delivery callback for all objects delivered up to this offset
-    if (deliveryCallback_) {
-      while (!pendingDeliveries_.empty()) {
-        auto& pendingDelivery = pendingDeliveries_.front();
+    while (!pendingDeliveries_.empty()) {
+      auto& pendingDelivery = pendingDeliveries_.front();
 
-        if (pendingDelivery.endOffset <= offset) {
+      if (pendingDelivery.endOffset <= offset) {
+        if (deliveryCallback_) {
           folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
           if (streamType_ != StreamType::FETCH_HEADER) {
             maybeTrackAlias = trackAlias_;
@@ -238,10 +240,15 @@ class StreamPublisherImpl
               pendingDelivery.groupId,
               pendingDelivery.subgroupId,
               pendingDelivery.objectId);
-          pendingDeliveries_.pop_front();
-        } else {
-          break;
         }
+
+        // Cancel delivery timeout timer when object is successfully delivered
+        if (deliveryTimer_) {
+          deliveryTimer_->cancelTimer(pendingDelivery.objectId);
+        }
+        pendingDeliveries_.pop_front();
+      } else {
+        break;
       }
     }
     onByteEventCommon(id, offset);
@@ -253,11 +260,12 @@ class StreamPublisherImpl
     // If delivery has been cancelled for an offset (e.g. by a reset), then
     // delivery must be cancelled for all offsets higher than the cancelled
     // offset as well;
-    if (deliveryCallback_) {
-      while (!pendingDeliveries_.empty()) {
-        auto& pendingDelivery = pendingDeliveries_.back();
 
-        if (pendingDelivery.endOffset >= offset) {
+    while (!pendingDeliveries_.empty()) {
+      auto& pendingDelivery = pendingDeliveries_.back();
+
+      if (pendingDelivery.endOffset >= offset) {
+        if (deliveryCallback_) {
           folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
           if (streamType_ != StreamType::FETCH_HEADER) {
             maybeTrackAlias = trackAlias_;
@@ -267,10 +275,16 @@ class StreamPublisherImpl
               pendingDelivery.groupId,
               pendingDelivery.subgroupId,
               pendingDelivery.objectId);
-          pendingDeliveries_.pop_back();
-        } else {
-          break;
         }
+
+        // Cancel delivery timeout timer when object delivery is cancelled
+        if (deliveryTimer_) {
+          deliveryTimer_->cancelTimer(pendingDelivery.objectId);
+        }
+
+        pendingDeliveries_.pop_back();
+      } else {
+        break;
       }
     }
     onByteEventCommon(id, offset);
@@ -280,9 +294,16 @@ class StreamPublisherImpl
     forward_ = forwardIn;
   }
 
+  void setDeliveryTimeout(folly::Optional<std::chrono::milliseconds> timeout) {
+    if (timeout.has_value() && timeout->count() > 0 && deliveryTimer_) {
+      deliveryTimer_->setDeliveryTimeout(*timeout);
+    }
+  }
+
  private:
-  std::shared_ptr<MLogger> logger_ = nullptr;
-  std::shared_ptr<DeliveryCallback> deliveryCallback_ = nullptr;
+  std::shared_ptr<MLogger> logger_;
+  std::shared_ptr<DeliveryCallback> deliveryCallback_;
+  std::unique_ptr<MoQDeliveryTimer> deliveryTimer_;
 
   // Track objects and their end offsets for delivery callbacks
   struct ObjectDeliveryInfo {
@@ -343,6 +364,15 @@ class StreamPublisherImpl
 
   void onStreamComplete();
 
+  void setDeliveryTimeoutCallback() {
+    if (deliveryTimer_) {
+      auto streamResetCallback = [this](ResetStreamErrorCode errorCode) {
+        this->reset(errorCode);
+      };
+      deliveryTimer_->setStreamResetCallback(streamResetCallback);
+    }
+  }
+
   std::shared_ptr<MoQSession::PublisherImpl> publisher_{nullptr};
   bool streamComplete_{false};
   folly::Optional<folly::CancellationCallback> cancelCallback_;
@@ -368,7 +398,8 @@ class StreamPublisherImpl
 StreamPublisherImpl::StreamPublisherImpl(
     std::shared_ptr<MoQSession::PublisherImpl> publisher,
     std::shared_ptr<MLogger> logger,
-    std::shared_ptr<DeliveryCallback> deliveryCallback)
+    std::shared_ptr<DeliveryCallback> deliveryCallback,
+    std::unique_ptr<MoQDeliveryTimer> deliveryTimer)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
@@ -378,9 +409,12 @@ StreamPublisherImpl::StreamPublisherImpl(
           0,
           ObjectStatus::NORMAL) {
   logger_ = logger;
-  deliveryCallback_ = deliveryCallback;
+  deliveryCallback_ = std::move(deliveryCallback);
+  deliveryTimer_ = std::move(deliveryTimer);
   moqFrameWriter_.initializeVersion(publisher->getVersion());
   (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->requestID());
+
+  setDeliveryTimeoutCallback();
 }
 
 StreamPublisherImpl::StreamPublisherImpl(
@@ -392,8 +426,13 @@ StreamPublisherImpl::StreamPublisherImpl(
     SubgroupIDFormat format,
     bool includeExtensions,
     std::shared_ptr<MLogger> logger,
-    std::shared_ptr<DeliveryCallback> deliveryCallback)
-    : StreamPublisherImpl(publisher, nullptr, deliveryCallback) {
+    std::shared_ptr<DeliveryCallback> deliveryCallback,
+    std::unique_ptr<MoQDeliveryTimer> deliveryTimer)
+    : StreamPublisherImpl(
+          publisher,
+          nullptr,
+          deliveryCallback,
+          std::move(deliveryTimer)) {
   CHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
   streamType_ = getSubgroupStreamType(
@@ -416,6 +455,8 @@ StreamPublisherImpl::StreamPublisherImpl(
   writeBuf_.move(); // clear FETCH_HEADER
   (void)moqFrameWriter_.writeSubgroupHeader(
       writeBuf_, trackAlias_, header_, format, includeExtensions);
+
+  setDeliveryTimeoutCallback();
 }
 
 // Private methods
@@ -515,7 +556,7 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
   if (!writeBuf_.empty() || finStream) {
     deliveryCallback = this;
 
-    if (deliveryCallback_ && endObject) {
+    if ((deliveryCallback_ || deliveryTimer_) && endObject) {
       uint64_t endOffset = bytesWritten_ + writeBuf_.chainLength() - 1;
       pendingDeliveries_.emplace_back(
           header_.group, header_.subgroup, header_.id, endOffset);
@@ -603,6 +644,11 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     }
   }
 
+  // Start delivery timeout timer when object begins being sent to stream
+  if (deliveryTimer_) {
+    deliveryTimer_->startTimer(objectID);
+  }
+
   return writeCurrentObject(
       objectID, length, std::move(payload), extensions, finStream);
 }
@@ -643,6 +689,11 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     return folly::makeUnexpected(validateObjectPublishRes.error());
   }
   header_.status = ObjectStatus::NORMAL;
+
+  // Start delivery timeout timer when object begins being sent to stream
+  if (deliveryTimer_) {
+    deliveryTimer_->startTimer(objectID);
+  }
 
   return writeCurrentObject(
       objectID,
@@ -758,6 +809,11 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
     // TODO: stream header is pending, reliable reset?
     XLOG(WARN) << "Stream header pending on subgroup=" << header_;
   }
+  // Cancel all delivery timeout timers for this stream since it's being reset
+  if (deliveryTimer_) {
+    deliveryTimer_->cancelAllTimers();
+  }
+
   if (auto* wh = std::exchange(writeHandle_, nullptr)) {
     wh->resetStream(uint32_t(error));
   } else {
@@ -837,7 +893,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       GroupOrder groupOrder,
       uint64_t version,
       uint64_t bytesBufferedThreshold,
-      bool forward)
+      bool forward,
+      folly::Optional<std::chrono::milliseconds> deliveryTimeout = folly::none)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
@@ -847,7 +904,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
             version,
             bytesBufferedThreshold),
         trackAlias_(trackAlias),
-        forward_(forward) {}
+        forward_(forward),
+        deliveryTimeout_(std::move(deliveryTimeout)) {}
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
       TrackAlias trackAlias) override {
@@ -893,6 +951,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
                 << requestID_ << " trackPub=" << this;
       // TODO: I think we need to buffer it?
     } else {
+      auto negotiatedVersion = session_->getNegotiatedVersion();
+      setDeliveryTimeout(getDeliveryTimeoutIfPresent(
+          subscribeUpdate.params, *negotiatedVersion));
       setForward(subscribeUpdate.forward);
       subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate));
     }
@@ -974,6 +1035,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     logger_ = logger;
   }
 
+  void setDeliveryTimeout(folly::Optional<uint64_t> timeoutMs);
+
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
@@ -988,6 +1051,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   State state_{State::OPEN};
   bool forward_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
+  folly::Optional<std::chrono::milliseconds> deliveryTimeout_;
 };
 
 class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
@@ -1118,6 +1182,14 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       getStreamPriority(
           groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
       false);
+
+  // Create a new DeliveryTimer if deliveryTimeout_ is set
+  std::unique_ptr<MoQDeliveryTimer> timeoutManager = nullptr;
+  if (deliveryTimeout_.has_value()) {
+    timeoutManager =
+        std::make_unique<MoQDeliveryTimer>(session_->exec_, *deliveryTimeout_);
+  }
+
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
       shared_from_this(),
       *stream,
@@ -1127,7 +1199,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       format,
       includeExtensions,
       logger_,
-      deliveryCallback_);
+      deliveryCallback_,
+      std::move(timeoutManager));
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
@@ -1324,6 +1397,16 @@ MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
 void MoQSession::TrackPublisherImpl::setDeliveryCallback(
     std::shared_ptr<DeliveryCallback> callback) {
   deliveryCallback_ = std::move(callback);
+}
+
+void MoQSession::TrackPublisherImpl::setDeliveryTimeout(
+    folly::Optional<uint64_t> timeoutMs) {
+  if (timeoutMs.has_value() && *timeoutMs > 0) {
+    deliveryTimeout_ = std::chrono::milliseconds(*timeoutMs);
+    for (const auto& [_, subgroupPublisher] : subgroups_) {
+      subgroupPublisher->setDeliveryTimeout(deliveryTimeout_);
+    }
+  }
 }
 
 // Receive State
@@ -2582,6 +2665,15 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   }
   // TODO: Check for duplicate alias
   bool forward = subscribeRequest.forward;
+
+  // Extract delivery timeout from subscribe request params
+  folly::Optional<std::chrono::milliseconds> deliveryTimeout;
+  auto timeoutValue =
+      getDeliveryTimeoutIfPresent(subscribeRequest.params, *negotiatedVersion_);
+  if (timeoutValue.has_value() && *timeoutValue > 0) {
+    deliveryTimeout = std::chrono::milliseconds(*timeoutValue);
+  }
+
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
       subscribeRequest.fullTrackName,
@@ -2591,8 +2683,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       subscribeRequest.groupOrder,
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
-      forward);
-
+      forward,
+      deliveryTimeout);
   if (logger_) {
     trackPublisher->setLogger(logger_);
   }
@@ -2612,6 +2704,8 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto requestID = sub.requestID;
+  auto fullTrackName = sub.fullTrackName;
+  auto params = sub.params;
   auto subscribeResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->subscribe(
@@ -2636,6 +2730,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     auto subHandle = std::move(subscribeResult->value());
     auto subOk = subHandle->subscribeOk();
     subOk.requestID = requestID;
+
     // TODO: verify TrackAlias is unique
     subscribeOk(subOk);
 
@@ -3912,6 +4007,14 @@ Subscriber::PublishResult MoQSession::publish(
   }
   controlWriteEvent_.signal();
 
+  // Extract delivery timeout from publish params
+  folly::Optional<std::chrono::milliseconds> deliveryTimeout;
+  auto timeoutValue =
+      getDeliveryTimeoutIfPresent(pub.params, *negotiatedVersion_);
+  if (timeoutValue.has_value() && *timeoutValue > 0) {
+    deliveryTimeout = std::chrono::milliseconds(*timeoutValue);
+  }
+
   // Create TrackConsumer for the publisher to write data
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
@@ -3922,7 +4025,8 @@ Subscriber::PublishResult MoQSession::publish(
       pub.groupOrder,
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
-      pub.forward);
+      pub.forward,
+      deliveryTimeout);
 
   // Set publishHandle in trackPublisher so it can cancel on unsubscribes
   trackPublisher->setSubscriptionHandle(handle);
@@ -4926,6 +5030,18 @@ uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
     }
   }
   return 0;
+}
+
+/*static*/
+folly::Optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
+    const std::vector<TrackRequestParameter>& params,
+    uint64_t version) {
+  for (const auto& param : params) {
+    if (param.key == getDeliveryTimeoutParamKey(version)) {
+      return param.asUint64;
+    }
+  }
+  return folly::none;
 }
 
 void MoQSession::aliasifyAuthTokens(

@@ -16,4 +16,10 @@ void MoQLibevExecutorImpl::add(folly::Func func) {
   runInLoop(std::move(func).asStdFunction(), /*thisIteration=*/false);
 }
 
+void MoQLibevExecutorImpl::scheduleTimeout(
+    quic::QuicTimerCallback* callback,
+    std::chrono::milliseconds timeout) {
+  quic::LibevQuicEventBase::scheduleTimeout(callback, timeout);
+}
+
 } // namespace moxygen

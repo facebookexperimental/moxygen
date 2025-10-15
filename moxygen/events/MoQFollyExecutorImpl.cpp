@@ -12,4 +12,10 @@ void MoQFollyExecutorImpl::add(folly::Func func) {
   getBackingEventBase()->add(std::move(func));
 }
 
+void MoQFollyExecutorImpl::scheduleTimeout(
+    quic::QuicTimerCallback* callback,
+    std::chrono::milliseconds timeout) {
+  quic::FollyQuicEventBase::scheduleTimeout(callback, timeout);
+}
+
 } // namespace moxygen

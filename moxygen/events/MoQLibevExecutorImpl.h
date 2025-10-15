@@ -21,6 +21,11 @@ class MoQLibevExecutorImpl : public MoQExecutor,
 
   // Implementation of folly::Executor::add
   void add(folly::Func func) override;
+
+  // Timeout scheduling methods
+  void scheduleTimeout(
+      quic::QuicTimerCallback* callback,
+      std::chrono::milliseconds timeout) override;
 };
 
 } // namespace moxygen

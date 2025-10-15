@@ -19,6 +19,11 @@ class MoQFollyExecutorImpl : public MoQExecutor,
       : quic::FollyQuicEventBase(evb) {}
 
   void add(folly::Func func) override;
+
+  // Timeout scheduling methods
+  void scheduleTimeout(
+      quic::QuicTimerCallback* callback,
+      std::chrono::milliseconds timeout) override;
 };
 
 } // namespace moxygen

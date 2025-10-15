@@ -55,3 +55,13 @@ moxygen_add_test(TARGET MoQSessionTests
     moxygenclient
     testmain
 )
+
+moxygen_add_test(TARGET MoQDeliveryTimerTests
+  PREFIX "MoQDeliveryTimer"
+  SOURCES
+    MoQDeliveryTimerTest.cpp
+  DEPENDS
+    moqtestutils
+    moqfollyexecutorimpl
+    testmain
+)

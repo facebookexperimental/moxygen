@@ -7,6 +7,8 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <quic/common/events/QuicEventBase.h>
+#include <chrono>
 
 namespace moxygen {
 
@@ -25,6 +27,11 @@ class MoQExecutor : public folly::Executor {
       return nullptr;
     }
   }
+
+  // Timeout scheduling methods
+  virtual void scheduleTimeout(
+      quic::QuicTimerCallback* callback,
+      std::chrono::milliseconds timeout) = 0;
 };
 
 } // namespace moxygen
