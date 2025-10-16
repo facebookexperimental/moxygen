@@ -73,6 +73,18 @@ class MoQSession : public Subscriber,
         std::shared_ptr<MoQSession> session) = 0;
   };
 
+  class MoQSessionCloseCallback {
+   public:
+    virtual ~MoQSessionCloseCallback() = default;
+    virtual void onMoQSessionClosed() {
+      XLOG(DBG1) << __func__ << " sess=" << this;
+    }
+  };
+
+  void setSessionCloseCallback(MoQSessionCloseCallback* cb) {
+    closeCallback_ = cb;
+  }
+
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::shared_ptr<MoQExecutor> exec);
@@ -638,6 +650,7 @@ class MoQSession : public Subscriber,
   uint64_t maxRequestID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};
+  MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
 
   folly::Optional<uint64_t> negotiatedVersion_{0};

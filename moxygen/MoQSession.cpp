@@ -1800,6 +1800,10 @@ void MoQSession::checkForCloseOnDrain() {
 
 void MoQSession::close(SessionCloseErrorCode error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (closeCallback_) {
+    XLOG(DBG1) << "Calling close callback";
+    closeCallback_->onMoQSessionClosed();
+  }
   if (auto wt = std::exchange(wt_, nullptr)) {
     // TODO: The error code should be propagated to
     // whatever implemented proxygen::WebTransport.
