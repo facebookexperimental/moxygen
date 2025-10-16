@@ -36,6 +36,32 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
+add_library(moqrelaysession
+    MoQRelaySession.cpp
+)
+
+target_include_directories(
+    moqrelaysession PUBLIC
+    $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+
+target_compile_options(
+    moqrelaysession PRIVATE
+    ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+
+target_link_libraries(
+    moqrelaysession PUBLIC
+    moxygen
+    Folly::folly
+)
+
+install(
+    TARGETS moqrelaysession
+    EXPORT moxygen-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+)
 
 add_library(moqfollyexecutorimpl
     events/MoQFollyExecutorImpl.cpp

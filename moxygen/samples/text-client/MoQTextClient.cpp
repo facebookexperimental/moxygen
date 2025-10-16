@@ -10,9 +10,9 @@
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <folly/portability/GFlags.h>
 #include <signal.h>
-#include <moxygen/MoQClient.h>
 #include <moxygen/MoQWebTransportClient.h>
 #include <moxygen/ObjectReceiver.h>
+#include <moxygen/relay/MoQRelayClient.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
@@ -146,13 +146,19 @@ class MoQTextClient : public Subscriber,
       FullTrackName ftn)
       : moqClient_(
             FLAGS_quic_transport
-                ? std::make_unique<MoQClient>(evb, std::move(url))
-                : std::make_unique<MoQWebTransportClient>(evb, std::move(url))),
+                ? std::make_unique<MoQClient>(
+                      evb,
+                      std::move(url),
+                      MoQRelaySession::createRelaySessionFactory())
+                : std::make_unique<MoQWebTransportClient>(
+                      evb,
+                      std::move(url),
+                      MoQRelaySession::createRelaySessionFactory())),
         fullTrackName_(std::move(ftn)) {}
 
   folly::coro::Task<MoQSession::SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces subAnn) {
-    auto res = co_await moqClient_->moqSession_->subscribeAnnounces(subAnn);
+    auto res = co_await moqClient_.getSession()->subscribeAnnounces(subAnn);
     if (res.hasValue()) {
       subAnnouncesHandle_ = res.value();
     }
@@ -192,11 +198,11 @@ class MoQTextClient : public Subscriber,
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      co_await moqClient_->setupMoQSession(
+      co_await moqClient_.setup(
+          /*publisher=*/nullptr,
+          /*subscriber=*/shared_from_this(),
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          /*publishHandler=*/nullptr,
-          /*subscribeHandler=*/shared_from_this(),
           quic::TransportSettings());
 
       if (FLAGS_publish) {
@@ -226,7 +232,7 @@ class MoQTextClient : public Subscriber,
         // Call join() for joining fetch
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
             ObjectReceiver::FETCH, fetchTextHandler_);
-        auto joinResult = co_await moqClient_->moqSession_->join(
+        auto joinResult = co_await moqClient_.getSession()->join(
             sub,
             subTextReceiver_,
             FLAGS_join_start,
@@ -238,7 +244,7 @@ class MoQTextClient : public Subscriber,
         track = joinResult.subscribeResult;
       } else {
         track =
-            co_await moqClient_->moqSession_->subscribe(sub, subTextReceiver_);
+            co_await moqClient_.getSession()->subscribe(sub, subTextReceiver_);
       }
       bool needFetch = false;
       AbsoluteLocation fetchEnd{sub.endGroup + 1, 0};
@@ -282,7 +288,7 @@ class MoQTextClient : public Subscriber,
       if (needFetch) {
         fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
             ObjectReceiver::FETCH, fetchTextHandler_);
-        auto fetchTrack = co_await moqClient_->moqSession_->fetch(
+        auto fetchTrack = co_await moqClient_.getSession()->fetch(
             Fetch(
                 RequestID(0),
                 sub.fullTrackName,
@@ -298,8 +304,8 @@ class MoQTextClient : public Subscriber,
           fetchTextReceiver_.reset();
         }
       }
-      if (moqClient_->moqSession_) {
-        moqClient_->moqSession_->drain();
+      if (moqClient_.getSession()) {
+        moqClient_.getSession()->drain();
       }
     } catch (const std::exception& ex) {
       XLOG(ERR) << folly::exceptionStr(ex);
@@ -340,12 +346,12 @@ class MoQTextClient : public Subscriber,
       subscription_->unsubscribe();
       subscription_.reset();
     }
-    if (moqClient_->moqSession_) {
-      moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    if (moqClient_.getSession()) {
+      moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
     }
   }
 
-  std::unique_ptr<MoQClient> moqClient_;
+  MoQRelayClient moqClient_;
   FullTrackName fullTrackName_;
   std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
   std::shared_ptr<TextHandler> subTextHandler_{
@@ -405,7 +411,7 @@ int main(int argc, char* argv[]) {
 
   SigHandler handler(&eventBase, [&textClient](int) mutable {
     textClient->stop();
-    textClient->moqClient_->moqSession_.reset();
+    textClient->moqClient_.shutdown();
   });
 
   auto subParams = flags2params();

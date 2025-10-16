@@ -152,13 +152,6 @@ class MoQSession : public Subscriber,
       Fetch fetch,
       std::shared_ptr<FetchConsumer> fetchy) override;
 
-  folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
-      SubscribeAnnounces subAnn) override;
-
-  folly::coro::Task<Subscriber::AnnounceResult> announce(
-      Announce ann,
-      std::shared_ptr<AnnounceCallback> announceCallback = nullptr) override;
-
   struct JoinResult {
     SubscribeResult subscribeResult;
     FetchResult fetchResult;
@@ -329,14 +322,6 @@ class MoQSession : public Subscriber,
 
  private:
   static const folly::RequestToken& sessionRequestToken();
-  std::shared_ptr<MLogger> logger_ = nullptr;
-  void setRequestSession() {
-    folly::RequestContext::get()->setContextData(
-        sessionRequestToken(),
-        std::make_unique<MoQSessionRequestData>(shared_from_this()));
-  }
-
-  void cleanup();
 
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
@@ -374,18 +359,6 @@ class MoQSession : public Subscriber,
   void fetchError(const FetchError& fetchError);
   void fetchCancel(const FetchCancel& fetchCancel);
 
-  folly::coro::Task<void> handleSubscribeAnnounces(SubscribeAnnounces sa);
-  void subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk);
-  void subscribeAnnouncesError(
-      const SubscribeAnnouncesError& subscribeAnnouncesError);
-  void unsubscribeAnnounces(const UnsubscribeAnnounces& unsubscribeAnnounces);
-
-  folly::coro::Task<void> handleAnnounce(Announce announce);
-  void announceOk(const AnnounceOk& annOk);
-  void announceError(const AnnounceError& announceError);
-  void announceCancel(const AnnounceCancel& annCan);
-  void unannounce(const Unannounce& unannounce);
-
   folly::coro::Task<void> handlePublish(
       PublishRequest publish,
       std::shared_ptr<Publisher::SubscriptionHandle> publishHandle);
@@ -412,6 +385,13 @@ class MoQSession : public Subscriber,
   void onFetchCancel(FetchCancel fetchCancel) override;
   void onFetchOk(FetchOk fetchOk) override;
   void onFetchError(FetchError fetchError) override;
+  void onTrackStatus(TrackStatus trackStatus) override;
+  void onTrackStatusOk(TrackStatusOk trackStatusOk) override;
+  void onTrackStatusError(TrackStatusError trackStatusError) override;
+  void onGoaway(Goaway goaway) override;
+  void onConnectionError(ErrorCode error) override;
+
+  // Announcement callback methods - default implementations for simple clients
   void onAnnounce(Announce announce) override;
   void onAnnounceOk(AnnounceOk announceOk) override;
   void onAnnounceError(AnnounceError announceError) override;
@@ -421,18 +401,12 @@ class MoQSession : public Subscriber,
   void onSubscribeAnnouncesOk(
       SubscribeAnnouncesOk subscribeAnnouncesOk) override;
   void onSubscribeAnnouncesError(
-      SubscribeAnnouncesError announceError) override;
+      SubscribeAnnouncesError subscribeAnnouncesError) override;
   void onUnsubscribeAnnounces(
       UnsubscribeAnnounces unsubscribeAnnounces) override;
-  void onTrackStatus(TrackStatus trackStatus) override;
-  void onTrackStatusOk(TrackStatusOk trackStatusOk) override;
-  void onTrackStatusError(TrackStatusError trackStatusError) override;
-  void onGoaway(Goaway goaway) override;
-  void onConnectionError(ErrorCode error) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
   void checkForCloseOnDrain();
 
-  void retireRequestID(bool signalWriteLoop);
   void sendMaxRequestID(bool signalWriteLoop);
   void fetchComplete(RequestID requestID);
 
@@ -451,37 +425,25 @@ class MoQSession : public Subscriber,
       const std::vector<TrackRequestParameter>& params,
       uint64_t version);
 
-  //  Closes the session if the requestID is invalid, that is,
-  //  requestID <= maxRequestID_;
-  bool closeSessionIfRequestIDInvalid(
-      RequestID requestID,
-      bool skipCheck,
-      bool isNewRequest,
-      bool parityMatters = true);
+ protected:
+  // Protected members and methods for MoQRelaySession subclass access
 
-  void initializeNegotiatedVersion(uint64_t negotiatedVersion);
-  void aliasifyAuthTokens(
-      std::vector<Parameter>& params,
-      const folly::Optional<uint64_t>& forceVersion = folly::none);
-  RequestID getNextRequestID();
-  uint8_t getRequestIDMultiplier() const {
-    return 2;
-  }
-  void deliverBufferedData(TrackAlias trackAlias);
-
+  // Core session state
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
   std::shared_ptr<MoQExecutor> exec_;
+  std::shared_ptr<MLogger> logger_ = nullptr;
+
+  // Control channel state
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
 
-  // Track Alias -> Receive State
+  // Track management maps
   folly::F14FastMap<
       TrackAlias,
       std::shared_ptr<SubscribeTrackReceiveState>,
       TrackAlias::hash>
       subTracks_;
-
   folly::F14FastMap<
       RequestID,
       std::shared_ptr<FetchTrackReceiveState>,
@@ -489,140 +451,121 @@ class MoQSession : public Subscriber,
       fetches_;
   folly::F14FastMap<RequestID, TrackAlias, RequestID::hash> reqIdToTrackAlias_;
 
-  struct PendingAnnounce {
-    TrackNamespace trackNamespace;
-    folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>> promise;
-    std::shared_ptr<AnnounceCallback> callback;
-  };
+  // Protected utility methods
+  bool closeSessionIfRequestIDInvalid(
+      RequestID requestID,
+      bool skipCheck,
+      bool isNewRequest,
+      bool parityMatters = true);
+  uint8_t getRequestIDMultiplier() const {
+    return 2;
+  }
+  void deliverBufferedData(TrackAlias trackAlias);
+  void aliasifyAuthTokens(
+      std::vector<Parameter>& params,
+      const folly::Optional<uint64_t>& forceVersion = folly::none);
+  RequestID getNextRequestID();
+  void setRequestSession() {
+    folly::RequestContext::get()->setContextData(
+        sessionRequestToken(),
+        std::make_unique<MoQSessionRequestData>(shared_from_this()));
+  }
+  void retireRequestID(bool signalWriteLoop);
+
+  // Virtual cleanup method for proper inheritance pattern (moved from private)
+  virtual void cleanup();
+
+  // Announcement response methods - available for responding to incoming
+  // announcements
+  void announceError(const AnnounceError& announceError);
+  void subscribeAnnouncesError(
+      const SubscribeAnnouncesError& subscribeAnnouncesError);
+
+  // Core frame writer and stats callbacks needed by MoQRelaySession
+  MoQFrameWriter moqFrameWriter_;
+  std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback_{nullptr};
+  std::shared_ptr<MoQSubscriberStatsCallback> subscriberStatsCallback_{nullptr};
+
+  // Handlers and cancellation needed by MoQRelaySession
+  folly::CancellationSource cancellationSource_;
+  std::shared_ptr<Subscriber> subscribeHandler_;
+  std::shared_ptr<Publisher> publishHandler_;
 
   // Consolidated pending request state using bespoke discriminated union
   class PendingRequestState {
    public:
     enum class Type : uint8_t {
       SUBSCRIBE_TRACK,
-      ANNOUNCE,
-      SUBSCRIBE_ANNOUNCES,
       PUBLISH,
-      TRACK_STATUS
+      TRACK_STATUS,
+      // Announcement types - only handled by MoQRelaySession subclass
+      ANNOUNCE,
+      SUBSCRIBE_ANNOUNCES
     };
 
-   private:
+    // Make polymorphic for subclassing - destructor implemented below
+
+   protected:
     Type type_;
     union Storage {
-      Storage() {}  // Empty constructor
-      ~Storage() {} // Empty destructor - handled by PendingRequestState
+      Storage() {}
+      ~Storage() {}
 
       std::shared_ptr<SubscribeTrackReceiveState> subscribeTrack_;
-      PendingAnnounce announce_;
-      folly::coro::Promise<
-          folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
-          subscribeAnnounces_;
       folly::coro::Promise<folly::Expected<PublishOk, PublishError>> publish_;
       folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>
           trackStatus_;
     } storage_;
 
    public:
-    // Factory methods for type-safe construction
-    static PendingRequestState makeSubscribeTrack(
+    // Factory methods for type-safe construction returning unique_ptr
+    static std::unique_ptr<PendingRequestState> makeSubscribeTrack(
         std::shared_ptr<SubscribeTrackReceiveState> state) {
-      PendingRequestState result;
-      result.type_ = Type::SUBSCRIBE_TRACK;
-      new (&result.storage_.subscribeTrack_) auto(std::move(state));
+      auto result = std::make_unique<PendingRequestState>();
+      result->type_ = Type::SUBSCRIBE_TRACK;
+      new (&result->storage_.subscribeTrack_) auto(std::move(state));
       return result;
     }
 
-    static PendingRequestState makeAnnounce(PendingAnnounce announce) {
-      PendingRequestState result;
-      result.type_ = Type::ANNOUNCE;
-      new (&result.storage_.announce_) PendingAnnounce(std::move(announce));
-      return result;
-    }
-
-    static PendingRequestState makeSubscribeAnnounces(
-        folly::coro::Promise<
-            folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>
-            promise) {
-      PendingRequestState result;
-      result.type_ = Type::SUBSCRIBE_ANNOUNCES;
-      new (&result.storage_.subscribeAnnounces_) auto(std::move(promise));
-      return result;
-    }
-
-    static PendingRequestState makePublish(
+    static std::unique_ptr<PendingRequestState> makePublish(
         folly::coro::Promise<folly::Expected<PublishOk, PublishError>>
             promise) {
-      PendingRequestState result;
-      result.type_ = Type::PUBLISH;
-      new (&result.storage_.publish_) auto(std::move(promise));
+      auto result = std::make_unique<PendingRequestState>();
+      result->type_ = Type::PUBLISH;
+      new (&result->storage_.publish_) auto(std::move(promise));
       return result;
     }
 
-    static PendingRequestState makeTrackStatus(
+    static std::unique_ptr<PendingRequestState> makeTrackStatus(
         folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>
             promise) {
-      PendingRequestState result;
-      result.type_ = Type::TRACK_STATUS;
-      new (&result.storage_.trackStatus_) auto(std::move(promise));
+      auto result = std::make_unique<PendingRequestState>();
+      result->type_ = Type::TRACK_STATUS;
+      new (&result->storage_.trackStatus_) auto(std::move(promise));
       return result;
     }
 
-    // Helper for move construction/assignment
-    void moveFrom(PendingRequestState&& other) {
-      type_ = other.type_;
-      switch (type_) {
-        case Type::SUBSCRIBE_TRACK:
-          new (&storage_.subscribeTrack_) auto(
-              std::move(other.storage_.subscribeTrack_));
-          break;
-        case Type::ANNOUNCE:
-          new (&storage_.announce_)
-              PendingAnnounce(std::move(other.storage_.announce_));
-          break;
-        case Type::SUBSCRIBE_ANNOUNCES:
-          new (&storage_.subscribeAnnounces_) auto(
-              std::move(other.storage_.subscribeAnnounces_));
-          break;
-        case Type::PUBLISH:
-          new (&storage_.publish_) auto(std::move(other.storage_.publish_));
-          break;
-        case Type::TRACK_STATUS:
-          new (&storage_.trackStatus_) auto(
-              std::move(other.storage_.trackStatus_));
-          break;
-      }
-    }
+    // Delete copy/move operations as this is held in unique_ptr
+    PendingRequestState(const PendingRequestState&) = delete;
+    PendingRequestState(PendingRequestState&&) = delete;
+    PendingRequestState& operator=(const PendingRequestState&) = delete;
+    PendingRequestState& operator=(PendingRequestState&&) = delete;
 
-    // Move constructor
-    PendingRequestState(PendingRequestState&& other) noexcept {
-      moveFrom(std::move(other));
-    }
-
-    // Move assignment
-    PendingRequestState& operator=(PendingRequestState&& other) noexcept {
-      if (this != &other) {
-        this->~PendingRequestState();
-        moveFrom(std::move(other));
-      }
-      return *this;
-    }
-    // Destructor
-    ~PendingRequestState() {
+    // Virtual destructor implementation
+    virtual ~PendingRequestState() {
       switch (type_) {
         case Type::SUBSCRIBE_TRACK:
           storage_.subscribeTrack_.~shared_ptr();
-          break;
-        case Type::ANNOUNCE:
-          storage_.announce_.~PendingAnnounce();
-          break;
-        case Type::SUBSCRIBE_ANNOUNCES:
-          storage_.subscribeAnnounces_.~Promise();
           break;
         case Type::PUBLISH:
           storage_.publish_.~Promise();
           break;
         case Type::TRACK_STATUS:
           storage_.trackStatus_.~Promise();
+          break;
+        case Type::ANNOUNCE:
+        case Type::SUBSCRIBE_ANNOUNCES:
+          // These types are handled by MoQRelaySession subclass destructor
           break;
       }
     }
@@ -637,21 +580,6 @@ class MoQSession : public Subscriber,
         const {
       return type_ == Type::SUBSCRIBE_TRACK ? &storage_.subscribeTrack_
                                             : nullptr;
-    }
-
-    PendingAnnounce* tryGetAnnounce() {
-      return type_ == Type::ANNOUNCE ? &storage_.announce_ : nullptr;
-    }
-
-    const PendingAnnounce* tryGetAnnounce() const {
-      return type_ == Type::ANNOUNCE ? &storage_.announce_ : nullptr;
-    }
-
-    folly::coro::Promise<
-        folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>*
-    tryGetSubscribeAnnounces() {
-      return type_ == Type::SUBSCRIBE_ANNOUNCES ? &storage_.subscribeAnnounces_
-                                                : nullptr;
     }
 
     folly::coro::Promise<folly::Expected<PublishOk, PublishError>>*
@@ -669,52 +597,34 @@ class MoQSession : public Subscriber,
     }
 
     // Delivers an error to the pending request based on its type
-    void deliverError(RequestID reqID);
+    virtual void deliverError(RequestID reqID);
 
-   private:
-    // Private default constructor - use factory methods
+   public:
+    // Default constructor - only use via factory methods
     PendingRequestState() = default;
   };
 
-  // Consolidated pending requests map
-  folly::F14FastMap<RequestID, PendingRequestState, RequestID::hash>
+  // Pending requests map - declared after PendingRequestState class
+  folly::F14FastMap<
+      RequestID,
+      std::unique_ptr<PendingRequestState>,
+      RequestID::hash>
       pendingRequests_;
 
-  // Subscriber ID -> metadata about a publish track
+ private:
+  // Private implementation methods
+  void initializeNegotiatedVersion(uint64_t negotiatedVersion);
+
+  // Private session state
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
       pubTracks_;
-
-  class SubscriberAnnounceCallback;
-  class PublisherAnnounceHandle;
-  class SubscribeAnnouncesHandle;
-  folly::F14FastMap<
-      TrackNamespace,
-      std::shared_ptr<Subscriber::AnnounceHandle>,
-      TrackNamespace::hash>
-      subscriberAnnounces_;
-  folly::F14FastMap<
-      TrackNamespace,
-      std::shared_ptr<Subscriber::AnnounceCallback>,
-      TrackNamespace::hash>
-      publisherAnnounces_;
-  folly::F14FastMap<
-      TrackNamespace,
-      std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
-      TrackNamespace::hash>
-      subscribeAnnounces_;
   folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
       bufferedDatagrams_;
   folly::F14FastMap<TrackAlias, std::list<TimedBaton*>, TrackAlias::hash>
       bufferedSubgroups_;
-  // TODO: The reason we have multiple TimedBatons here is that the TimedBaton
-  // doesn't support multiple waiters. Would be better to make a primitive that
-  // supports multiple waiters. A "TimedBarrier"?
   std::list<std::shared_ptr<moxygen::TimedBaton>> subgroupsWaitingForVersion_;
 
   uint64_t closedRequests_{0};
-  // TODO: Make this value configurable. maxConcurrentRequests_ represents
-  // the maximum number of concurrent subscriptions to a given sessions, set
-  // to the initial MAX_REQUEST_ID
   uint64_t maxConcurrentRequests_{100};
   uint64_t peerMaxRequestID_{0};
 
@@ -722,26 +632,16 @@ class MoQSession : public Subscriber,
   bool setupComplete_{false};
   bool draining_{false};
   bool receivedGoaway_{false};
-  folly::CancellationSource cancellationSource_;
 
-  // RequestID must be a unique monotonically increasing number that is
-  // less than maxRequestID.
   uint64_t nextRequestID_{0};
   uint64_t nextExpectedPeerRequestID_{0};
-
   uint64_t maxRequestID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};
   MoQSettings moqSettings_;
-  std::shared_ptr<Publisher> publishHandler_;
-  std::shared_ptr<Subscriber> subscribeHandler_;
 
-  std::shared_ptr<MoQPublisherStatsCallback> publisherStatsCallback_{nullptr};
-  std::shared_ptr<MoQSubscriberStatsCallback> subscriberStatsCallback_{nullptr};
-
-  MoQFrameWriter moqFrameWriter_;
   folly::Optional<uint64_t> negotiatedVersion_{0};
   MoQControlCodec controlCodec_;
-  MoQTokenCache tokenCache_{1024}; // sending tokens
+  MoQTokenCache tokenCache_{1024};
 };
 } // namespace moxygen

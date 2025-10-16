@@ -39,14 +39,14 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   try {
-    co_await moqClient_.setupMoQSession(
+    co_await moqClient_.setup(
+        /*publisher=*/shared_from_this(),
+        /*subscriber=*/shared_from_this(),
         std::chrono::milliseconds(FLAGS_connect_timeout),
         std::chrono::seconds(FLAGS_transaction_timeout),
-        /*publishHandler=*/shared_from_this(),
-        /*subscribeHandler=*/shared_from_this(),
         quic::TransportSettings());
     // the announce and subscribe announces should be in parallel
-    auto announceRes = co_await moqClient_.moqSession_->announce(
+    auto announceRes = co_await moqClient_.getSession()->announce(
         {RequestID(0), participantTrackName(username_), {}});
     if (announceRes.hasError()) {
       XLOG(ERR) << "Announce failed err=" << announceRes.error().reasonPhrase;
@@ -54,9 +54,9 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     }
     announceHandle_ = std::move(announceRes.value());
     uint64_t negotiatedVersion =
-        *(moqClient_.moqSession_->getNegotiatedVersion());
+        *(moqClient_.getSession()->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the largest group
-    auto sa = co_await moqClient_.moqSession_->subscribeAnnounces(
+    auto sa = co_await moqClient_.getSession()->subscribeAnnounces(
         {RequestID(0),
          TrackNamespace(chatPrefix()),
          {getAuthParam(negotiatedVersion, username_)}});
@@ -88,7 +88,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
           "Invalid chat announce"});
     }
     co_withExecutor(
-        moqClient_.moqSession_->getExecutor(),
+        moqClient_.getSession()->getExecutor(),
         subscribeToUser(std::move(announce.trackNamespace)))
         .start();
   } else {
@@ -155,8 +155,8 @@ void MoQChatClient::publishLoop() {
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   std::string input;
   auto evb = moqClient_.getEventBase();
-  auto keepAlive = folly::getKeepAliveToken(evb.get());
-  auto token = moqClient_.moqSession_->getCancelToken();
+  auto keepAlive = folly::getKeepAliveToken(evb);
+  auto token = moqClient_.getSession()->getCancelToken();
   while (!token.isCancellationRequested() && std::cin.good() &&
          !std::cin.eof()) {
     std::getline(std::cin, input);
@@ -187,8 +187,8 @@ void MoQChatClient::publishLoop() {
           // be reset to prevent memory leaks
           publisher_.reset();
         }
-        moqClient_.moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-        moqClient_.moqSession_.reset();
+        moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
+        moqClient_.shutdown();
       } else if (publisher_) {
         publisher_->objectStream(
             {nextGroup_++,
@@ -289,7 +289,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   auto handler = std::make_shared<ChatObjectHandler>(*this, username);
 
   auto req = SubscribeRequest::make(FullTrackName({trackNamespace, "chat"}));
-  auto track = co_await co_awaitTry(moqClient_.moqSession_->subscribe(
+  auto track = co_await co_awaitTry(moqClient_.getSession()->subscribe(
       std::move(req),
       std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, handler)));
   if (track.hasException()) {

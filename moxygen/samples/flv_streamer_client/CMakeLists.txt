@@ -24,6 +24,7 @@ target_compile_options(
 )
 target_link_libraries(
   moqflvstreamerclient PUBLIC
+  moqrelaysession
   moxygenwtclient
   flvparser
   moqmi

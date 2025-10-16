@@ -42,6 +42,7 @@ target_link_libraries(
   proxygen::proxygen
   proxygen::proxygenhqserver
   moxygen
+  moqrelaysession
 )
 
 install(

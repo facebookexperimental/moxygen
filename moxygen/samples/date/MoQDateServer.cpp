@@ -75,10 +75,13 @@ class MoQDateServer : public MoQServer,
     if (!moqEvb_) {
       moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(evb);
     }
-    relayClient_ = std::make_unique<MoQRelayClient>(
-        (FLAGS_quic_transport
-             ? std::make_unique<MoQClient>(moqEvb_, url)
-             : std::make_unique<MoQWebTransportClient>(moqEvb_, url)));
+    relayClient_ = std::make_unique<MoQRelayClient>((
+        FLAGS_quic_transport
+            ? std::make_unique<MoQClient>(
+                  moqEvb_, url, MoQRelaySession::createRelaySessionFactory())
+            : std::make_unique<MoQWebTransportClient>(
+                  moqEvb_, url, MoQRelaySession::createRelaySessionFactory())));
+
     folly::coro::blockingWait(
         relayClient_
             ->setup(

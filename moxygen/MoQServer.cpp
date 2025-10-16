@@ -79,8 +79,8 @@ void MoQServer::createMoQQuicSession(
   std::shared_ptr<proxygen::WebTransport> wt(std::move(quicWebTransport));
   auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
                  ->getBackingEventBase();
-  auto moqSession = std::make_shared<MoQSession>(
-      wt, *this, std::make_unique<MoQFollyExecutorImpl>(evb));
+  auto moqSession =
+      createSession(std::move(wt), std::make_unique<MoQFollyExecutorImpl>(evb));
   qWtPtr->setHandler(moqSession.get());
   // the handleClientSession coro this session moqSession
   co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
@@ -293,6 +293,15 @@ void MoQServer::setQuicStatsFactory(
   if (hqServer_) {
     hqServer_->setStatsFactory(std::move(factory));
   }
+}
+
+std::shared_ptr<MoQSession> MoQServer::createSession(
+    std::shared_ptr<proxygen::WebTransport> wt,
+    std::shared_ptr<MoQExecutor> executor) {
+  return std::make_shared<MoQSession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(std::move(wt)),
+      *this,
+      std::move(executor));
 }
 
 } // namespace moxygen

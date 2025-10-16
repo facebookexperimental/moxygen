@@ -15,6 +15,7 @@
 #include <quic/state/TransportSettings.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/mlog/MLogger.h>
+#include <functional>
 #include <memory>
 
 namespace moxygen {
@@ -25,8 +26,22 @@ class Subscriber;
 
 class MoQClientBase : public proxygen::WebTransportHandler {
  public:
+  using SessionFactory = std::function<std::shared_ptr<MoQSession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>,
+      std::shared_ptr<MoQExecutor>)>;
+
   MoQClientBase(std::shared_ptr<MoQExecutor> exec, proxygen::URL url)
-      : exec_(std::move(exec)), url_(std::move(url)) {}
+      : exec_(std::move(exec)),
+        url_(std::move(url)),
+        sessionFactory_(defaultSessionFactory()) {}
+
+  MoQClientBase(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      SessionFactory sessionFactory)
+      : exec_(std::move(exec)),
+        url_(std::move(url)),
+        sessionFactory_(std::move(sessionFactory)) {}
 
   std::shared_ptr<MoQExecutor> getEventBase() {
     return exec_;
@@ -56,6 +71,11 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       std::string alpn,
       const quic::TransportSettings& transportSettings) = 0;
 
+  virtual std::shared_ptr<MoQSession> createSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt);
+
+  static SessionFactory defaultSessionFactory();
+
   folly::coro::Task<ServerSetup> completeSetupMoQSession(
       proxygen::WebTransport* wt,
       const folly::Optional<std::string>& pathParam,
@@ -72,6 +92,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
 
   std::shared_ptr<MoQExecutor> exec_;
   proxygen::URL url_;
+  SessionFactory sessionFactory_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
 };
 

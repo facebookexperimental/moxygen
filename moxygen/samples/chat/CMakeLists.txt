@@ -26,6 +26,7 @@ target_link_libraries(
   moqchatclient PUBLIC
   Folly::folly
   moxygenclient
+  moqrelaysession
 )
 
 install(

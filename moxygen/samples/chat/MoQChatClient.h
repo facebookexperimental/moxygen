@@ -9,6 +9,7 @@
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <memory>
 #include "moxygen/MoQClient.h"
+#include "moxygen/relay/MoQRelayClient.h"
 
 namespace moxygen {
 
@@ -79,7 +80,7 @@ class MoQChatClient : public Publisher,
   std::string deviceId_;
   std::string timestampString_;
   std::shared_ptr<MoQFollyExecutorImpl> executor_;
-  MoQClient moqClient_;
+  MoQRelayClient moqClient_;
   folly::Optional<RequestID> chatRequestID_;
   folly::Optional<TrackAlias> chatTrackAlias_;
   std::shared_ptr<TrackConsumer> publisher_;

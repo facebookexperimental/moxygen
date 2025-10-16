@@ -21,6 +21,7 @@
 #include <moxygen/test/Mocks.h>
 #include <moxygen/test/TestHelpers.h>
 #include <moxygen/test/TestUtils.h>
+#include "moxygen/MoQRelaySession.h"
 
 using namespace moxygen;
 
@@ -123,12 +124,12 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     MoQExecutor_ = std::make_shared<MoQFollyExecutorImpl>(&eventBase_);
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-    clientSession_ = std::make_shared<MoQSession>(
+    clientSession_ = std::make_shared<MoQRelaySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt_.get()),
         MoQExecutor_);
     serverWt_->setPeerHandler(clientSession_.get());
 
-    serverSession_ = std::make_shared<MoQSession>(
+    serverSession_ = std::make_shared<MoQRelaySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt_.get()),
         *this,
         MoQExecutor_);

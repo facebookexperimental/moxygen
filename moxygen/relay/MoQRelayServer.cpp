@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQServer.h"
 #include "moxygen/relay/MoQRelay.h"
 
@@ -31,6 +32,16 @@ class MoQRelayServer : public MoQServer {
 
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     relay_->removeSession(session);
+  }
+
+ protected:
+  std::shared_ptr<MoQSession> createSession(
+      std::shared_ptr<proxygen::WebTransport> wt,
+      std::shared_ptr<MoQExecutor> executor) override {
+    return std::make_shared<MoQRelaySession>(
+        folly::MaybeManagedPtr<proxygen::WebTransport>(std::move(wt)),
+        *this,
+        std::move(executor));
   }
 
  private:

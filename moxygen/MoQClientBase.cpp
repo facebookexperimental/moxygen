@@ -79,7 +79,8 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler) {
   //  Create MoQSession and Setup MoQSession parameters
-  moqSession_ = std::make_shared<MoQSession>(wt, exec_);
+  moqSession_ =
+      createSession(folly::MaybeManagedPtr<proxygen::WebTransport>(wt));
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->setLogger(logger_);
@@ -183,6 +184,20 @@ void MoQClientBase::goaway(const Goaway& goaway) {
 
 void MoQClientBase::setLogger(const std::shared_ptr<MLogger>& logger) {
   logger_ = logger;
+}
+
+MoQClientBase::SessionFactory MoQClientBase::defaultSessionFactory() {
+  static SessionFactory factory =
+      [](folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+         std::shared_ptr<MoQExecutor> exec) {
+        return std::make_shared<MoQSession>(std::move(wt), std::move(exec));
+      };
+  return factory;
+}
+
+std::shared_ptr<MoQSession> MoQClientBase::createSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt) {
+  return sessionFactory_(std::move(wt), exec_);
 }
 
 } // namespace moxygen

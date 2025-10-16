@@ -1638,19 +1638,9 @@ void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
       }
       break;
     }
-    case Type::ANNOUNCE: {
-      storage_.announce_.promise.setValue(folly::makeUnexpected(AnnounceError(
-          {reqID, AnnounceErrorCode::INTERNAL_ERROR, "session closed"})));
+    case Type::ANNOUNCE:
+    case Type::SUBSCRIBE_ANNOUNCES:
       break;
-    }
-    case Type::SUBSCRIBE_ANNOUNCES: {
-      storage_.subscribeAnnounces_.setValue(
-          folly::makeUnexpected(SubscribeAnnouncesError(
-              {reqID,
-               SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-               "session closed"})));
-      break;
-    }
     case Type::PUBLISH: {
       storage_.publish_.setValue(folly::makeUnexpected(PublishError(
           {reqID, PublishErrorCode::INTERNAL_ERROR, "session closed"})));
@@ -1666,47 +1656,6 @@ void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
 
 using folly::coro::co_awaitTry;
 using folly::coro::co_error;
-
-class MoQSession::SubscriberAnnounceCallback
-    : public Subscriber::AnnounceCallback {
- public:
-  SubscriberAnnounceCallback(MoQSession& session, const TrackNamespace& ns)
-      : session_(session), trackNamespace_(ns) {}
-
-  void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase)
-      override {
-    session_.announceCancel(
-        {trackNamespace_, errorCode, std::move(reasonPhrase)});
-  }
-
- private:
-  MoQSession& session_;
-  TrackNamespace trackNamespace_;
-};
-
-class MoQSession::PublisherAnnounceHandle : public Subscriber::AnnounceHandle {
- public:
-  PublisherAnnounceHandle(std::shared_ptr<MoQSession> session, AnnounceOk annOk)
-      : Subscriber::AnnounceHandle(std::move(annOk)),
-        session_(std::move(session)) {}
-  PublisherAnnounceHandle(const PublisherAnnounceHandle&) = delete;
-  PublisherAnnounceHandle& operator=(const PublisherAnnounceHandle&) = delete;
-  PublisherAnnounceHandle(PublisherAnnounceHandle&&) = delete;
-  PublisherAnnounceHandle& operator=(PublisherAnnounceHandle&&) = delete;
-  ~PublisherAnnounceHandle() override {
-    unannounce();
-  }
-
-  void unannounce() override {
-    if (session_) {
-      session_->unannounce({announceOk().trackNamespace});
-      session_.reset();
-    }
-  }
-
- private:
-  std::shared_ptr<MoQSession> session_;
-};
 
 // Constructors
 MoQSession::MoQSession(
@@ -1738,21 +1687,6 @@ MoQSession::~MoQSession() {
 
 void MoQSession::cleanup() {
   // TODO: Are these loops safe since they may (should?) delete elements
-  for (auto& subAnn : subscribeAnnounces_) {
-    subAnn.second->unsubscribeAnnounces();
-  }
-  subscribeAnnounces_.clear();
-  for (auto& ann : subscriberAnnounces_) {
-    ann.second->unannounce();
-  }
-  subscriberAnnounces_.clear();
-  for (auto& ann : publisherAnnounces_) {
-    if (ann.second) {
-      ann.second->announceCancel(
-          AnnounceErrorCode::INTERNAL_ERROR, "Session ended");
-    }
-  }
-  publisherAnnounces_.clear();
   while (!pubTracks_.empty()) {
     auto pubTrack = pubTracks_.begin();
     pubTrack->second->terminatePublish(
@@ -1786,7 +1720,7 @@ void MoQSession::cleanup() {
   fetches_.clear();
   // Handle all pending requests in consolidated map
   for (auto& [reqID, pendingState] : pendingRequests_) {
-    pendingState.deliverError(reqID);
+    pendingState->deliverError(reqID);
   }
   pendingRequests_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
@@ -2840,7 +2774,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     return;
   }
 
-  auto* publishPtr = pubIt->second.tryGetPublish();
+  auto* publishPtr = pubIt->second->tryGetPublish();
   if (!publishPtr) {
     XLOG(ERR) << "Request ID " << publishOk.requestID
               << " is not a publish request, sess=" << this;
@@ -2864,7 +2798,7 @@ void MoQSession::onPublishError(PublishError publishError) {
     return;
   }
 
-  auto* publishPtr = pendIt->second.tryGetPublish();
+  auto* publishPtr = pendIt->second->tryGetPublish();
   if (!publishPtr) {
     XLOG(ERR) << "Request ID " << publishError.requestID
               << " is not a publish request, sess=" << this;
@@ -2899,7 +2833,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto* trackPtr = it->second.tryGetSubscribeTrack();
+  auto* trackPtr = it->second->tryGetSubscribeTrack();
   if (!trackPtr) {
     XLOG(ERR) << "Request ID " << subOk.requestID
               << " is not a subscribe track request, sess=" << this;
@@ -2968,7 +2902,7 @@ void MoQSession::onSubscribeError(SubscribeError subErr) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto* trackPtr = it->second.tryGetSubscribeTrack();
+  auto* trackPtr = it->second->tryGetSubscribeTrack();
   if (!trackPtr) {
     XLOG(ERR) << "Request ID " << subErr.requestID
               << " is not a subscribe track request, sess=" << this;
@@ -3373,321 +3307,6 @@ void MoQSession::onFetchError(FetchError fetchError) {
   checkForCloseOnDrain();
 }
 
-void MoQSession::onAnnounce(Announce ann) {
-  XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
-
-  if (logger_) {
-    logger_->logAnnounce(
-        ann, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
-
-  if (closeSessionIfRequestIDInvalid(ann.requestID, false, true)) {
-    return;
-  }
-
-  if (!subscribeHandler_) {
-    XLOG(DBG1) << __func__ << " No subscriber callback set";
-    announceError(
-        {ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "Not a subscriber"});
-    return;
-  }
-  co_withExecutor(exec_.get(), handleAnnounce(std::move(ann))).start();
-}
-
-folly::coro::Task<void> MoQSession::handleAnnounce(Announce announce) {
-  folly::RequestContextScopeGuard guard;
-  setRequestSession();
-  auto annCb = std::make_shared<SubscriberAnnounceCallback>(
-      *this, announce.trackNamespace);
-  auto announceResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      subscribeHandler_->announce(announce, std::move(annCb))));
-  if (announceResult.hasException()) {
-    XLOG(ERR) << "Exception in Subscriber callback ex="
-              << announceResult.exception().what().toStdString();
-    announceError(
-        {announce.requestID,
-         AnnounceErrorCode::INTERNAL_ERROR,
-         announceResult.exception().what().toStdString()});
-    co_return;
-  }
-  if (announceResult->hasError()) {
-    XLOG(DBG1) << "Application announce error err="
-               << announceResult->error().reasonPhrase;
-    auto annErr = std::move(announceResult->error());
-    annErr.requestID = announce.requestID; // In case app got it wrong
-    announceError(annErr);
-  } else {
-    auto handle = std::move(announceResult->value());
-    auto announceOkMsg = handle->announceOk();
-    announceOk(announceOkMsg);
-    // TODO: what about UNANNOUNCE before ANNOUNCE_OK
-    subscriberAnnounces_[announce.trackNamespace] = std::move(handle);
-  }
-}
-
-void MoQSession::onAnnounceOk(AnnounceOk annOk) {
-  XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
-
-  if (logger_) {
-    logger_->logAnnounceOk(
-        annOk, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
-
-  auto reqID = annOk.requestID;
-  auto annIt = pendingRequests_.find(reqID);
-  if (annIt == pendingRequests_.end()) {
-    // unknown
-    XLOG(ERR) << "No matching announce reqID=" << reqID
-              << " trackNamespace=" << annOk.trackNamespace << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  auto* announcePtr = annIt->second.tryGetAnnounce();
-  if (!announcePtr) {
-    XLOG(ERR) << "Request ID " << reqID
-              << " is not an announce request, sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  publisherAnnounces_[announcePtr->trackNamespace] =
-      std::move(announcePtr->callback);
-  annOk.trackNamespace = announcePtr->trackNamespace;
-  announcePtr->promise.setValue(std::move(annOk));
-  pendingRequests_.erase(annIt);
-}
-
-void MoQSession::onAnnounceError(AnnounceError announceError) {
-  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
-             << " sess=" << this;
-
-  if (logger_) {
-    logger_->logAnnounceError(
-        announceError,
-        TrackNamespace(), // TODO: real namespace from pendingRequest
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-  auto reqID = announceError.requestID.value;
-  auto annIt = pendingRequests_.find(reqID);
-  if (annIt == pendingRequests_.end()) {
-    // unknown
-    XLOG(ERR) << "No matching announce requestID=" << reqID << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  auto* announcePtr = annIt->second.tryGetAnnounce();
-  if (!announcePtr) {
-    XLOG(ERR) << "Request ID " << reqID
-              << " is not an announce request, sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  announcePtr->promise.setValue(
-      folly::makeUnexpected(std::move(announceError)));
-  pendingRequests_.erase(annIt);
-}
-
-void MoQSession::onUnannounce(Unannounce unAnn) {
-  XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
-  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnannounce);
-
-  if (logger_) {
-    logger_->logUnannounce(
-        unAnn, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
-
-  auto annIt = subscriberAnnounces_.find(unAnn.trackNamespace);
-  if (annIt == subscriberAnnounces_.end()) {
-    XLOG(ERR) << "Unannounce for bad namespace ns=" << unAnn.trackNamespace;
-  } else {
-    annIt->second->unannounce();
-    subscriberAnnounces_.erase(annIt);
-    retireRequestID(/*signalWriteLoop=*/true);
-  }
-}
-
-void MoQSession::announceCancel(const AnnounceCancel& annCan) {
-  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onAnnounceCancel);
-  auto res = moqFrameWriter_.writeAnnounceCancel(controlWriteBuf_, annCan);
-  if (!res) {
-    XLOG(ERR) << "writeAnnounceCancel failed sess=" << this;
-  }
-  controlWriteEvent_.signal();
-  subscriberAnnounces_.erase(annCan.trackNamespace);
-  retireRequestID(/*signalWriteLoop=*/false);
-
-  if (logger_) {
-    logger_->logAnnounceCancel(annCan);
-  }
-}
-
-void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
-  XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
-             << " sess=" << this;
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceCancel);
-
-  if (logger_) {
-    logger_->logAnnounceCancel(
-        announceCancel,
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-
-  auto it = publisherAnnounces_.find(announceCancel.trackNamespace);
-  if (it == publisherAnnounces_.end()) {
-    XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
-  } else {
-    it->second->announceCancel(
-        announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
-    publisherAnnounces_.erase(it);
-  }
-}
-
-void MoQSession::onSubscribeAnnounces(SubscribeAnnounces sa) {
-  XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
-             << " sess=" << this;
-  if (logger_) {
-    logger_->logSubscribeAnnounces(
-        sa, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
-  if (closeSessionIfRequestIDInvalid(sa.requestID, false, true)) {
-    return;
-  }
-  if (!publishHandler_) {
-    XLOG(DBG1) << __func__ << "No publisher callback set";
-    subscribeAnnouncesError(
-        {sa.requestID,
-         SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
-         "Not a publisher"});
-    return;
-  }
-  co_withExecutor(exec_.get(), handleSubscribeAnnounces(std::move(sa))).start();
-}
-
-folly::coro::Task<void> MoQSession::handleSubscribeAnnounces(
-    SubscribeAnnounces subAnn) {
-  folly::RequestContextScopeGuard guard;
-  setRequestSession();
-  auto subAnnResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->subscribeAnnounces(subAnn)));
-  if (subAnnResult.hasException()) {
-    XLOG(ERR) << "Exception in Publisher callback ex="
-              << subAnnResult.exception().what().toStdString();
-    subscribeAnnouncesError(
-        {subAnn.requestID,
-         SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-         subAnnResult.exception().what().toStdString()});
-    co_return;
-  }
-  if (subAnnResult->hasError()) {
-    XLOG(DBG1) << "Application subAnn error err="
-               << subAnnResult->error().reasonPhrase;
-    auto subAnnErr = std::move(subAnnResult->error());
-    subAnnErr.requestID = subAnn.requestID; // In case app got it wrong
-    subscribeAnnouncesError(subAnnErr);
-  } else {
-    auto handle = std::move(subAnnResult->value());
-    auto subAnnOk = handle->subscribeAnnouncesOk();
-    subAnnOk.trackNamespacePrefix = subAnn.trackNamespacePrefix;
-    subscribeAnnouncesOk(subAnnOk);
-    subscribeAnnounces_[subAnn.trackNamespacePrefix] = std::move(handle);
-  }
-}
-
-void MoQSession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
-  XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
-             << " sess=" << this;
-  if (logger_) {
-    logger_->logSubscribeAnnouncesOk(
-        saOk, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
-  auto reqID = saOk.requestID;
-  auto saIt = pendingRequests_.find(reqID);
-  if (saIt == pendingRequests_.end()) {
-    // unknown
-    XLOG(ERR) << "No matching subscribeAnnounces reqID=" << reqID
-              << " trackNamespace=" << saOk.trackNamespacePrefix
-              << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  auto* subscribeAnnouncesPtr = saIt->second.tryGetSubscribeAnnounces();
-  if (!subscribeAnnouncesPtr) {
-    XLOG(ERR) << "Request ID " << reqID
-              << " is not a subscribe announces request, sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  subscribeAnnouncesPtr->setValue(std::move(saOk));
-  pendingRequests_.erase(saIt);
-}
-
-void MoQSession::onSubscribeAnnouncesError(
-    SubscribeAnnouncesError subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
-             << " sess=" << this;
-  if (logger_) {
-    logger_->logSubscribeAnnouncesError(
-        subscribeAnnouncesError,
-        TrackNamespace(), // TODO: use namespace from pendingRequest
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-  auto reqID = subscribeAnnouncesError.requestID.value;
-  auto saIt = pendingRequests_.find(reqID);
-  if (saIt == pendingRequests_.end()) {
-    // unknown
-    XLOG(ERR) << "No matching subscribeAnnounces reqID=" << reqID
-              << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  auto* subscribeAnnouncesPtr = saIt->second.tryGetSubscribeAnnounces();
-  if (!subscribeAnnouncesPtr) {
-    XLOG(ERR) << "Request ID " << reqID
-              << " is not a subscribe announces request, sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-
-  subscribeAnnouncesPtr->setValue(
-      folly::makeUnexpected(std::move(subscribeAnnouncesError)));
-  pendingRequests_.erase(saIt);
-}
-
-void MoQSession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
-  XLOG(DBG1) << __func__ << " prefix=" << unsub.trackNamespacePrefix
-             << " sess=" << this;
-  if (logger_) {
-    logger_->logUnsubscribeAnnounces(
-        unsub, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeAnnounces);
-  if (!publishHandler_) {
-    XLOG(DBG1) << __func__ << "No publisher callback set";
-    return;
-  }
-  auto saIt = subscribeAnnounces_.find(unsub.trackNamespacePrefix);
-  if (saIt == subscribeAnnounces_.end()) {
-    XLOG(ERR) << "Invalid unsub announce nsp=" << unsub.trackNamespacePrefix;
-  } else {
-    folly::RequestContextScopeGuard guard;
-    setRequestSession();
-    saIt->second->unsubscribeAnnounces();
-    subscribeAnnounces_.erase(saIt);
-    retireRequestID(/*signalWriteLoop=*/true);
-  }
-}
-
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
@@ -3828,7 +3447,7 @@ void MoQSession::onTrackStatusOk(TrackStatusOk trackStatusOk) {
     return;
   }
 
-  auto* trackStatusPtr = trackStatusIt->second.tryGetTrackStatus();
+  auto* trackStatusPtr = trackStatusIt->second->tryGetTrackStatus();
   if (!trackStatusPtr) {
     XLOG(ERR) << "Request ID " << reqID
               << " is not a track status request, sess=" << this;
@@ -3860,7 +3479,7 @@ void MoQSession::onTrackStatusError(TrackStatusError trackStatusError) {
     return;
   }
 
-  auto* trackStatusPtr = trackStatusIt->second.tryGetTrackStatus();
+  auto* trackStatusPtr = trackStatusIt->second->tryGetTrackStatus();
   if (!trackStatusPtr) {
     XLOG(ERR) << "Request ID " << reqID
               << " is not a track status request, sess=" << this;
@@ -3910,56 +3529,6 @@ void MoQSession::onConnectionError(ErrorCode error) {
   // TODO: This error is coming from MoQCodec -- do we need a better
   // error code?
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-}
-
-folly::coro::Task<Subscriber::AnnounceResult> MoQSession::announce(
-    Announce ann,
-    std::shared_ptr<AnnounceCallback> announceCallback) {
-  XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
-
-  if (logger_) {
-    logger_->logAnnounce(ann);
-  }
-
-  auto announceStartTime = std::chrono::steady_clock::now();
-  SCOPE_EXIT {
-    auto duration = (std::chrono::steady_clock::now() - announceStartTime);
-    auto durationMsec =
-        std::chrono::duration_cast<std::chrono::milliseconds>(duration);
-    MOQ_PUBLISHER_STATS(
-        publisherStatsCallback_, recordAnnounceLatency, durationMsec.count());
-  };
-  aliasifyAuthTokens(ann.params);
-  ann.requestID = getNextRequestID();
-  auto res = moqFrameWriter_.writeAnnounce(controlWriteBuf_, ann);
-  if (!res) {
-    XLOG(ERR) << "writeAnnounce failed sess=" << this;
-    co_return folly::makeUnexpected(AnnounceError(
-        {ann.requestID,
-         AnnounceErrorCode::INTERNAL_ERROR,
-         "local write failed"}));
-  }
-  controlWriteEvent_.signal();
-  auto contract = folly::coro::makePromiseContract<
-      folly::Expected<AnnounceOk, AnnounceError>>();
-  pendingRequests_.emplace(
-      ann.requestID,
-      PendingRequestState::makeAnnounce(PendingAnnounce(
-          {std::move(ann.trackNamespace),
-           std::move(contract.first),
-           std::move(announceCallback)})));
-  auto announceResult = co_await std::move(contract.second);
-  if (announceResult.hasError()) {
-    MOQ_PUBLISHER_STATS(
-        publisherStatsCallback_,
-        onAnnounceError,
-        announceResult.error().errorCode);
-    co_return folly::makeUnexpected(announceResult.error());
-  } else {
-    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceSuccess);
-    co_return std::make_shared<PublisherAnnounceHandle>(
-        shared_from_this(), std::move(announceResult.value()));
-  }
 }
 
 Subscriber::PublishResult MoQSession::publish(
@@ -4069,44 +3638,6 @@ Subscriber::PublishResult MoQSession::publish(
       std::move(replyTask)};
 }
 
-void MoQSession::announceOk(const AnnounceOk& annOk) {
-  XLOG(DBG1) << __func__ << " ns=" << annOk.trackNamespace << " sess=" << this;
-
-  if (logger_) {
-    logger_->logAnnounceOk(annOk);
-  }
-
-  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onAnnounceSuccess);
-  auto res = moqFrameWriter_.writeAnnounceOk(controlWriteBuf_, annOk);
-  if (!res) {
-    XLOG(ERR) << "writeAnnounceOk failed sess=" << this;
-    return;
-  }
-  controlWriteEvent_.signal();
-}
-
-void MoQSession::announceError(const AnnounceError& announceError) {
-  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
-             << " sess=" << this;
-  MOQ_SUBSCRIBER_STATS(
-      subscriberStatsCallback_, onAnnounceError, announceError.errorCode);
-  auto res =
-      moqFrameWriter_.writeAnnounceError(controlWriteBuf_, announceError);
-  if (!res) {
-    XLOG(ERR) << "writeAnnounceError failed sess=" << this;
-    return;
-  }
-
-  // Log AnnounceError
-  if (logger_) {
-    logger_->logAnnounceError(
-        announceError, TrackNamespace() // TODO: pass real namespace
-    );
-  }
-
-  controlWriteEvent_.signal();
-}
-
 void MoQSession::publishOk(const PublishOk& pubOk) {
   XLOG(DBG1) << __func__ << " reqID=" << pubOk.requestID << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishOk);
@@ -4138,174 +3669,6 @@ void MoQSession::publishError(const PublishError& publishError) {
     return;
   }
   removeSubscriptionState(aliasRes->second, publishError.requestID);
-}
-
-void MoQSession::unannounce(const Unannounce& unann) {
-  XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
-
-  if (logger_) {
-    logger_->logUnannounce(unann);
-  }
-
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnannounce);
-  auto it = publisherAnnounces_.find(unann.trackNamespace);
-  if (it == publisherAnnounces_.end()) {
-    // Not established but could be pending
-    auto pendingIt = std::find_if(
-        pendingRequests_.begin(),
-        pendingRequests_.end(),
-        [&unann](const auto& pair) {
-          if (auto* announcePtr = pair.second.tryGetAnnounce()) {
-            return announcePtr->trackNamespace == unann.trackNamespace;
-          }
-          return false;
-        });
-
-    if (pendingIt != pendingRequests_.end()) {
-      if (auto* announcePtr = pendingIt->second.tryGetAnnounce()) {
-        announcePtr->promise.setValue(folly::makeUnexpected(AnnounceError(
-            {pendingIt->first,
-             AnnounceErrorCode::INTERNAL_ERROR,
-             "Unannounce before announce"})));
-      }
-      pendingRequests_.erase(pendingIt);
-    } else {
-      XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
-      return;
-    }
-  }
-  auto trackNamespace = unann.trackNamespace;
-  auto res = moqFrameWriter_.writeUnannounce(controlWriteBuf_, unann);
-  if (!res) {
-    XLOG(ERR) << "writeUnannounce failed sess=" << this;
-  }
-  controlWriteEvent_.signal();
-}
-
-class MoQSession::SubscribeAnnouncesHandle
-    : public Publisher::SubscribeAnnouncesHandle {
- public:
-  SubscribeAnnouncesHandle(
-      std::shared_ptr<MoQSession> session,
-      SubscribeAnnouncesOk subAnnOk)
-      : Publisher::SubscribeAnnouncesHandle(std::move(subAnnOk)),
-        session_(std::move(session)) {}
-  SubscribeAnnouncesHandle(const SubscribeAnnouncesHandle&) = delete;
-  SubscribeAnnouncesHandle& operator=(const SubscribeAnnouncesHandle&) = delete;
-  SubscribeAnnouncesHandle(SubscribeAnnouncesHandle&&) = delete;
-  SubscribeAnnouncesHandle& operator=(SubscribeAnnouncesHandle&&) = delete;
-  ~SubscribeAnnouncesHandle() override {
-    unsubscribeAnnounces();
-  }
-
-  void unsubscribeAnnounces() override {
-    if (session_) {
-      session_->unsubscribeAnnounces(
-          {subscribeAnnouncesOk_->trackNamespacePrefix});
-      session_.reset();
-    }
-  }
-
- private:
-  std::shared_ptr<MoQSession> session_;
-};
-
-folly::coro::Task<Publisher::SubscribeAnnouncesResult>
-MoQSession::subscribeAnnounces(SubscribeAnnounces sa) {
-  XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
-             << " sess=" << this;
-  auto trackNamespace = sa.trackNamespacePrefix;
-  aliasifyAuthTokens(sa.params);
-  sa.requestID = getNextRequestID();
-
-  auto res = moqFrameWriter_.writeSubscribeAnnounces(controlWriteBuf_, sa);
-  if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnounces failed sess=" << this;
-    co_return folly::makeUnexpected(SubscribeAnnouncesError(
-        {0,
-         SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-         "local write failed"}));
-  }
-  if (logger_) {
-    logger_->logSubscribeAnnounces(sa);
-  }
-  controlWriteEvent_.signal();
-  auto contract = folly::coro::makePromiseContract<
-      folly::Expected<SubscribeAnnouncesOk, SubscribeAnnouncesError>>();
-  pendingRequests_.emplace(
-      sa.requestID,
-      PendingRequestState::makeSubscribeAnnounces(std::move(contract.first)));
-  auto subAnnResult = co_await std::move(contract.second);
-  if (subAnnResult.hasError()) {
-    MOQ_SUBSCRIBER_STATS(
-        subscriberStatsCallback_,
-        onSubscribeAnnouncesError,
-        subAnnResult.error().errorCode);
-    co_return folly::makeUnexpected(subAnnResult.error());
-  } else {
-    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeAnnouncesSuccess);
-    co_return std::make_shared<SubscribeAnnouncesHandle>(
-        shared_from_this(), std::move(subAnnResult.value()));
-  }
-}
-
-void MoQSession::subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk) {
-  XLOG(DBG1) << __func__ << " prefix=" << saOk.trackNamespacePrefix
-             << " sess=" << this;
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeAnnouncesSuccess);
-  auto res = moqFrameWriter_.writeSubscribeAnnouncesOk(controlWriteBuf_, saOk);
-  if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnouncesOk failed sess=" << this;
-    return;
-  }
-
-  if (logger_) {
-    logger_->logSubscribeAnnouncesOk(saOk);
-  }
-
-  controlWriteEvent_.signal();
-}
-
-void MoQSession::subscribeAnnouncesError(
-    const SubscribeAnnouncesError& subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
-             << " sess=" << this;
-  MOQ_PUBLISHER_STATS(
-      publisherStatsCallback_,
-      onSubscribeAnnouncesError,
-      subscribeAnnouncesError.errorCode);
-  auto res = moqFrameWriter_.writeSubscribeAnnouncesError(
-      controlWriteBuf_, subscribeAnnouncesError);
-  if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
-    return;
-  }
-
-  if (logger_) {
-    logger_->logSubscribeAnnouncesError(
-        subscribeAnnouncesError, TrackNamespace() // TODO: pass real namespace
-    );
-  }
-
-  controlWriteEvent_.signal();
-}
-
-void MoQSession::unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn) {
-  XLOG(DBG1) << __func__ << " prefix=" << unsubAnn.trackNamespacePrefix
-             << " sess=" << this;
-  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribeAnnounces);
-  auto res =
-      moqFrameWriter_.writeUnsubscribeAnnounces(controlWriteBuf_, unsubAnn);
-  if (!res) {
-    XLOG(ERR) << "writeUnsubscribeAnnounces failed sess=" << this;
-    return;
-  }
-
-  if (logger_) {
-    logger_->logUnsubscribeAnnounces(unsubAnn);
-  }
-
-  controlWriteEvent_.signal();
 }
 
 RequestID MoQSession::getNextRequestID() {
@@ -4653,7 +4016,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     std::shared_ptr<SubscribeTrackReceiveState> state;
     auto pendingIt = pendingRequests_.find(joining->joiningRequestID);
     if (pendingIt != pendingRequests_.end()) {
-      if (auto* trackPtr = pendingIt->second.tryGetSubscribeTrack()) {
+      if (auto* trackPtr = pendingIt->second->tryGetSubscribeTrack()) {
         state = *trackPtr;
       }
     } else {
@@ -5087,6 +4450,126 @@ void MoQSession::aliasifyAuthTokens(
       }
     }
   }
+}
+
+// Announcement callback methods - default implementations for simple clients
+void MoQSession::onAnnounce(Announce announce) {
+  XLOG(DBG1) << __func__ << " ns=" << announce.trackNamespace
+             << " - sending NOT_SUPPORTED error, sess=" << this;
+  announceError(AnnounceError{
+      announce.requestID,
+      AnnounceErrorCode::NOT_SUPPORTED,
+      "Announce not supported by simple client"});
+}
+
+void MoQSession::onAnnounceOk(AnnounceOk announceOk) {
+  XLOG(DBG1) << __func__ << " ns=" << announceOk.trackNamespace
+             << " - unexpected in simple client, sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+void MoQSession::onAnnounceError(AnnounceError announceError) {
+  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
+             << " - unexpected in simple client, sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+void MoQSession::onUnannounce(Unannounce unannounce) {
+  if (logger_) {
+    logger_->logUnannounce(
+        unannounce,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
+
+  XLOG(DBG1) << "Received Unannounce on base session - ignoring, sess=" << this;
+}
+
+void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
+  XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
+             << " - ignored by simple client, sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceCancel);
+}
+
+void MoQSession::onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) {
+  XLOG(DBG1) << __func__
+             << " prefix=" << subscribeAnnounces.trackNamespacePrefix
+             << " - sending NOT_SUPPORTED error, sess=" << this;
+  subscribeAnnouncesError(SubscribeAnnouncesError{
+      subscribeAnnounces.requestID,
+      SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+      "SubscribeAnnounces not supported by simple client"});
+}
+
+void MoQSession::onSubscribeAnnouncesOk(
+    SubscribeAnnouncesOk subscribeAnnouncesOk) {
+  XLOG(DBG1) << __func__
+             << " prefix=" << subscribeAnnouncesOk.trackNamespacePrefix
+             << " - unexpected in simple client, sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+void MoQSession::onSubscribeAnnouncesError(
+    SubscribeAnnouncesError subscribeAnnouncesError) {
+  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
+             << " - unexpected in simple client, sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+void MoQSession::onUnsubscribeAnnounces(
+    UnsubscribeAnnounces unsubscribeAnnounces) {
+  XLOG(DBG1) << __func__
+             << " prefix=" << unsubscribeAnnounces.trackNamespacePrefix
+             << " - ignored by simple client, sess=" << this;
+  if (logger_) {
+    logger_->logUnsubscribeAnnounces(
+        unsubscribeAnnounces,
+        MOQTByteStringType::STRING_VALUE,
+        ControlMessageType::PARSED);
+  }
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeAnnounces);
+}
+
+// Announcement response methods
+void MoQSession::announceError(const AnnounceError& announceError) {
+  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
+             << " sess=" << this;
+  MOQ_SUBSCRIBER_STATS(
+      subscriberStatsCallback_, onAnnounceError, announceError.errorCode);
+  auto res =
+      moqFrameWriter_.writeAnnounceError(controlWriteBuf_, announceError);
+  if (!res) {
+    XLOG(ERR) << "writeAnnounceError failed sess=" << this;
+    return;
+  }
+  if (logger_) {
+    logger_->logAnnounceError(
+        announceError, TrackNamespace() // TODO
+    );
+  }
+  controlWriteEvent_.signal();
+}
+
+void MoQSession::subscribeAnnouncesError(
+    const SubscribeAnnouncesError& subscribeAnnouncesError) {
+  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
+             << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_,
+      onSubscribeAnnouncesError,
+      subscribeAnnouncesError.errorCode);
+  auto res = moqFrameWriter_.writeSubscribeAnnouncesError(
+      controlWriteBuf_, subscribeAnnouncesError);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
+    return;
+  }
+  if (logger_) {
+    logger_->logSubscribeAnnouncesError(
+        subscribeAnnouncesError, TrackNamespace() // TODO
+    );
+  }
+  controlWriteEvent_.signal();
 }
 
 // Static methods

@@ -88,6 +88,11 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   void rejectNewConnections(bool reject);
   void pauseRead();
 
+ protected:
+  virtual std::shared_ptr<MoQSession> createSession(
+      std::shared_ptr<proxygen::WebTransport> wt,
+      std::shared_ptr<MoQExecutor> executor);
+
  private:
   // AUTHORITY parameter validation methods
   // Not called for HTTP inside proxygen, we leave it to applications.

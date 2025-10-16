@@ -51,6 +51,7 @@ moxygen_add_test(TARGET MoQSessionTests
     MoQSessionTest.cpp
   DEPENDS
     moqtestutils
+    moqrelaysession
     moqfollyexecutorimpl
     moxygenclient
     testmain

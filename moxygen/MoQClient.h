@@ -33,6 +33,15 @@ class MoQClient : public MoQClientBase {
     return quicWebTransport_->getTransportInfo();
   }
 
+  MoQClient(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      SessionFactory sessionFactory)
+      : MoQClientBase(
+            std::move(exec),
+            std::move(url),
+            std::move(sessionFactory)) {}
+
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
       folly::SocketAddress connectAddr,

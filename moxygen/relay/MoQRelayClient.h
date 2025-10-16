@@ -10,13 +10,21 @@
 #include <folly/logging/xlog.h>
 #include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClient.h>
+#include <moxygen/MoQRelaySession.h>
 
 namespace moxygen {
 
 class MoQRelayClient {
  public:
-  explicit MoQRelayClient(std::unique_ptr<MoQClient> client)
-      : moqClient_(std::move(client)) {}
+  explicit MoQRelayClient(std::unique_ptr<MoQClient> moqClient)
+      : moqClient_(std::move(moqClient)) {}
+
+  // Convenience constructor for QUIC transport with relay session
+  MoQRelayClient(std::shared_ptr<MoQExecutor> exec, proxygen::URL url)
+      : moqClient_(std::make_unique<MoQClient>(
+            std::move(exec),
+            std::move(url),
+            MoQRelaySession::createRelaySessionFactory())) {}
 
   folly::coro::Task<void> setup(
       std::shared_ptr<Publisher> publisher,
@@ -78,6 +86,10 @@ class MoQRelayClient {
 
   std::shared_ptr<MoQSession> getSession() const {
     return moqClient_->moqSession_;
+  }
+
+  MoQExecutor* getEventBase() const {
+    return moqClient_->getEventBase().get();
   }
 
   void shutdown() {
