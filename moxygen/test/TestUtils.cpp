@@ -100,10 +100,11 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            {{getMaxCacheDurationParamKey(version), "", 3600000}}}));
   res = moqFrameWriter.writeMaxRequestID(writeBuf, {.requestID = 50000});
   res = moqFrameWriter.writeRequestsBlocked(writeBuf, {.maxRequestID = 50000});
-  res = moqFrameWriter.writeSubscribeError(
+  res = moqFrameWriter.writeRequestError(
       writeBuf,
       SubscribeError(
-          {RequestID(0), SubscribeErrorCode::TRACK_NOT_EXIST, "not found"}));
+          {RequestID(0), SubscribeErrorCode::TRACK_NOT_EXIST, "not found"}),
+      FrameType::SUBSCRIBE_ERROR);
   res = moqFrameWriter.writeUnsubscribe(
       writeBuf,
       Unsubscribe({
@@ -133,13 +134,14 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            folly::none,
            folly::none,
            getTestTrackRequestParameters(moqFrameWriter)}));
-  res = moqFrameWriter.writePublishError(
+  res = moqFrameWriter.writeRequestError(
       writeBuf,
       PublishError({
           0,
           PublishErrorCode::INTERNAL_ERROR,
           "server error",
-      }));
+      }),
+      FrameType::PUBLISH_ERROR);
   res = moqFrameWriter.writeAnnounce(
       writeBuf,
       Announce(
@@ -150,10 +152,11 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
             {getMaxCacheDurationParamKey(version), "", 3600000}}}));
   res = moqFrameWriter.writeAnnounceOk(
       writeBuf, AnnounceOk({1, TrackNamespace({"hello"})}));
-  res = moqFrameWriter.writeAnnounceError(
+  res = moqFrameWriter.writeRequestError(
       writeBuf,
       AnnounceError(
-          {RequestID(1), AnnounceErrorCode::INTERNAL_ERROR, "server error"}));
+          {RequestID(1), AnnounceErrorCode::INTERNAL_ERROR, "server error"}),
+      FrameType::ANNOUNCE_ERROR);
   res = moqFrameWriter.writeAnnounceCancel(
       writeBuf,
       AnnounceCancel(
@@ -195,12 +198,13 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            {getTestAuthParam(moqFrameWriter, "binky")}}));
   res = moqFrameWriter.writeSubscribeAnnouncesOk(
       writeBuf, SubscribeAnnouncesOk({2, TrackNamespace({"hello"})}));
-  res = moqFrameWriter.writeSubscribeAnnouncesError(
+  res = moqFrameWriter.writeRequestError(
       writeBuf,
       SubscribeAnnouncesError(
           {RequestID(2),
            SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-           "server error"}));
+           "server error"}),
+      FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
   res = moqFrameWriter.writeUnsubscribeAnnounces(
       writeBuf, UnsubscribeAnnounces({TrackNamespace({"hello"})}));
   res = moqFrameWriter.writeFetch(
@@ -222,9 +226,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            1,
            AbsoluteLocation({0, 0}),
            {{getMaxCacheDurationParamKey(version), "", 1000, {}}}}));
-  res = moqFrameWriter.writeFetchError(
+  res = moqFrameWriter.writeRequestError(
       writeBuf,
-      FetchError({0, FetchErrorCode::INVALID_RANGE, "Invalid range"}));
+      FetchError({0, FetchErrorCode::INVALID_RANGE, "Invalid range"}),
+      FrameType::FETCH_ERROR);
 
   return writeBuf.move();
 }

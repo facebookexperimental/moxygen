@@ -1174,10 +1174,6 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<SubscribeError, ErrorCode> parseSubscribeError(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
-
   folly::Expected<Unsubscribe, ErrorCode> parseUnsubscribe(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
@@ -1194,19 +1190,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<PublishError, ErrorCode> parsePublishError(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
-
   folly::Expected<Announce, ErrorCode> parseAnnounce(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
   folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
-
-  folly::Expected<AnnounceError, ErrorCode> parseAnnounceError(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -1254,10 +1242,6 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<FetchError, ErrorCode> parseFetchError(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
-
   folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
@@ -1265,10 +1249,6 @@ class MoQFrameParser {
   folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
-
-  folly::Expected<SubscribeAnnouncesError, ErrorCode>
-  parseSubscribeAnnouncesError(folly::io::Cursor& cursor, size_t length)
-      const noexcept;
 
   // Unified request error parsing function
   folly::Expected<RequestError, ErrorCode> parseRequestError(
@@ -1415,10 +1395,6 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const SubscribeOk& subscribeOk) const noexcept;
 
-  WriteResult writeSubscribeError(
-      folly::IOBufQueue& writeBuf,
-      const SubscribeError& subscribeError) const noexcept;
-
   WriteResult writeSubscribeDone(
       folly::IOBufQueue& writeBuf,
       const SubscribeDone& subscribeDone) const noexcept;
@@ -1435,10 +1411,6 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const PublishOk& publishOk) const noexcept;
 
-  WriteResult writePublishError(
-      folly::IOBufQueue& writeBuf,
-      const PublishError& publishError) const noexcept;
-
   WriteResult writeMaxRequestID(
       folly::IOBufQueue& writeBuf,
       const MaxRequestID& maxRequestID) const noexcept;
@@ -1454,10 +1426,6 @@ class MoQFrameWriter {
   WriteResult writeAnnounceOk(
       folly::IOBufQueue& writeBuf,
       const AnnounceOk& announceOk) const noexcept;
-
-  WriteResult writeAnnounceError(
-      folly::IOBufQueue& writeBuf,
-      const AnnounceError& announceError) const noexcept;
 
   WriteResult writeUnannounce(
       folly::IOBufQueue& writeBuf,
@@ -1490,10 +1458,6 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const SubscribeAnnouncesOk& subscribeAnnouncesOk) const noexcept;
 
-  WriteResult writeSubscribeAnnouncesError(
-      folly::IOBufQueue& writeBuf,
-      const SubscribeAnnouncesError& subscribeAnnouncesError) const noexcept;
-
   WriteResult writeUnsubscribeAnnounces(
       folly::IOBufQueue& writeBuf,
       const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept;
@@ -1507,10 +1471,6 @@ class MoQFrameWriter {
 
   WriteResult writeFetchOk(folly::IOBufQueue& writeBuf, const FetchOk& fetchOk)
       const noexcept;
-
-  WriteResult writeFetchError(
-      folly::IOBufQueue& writeBuf,
-      const FetchError& fetchError) const noexcept;
 
   // Unified request error writing function
   WriteResult writeRequestError(

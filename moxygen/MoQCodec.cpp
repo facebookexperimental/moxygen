@@ -448,7 +448,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_ERROR: {
-      auto res = moqFrameParser_.parseSubscribeError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseRequestError(
+          cursor, curFrameLength_, curFrameType_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeError(std::move(res.value()));
@@ -503,7 +504,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::PUBLISH_ERROR: {
-      auto res = moqFrameParser_.parsePublishError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseRequestError(
+          cursor, curFrameLength_, curFrameType_);
       if (res) {
         if (callback_) {
           callback_->onPublishError(std::move(res.value()));
@@ -569,7 +571,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH_ERROR: {
-      auto res = moqFrameParser_.parseFetchError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseRequestError(
+          cursor, curFrameLength_, curFrameType_);
       if (res) {
         if (callback_) {
           callback_->onFetchError(std::move(res.value()));
@@ -602,7 +605,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::ANNOUNCE_ERROR: {
-      auto res = moqFrameParser_.parseAnnounceError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseRequestError(
+          cursor, curFrameLength_, curFrameType_);
       if (res) {
         if (callback_) {
           callback_->onAnnounceError(std::move(res.value()));
@@ -659,8 +663,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_ANNOUNCES_ERROR: {
-      auto res =
-          moqFrameParser_.parseSubscribeAnnouncesError(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parseRequestError(
+          cursor, curFrameLength_, curFrameType_);
       if (res) {
         if (callback_) {
           callback_->onSubscribeAnnouncesError(std::move(res.value()));

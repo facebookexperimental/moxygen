@@ -1015,12 +1015,6 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   return subscribeOk;
 }
 
-folly::Expected<SubscribeError, ErrorCode> MoQFrameParser::parseSubscribeError(
-    folly::io::Cursor& cursor,
-    size_t length) const noexcept {
-  return parseRequestError(cursor, length, FrameType::SUBSCRIBE_ERROR);
-}
-
 folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
@@ -1249,12 +1243,6 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
   return publishOk;
 }
 
-folly::Expected<PublishError, ErrorCode> MoQFrameParser::parsePublishError(
-    folly::io::Cursor& cursor,
-    size_t length) const noexcept {
-  return parseRequestError(cursor, length, FrameType::PUBLISH_ERROR);
-}
-
 folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
@@ -1314,12 +1302,6 @@ folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return announceOk;
-}
-
-folly::Expected<AnnounceError, ErrorCode> MoQFrameParser::parseAnnounceError(
-    folly::io::Cursor& cursor,
-    size_t length) const noexcept {
-  return parseRequestError(cursor, length, FrameType::ANNOUNCE_ERROR);
 }
 
 folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
@@ -1695,12 +1677,6 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   return fetchOk;
 }
 
-folly::Expected<FetchError, ErrorCode> MoQFrameParser::parseFetchError(
-    folly::io::Cursor& cursor,
-    size_t length) const noexcept {
-  return parseRequestError(cursor, length, FrameType::FETCH_ERROR);
-}
-
 folly::Expected<SubscribeAnnounces, ErrorCode>
 MoQFrameParser::parseSubscribeAnnounces(
     folly::io::Cursor& cursor,
@@ -1722,14 +1698,6 @@ MoQFrameParser::parseSubscribeAnnouncesOk(
     return folly::makeUnexpected(res.error());
   }
   return SubscribeAnnouncesOk({res->requestID, std::move(res->trackNamespace)});
-}
-
-folly::Expected<SubscribeAnnouncesError, ErrorCode>
-MoQFrameParser::parseSubscribeAnnouncesError(
-    folly::io::Cursor& cursor,
-    size_t length) const noexcept {
-  return parseRequestError(
-      cursor, length, FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
 }
 
 // Unified request error parsing function
@@ -2776,13 +2744,6 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeSubscribeError(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeError& subscribeError) const noexcept {
-  return writeRequestError(
-      writeBuf, subscribeError, FrameType::SUBSCRIBE_ERROR);
-}
-
 WriteResult MoQFrameWriter::writeMaxRequestID(
     folly::IOBufQueue& writeBuf,
     const MaxRequestID& maxRequestID) const noexcept {
@@ -2948,12 +2909,6 @@ WriteResult MoQFrameWriter::writePublishOk(
   return size;
 }
 
-WriteResult MoQFrameWriter::writePublishError(
-    folly::IOBufQueue& writeBuf,
-    const PublishError& publishError) const noexcept {
-  return writeRequestError(writeBuf, publishError, FrameType::PUBLISH_ERROR);
-}
-
 WriteResult MoQFrameWriter::writeAnnounce(
     folly::IOBufQueue& writeBuf,
     const Announce& announce) const noexcept {
@@ -2990,12 +2945,6 @@ WriteResult MoQFrameWriter::writeAnnounceOk(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   return size;
-}
-
-WriteResult MoQFrameWriter::writeAnnounceError(
-    folly::IOBufQueue& writeBuf,
-    const AnnounceError& announceError) const noexcept {
-  return writeRequestError(writeBuf, announceError, FrameType::ANNOUNCE_ERROR);
 }
 
 WriteResult MoQFrameWriter::writeUnannounce(
@@ -3177,13 +3126,6 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeSubscribeAnnouncesError(
-    folly::IOBufQueue& writeBuf,
-    const SubscribeAnnouncesError& subscribeAnnouncesError) const noexcept {
-  return writeRequestError(
-      writeBuf, subscribeAnnouncesError, FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
-}
-
 WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept {
@@ -3279,12 +3221,6 @@ WriteResult MoQFrameWriter::writeFetchOk(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   return size;
-}
-
-WriteResult MoQFrameWriter::writeFetchError(
-    folly::IOBufQueue& writeBuf,
-    const FetchError& fetchError) const noexcept {
-  return writeRequestError(writeBuf, fetchError, FrameType::FETCH_ERROR);
 }
 
 // Unified request error writing function

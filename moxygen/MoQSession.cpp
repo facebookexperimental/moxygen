@@ -3659,7 +3659,8 @@ void MoQSession::publishError(const PublishError& publishError) {
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onPublishError, publishError.errorCode);
-  auto res = moqFrameWriter_.writePublishError(controlWriteBuf_, publishError);
+  auto res = moqFrameWriter_.writeRequestError(
+      controlWriteBuf_, publishError, FrameType::PUBLISH_ERROR);
   if (!res) {
     XLOG(ERR) << "writePublishError failed sess=" << this;
     return;
@@ -3807,7 +3808,8 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
     return;
   }
   pubTracks_.erase(it);
-  auto res = moqFrameWriter_.writeSubscribeError(controlWriteBuf_, subErr);
+  auto res = moqFrameWriter_.writeRequestError(
+      controlWriteBuf_, subErr, FrameType::SUBSCRIBE_ERROR);
   retireRequestID(/*signalWriteLoop=*/false);
   if (!res) {
     XLOG(ERR) << "writeSubscribeError failed sess=" << this;
@@ -4115,7 +4117,8 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
     XLOG(DBG1) << "fetchErr for invalid id=" << fetchErr.requestID
                << " sess=" << this;
   }
-  auto res = moqFrameWriter_.writeFetchError(controlWriteBuf_, fetchErr);
+  auto res = moqFrameWriter_.writeRequestError(
+      controlWriteBuf_, fetchErr, FrameType::FETCH_ERROR);
   if (!res) {
     XLOG(ERR) << "writeFetchError failed sess=" << this;
     return;
@@ -4540,8 +4543,8 @@ void MoQSession::announceError(const AnnounceError& announceError) {
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onAnnounceError, announceError.errorCode);
-  auto res =
-      moqFrameWriter_.writeAnnounceError(controlWriteBuf_, announceError);
+  auto res = moqFrameWriter_.writeRequestError(
+      controlWriteBuf_, announceError, FrameType::ANNOUNCE_ERROR);
   if (!res) {
     XLOG(ERR) << "writeAnnounceError failed sess=" << this;
     return;
@@ -4562,8 +4565,10 @@ void MoQSession::subscribeAnnouncesError(
       publisherStatsCallback_,
       onSubscribeAnnouncesError,
       subscribeAnnouncesError.errorCode);
-  auto res = moqFrameWriter_.writeSubscribeAnnouncesError(
-      controlWriteBuf_, subscribeAnnouncesError);
+  auto res = moqFrameWriter_.writeRequestError(
+      controlWriteBuf_,
+      subscribeAnnouncesError,
+      FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
   if (!res) {
     XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
     return;

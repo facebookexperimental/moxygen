@@ -105,7 +105,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r4b);
 
     skip(cursor, 1);
-    auto r5 = parser_.parseSubscribeError(cursor, frameLength(cursor));
+    auto r5 = parser_.parseRequestError(
+        cursor, frameLength(cursor), FrameType::SUBSCRIBE_ERROR);
     testUnderflowResult(r5);
 
     skip(cursor, 1);
@@ -125,7 +126,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r8b);
 
     skip(cursor, 1);
-    auto r8c = parser_.parsePublishError(cursor, frameLength(cursor));
+    auto r8c = parser_.parseRequestError(
+        cursor, frameLength(cursor), FrameType::PUBLISH_ERROR);
     testUnderflowResult(r8c);
 
     skip(cursor, 1);
@@ -137,7 +139,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r10);
 
     skip(cursor, 1);
-    auto r11 = parser_.parseAnnounceError(cursor, frameLength(cursor));
+    auto r11 = parser_.parseRequestError(
+        cursor, frameLength(cursor), FrameType::ANNOUNCE_ERROR);
     testUnderflowResult(r11);
 
     skip(cursor, 1);
@@ -169,8 +172,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r10a);
 
     skip(cursor, 1);
-    auto r11a =
-        parser_.parseSubscribeAnnouncesError(cursor, frameLength(cursor));
+    auto r11a = parser_.parseRequestError(
+        cursor, frameLength(cursor), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
     testUnderflowResult(r11a);
 
     skip(cursor, 1);
@@ -190,7 +193,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r18);
 
     skip(cursor, 1);
-    auto r19 = parser_.parseFetchError(cursor, frameLength(cursor));
+    auto r19 = parser_.parseRequestError(
+        cursor, frameLength(cursor), FrameType::FETCH_ERROR);
     testUnderflowResult(r19);
 
     skip(cursor, 1);
