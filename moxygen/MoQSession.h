@@ -385,18 +385,16 @@ class MoQSession : public Subscriber,
   void onSubscribe(SubscribeRequest subscribeRequest) override;
   void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
-  void onSubscribeError(SubscribeError subscribeError) override;
+  void onRequestError(RequestError requestError, FrameType frameType) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onPublish(PublishRequest publish) override;
   void onPublishOk(PublishOk publishOk) override;
-  void onPublishError(PublishError publishError) override;
   void onSubscribeDone(SubscribeDone subscribeDone) override;
   void onMaxRequestID(MaxRequestID maxSubId) override;
   void onRequestsBlocked(RequestsBlocked requestsBlocked) override;
   void onFetch(Fetch fetch) override;
   void onFetchCancel(FetchCancel fetchCancel) override;
   void onFetchOk(FetchOk fetchOk) override;
-  void onFetchError(FetchError fetchError) override;
   void onTrackStatus(TrackStatus trackStatus) override;
   void onTrackStatusOk(TrackStatusOk trackStatusOk) override;
   void onTrackStatusError(TrackStatusError trackStatusError) override;
@@ -406,14 +404,11 @@ class MoQSession : public Subscriber,
   // Announcement callback methods - default implementations for simple clients
   void onAnnounce(Announce announce) override;
   void onAnnounceOk(AnnounceOk announceOk) override;
-  void onAnnounceError(AnnounceError announceError) override;
   void onUnannounce(Unannounce unannounce) override;
   void onAnnounceCancel(AnnounceCancel announceCancel) override;
   void onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) override;
   void onSubscribeAnnouncesOk(
       SubscribeAnnouncesOk subscribeAnnouncesOk) override;
-  void onSubscribeAnnouncesError(
-      SubscribeAnnouncesError subscribeAnnouncesError) override;
   void onUnsubscribeAnnounces(
       UnsubscribeAnnounces unsubscribeAnnounces) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
@@ -602,6 +597,28 @@ class MoQSession : public Subscriber,
                                             : nullptr;
     }
 
+    FrameType getFrameType() const {
+      switch (type_) {
+        case Type::SUBSCRIBE_TRACK:
+          return FrameType::SUBSCRIBE_ERROR;
+        case Type::PUBLISH:
+          return FrameType::PUBLISH_ERROR;
+        case Type::TRACK_STATUS:
+          return FrameType::TRACK_STATUS;
+        case Type::FETCH:
+          return FrameType::FETCH_ERROR;
+        case Type::ANNOUNCE:
+          return FrameType::ANNOUNCE_ERROR;
+        case Type::SUBSCRIBE_ANNOUNCES:
+          return FrameType::SUBSCRIBE_ANNOUNCES_ERROR;
+      }
+      __builtin_unreachable();
+    }
+
+    virtual folly::Expected<Type, folly::Unit> setError(
+        RequestError error,
+        FrameType frameType);
+
     const std::shared_ptr<SubscribeTrackReceiveState>* tryGetSubscribeTrack()
         const {
       return type_ == Type::SUBSCRIBE_TRACK ? &storage_.subscribeTrack_
@@ -618,16 +635,13 @@ class MoQSession : public Subscriber,
       return type_ == Type::TRACK_STATUS ? &storage_.trackStatus_ : nullptr;
     }
 
-    std::shared_ptr<FetchTrackReceiveState>* tryGetFetchTrack() {
+    std::shared_ptr<FetchTrackReceiveState>* tryGetFetch() {
       return type_ == Type::FETCH ? &storage_.fetchTrack_ : nullptr;
     }
 
     Type getType() const {
       return type_;
     }
-
-    // Delivers an error to the pending request based on its type
-    virtual void deliverError(RequestID reqID);
 
    public:
     // Default constructor - only use via factory methods

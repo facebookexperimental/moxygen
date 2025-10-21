@@ -60,6 +60,39 @@ uint64_t getStreamPriority(
       subgroupBits);
 }
 
+// Helper function to log RequestError with the correct logger method based on
+// frameType
+void logRequestError(
+    const std::shared_ptr<MLogger>& logger,
+    const RequestError& error,
+    FrameType frameType,
+    ControlMessageType msgType = ControlMessageType::PARSED) {
+  if (!logger) {
+    return;
+  }
+  switch (frameType) {
+    case FrameType::SUBSCRIBE_ERROR:
+      logger->logSubscribeError(error, msgType);
+      break;
+    case FrameType::PUBLISH_ERROR:
+      // logger->logPublishError(static_cast<const PublishError&>(error),
+      // msgType);
+      break;
+    case FrameType::FETCH_ERROR:
+      logger->logFetchError(error, msgType);
+      break;
+    case FrameType::ANNOUNCE_ERROR:
+      logger->logAnnounceError(error, TrackNamespace() /*TODO*/);
+      break;
+    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
+      logger->logSubscribeAnnouncesError(error, TrackNamespace() /* TODO */);
+      break;
+    default:
+      // Unknown or unsupported error type for logging
+      break;
+  }
+}
+
 // Helper classes for publishing
 
 // StreamPublisherImpl is for publishing to a single stream, either a Subgroup
@@ -1629,34 +1662,51 @@ class MoQSession::FetchTrackReceiveState
   uint64_t currentStreamId_{0};
 };
 
-void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
-  switch (type_) {
-    case Type::SUBSCRIBE_TRACK: {
-      if (!storage_.subscribeTrack_->isPublish()) {
-        storage_.subscribeTrack_->subscribeError(
-            {reqID, SubscribeErrorCode::INTERNAL_ERROR, "session closed"});
+folly::Expected<MoQSession::PendingRequestState::Type, folly::Unit>
+MoQSession::PendingRequestState::setError(
+    RequestError error,
+    FrameType frameType) {
+  switch (frameType) {
+    case FrameType::SUBSCRIBE_ERROR: {
+      auto ptr = tryGetSubscribeTrack();
+      if (!ptr || !*ptr || (*ptr)->isPublish()) {
+        return folly::makeUnexpected(folly::unit);
       }
-      break;
+      (*ptr)->subscribeError(std::move(error));
+      return type_;
     }
-    case Type::ANNOUNCE:
-    case Type::SUBSCRIBE_ANNOUNCES:
-      break;
-    case Type::PUBLISH: {
-      storage_.publish_.setValue(folly::makeUnexpected(PublishError(
-          {reqID, PublishErrorCode::INTERNAL_ERROR, "session closed"})));
-      break;
+    case FrameType::PUBLISH_ERROR: {
+      auto promise = tryGetPublish();
+      if (!promise) {
+        return folly::makeUnexpected(folly::unit);
+      }
+      promise->setValue(folly::makeUnexpected(std::move(error)));
+      return type_;
     }
-    case Type::TRACK_STATUS: {
+    case FrameType::TRACK_STATUS: {
       storage_.trackStatus_.setValue(folly::makeUnexpected(TrackStatusError(
-          {reqID, TrackStatusErrorCode::INTERNAL_ERROR, "session closed"})));
-      break;
+          {error.requestID, error.errorCode, error.reasonPhrase})));
+      return type_;
     }
-    case Type::FETCH: {
-      storage_.fetchTrack_->fetchError(
-          {reqID, FetchErrorCode::INTERNAL_ERROR, "session closed"});
-      break;
+    case FrameType::FETCH_ERROR: {
+      auto fetchPtr = tryGetFetch();
+      if (!fetchPtr) {
+        return folly::makeUnexpected(folly::unit);
+      }
+      (*fetchPtr)->fetchError(std::move(error));
+      return type_;
     }
+    case FrameType::ANNOUNCE_ERROR:
+    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR: {
+      // These types are handled by MoQRelaySession subclass
+      return folly::makeUnexpected(folly::unit);
+    }
+    default:
+      // fall through
+      break;
   }
+  // Should not reach here
+  return folly::makeUnexpected(folly::unit);
 }
 
 using folly::coro::co_awaitTry;
@@ -1713,19 +1763,15 @@ void MoQSession::cleanup() {
   subTracks_.clear();
   // We parse a subscribeDone after cleanup
   reqIdToTrackAlias_.clear();
-  for (auto& fetch : fetches_) {
-    // TODO: there needs to be a way to queue an error in TrackReceiveState,
-    // both from here, when close races the FETCH stream, and from readLoop
-    // where we get a reset.
-    fetch.second->fetchError(
-        {/*TrackReceiveState fills in subId*/ 0,
-         FetchErrorCode::INTERNAL_ERROR,
-         "session closed"});
-  }
+  // TODO: there needs to be a way to queue an error in TrackReceiveState,
+  // both from here, when close races the FETCH stream, and from readLoop
+  // where we get a reset.
   fetches_.clear();
   // Handle all pending requests in consolidated map
   for (auto& [reqID, pendingState] : pendingRequests_) {
-    pendingState->deliverError(reqID);
+    pendingState->setError(
+        RequestError{reqID, RequestErrorCode::INTERNAL_ERROR, "Session closed"},
+        pendingState->getFrameType());
   }
   pendingRequests_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
@@ -2795,37 +2841,60 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
   pendingRequests_.erase(pubIt);
 }
 
-void MoQSession::onPublishError(PublishError publishError) {
-  XLOG(DBG1) << __func__ << " reqID=" << publishError.requestID
+void MoQSession::onRequestError(RequestError error, FrameType frameType) {
+  XLOG(DBG1) << __func__ << " reqID=" << error.requestID
+             << " frameType=" << folly::to_underlying(frameType)
              << " sess=" << this;
 
-  auto pendIt = pendingRequests_.find(publishError.requestID);
-  if (pendIt == pendingRequests_.end()) {
-    XLOG(ERR) << "No matching publish reqID=" << publishError.requestID
-              << " sess=" << this;
+  // Log the error using the appropriate logger method
+  logRequestError(logger_, error, frameType, ControlMessageType::PARSED);
+
+  // Find the pending request and invoke setError
+  auto it = pendingRequests_.find(error.requestID);
+  if (it != pendingRequests_.end()) {
+    auto pendingState = std::move(it->second);
+    pendingRequests_.erase(it);
+    auto setErrorRes = pendingState->setError(error, frameType);
+    if (setErrorRes.hasError()) {
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    }
+  } else {
+    // Error: request not found
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
   }
 
-  auto* publishPtr = pendIt->second->tryGetPublish();
-  if (!publishPtr) {
-    XLOG(ERR) << "Request ID " << publishError.requestID
-              << " is not a publish request, sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
+  // Additional cleanup for specific error types if needed
+  switch (frameType) {
+    case FrameType::SUBSCRIBE_ERROR: {
+      auto aliasIt = reqIdToTrackAlias_.find(error.requestID);
+      if (aliasIt != reqIdToTrackAlias_.end()) {
+        removeSubscriptionState(aliasIt->second, error.requestID);
+      }
+      break;
+    }
+    case FrameType::PUBLISH_ERROR: {
+      auto pubIt = pubTracks_.find(error.requestID);
+      if (pubIt != pubTracks_.end()) {
+        pubIt->second->setSession(nullptr);
+        pubTracks_.erase(pubIt);
+      }
+      break;
+    }
+    case FrameType::FETCH_ERROR: {
+      auto fetchIt = fetches_.find(error.requestID);
+      if (fetchIt != fetches_.end()) {
+        fetches_.erase(fetchIt);
+      }
+      break;
+    }
+    case FrameType::ANNOUNCE_ERROR:
+    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
+      break;
+    default:
+      // Unknown or unsupported error type
+      break;
   }
-
-  auto requestId = publishError.requestID;
-  publishPtr->setValue(folly::makeUnexpected(std::move(publishError)));
-  pendingRequests_.erase(pendIt);
-
-  auto pubIt = pubTracks_.find(requestId);
-  if (pubIt == pubTracks_.end()) {
-    XLOG(ERR) << "Invalid Publish OK, id=" << requestId;
-    return;
-  }
-  pubIt->second->setSession(nullptr);
-  pubTracks_.erase(pubIt);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::onSubscribeOk(SubscribeOk subOk) {
@@ -2895,33 +2964,6 @@ void MoQSession::deliverBufferedData(TrackAlias trackAlias) {
       baton->signal();
     }
   }
-}
-
-void MoQSession::onSubscribeError(SubscribeError subErr) {
-  XLOG(DBG1) << __func__ << " id=" << subErr.requestID << " sess=" << this;
-
-  if (logger_) {
-    logger_->logSubscribeError(subErr, ControlMessageType::PARSED);
-  }
-
-  auto it = pendingRequests_.find(subErr.requestID);
-  if (it == pendingRequests_.end()) {
-    XLOG(ERR) << "No matching request ID=" << subErr.requestID
-              << " sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-  auto* trackPtr = it->second->tryGetSubscribeTrack();
-  if (!trackPtr) {
-    XLOG(ERR) << "Request ID " << subErr.requestID
-              << " is not a subscribe track request, sess=" << this;
-    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return;
-  }
-  auto trackReceiveState = std::move(*trackPtr);
-  pendingRequests_.erase(it);
-  trackReceiveState->subscribeError(std::move(subErr));
-  checkForCloseOnDrain();
 }
 
 class MoQSession::ReceiverSubscriptionHandle
@@ -3296,24 +3338,6 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
     fetches_.erase(fetchIt);
     checkForCloseOnDrain();
   }
-}
-
-void MoQSession::onFetchError(FetchError fetchError) {
-  XLOG(DBG1) << __func__ << " id=" << fetchError.requestID << " sess=" << this;
-  auto fetchIt = fetches_.find(fetchError.requestID);
-
-  if (logger_) {
-    logger_->logFetchError(fetchError, ControlMessageType::PARSED);
-  }
-
-  if (fetchIt == fetches_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << fetchError.requestID
-              << " sess=" << this;
-    return;
-  }
-  fetchIt->second->fetchError(fetchError);
-  fetches_.erase(fetchIt);
-  checkForCloseOnDrain();
 }
 
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
@@ -4483,12 +4507,6 @@ void MoQSession::onAnnounceOk(AnnounceOk announceOk) {
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
-void MoQSession::onAnnounceError(AnnounceError announceError) {
-  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
-             << " - unexpected in simple client, sess=" << this;
-  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-}
-
 void MoQSession::onUnannounce(Unannounce unannounce) {
   if (logger_) {
     logger_->logUnannounce(
@@ -4520,13 +4538,6 @@ void MoQSession::onSubscribeAnnouncesOk(
     SubscribeAnnouncesOk subscribeAnnouncesOk) {
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnouncesOk.trackNamespacePrefix
-             << " - unexpected in simple client, sess=" << this;
-  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-}
-
-void MoQSession::onSubscribeAnnouncesError(
-    SubscribeAnnouncesError subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
              << " - unexpected in simple client, sess=" << this;
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }

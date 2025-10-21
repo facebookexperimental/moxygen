@@ -136,6 +136,29 @@ class MoQRelaySession::MoQRelayPendingRequestState
     new (&subscribeAnnouncesStorage_) auto(std::move(promise));
   }
 
+  folly::Expected<Type, folly::Unit> setError(
+      RequestError error,
+      FrameType frameType) override {
+    switch (type_) {
+      case Type::ANNOUNCE:
+        if (auto* announcePtr = tryGetAnnounce(this)) {
+          announcePtr->promise.setValue(
+              folly::makeUnexpected(std::move(error)));
+          return type_;
+        }
+        return folly::makeUnexpected(folly::unit);
+      case Type::SUBSCRIBE_ANNOUNCES:
+        if (auto* subscribeAnnouncesPtr = tryGetSubscribeAnnounces(this)) {
+          subscribeAnnouncesPtr->setValue(
+              folly::makeUnexpected(std::move(error)));
+          return type_;
+        }
+        return folly::makeUnexpected(folly::unit);
+      default:
+        return PendingRequestState::setError(std::move(error), frameType);
+    }
+  }
+
   // Factory methods for announcement types
   static std::unique_ptr<MoQRelayPendingRequestState> makeAnnounce(
       PendingAnnounce pendingAnnounce) {
@@ -184,26 +207,6 @@ class MoQRelaySession::MoQRelayPendingRequestState
       return &relay->subscribeAnnouncesStorage_;
     }
     return nullptr;
-  }
-
-  void deliverError(RequestID reqID) override {
-    switch (getType()) {
-      case Type::ANNOUNCE: {
-        announceStorage_.promise.setValue(folly::makeUnexpected(AnnounceError(
-            {reqID, AnnounceErrorCode::INTERNAL_ERROR, "session closed"})));
-        break;
-      }
-      case Type::SUBSCRIBE_ANNOUNCES: {
-        subscribeAnnouncesStorage_.setValue(
-            folly::makeUnexpected(SubscribeAnnouncesError(
-                {reqID,
-                 SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-                 "session closed"})));
-        break;
-      }
-      default:
-        PendingRequestState::deliverError(reqID);
-    }
   }
 
  private:
@@ -321,34 +324,6 @@ void MoQRelaySession::onAnnounceOk(AnnounceOk annOk) {
   annOk.trackNamespace = announcePtr->trackNamespace;
   announcePtr->promise.setValue(std::move(annOk));
   pendingRequests_.erase(annIt);
-}
-
-void MoQRelaySession::onAnnounceError(AnnounceError announceError) {
-  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
-             << " errorCode=" << folly::to_underlying(announceError.errorCode)
-             << " reason=" << announceError.reasonPhrase << " sess=" << this;
-
-  if (logger_) {
-    logger_->logAnnounceError(
-        announceError,
-        TrackNamespace(), // TODO: real namespace from pendingRequest
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-
-  auto pendingIt = pendingRequests_.find(announceError.requestID.value);
-  if (pendingIt != pendingRequests_.end()) {
-    auto* announcePtr =
-        MoQRelayPendingRequestState::tryGetAnnounce(pendingIt->second.get());
-    if (announcePtr) {
-      announcePtr->promise.setValue(folly::makeUnexpected(announceError));
-      pendingRequests_.erase(pendingIt);
-      return;
-    }
-  }
-  XLOG(ERR) << "AnnounceError for unknown or invalid request ID="
-            << announceError.requestID.value << " sess=" << this;
-  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
 void MoQRelaySession::onAnnounceCancel(AnnounceCancel announceCancel) {
@@ -593,40 +568,6 @@ void MoQRelaySession::onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) {
 
   subscribeAnnouncesPtr->setValue(std::move(saOk));
   pendingRequests_.erase(saIt);
-}
-
-void MoQRelaySession::onSubscribeAnnouncesError(
-    SubscribeAnnouncesError subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
-             << " errorCode="
-             << folly::to_underlying(subscribeAnnouncesError.errorCode)
-             << " reason=" << subscribeAnnouncesError.reasonPhrase
-             << " sess=" << this;
-
-  if (logger_) {
-    logger_->logSubscribeAnnouncesError(
-        subscribeAnnouncesError,
-        TrackNamespace(), // TODO: use namespace from pendingRequest
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-
-  auto pendingIt =
-      pendingRequests_.find(subscribeAnnouncesError.requestID.value);
-  if (pendingIt != pendingRequests_.end()) {
-    if (auto* subscribeAnnouncesPtr =
-            MoQRelayPendingRequestState::tryGetSubscribeAnnounces(
-                pendingIt->second.get())) {
-      subscribeAnnouncesPtr->setValue(
-          folly::makeUnexpected(subscribeAnnouncesError));
-      pendingRequests_.erase(pendingIt);
-      return;
-    }
-  }
-  XLOG(ERR) << "SubscribeAnnouncesError for unknown/invalid request ID="
-            << subscribeAnnouncesError.requestID.value << " sess=" << this;
-  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-  return;
 }
 
 void MoQRelaySession::unsubscribeAnnounces(

@@ -447,12 +447,16 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::SUBSCRIBE_ERROR: {
+    case FrameType::SUBSCRIBE_ERROR:
+    case FrameType::FETCH_ERROR:
+    case FrameType::ANNOUNCE_ERROR:
+    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
+    case FrameType::PUBLISH_ERROR: {
       auto res = moqFrameParser_.parseRequestError(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribeError(std::move(res.value()));
+          callback_->onRequestError(std::move(res.value()), curFrameType_);
         }
       } else {
         return folly::makeUnexpected(res.error());
@@ -497,18 +501,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       if (res) {
         if (callback_) {
           callback_->onPublishOk(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
-    case FrameType::PUBLISH_ERROR: {
-      auto res = moqFrameParser_.parseRequestError(
-          cursor, curFrameLength_, curFrameType_);
-      if (res) {
-        if (callback_) {
-          callback_->onPublishError(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
@@ -570,18 +562,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::FETCH_ERROR: {
-      auto res = moqFrameParser_.parseRequestError(
-          cursor, curFrameLength_, curFrameType_);
-      if (res) {
-        if (callback_) {
-          callback_->onFetchError(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
     case FrameType::ANNOUNCE: {
       auto res = moqFrameParser_.parseAnnounce(cursor, curFrameLength_);
       if (res) {
@@ -598,18 +578,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       if (res) {
         if (callback_) {
           callback_->onAnnounceOk(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
-    case FrameType::ANNOUNCE_ERROR: {
-      auto res = moqFrameParser_.parseRequestError(
-          cursor, curFrameLength_, curFrameType_);
-      if (res) {
-        if (callback_) {
-          callback_->onAnnounceError(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
@@ -656,18 +624,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       if (res) {
         if (callback_) {
           callback_->onSubscribeAnnouncesOk(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
-    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR: {
-      auto res = moqFrameParser_.parseRequestError(
-          cursor, curFrameLength_, curFrameType_);
-      if (res) {
-        if (callback_) {
-          callback_->onSubscribeAnnouncesError(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());

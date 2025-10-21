@@ -59,29 +59,26 @@ class MoQControlCodec : public MoQCodec {
     virtual void onSubscribe(SubscribeRequest subscribeRequest) = 0;
     virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) = 0;
     virtual void onSubscribeOk(SubscribeOk subscribeOk) = 0;
-    virtual void onSubscribeError(SubscribeError subscribeError) = 0;
+    virtual void onRequestError(
+        RequestError subscribeError,
+        FrameType frameType) = 0;
     virtual void onSubscribeDone(SubscribeDone subscribeDone) = 0;
     virtual void onUnsubscribe(Unsubscribe unsubscribe) = 0;
     virtual void onPublish(PublishRequest publish) = 0;
     virtual void onPublishOk(PublishOk publishOk) = 0;
-    virtual void onPublishError(PublishError publishError) = 0;
     virtual void onMaxRequestID(MaxRequestID maxSubId) = 0;
     virtual void onRequestsBlocked(RequestsBlocked subscribesBlocked) = 0;
     virtual void onFetch(Fetch fetch) = 0;
     virtual void onFetchCancel(FetchCancel fetchCancel) = 0;
     virtual void onFetchOk(FetchOk fetchOk) = 0;
-    virtual void onFetchError(FetchError fetchError) = 0;
     virtual void onAnnounce(Announce announce) = 0;
     virtual void onAnnounceOk(AnnounceOk announceOk) = 0;
-    virtual void onAnnounceError(AnnounceError announceError) = 0;
     virtual void onUnannounce(Unannounce unannounce) = 0;
     virtual void onAnnounceCancel(AnnounceCancel announceCancel) = 0;
     virtual void onSubscribeAnnounces(
         SubscribeAnnounces subscribeAnnounces) = 0;
     virtual void onSubscribeAnnouncesOk(
         SubscribeAnnouncesOk subscribeAnnouncesOk) = 0;
-    virtual void onSubscribeAnnouncesError(
-        SubscribeAnnouncesError announceError) = 0;
     virtual void onUnsubscribeAnnounces(
         UnsubscribeAnnounces unsubscribeAnnounces) = 0;
     virtual void onTrackStatus(TrackStatus trackStatus) = 0;
