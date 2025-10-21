@@ -1651,6 +1651,11 @@ void MoQSession::PendingRequestState::deliverError(RequestID reqID) {
           {reqID, TrackStatusErrorCode::INTERNAL_ERROR, "session closed"})));
       break;
     }
+    case Type::FETCH: {
+      storage_.fetchTrack_->fetchError(
+          {reqID, FetchErrorCode::INTERNAL_ERROR, "session closed"});
+      break;
+    }
   }
 }
 
@@ -4073,6 +4078,9 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto fetchTrack = fetches_.try_emplace(reqID, trackReceiveState);
   XCHECK(fetchTrack.second)
       << "RequestID already in use id=" << reqID << " sess=" << this;
+  pendingRequests_.emplace(
+      trackReceiveState->getRequestID(),
+      PendingRequestState::makeFetch(trackReceiveState));
   auto fetchResult = co_await trackReceiveState->fetchFuture();
   XLOG(DBG1) << __func__
              << " fetchReady trackReceiveState=" << trackReceiveState;

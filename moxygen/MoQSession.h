@@ -510,6 +510,7 @@ class MoQSession : public Subscriber,
       SUBSCRIBE_TRACK,
       PUBLISH,
       TRACK_STATUS,
+      FETCH,
       // Announcement types - only handled by MoQRelaySession subclass
       ANNOUNCE,
       SUBSCRIBE_ANNOUNCES
@@ -527,6 +528,7 @@ class MoQSession : public Subscriber,
       folly::coro::Promise<folly::Expected<PublishOk, PublishError>> publish_;
       folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>
           trackStatus_;
+      std::shared_ptr<FetchTrackReceiveState> fetchTrack_;
     } storage_;
 
    public:
@@ -557,6 +559,14 @@ class MoQSession : public Subscriber,
       return result;
     }
 
+    static std::unique_ptr<PendingRequestState> makeFetch(
+        std::shared_ptr<FetchTrackReceiveState> state) {
+      auto result = std::make_unique<PendingRequestState>();
+      result->type_ = Type::FETCH;
+      new (&result->storage_.fetchTrack_) auto(std::move(state));
+      return result;
+    }
+
     // Delete copy/move operations as this is held in unique_ptr
     PendingRequestState(const PendingRequestState&) = delete;
     PendingRequestState(PendingRequestState&&) = delete;
@@ -574,6 +584,10 @@ class MoQSession : public Subscriber,
           break;
         case Type::TRACK_STATUS:
           storage_.trackStatus_.~Promise();
+          break;
+        case Type::FETCH:
+          // If FETCH storage is added, destroy it here, e.g.:
+          storage_.fetchTrack_.~shared_ptr<FetchTrackReceiveState>();
           break;
         case Type::ANNOUNCE:
         case Type::SUBSCRIBE_ANNOUNCES:
@@ -602,6 +616,10 @@ class MoQSession : public Subscriber,
     folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>*
     tryGetTrackStatus() {
       return type_ == Type::TRACK_STATUS ? &storage_.trackStatus_ : nullptr;
+    }
+
+    std::shared_ptr<FetchTrackReceiveState>* tryGetFetchTrack() {
+      return type_ == Type::FETCH ? &storage_.fetchTrack_ : nullptr;
     }
 
     Type getType() const {
