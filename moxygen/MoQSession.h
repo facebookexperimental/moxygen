@@ -612,7 +612,7 @@ class MoQSession : public Subscriber,
         case Type::SUBSCRIBE_ANNOUNCES:
           return FrameType::SUBSCRIBE_ANNOUNCES_ERROR;
       }
-      __builtin_unreachable();
+      folly::assume_unreachable();
     }
 
     virtual folly::Expected<Type, folly::Unit> setError(
