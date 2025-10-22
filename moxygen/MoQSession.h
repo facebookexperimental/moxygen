@@ -332,6 +332,12 @@ class MoQSession : public Subscriber,
     return nextRequestID_;
   }
 
+  // Making this public temporarily until we have param management in a single
+  // place
+  static folly::Optional<uint64_t> getDeliveryTimeoutIfPresent(
+      const std::vector<TrackRequestParameter>& params,
+      uint64_t version);
+
  private:
   static const folly::RequestToken& sessionRequestToken();
 
@@ -428,9 +434,6 @@ class MoQSession : public Subscriber,
       const std::vector<SetupParameter>& params);
   static bool shouldIncludeMoqtImplementationParam(
       const std::vector<uint64_t>& supportedVersions);
-  static folly::Optional<uint64_t> getDeliveryTimeoutIfPresent(
-      const std::vector<TrackRequestParameter>& params,
-      uint64_t version);
 
  protected:
   // Protected members and methods for MoQRelaySession subclass access

@@ -228,7 +228,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
           .RetiresOnSaturation();
     }
     EXPECT_CALL(*serverPublisher, fetch(_, _))
-        .WillOnce(testing::Invoke(lambda))
+        .WillOnce(lambda)
         .RetiresOnSaturation();
   }
 
@@ -300,7 +300,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
       MoQControlCodec::Direction direction = MoQControlCodec::Direction::SERVER,
       const folly::Optional<SubscribeErrorCode>& error = folly::none) {
     EXPECT_CALL(*getPublisher(direction), subscribe(_, _))
-        .WillOnce(testing::Invoke(
+        .WillOnce(
             [this, lambda = std::move(lambda), error, direction](
                 auto sub, auto pub) -> TaskSubscribeResult {
               EXPECT_CALL(
@@ -318,7 +318,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                     .RetiresOnSaturation();
               }
               return lambda(sub, pub);
-            }))
+            })
         .RetiresOnSaturation();
   }
 
@@ -329,11 +329,10 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
         *getPublisherStatsCallback(oppositeDirection(recipient)),
         onSubscribeDone(_));
     EXPECT_CALL(*getSubscriberStatsCallback(recipient), onSubscribeDone(_));
-    EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
-        .WillOnce(testing::Invoke([&] {
-          subscribeDone_.post();
-          return folly::unit;
-        }));
+    EXPECT_CALL(*subscribeCallback_, subscribeDone(_)).WillOnce([&] {
+      subscribeDone_.post();
+      return folly::unit;
+    });
   }
 
   // GCC barfs when using struct brace initializers inside a coroutine?
@@ -623,10 +622,10 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
   folly::coro::Baton baton;
   EXPECT_CALL(
       *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
-      .WillOnce(testing::Invoke([&] {
+      .WillOnce([&] {
         baton.post();
         return folly::unit;
-      }));
+      });
   expectFetchSuccess();
   EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
   auto res =
@@ -658,18 +657,18 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
   });
   EXPECT_CALL(*subscribeCallback_, datagram(_, _))
-      .WillOnce(testing::Invoke([&](const auto& header, auto) {
+      .WillOnce([&](const auto& header, auto) {
         EXPECT_EQ(header.length, 11);
         return folly::unit;
-      }));
+      });
   expectSubscribeDone();
   folly::coro::Baton fetchBaton;
   EXPECT_CALL(
       *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
-      .WillOnce(testing::Invoke([&] {
+      .WillOnce([&] {
         fetchBaton.post();
         return folly::unit;
-      }));
+      });
   auto res = co_await clientSession_->join(
       getSubscribe(kTestTrackName),
       subscribeCallback_,
@@ -738,19 +737,19 @@ CO_TEST_P_X(V11PlusTests, AbsoluteJoiningFetch) {
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
   });
   EXPECT_CALL(*subscribeCallback_, datagram(_, _))
-      .WillRepeatedly(testing::Invoke([&](const auto& header, auto) {
+      .WillRepeatedly([&](const auto& header, auto) {
         EXPECT_EQ(header.length, 11);
         return folly::unit;
-      }));
+      });
   expectSubscribeDone();
   folly::coro::Baton fetchBaton;
   for (uint32_t group = 2; group < 6; group++) {
     EXPECT_CALL(
         *fetchCallback_, object(group, 0, 0, HasChainDataLengthOf(100), _, _))
-        .WillRepeatedly(testing::Invoke([&] {
+        .WillRepeatedly([&] {
           fetchBaton.post();
           return folly::unit;
-        }));
+        });
   }
   auto res = co_await clientSession_->join(
       getSubscribe(kTestTrackName),
@@ -810,10 +809,10 @@ CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   folly::coro::Baton baton;
   EXPECT_CALL(
       *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
-      .WillOnce(testing::Invoke([&] {
+      .WillOnce([&] {
         baton.post();
         return folly::unit;
-      }));
+      });
   co_await baton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -2847,6 +2846,127 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Test that delivery timeout in PUBLISH request is extracted and used
+CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+      {}                        // params - will add delivery timeout
+  };
+
+  // Add delivery timeout parameter (5000ms)
+  pub.params.push_back(
+      {getDeliveryTimeoutParamKey(getServerSelectedVersion()), "", 5000, {}});
+
+  // Setup server to verify params and respond with PUBLISH_OK
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(testing::Invoke(
+          [this](
+              const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            // Verify delivery timeout parameter was received
+            EXPECT_EQ(actualPub.params.size(), 1);
+            EXPECT_EQ(
+                actualPub.params.at(0).key,
+                getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+            EXPECT_EQ(actualPub.params.at(0).asUint64, 5000);
+
+            return makePublishOkResult(actualPub);
+          }));
+
+  auto handle = makePublishHandle();
+
+  auto result = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(result.hasValue());
+
+  auto replyResult = co_await std::move(result->reply);
+  EXPECT_TRUE(replyResult.hasValue());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Test that delivery timeout in SUBSCRIBE_UPDATE updates trackPublisher
+CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
+  try {
+    co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+    PublishRequest pub{
+        RequestID(0),
+        FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+        TrackAlias(100),
+        GroupOrder::Default,
+        AbsoluteLocation{0, 100}, // largest
+        true,                     // forward
+        {}                        // params
+    };
+    std::shared_ptr<SubscriptionHandle> capturedHandle;
+    // Setup server to respond with PUBLISH_OK
+    EXPECT_CALL(*serverSubscriber, publish(_, _))
+        .WillOnce(testing::Invoke(
+            [&](const PublishRequest& actualPub,
+                std::shared_ptr<SubscriptionHandle> subHandle)
+                -> Subscriber::PublishResult {
+              capturedHandle = std::move(subHandle);
+              return makePublishOkResult(actualPub);
+            }));
+
+    auto handle = makePublishHandle();
+
+    // Initiate publish
+    auto publishResult = clientSession_->publish(std::move(pub), handle);
+    EXPECT_TRUE(publishResult.hasValue()) << "Publish should succeed initially";
+
+    // Wait for server processing to finish
+    auto replyRes = co_await std::move(publishResult.value().reply);
+    EXPECT_TRUE(replyRes.hasValue()) << "Publish should succeed";
+
+    // Now send a SubscribeUpdate with delivery timeout parameter
+    SubscribeUpdate subscribeUpdate{
+        RequestID(0),
+        RequestID(0),
+        AbsoluteLocation{0, 0},
+        10,
+        kDefaultPriority + 1,
+        true,
+        {} // params - will add delivery timeout
+    };
+
+    // Add delivery timeout parameter (7000ms)
+    subscribeUpdate.params.push_back(
+        {getDeliveryTimeoutParamKey(getServerSelectedVersion()), "", 7000, {}});
+
+    EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
+    EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
+
+    folly::coro::Baton subscribeUpdateInvoked;
+    EXPECT_CALL(*handle, subscribeUpdate)
+        .WillOnce(testing::Invoke([&](const auto& actualUpdate) {
+          // Verify delivery timeout parameter was received
+          EXPECT_EQ(actualUpdate.params.size(), 1);
+          EXPECT_EQ(
+              actualUpdate.params.at(0).key,
+              getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+          EXPECT_EQ(actualUpdate.params.at(0).asUint64, 7000);
+          subscribeUpdateInvoked.post();
+        }));
+    capturedHandle->subscribeUpdate(subscribeUpdate);
+
+    co_await subscribeUpdateInvoked;
+
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  } catch (...) {
+    XCHECK(false) << "Exception thrown: "
+                  << folly::exceptionStr(std::current_exception());
+  }
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
   try {
     co_await setupMoQSessionForPublish(initialMaxRequestID_);
@@ -3529,3 +3649,181 @@ CO_TEST_P_X(MoQSessionTest, ServerClosesDuringSubscribeHandler) {
 // write stream data fails for object
 // publish with stream EOM
 // uni stream or datagram before setup complete
+
+// Test that delivery timeout in PUBLISH_OK updates trackPublisher
+CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+      {}                        // params
+  };
+
+  // Setup server to respond with PUBLISH_OK containing delivery timeout param
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(testing::Invoke(
+          [this](
+              const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto mockConsumer = std::make_shared<MockTrackConsumer>();
+            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                .WillRepeatedly(testing::Return(
+                    folly::Expected<folly::Unit, MoQPublishError>(
+                        folly::unit)));
+
+            // Create PublishOk with delivery timeout parameter
+            PublishOk publishOk{
+                actualPub.requestID,
+                true, // forward
+                128,  // subscriber priority
+                GroupOrder::Default,
+                LocationType::LargestObject,
+                folly::none,                       // start
+                folly::make_optional(uint64_t(0)), // endGroup
+                {} // params - will add delivery timeout
+            };
+
+            // Add delivery timeout parameter (3000ms)
+            publishOk.params.push_back(
+                {getDeliveryTimeoutParamKey(getServerSelectedVersion()),
+                 "",
+                 3000,
+                 {}});
+
+            auto replyTask =
+                folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                    std::move(publishOk));
+
+            return Subscriber::PublishConsumerAndReplyTask{
+                std::static_pointer_cast<TrackConsumer>(mockConsumer),
+                std::move(replyTask)};
+          }));
+
+  auto handle = makePublishHandle();
+
+  auto result = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(result.hasValue());
+
+  // Get the reply to trigger processing of PUBLISH_OK
+  auto replyResult = co_await std::move(result->reply);
+  EXPECT_TRUE(replyResult.hasValue());
+
+  // Verify the delivery timeout parameter was received
+  EXPECT_EQ(replyResult->params.size(), 1);
+  EXPECT_EQ(
+      replyResult->params.at(0).key,
+      getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+  EXPECT_EQ(replyResult->params.at(0).asUint64, 3000);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Test that PUBLISH_OK without delivery timeout param doesn't fail
+CO_TEST_P_X(MoQSessionTest, PublishOkWithoutDeliveryTimeout) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+      {}                        // params
+  };
+
+  // Setup server to respond with PUBLISH_OK without delivery timeout param
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(testing::Invoke(
+          [](const PublishRequest& actualPub,
+             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
+            return makePublishOkResult(actualPub);
+          }));
+
+  auto handle = makePublishHandle();
+
+  auto result = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(result.hasValue());
+
+  auto replyResult = co_await std::move(result->reply);
+  EXPECT_TRUE(replyResult.hasValue());
+
+  // Verify no params
+  EXPECT_EQ(replyResult->params.size(), 0);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Test that delivery timeout in PUBLISH_OK with zero value is handled correctly
+CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+      {}                        // params
+  };
+
+  // Setup server to respond with PUBLISH_OK containing zero delivery timeout
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(testing::Invoke(
+          [this](
+              const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto mockConsumer = std::make_shared<MockTrackConsumer>();
+            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                .WillRepeatedly(testing::Return(
+                    folly::Expected<folly::Unit, MoQPublishError>(
+                        folly::unit)));
+
+            PublishOk publishOk{
+                actualPub.requestID,
+                true,
+                128,
+                GroupOrder::Default,
+                LocationType::LargestObject,
+                folly::none,
+                folly::make_optional(uint64_t(0)),
+                {}};
+
+            // Add zero delivery timeout parameter
+            publishOk.params.push_back(
+                {getDeliveryTimeoutParamKey(getServerSelectedVersion()),
+                 "",
+                 0,
+                 {}});
+
+            auto replyTask =
+                folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                    std::move(publishOk));
+
+            return Subscriber::PublishConsumerAndReplyTask{
+                std::static_pointer_cast<TrackConsumer>(mockConsumer),
+                std::move(replyTask)};
+          }));
+
+  auto handle = makePublishHandle();
+
+  auto result = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(result.hasValue());
+
+  auto replyResult = co_await std::move(result->reply);
+  EXPECT_TRUE(replyResult.hasValue());
+
+  // Verify the zero timeout parameter was received
+  EXPECT_EQ(replyResult->params.size(), 1);
+  EXPECT_EQ(replyResult->params.at(0).asUint64, 0);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

@@ -978,17 +978,36 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   void onTooManyBytesBuffered() override;
 
-  void subscribeUpdate(SubscribeUpdate subscribeUpdate) {
+  void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     if (!subscriptionHandle_) {
       XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
                 << requestID_ << " trackPub=" << this;
       // TODO: I think we need to buffer it?
     } else {
-      auto negotiatedVersion = session_->getNegotiatedVersion();
-      setDeliveryTimeout(getDeliveryTimeoutIfPresent(
-          subscribeUpdate.params, *negotiatedVersion));
+      auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
+          subscribeUpdate.params, *session_->getNegotiatedVersion());
+      if (timeoutValue.has_value()) {
+        setDeliveryTimeout(timeoutValue);
+      }
       setForward(subscribeUpdate.forward);
       subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate));
+    }
+  }
+
+  void onPublishOk(const PublishOk& publishOk) {
+    auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
+        publishOk.params, *session_->getNegotiatedVersion());
+    if (timeoutValue.has_value()) {
+      setDeliveryTimeout(timeoutValue);
+    }
+  }
+
+  void onSubscribeOk(const SubscribeOk& subscribeOk) {
+    setGroupOrder(subscribeOk.groupOrder);
+    auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
+        subscribeOk.params, *session_->getNegotiatedVersion());
+    if (timeoutValue.has_value()) {
+      setDeliveryTimeout(timeoutValue);
     }
   }
 
@@ -2772,12 +2791,12 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     return;
   }
   auto trackPublisher =
-      dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
+      std::static_pointer_cast<TrackPublisherImpl>(pubTrackIt->second);
   if (!trackPublisher) {
     XLOG(ERR) << "SubscriptionRequestID in SubscribeUpdate is for a FETCH, id="
               << subscriptionRequestID << " sess=" << this;
   } else {
-    trackPublisher->subscribeUpdate(std::move(subscribeUpdate));
+    trackPublisher->onSubscribeUpdate(std::move(subscribeUpdate));
   }
 }
 
@@ -2835,6 +2854,14 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
               << " is not a publish request, sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
+  }
+
+  // Extract delivery timeout from PUBLISH_OK params and update trackPublisher
+  auto trackIt = pubTracks_.find(publishOk.requestID);
+  if (trackIt != pubTracks_.end()) {
+    auto trackPublisher =
+        std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
+    trackPublisher->onPublishOk(publishOk);
   }
 
   publishPtr->setValue(std::move(publishOk));
@@ -3802,7 +3829,7 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
     return nullptr;
   }
   auto trackPublisher =
-      std::dynamic_pointer_cast<TrackPublisherImpl>(it->second);
+      std::static_pointer_cast<TrackPublisherImpl>(it->second);
   if (!trackPublisher) {
     XLOG(ERR) << "subscribe ID maps to a fetch, not a subscribe, id="
               << subOk.requestID;
@@ -3812,7 +3839,7 @@ std::shared_ptr<TrackConsumer> MoQSession::subscribeOk(
          "Invalid internal state"});
     return nullptr;
   }
-  trackPublisher->setGroupOrder(subOk.groupOrder);
+  trackPublisher->onSubscribeOk(subOk);
   auto res = moqFrameWriter_.writeSubscribeOk(controlWriteBuf_, subOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
