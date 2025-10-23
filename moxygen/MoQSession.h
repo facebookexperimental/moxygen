@@ -12,6 +12,8 @@
 #include <moxygen/events/MoQExecutor.h>
 
 #include <folly/MaybeManagedPtr.h>
+#include <folly/Optional.h>
+#include <folly/container/F14Map.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Task.h>
 #include <folly/logging/xlog.h>
