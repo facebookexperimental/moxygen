@@ -1,7 +1,7 @@
 # Dockerfile for building the Moq Relay Server
 #
 # docker build -t moqrelay -f docker/Dockerfile .
-# 
+#
 # To run the container:
 #
 # Using default values (udp port 4433, logging DBG)
@@ -33,15 +33,17 @@
 #
 FROM ubuntu:latest
 
-# Install essential build tools and dependencies
+# Install python3 (getdeps.py handles all other build dependencies)
 RUN apt-get update && apt-get install -y \
     build-essential \
-    cmake \
     git \
     gcc \
     g++ \
     make \
+    libssl-dev \
+    m4 \
     doxygen \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up working directory
@@ -50,8 +52,8 @@ WORKDIR /app
 # Copy the rest of the project files
 COPY . .
 
-# Run the build script (already running as root)
-RUN ./build.sh
+# Run the build script using getdeps.py (already running as root)
+RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages moxygen
 RUN ./scripts/create-server-certs.sh
 
 # Set default environment variables
@@ -63,4 +65,4 @@ ENV MOQ_ENDPOINT=/moq
 
 EXPOSE ${MOQ_PORT}/udp
 
-CMD ["sh", "-c", "./_build/bin/moqrelayserver -port ${MOQ_PORT} -cert ${CERT_FILE} -key ${KEY_FILE} -endpoint \"${MOQ_ENDPOINT}\" --logging ${MOQ_LOG_LEVEL}"]
+CMD ["sh", "-c", "eval $(./build/fbcode_builder/getdeps.py env moxygen) && INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && $INST_DIR/bin/moqrelayserver -port ${MOQ_PORT} -cert ${CERT_FILE} -key ${KEY_FILE} -endpoint \"${MOQ_ENDPOINT}\" --logging ${MOQ_LOG_LEVEL}"]
