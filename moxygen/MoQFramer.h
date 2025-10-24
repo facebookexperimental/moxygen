@@ -303,15 +303,26 @@ constexpr uint64_t kVersionDraft12 = 0xff00000C;
 constexpr uint64_t kVersionDraft13 = 0xff00000D;
 constexpr uint64_t kVersionDraft14 = 0xff00000E;
 
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft11;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
+
+enum class TrackRequestParamKey : uint64_t {
+  AUTHORIZATION_TOKEN = 3,
+  DELIVERY_TIMEOUT = 2,
+  MAX_CACHE_DURATION = 4,
+};
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
 // version 8 and minor version 2.
 uint64_t getDraftMajorVersion(uint64_t version);
 constexpr std::array<uint64_t, 2> kSupportedVersions{
-    kVersionDraft11,
-    kVersionDraft12};
+    kVersionDraft12,
+    kVersionDraft14};
+
+bool isSupportedVersion(uint64_t version);
+
+// Returns a comma-separated list of supported versions, useful for logging.
+std::string getSupportedVersionsString();
 
 void writeVarint(
     folly::IOBufQueue& buf,
@@ -572,12 +583,6 @@ struct DatagramObjectHeader {
 };
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
-
-uint64_t getAuthorizationParamKey(uint64_t version);
-
-uint64_t getDeliveryTimeoutParamKey(uint64_t version);
-
-uint64_t getMaxCacheDurationParamKey(uint64_t version);
 
 enum class LocationType : uint8_t {
   NextGroupStart = 1,

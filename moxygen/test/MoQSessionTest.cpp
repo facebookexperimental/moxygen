@@ -117,6 +117,18 @@ struct VersionParams {
   uint64_t serverVersion;
 };
 
+std::vector<VersionParams> getSupportedVersionParams() {
+  // In this, the client and the server will negotiate the exact same version
+  // (the client vector will have just one element, and the server version will
+  // be that element)
+  std::vector<VersionParams> result;
+  for (auto supportedVersion : kSupportedVersions) {
+    result.emplace_back(
+        std::vector<uint64_t>{supportedVersion}, supportedVersion);
+  }
+  return result;
+}
+
 class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                        public MoQSession::ServerSetupCallback {
  public:
@@ -180,13 +192,9 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     EXPECT_EQ(
         setup.params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
     EXPECT_EQ(setup.params.at(1).asUint64, initialMaxRequestID_);
-    if (setup.params.size() > 2) {
-      EXPECT_EQ(
-          setup.params.at(2).key,
-          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
-    } else {
-      EXPECT_LT(setup.supportedVersions[0], kVersionDraft11);
-    }
+    EXPECT_EQ(
+        setup.params.at(2).key,
+        folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
     if (failServerSetup_) {
       return folly::makeTryWith(
           []() -> ServerSetup { throw std::runtime_error("failed"); });
@@ -408,14 +416,6 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   std::shared_ptr<MockPublisherStats> serverPublisherStatsCallback_;
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    MoQSessionTest,
-    MoQSessionTest,
-    testing::Values(
-        VersionParams{{kVersionDraft11}, kVersionDraft11},
-        VersionParams{{kVersionDraft12}, kVersionDraft12},
-        VersionParams{{kVersionDraft14}, kVersionDraft14}));
-
 // Helper function to make a Fetch request
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
   return Fetch(
@@ -530,9 +530,7 @@ using MoQVersionNegotiationTest = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     MoQVersionNegotiationTest,
     MoQVersionNegotiationTest,
-    testing::Values(
-        VersionParams{{kVersionDraft11}, kVersionDraft11},
-        VersionParams{{kVersionDraft12}, kVersionDraft12}));
+    testing::ValuesIn(getSupportedVersionParams()));
 
 TEST_P(MoQVersionNegotiationTest, Setup) {
   folly::coro::blockingWait(setupMoQSession(), getExecutor());
@@ -563,42 +561,6 @@ INSTANTIATE_TEST_SUITE_P(
     CurrentVersionOnly,
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
-
-CO_TEST_P_X(MoQSessionTest, InvalidVersion) {
-  invalidVersion_ = true;
-  clientSession_->start();
-  co_await folly::coro::co_reschedule_on_current_executor;
-  ClientSetup setup;
-  setup.supportedVersions.push_back(0xfaceb001);
-  auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
-  EXPECT_TRUE(serverSetup.hasException());
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
-class InvalidServerVersionTest : public MoQSessionTest {};
-
-INSTANTIATE_TEST_SUITE_P(
-    InvalidServerVersionTest,
-    InvalidServerVersionTest,
-    testing::Values(
-        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent - 1},
-        VersionParams{{kVersionDraftCurrent}, 0xfaceb001}));
-
-CO_TEST_P_X(InvalidServerVersionTest, InvalidServerVersion) {
-  clientSession_->start();
-  co_await folly::coro::co_reschedule_on_current_executor;
-  auto serverSetup = co_await co_awaitTry(
-      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
-  EXPECT_TRUE(serverSetup.hasException());
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
-
-CO_TEST_P_X(InvalidServerVersionTest, ServerSetupUnsupportedVersion) {
-  clientSession_->start();
-  auto serverSetup = co_await co_awaitTry(
-      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
-  EXPECT_TRUE(serverSetup.hasException());
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
 
 // === FETCH tests ===
 
@@ -700,16 +662,7 @@ CO_TEST_P_X(MoQSessionTest, BadRelativeJoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-using V11PlusTests = MoQSessionTest;
-
-INSTANTIATE_TEST_SUITE_P(
-    V11PlusTests,
-    V11PlusTests,
-    testing::Values(VersionParams{
-        {kVersionDraft11, kVersionDraft12, kVersionDraft14},
-        kVersionDraft14}));
-
-CO_TEST_P_X(V11PlusTests, AbsoluteJoiningFetch) {
+CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     for (uint32_t group = 6; group < 10; group++) {
@@ -768,7 +721,7 @@ CO_TEST_P_X(V11PlusTests, AbsoluteJoiningFetch) {
 }
 
 // Subscribe id passed into fetch() doesn't correspond to a subscription.
-CO_TEST_P_X(V11PlusTests, BadAbsoluteJoiningFetch) {
+CO_TEST_P_X(MoQSessionTest, BadAbsoluteJoiningFetch) {
   co_await setupMoQSession();
   auto res = co_await clientSession_->fetch(
       Fetch(
@@ -1404,7 +1357,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
 
 // Checks to see that we return errors if we receive a subscribe request with
 // forward == false and try to send data.
-CO_TEST_P_X(V11PlusTests, SubscribeForwardingFalse) {
+CO_TEST_P_X(MoQSessionTest, SubscribeForwardingFalse) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     auto pubResult1 = pub->datagram(
@@ -1431,7 +1384,7 @@ CO_TEST_P_X(V11PlusTests, SubscribeForwardingFalse) {
 
 // Checks to see that we return errors if we receive a subscribe update with
 // forward == false and try to send data.
-CO_TEST_P_X(V11PlusTests, SubscribeUpdateForwardingFalse) {
+CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   co_await setupMoQSession();
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -1929,7 +1882,7 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
+CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
@@ -1942,7 +1895,8 @@ CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
                                    const auto& param,
                                    const std::string& expectedTokenValue) {
               return param.key ==
-                  getAuthorizationParamKey(getServerSelectedVersion()) &&
+                  folly::to_underlying(
+                         TrackRequestParamKey::AUTHORIZATION_TOKEN) &&
                   param.asAuthToken.tokenType == 0 &&
                   param.asAuthToken.tokenValue == expectedTokenValue;
             };
@@ -1958,9 +1912,12 @@ CO_TEST_P_X(V11PlusTests, TrackStatusWithAuthorizationToken) {
             co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
           }));
   TrackStatus request = getTrackStatus();
-  auto addAuthToken = [this](auto& params, const AuthToken& token) {
+  auto addAuthToken = [](auto& params, const AuthToken& token) {
     params.push_back(
-        {getAuthorizationParamKey(getServerSelectedVersion()), "", 0, token});
+        {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+         "",
+         0,
+         token});
   };
 
   addAuthToken(request.params, {0, "abc", AuthToken::DontRegister});
@@ -1980,16 +1937,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
     EXPECT_EQ(sub.params.size(), 2);
     EXPECT_EQ(
         sub.params.at(0).key,
-        getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
     EXPECT_EQ(sub.params.at(0).asUint64, 5000);
     EXPECT_EQ(
         sub.params.at(1).key,
-        getAuthorizationParamKey(getServerSelectedVersion()));
-    if (getServerSelectedVersion() < kVersionDraft11) {
-      EXPECT_EQ(sub.params.at(1).asString, "auth_token_value");
-    } else {
-      EXPECT_EQ(sub.params.at(1).asAuthToken.tokenValue, "auth_token_value");
-    }
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+    EXPECT_EQ(sub.params.at(1).asAuthToken.tokenValue, "auth_token_value");
 
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub);
@@ -1999,7 +1952,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
 
   SubscribeRequest subscribeRequest = getSubscribe(kTestTrackName);
   subscribeRequest.params.push_back(
-      {getDeliveryTimeoutParamKey(getServerSelectedVersion()), "", 5000, {}});
+      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+       "",
+       5000,
+       {}});
   subscribeRequest.params.push_back(
       getAuthParam(getServerSelectedVersion(), "auth_token_value"));
 
@@ -2256,14 +2212,7 @@ CO_TEST_P_X(MoQSessionTest, TestOnObjectPayload) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-using V12PlusTests = MoQSessionTest;
-
-INSTANTIATE_TEST_SUITE_P(
-    V12PlusTests,
-    V12PlusTests,
-    testing::Values(VersionParams{{kVersionDraft12}, kVersionDraft12}));
-
-CO_TEST_P_X(V12PlusTests, SubscribeOKAfterSubgroup) {
+CO_TEST_P_X(MoQSessionTest, SubscribeOKAfterSubgroup) {
   co_await setupMoQSession();
 
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
@@ -2309,7 +2258,7 @@ CO_TEST_P_X(V12PlusTests, SubscribeOKAfterSubgroup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(V12PlusTests, SubscribeOKArrivesOneByteAtATime) {
+CO_TEST_P_X(MoQSessionTest, SubscribeOKArrivesOneByteAtATime) {
   co_await setupMoQSession();
 
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
@@ -2355,7 +2304,7 @@ CO_TEST_P_X(V12PlusTests, SubscribeOKArrivesOneByteAtATime) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(V12PlusTests, SubscribeOKNeverArrives) {
+CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
   co_await setupMoQSession();
 
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
@@ -2400,7 +2349,7 @@ CO_TEST_P_X(V12PlusTests, SubscribeOKNeverArrives) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(V12PlusTests, SubscriberCancelsBeforeSubscribeOK) {
+CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
   co_await setupMoQSession();
 
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
@@ -2862,7 +2811,10 @@ CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
 
   // Add delivery timeout parameter (5000ms)
   pub.params.push_back(
-      {getDeliveryTimeoutParamKey(getServerSelectedVersion()), "", 5000, {}});
+      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+       "",
+       5000,
+       {}});
 
   // Setup server to verify params and respond with PUBLISH_OK
   EXPECT_CALL(*serverSubscriber, publish(_, _))
@@ -2875,7 +2827,7 @@ CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
             EXPECT_EQ(actualPub.params.size(), 1);
             EXPECT_EQ(
                 actualPub.params.at(0).key,
-                getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+                folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
             EXPECT_EQ(actualPub.params.at(0).asUint64, 5000);
 
             return makePublishOkResult(actualPub);
@@ -2940,7 +2892,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
 
     // Add delivery timeout parameter (7000ms)
     subscribeUpdate.params.push_back(
-        {getDeliveryTimeoutParamKey(getServerSelectedVersion()), "", 7000, {}});
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         "",
+         7000,
+         {}});
 
     EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
     EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
@@ -2952,7 +2907,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
           EXPECT_EQ(actualUpdate.params.size(), 1);
           EXPECT_EQ(
               actualUpdate.params.at(0).key,
-              getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+              folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
           EXPECT_EQ(actualUpdate.params.at(0).asUint64, 7000);
           subscribeUpdateInvoked.post();
         }));
@@ -3691,7 +3646,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
 
             // Add delivery timeout parameter (3000ms)
             publishOk.params.push_back(
-                {getDeliveryTimeoutParamKey(getServerSelectedVersion()),
+                {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
                  "",
                  3000,
                  {}});
@@ -3718,7 +3673,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
   EXPECT_EQ(replyResult->params.size(), 1);
   EXPECT_EQ(
       replyResult->params.at(0).key,
-      getDeliveryTimeoutParamKey(getServerSelectedVersion()));
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
   EXPECT_EQ(replyResult->params.at(0).asUint64, 3000);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -3799,7 +3754,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
 
             // Add zero delivery timeout parameter
             publishOk.params.push_back(
-                {getDeliveryTimeoutParamKey(getServerSelectedVersion()),
+                {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
                  "",
                  0,
                  {}});
@@ -3827,3 +3782,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQSessionTest,
+    MoQSessionTest,
+    testing::ValuesIn(getSupportedVersionParams()));

@@ -942,11 +942,15 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   ts.locType = LocationType::LargestObject;
   // Add some parameters to the TrackStatus.
   ts.params.push_back(
-      {getAuthorizationParamKey(GetParam()),
+      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        writer_.encodeTokenValue(0, "stampolli"),
        0,
        {}});
-  ts.params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
+  ts.params.push_back(
+      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+       "",
+       999,
+       {}});
   auto writeResult = writer_.writeTrackStatus(writeBuf, ts);
   EXPECT_TRUE(writeResult.hasValue());
 
@@ -960,10 +964,14 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
   EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
   EXPECT_EQ(parseResult->params.size(), 2);
-  EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
+  EXPECT_EQ(
+      parseResult->params[0].key,
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
   EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
   EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
-  EXPECT_EQ(parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
+  EXPECT_EQ(
+      parseResult->params[1].key,
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
   EXPECT_EQ(parseResult->params[1].asUint64, 999);
 }
 
@@ -979,11 +987,15 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   std::vector<TrackRequestParameter> params;
   // Add some parameters to the TrackStatus.
   params.push_back(
-      {getAuthorizationParamKey(GetParam()),
+      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        writer_.encodeTokenValue(0, "stampolli"),
        0,
        {}});
-  params.push_back({getDeliveryTimeoutParamKey(GetParam()), "", 999, {}});
+  params.push_back(
+      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+       "",
+       999,
+       {}});
   trackStatusOk.params = params;
   auto writeResult = writer_.writeTrackStatusOk(writeBuf, trackStatusOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -999,10 +1011,14 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
   EXPECT_EQ(parseResult->params.size(), 2);
-  EXPECT_EQ(parseResult->params[0].key, getAuthorizationParamKey(GetParam()));
+  EXPECT_EQ(
+      parseResult->params[0].key,
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
   EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
   EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
-  EXPECT_EQ(parseResult->params[1].key, getDeliveryTimeoutParamKey(GetParam()));
+  EXPECT_EQ(
+      parseResult->params[1].key,
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
   EXPECT_EQ(parseResult->params[1].asUint64, 999);
 }
 
@@ -1048,7 +1064,10 @@ static size_t writeSubscribeRequestWithAuthToken(
   auto encodedToken =
       encodeToken(writer, aliasType, alias, tokenType, tokenValue);
   req.params.push_back(
-      {getAuthorizationParamKey(*writer.getVersion()), encodedToken, 0, {}});
+      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+       encodedToken,
+       0,
+       {}});
   auto writeResult = writer.writeSubscribeRequest(writeBuf, req);
   EXPECT_TRUE(writeResult.hasValue());
   return encodedToken.size();
@@ -1198,7 +1217,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
 
   for (int j = 0; j < 4; ++j) {
     auto frameHeader = writeBufs[j].split(3);
-    auto front = writeBufs[j].split(20);
+    auto front = writeBufs[j].split(19);
     auto origTokenLengthBytes = tokenLengths[j] > 64 ? 2 : 1;
     auto tokenLengthBuf = writeBufs[j].split(origTokenLengthBytes);
     auto tail = writeBufs[j].move();
@@ -1369,12 +1388,12 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraft11, kVersionDraft12, kVersionDraft14));
+    ::testing::ValuesIn(kSupportedVersions));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,
     MoQFramerAuthTest,
-    ::testing::Values(kVersionDraft11));
+    ::testing::ValuesIn(kSupportedVersions));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);

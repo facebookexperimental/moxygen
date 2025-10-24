@@ -1939,15 +1939,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
          {}}));
   }
 
-  // Choose serialization version based on supported v11 vs v12
   uint64_t setupSerializationVersion = kVersionDraft12;
-  for (auto supportedVersion : setup.supportedVersions) {
-    auto majorVersion = getDraftMajorVersion(supportedVersion);
-    if (majorVersion < 12) {
-      setupSerializationVersion = kVersionDraft11;
-      break;
-    }
-  }
+
   // This sets the receive token cache size, but it's necesarily empty
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(setup.params));
@@ -4466,7 +4459,8 @@ folly::Optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
     const std::vector<TrackRequestParameter>& params,
     uint64_t version) {
   for (const auto& param : params) {
-    if (param.key == getDeliveryTimeoutParamKey(version)) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) {
       return param.asUint64;
     }
   }
@@ -4481,7 +4475,8 @@ void MoQSession::aliasifyAuthTokens(
     return;
   }
 
-  auto authParamKey = getAuthorizationParamKey(*version);
+  auto authParamKey =
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
   for (auto it = params.begin(); it != params.end(); ++it) {
     if (it->key == authParamKey) {
       const auto& token = it->asAuthToken;

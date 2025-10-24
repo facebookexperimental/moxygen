@@ -99,11 +99,10 @@ ClientSetup MoQClientBase::getClientSetup(
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxRequestID = 100;
   const uint32_t kMaxAuthTokenCacheSize = 1024;
-  static const std::vector<uint64_t> post11Versions = {
-      kVersionDraft11, kVersionDraft12, kVersionDraft13, kVersionDraft14};
 
   ClientSetup clientSetup{
-      post11Versions,
+      std::vector<uint64_t>(
+          kSupportedVersions.begin(), kSupportedVersions.end()),
       {{folly::to_underlying(SetupKey::MAX_REQUEST_ID),
         "",
         kDefaultMaxRequestID,

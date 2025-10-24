@@ -26,18 +26,6 @@ uint64_t getLocationTypeValue(
 }
 
 // Used in draft 11 and above
-enum class TrackRequestParamKey11 : uint64_t {
-  AUTHORIZATION_TOKEN = 1,
-  DELIVERY_TIMEOUT = 2,
-  MAX_CACHE_DURATION = 4,
-};
-
-// Used in draft 12 and above
-enum class TrackRequestParamKey : uint64_t {
-  AUTHORIZATION_TOKEN = 3,
-  DELIVERY_TIMEOUT = 2,
-  MAX_CACHE_DURATION = 4,
-};
 } // namespace
 
 namespace moxygen {
@@ -107,20 +95,22 @@ uint64_t getDraftMajorVersion(uint64_t version) {
   }
 }
 
-uint64_t getAuthorizationParamKey(uint64_t version) {
-  if (getDraftMajorVersion(version) >= 12) {
-    return folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
-  } else {
-    return folly::to_underlying(TrackRequestParamKey11::AUTHORIZATION_TOKEN);
+bool isSupportedVersion(uint64_t version) {
+  return (
+      std::find(
+          kSupportedVersions.begin(), kSupportedVersions.end(), version) !=
+      kSupportedVersions.end());
+}
+
+std::string getSupportedVersionsString() {
+  std::string result;
+  for (size_t i = 0; i < kSupportedVersions.size(); ++i) {
+    if (i > 0) {
+      result += ",";
+    }
+    result += folly::to<std::string>(kSupportedVersions[i]);
   }
-}
-
-uint64_t getDeliveryTimeoutParamKey(uint64_t version) {
-  return folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
-}
-
-uint64_t getMaxCacheDurationParamKey(uint64_t version) {
-  return folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION);
+  return result;
 }
 
 std::string toString(LocationType loctype) {
@@ -292,11 +282,11 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
     ParamsType paramsType) {
   Parameter p;
   p.key = key;
-  auto majorVersion = getDraftMajorVersion(version);
   // Formatted Auth Tokens from v11
   // Auth in setup from v12
-  if (majorVersion >= 11 && key == getAuthorizationParamKey(version) &&
-      (paramsType == ParamsType::Request || majorVersion >= 12)) {
+  const auto authKey =
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
+  if (key == authKey) {
     auto res = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!res) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -358,12 +348,13 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     folly::Expected<folly::Optional<Parameter>, ErrorCode> res;
 
     if ((paramsType == ParamsType::Request &&
-         key->first == getDeliveryTimeoutParamKey(version)) ||
+         key->first ==
+             folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) ||
         ((key->first & 0x01) == 0 &&
          (paramsType != ParamsType::Request ||
           key->first !=
-              getAuthorizationParamKey(
-                  version)) /* pre v11, track-request=AUTH=2*/)) {
+              folly::to_underlying(
+                  TrackRequestParamKey::AUTHORIZATION_TOKEN)))) {
       res = parseIntParam(cursor, length, version, key->first);
     } else {
       res = parseVariableParam(
@@ -398,14 +389,11 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
     if (!version) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    auto majorVersion = getDraftMajorVersion(version->first);
-    if (majorVersion < 11) {
+    if (!isSupportedVersion(version->first)) {
       XLOG(WARN) << "Peer advertised unsupported version " << version->first
-                 << " (major=" << majorVersion << "), minimum supported is 11";
+                 << ", supported versions are: "
+                 << getSupportedVersionsString();
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    if (majorVersion < 12) {
-      serializationVersion = kVersionDraft11;
     }
     clientSetup.supportedVersions.push_back(version->first);
     length -= version->second;
@@ -441,10 +429,9 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= version->second;
-  auto majorVersion = getDraftMajorVersion(version->first);
-  if (majorVersion < 11) {
-    XLOG(WARN) << "Peer selected unsupported version " << version->first
-               << " (major=" << majorVersion << "), minimum supported is 11";
+  if (!isSupportedVersion(version->first)) {
+    XLOG(WARN) << "Peer advertised unsupported version " << version->first
+               << ", supported versions are: " << getSupportedVersionsString();
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   serverSetup.selectedVersion = version->first;
@@ -2127,10 +2114,9 @@ std::string MoQFrameWriter::encodeTokenValue(
 }
 
 bool includeSetupParam(uint64_t version, SetupKey key) {
-  auto majorVersion = getDraftMajorVersion(version);
   return key == SetupKey::MAX_REQUEST_ID || key == SetupKey::PATH ||
-      (majorVersion >= 11 && key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE) ||
-      (majorVersion >= 12 && key == SetupKey::AUTHORIZATION_TOKEN);
+      key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE ||
+      key == SetupKey::AUTHORIZATION_TOKEN;
 }
 
 WriteResult writeClientSetup(
@@ -2140,12 +2126,11 @@ WriteResult writeClientSetup(
   size_t size = 0;
   bool error = false;
 
-  // Check that all supported versions are >= 11
+  // Check that all supported versions are >= 12
   for (auto ver : clientSetup.supportedVersions) {
-    auto majorVersion = getDraftMajorVersion(ver);
-    XCHECK_GE(majorVersion, 11)
-        << "Supported version " << ver << " (major=" << majorVersion
-        << ") is not supported. Minimum version is 11.";
+    XCHECK(isSupportedVersion(ver))
+        << "Version " << ver << " is not supported. Supported versions are: "
+        << getSupportedVersionsString();
   }
 
   FrameType frameType = FrameType::CLIENT_SETUP;
@@ -2154,10 +2139,6 @@ WriteResult writeClientSetup(
   writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
   uint64_t serializationVersion = kVersionDraft12;
   for (auto ver : clientSetup.supportedVersions) {
-    auto majorVersion = getDraftMajorVersion(ver);
-    if (majorVersion < 12) {
-      serializationVersion = kVersionDraft11;
-    }
     writeVarint(writeBuf, ver, size, error);
   }
 
@@ -2194,12 +2175,10 @@ WriteResult writeServerSetup(
   size_t size = 0;
   bool error = false;
 
-  // Check that selected version is >= 11
-  auto majorVersion = getDraftMajorVersion(serverSetup.selectedVersion);
-  XCHECK_GE(majorVersion, 11)
-      << "Selected version " << serverSetup.selectedVersion
-      << " (major=" << majorVersion
-      << ") is not supported. Minimum version is 11.";
+  XCHECK(isSupportedVersion(serverSetup.selectedVersion))
+      << "Supported version " << serverSetup.selectedVersion
+      << ") is not supported. Supported versions are: "
+      << getSupportedVersionsString();
 
   FrameType frameType = FrameType::SERVER_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
@@ -2449,7 +2428,7 @@ TrackRequestParameter getAuthParam(
     uint64_t tokenType,
     folly::Optional<uint64_t> registerToken) {
   return TrackRequestParameter(
-      {getAuthorizationParamKey(version),
+      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        "",
        0,
        {tokenType, std::move(token), registerToken}});
@@ -2462,14 +2441,18 @@ void MoQFrameWriter::writeTrackRequestParams(
     bool& error) const noexcept {
   CHECK(*version_) << "Version must be set before writing track request params";
   writeVarint(writeBuf, params.size(), size, error);
+  const auto authKey =
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
+  const auto deliveryKey =
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
+  const auto cacheKey =
+      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION);
   for (auto& param : params) {
     writeVarint(writeBuf, param.key, size, error);
 
-    if (param.key == getAuthorizationParamKey(*version_)) {
+    if (param.key == authKey) {
       writeFixedString(writeBuf, param.asString, size, error);
-    } else if (
-        param.key == getDeliveryTimeoutParamKey(*version_) ||
-        param.key == getMaxCacheDurationParamKey(*version_)) {
+    } else if (param.key == deliveryKey || param.key == cacheKey) {
       writeVarint(writeBuf, param.asUint64, size, error);
     }
   }

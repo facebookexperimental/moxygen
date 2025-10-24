@@ -186,20 +186,18 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(
   uint64_t negotiatedVersion = 0;
   // Iterate over supported versions and set the highest version within the
   // range
-  constexpr uint64_t kVersionMin = kVersionDraft11;
-  constexpr uint64_t kVersionMax = kVersionDraft14;
   uint64_t highestVersion = 0;
   for (const auto& version : setup.supportedVersions) {
-    if (version >= kVersionMin && version <= kVersionMax) {
+    if (isSupportedVersion(version)) {
       highestVersion = std::max(highestVersion, version);
     }
   }
   if (highestVersion == 0) {
-    return folly::Try<ServerSetup>(std::runtime_error(
-        "Client does not support versions in the range " +
-        std::to_string(getDraftMajorVersion(kVersionMin)) + " to " +
-        std::to_string(getDraftMajorVersion(kVersionMax))));
+    std::string errorMessage = folly::to<std::string>(
+        "The only supported versions are ", getSupportedVersionsString());
+    return folly::Try<ServerSetup>(std::runtime_error(errorMessage));
   }
+
   negotiatedVersion = highestVersion;
 
   // TODO: Make the default MAX_REQUEST_ID configurable and
