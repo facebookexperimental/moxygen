@@ -102,6 +102,37 @@ bool isSupportedVersion(uint64_t version) {
       kSupportedVersions.end());
 }
 
+bool isLegacyAlpn(folly::StringPiece alpn) {
+  return alpn == kAlpnMoqtLegacy;
+}
+
+folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
+  // Parse "moqt-{N}" format
+  if (alpn.startsWith("moqt-")) {
+    auto draftStr = alpn.subpiece(5); // skip "moqt-"
+    try {
+      auto draftNum = folly::to<uint64_t>(draftStr);
+      return 0xff000000 | draftNum; // Create version constant 0xff0000XX
+    } catch (...) {
+      return folly::none;
+    }
+  }
+
+  return folly::none;
+}
+
+folly::Optional<std::string> getAlpnFromVersion(uint64_t version) {
+  uint64_t draftNum = getDraftMajorVersion(version);
+
+  // Drafts < 15 use legacy ALPN "moq-00"
+  if (draftNum < 15) {
+    return std::string(kAlpnMoqtLegacy);
+  }
+
+  // Draft 15+ use "moqt-{N}" format
+  return folly::to<std::string>("moqt-", draftNum);
+}
+
 std::string getSupportedVersionsString() {
   std::string result;
   for (size_t i = 0; i < kSupportedVersions.size(); ++i) {

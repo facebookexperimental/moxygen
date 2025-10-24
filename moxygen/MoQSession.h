@@ -151,6 +151,8 @@ class MoQSession : public Subscriber,
     return maxRequestID_;
   }
 
+  void setVersionFromAlpn(const std::string& alpn);
+
   static GroupOrder resolveGroupOrder(GroupOrder pubOrder, GroupOrder subOrder);
 
   static std::string getMoQTImplementationString();
@@ -690,7 +692,7 @@ class MoQSession : public Subscriber,
   MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
 
-  folly::Optional<uint64_t> negotiatedVersion_{0};
+  folly::Optional<uint64_t> negotiatedVersion_;
   MoQControlCodec controlCodec_;
   MoQTokenCache tokenCache_{1024};
 };

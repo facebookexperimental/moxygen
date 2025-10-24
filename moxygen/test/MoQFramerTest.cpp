@@ -1402,6 +1402,71 @@ TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff00ffff), 0xffff);
 }
 
+TEST(MoQFramerTestUtils, IsLegacyAlpn) {
+  EXPECT_FALSE(isLegacyAlpn(""));
+
+  EXPECT_TRUE(isLegacyAlpn("moq-00"));
+  EXPECT_FALSE(isLegacyAlpn("moq-01"));
+
+  EXPECT_FALSE(isLegacyAlpn("moqt-15"));
+  EXPECT_FALSE(isLegacyAlpn("moqt-16"));
+  EXPECT_FALSE(isLegacyAlpn("moqt-14"));
+}
+
+TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
+  auto legacyVersion = getVersionFromAlpn("moq-00");
+  EXPECT_FALSE(legacyVersion.hasValue());
+
+  auto draft15 = getVersionFromAlpn("moqt-15");
+  ASSERT_TRUE(draft15.hasValue());
+  EXPECT_EQ(*draft15, 0xff00000f);
+
+  auto invalidAlpn1 = getVersionFromAlpn("h3");
+  EXPECT_FALSE(invalidAlpn1.hasValue());
+
+  auto invalidAlpn2 = getVersionFromAlpn("moqt-");
+  EXPECT_FALSE(invalidAlpn2.hasValue());
+
+  auto invalidAlpn3 = getVersionFromAlpn("moqt-abc");
+  EXPECT_FALSE(invalidAlpn3.hasValue());
+
+  auto emptyAlpn = getVersionFromAlpn("");
+  EXPECT_FALSE(emptyAlpn.hasValue());
+}
+
+TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
+  auto alpnDraft11 = getAlpnFromVersion(kVersionDraft11);
+  ASSERT_TRUE(alpnDraft11.hasValue());
+  EXPECT_EQ(*alpnDraft11, "moq-00");
+
+  auto alpnDraft12 = getAlpnFromVersion(kVersionDraft12);
+  ASSERT_TRUE(alpnDraft12.hasValue());
+  EXPECT_EQ(*alpnDraft12, "moq-00");
+
+  auto alpnDraft14 = getAlpnFromVersion(kVersionDraft14);
+  ASSERT_TRUE(alpnDraft14.hasValue());
+  EXPECT_EQ(*alpnDraft14, "moq-00");
+
+  auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
+  ASSERT_TRUE(alpnDraft15.hasValue());
+  EXPECT_EQ(*alpnDraft15, "moqt-15");
+}
+
+TEST(MoQFramerTestUtils, AlpnRoundTrip) {
+  auto testRoundTrip = [](const std::string& alpn) {
+    auto version = getVersionFromAlpn(alpn);
+    ASSERT_TRUE(version.hasValue()) << "Failed to parse ALPN: " << alpn;
+    auto alpnBack = getAlpnFromVersion(*version);
+    ASSERT_TRUE(alpnBack.hasValue())
+        << "Failed to convert version back to ALPN";
+    EXPECT_EQ(*alpnBack, alpn) << "Round trip failed for ALPN: " << alpn;
+  };
+
+  testRoundTrip("moqt-15");
+  testRoundTrip("moqt-16");
+  testRoundTrip("moqt-20");
+}
+
 // Test class for immutable extensions feature (draft 14+)
 class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
  public:

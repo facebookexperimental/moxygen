@@ -562,6 +562,58 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
 
+TEST(MoQSessionTest, SetVersionFromAlpnLegacy) {
+  folly::EventBase eventBase;
+  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      MoQExecutor);
+
+  session->setVersionFromAlpn("moq-00");
+  EXPECT_FALSE(session->getNegotiatedVersion().has_value());
+}
+
+TEST(MoQSessionTest, SetVersionFromAlpnDraft15) {
+  folly::EventBase eventBase;
+  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      MoQExecutor);
+
+  session->setVersionFromAlpn("moqt-15");
+  EXPECT_EQ(session->getNegotiatedVersion(), 0xff00000f);
+}
+
+TEST(MoQSessionTest, SetVersionFromAlpnDraft16) {
+  folly::EventBase eventBase;
+  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      MoQExecutor);
+
+  session->setVersionFromAlpn("moqt-16");
+  EXPECT_EQ(session->getNegotiatedVersion(), 0xff000010);
+}
+
+TEST(MoQSessionTest, SetVersionFromAlpnInvalidAlpn) {
+  folly::EventBase eventBase;
+  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      MoQExecutor);
+
+  session->setVersionFromAlpn("invalid-alpn");
+  EXPECT_FALSE(session->getNegotiatedVersion().has_value());
+}
+
 // === FETCH tests ===
 
 CO_TEST_P_X(MoQSessionTest, Fetch) {

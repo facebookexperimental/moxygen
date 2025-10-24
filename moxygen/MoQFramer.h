@@ -311,10 +311,20 @@ enum class TrackRequestParamKey : uint64_t {
   MAX_CACHE_DURATION = 4,
 };
 
+// ALPN constants for version negotiation
+constexpr std::string_view kAlpnMoqtLegacy = "moq-00";
+constexpr std::string_view kAlpnMoqtDraft15 = "moqt-15";
+
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
 // version 8 and minor version 2.
 uint64_t getDraftMajorVersion(uint64_t version);
+
+// ALPN utility functions
+bool isLegacyAlpn(folly::StringPiece alpn);
+folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn);
+folly::Optional<std::string> getAlpnFromVersion(uint64_t version);
+
 constexpr std::array<uint64_t, 2> kSupportedVersions{
     kVersionDraft12,
     kVersionDraft14};
