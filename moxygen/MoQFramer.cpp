@@ -1727,6 +1727,7 @@ folly::Expected<RequestError, ErrorCode> MoQFrameParser::parseRequestError(
   // XCHECK that frameType is one of the allowed types for this function
   XCHECK(
       frameType == FrameType::SUBSCRIBE_ERROR ||
+      frameType == FrameType::REQUEST_ERROR ||
       frameType == FrameType::ANNOUNCE_ERROR ||
       frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
       frameType == FrameType::PUBLISH_ERROR ||
@@ -3247,6 +3248,7 @@ WriteResult MoQFrameWriter::writeRequestError(
   // XCHECK that frameType is one of the allowed types for this function
   XCHECK(
       frameType == FrameType::SUBSCRIBE_ERROR ||
+      frameType == FrameType::REQUEST_ERROR ||
       frameType == FrameType::ANNOUNCE_ERROR ||
       frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
       frameType == FrameType::PUBLISH_ERROR ||
@@ -3257,6 +3259,9 @@ WriteResult MoQFrameWriter::writeRequestError(
 
   size_t size = 0;
   bool error = false;
+  if (getDraftMajorVersion(*version_) > 14) {
+    frameType = FrameType::REQUEST_ERROR;
+  }
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   writeVarint(writeBuf, requestError.requestID.value, size, error);

@@ -10,6 +10,27 @@
 
 #include <folly/portability/GTest.h>
 
+namespace {
+moxygen::FrameType getErrorFrameType(
+    uint64_t version,
+    moxygen::FrameType frameType) {
+  return (moxygen::getDraftMajorVersion(version) < 15)
+      ? frameType
+      : moxygen::FrameType::REQUEST_ERROR;
+}
+
+void expectOnRequestError(
+    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
+    uint64_t version,
+    moxygen::FrameType frameType) {
+  EXPECT_CALL(
+      callback,
+      onRequestError(testing::_, getErrorFrameType(version, frameType)))
+      .RetiresOnSaturation();
+}
+
+} // namespace
+
 namespace moxygen::test {
 using testing::_;
 
@@ -43,17 +64,15 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
-    EXPECT_CALL(
-        callback, onRequestError(testing::_, FrameType::SUBSCRIBE_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeDone(testing::_));
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
-    EXPECT_CALL(callback, onRequestError(testing::_, FrameType::PUBLISH_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
     EXPECT_CALL(callback, onAnnounce(testing::_));
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
-    EXPECT_CALL(
-        callback, onRequestError(testing::_, FrameType::ANNOUNCE_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
     EXPECT_CALL(callback, onUnannounce(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
     EXPECT_CALL(callback, onTrackStatusOk(testing::_));
@@ -61,14 +80,14 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
-    EXPECT_CALL(
-        callback,
-        onRequestError(testing::_, FrameType::SUBSCRIBE_ANNOUNCES_ERROR));
+    expectOnRequestError(
+        callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
     EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
-    EXPECT_CALL(callback, onRequestError(testing::_, FrameType::FETCH_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::FETCH_ERROR);
+
     EXPECT_CALL(callback, onFrame(testing::_)).Times(28);
 
     codec.onIngress(std::move(allMsgs), true);
@@ -97,17 +116,15 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
-    EXPECT_CALL(
-        callback, onRequestError(testing::_, FrameType::SUBSCRIBE_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
     EXPECT_CALL(callback, onSubscribeDone(testing::_));
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
-    EXPECT_CALL(callback, onRequestError(testing::_, FrameType::PUBLISH_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
     EXPECT_CALL(callback, onAnnounce(testing::_));
     EXPECT_CALL(callback, onAnnounceOk(testing::_));
-    EXPECT_CALL(
-        callback, onRequestError(testing::_, FrameType::ANNOUNCE_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
     EXPECT_CALL(callback, onUnannounce(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
     EXPECT_CALL(callback, onTrackStatusOk(testing::_));
@@ -115,14 +132,13 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
-    EXPECT_CALL(
-        callback,
-        onRequestError(testing::_, FrameType::SUBSCRIBE_ANNOUNCES_ERROR));
+    expectOnRequestError(
+        callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
     EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
-    EXPECT_CALL(callback, onRequestError(testing::_, FrameType::FETCH_ERROR));
+    expectOnRequestError(callback, GetParam(), FrameType::FETCH_ERROR);
     EXPECT_CALL(callback, onFrame(testing::_)).Times(28);
     while (!readBuf.empty()) {
       codec.onIngress(readBuf.split(1), false);

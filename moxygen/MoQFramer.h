@@ -138,6 +138,7 @@ enum class FrameType : uint64_t {
   SUBSCRIBE = 3,
   SUBSCRIBE_OK = 4,
   SUBSCRIBE_ERROR = 5,
+  REQUEST_ERROR = 5,
   ANNOUNCE = 0x6,
   ANNOUNCE_OK = 0x7,
   ANNOUNCE_ERROR = 0x8,
@@ -302,6 +303,7 @@ constexpr uint64_t kVersionDraft11 = 0xff00000B;
 constexpr uint64_t kVersionDraft12 = 0xff00000C;
 constexpr uint64_t kVersionDraft13 = 0xff00000D;
 constexpr uint64_t kVersionDraft14 = 0xff00000E;
+constexpr uint64_t kVersionDraft15 = 0xff00000F;
 
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
 

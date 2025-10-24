@@ -2867,20 +2867,31 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
              << " sess=" << this;
 
   // Log the error using the appropriate logger method
-  logRequestError(logger_, error, frameType, ControlMessageType::PARSED);
+  auto g = folly::makeGuard([&] {
+    logRequestError(logger_, error, frameType, ControlMessageType::PARSED);
+  });
 
   // Find the pending request and invoke setError
   auto it = pendingRequests_.find(error.requestID);
   if (it != pendingRequests_.end()) {
     auto pendingState = std::move(it->second);
     pendingRequests_.erase(it);
+    if (getDraftMajorVersion(*getNegotiatedVersion()) > 14) {
+      // determine real frame type from pendingRequest
+      frameType = pendingState->getFrameType();
+    }
+
     auto setErrorRes = pendingState->setError(error, frameType);
     if (setErrorRes.hasError()) {
+      XLOG(ERR) << "setError failure id=" << error.requestID
+                << " sess=" << this;
       close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
     }
   } else {
-    // Error: request not found
+    XLOG(ERR) << "Request not found id=" << error.requestID << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
   }
 
   // Additional cleanup for specific error types if needed

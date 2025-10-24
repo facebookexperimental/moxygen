@@ -447,11 +447,16 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::SUBSCRIBE_ERROR:
     case FrameType::FETCH_ERROR:
     case FrameType::ANNOUNCE_ERROR:
     case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
-    case FrameType::PUBLISH_ERROR: {
+    case FrameType::PUBLISH_ERROR:
+      if (getDraftMajorVersion(*moqFrameParser_.getVersion()) > 14) {
+        XLOG(ERR) << "Old frame type=" << folly::to_underlying(curFrameType_);
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      [[fallthrough]];
+    case FrameType::SUBSCRIBE_ERROR: {
       auto res = moqFrameParser_.parseRequestError(
           cursor, curFrameLength_, curFrameType_);
       if (res) {

@@ -1750,7 +1750,7 @@ TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
 INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
-    ::testing::Values(kVersionDraft14));
+    ::testing::Values(kVersionDraft14, kVersionDraft15));
 
 /* Test cases to add
  *
