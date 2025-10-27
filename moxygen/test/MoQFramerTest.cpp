@@ -1765,3 +1765,93 @@ INSTANTIATE_TEST_SUITE_P(
  * write datagram
  * string ify and operator <<
  */
+
+TEST(MoQFramerTest, ClientSetupRejectsDelete) {
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
+  parser.setTokenCacheMaxSize(100);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Write CLIENT_SETUP header
+  writeVarint(writeBuf, 1, size, error); // 1 version
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
+  writeVarint(writeBuf, 1, size, error); // 1 parameter
+
+  // Write AUTHORIZATION_TOKEN parameter with DELETE alias type
+  writeVarint(
+      writeBuf,
+      folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
+      size,
+      error);
+
+  // Token content
+  folly::IOBufQueue tokenBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t tokenSize = 0;
+  writeVarint(
+      tokenBuf, folly::to_underlying(AliasType::DELETE), tokenSize, error);
+  writeVarint(tokenBuf, 42, tokenSize, error); // alias=42
+
+  // Write token length
+  writeVarint(writeBuf, tokenSize, size, error);
+  // Write token content
+  auto tokenChain = tokenBuf.move();
+  writeBuf.append(std::move(tokenChain));
+  size += tokenSize;
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION)
+      << "CLIENT_SETUP must reject DELETE (0x0) alias type";
+}
+
+TEST(MoQFramerTest, ClientSetupRejectsUseAlias) {
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
+  parser.setTokenCacheMaxSize(100);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Write CLIENT_SETUP header
+  writeVarint(writeBuf, 1, size, error); // 1 version
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
+  writeVarint(writeBuf, 1, size, error); // 1 parameter
+
+  // Write AUTHORIZATION_TOKEN parameter with USE_ALIAS alias type
+  writeVarint(
+      writeBuf,
+      folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
+      size,
+      error);
+
+  // Token content
+  folly::IOBufQueue tokenBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t tokenSize = 0;
+  writeVarint(
+      tokenBuf, folly::to_underlying(AliasType::USE_ALIAS), tokenSize, error);
+  writeVarint(tokenBuf, 99, tokenSize, error); // alias=99
+
+  // Write token length
+  writeVarint(writeBuf, tokenSize, size, error);
+  // Write token content
+  auto tokenChain = tokenBuf.move();
+  writeBuf.append(std::move(tokenChain));
+  size += tokenSize;
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION)
+      << "CLIENT_SETUP must reject USE_ALIAS (0x2) alias type";
+}
