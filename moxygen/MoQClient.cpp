@@ -14,7 +14,7 @@ MoQClient::connectQuic(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    std::string alpn,
+    const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
   auto quicClient = co_await QuicConnector::connectQuic(
       exec_->getTypedExecutor<MoQFollyExecutorImpl>()->getBackingEventBase(),
@@ -22,7 +22,7 @@ MoQClient::connectQuic(
           url_.getHost(), url_.getPort(), true), // blocking DNS,
       timeoutMs,
       verifier,
-      "moq-00",
+      alpns,
       transportSettings);
 
   co_return quicClient;

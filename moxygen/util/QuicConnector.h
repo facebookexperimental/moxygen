@@ -28,7 +28,7 @@ class QuicConnector {
       folly::SocketAddress connectAddr,
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
-      std::string alpn,
+      const std::vector<std::string>& alpns,
       const quic::TransportSettings& transportSettings);
 };
 

@@ -75,11 +75,11 @@ MoQClientMobile::connectQuic(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    std::string alpn,
+    const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
   auto sock = std::make_unique<quic::LibevQuicAsyncUDPSocket>(moqlibevEvb_);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
-  fizzContext->setSupportedAlpns({alpn});
+  fizzContext->setSupportedAlpns(alpns);
   auto quicClient = quic::QuicClientTransport::newClient(
       moqlibevEvb_,
       std::move(sock),

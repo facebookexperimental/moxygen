@@ -7,6 +7,8 @@
 #include <moxygen/MoQWebTransportClient.h>
 
 #include <proxygen/lib/http/HQConnector.h>
+#include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
+#include <moxygen/MoQFramer.h>
 
 namespace {
 
@@ -39,6 +41,13 @@ proxygen::HTTPMessage getWebTransportConnectRequest(const proxygen::URL& url) {
   req.setURL(url.makeRelativeURL());
   req.setMethod(proxygen::HTTPMethod::CONNECT);
   req.setUpgradeProtocol("webtransport");
+
+  // Set available MoQT protocols for version negotiation
+  std::vector<std::string> availableProtocols{
+      std::string(moxygen::kAlpnMoqtDraft15),
+      std::string(moxygen::kAlpnMoqtLegacy)};
+  proxygen::HTTPWebTransport::setWTAvailableProtocols(req, availableProtocols);
+
   return req;
 }
 
@@ -142,6 +151,18 @@ void MoQWebTransportClient::HTTPHandler::onHeadersComplete(
             fmt::format("Non-200 response: {0}", resp->getStatusCode())));
     return;
   }
+
+  // Read negotiated MoQT protocol from WT-Protocol header
+  auto protocolResult = proxygen::HTTPWebTransport::getWTProtocol(*resp);
+  if (protocolResult.hasValue()) {
+    client_.negotiatedProtocol_ = protocolResult.value();
+    XLOG(INFO) << "WebTransport client: Negotiated protocol: "
+               << *client_.negotiatedProtocol_;
+  } else {
+    XLOG(WARN) << "WebTransport: No WT-Protocol header in response, "
+               << "will use legacy version negotiation";
+  }
+
   auto wt = txn_->getWebTransport();
   if (!wt) {
     XLOG(ERR) << "Failed to get web transport, exiting";

@@ -68,7 +68,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       folly::SocketAddress connectAddr,
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
-      std::string alpn,
+      const std::vector<std::string>& alpns,
       const quic::TransportSettings& transportSettings) = 0;
 
   virtual std::shared_ptr<MoQSession> createSession(
@@ -94,6 +94,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   proxygen::URL url_;
   SessionFactory sessionFactory_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
+  folly::Optional<std::string> negotiatedProtocol_;
 };
 
 } // namespace moxygen

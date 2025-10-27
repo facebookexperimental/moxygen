@@ -106,16 +106,25 @@ bool isLegacyAlpn(folly::StringPiece alpn) {
   return alpn == kAlpnMoqtLegacy;
 }
 
+std::vector<uint64_t> getSupportedLegacyVersions() {
+  std::vector<uint64_t> supportedLegacyVers;
+  for (auto& version : kSupportedVersions) {
+    if (getDraftMajorVersion(version) < 15) {
+      supportedLegacyVers.push_back(version);
+    }
+  }
+  return supportedLegacyVers;
+}
+
 folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
   // Parse "moqt-{N}" format
   if (alpn.startsWith("moqt-")) {
     auto draftStr = alpn.subpiece(5); // skip "moqt-"
-    try {
-      auto draftNum = folly::to<uint64_t>(draftStr);
-      return 0xff000000 | draftNum; // Create version constant 0xff0000XX
-    } catch (...) {
-      return folly::none;
+    auto draftNum = folly::tryTo<uint64_t>(draftStr);
+    if (draftNum.hasValue()) {
+      return 0xff000000 | draftNum.value();
     }
+    return folly::none;
   }
 
   return folly::none;
@@ -434,6 +443,8 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
       length -= version->second;
     }
   } else {
+    XLOG(DBG3)
+        << "Skipped parsing versions from wire for alpn ClientSetup message";
     serializationVersion = *version_;
   }
 
@@ -479,6 +490,9 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     serverSetup.selectedVersion = version->first;
+  } else {
+    XLOG(DBG3)
+        << "Skipped parsing version from wire for alpn ServerSetup message";
   }
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -2173,21 +2187,24 @@ WriteResult writeClientSetup(
   size_t size = 0;
   bool error = false;
 
-  // Check that all supported versions are >= 12
-  for (auto ver : clientSetup.supportedVersions) {
-    XCHECK(isSupportedVersion(ver))
-        << "Version " << ver << " is not supported. Supported versions are: "
-        << getSupportedVersionsString();
-  }
-
   FrameType frameType = FrameType::CLIENT_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   if (getDraftMajorVersion(version) < 15) {
+    // Check that all supported versions are >= 12
+    for (auto ver : clientSetup.supportedVersions) {
+      XCHECK(isSupportedVersion(ver))
+          << "Version " << ver << " is not supported. Supported versions are: "
+          << getSupportedVersionsString();
+    }
+    // Only write version array in non-alpn mode
     writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
     for (auto ver : clientSetup.supportedVersions) {
       writeVarint(writeBuf, ver, size, error);
     }
+  } else {
+    XLOG(DBG3)
+        << "Skipped writing versions to wire for alpn ClientSetup message";
   }
 
   // Count the number of params
@@ -2223,17 +2240,19 @@ WriteResult writeServerSetup(
   size_t size = 0;
   bool error = false;
 
-  XCHECK(isSupportedVersion(serverSetup.selectedVersion))
-      << "Supported version " << serverSetup.selectedVersion
-      << ") is not supported. Supported versions are: "
-      << getSupportedVersionsString();
-
   FrameType frameType = FrameType::SERVER_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   // Only write selected version in non-alpn mode
   if (getDraftMajorVersion(version) < 15) {
+    XCHECK(isSupportedVersion(serverSetup.selectedVersion))
+        << "Supported version " << serverSetup.selectedVersion
+        << ") is not supported. Supported versions are: "
+        << getSupportedVersionsString();
     writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
+  } else {
+    XLOG(DBG3)
+        << "Skipped writing version to wire for alpn ClientSetup message";
   }
 
   // Count the number of params

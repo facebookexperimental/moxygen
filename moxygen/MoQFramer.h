@@ -324,6 +324,7 @@ uint64_t getDraftMajorVersion(uint64_t version);
 
 // ALPN utility functions
 bool isLegacyAlpn(folly::StringPiece alpn);
+std::vector<uint64_t> getSupportedLegacyVersions();
 folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn);
 folly::Optional<std::string> getAlpnFromVersion(uint64_t version);
 

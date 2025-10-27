@@ -82,12 +82,12 @@ QuicConnector::connectQuic(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    std::string alpn,
+    const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
   auto qEvb = std::make_shared<quic::FollyQuicEventBase>(eventBase);
   auto sock = std::make_unique<quic::FollyQuicAsyncUDPSocket>(qEvb);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
-  fizzContext->setSupportedAlpns({alpn});
+  fizzContext->setSupportedAlpns(alpns);
   auto quicClient = quic::QuicClientTransport::newClient(
       std::move(qEvb),
       std::move(sock),

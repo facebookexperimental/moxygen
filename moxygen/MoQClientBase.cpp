@@ -51,21 +51,32 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::shared_ptr<Subscriber> subscribeHandler,
     const quic::TransportSettings& transportSettings) noexcept {
   proxygen::WebTransport* wt = nullptr;
-  // Establish QUIC connection
+
+  std::vector<std::string> alpn = {
+      std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+  // Establish QUIC connection with multiple ALPN options
   auto quicClient = co_await connectQuic(
       folly::SocketAddress(
           url_.getHost(), url_.getPort(), true), // blocking DNS,
       connect_timeout,
       std::make_shared<
           proxygen::InsecureVerifierDangerousDoNotUseInProduction>(),
-      "moq-00",
+      alpn,
       transportSettings);
+
+  // Detect negotiated ALPN before wrapping the socket
+  auto stdAlpn = quicClient->getAppProtocol();
+  if (stdAlpn) {
+    negotiatedProtocol_ = *stdAlpn;
+    XLOG(INFO) << "Client: Negotiated ALPN: " << *negotiatedProtocol_;
+  }
 
   // Make WebTransport object
   quicWebTransport_ =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicClient));
   quicWebTransport_->setHandler(this);
   wt = quicWebTransport_.get();
+
   co_await completeSetupMoQSession(
       wt,
       url_.getPath(),
@@ -81,6 +92,14 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
   //  Create MoQSession and Setup MoQSession parameters
   moqSession_ =
       createSession(folly::MaybeManagedPtr<proxygen::WebTransport>(wt));
+
+  // Configure session based on negotiated ALPN
+  // If there is no ALPN negotiation, the negotiation will be done in the
+  // Setup messages.
+  if (negotiatedProtocol_) {
+    moqSession_->setVersionFromAlpn(*negotiatedProtocol_);
+  }
+
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
   moqSession_->setLogger(logger_);
@@ -100,9 +119,9 @@ ClientSetup MoQClientBase::getClientSetup(
   const uint32_t kDefaultMaxRequestID = 100;
   const uint32_t kMaxAuthTokenCacheSize = 1024;
 
+  const auto& legacyVersions = getSupportedLegacyVersions();
   ClientSetup clientSetup{
-      std::vector<uint64_t>(
-          kSupportedVersions.begin(), kSupportedVersions.end()),
+      legacyVersions,
       {{folly::to_underlying(SetupKey::MAX_REQUEST_ID),
         "",
         kDefaultMaxRequestID,
