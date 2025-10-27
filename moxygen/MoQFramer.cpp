@@ -409,26 +409,34 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   ClientSetup clientSetup;
-  auto numVersions = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!numVersions) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= numVersions->second;
   uint64_t serializationVersion = kVersionDraft12;
-  for (auto i = 0ul; i < numVersions->first; i++) {
-    auto version = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!version) {
+
+  // Only parse version array when version is not initialized, i.e. alpn did not
+  // happen, or when version is initialized but is < 15 (in tests)
+  if (!version_ || getDraftMajorVersion(*version_) < 15) {
+    auto numVersions = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!numVersions) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    if (!isSupportedVersion(version->first)) {
-      XLOG(WARN) << "Peer advertised unsupported version " << version->first
-                 << ", supported versions are: "
-                 << getSupportedVersionsString();
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    length -= numVersions->second;
+    for (auto i = 0ul; i < numVersions->first; i++) {
+      auto version = quic::follyutils::decodeQuicInteger(cursor, length);
+      if (!version) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      if (!isSupportedVersion(version->first)) {
+        XLOG(WARN) << "Peer advertised unsupported version " << version->first
+                   << ", supported versions are: "
+                   << getSupportedVersionsString();
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      clientSetup.supportedVersions.push_back(version->first);
+      length -= version->second;
     }
-    clientSetup.supportedVersions.push_back(version->first);
-    length -= version->second;
+  } else {
+    serializationVersion = *version_;
   }
+
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -455,17 +463,24 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   ServerSetup serverSetup;
-  auto version = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!version) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+
+  // Only parse version when version is not initialized, i.e. alpn did not
+  // happen, or when version is initialized but is < 15 (in tests)
+  if (!version_ || getDraftMajorVersion(*version_) < 15) {
+    auto version = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!version) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= version->second;
+    if (!isSupportedVersion(version->first)) {
+      XLOG(WARN) << "Peer advertised unsupported version " << version->first
+                 << ", supported versions are: "
+                 << getSupportedVersionsString();
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    serverSetup.selectedVersion = version->first;
   }
-  length -= version->second;
-  if (!isSupportedVersion(version->first)) {
-    XLOG(WARN) << "Peer advertised unsupported version " << version->first
-               << ", supported versions are: " << getSupportedVersionsString();
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  serverSetup.selectedVersion = version->first;
+
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -474,7 +489,7 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
   auto res = parseParams(
       cursor,
       length,
-      serverSetup.selectedVersion,
+      version_ ? *version_ : serverSetup.selectedVersion,
       numParams->first,
       serverSetup.params,
       tokenCache_,
@@ -2168,22 +2183,23 @@ WriteResult writeClientSetup(
   FrameType frameType = FrameType::CLIENT_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
-  writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
-  uint64_t serializationVersion = kVersionDraft12;
-  for (auto ver : clientSetup.supportedVersions) {
-    writeVarint(writeBuf, ver, size, error);
+  if (getDraftMajorVersion(version) < 15) {
+    writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
+    for (auto ver : clientSetup.supportedVersions) {
+      writeVarint(writeBuf, ver, size, error);
+    }
   }
 
   // Count the number of params
   size_t paramCount = 0;
   for (const auto& param : clientSetup.params) {
-    if (includeSetupParam(serializationVersion, SetupKey(param.key))) {
+    if (includeSetupParam(version, SetupKey(param.key))) {
       ++paramCount;
     }
   }
   writeVarint(writeBuf, paramCount, size, error);
   for (auto& param : clientSetup.params) {
-    if (!includeSetupParam(serializationVersion, SetupKey(param.key))) {
+    if (!includeSetupParam(version, SetupKey(param.key))) {
       continue;
     }
     writeVarint(writeBuf, param.key, size, error);
@@ -2214,7 +2230,11 @@ WriteResult writeServerSetup(
 
   FrameType frameType = FrameType::SERVER_SETUP;
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
-  writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
+
+  // Only write selected version in non-alpn mode
+  if (getDraftMajorVersion(version) < 15) {
+    writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
+  }
 
   // Count the number of params
   size_t paramCount = 0;

@@ -65,7 +65,7 @@ class MoQSession : public Subscriber,
     virtual ~ServerSetupCallback() = default;
     virtual folly::Try<ServerSetup> onClientSetup(
         ClientSetup clientSetup,
-        std::shared_ptr<MoQSession> session) = 0;
+        const std::shared_ptr<MoQSession>& session) = 0;
 
     // Authority validation callback - returns error code if validation fails
     virtual folly::Expected<folly::Unit, SessionCloseErrorCode>

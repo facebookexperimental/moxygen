@@ -171,6 +171,15 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
     serverPublisherStatsCallback_ = std::make_shared<MockPublisherStats>();
     serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
+
+    // For Draft15+, initialize version via ALPN since it's required
+    if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
+      auto alpn = getAlpnFromVersion(getServerSelectedVersion());
+      if (alpn.hasValue()) {
+        clientSession_->setVersionFromAlpn(alpn.value());
+        serverSession_->setVersionFromAlpn(alpn.value());
+      }
+    }
   }
 
   folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
@@ -183,12 +192,15 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
   folly::Try<ServerSetup> onClientSetup(
       ClientSetup setup,
-      std::shared_ptr<MoQSession>) override {
+      const std::shared_ptr<MoQSession>&) override {
     if (invalidVersion_) {
       return folly::Try<ServerSetup>(std::runtime_error("invalid version"));
     }
 
-    EXPECT_EQ(setup.supportedVersions[0], getClientSupportedVersions()[0]);
+    // For Draft15+, supportedVersions is not included in CLIENT_SETUP
+    if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
+      EXPECT_EQ(setup.supportedVersions[0], getClientSupportedVersions()[0]);
+    }
     EXPECT_EQ(setup.params.at(0).key, folly::to_underlying(SetupKey::PATH));
     EXPECT_EQ(setup.params.at(0).asString, "/foo");
     EXPECT_EQ(
@@ -471,7 +483,11 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
 
-  EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
+  // For Draft15+, selectedVersion is negotiated via ALPN and not in
+  // SERVER_SETUP
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
+    EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
+  }
   EXPECT_EQ(
       serverSetup.params.at(0).key,
       folly::to_underlying(SetupKey::MAX_REQUEST_ID));
@@ -511,7 +527,11 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(maxRequestID));
 
-  EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
+  // For Draft15+, selectedVersion is negotiated via ALPN and not in
+  // SERVER_SETUP
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
+    EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
+  }
   EXPECT_EQ(
       serverSetup.params.at(0).key,
       folly::to_underlying(SetupKey::MAX_REQUEST_ID));
@@ -614,6 +634,77 @@ TEST(MoQSessionTest, SetVersionFromAlpnInvalidAlpn) {
 
   session->setVersionFromAlpn("invalid-alpn");
   EXPECT_FALSE(session->getNegotiatedVersion().has_value());
+}
+
+TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
+  // Test that when version >= 15 is present in SERVER_SETUP but not
+  // pre-negotiated via ALPN, the server should close with
+  // VERSION_NEGOTIATION_FAILED
+
+  folly::EventBase eventBase;
+  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+
+  class TestServerSetupCallback : public MoQSession::ServerSetupCallback {
+   public:
+    folly::Try<ServerSetup> onClientSetup(
+        ClientSetup /*clientSetup*/,
+        const std::shared_ptr<MoQSession>& /*session*/) override {
+      // Server tries to select version >= 15 without ALPN negotiation
+      ServerSetup serverSetup;
+      serverSetup.selectedVersion = 0xff00000f;
+      serverSetup.params = {};
+      return folly::Try<ServerSetup>(serverSetup);
+    }
+
+    folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+        const ClientSetup& /*clientSetup*/,
+        uint64_t /*negotiatedVersion*/,
+        std::shared_ptr<MoQSession> /*session*/) override {
+      return folly::unit;
+    }
+  };
+
+  TestServerSetupCallback serverSetupCallback;
+  auto serverSession = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
+      serverSetupCallback,
+      moqExecutor);
+
+  auto clientSession = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      moqExecutor);
+
+  // Setup peer handlers before starting
+  clientWt->setPeerHandler(serverSession.get());
+  serverWt->setPeerHandler(clientSession.get());
+
+  // Start both sessions
+  serverSession->start();
+  clientSession->start();
+
+  // Client sends setup with version < 15 (no ALPN negotiation happened)
+  ClientSetup clientSetup;
+  clientSetup.supportedVersions.push_back(kVersionDraft12);
+  clientSetup.params = {};
+
+  folly::coro::co_withExecutor(
+      moqExecutor.get(), clientSession->setup(clientSetup))
+      .start();
+  eventBase.loop();
+
+  // Server should have closed the session with VERSION_NEGOTIATION_FAILED
+  EXPECT_TRUE(serverWt->isSessionClosed())
+      << "Server should close when version >= 15 is selected without ALPN";
+
+  // Cleanup
+  if (!clientWt->isSessionClosed()) {
+    clientSession->close(SessionCloseErrorCode::NO_ERROR);
+  }
+  if (!serverWt->isSessionClosed()) {
+    serverSession->close(SessionCloseErrorCode::NO_ERROR);
+  }
 }
 
 // === FETCH tests ===

@@ -1940,6 +1940,9 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   }
 
   uint64_t setupSerializationVersion = kVersionDraft12;
+  if (negotiatedVersion_) {
+    setupSerializationVersion = *negotiatedVersion_;
+  }
 
   // This sets the receive token cache size, but it's necesarily empty
   controlCodec_.setMaxAuthTokenCacheSize(
@@ -1972,13 +1975,16 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
   }
-  if (std::find(
-          setup.supportedVersions.begin(),
-          setup.supportedVersions.end(),
-          serverSetup->selectedVersion) == setup.supportedVersions.end()) {
-    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-    XLOG(ERR) << "Server chose a version that the client doesn't support";
-    co_yield folly::coro::co_error(serverSetup.exception());
+  // Only validate version selection in non-alpn mode
+  if (!negotiatedVersion_) {
+    if (std::find(
+            setup.supportedVersions.begin(),
+            setup.supportedVersions.end(),
+            serverSetup->selectedVersion) == setup.supportedVersions.end()) {
+      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+      XLOG(ERR) << "Server chose a version that the client doesn't support";
+      co_yield folly::coro::co_error(serverSetup.exception());
+    }
   }
 
   setupComplete_ = true;
@@ -2010,7 +2016,11 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
     return;
   }
 
-  initializeNegotiatedVersion(serverSetup.selectedVersion);
+  // In LEGACY mode: initialize version from SERVER_SETUP
+  if (!negotiatedVersion_) {
+    initializeNegotiatedVersion(serverSetup.selectedVersion);
+  }
+
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(
       std::min(
@@ -2051,9 +2061,35 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     return;
   }
 
+  if (!getNegotiatedVersion()) {
+    // Version negotiation has not happened at alpn
+    // Negotiate from setup message
+
+    auto majorVersion = getDraftMajorVersion(serverSetup->selectedVersion);
+
+    if (majorVersion >= 15) {
+      // Version >= 15 should always be negotiated using alpn
+      XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
+                << " (major=" << majorVersion
+                << ") can only be negotiated via alpn. sess=" << this;
+      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+      return;
+    }
+
+    // Check if selected version is < 11 and handle appropriately
+    if (majorVersion < 11) {
+      XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
+                << " (major=" << majorVersion
+                << ") is not supported. Minimum version is 11. sess=" << this;
+      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+      return;
+    }
+    initializeNegotiatedVersion(serverSetup->selectedVersion);
+  }
+
   // Validate authority with the negotiated version
   auto authorityValidation = serverSetupCallback_->validateAuthority(
-      clientSetup, serverSetup->selectedVersion, shared_from_this());
+      clientSetup, *getNegotiatedVersion(), shared_from_this());
   if (!authorityValidation.hasValue()) {
     SessionCloseErrorCode errorCode = authorityValidation.error();
     XLOG(ERR) << "Authority validation failed sess=" << this
@@ -2062,7 +2098,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     return;
   }
 
-  if (getDraftMajorVersion(serverSetup->selectedVersion) >= 14) {
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
     serverSetup->params.emplace_back(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
          getMoQTImplementationString(),
@@ -2070,17 +2106,6 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
          {}}));
   }
 
-  // Check if selected version is < 11 and handle appropriately
-  auto majorVersion = getDraftMajorVersion(serverSetup->selectedVersion);
-  if (majorVersion < 11) {
-    XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
-              << " (major=" << majorVersion
-              << ") is not supported. Minimum version is 11. sess=" << this;
-    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-    return;
-  }
-
-  initializeNegotiatedVersion(serverSetup->selectedVersion);
   XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
 
@@ -2088,8 +2113,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
   aliasifyAuthTokens(serverSetup->params);
-  auto res = writeServerSetup(
-      controlWriteBuf_, *serverSetup, serverSetup->selectedVersion);
+  auto res =
+      writeServerSetup(controlWriteBuf_, *serverSetup, *getNegotiatedVersion());
   if (!res) {
     XLOG(ERR) << "writeServerSetup failed sess=" << this;
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);

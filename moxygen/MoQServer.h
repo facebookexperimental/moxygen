@@ -58,7 +58,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   folly::Try<ServerSetup> onClientSetup(
       ClientSetup clientSetup,
-      std::shared_ptr<MoQSession> session) override;
+      const std::shared_ptr<MoQSession>& session) override;
 
   folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
       const ClientSetup& clientSetup,

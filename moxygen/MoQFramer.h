@@ -327,9 +327,10 @@ bool isLegacyAlpn(folly::StringPiece alpn);
 folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn);
 folly::Optional<std::string> getAlpnFromVersion(uint64_t version);
 
-constexpr std::array<uint64_t, 2> kSupportedVersions{
+constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft12,
-    kVersionDraft14};
+    kVersionDraft14,
+    kVersionDraft15};
 
 bool isSupportedVersion(uint64_t version);
 

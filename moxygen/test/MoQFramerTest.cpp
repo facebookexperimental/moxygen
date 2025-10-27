@@ -716,9 +716,11 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
         parser_.parseClientSetup(cursor, frameLength(cursor));
     EXPECT_TRUE(parseClientSetupResult.hasValue())
         << "Failed to parse client setup for maxRequestID:" << maxRequestID;
-    EXPECT_EQ(parseClientSetupResult->supportedVersions.size(), 1);
-    EXPECT_EQ(
-        parseClientSetupResult->supportedVersions[0], kVersionDraftCurrent);
+    if (getDraftMajorVersion(GetParam()) < 15) {
+      EXPECT_EQ(parseClientSetupResult->supportedVersions.size(), 1);
+      EXPECT_EQ(
+          parseClientSetupResult->supportedVersions[0], kVersionDraftCurrent);
+    }
     EXPECT_EQ(parseClientSetupResult->params.size(), 1);
     EXPECT_EQ(
         parseClientSetupResult->params[0].key,
@@ -1752,6 +1754,122 @@ INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
     ::testing::Values(kVersionDraft14, kVersionDraft15));
+
+// ALPN Version Negotiation Tests (version >= 15)
+TEST(MoQFramerTest, ParseClientSetupWithAlpnVersion15NoVersionArray) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Write CLIENT_SETUP without version array (ALPN mode)
+  // Just write number of params (0 in this case)
+  writeVarint(writeBuf, 0, size, error);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+
+  // When version >= 15 is pre-initialized via ALPN, CLIENT_SETUP should not
+  // have version array in wire format
+  parser.initializeVersion(kVersionDraft15);
+  auto result =
+      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
+
+  EXPECT_TRUE(result.hasValue()) << "CLIENT_SETUP should parse successfully";
+  EXPECT_TRUE(result->supportedVersions.empty())
+      << "Version array should be empty when ALPN negotiated";
+}
+
+TEST(MoQFramerTest, WriteClientSetupWithAlpnVersion15NoVersionArray) {
+  // When version >= 15, CLIENT_SETUP should not write version array
+
+  auto clientSetup = ClientSetup{
+      .supportedVersions = {kVersionDraft15},
+      .params = {},
+  };
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft15);
+  EXPECT_TRUE(result.hasValue()) << "Failed to write CLIENT_SETUP";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  // Skip frame type
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::CLIENT_SETUP));
+
+  // Skip frame length
+  cursor.skip(2);
+
+  // Next field should be number of params (not version array)
+  auto numParams = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(numParams.has_value());
+  EXPECT_EQ(numParams->first, 0) << "Should have 0 params";
+
+  // Verify we're at end of message (no version array was written)
+  EXPECT_FALSE(cursor.canAdvance(1))
+      << "No additional data should be present (version array not written)";
+}
+
+TEST(MoQFramerTest, ParseServerSetupWithAlpnVersion15NoVersionField) {
+  // When version >= 15 is pre-initialized via ALPN, SERVER_SETUP should not
+  // have version field in wire format
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  // Write SERVER_SETUP without version field (ALPN mode)
+  // Just write number of params (0 in this case)
+  writeVarint(writeBuf, 0, size, error);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft15);
+  auto result =
+      parser.parseServerSetup(cursor, buffer->computeChainDataLength());
+
+  EXPECT_TRUE(result.hasValue()) << "SERVER_SETUP should parse successfully";
+}
+
+TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
+  // When version >= 15, SERVER_SETUP should not write version field
+
+  auto serverSetup = ServerSetup{
+      .selectedVersion = kVersionDraft15,
+      .params = {},
+  };
+
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft15);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeServerSetup(writeBuf, serverSetup, kVersionDraft15);
+  EXPECT_TRUE(result.hasValue()) << "Failed to write SERVER_SETUP";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  // Skip frame type
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SERVER_SETUP));
+
+  // Skip frame length
+  cursor.skip(2);
+
+  // Next field should be number of params (not version field)
+  auto numParams = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(numParams.has_value());
+  EXPECT_EQ(numParams->first, 0) << "Should have 0 params";
+
+  // Verify we're at end of message (no version field was written)
+  EXPECT_FALSE(cursor.canAdvance(1))
+      << "No additional data should be present (version field not written)";
+}
 
 /* Test cases to add
  *

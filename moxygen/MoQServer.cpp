@@ -180,7 +180,7 @@ void MoQServer::pauseRead() {
 
 folly::Try<ServerSetup> MoQServer::onClientSetup(
     ClientSetup setup,
-    std::shared_ptr<MoQSession>) {
+    const std::shared_ptr<MoQSession>&) {
   XLOG(INFO) << "ClientSetup";
 
   uint64_t negotiatedVersion = 0;
