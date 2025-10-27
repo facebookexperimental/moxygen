@@ -51,8 +51,9 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace;
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
-    co_return folly::makeUnexpected(AnnounceError{
-        ann.requestID, AnnounceErrorCode::UNINTERESTED, "bad namespace"});
+    co_return folly::makeUnexpected(
+        AnnounceError{
+            ann.requestID, AnnounceErrorCode::UNINTERESTED, "bad namespace"});
   }
   std::vector<std::shared_ptr<MoQSession>> sessions;
   auto nodePtr = findNamespaceNode(
@@ -109,8 +110,9 @@ Subscriber::PublishResult MoQRelay::publish(
     std::shared_ptr<Publisher::SubscriptionHandle> handle) {
   XLOG(DBG1) << __func__ << " ns=" << pub.fullTrackName.trackNamespace;
   if (!pub.fullTrackName.trackNamespace.startsWith(allowedNamespacePrefix_)) {
-    return folly::makeUnexpected(PublishError{
-        pub.requestID, PublishErrorCode::UNINTERESTED, "bad namespace"});
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID, PublishErrorCode::UNINTERESTED, "bad namespace"});
   }
 
   if (pub.fullTrackName.trackNamespace.empty()) {
@@ -259,10 +261,11 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
   // check auth
   if (subNs.trackNamespacePrefix.empty()) {
-    co_return folly::makeUnexpected(SubscribeAnnouncesError{
-        subNs.requestID,
-        SubscribeAnnouncesErrorCode::NAMESPACE_PREFIX_UNKNOWN,
-        "empty"});
+    co_return folly::makeUnexpected(
+        SubscribeAnnouncesError{
+            subNs.requestID,
+            SubscribeAnnouncesErrorCode::NAMESPACE_PREFIX_UNKNOWN,
+            "empty"});
   }
   auto session = MoQSession::getRequestSession();
   auto nodePtr = findNamespaceNode(
@@ -457,10 +460,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     auto& forwarder = subscriptionIt->second.forwarder;
     if (forwarder->largest() && subReq.locType == LocationType::AbsoluteRange &&
         subReq.endGroup < forwarder->largest()->group) {
-      co_return folly::makeUnexpected(SubscribeError{
-          subReq.requestID,
-          SubscribeErrorCode::INVALID_RANGE,
-          "Range in the past, use FETCH"});
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subReq.requestID,
+              SubscribeErrorCode::INVALID_RANGE,
+              "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to largest
     }
     co_return subscriptionIt->second.forwarder->addSubscriber(

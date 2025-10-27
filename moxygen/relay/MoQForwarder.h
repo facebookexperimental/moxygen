@@ -187,26 +187,29 @@ class MoQForwarder : public TrackConsumer {
     auto subIt = subscribers_.find(session.get());
     if (subIt == subscribers_.end()) {
       XLOG(ERR) << "Session not found";
-      return folly::makeUnexpected(FetchError{
-          RequestID(0),
-          FetchErrorCode::TRACK_NOT_EXIST,
-          "Session has no active subscribe"});
+      return folly::makeUnexpected(
+          FetchError{
+              RequestID(0),
+              FetchErrorCode::TRACK_NOT_EXIST,
+              "Session has no active subscribe"});
     }
     if (subIt->second->requestID != joining.joiningRequestID) {
       XLOG(ERR) << joining.joiningRequestID
                 << " does not name a Subscribe "
                    " for this track";
-      return folly::makeUnexpected(FetchError{
-          RequestID(0),
-          FetchErrorCode::INTERNAL_ERROR,
-          "Incorrect RequestID for Track"});
+      return folly::makeUnexpected(
+          FetchError{
+              RequestID(0),
+              FetchErrorCode::INTERNAL_ERROR,
+              "Incorrect RequestID for Track"});
     }
     if (!subIt->second->subscribeOk().largest) {
       // No content exists, fetch error
       // Relay caller verifies upstream SubscribeOK has been processed before
       // calling resolveJoiningFetch()
-      return folly::makeUnexpected(FetchError{
-          RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No largest"});
+      return folly::makeUnexpected(
+          FetchError{
+              RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No largest"});
     }
     CHECK(
         joining.fetchType == FetchType::RELATIVE_JOINING ||

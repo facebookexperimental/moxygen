@@ -127,10 +127,11 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
   // Validate the params
   if (!moxygen::validateMoQPerfParams(params)) {
     XLOG(ERR) << "Invalid MoQPerfParams";
-    co_return folly::makeUnexpected(moxygen::SubscribeError{
-        0,
-        SubscribeErrorCode::INTERNAL_ERROR,
-        "Client Parameters are Invalid"});
+    co_return folly::makeUnexpected(
+        moxygen::SubscribeError{
+            0,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "Client Parameters are Invalid"});
   }
   // Create a SubRequest with the created TrackNamespace in its fullTrackName
   TrackNamespace track = convertMoQPerfParamsToTrackNamespace(params);
@@ -156,8 +157,11 @@ folly::coro::Task<MoQSession::FetchResult> MoQPerfClient::fetch(
   // Validate the params
   if (!moxygen::validateMoQPerfParams(params)) {
     XLOG(ERR) << "Invalid MoQPerfParams";
-    co_return folly::makeUnexpected(moxygen::FetchError{
-        0, FetchErrorCode::INTERNAL_ERROR, "Client Parameters are Invalid"});
+    co_return folly::makeUnexpected(
+        moxygen::FetchError{
+            0,
+            FetchErrorCode::INTERNAL_ERROR,
+            "Client Parameters are Invalid"});
   }
   // Create a SubRequest with the created TrackNamespace in its fullTrackName
   TrackNamespace track = convertMoQPerfParamsToTrackNamespace(params);

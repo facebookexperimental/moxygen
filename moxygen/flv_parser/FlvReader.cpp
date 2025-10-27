@@ -63,10 +63,11 @@ std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
   if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
     ret = folly::IOBuf::copyBuffer(tmp, bytesToRead);
   } else {
-    throw std::runtime_error(fmt::format(
-        "Failed to read {} bytes at offset {}",
-        n,
-        static_cast<int>(f_.tellg())));
+    throw std::runtime_error(
+        fmt::format(
+            "Failed to read {} bytes at offset {}",
+            n,
+            static_cast<int>(f_.tellg())));
   }
   return ret;
 }

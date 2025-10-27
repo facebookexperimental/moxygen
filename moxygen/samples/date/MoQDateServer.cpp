@@ -130,10 +130,11 @@ class MoQDateServer : public MoQServer,
       TrackStatus trackStatus) override {
     XLOG(DBG1) << __func__ << trackStatus.fullTrackName;
     if (trackStatus.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(TrackStatusError{
-          trackStatus.requestID,
-          TrackStatusErrorCode::TRACK_NOT_EXIST,
-          "The requested track does not exist"});
+      co_return folly::makeUnexpected(
+          TrackStatusError{
+              trackStatus.requestID,
+              TrackStatusErrorCode::TRACK_NOT_EXIST,
+              "The requested track does not exist"});
     }
     // TODO: add other trackSTatus codes
     // TODO: unify this with subscribe. You can get the same information both
@@ -217,18 +218,20 @@ class MoQDateServer : public MoQServer,
                << " name=" << subReq.fullTrackName.trackName
                << " requestID=" << subReq.requestID;
     if (subReq.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(SubscribeError{
-          subReq.requestID,
-          SubscribeErrorCode::TRACK_NOT_EXIST,
-          "unexpected subscribe"});
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subReq.requestID,
+              SubscribeErrorCode::TRACK_NOT_EXIST,
+              "unexpected subscribe"});
     }
     auto largest = updateLargest();
     if (subReq.locType == LocationType::AbsoluteRange &&
         subReq.endGroup < largest.group) {
-      co_return folly::makeUnexpected(SubscribeError{
-          subReq.requestID,
-          SubscribeErrorCode::INVALID_RANGE,
-          "Range in the past, use FETCH"});
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subReq.requestID,
+              SubscribeErrorCode::INVALID_RANGE,
+              "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to largest
     }
 
@@ -261,10 +264,11 @@ class MoQDateServer : public MoQServer,
                << " name=" << fetch.fullTrackName.trackName
                << " requestID=" << fetch.requestID;
     if (fetch.fullTrackName != dateTrackName()) {
-      co_return folly::makeUnexpected(FetchError{
-          fetch.requestID,
-          FetchErrorCode::TRACK_NOT_EXIST,
-          "unexpected fetch"});
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID,
+              FetchErrorCode::TRACK_NOT_EXIST,
+              "unexpected fetch"});
     }
     auto largest = updateLargest();
     auto [standalone, joining] = fetchType(fetch);
@@ -285,14 +289,16 @@ class MoQDateServer : public MoQServer,
     if (standalone->end < standalone->start &&
         !(standalone->start.group == standalone->end.group &&
           standalone->end.object == 0)) {
-      co_return folly::makeUnexpected(FetchError{
-          fetch.requestID, FetchErrorCode::INVALID_RANGE, "No objects"});
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID, FetchErrorCode::INVALID_RANGE, "No objects"});
     }
     if (standalone->start > largest) {
-      co_return folly::makeUnexpected(FetchError{
-          fetch.requestID,
-          FetchErrorCode::INVALID_RANGE,
-          "fetch starts in future"});
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID,
+              FetchErrorCode::INVALID_RANGE,
+              "fetch starts in future"});
     }
     XLOG(DBG1) << "Fetch {" << standalone->start.group << ","
                << standalone->start.object << "}.." << standalone->end.group

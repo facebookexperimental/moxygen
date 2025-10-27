@@ -372,10 +372,11 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (isSubCancelled()) {
-        co_return folly::makeUnexpected(SubscribeError{
-            sub.requestID,
-            SubscribeErrorCode::INTERNAL_ERROR,
-            "Datagram Subscription Cancelled"});
+        co_return folly::makeUnexpected(
+            SubscribeError{
+                sub.requestID,
+                SubscribeErrorCode::INTERNAL_ERROR,
+                "Datagram Subscription Cancelled"});
       }
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
@@ -395,10 +396,11 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
 
       auto res = callback->datagram(header, std::move(objectPayload));
       if (res.hasError()) {
-        co_return folly::makeUnexpected(SubscribeError{
-            sub.requestID,
-            SubscribeErrorCode::INTERNAL_ERROR,
-            "Error Sending Datagram Objects"});
+        co_return folly::makeUnexpected(
+            SubscribeError{
+                sub.requestID,
+                SubscribeErrorCode::INTERNAL_ERROR,
+                "Error Sending Datagram Objects"});
       }
 
       // Set Delay Based on Object Frequency

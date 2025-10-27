@@ -82,18 +82,20 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
   XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
   if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
     if (announce.trackNamespace.size() != 5) {
-      co_return folly::makeUnexpected(AnnounceError{
-          announce.requestID,
-          AnnounceErrorCode::UNINTERESTED,
-          "Invalid chat announce"});
+      co_return folly::makeUnexpected(
+          AnnounceError{
+              announce.requestID,
+              AnnounceErrorCode::UNINTERESTED,
+              "Invalid chat announce"});
     }
     co_withExecutor(
         moqClient_.getSession()->getExecutor(),
         subscribeToUser(std::move(announce.trackNamespace)))
         .start();
   } else {
-    co_return folly::makeUnexpected(AnnounceError{
-        announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
+    co_return folly::makeUnexpected(
+        AnnounceError{
+            announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
       AnnounceOk{announce.requestID, announce.trackNamespace},
@@ -111,16 +113,18 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   XLOG(INFO) << "SubscribeRequest";
   if (subscribeReq.fullTrackName.trackNamespace !=
       participantTrackName(username_)) {
-    co_return folly::makeUnexpected(SubscribeError{
-        subscribeReq.requestID,
-        SubscribeErrorCode::TRACK_NOT_EXIST,
-        "no such track"});
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subscribeReq.requestID,
+            SubscribeErrorCode::TRACK_NOT_EXIST,
+            "no such track"});
   }
   if (publisher_) {
-    co_return folly::makeUnexpected(SubscribeError{
-        subscribeReq.requestID,
-        SubscribeErrorCode::INTERNAL_ERROR,
-        "Duplicate subscribe for track"});
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subscribeReq.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "Duplicate subscribe for track"});
   }
   chatRequestID_.emplace(subscribeReq.requestID);
   chatTrackAlias_.emplace(subscribeReq.trackAlias.value_or(

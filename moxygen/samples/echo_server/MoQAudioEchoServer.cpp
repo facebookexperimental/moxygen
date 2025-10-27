@@ -46,8 +46,9 @@ Subscriber::PublishResult MoQAudioEchoServer::EchoHandler::publish(
     std::shared_ptr<Publisher::SubscriptionHandle> handle) {
   // Only echo upstream audio track
   if (pub.fullTrackName.trackName != kUpstreamTrackName) {
-    return folly::makeUnexpected(PublishError{
-        pub.requestID, PublishErrorCode::NOT_SUPPORTED, "Unknown track"});
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID, PublishErrorCode::NOT_SUPPORTED, "Unknown track"});
   }
   // Republish as echo0 within the same namespace back to current session
   pub.fullTrackName.trackName = kEchoTrackName;

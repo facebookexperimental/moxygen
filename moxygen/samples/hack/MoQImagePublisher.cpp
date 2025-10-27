@@ -115,13 +115,12 @@ void MoQImagePublisher::publishImage(
         Extensions exts;
         moxygen::appext::appendImageMimeType(exts, mimeType);
 
-        ObjectHeader objHeader = ObjectHeader{
-            /*groupIn=*/seqId,
-            /*subgroupIn=*/0,
-            /*idIn=*/0,
-            IMAGE_STREAM_PRIORITY,
-            ObjectStatus::NORMAL,
-            std::move(exts)};
+        ObjectHeader objHeader = ObjectHeader{/*groupIn=*/seqId,
+                                              /*subgroupIn=*/0,
+                                              /*idIn=*/0,
+                                              IMAGE_STREAM_PRIORITY,
+                                              ObjectStatus::NORMAL,
+                                              std::move(exts)};
 
         if (auto res = imageTrackPublisher_->objectStream(
                 objHeader, std::move(payload));

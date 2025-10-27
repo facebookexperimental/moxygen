@@ -87,8 +87,9 @@ Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
 Subscriber::PublishResult makePublishOkResult(const auto& pub) {
   auto mockConsumer = std::make_shared<MockTrackConsumer>();
   EXPECT_CALL(*mockConsumer, setTrackAlias(_))
-      .WillRepeatedly(testing::Return(
-          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+      .WillRepeatedly(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
 
   // Create PublishOk directly
   PublishOk publishOk{
@@ -153,8 +154,9 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
     // Set default behavior for setTrackAlias to return success
     ON_CALL(*subscribeCallback_, setTrackAlias(_))
-        .WillByDefault(testing::Return(
-            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+        .WillByDefault(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
     EXPECT_CALL(*subscribeCallback_, setTrackAlias(_))
         .Times(testing::AtLeast(0));
 
@@ -841,8 +843,11 @@ CO_TEST_P_X(MoQSessionTest, FetchPublisherError) {
   co_await setupMoQSession();
   expectFetch(
       [](Fetch fetch, auto) -> TaskFetchResult {
-        co_return folly::makeUnexpected(FetchError{
-            fetch.requestID, FetchErrorCode::TRACK_NOT_EXIST, "Bad trackname"});
+        co_return folly::makeUnexpected(
+            FetchError{
+                fetch.requestID,
+                FetchErrorCode::TRACK_NOT_EXIST,
+                "Bad trackname"});
       },
       FetchErrorCode::TRACK_NOT_EXIST);
   auto res =
@@ -1110,8 +1115,9 @@ CO_TEST_P_X(MoQSessionTest, ServerInitiatedSubscribe) {
 CO_TEST_P_X(MoQSessionTest, DoubleBeginObject) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
-        .WillOnce(testing::Return(
-            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+        .WillOnce(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
     EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)));
     EXPECT_EQ(
         sgp->beginObject(2, 100, test::makeBuf(10)).error().code,
@@ -1123,8 +1129,9 @@ CO_TEST_P_X(MoQSessionTest, DoubleBeginObject) {
 CO_TEST_P_X(MoQSessionTest, ObjectPayloadTooLong) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
-        .WillOnce(testing::Return(
-            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+        .WillOnce(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
     EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)).hasValue());
     auto payloadFail =
         sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(200, 'x')));
@@ -1136,8 +1143,9 @@ CO_TEST_P_X(MoQSessionTest, ObjectPayloadTooLong) {
 CO_TEST_P_X(MoQSessionTest, ObjectPayloadEarlyFin) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
-        .WillOnce(testing::Return(
-            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+        .WillOnce(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
     EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)).hasValue());
 
     // Attempt to send an object payload with length 20 and fin=true, which
@@ -1153,8 +1161,9 @@ CO_TEST_P_X(MoQSessionTest, ObjectPayloadEarlyFin) {
 CO_TEST_P_X(MoQSessionTest, PublisherResetAfterBeginObject) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {
     EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
-        .WillOnce(testing::Return(
-            folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+        .WillOnce(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
     EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)));
 
     // Call reset after beginObject
@@ -1233,11 +1242,13 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
   EXPECT_CALL(*serverPublisher, trackStatus(_))
-      .WillOnce(testing::Invoke(
-          [](TrackStatus request)
-              -> folly::coro::Task<Publisher::TrackStatusResult> {
-            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](TrackStatus request)
+                  -> folly::coro::Task<Publisher::TrackStatusResult> {
+                co_return makeTrackStatusOkResult(
+                    request, AbsoluteLocation{0, 0});
+              }));
   auto res = co_await clientSession_->trackStatus(getTrackStatus());
   EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -1251,8 +1262,9 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
     testing::InSequence enforceOrder;
     expectSubscribe(
         [](auto sub, auto) -> TaskSubscribeResult {
-          co_return folly::makeUnexpected(SubscribeError{
-              sub.requestID, SubscribeErrorCode::UNAUTHORIZED, "bad"});
+          co_return folly::makeUnexpected(
+              SubscribeError{
+                  sub.requestID, SubscribeErrorCode::UNAUTHORIZED, "bad"});
         },
         MoQControlCodec::Direction::SERVER,
         SubscribeErrorCode::UNAUTHORIZED);
@@ -1278,14 +1290,17 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
   // Expect setTrackAlias to be called for each publisher and return folly::unit
   // if called
   EXPECT_CALL(*trackPublisher1, setTrackAlias(_))
-      .WillRepeatedly(testing::Return(
-          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+      .WillRepeatedly(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
   EXPECT_CALL(*trackPublisher2, setTrackAlias(_))
-      .WillRepeatedly(testing::Return(
-          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+      .WillRepeatedly(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
   EXPECT_CALL(*trackPublisher3, setTrackAlias(_))
-      .WillRepeatedly(testing::Return(
-          folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+      .WillRepeatedly(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
 
   EXPECT_CALL(
       *clientSubscriberStatsCallback_,
@@ -1490,8 +1505,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   subscribeHandler->subscribeUpdate(subscribeUpdate);
   folly::coro::Baton subscribeUpdateInvoked;
   EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
-      .WillOnce(testing::Invoke(
-          [&](auto /*blag*/) { subscribeUpdateInvoked.post(); }));
+      .WillOnce(testing::Invoke([&](auto /*blag*/) {
+        subscribeUpdateInvoked.post();
+      }));
   co_await subscribeUpdateInvoked;
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
@@ -1591,11 +1607,12 @@ CO_TEST_P_X(MoQSessionTest, Announce) {
   co_await setupMoQSession();
 
   EXPECT_CALL(*serverSubscriber, announce(_, _))
-      .WillOnce(testing::Invoke(
-          [](auto ann, auto /* announceCallback */)
-              -> folly::coro::Task<Subscriber::AnnounceResult> {
-            co_return makeAnnounceOkResult(ann);
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](auto ann, auto /* announceCallback */)
+                  -> folly::coro::Task<Subscriber::AnnounceResult> {
+                co_return makeAnnounceOkResult(ann);
+              }));
 
   EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceSuccess());
   EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceSuccess());
@@ -1611,14 +1628,15 @@ CO_TEST_P_X(MoQSessionTest, Unannounce) {
 
   std::shared_ptr<MockAnnounceHandle> mockAnnounceHandle;
   EXPECT_CALL(*serverSubscriber, announce(_, _))
-      .WillOnce(testing::Invoke(
-          [&mockAnnounceHandle](auto ann, auto /* announceCallback */)
-              -> folly::coro::Task<Subscriber::AnnounceResult> {
-            mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
-                AnnounceOk({ann.requestID, ann.trackNamespace}));
-            Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
-            co_return announceResult;
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&mockAnnounceHandle](auto ann, auto /* announceCallback */)
+                  -> folly::coro::Task<Subscriber::AnnounceResult> {
+                mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
+                    AnnounceOk({ann.requestID, ann.trackNamespace}));
+                Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
+                co_return announceResult;
+              }));
 
   EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceSuccess());
   EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceSuccess());
@@ -1639,16 +1657,17 @@ CO_TEST_P_X(MoQSessionTest, AnnounceCancel) {
   std::shared_ptr<MockAnnounceHandle> mockAnnounceHandle;
   std::shared_ptr<moxygen::Subscriber::AnnounceCallback> announceCallback;
   EXPECT_CALL(*serverSubscriber, announce(_, _))
-      .WillOnce(testing::Invoke(
-          [&mockAnnounceHandle, &announceCallback](
-              auto ann, auto announceCallbackIn)
-              -> folly::coro::Task<Subscriber::AnnounceResult> {
-            announceCallback = announceCallbackIn;
-            mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
-                AnnounceOk({ann.requestID, ann.trackNamespace}));
-            Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
-            co_return announceResult;
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&mockAnnounceHandle, &announceCallback](
+                  auto ann, auto announceCallbackIn)
+                  -> folly::coro::Task<Subscriber::AnnounceResult> {
+                announceCallback = announceCallbackIn;
+                mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
+                    AnnounceOk({ann.requestID, ann.trackNamespace}));
+                Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
+                co_return announceResult;
+              }));
 
   EXPECT_CALL(*clientPublisherStatsCallback_, onAnnounceSuccess());
   EXPECT_CALL(*serverSubscriberStatsCallback_, onAnnounceSuccess());
@@ -1661,11 +1680,12 @@ CO_TEST_P_X(MoQSessionTest, AnnounceCancel) {
 
   folly::coro::Baton barricade;
   EXPECT_CALL(*mockAnnounceCallback, announceCancel(_, _))
-      .WillOnce(testing::Invoke(
-          [&barricade](moxygen::AnnounceErrorCode, std::string) {
-            barricade.post();
-            return;
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&barricade](moxygen::AnnounceErrorCode, std::string) {
+                barricade.post();
+                return;
+              }));
   announceCallback->announceCancel(
       AnnounceErrorCode::UNINTERESTED, "Not interested!");
 
@@ -1678,15 +1698,16 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
 
   std::shared_ptr<MockSubscribeAnnouncesHandle> mockSubscribeAnnouncesHandle;
   EXPECT_CALL(*serverPublisher, subscribeAnnounces(_))
-      .WillOnce(testing::Invoke(
-          [&mockSubscribeAnnouncesHandle](auto subAnn)
-              -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
-            mockSubscribeAnnouncesHandle =
-                std::make_shared<MockSubscribeAnnouncesHandle>(
-                    SubscribeAnnouncesOk(
-                        {RequestID(0), subAnn.trackNamespacePrefix}));
-            co_return mockSubscribeAnnouncesHandle;
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&mockSubscribeAnnouncesHandle](auto subAnn)
+                  -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
+                mockSubscribeAnnouncesHandle =
+                    std::make_shared<MockSubscribeAnnouncesHandle>(
+                        SubscribeAnnouncesOk(
+                            {RequestID(0), subAnn.trackNamespacePrefix}));
+                co_return mockSubscribeAnnouncesHandle;
+              }));
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeAnnouncesSuccess());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeAnnouncesSuccess());
@@ -1706,15 +1727,16 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAnnouncesError) {
   co_await setupMoQSession();
 
   EXPECT_CALL(*serverPublisher, subscribeAnnounces(_))
-      .WillOnce(testing::Invoke(
-          [](auto subAnn)
-              -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
-            SubscribeAnnouncesError subAnnError{
-                subAnn.requestID,
-                SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
-                "not supported"};
-            co_return folly::makeUnexpected(subAnnError);
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](auto subAnn)
+                  -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
+                SubscribeAnnouncesError subAnnError{
+                    subAnn.requestID,
+                    SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+                    "not supported"};
+                co_return folly::makeUnexpected(subAnnError);
+              }));
 
   EXPECT_CALL(
       *clientSubscriberStatsCallback_,
@@ -1939,30 +1961,32 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
   EXPECT_CALL(*serverPublisher, trackStatus(_))
-      .WillOnce(testing::Invoke(
-          [this](TrackStatus request)
-              -> folly::coro::Task<Publisher::TrackStatusResult> {
-            EXPECT_EQ(request.params.size(), 5);
-            auto verifyParam = [this](
-                                   const auto& param,
-                                   const std::string& expectedTokenValue) {
-              return param.key ==
-                  folly::to_underlying(
-                         TrackRequestParamKey::AUTHORIZATION_TOKEN) &&
-                  param.asAuthToken.tokenType == 0 &&
-                  param.asAuthToken.tokenValue == expectedTokenValue;
-            };
+      .WillOnce(
+          testing::Invoke(
+              [this](TrackStatus request)
+                  -> folly::coro::Task<Publisher::TrackStatusResult> {
+                EXPECT_EQ(request.params.size(), 5);
+                auto verifyParam = [this](
+                                       const auto& param,
+                                       const std::string& expectedTokenValue) {
+                  return param.key ==
+                      folly::to_underlying(
+                             TrackRequestParamKey::AUTHORIZATION_TOKEN) &&
+                      param.asAuthToken.tokenType == 0 &&
+                      param.asAuthToken.tokenValue == expectedTokenValue;
+                };
 
-            EXPECT_TRUE(verifyParam(request.params.at(0), "abc"));
-            EXPECT_TRUE(
-                verifyParam(request.params.at(1), std::string(20, 'x')));
-            EXPECT_TRUE(verifyParam(request.params.at(2), "abcd"));
-            EXPECT_TRUE(verifyParam(request.params.at(3), "abcd"));
-            EXPECT_TRUE(verifyParam(request.params.at(4), "xyzw"))
-                << "'" << request.params.at(4).asAuthToken.tokenValue;
+                EXPECT_TRUE(verifyParam(request.params.at(0), "abc"));
+                EXPECT_TRUE(
+                    verifyParam(request.params.at(1), std::string(20, 'x')));
+                EXPECT_TRUE(verifyParam(request.params.at(2), "abcd"));
+                EXPECT_TRUE(verifyParam(request.params.at(3), "abcd"));
+                EXPECT_TRUE(verifyParam(request.params.at(4), "xyzw"))
+                    << "'" << request.params.at(4).asAuthToken.tokenValue;
 
-            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
-          }));
+                co_return makeTrackStatusOkResult(
+                    request, AbsoluteLocation{0, 0});
+              }));
   TrackStatus request = getTrackStatus();
   auto addAuthToken = [](auto& params, const AuthToken& token) {
     params.push_back(
@@ -2074,12 +2098,15 @@ CO_TEST_P_X(MoQSessionTest, SubscribeException) {
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   EXPECT_CALL(
       *getPublisher(MoQControlCodec::Direction::SERVER), subscribe(_, _))
-      .WillOnce(testing::Invoke(
-          [&](SubscribeRequest /* sub */,
-              std::shared_ptr<TrackConsumer> /* pub */) -> TaskSubscribeResult {
-            co_yield folly::coro::co_error(folly::exception_wrapper(
-                std::runtime_error("Unsubscribe unsuccessful")));
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&](SubscribeRequest /* sub */,
+                  std::shared_ptr<TrackConsumer> /* pub */)
+                  -> TaskSubscribeResult {
+                co_yield folly::coro::co_error(
+                    folly::exception_wrapper(
+                        std::runtime_error("Unsubscribe unsuccessful")));
+              }));
   auto subscribeRequest = getSubscribe(kTestTrackName);
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
@@ -2114,14 +2141,16 @@ CO_TEST_P_X(MoQSessionTest, AnnounceError) {
   co_await setupMoQSession();
 
   EXPECT_CALL(*serverSubscriber, announce(_, _))
-      .WillOnce(testing::Invoke(
-          [](auto ann, auto /* announceCallback */)
-              -> folly::coro::Task<Subscriber::AnnounceResult> {
-            co_return folly::makeUnexpected(AnnounceError{
-                ann.requestID,
-                AnnounceErrorCode::UNAUTHORIZED,
-                "Unauthorized"});
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](auto ann, auto /* announceCallback */)
+                  -> folly::coro::Task<Subscriber::AnnounceResult> {
+                co_return folly::makeUnexpected(
+                    AnnounceError{
+                        ann.requestID,
+                        AnnounceErrorCode::UNAUTHORIZED,
+                        "Unauthorized"});
+              }));
 
   EXPECT_CALL(
       *clientPublisherStatsCallback_,
@@ -2375,10 +2404,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
         sgp->object(0, moxygen::test::makeBuf(10));
         return folly::coro::co_invoke([]() -> TaskSubscribeResult {
           co_await folly::coro::co_reschedule_on_current_executor;
-          co_return folly::makeUnexpected(SubscribeError{
-              RequestID(0),
-              SubscribeErrorCode::INTERNAL_ERROR,
-              "Subscribe OK never arrived"});
+          co_return folly::makeUnexpected(
+              SubscribeError{
+                  RequestID(0),
+                  SubscribeErrorCode::INTERNAL_ERROR,
+                  "Subscribe OK never arrived"});
         });
       },
       MoQControlCodec::Direction::SERVER,
@@ -2530,14 +2560,16 @@ CO_TEST_P_X(MoQSessionTest, PublishDiagnostic) {
   // Simple diagnostic mock with logging
   bool serverMockCalled = false;
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [&serverMockCalled](
-              PublishRequest pub, std::shared_ptr<SubscriptionHandle>)
-              -> Subscriber::PublishResult {
-            serverMockCalled = true;
-            XLOG(ERR) << "SERVER MOCK CALLED - RequestID: " << pub.requestID;
-            return makePublishOkResult(pub);
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&serverMockCalled](
+                  PublishRequest pub, std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                serverMockCalled = true;
+                XLOG(ERR) << "SERVER MOCK CALLED - RequestID: "
+                          << pub.requestID;
+                return makePublishOkResult(pub);
+              }));
 
   XLOG(ERR) << "CALLING clientSession_->publish()";
 
@@ -2583,15 +2615,17 @@ CO_TEST_P_X(MoQSessionTest, PublishTimeout) {
 
   // Setup server to respond with timeout error
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [](PublishRequest pub,
-             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
-            // Simulate timeout by returning error immediately
-            return folly::makeUnexpected(PublishError{
-                pub.requestID,
-                PublishErrorCode::INTERNAL_ERROR,
-                "Request timed out"});
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](PublishRequest pub, std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                // Simulate timeout by returning error immediately
+                return folly::makeUnexpected(
+                    PublishError{
+                        pub.requestID,
+                        PublishErrorCode::INTERNAL_ERROR,
+                        "Request timed out"});
+              }));
 
   // Create MockSubscriptionHandle to return to client
   auto handle = makePublishHandle();
@@ -2625,13 +2659,14 @@ CO_TEST_P_X(MoQSessionTest, PublishBasicSuccess) {
   // Test the success path
   bool mockCalled = false;
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [&mockCalled](
-              PublishRequest actualPub, std::shared_ptr<SubscriptionHandle>)
-              -> Subscriber::PublishResult {
-            mockCalled = true;
-            return makePublishOkResult(actualPub);
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&mockCalled](
+                  PublishRequest actualPub, std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                mockCalled = true;
+                return makePublishOkResult(actualPub);
+              }));
 
   auto handle = makePublishHandle();
 
@@ -2665,37 +2700,41 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
 
   // Setup server to respond with subscriber filtering preferences
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [](PublishRequest actualPub,
-             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
-            auto mockConsumer = std::make_shared<MockTrackConsumer>();
-            // Set default behavior for setTrackAlias to return success
-            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
-                .WillRepeatedly(testing::Return(
-                    folly::Expected<folly::Unit, MoQPublishError>(
-                        folly::unit)));
+      .WillOnce(
+          testing::Invoke(
+              [](PublishRequest actualPub, std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                auto mockConsumer = std::make_shared<MockTrackConsumer>();
+                // Set default behavior for setTrackAlias to return success
+                EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                    .WillRepeatedly(
+                        testing::Return(
+                            folly::Expected<folly::Unit, MoQPublishError>(
+                                folly::unit)));
 
-            // Create the PublishOk directly instead of using a coroutine
-            PublishOk expectedOk{
-                actualPub.requestID,
-                true, // forward - subscriber wants forwarding
-                64,   // subscriber priority - different from default
-                GroupOrder::NewestFirst, // subscriber prefers different order
-                LocationType::AbsoluteRange, // subscriber wants range filter
-                AbsoluteLocation{50, 25},    // specific start location
-                folly::make_optional(uint64_t(200)), // endGroup
-                {}                                   // params
-            };
+                // Create the PublishOk directly instead of using a coroutine
+                PublishOk expectedOk{
+                    actualPub.requestID,
+                    true, // forward - subscriber wants forwarding
+                    64,   // subscriber priority - different from default
+                    GroupOrder::NewestFirst,     // subscriber prefers different
+                                                 // order
+                    LocationType::AbsoluteRange, // subscriber wants range
+                                                 // filter
+                    AbsoluteLocation{50, 25},    // specific start location
+                    folly::make_optional(uint64_t(200)), // endGroup
+                    {}                                   // params
+                };
 
-            // Create the reply task that returns the PublishOk
-            auto replyTask =
-                folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                // Create the reply task that returns the PublishOk
+                auto replyTask = folly::coro::makeTask<
+                    folly::Expected<PublishOk, PublishError>>(
                     std::move(expectedOk));
 
-            return Subscriber::PublishConsumerAndReplyTask{
-                std::static_pointer_cast<TrackConsumer>(mockConsumer),
-                std::move(replyTask)};
-          }));
+                return Subscriber::PublishConsumerAndReplyTask{
+                    std::static_pointer_cast<TrackConsumer>(mockConsumer),
+                    std::move(replyTask)};
+              }));
 
   auto handle = makePublishHandle();
 
@@ -2742,17 +2781,20 @@ CO_TEST_P_X(MoQSessionTest, PublishConnectionDropCleanup) {
   // Setup server to simulate connection drop via error response
   bool mockCalled = false;
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [&mockCalled](PublishRequest pub, std::shared_ptr<SubscriptionHandle>)
-              -> Subscriber::PublishResult {
-            mockCalled = true;
-            // Simulate connection drop by returning an error
-            // (Testing cleanup behavior without actual connection drop)
-            return folly::makeUnexpected(PublishError{
-                pub.requestID,
-                PublishErrorCode::INTERNAL_ERROR,
-                "Connection dropped"});
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [&mockCalled](
+                  PublishRequest pub, std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                mockCalled = true;
+                // Simulate connection drop by returning an error
+                // (Testing cleanup behavior without actual connection drop)
+                return folly::makeUnexpected(
+                    PublishError{
+                        pub.requestID,
+                        PublishErrorCode::INTERNAL_ERROR,
+                        "Connection dropped"});
+              }));
 
   auto handle = makePublishHandle();
 
@@ -2796,18 +2838,19 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
 
   // Mock to capture the PublishHandle and return a consumer
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [&capturedHandle, &mockCalled](
-              PublishRequest actualPub,
-              std::shared_ptr<SubscriptionHandle> handle)
-              -> Subscriber::PublishResult {
-            mockCalled = true;
-            capturedHandle = handle; // Capture handle for later cancel
+      .WillOnce(
+          testing::Invoke(
+              [&capturedHandle, &mockCalled](
+                  PublishRequest actualPub,
+                  std::shared_ptr<SubscriptionHandle> handle)
+                  -> Subscriber::PublishResult {
+                mockCalled = true;
+                capturedHandle = handle; // Capture handle for later cancel
 
-            // Return a consumer and immediate success
-            // (we'll test cancel before the reply is processed)
-            return makePublishOkResult(actualPub);
-          }));
+                // Return a consumer and immediate success
+                // (we'll test cancel before the reply is processed)
+                return makePublishOkResult(actualPub);
+              }));
 
   auto handle = makePublishHandle();
   // Initiate publish
@@ -2870,20 +2913,22 @@ CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
 
   // Setup server to verify params and respond with PUBLISH_OK
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [this](
-              const PublishRequest& actualPub,
-              std::shared_ptr<SubscriptionHandle>)
-              -> Subscriber::PublishResult {
-            // Verify delivery timeout parameter was received
-            EXPECT_EQ(actualPub.params.size(), 1);
-            EXPECT_EQ(
-                actualPub.params.at(0).key,
-                folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-            EXPECT_EQ(actualPub.params.at(0).asUint64, 5000);
+      .WillOnce(
+          testing::Invoke(
+              [this](
+                  const PublishRequest& actualPub,
+                  std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                // Verify delivery timeout parameter was received
+                EXPECT_EQ(actualPub.params.size(), 1);
+                EXPECT_EQ(
+                    actualPub.params.at(0).key,
+                    folly::to_underlying(
+                        TrackRequestParamKey::DELIVERY_TIMEOUT));
+                EXPECT_EQ(actualPub.params.at(0).asUint64, 5000);
 
-            return makePublishOkResult(actualPub);
-          }));
+                return makePublishOkResult(actualPub);
+              }));
 
   auto handle = makePublishHandle();
 
@@ -2913,13 +2958,14 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
     std::shared_ptr<SubscriptionHandle> capturedHandle;
     // Setup server to respond with PUBLISH_OK
     EXPECT_CALL(*serverSubscriber, publish(_, _))
-        .WillOnce(testing::Invoke(
-            [&](const PublishRequest& actualPub,
-                std::shared_ptr<SubscriptionHandle> subHandle)
-                -> Subscriber::PublishResult {
-              capturedHandle = std::move(subHandle);
-              return makePublishOkResult(actualPub);
-            }));
+        .WillOnce(
+            testing::Invoke(
+                [&](const PublishRequest& actualPub,
+                    std::shared_ptr<SubscriptionHandle> subHandle)
+                    -> Subscriber::PublishResult {
+                  capturedHandle = std::move(subHandle);
+                  return makePublishOkResult(actualPub);
+                }));
 
     auto handle = makePublishHandle();
 
@@ -2990,13 +3036,14 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
     std::shared_ptr<SubscriptionHandle> capturedHandle;
     // Setup server to respond with PUBLISH_OK
     EXPECT_CALL(*serverSubscriber, publish(_, _))
-        .WillOnce(testing::Invoke(
-            [&](const PublishRequest& actualPub,
-                std::shared_ptr<SubscriptionHandle> subHandle)
-                -> Subscriber::PublishResult {
-              capturedHandle = std::move(subHandle);
-              return makePublishOkResult(actualPub);
-            }));
+        .WillOnce(
+            testing::Invoke(
+                [&](const PublishRequest& actualPub,
+                    std::shared_ptr<SubscriptionHandle> subHandle)
+                    -> Subscriber::PublishResult {
+                  capturedHandle = std::move(subHandle);
+                  return makePublishOkResult(actualPub);
+                }));
 
     auto handle = makePublishHandle();
 
@@ -3117,43 +3164,47 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
 
   // Setup server to respond with PUBLISH_OK after a delay
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [&](const PublishRequest& actualPub,
-              std::shared_ptr<SubscriptionHandle> subHandle)
-              -> Subscriber::PublishResult {
-            capturedHandle = std::move(subHandle);
-            auto trackConsumer = std::make_shared<MockTrackConsumer>();
-            // Set default behavior for setTrackAlias to return success
-            EXPECT_CALL(*trackConsumer, setTrackAlias(_))
-                .WillRepeatedly(testing::Return(
-                    folly::Expected<folly::Unit, MoQPublishError>(
-                        folly::unit)));
-            // Verify that data is not delivered until PUBLISH_OK is returned
-            EXPECT_CALL(*trackConsumer, datagram(_, _)).Times(0);
+      .WillOnce(
+          testing::Invoke(
+              [&](const PublishRequest& actualPub,
+                  std::shared_ptr<SubscriptionHandle> subHandle)
+                  -> Subscriber::PublishResult {
+                capturedHandle = std::move(subHandle);
+                auto trackConsumer = std::make_shared<MockTrackConsumer>();
+                // Set default behavior for setTrackAlias to return success
+                EXPECT_CALL(*trackConsumer, setTrackAlias(_))
+                    .WillRepeatedly(
+                        testing::Return(
+                            folly::Expected<folly::Unit, MoQPublishError>(
+                                folly::unit)));
+                // Verify that data is not delivered until PUBLISH_OK is
+                // returned
+                EXPECT_CALL(*trackConsumer, datagram(_, _)).Times(0);
 
-            // Delay PUBLISH_OK response
-            return Subscriber::PublishConsumerAndReplyTask{
-                trackConsumer, // Assuming a nullptr consumer for demonstration
-                folly::coro::co_invoke(
-                    [actualPub, trackConsumer]()
-                        -> folly::coro::Task<
-                            folly::Expected<PublishOk, PublishError>> {
-                      co_await folly::coro::sleep(
-                          std::chrono::milliseconds(100));
-                      // Now data should be delivered
-                      EXPECT_CALL(*trackConsumer, datagram(_, _))
-                          .WillOnce(testing::Return(folly::unit));
-                      co_return PublishOk{
-                          actualPub.requestID,
-                          true,
-                          128,
-                          GroupOrder::Default,
-                          LocationType::LargestObject,
-                          folly::none,
-                          folly::none,
-                          {}};
-                    })};
-          }));
+                // Delay PUBLISH_OK response
+                return Subscriber::PublishConsumerAndReplyTask{
+                    trackConsumer, // Assuming a nullptr consumer for
+                                   // demonstration
+                    folly::coro::co_invoke(
+                        [actualPub, trackConsumer]()
+                            -> folly::coro::Task<
+                                folly::Expected<PublishOk, PublishError>> {
+                          co_await folly::coro::sleep(
+                              std::chrono::milliseconds(100));
+                          // Now data should be delivered
+                          EXPECT_CALL(*trackConsumer, datagram(_, _))
+                              .WillOnce(testing::Return(folly::unit));
+                          co_return PublishOk{
+                              actualPub.requestID,
+                              true,
+                              128,
+                              GroupOrder::Default,
+                              LocationType::LargestObject,
+                              folly::none,
+                              folly::none,
+                              {}};
+                        })};
+              }));
 
   auto handle = makePublishHandle();
 
@@ -3217,32 +3268,35 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
       {}};                      // params
 
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [](const PublishRequest& actualPub,
-             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
-            auto mockConsumer = std::make_shared<MockTrackConsumer>();
-            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
-                .WillRepeatedly(testing::Return(
-                    folly::Expected<folly::Unit, MoQPublishError>(
-                        folly::unit)));
-            // Return a PublishOk with a mismatched requestID to simulate a
-            // republish or handler miswiring; session should remap to inbound.
-            PublishOk bogus{
-                RequestID(actualPub.requestID.value + 123),
-                true,
-                128,
-                GroupOrder::Default,
-                LocationType::LargestObject,
-                folly::none,
-                folly::none,
-                {}};
-            auto replyTask =
-                folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
-                    std::move(bogus));
-            return Subscriber::PublishConsumerAndReplyTask{
-                std::static_pointer_cast<TrackConsumer>(mockConsumer),
-                std::move(replyTask)};
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](const PublishRequest& actualPub,
+                 std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                auto mockConsumer = std::make_shared<MockTrackConsumer>();
+                EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                    .WillRepeatedly(
+                        testing::Return(
+                            folly::Expected<folly::Unit, MoQPublishError>(
+                                folly::unit)));
+                // Return a PublishOk with a mismatched requestID to simulate a
+                // republish or handler miswiring; session should remap to
+                // inbound.
+                PublishOk bogus{
+                    RequestID(actualPub.requestID.value + 123),
+                    true,
+                    128,
+                    GroupOrder::Default,
+                    LocationType::LargestObject,
+                    folly::none,
+                    folly::none,
+                    {}};
+                auto replyTask = folly::coro::makeTask<
+                    folly::Expected<PublishOk, PublishError>>(std::move(bogus));
+                return Subscriber::PublishConsumerAndReplyTask{
+                    std::static_pointer_cast<TrackConsumer>(mockConsumer),
+                    std::move(replyTask)};
+              }));
 
   auto handle = makePublishHandle();
   auto result = clientSession_->publish(std::move(pub), handle);
@@ -3673,44 +3727,47 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
 
   // Setup server to respond with PUBLISH_OK containing delivery timeout param
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [this](
-              const PublishRequest& actualPub,
-              std::shared_ptr<SubscriptionHandle>)
-              -> Subscriber::PublishResult {
-            auto mockConsumer = std::make_shared<MockTrackConsumer>();
-            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
-                .WillRepeatedly(testing::Return(
-                    folly::Expected<folly::Unit, MoQPublishError>(
-                        folly::unit)));
+      .WillOnce(
+          testing::Invoke(
+              [this](
+                  const PublishRequest& actualPub,
+                  std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                auto mockConsumer = std::make_shared<MockTrackConsumer>();
+                EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                    .WillRepeatedly(
+                        testing::Return(
+                            folly::Expected<folly::Unit, MoQPublishError>(
+                                folly::unit)));
 
-            // Create PublishOk with delivery timeout parameter
-            PublishOk publishOk{
-                actualPub.requestID,
-                true, // forward
-                128,  // subscriber priority
-                GroupOrder::Default,
-                LocationType::LargestObject,
-                folly::none,                       // start
-                folly::make_optional(uint64_t(0)), // endGroup
-                {} // params - will add delivery timeout
-            };
+                // Create PublishOk with delivery timeout parameter
+                PublishOk publishOk{
+                    actualPub.requestID,
+                    true, // forward
+                    128,  // subscriber priority
+                    GroupOrder::Default,
+                    LocationType::LargestObject,
+                    folly::none,                       // start
+                    folly::make_optional(uint64_t(0)), // endGroup
+                    {} // params - will add delivery timeout
+                };
 
-            // Add delivery timeout parameter (3000ms)
-            publishOk.params.push_back(
-                {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-                 "",
-                 3000,
-                 {}});
+                // Add delivery timeout parameter (3000ms)
+                publishOk.params.push_back(
+                    {folly::to_underlying(
+                         TrackRequestParamKey::DELIVERY_TIMEOUT),
+                     "",
+                     3000,
+                     {}});
 
-            auto replyTask =
-                folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                auto replyTask = folly::coro::makeTask<
+                    folly::Expected<PublishOk, PublishError>>(
                     std::move(publishOk));
 
-            return Subscriber::PublishConsumerAndReplyTask{
-                std::static_pointer_cast<TrackConsumer>(mockConsumer),
-                std::move(replyTask)};
-          }));
+                return Subscriber::PublishConsumerAndReplyTask{
+                    std::static_pointer_cast<TrackConsumer>(mockConsumer),
+                    std::move(replyTask)};
+              }));
 
   auto handle = makePublishHandle();
 
@@ -3747,11 +3804,13 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithoutDeliveryTimeout) {
 
   // Setup server to respond with PUBLISH_OK without delivery timeout param
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [](const PublishRequest& actualPub,
-             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
-            return makePublishOkResult(actualPub);
-          }));
+      .WillOnce(
+          testing::Invoke(
+              [](const PublishRequest& actualPub,
+                 std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                return makePublishOkResult(actualPub);
+              }));
 
   auto handle = makePublishHandle();
 
@@ -3783,42 +3842,45 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
 
   // Setup server to respond with PUBLISH_OK containing zero delivery timeout
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(testing::Invoke(
-          [this](
-              const PublishRequest& actualPub,
-              std::shared_ptr<SubscriptionHandle>)
-              -> Subscriber::PublishResult {
-            auto mockConsumer = std::make_shared<MockTrackConsumer>();
-            EXPECT_CALL(*mockConsumer, setTrackAlias(_))
-                .WillRepeatedly(testing::Return(
-                    folly::Expected<folly::Unit, MoQPublishError>(
-                        folly::unit)));
+      .WillOnce(
+          testing::Invoke(
+              [this](
+                  const PublishRequest& actualPub,
+                  std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                auto mockConsumer = std::make_shared<MockTrackConsumer>();
+                EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                    .WillRepeatedly(
+                        testing::Return(
+                            folly::Expected<folly::Unit, MoQPublishError>(
+                                folly::unit)));
 
-            PublishOk publishOk{
-                actualPub.requestID,
-                true,
-                128,
-                GroupOrder::Default,
-                LocationType::LargestObject,
-                folly::none,
-                folly::make_optional(uint64_t(0)),
-                {}};
+                PublishOk publishOk{
+                    actualPub.requestID,
+                    true,
+                    128,
+                    GroupOrder::Default,
+                    LocationType::LargestObject,
+                    folly::none,
+                    folly::make_optional(uint64_t(0)),
+                    {}};
 
-            // Add zero delivery timeout parameter
-            publishOk.params.push_back(
-                {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-                 "",
-                 0,
-                 {}});
+                // Add zero delivery timeout parameter
+                publishOk.params.push_back(
+                    {folly::to_underlying(
+                         TrackRequestParamKey::DELIVERY_TIMEOUT),
+                     "",
+                     0,
+                     {}});
 
-            auto replyTask =
-                folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                auto replyTask = folly::coro::makeTask<
+                    folly::Expected<PublishOk, PublishError>>(
                     std::move(publishOk));
 
-            return Subscriber::PublishConsumerAndReplyTask{
-                std::static_pointer_cast<TrackConsumer>(mockConsumer),
-                std::move(replyTask)};
-          }));
+                return Subscriber::PublishConsumerAndReplyTask{
+                    std::static_pointer_cast<TrackConsumer>(mockConsumer),
+                    std::move(replyTask)};
+              }));
 
   auto handle = makePublishHandle();
 

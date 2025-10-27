@@ -84,8 +84,8 @@ class Subscriber {
   virtual folly::coro::Task<AnnounceResult> announce(
       Announce ann,
       std::shared_ptr<AnnounceCallback> = nullptr) {
-    return folly::coro::makeTask<AnnounceResult>(
-        folly::makeUnexpected(AnnounceError{
+    return folly::coro::makeTask<AnnounceResult>(folly::makeUnexpected(
+        AnnounceError{
             ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "unimplemented"}));
   }
 
@@ -103,8 +103,9 @@ class Subscriber {
   virtual PublishResult publish(
       PublishRequest pub,
       std::shared_ptr<SubscriptionHandle> /*handle*/ = nullptr) {
-    return folly::makeUnexpected(PublishError{
-        pub.requestID, PublishErrorCode::NOT_SUPPORTED, "unimplemented"});
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID, PublishErrorCode::NOT_SUPPORTED, "unimplemented"});
   }
 
   virtual void goaway(Goaway /*goaway*/) {}

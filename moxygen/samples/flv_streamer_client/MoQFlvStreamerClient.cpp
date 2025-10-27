@@ -147,10 +147,11 @@ class MoQFlvStreamerClient
     AbsoluteLocation largest;
     // Location mode not supported
     if (subscribeReq.locType != LocationType::LargestObject) {
-      co_return folly::makeUnexpected(SubscribeError{
-          subscribeReq.requestID,
-          SubscribeErrorCode::NOT_SUPPORTED,
-          "Only location LargestObject mode supported"});
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subscribeReq.requestID,
+              SubscribeErrorCode::NOT_SUPPORTED,
+              "Only location LargestObject mode supported"});
     }
     // Track not available
     auto alias = subscribeReq.trackAlias.value_or(
@@ -164,10 +165,11 @@ class MoQFlvStreamerClient
       largest = largestAudio_;
       audioPub_ = std::move(consumer);
     } else {
-      co_return folly::makeUnexpected(SubscribeError{
-          subscribeReq.requestID,
-          SubscribeErrorCode::TRACK_NOT_EXIST,
-          "Full trackname NOT available"});
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subscribeReq.requestID,
+              SubscribeErrorCode::TRACK_NOT_EXIST,
+              "Full trackname NOT available"});
     }
     // Save subscribe
     auto subscription = std::make_shared<Subscription>(

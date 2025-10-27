@@ -83,8 +83,8 @@ class Publisher {
   virtual folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback) {
-    return folly::coro::makeTask<SubscribeResult>(
-        folly::makeUnexpected(SubscribeError{
+    return folly::coro::makeTask<SubscribeResult>(folly::makeUnexpected(
+        SubscribeError{
             sub.requestID,
             SubscribeErrorCode::NOT_SUPPORTED,
             "unimplemented"}));
@@ -117,8 +117,9 @@ class Publisher {
   virtual folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> fetchCallback) {
-    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(FetchError{
-        fetch.requestID, FetchErrorCode::NOT_SUPPORTED, "unimplemented"}));
+    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(
+        FetchError{
+            fetch.requestID, FetchErrorCode::NOT_SUPPORTED, "unimplemented"}));
   }
 
   // On successful SUBSCRIBE_ANNOUNCES, a SubscribeAnnouncesHandle is returned,
@@ -151,10 +152,11 @@ class Publisher {
   virtual folly::coro::Task<SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces subAnn) {
     return folly::coro::makeTask<SubscribeAnnouncesResult>(
-        folly::makeUnexpected(SubscribeAnnouncesError{
-            subAnn.requestID,
-            SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
-            "unimplemented"}));
+        folly::makeUnexpected(
+            SubscribeAnnouncesError{
+                subAnn.requestID,
+                SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+                "unimplemented"}));
   }
 
   virtual void goaway(Goaway /*goaway*/) {}

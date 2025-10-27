@@ -1028,11 +1028,12 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       } else {
         XLOG(ERR) << "Consumer error=" << res.error().msg;
         consumer->reset(ResetStreamErrorCode::INTERNAL_ERROR);
-        co_return folly::makeUnexpected(FetchError{
-            fetch.requestID,
-            FetchErrorCode::INTERNAL_ERROR,
-            folly::to<std::string>(
-                "Consumer error on object=", res.error().msg)});
+        co_return folly::makeUnexpected(
+            FetchError{
+                fetch.requestID,
+                FetchErrorCode::INTERNAL_ERROR,
+                folly::to<std::string>(
+                    "Consumer error on object=", res.error().msg)});
       }
     } // else publish success
     servedOneObject |= exists(object->status);
@@ -1176,8 +1177,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
     }
     XLOG(ERR) << "upstream fetch failed err=" << res.error().reasonPhrase;
     consumer->reset(ResetStreamErrorCode::CANCELLED);
-    co_return folly::makeUnexpected(FetchError{
-        fetch.requestID, res.error().errorCode, res.error().reasonPhrase});
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID, res.error().errorCode, res.error().reasonPhrase});
   }
 
   XLOG(DBG1) << "upstream success";
@@ -1202,10 +1204,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
   if (writeback->wasReset()) {
     // FetchOk but fetch stream was reset, can't continue
     XLOG(ERR) << "Fetch was reset, returning error";
-    co_return folly::makeUnexpected(FetchError{
-        fetch.requestID,
-        FetchErrorCode::INTERNAL_ERROR,
-        folly::to<std::string>("Upstream fetch reset")});
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::INTERNAL_ERROR,
+            folly::to<std::string>("Upstream fetch reset")});
   }
   // completed successfully, ready for next object
   co_return nullptr;
@@ -1219,11 +1222,12 @@ MoQCache::handleBlocked(
   if (!awaitRes) {
     XLOG(ERR) << "awaitReadyToConsume error: " << awaitRes.error().what();
     consumer->reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    co_return folly::makeUnexpected(FetchError{
-        fetch.requestID,
-        FetchErrorCode::INTERNAL_ERROR,
-        folly::to<std::string>(
-            "Consumer error awaiting ready=", awaitRes.error().msg)});
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::INTERNAL_ERROR,
+            folly::to<std::string>(
+                "Consumer error awaiting ready=", awaitRes.error().msg)});
   }
   co_await std::move(awaitRes.value());
   co_return folly::unit;

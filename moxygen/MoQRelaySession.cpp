@@ -272,10 +272,11 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelaySession::announce(
       folly::Expected<AnnounceOk, AnnounceError>>();
   pendingRequests_.emplace(
       ann.requestID,
-      MoQRelayPendingRequestState::makeAnnounce(PendingAnnounce{
-          trackNamespace, // Use saved copy instead of ann.trackNamespace
-          std::move(contract.first),
-          std::move(announceCallback)}));
+      MoQRelayPendingRequestState::makeAnnounce(
+          PendingAnnounce{
+              trackNamespace, // Use saved copy instead of ann.trackNamespace
+              std::move(contract.first),
+              std::move(announceCallback)}));
   auto announceResult = co_await std::move(contract.second);
   if (announceResult.hasError()) {
     MOQ_PUBLISHER_STATS(
@@ -373,10 +374,11 @@ void MoQRelaySession::unannounce(const Unannounce& unann) {
     if (pendingIt != pendingRequests_.end()) {
       if (auto* announcePtr = MoQRelayPendingRequestState::tryGetAnnounce(
               pendingIt->second.get())) {
-        announcePtr->promise.setValue(folly::makeUnexpected(AnnounceError(
-            {pendingIt->first,
-             AnnounceErrorCode::INTERNAL_ERROR,
-             "Unannounce before AnnounceOK"})));
+        announcePtr->promise.setValue(
+            folly::makeUnexpected(AnnounceError(
+                {pendingIt->first,
+                 AnnounceErrorCode::INTERNAL_ERROR,
+                 "Unannounce before AnnounceOK"})));
       }
       pendingRequests_.erase(pendingIt);
     } else {
@@ -406,8 +408,11 @@ void MoQRelaySession::onAnnounce(Announce ann) {
 
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << "No subscriber callback set";
-    announceError(AnnounceError{
-        ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "Not a subscriber"});
+    announceError(
+        AnnounceError{
+            ann.requestID,
+            AnnounceErrorCode::NOT_SUPPORTED,
+            "Not a subscriber"});
   }
   co_withExecutor(exec_.get(), handleAnnounce(std::move(ann))).start();
 }
@@ -423,10 +428,11 @@ folly::coro::Task<void> MoQRelaySession::handleAnnounce(Announce announce) {
   if (announceResult.hasException()) {
     XLOG(ERR) << "Exception in Subscriber callback ex="
               << announceResult.exception().what().toStdString();
-    announceError(AnnounceError{
-        announce.requestID,
-        AnnounceErrorCode::INTERNAL_ERROR,
-        announceResult.exception().what().toStdString()});
+    announceError(
+        AnnounceError{
+            announce.requestID,
+            AnnounceErrorCode::INTERNAL_ERROR,
+            announceResult.exception().what().toStdString()});
     co_return;
   }
   if (announceResult->hasError()) {
@@ -602,10 +608,11 @@ void MoQRelaySession::onSubscribeAnnounces(SubscribeAnnounces sa) {
   }
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
-    subscribeAnnouncesError(SubscribeAnnouncesError{
-        sa.requestID,
-        SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
-        "Not a publisher"});
+    subscribeAnnouncesError(
+        SubscribeAnnouncesError{
+            sa.requestID,
+            SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+            "Not a publisher"});
     return;
   }
   co_withExecutor(exec_.get(), handleSubscribeAnnounces(std::move(sa))).start();
@@ -621,10 +628,11 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeAnnounces(
   if (subAnnResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subAnnResult.exception().what().toStdString();
-    subscribeAnnouncesError(SubscribeAnnouncesError{
-        subAnn.requestID,
-        SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
-        subAnnResult.exception().what().toStdString()});
+    subscribeAnnouncesError(
+        SubscribeAnnouncesError{
+            subAnn.requestID,
+            SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+            subAnnResult.exception().what().toStdString()});
     co_return;
   }
   if (subAnnResult->hasError()) {

@@ -469,10 +469,11 @@ TEST_P(MoQFramerTest, parseFixedString) {
   // Encode a QuicInteger onto the buffer
   auto quicIntegerSize = quic::getQuicIntegerSize(s.length());
   folly::io::QueueAppender appender(&writeBuf, *quicIntegerSize);
-  CHECK(quic::encodeQuicInteger(
-      s.length(), [appender = std::move(appender)](auto val) mutable {
-        appender.writeBE(val);
-      }));
+  CHECK(
+      quic::encodeQuicInteger(
+          s.length(), [appender = std::move(appender)](auto val) mutable {
+            appender.writeBE(val);
+          }));
 
   // Write a blob of bytes to buffer
   writeBuf.append(s.data(), s.length());

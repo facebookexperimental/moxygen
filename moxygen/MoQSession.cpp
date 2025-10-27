@@ -1703,8 +1703,9 @@ MoQSession::PendingRequestState::setError(
       return type_;
     }
     case FrameType::TRACK_STATUS: {
-      storage_.trackStatus_.setValue(folly::makeUnexpected(TrackStatusError(
-          {error.requestID, error.errorCode, error.reasonPhrase})));
+      storage_.trackStatus_.setValue(
+          folly::makeUnexpected(TrackStatusError(
+              {error.requestID, error.errorCode, error.reasonPhrase})));
       return type_;
     }
     case FrameType::FETCH_ERROR: {
@@ -1773,10 +1774,9 @@ void MoQSession::cleanup() {
   }
   for (auto& subTrack : subTracks_) {
     if (!subTrack.second->isPublish()) {
-      subTrack.second->subscribeError(
-          {/*TrackReceiveState fills in subId*/ 0,
-           SubscribeErrorCode::INTERNAL_ERROR,
-           "session closed"});
+      subTrack.second->subscribeError({/*TrackReceiveState fills in subId*/ 0,
+                                       SubscribeErrorCode::INTERNAL_ERROR,
+                                       "session closed"});
     }
   }
   subTracks_.clear();
@@ -3041,10 +3041,11 @@ void MoQSession::onPublish(PublishRequest publish) {
 
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << " No subscriber callback set";
-    publishError(PublishError{
-        publish.requestID,
-        PublishErrorCode::NOT_SUPPORTED,
-        "Not a subscriber"});
+    publishError(
+        PublishError{
+            publish.requestID,
+            PublishErrorCode::NOT_SUPPORTED,
+            "Not a subscriber"});
     return;
   }
 
@@ -3473,10 +3474,11 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   auto res = moqFrameWriter_.writeTrackStatus(controlWriteBuf_, trackStatus);
   if (!res) {
     XLOG(ERR) << "writeTrackStatus failed sess=" << this;
-    co_return folly::makeUnexpected(TrackStatusError{
-        trackStatus.requestID,
-        TrackStatusErrorCode::INTERNAL_ERROR,
-        "local write failed"});
+    co_return folly::makeUnexpected(
+        TrackStatusError{
+            trackStatus.requestID,
+            TrackStatusErrorCode::INTERNAL_ERROR,
+            "local write failed"});
   }
   if (logger_) {
     logger_->logTrackStatus(trackStatus);
@@ -3604,17 +3606,21 @@ Subscriber::PublishResult MoQSession::publish(
   // Reject new publish attempts if session is draining
   if (draining_) {
     XLOG(DBG1) << "Rejecting publish request, session draining sess=" << this;
-    return folly::makeUnexpected(PublishError{
-        pub.requestID, PublishErrorCode::INTERNAL_ERROR, "Session draining"});
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID,
+            PublishErrorCode::INTERNAL_ERROR,
+            "Session draining"});
   }
 
   if (!handle) {
     XLOG(DBG1) << "Rejecting publish request, no subscription handle sess="
                << this;
-    return folly::makeUnexpected(PublishError{
-        pub.requestID,
-        PublishErrorCode::INTERNAL_ERROR,
-        "No subscription handle"});
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID,
+            PublishErrorCode::INTERNAL_ERROR,
+            "No subscription handle"});
   }
 
   auto publishStartTime = std::chrono::steady_clock::now();
@@ -3635,8 +3641,11 @@ Subscriber::PublishResult MoQSession::publish(
   auto res = moqFrameWriter_.writePublish(controlWriteBuf_, pub);
   if (!res) {
     XLOG(ERR) << "writePublish failed sess=" << this;
-    return folly::makeUnexpected(PublishError{
-        pub.requestID, PublishErrorCode::INTERNAL_ERROR, "local write failed"});
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID,
+            PublishErrorCode::INTERNAL_ERROR,
+            "local write failed"});
   }
   controlWriteEvent_.signal();
 
@@ -3680,7 +3689,7 @@ Subscriber::PublishResult MoQSession::publish(
        rid = pub.requestID,
        trackPublisher,
        this]() mutable
-      -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
+          -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
         auto result = co_await std::move(fut);
         if (result.hasValue()) {
           auto it = pubTracks_.find(rid);
@@ -4528,10 +4537,11 @@ void MoQSession::aliasifyAuthTokens(
 void MoQSession::onAnnounce(Announce announce) {
   XLOG(DBG1) << __func__ << " ns=" << announce.trackNamespace
              << " - sending NOT_SUPPORTED error, sess=" << this;
-  announceError(AnnounceError{
-      announce.requestID,
-      AnnounceErrorCode::NOT_SUPPORTED,
-      "Announce not supported by simple client"});
+  announceError(
+      AnnounceError{
+          announce.requestID,
+          AnnounceErrorCode::NOT_SUPPORTED,
+          "Announce not supported by simple client"});
 }
 
 void MoQSession::onAnnounceOk(AnnounceOk announceOk) {
@@ -4561,10 +4571,11 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) {
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnounces.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
-  subscribeAnnouncesError(SubscribeAnnouncesError{
-      subscribeAnnounces.requestID,
-      SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
-      "SubscribeAnnounces not supported by simple client"});
+  subscribeAnnouncesError(
+      SubscribeAnnouncesError{
+          subscribeAnnounces.requestID,
+          SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+          "SubscribeAnnounces not supported by simple client"});
 }
 
 void MoQSession::onSubscribeAnnouncesOk(

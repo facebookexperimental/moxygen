@@ -400,15 +400,16 @@ int main(int argc, char* argv[]) {
   auto subParams = flags2params();
   co_withExecutor(
       moqEvb.get(),
-      textClient->run(SubscribeRequest::make(
-          moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
-          0,
-          GroupOrder::OldestFirst,
-          FLAGS_forward,
-          subParams.locType,
-          subParams.start,
-          subParams.endGroup,
-          {})))
+      textClient->run(
+          SubscribeRequest::make(
+              moxygen::FullTrackName({std::move(ns), FLAGS_track_name}),
+              0,
+              GroupOrder::OldestFirst,
+              FLAGS_forward,
+              subParams.locType,
+              subParams.start,
+              subParams.endGroup,
+              {})))
       .start()
       .via(moqEvb.get());
 

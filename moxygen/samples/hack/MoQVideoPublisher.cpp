@@ -162,13 +162,12 @@ namespace moxygen {
 class LocalSubscriptionHandle : public SubscriptionHandle {
  public:
   explicit LocalSubscriptionHandle(RequestID rid, TrackAlias alias) {
-    SubscribeOk ok{
-        /*requestID=*/rid,
-        /*trackAlias=*/alias,
-        /*expires=*/std::chrono::milliseconds(0),
-        /*groupOrder=*/GroupOrder::OldestFirst,
-        /*largest=*/folly::none,
-        /*params=*/{}};
+    SubscribeOk ok{/*requestID=*/rid,
+                   /*trackAlias=*/alias,
+                   /*expires=*/std::chrono::milliseconds(0),
+                   /*groupOrder=*/GroupOrder::OldestFirst,
+                   /*largest=*/folly::none,
+                   /*params=*/{}};
     setSubscribeOk(std::move(ok));
   }
   void unsubscribe() override {}
@@ -305,7 +304,7 @@ folly::coro::Task<void> MoQVideoPublisher::initialAudioPublish(
         replyEvb,
         folly::coro::co_invoke(
             [selfWeak, replyTask = std::move(replyTask)]() mutable
-            -> folly::coro::Task<void> {
+                -> folly::coro::Task<void> {
               try {
                 auto reply = co_await std::move(replyTask);
                 if (reply.hasError()) {
@@ -350,31 +349,37 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
   if ((sub.fullTrackName != videoForwarder_.fullTrackName()) &&
       (sub.fullTrackName != audioForwarder_.fullTrackName())) {
     XLOG(ERR) << "Unknown track " << sub.fullTrackName;
-    co_return folly::makeUnexpected(SubscribeError{
-        sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            sub.requestID,
+            SubscribeErrorCode::TRACK_NOT_EXIST,
+            "Unknown track"});
   }
   if ((sub.fullTrackName == videoForwarder_.fullTrackName()) &&
       !videoForwarder_.empty()) {
     XLOG(ERR) << "Already subscribed to video track "
               << videoForwarder_.fullTrackName();
-    co_return folly::makeUnexpected(SubscribeError{
-        sub.requestID,
-        SubscribeErrorCode::INTERNAL_ERROR,
-        "Already subscribed"});
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            sub.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "Already subscribed"});
   }
 
   if ((sub.fullTrackName == audioForwarder_.fullTrackName()) &&
       !audioForwarder_.empty()) {
     XLOG(ERR) << "Already subscribed to audio track "
               << audioForwarder_.fullTrackName();
-    co_return folly::makeUnexpected(SubscribeError{
-        sub.requestID,
-        SubscribeErrorCode::INTERNAL_ERROR,
-        "Already subscribed"});
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            sub.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "Already subscribed"});
   }
 
-  co_return folly::makeUnexpected(SubscribeError{
-      sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
+  co_return folly::makeUnexpected(
+      SubscribeError{
+          sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
 }
 
 void MoQVideoPublisher::publishVideoFrame(
@@ -607,13 +612,13 @@ void MoQVideoPublisher::publishAudioFrameToMoQ(
     return;
   }
 
-  ObjectHeader objHeader = ObjectHeader{
-      /*groupIn=*/id,
-      /*subgroupIn=*/0,
-      /*idIn=*/0,
-      AUDIO_STREAM_PRIORITY,
-      ObjectStatus::NORMAL,
-      Extensions(std::move(moqMiObj->extensions), {})};
+  ObjectHeader objHeader =
+      ObjectHeader{/*groupIn=*/id,
+                   /*subgroupIn=*/0,
+                   /*idIn=*/0,
+                   AUDIO_STREAM_PRIORITY,
+                   ObjectStatus::NORMAL,
+                   Extensions(std::move(moqMiObj->extensions), {})};
 
   if (auto res = audioTrackPublisher_->objectStream(
           objHeader, std::move(moqMiObj->payload));

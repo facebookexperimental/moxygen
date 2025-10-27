@@ -23,8 +23,9 @@ TrackNamespace convertToTrackNamespace(const MoQBenchmarkParams& params) {
 folly::Expected<MoQBenchmarkParams, std::runtime_error>
 convertToMoqBenchmarkParams(const TrackNamespace& track) {
   if (track.trackNamespace.size() != 3) {
-    return folly::makeUnexpected(std::runtime_error(
-        "TrackNamespace must have 3 elements for benchmark"));
+    return folly::makeUnexpected(
+        std::runtime_error(
+            "TrackNamespace must have 3 elements for benchmark"));
   }
 
   auto params = MoQBenchmarkParams();

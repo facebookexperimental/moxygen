@@ -21,10 +21,11 @@ class MoQRelayClient {
 
   // Convenience constructor for QUIC transport with relay session
   MoQRelayClient(std::shared_ptr<MoQExecutor> exec, proxygen::URL url)
-      : moqClient_(std::make_unique<MoQClient>(
-            std::move(exec),
-            std::move(url),
-            MoQRelaySession::createRelaySessionFactory())) {}
+      : moqClient_(
+            std::make_unique<MoQClient>(
+                std::move(exec),
+                std::move(url),
+                MoQRelaySession::createRelaySessionFactory())) {}
 
   folly::coro::Task<void> setup(
       std::shared_ptr<Publisher> publisher,

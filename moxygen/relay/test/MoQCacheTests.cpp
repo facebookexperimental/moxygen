@@ -100,8 +100,9 @@ class MoQCacheTest : public ::testing::Test {
 
   void expectUpstreamFetch(const FetchError& err) {
     EXPECT_CALL(*upstream_, fetch(_, _))
-        .WillOnce(Return(folly::coro::makeTask<Publisher::FetchResult>(
-            folly::makeUnexpected(err))));
+        .WillOnce(Return(
+            folly::coro::makeTask<Publisher::FetchResult>(
+                folly::makeUnexpected(err))));
   }
 
   void populateCacheRange(

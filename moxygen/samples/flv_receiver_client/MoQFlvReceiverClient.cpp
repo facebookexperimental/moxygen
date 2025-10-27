@@ -191,8 +191,8 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
       XLOG(DBG1) << trackMediaType_.toStr()
                  << " Received payload. Size=" << payloadSize;
 
-      auto payloadDecodedData =
-          MoQMi::decodeMoQMi(std::make_unique<MoQMi::MoqMiObject>(
+      auto payloadDecodedData = MoQMi::decodeMoQMi(
+          std::make_unique<MoQMi::MoqMiObject>(
               objHeader.extensions.getMutableExtensions(), std::move(payload)));
       logData(payloadDecodedData);
       if (payloadDecodedData.index() ==

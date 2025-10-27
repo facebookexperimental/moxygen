@@ -31,7 +31,7 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
       SubscribeOk ok,
       folly::CancellationSource* cancellationSource)
       : Publisher::SubscriptionHandle(std::move(ok)),
-        cancelSource_(cancellationSource){};
+        cancelSource_(cancellationSource) {};
 
   virtual void unsubscribe() override;
   virtual void subscribeUpdate(SubscribeUpdate subUpdate) override;
@@ -56,7 +56,7 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
       folly::CancellationSource* cancellationSource)
       : Publisher::FetchHandle(ok),
         fetchOk_(ok),
-        cancelSource_(cancellationSource){};
+        cancelSource_(cancellationSource) {};
 
   virtual void fetchCancel() override;
 

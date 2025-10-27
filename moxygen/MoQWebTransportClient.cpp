@@ -137,8 +137,9 @@ void MoQWebTransportClient::HTTPHandler::onHeadersComplete(
     std::unique_ptr<proxygen::HTTPMessage> resp) noexcept {
   if (resp->getStatusCode() != 200) {
     txn_->sendAbort();
-    wtContract.first.setException(std::runtime_error(
-        fmt::format("Non-200 response: {0}", resp->getStatusCode())));
+    wtContract.first.setException(
+        std::runtime_error(
+            fmt::format("Non-200 response: {0}", resp->getStatusCode())));
     return;
   }
   auto wt = txn_->getWebTransport();
@@ -154,8 +155,11 @@ void MoQWebTransportClient::HTTPHandler::onError(
     const proxygen::HTTPException& ex) noexcept {
   XLOG(DBG1) << __func__;
   if (!wtContract.first.isFulfilled()) {
-    wtContract.first.setException(std::runtime_error(fmt::format(
-        "Error setting up WebTransport: {0}", folly::exceptionStr(ex))));
+    wtContract.first.setException(
+        std::runtime_error(
+            fmt::format(
+                "Error setting up WebTransport: {0}",
+                folly::exceptionStr(ex))));
     return;
   }
   // the moq session has been torn down...

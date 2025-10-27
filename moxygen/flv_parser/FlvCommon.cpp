@@ -74,41 +74,46 @@ flv::FlvTag createTag(
     audioTag->soundFormat = (tmp >> 4) & 0x0f;
     audioTag->soundRate = (tmp >> 2) & 0x3;
     if (audioTag->soundRate > 3) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported audio sampling rate. soundRateIndex {}",
-          audioTag->soundRate));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported audio sampling rate. soundRateIndex {}",
+              audioTag->soundRate));
     }
     // audioTag->soundRate = kAudioFreqSamplingIndexMapping[soundRateIndex];
     audioTag->soundSize = (tmp >> 1) & 0x1;
     if (audioTag->soundSize > 1) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported audio bits per sample. soundSizeIndex {}",
-          audioTag->soundSize));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported audio bits per sample. soundSizeIndex {}",
+              audioTag->soundSize));
     }
     // audioTag->soundSize = kAudioBitsPerSampleMapping[soundSizeIndex];
     audioTag->soundType = tmp & 0x1;
     if (audioTag->soundType > 1) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported number of channels. soundSizeIndex {}",
-          audioTag->soundType));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported number of channels. soundSizeIndex {}",
+              audioTag->soundType));
     }
     // audioTag->soundType = kAudioChannels[soundTypeIndex];
     if (audioTag->soundFormat != 10 || audioTag->soundRate != 3 ||
         audioTag->soundSize != 1 || audioTag->soundType != 1) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported audio format, only AAC is supported. soundFormat {}, soundRate {}, soundSize {}, soundType {} (byte: {})",
-          audioTag->soundFormat,
-          audioTag->soundRate,
-          audioTag->soundSize,
-          audioTag->soundType,
-          tmp));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported audio format, only AAC is supported. soundFormat {}, soundRate {}, soundSize {}, soundType {} (byte: {})",
+              audioTag->soundFormat,
+              audioTag->soundRate,
+              audioTag->soundSize,
+              audioTag->soundType,
+              tmp));
     }
 
     audioTag->aacPacketType = read1Byte(cursor);
     if (audioTag->aacPacketType > 1) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported AAC packet type. packetType {}",
-          audioTag->aacPacketType));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported AAC packet type. packetType {}",
+              audioTag->aacPacketType));
     }
 
     // Read data
@@ -128,15 +133,17 @@ flv::FlvTag createTag(
     videoTag->frameType = (tmp >> 4) & 0x0f;
     videoTag->codecId = tmp & 0x0f;
     if (videoTag->codecId != 0x07) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported video codec. Only h264 supported. CodecId {}",
-          videoTag->codecId));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported video codec. Only h264 supported. CodecId {}",
+              videoTag->codecId));
     }
     videoTag->avcPacketType = read1Byte(cursor);
     if (videoTag->avcPacketType > 2) {
-      throw std::runtime_error(fmt::format(
-          "Unsupported AVC packet type. packetType {}",
-          videoTag->avcPacketType));
+      throw std::runtime_error(
+          fmt::format(
+              "Unsupported AVC packet type. packetType {}",
+              videoTag->avcPacketType));
     }
     videoTag->compositionTime = read3Bytes(cursor);
 

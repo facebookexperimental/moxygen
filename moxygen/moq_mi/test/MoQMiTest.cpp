@@ -66,8 +66,9 @@ TEST(MoQMiTest, EncodeVideoH264TestNoMetadata) {
   EXPECT_EQ(mi->extensions.size(), 2);
   EXPECT_EQ(
       mi->extensions[0].type,
-      folly::to_underlying(MoQMi::HeaderExtensionsTypeIDs::
-                               MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
   EXPECT_EQ(
       mi->extensions[0].intValue,
       folly::to_underlying(
@@ -113,8 +114,9 @@ TEST(MoQMiTest, EncodeVideoH264TestWithMetadata) {
   EXPECT_EQ(mi->extensions.size(), 3);
   EXPECT_EQ(
       mi->extensions[0].type,
-      folly::to_underlying(MoQMi::HeaderExtensionsTypeIDs::
-                               MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
   EXPECT_EQ(
       mi->extensions[0].intValue,
       folly::to_underlying(
@@ -166,8 +168,9 @@ TEST(MoQMiTest, EncodeAudioAAC) {
   EXPECT_EQ(mi->extensions.size(), 2);
   EXPECT_EQ(
       mi->extensions[0].type,
-      folly::to_underlying(MoQMi::HeaderExtensionsTypeIDs::
-                               MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
   EXPECT_EQ(
       mi->extensions[0].intValue,
       folly::to_underlying(

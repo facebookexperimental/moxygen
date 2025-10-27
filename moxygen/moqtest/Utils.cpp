@@ -39,8 +39,9 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
   // Check if Last Group in track field is within valid range (less than max)
   // (Tuple Field 4)
   if (track->lastGroupInTrack > static_cast<uint64_t>(pow(2, 62)) - 1) {
-    return folly::makeUnexpected(std::runtime_error(
-        "Last Group In Track field exceeds maximum allowed groups"));
+    return folly::makeUnexpected(
+        std::runtime_error(
+            "Last Group In Track field exceeds maximum allowed groups"));
   }
 
   // Check if Last Object is Less than Maximum allowed value (Tuple Field 5)
@@ -48,8 +49,9 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
       track->objectsPerGroup + static_cast<int>(track->sendEndOfGroupMarkers);
 
   if (track->lastObjectInTrack > maximumObjects) {
-    return folly::makeUnexpected(std::runtime_error(
-        "Last Object In Track field exceeds maximum allowed objects"));
+    return folly::makeUnexpected(
+        std::runtime_error(
+            "Last Object In Track field exceeds maximum allowed objects"));
   }
 
   // Checks for Tuple Field 10
@@ -132,9 +134,10 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
     params.testVariableExtension = (std::stoi((track->trackNamespace)[14]));
     params.publisherDeliveryTimeout = std::stoull((track->trackNamespace)[15]);
   } catch (const std::exception& e) {
-    return folly::makeUnexpected(std::runtime_error(
-        "Error Converting TrackNamespace String value to Digit: " +
-        std::string(e.what())));
+    return folly::makeUnexpected(
+        std::runtime_error(
+            "Error Converting TrackNamespace String value to Digit: " +
+            std::string(e.what())));
   }
 
   // Check if the new params is Valid
