@@ -90,7 +90,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
  protected:
   virtual std::shared_ptr<MoQSession> createSession(
-      std::shared_ptr<proxygen::WebTransport> wt,
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::shared_ptr<MoQExecutor> executor);
 
  private:
