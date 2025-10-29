@@ -12,26 +12,6 @@
 
 namespace {
 
-// This is an insecure certificate verifier and is not meant to be
-// used in production. Using it in production would mean that this will
-// leave everyone insecure.
-class InsecureVerifierDangerousDoNotUseInProduction
-    : public fizz::CertificateVerifier {
- public:
-  ~InsecureVerifierDangerousDoNotUseInProduction() override = default;
-
-  std::shared_ptr<const folly::AsyncTransportCertificate> verify(
-      const std::vector<std::shared_ptr<const fizz::PeerCert>>& certs)
-      const override {
-    return certs.front();
-  }
-
-  std::vector<fizz::Extension> getCertificateRequestExtensions()
-      const override {
-    return std::vector<fizz::Extension>();
-  }
-};
-
 proxygen::HTTPMessage getWebTransportConnectRequest(const proxygen::URL& url) {
   proxygen::HTTPMessage req;
   req.setHTTPVersion(1, 1);
@@ -97,7 +77,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
       folly::none,
       folly::SocketAddress(url.getHost(), url.getPort(), true), // blocking DNS,
       std::move(fizzContext),
-      std::make_shared<InsecureVerifierDangerousDoNotUseInProduction>(),
+      nullptr, // default verifier will be used
       connect_timeout,
       folly::emptySocketOptionMap,
       url.getHost());

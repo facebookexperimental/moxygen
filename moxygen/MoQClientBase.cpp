@@ -8,30 +8,6 @@
 #include <quic/client/QuicClientTransport.h>
 #include <moxygen/MoQClientBase.h>
 
-// TODO: clean this up.
-namespace proxygen {
-
-// This is an insecure certificate verifier and is not meant to be
-// used in production. Using it in production would mean that this will
-// leave everyone insecure.
-class InsecureVerifierDangerousDoNotUseInProduction
-    : public fizz::CertificateVerifier {
- public:
-  ~InsecureVerifierDangerousDoNotUseInProduction() override = default;
-
-  std::shared_ptr<const folly::AsyncTransportCertificate> verify(
-      const std::vector<std::shared_ptr<const fizz::PeerCert>>& certs)
-      const override {
-    return certs.front();
-  }
-
-  std::vector<fizz::Extension> getCertificateRequestExtensions()
-      const override {
-    return std::vector<fizz::Extension>();
-  }
-};
-} // namespace proxygen
-
 namespace moxygen {
 /*static*/
 bool MoQClientBase::shouldSendAuthorityParam(
@@ -59,8 +35,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       folly::SocketAddress(
           url_.getHost(), url_.getPort(), true), // blocking DNS,
       connect_timeout,
-      std::make_shared<
-          proxygen::InsecureVerifierDangerousDoNotUseInProduction>(),
+      nullptr, // default verifier will be used
       alpn,
       transportSettings);
 
