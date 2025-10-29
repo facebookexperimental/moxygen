@@ -34,6 +34,14 @@ class MoQForwarder : public TrackConsumer {
     groupOrder_ = order;
   }
 
+  void setDeliveryTimeout(uint64_t timeout) {
+    upstreamDeliveryTimeout_ = std::chrono::milliseconds(timeout);
+  }
+
+  std::chrono::milliseconds upstreamDeliveryTimeout() const {
+    return upstreamDeliveryTimeout_;
+  }
+
   void setLargest(AbsoluteLocation largest) {
     largest_ = largest;
   }
@@ -96,6 +104,18 @@ class MoQForwarder : public TrackConsumer {
 
     void updateLargest(AbsoluteLocation largest) {
       subscribeOk_->largest = largest;
+    }
+
+    // Updates the params of the subscribeOk
+    // updates existing param if key matches, otherwise adds new param
+    void setParam(const TrackRequestParameter& param) {
+      for (auto& existingParam : subscribeOk_->params) {
+        if (existingParam.key == param.key) {
+          existingParam = param;
+          return;
+        }
+      }
+      subscribeOk_->params.push_back(param);
     }
 
     void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {
@@ -652,6 +672,8 @@ class MoQForwarder : public TrackConsumer {
       subgroups_;
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
   folly::Optional<AbsoluteLocation> largest_;
+  // This should eventually be a vector of params that can be cascaded e2e
+  std::chrono::milliseconds upstreamDeliveryTimeout_{};
   std::shared_ptr<Callback> callback_;
 };
 

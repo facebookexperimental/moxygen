@@ -158,6 +158,13 @@ Subscriber::PublishResult MoQRelay::publish(
   // Set Forwarder Params
   forwarder->setGroupOrder(pub.groupOrder);
 
+  // Extract delivery timeout from publish request params and store in forwarder
+  auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
+      pub.params, session->getNegotiatedVersion().value());
+  if (deliveryTimeout && *deliveryTimeout > 0) {
+    forwarder->setDeliveryTimeout(*deliveryTimeout);
+  }
+
   auto subRes = subscriptions_.emplace(
       std::piecewise_construct,
       std::forward_as_tuple(pub.fullTrackName),
@@ -231,6 +238,19 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   subscriber->range =
       toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder->largest());
   subscriber->shouldForward = pubOk.forward;
+
+  // Extract delivery timeout from upstream PUBLISH_OK and propagate to
+  // subscriber
+  auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
+      pubOk.params, session->getNegotiatedVersion().value());
+  if (deliveryTimeout && *deliveryTimeout > 0) {
+    forwarder->setDeliveryTimeout(*deliveryTimeout);
+    subscriber->setParam(
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         "",
+         *deliveryTimeout,
+         {}});
+  }
 }
 
 class MoQRelay::AnnouncesSubscription
@@ -423,6 +443,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       }
     });
     // Add subscriber first in case objects come before subscribe OK.
+    auto sessionVersion = session->getNegotiatedVersion();
     auto subscriber = forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
     // As per the spec, we must set forward = true in the subscribe request
@@ -447,6 +468,20 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     }
     auto pubGroupOrder = subRes.value()->subscribeOk().groupOrder;
     forwarder->setGroupOrder(pubGroupOrder);
+
+    // Store upstream delivery timeout in forwarder
+    // add delivery timeout to downstream sub
+    auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
+        subRes.value()->subscribeOk().params, sessionVersion.value());
+    if (deliveryTimeout && *deliveryTimeout > 0) {
+      forwarder->setDeliveryTimeout(*deliveryTimeout);
+      subscriber->setParam(
+          {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+           "",
+           *deliveryTimeout,
+           {}});
+    }
+
     subscriber->setPublisherGroupOrder(pubGroupOrder);
     auto it = subscriptions_.find(subReq.fullTrackName);
     XCHECK(it != subscriptions_.end());
@@ -471,8 +506,19 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
               "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to largest
     }
-    co_return subscriptionIt->second.forwarder->addSubscriber(
+    auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
+
+    // add delivery timeout to downstream sub
+    if (forwarder->upstreamDeliveryTimeout().count() > 0) {
+      subscriber->setParam(
+          {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+           "",
+           static_cast<uint64_t>(forwarder->upstreamDeliveryTimeout().count()),
+           {}});
+    }
+
+    co_return subscriber;
   }
 }
 

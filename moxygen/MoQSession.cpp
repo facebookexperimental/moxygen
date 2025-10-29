@@ -9,6 +9,7 @@
 #include <folly/coro/FutureUtil.h>
 #include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
+#include <moxygen/events/MoQDeliveryTimeoutManager.h>
 
 #include <folly/logging/xlog.h>
 
@@ -327,9 +328,28 @@ class StreamPublisherImpl
     forward_ = forwardIn;
   }
 
-  void setDeliveryTimeout(folly::Optional<std::chrono::milliseconds> timeout) {
-    if (timeout.has_value() && timeout->count() > 0 && deliveryTimer_) {
-      deliveryTimer_->setDeliveryTimeout(*timeout);
+  void setDeliveryTimeout(
+      folly::Optional<std::chrono::milliseconds> timeout,
+      std::shared_ptr<MoQExecutor> exec) {
+    if (timeout.has_value() && timeout->count() > 0) {
+      if (!deliveryTimer_) {
+        // Create new delivery timer.
+        XLOG(DBG6)
+            << "MoQSession::SubgroupPublisher::setDeliveryTimeout: CREATING new delivery timer"
+            << " timeout=" << timeout->count() << "ms";
+        if (!exec) {
+          XLOG(ERR)
+              << "MoQSession::SubgroupPublisher::setDeliveryTimeout: ERROR: No executor available. Delivery timeout was not set.";
+          return;
+        }
+        deliveryTimer_ = std::make_unique<MoQDeliveryTimer>(exec, *timeout);
+        setDeliveryTimeoutCallback();
+      } else {
+        XLOG(DBG6)
+            << "[MoQSession::SubgroupPublisher::setDeliveryTimeout: CALLING deliveryTimer->setDeliveryTimeout"
+            << " timeout=" << timeout->count() << "ms";
+        deliveryTimer_->setDeliveryTimeout(*timeout);
+      }
     }
   }
 
@@ -937,8 +957,18 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
             version,
             bytesBufferedThreshold),
         trackAlias_(trackAlias),
-        forward_(forward),
-        deliveryTimeout_(std::move(deliveryTimeout)) {}
+        forward_(forward) {
+    // Set callback for delivery timeout changes
+    deliveryTimeoutManager_.setOnChangeCallback(
+        [this](folly::Optional<std::chrono::milliseconds> newTimeout) {
+          onDeliveryTimeoutChanged(std::move(newTimeout));
+        });
+
+    // Initialize with downstream timeout by default
+    if (deliveryTimeout.has_value()) {
+      deliveryTimeoutManager_.setDownstreamTimeout(*deliveryTimeout);
+    }
+  }
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
       TrackAlias trackAlias) override {
@@ -986,8 +1016,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     } else {
       auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
           subscribeUpdate.params, *session_->getNegotiatedVersion());
-      if (timeoutValue.has_value()) {
-        setDeliveryTimeout(timeoutValue);
+      if (timeoutValue.has_value() && *timeoutValue > 0) {
+        XLOG(DBG6)
+            << "[MoQSession::TrackPublisherImpl::onSubscribeUpdate: SETTING downstream timeout on deliveryTimeoutManager"
+            << " timeout=" << *timeoutValue << "ms"
+            << " requestID=" << requestID_;
+        deliveryTimeoutManager_.setDownstreamTimeout(
+            std::chrono::milliseconds(*timeoutValue));
+      } else {
+        XLOG(DBG6)
+            << "MoQSession::TrackPublisherImpl::onSubscribeUpdate: No delivery timeout in params or timeout=0"
+            << " requestID=" << requestID_;
       }
       setForward(subscribeUpdate.forward);
       subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate));
@@ -997,8 +1036,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   void onPublishOk(const PublishOk& publishOk) {
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
         publishOk.params, *session_->getNegotiatedVersion());
-    if (timeoutValue.has_value()) {
-      setDeliveryTimeout(timeoutValue);
+    if (timeoutValue.has_value() && *timeoutValue > 0) {
+      deliveryTimeoutManager_.setDownstreamTimeout(
+          std::chrono::milliseconds(*timeoutValue));
     }
   }
 
@@ -1006,8 +1046,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     setGroupOrder(subscribeOk.groupOrder);
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
         subscribeOk.params, *session_->getNegotiatedVersion());
-    if (timeoutValue.has_value()) {
-      setDeliveryTimeout(timeoutValue);
+    if (timeoutValue.has_value() && *timeoutValue > 0) {
+      deliveryTimeoutManager_.setUpstreamTimeout(
+          std::chrono::milliseconds(*timeoutValue));
     }
   }
 
@@ -1087,9 +1128,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     logger_ = logger;
   }
 
-  void setDeliveryTimeout(folly::Optional<uint64_t> timeoutMs);
-
  private:
+  void onDeliveryTimeoutChanged(
+      folly::Optional<std::chrono::milliseconds> newTimeout);
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
   folly::Optional<TrackAlias> trackAlias_;
@@ -1103,7 +1144,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   State state_{State::OPEN};
   bool forward_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
-  folly::Optional<std::chrono::milliseconds> deliveryTimeout_;
+  MoQDeliveryTimeoutManager deliveryTimeoutManager_;
 };
 
 class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
@@ -1235,11 +1276,12 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
           groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
       false);
 
-  // Create a new DeliveryTimer if deliveryTimeout_ is set
-  std::unique_ptr<MoQDeliveryTimer> timeoutManager = nullptr;
-  if (deliveryTimeout_.has_value()) {
-    timeoutManager =
-        std::make_unique<MoQDeliveryTimer>(session_->exec_, *deliveryTimeout_);
+  // Create a new DeliveryTimer if effective timeout is set
+  std::unique_ptr<MoQDeliveryTimer> timer = nullptr;
+  auto effectiveTimeout = deliveryTimeoutManager_.getEffectiveTimeout();
+  if (effectiveTimeout.has_value()) {
+    timer =
+        std::make_unique<MoQDeliveryTimer>(session_->exec_, *effectiveTimeout);
   }
 
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
@@ -1252,7 +1294,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       includeExtensions,
       logger_,
       deliveryCallback_,
-      std::move(timeoutManager));
+      std::move(timer));
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
@@ -1451,13 +1493,22 @@ void MoQSession::TrackPublisherImpl::setDeliveryCallback(
   deliveryCallback_ = std::move(callback);
 }
 
-void MoQSession::TrackPublisherImpl::setDeliveryTimeout(
-    folly::Optional<uint64_t> timeoutMs) {
-  if (timeoutMs.has_value() && *timeoutMs > 0) {
-    deliveryTimeout_ = std::chrono::milliseconds(*timeoutMs);
-    for (const auto& [_, subgroupPublisher] : subgroups_) {
-      subgroupPublisher->setDeliveryTimeout(deliveryTimeout_);
-    }
+void MoQSession::TrackPublisherImpl::onDeliveryTimeoutChanged(
+    folly::Optional<std::chrono::milliseconds> newTimeout) {
+  XLOG(DBG6)
+      << "MoQSession::TrackPublisherImpl::onDeliveryTimeoutChanged: CALLBACK INVOKED"
+      << " newTimeout="
+      << (newTimeout.has_value() ? std::to_string(newTimeout->count()) + "ms"
+                                 : "none")
+      << " requestID=" << requestID_ << " subgroups.size=" << subgroups_.size();
+
+  if (!newTimeout.has_value()) {
+    return;
+  }
+
+  // Propagate to all existing subgroups
+  for (const auto& [_, subgroupPublisher] : subgroups_) {
+    subgroupPublisher->setDeliveryTimeout(*newTimeout, session_->exec_);
   }
 }
 
