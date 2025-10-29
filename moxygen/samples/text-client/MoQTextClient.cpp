@@ -41,6 +41,10 @@ DEFINE_bool(
     false,
     "If client will unsubscribe from PUBLISH track after a specified time");
 DEFINE_uint64(unsubscribe_time, 30, "Time to unsubscribe in seconds");
+DEFINE_bool(
+    use_legacy_setup,
+    false,
+    "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
 
 namespace {
 using namespace moxygen;
@@ -198,12 +202,19 @@ class MoQTextClient : public Subscriber,
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
+      std::vector<std::string> alpns;
+      if (FLAGS_use_legacy_setup) {
+        alpns = {std::string(kAlpnMoqtLegacy)};
+      } else {
+        alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+      }
       co_await moqClient_.setup(
           /*publisher=*/nullptr,
           /*subscriber=*/shared_from_this(),
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
-          quic::TransportSettings());
+          quic::TransportSettings(),
+          alpns);
 
       if (FLAGS_publish) {
         SubscribeAnnounces subAnn{

@@ -4710,7 +4710,7 @@ void MoQSession::setSubscribeHandler(
   subscribeHandler_ = std::move(subscribeHandler);
 }
 
-void MoQSession::setVersionFromAlpn(const std::string& alpn) {
+void MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
   auto version = getVersionFromAlpn(folly::StringPiece(alpn));
   if (version) {
     initializeNegotiatedVersion(*version);

@@ -151,7 +151,7 @@ class MoQSession : public Subscriber,
     return maxRequestID_;
   }
 
-  void setVersionFromAlpn(const std::string& alpn);
+  void validateAndSetVersionFromAlpn(const std::string& alpn);
 
   static GroupOrder resolveGroupOrder(GroupOrder pubOrder, GroupOrder subOrder);
 

@@ -32,7 +32,8 @@ class MoQWebTransportClient : public MoQClient {
       std::chrono::milliseconds transaction_timeout,
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler,
-      const quic::TransportSettings& transportSettings) noexcept override;
+      const quic::TransportSettings& transportSettings,
+      const std::vector<std::string>& alpns = {}) noexcept override;
 
   class HTTPHandler : public proxygen::HTTPTransactionHandler {
    public:

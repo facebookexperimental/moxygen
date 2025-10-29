@@ -93,7 +93,7 @@ void MoQServer::createMoQQuicSession(
 
   // Configure session based on negotiated ALPN
   if (alpn) {
-    moqSession->setVersionFromAlpn(*alpn);
+    moqSession->validateAndSetVersionFromAlpn(*alpn);
   }
 
   qWtPtr->setHandler(moqSession.get());
@@ -334,7 +334,7 @@ void MoQServer::Handler::onHeadersComplete(
 
   // Configure session based on negotiated WebTransport protocol
   if (negotiatedProtocol) {
-    clientSession_->setVersionFromAlpn(*negotiatedProtocol);
+    clientSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol);
   }
 
   co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();

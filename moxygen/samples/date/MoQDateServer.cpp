@@ -30,6 +30,10 @@ DEFINE_string(
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(publish, false, "Send PUBLISH to subscriber");
 DEFINE_string(ns, "moq-date", "Namespace for date track");
+DEFINE_bool(
+    use_legacy_setup,
+    false,
+    "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
 
 namespace {
 using namespace moxygen;
@@ -82,13 +86,21 @@ class MoQDateServer : public MoQServer,
             : std::make_unique<MoQWebTransportClient>(
                   moqEvb_, url, MoQRelaySession::createRelaySessionFactory())));
 
+    std::vector<std::string> alpns;
+    if (FLAGS_use_legacy_setup) {
+      alpns = {std::string(kAlpnMoqtLegacy)};
+    } else {
+      alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+    }
     folly::coro::blockingWait(
         relayClient_
             ->setup(
                 /*publisher=*/shared_from_this(),
                 /*subscriber=*/nullptr,
                 std::chrono::milliseconds(FLAGS_relay_connect_timeout),
-                std::chrono::seconds(FLAGS_relay_transaction_timeout))
+                std::chrono::seconds(FLAGS_relay_transaction_timeout),
+                quic::TransportSettings(),
+                alpns)
             .scheduleOn(evb)
             .start());
     relayClient_

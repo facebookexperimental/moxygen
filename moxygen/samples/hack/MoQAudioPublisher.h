@@ -43,7 +43,8 @@ class MoQAudioPublisher
   // so that the publisher session can also accept inbound PUBLISH (e.g., echo)
   bool setup(
       const std::string& connectURL,
-      std::shared_ptr<Subscriber> subscriber = nullptr);
+      std::shared_ptr<Subscriber> subscriber = nullptr,
+      bool useLegacySetup = false);
 
   void publishAudioFrame(
       std::chrono::microseconds ptsUs,

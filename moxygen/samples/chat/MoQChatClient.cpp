@@ -16,6 +16,10 @@ DEFINE_string(username, "", "Username to join chat");
 DEFINE_string(device, "12345", "Device ID");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
+DEFINE_bool(
+    use_legacy_setup,
+    false,
+    "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
 
 namespace moxygen {
 
@@ -39,12 +43,19 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   try {
+    std::vector<std::string> alpns;
+    if (FLAGS_use_legacy_setup) {
+      alpns = {std::string(kAlpnMoqtLegacy)};
+    } else {
+      alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+    }
     co_await moqClient_.setup(
         /*publisher=*/shared_from_this(),
         /*subscriber=*/shared_from_this(),
         std::chrono::milliseconds(FLAGS_connect_timeout),
         std::chrono::seconds(FLAGS_transaction_timeout),
-        quic::TransportSettings());
+        quic::TransportSettings(),
+        alpns);
     // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.getSession()->announce(
         {RequestID(0), participantTrackName(username_), {}});

@@ -207,7 +207,8 @@ void MoQVideoPublisher::noteClientAudioSendTs(uint64_t ptsUs, uint64_t t0Us) {
 // Implementation of setup function
 bool MoQVideoPublisher::setup(
     const std::string& connectURL,
-    std::shared_ptr<Subscriber> subscriber) {
+    std::shared_ptr<Subscriber> subscriber,
+    bool useLegacySetup) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << connectURL;
@@ -215,6 +216,13 @@ bool MoQVideoPublisher::setup(
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
       std::make_unique<MoQClient>(moqExecutor_, url));
+
+  std::vector<std::string> alpns;
+  if (useLegacySetup) {
+    alpns = {std::string(kAlpnMoqtLegacy)};
+  } else {
+    alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+  }
 
   cancel_ = folly::CancellationSource();
   running_ = true;
@@ -224,7 +232,9 @@ bool MoQVideoPublisher::setup(
                                     /*publisher=*/shared_from_this(),
                                     /*subscriber=*/subscriber,
                                     kConnectTimeout,
-                                    kTransactionTimeout))
+                                    kTransactionTimeout,
+                                    quic::TransportSettings(),
+                                    alpns))
                                 .start());
   {
     auto* evb = evbThread_->getEventBase();

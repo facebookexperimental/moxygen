@@ -33,13 +33,15 @@ class MoQRelayClient {
       std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
       std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60),
       const quic::TransportSettings& transportSettings =
-          quic::TransportSettings()) {
+          quic::TransportSettings(),
+      const std::vector<std::string>& alpns = {}) {
     co_await moqClient_->setupMoQSession(
         connectTimeout,
         transactionTimeout,
         std::move(publisher),
         std::move(subscriber),
-        transportSettings);
+        transportSettings,
+        alpns);
   }
 
   folly::coro::Task<void> run(

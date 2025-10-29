@@ -178,8 +178,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
     if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
       auto alpn = getAlpnFromVersion(getServerSelectedVersion());
       if (alpn.hasValue()) {
-        clientSession_->setVersionFromAlpn(alpn.value());
-        serverSession_->setVersionFromAlpn(alpn.value());
+        clientSession_->validateAndSetVersionFromAlpn(alpn.value());
+        serverSession_->validateAndSetVersionFromAlpn(alpn.value());
       }
     }
   }
@@ -595,7 +595,7 @@ TEST(MoQSessionTest, SetVersionFromAlpnLegacy) {
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
       MoQExecutor);
 
-  session->setVersionFromAlpn("moq-00");
+  session->validateAndSetVersionFromAlpn("moq-00");
   EXPECT_FALSE(session->getNegotiatedVersion().has_value());
 }
 
@@ -608,7 +608,7 @@ TEST(MoQSessionTest, SetVersionFromAlpnDraft15) {
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
       MoQExecutor);
 
-  session->setVersionFromAlpn("moqt-15");
+  session->validateAndSetVersionFromAlpn("moqt-15");
   EXPECT_EQ(session->getNegotiatedVersion(), 0xff00000f);
 }
 
@@ -621,7 +621,7 @@ TEST(MoQSessionTest, SetVersionFromAlpnDraft16) {
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
       MoQExecutor);
 
-  session->setVersionFromAlpn("moqt-16");
+  session->validateAndSetVersionFromAlpn("moqt-16");
   EXPECT_EQ(session->getNegotiatedVersion(), 0xff000010);
 }
 
@@ -634,7 +634,7 @@ TEST(MoQSessionTest, SetVersionFromAlpnInvalidAlpn) {
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
       MoQExecutor);
 
-  session->setVersionFromAlpn("invalid-alpn");
+  session->validateAndSetVersionFromAlpn("invalid-alpn");
   EXPECT_FALSE(session->getNegotiatedVersion().has_value());
 }
 

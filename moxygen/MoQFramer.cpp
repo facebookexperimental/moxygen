@@ -121,12 +121,10 @@ folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
   if (alpn.startsWith("moqt-")) {
     auto draftStr = alpn.subpiece(5); // skip "moqt-"
     auto draftNum = folly::tryTo<uint64_t>(draftStr);
-    if (draftNum.hasValue()) {
+    if (draftNum.hasValue() && draftNum.value() >= 15) {
       return 0xff000000 | draftNum.value();
     }
-    return folly::none;
   }
-
   return folly::none;
 }
 

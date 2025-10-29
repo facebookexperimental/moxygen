@@ -53,7 +53,8 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       std::chrono::milliseconds transaction_timeout,
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler,
-      const quic::TransportSettings& transportSettings) noexcept;
+      const quic::TransportSettings& transportSettings,
+      const std::vector<std::string>& alpns = {}) noexcept;
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
 

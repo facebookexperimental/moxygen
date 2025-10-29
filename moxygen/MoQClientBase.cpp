@@ -25,11 +25,17 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler,
-    const quic::TransportSettings& transportSettings) noexcept {
+    const quic::TransportSettings& transportSettings,
+    const std::vector<std::string>& alpns) noexcept {
   proxygen::WebTransport* wt = nullptr;
 
-  std::vector<std::string> alpn = {
-      std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+  std::vector<std::string> alpn;
+  if (alpns.empty()) {
+    // Default: use both ALPNs
+    alpn = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+  } else {
+    alpn = alpns;
+  }
   // Establish QUIC connection with multiple ALPN options
   auto quicClient = co_await connectQuic(
       folly::SocketAddress(
@@ -72,7 +78,7 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
   // If there is no ALPN negotiation, the negotiation will be done in the
   // Setup messages.
   if (negotiatedProtocol_) {
-    moqSession_->setVersionFromAlpn(*negotiatedProtocol_);
+    moqSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol_);
   }
 
   moqSession_->setPublishHandler(std::move(publishHandler));
