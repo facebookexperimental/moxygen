@@ -116,6 +116,9 @@ Subscriber::PublishResult makePublishOkResult(const auto& pub) {
 struct VersionParams {
   std::vector<uint64_t> clientVersions;
   uint64_t serverVersion;
+
+  VersionParams(std::vector<uint64_t> cv, uint64_t sv)
+      : clientVersions(std::move(cv)), serverVersion(sv) {}
 };
 
 std::vector<VersionParams> getSupportedVersionParams() {
