@@ -59,9 +59,9 @@ void MoQServer::stop() {
   hqServer_->stop();
 }
 
-void MoQServer::rejectNewConnections(bool reject) {
+void MoQServer::rejectNewConnections(std::function<bool()> rejectFn) {
   if (hqServer_) {
-    hqServer_->rejectNewConnections(reject);
+    hqServer_->rejectNewConnections(std::move(rejectFn));
   }
 }
 

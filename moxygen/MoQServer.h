@@ -85,7 +85,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   void startPacketForwarding(const folly::SocketAddress& addr);
 
   // Takeover part 4: Methods called on the old instance to wind down.
-  void rejectNewConnections(bool reject);
+  void rejectNewConnections(std::function<bool()> rejectFn);
   void pauseRead();
 
   void setFizzContext(
