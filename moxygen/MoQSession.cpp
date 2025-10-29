@@ -1790,7 +1790,7 @@ void MoQSession::cleanup() {
   for (auto& [reqID, pendingState] : pendingRequests_) {
     pendingState->setError(
         RequestError{reqID, RequestErrorCode::INTERNAL_ERROR, "Session closed"},
-        pendingState->getFrameType());
+        pendingState->getErrorFrameType());
   }
   pendingRequests_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
@@ -2903,7 +2903,7 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
     pendingRequests_.erase(it);
     if (getDraftMajorVersion(*getNegotiatedVersion()) > 14) {
       // determine real frame type from pendingRequest
-      frameType = pendingState->getFrameType();
+      frameType = pendingState->getErrorFrameType();
     }
 
     auto setErrorRes = pendingState->setError(error, frameType);
@@ -4569,9 +4569,9 @@ void MoQSession::onAnnounce(Announce announce) {
           "Announce not supported by simple client"});
 }
 
-void MoQSession::onAnnounceOk(AnnounceOk announceOk) {
-  XLOG(DBG1) << __func__ << " ns=" << announceOk.trackNamespace
-             << " - unexpected in simple client, sess=" << this;
+void MoQSession::onRequestOk(RequestOk /*requestOk*/, FrameType /*frameType*/) {
+  XLOG(DBG1) << __func__
+             << " REQUEST_OK unexpected in simple client, sess=" << this;
   close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
@@ -4601,14 +4601,6 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) {
           subscribeAnnounces.requestID,
           SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
           "SubscribeAnnounces not supported by simple client"});
-}
-
-void MoQSession::onSubscribeAnnouncesOk(
-    SubscribeAnnouncesOk subscribeAnnouncesOk) {
-  XLOG(DBG1) << __func__
-             << " prefix=" << subscribeAnnouncesOk.trackNamespacePrefix
-             << " - unexpected in simple client, sess=" << this;
-  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
 void MoQSession::onUnsubscribeAnnounces(

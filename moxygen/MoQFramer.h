@@ -141,6 +141,7 @@ enum class FrameType : uint64_t {
   REQUEST_ERROR = 5,
   ANNOUNCE = 0x6,
   ANNOUNCE_OK = 0x7,
+  REQUEST_OK = 0x7,
   ANNOUNCE_ERROR = 0x8,
   UNANNOUNCE = 9,
   UNSUBSCRIBE = 0xA,
@@ -872,11 +873,6 @@ struct Announce {
   std::vector<TrackRequestParameter> params;
 };
 
-struct AnnounceOk {
-  RequestID requestID;
-  TrackNamespace trackNamespace;
-};
-
 // AnnounceError is now an alias for RequestError - see below
 
 struct Unannounce {
@@ -1018,16 +1014,19 @@ struct SubscribeAnnounces {
   std::vector<TrackRequestParameter> params;
 };
 
-struct SubscribeAnnouncesOk {
-  RequestID requestID;
-  TrackNamespace trackNamespacePrefix;
-};
-
 // SubscribeAnnouncesError is now an alias for RequestError - see below
 
 struct UnsubscribeAnnounces {
   TrackNamespace trackNamespacePrefix;
 };
+
+struct RequestOk {
+  RequestID requestID;
+  std::vector<TrackRequestParameter> params;
+};
+
+using SubscribeAnnouncesOk = RequestOk;
+using AnnounceOk = RequestOk;
 
 // Consolidated request error structure
 struct RequestError {
@@ -1216,6 +1215,11 @@ class MoQFrameParser {
   folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
+
+  folly::Expected<RequestOk, ErrorCode> parseRequestOk(
+      folly::io::Cursor& cursor,
+      size_t length,
+      FrameType frameType) const noexcept;
 
   folly::Expected<Unannounce, ErrorCode> parseUnannounce(
       folly::io::Cursor& cursor,
@@ -1445,6 +1449,11 @@ class MoQFrameWriter {
   WriteResult writeAnnounceOk(
       folly::IOBufQueue& writeBuf,
       const AnnounceOk& announceOk) const noexcept;
+
+  WriteResult writeRequestOk(
+      folly::IOBufQueue& writeBuf,
+      const RequestOk& requestOk,
+      FrameType frameType) const noexcept;
 
   WriteResult writeUnannounce(
       folly::IOBufQueue& writeBuf,

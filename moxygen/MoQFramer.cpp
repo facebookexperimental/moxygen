@@ -1329,26 +1329,44 @@ folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
 folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseAnnounceOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  AnnounceOk announceOk;
-  if (getDraftMajorVersion(*version_) >= 11) {
-    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!requestID) {
+  return parseRequestOk(cursor, length, FrameType::ANNOUNCE_OK);
+}
+
+folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseRequestOk(
+    folly::io::Cursor& cursor,
+    size_t length,
+    FrameType frameType) const noexcept {
+  RequestOk requestOk;
+  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!requestID) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= requestID->second;
+  requestOk.requestID = requestID->first;
+  if (getDraftMajorVersion(*version_) > 14) {
+    // Parse track request params into requestOk.params
+    auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!numParams) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    length -= requestID->second;
-    announceOk.requestID = requestID->first;
-  } else {
-    announceOk.requestID = 0;
-    auto res = parseFixedTuple(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
+    length -= numParams->second;
+    if (numParams->first > 0) {
+      if (frameType == FrameType::ANNOUNCE_OK ||
+          frameType == FrameType::SUBSCRIBE_ANNOUNCES_OK) {
+        // no params supported
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      auto res = parseTrackRequestParams(
+          cursor, length, numParams->first, requestOk.params);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
     }
-    announceOk.trackNamespace = TrackNamespace(std::move(res.value()));
   }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
-  return announceOk;
+  return requestOk;
 }
 
 folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
@@ -1740,11 +1758,7 @@ folly::Expected<SubscribeAnnouncesOk, ErrorCode>
 MoQFrameParser::parseSubscribeAnnouncesOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  auto res = parseAnnounceOk(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
-  }
-  return SubscribeAnnouncesOk({res->requestID, std::move(res->trackNamespace)});
+  return parseRequestOk(cursor, length, FrameType::SUBSCRIBE_ANNOUNCES_OK);
 }
 
 // Unified request error parsing function
@@ -2985,14 +2999,29 @@ WriteResult MoQFrameWriter::writeAnnounce(
 WriteResult MoQFrameWriter::writeAnnounceOk(
     folly::IOBufQueue& writeBuf,
     const AnnounceOk& announceOk) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write announce ok";
+  return writeRequestOk(writeBuf, announceOk, FrameType::ANNOUNCE_OK);
+}
+
+WriteResult MoQFrameWriter::writeRequestOk(
+    folly::IOBufQueue& writeBuf,
+    const RequestOk& requestOk,
+    FrameType frameType) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write request ok";
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_OK, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeVarint(writeBuf, announceOk.requestID.value, size, error);
-  } else {
-    writeTrackNamespace(writeBuf, announceOk.trackNamespace, size, error);
+  if (getDraftMajorVersion(*version_) > 14) {
+    frameType = FrameType::REQUEST_OK;
+  }
+  auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
+  writeVarint(writeBuf, requestOk.requestID.value, size, error);
+  if (getDraftMajorVersion(*version_) > 14) {
+    if ((frameType == FrameType::ANNOUNCE_OK ||
+         frameType == FrameType::SUBSCRIBE_ANNOUNCES_OK) &&
+        !requestOk.params.empty()) {
+      return folly::makeUnexpected(
+          quic::TransportErrorCode::PROTOCOL_VIOLATION);
+    }
+    writeTrackRequestParams(writeBuf, requestOk.params, size, error);
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -3161,23 +3190,8 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
 WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnouncesOk& subscribeAnnouncesOk) const noexcept {
-  CHECK(version_.hasValue())
-      << "Version needs to be set to write subscribe announces ok";
-  size_t size = 0;
-  bool error = false;
-  auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_ANNOUNCES_OK, error);
-  if (getDraftMajorVersion(*version_) >= 11) {
-    writeVarint(writeBuf, subscribeAnnouncesOk.requestID.value, size, error);
-  } else {
-    writeTrackNamespace(
-        writeBuf, subscribeAnnouncesOk.trackNamespacePrefix, size, error);
-  }
-  writeSize(sizePtr, size, error, *version_);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  return size;
+  return writeRequestOk(
+      writeBuf, subscribeAnnouncesOk, FrameType::SUBSCRIBE_ANNOUNCES_OK);
 }
 
 WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(

@@ -64,11 +64,10 @@ class MoQRelaySession : public MoQSession {
 
   // Override all incoming announcement message handlers
   void onAnnounce(Announce ann) override;
-  void onAnnounceOk(AnnounceOk annOk) override;
   void onAnnounceCancel(AnnounceCancel announceCancel) override;
   void onUnannounce(Unannounce unAnn) override;
   void onSubscribeAnnounces(SubscribeAnnounces sa) override;
-  void onSubscribeAnnouncesOk(SubscribeAnnouncesOk saOk) override;
+  void onRequestOk(RequestOk ok, FrameType frameType) override;
   void onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) override;
 
   // Announcement-specific types (moved from base class)

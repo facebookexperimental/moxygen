@@ -80,6 +80,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
     Announce announce,
     std::shared_ptr<AnnounceCallback>) {
   XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
+  auto trackNamespaceCopy = announce.trackNamespace;
   if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
     if (announce.trackNamespace.size() != 5) {
       co_return folly::makeUnexpected(
@@ -98,8 +99,9 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
             announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
-      AnnounceOk{announce.requestID, announce.trackNamespace},
-      shared_from_this());
+      AnnounceOk{announce.requestID, {}},
+      shared_from_this(),
+      std::move(trackNamespaceCopy));
 }
 
 void MoQChatClient::unannounce(const TrackNamespace&) {

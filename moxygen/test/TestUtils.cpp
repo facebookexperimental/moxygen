@@ -159,8 +159,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
             {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
              "",
              3600000}}}));
-  res = moqFrameWriter.writeAnnounceOk(
-      writeBuf, AnnounceOk({1, TrackNamespace({"hello"})}));
+  res = moqFrameWriter.writeAnnounceOk(writeBuf, AnnounceOk({1, {}}));
   res = moqFrameWriter.writeRequestError(
       writeBuf,
       AnnounceError(
@@ -206,7 +205,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            TrackNamespace({"hello"}),
            {getTestAuthParam(moqFrameWriter, "binky")}}));
   res = moqFrameWriter.writeSubscribeAnnouncesOk(
-      writeBuf, SubscribeAnnouncesOk({2, TrackNamespace({"hello"})}));
+      writeBuf, SubscribeAnnouncesOk({2, {}}));
   res = moqFrameWriter.writeRequestError(
       writeBuf,
       SubscribeAnnouncesError(

@@ -540,7 +540,7 @@ folly::coro::Task<MoQSession::AnnounceResult> MoQTestClient::announce(
 
   AnnounceOk ok = {
       requestID_,
-      track.value(),
+      {},
   };
   co_return std::make_shared<AnnounceHandle>(ok);
 }

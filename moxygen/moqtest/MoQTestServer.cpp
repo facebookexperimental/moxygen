@@ -694,7 +694,7 @@ void MoQTAnnounceCallback::announceCancel(
 
 folly::coro::Task<MoQSession::SubscribeAnnouncesResult>
 MoQTestServer::subscribeAnnounces(SubscribeAnnounces subAnn) {
-  SubscribeAnnouncesOk ok{subAnn.requestID, subAnn.trackNamespacePrefix};
+  SubscribeAnnouncesOk ok{subAnn.requestID, {}};
   auto handle =
       std::make_shared<MoQTestSubscribeAnnouncesHandle>(std::move(ok));
   co_return handle;

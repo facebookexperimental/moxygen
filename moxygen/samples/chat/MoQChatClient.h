@@ -36,17 +36,22 @@ class MoQChatClient : public Publisher,
 
   class AnnounceHandle : public Subscriber::AnnounceHandle {
    public:
-    AnnounceHandle(AnnounceOk ok, std::shared_ptr<MoQChatClient> client)
+    AnnounceHandle(
+        AnnounceOk ok,
+        std::shared_ptr<MoQChatClient> client,
+        TrackNamespace trackNamespace)
         : Subscriber::AnnounceHandle(std::move(ok)),
-          client_(std::move(client)) {}
+          client_(std::move(client)),
+          trackNamespace_(std::move(trackNamespace)) {}
 
     void unannounce() override {
-      client_->unannounce(announceOk_->trackNamespace);
+      client_->unannounce(trackNamespace_);
       client_.reset();
     }
 
    private:
     std::shared_ptr<MoQChatClient> client_;
+    TrackNamespace trackNamespace_;
   };
 
   folly::coro::Task<Subscriber::AnnounceResult> announce(

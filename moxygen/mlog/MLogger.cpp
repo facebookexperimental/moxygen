@@ -350,8 +350,10 @@ void MLogger::logAnnounceOk(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceOk>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespace.trackNamespace, type);
+  // TODO
+  TrackNamespace ns;
+  baseMsg->trackNamespace =
+      convertTrackNamespaceToByteStringFormat(ns.trackNamespace, type);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -619,8 +621,10 @@ void MLogger::logSubscribeAnnouncesOk(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesOk>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespacePrefix.trackNamespace, type);
+  // TODO
+  TrackNamespace ns;
+  baseMsg->trackNamespace =
+      convertTrackNamespaceToByteStringFormat(ns.trackNamespace, type);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));

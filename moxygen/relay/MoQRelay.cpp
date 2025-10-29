@@ -65,7 +65,8 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   // TODO: store auth for forwarding on future SubscribeAnnounces?
   auto session = MoQSession::getRequestSession();
   nodePtr->sourceSession = std::move(session);
-  nodePtr->setAnnounceOk({ann.requestID, ann.trackNamespace});
+  nodePtr->trackNamespace_ = ann.trackNamespace;
+  nodePtr->setAnnounceOk({ann.requestID, {}});
   for (auto& outSession : sessions) {
     if (outSession != session) {
       auto exec = outSession->getExecutor();
@@ -238,15 +239,16 @@ class MoQRelay::AnnouncesSubscription
   AnnouncesSubscription(
       std::shared_ptr<MoQRelay> relay,
       std::shared_ptr<MoQSession> session,
-      SubscribeAnnouncesOk ok)
+      SubscribeAnnouncesOk ok,
+      TrackNamespace trackNamespacePrefix)
       : Publisher::SubscribeAnnouncesHandle(std::move(ok)),
         relay_(std::move(relay)),
-        session_(std::move(session)) {}
+        session_(std::move(session)),
+        trackNamespacePrefix_(std::move(trackNamespacePrefix)) {}
 
   void unsubscribeAnnounces() override {
     if (relay_) {
-      relay_->unsubscribeAnnounces(
-          subscribeAnnouncesOk_->trackNamespacePrefix, std::move(session_));
+      relay_->unsubscribeAnnounces(trackNamespacePrefix_, std::move(session_));
       relay_.reset();
     }
   }
@@ -254,6 +256,7 @@ class MoQRelay::AnnouncesSubscription
  private:
   std::shared_ptr<MoQRelay> relay_;
   std::shared_ptr<MoQSession> session_;
+  TrackNamespace trackNamespacePrefix_;
 };
 
 folly::coro::Task<Publisher::SubscribeAnnouncesResult>
@@ -331,7 +334,8 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   co_return std::make_shared<AnnouncesSubscription>(
       shared_from_this(),
       std::move(session),
-      SubscribeAnnouncesOk{subNs.requestID, subNs.trackNamespacePrefix});
+      SubscribeAnnouncesOk{subNs.requestID, {}},
+      subNs.trackNamespacePrefix);
 }
 
 void MoQRelay::unsubscribeAnnounces(

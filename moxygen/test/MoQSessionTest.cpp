@@ -80,8 +80,7 @@ Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
 }
 
 Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
-  return std::make_shared<MockAnnounceHandle>(
-      AnnounceOk({ann.requestID, ann.trackNamespace}));
+  return std::make_shared<MockAnnounceHandle>(AnnounceOk({ann.requestID, {}}));
 }
 
 Subscriber::PublishResult makePublishOkResult(const auto& pub) {
@@ -1727,7 +1726,7 @@ CO_TEST_P_X(MoQSessionTest, Unannounce) {
               [&mockAnnounceHandle](auto ann, auto /* announceCallback */)
                   -> folly::coro::Task<Subscriber::AnnounceResult> {
                 mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
-                    AnnounceOk({ann.requestID, ann.trackNamespace}));
+                    AnnounceOk({ann.requestID, {}}));
                 Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
                 co_return announceResult;
               }));
@@ -1758,7 +1757,7 @@ CO_TEST_P_X(MoQSessionTest, AnnounceCancel) {
                   -> folly::coro::Task<Subscriber::AnnounceResult> {
                 announceCallback = announceCallbackIn;
                 mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
-                    AnnounceOk({ann.requestID, ann.trackNamespace}));
+                    AnnounceOk({ann.requestID, {}}));
                 Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
                 co_return announceResult;
               }));
@@ -1798,8 +1797,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
                   -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
                 mockSubscribeAnnouncesHandle =
                     std::make_shared<MockSubscribeAnnouncesHandle>(
-                        SubscribeAnnouncesOk(
-                            {RequestID(0), subAnn.trackNamespacePrefix}));
+                        SubscribeAnnouncesOk({RequestID(0), {}}));
                 co_return mockSubscribeAnnouncesHandle;
               }));
 

@@ -395,6 +395,7 @@ class MoQSession : public Subscriber,
   void onSubscribe(SubscribeRequest subscribeRequest) override;
   void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
+  void onRequestOk(RequestOk requestOk, FrameType frameType) override;
   void onRequestError(RequestError requestError, FrameType frameType) override;
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onPublish(PublishRequest publish) override;
@@ -413,12 +414,9 @@ class MoQSession : public Subscriber,
 
   // Announcement callback methods - default implementations for simple clients
   void onAnnounce(Announce announce) override;
-  void onAnnounceOk(AnnounceOk announceOk) override;
   void onUnannounce(Unannounce unannounce) override;
   void onAnnounceCancel(AnnounceCancel announceCancel) override;
   void onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) override;
-  void onSubscribeAnnouncesOk(
-      SubscribeAnnouncesOk subscribeAnnouncesOk) override;
   void onUnsubscribeAnnounces(
       UnsubscribeAnnounces unsubscribeAnnounces) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
@@ -604,22 +602,30 @@ class MoQSession : public Subscriber,
                                             : nullptr;
     }
 
-    FrameType getFrameType() const {
+    FrameType getFrameType(bool ok) const {
       switch (type_) {
         case Type::SUBSCRIBE_TRACK:
-          return FrameType::SUBSCRIBE_ERROR;
+          return ok ? FrameType::SUBSCRIBE_OK : FrameType::SUBSCRIBE_ERROR;
         case Type::PUBLISH:
-          return FrameType::PUBLISH_ERROR;
+          return ok ? FrameType::PUBLISH_OK : FrameType::PUBLISH_ERROR;
         case Type::TRACK_STATUS:
-          return FrameType::TRACK_STATUS;
+          return ok ? FrameType::TRACK_STATUS_OK : FrameType::TRACK_STATUS;
         case Type::FETCH:
-          return FrameType::FETCH_ERROR;
+          return ok ? FrameType::FETCH_OK : FrameType::FETCH_ERROR;
         case Type::ANNOUNCE:
-          return FrameType::ANNOUNCE_ERROR;
+          return ok ? FrameType::ANNOUNCE_OK : FrameType::ANNOUNCE_ERROR;
         case Type::SUBSCRIBE_ANNOUNCES:
-          return FrameType::SUBSCRIBE_ANNOUNCES_ERROR;
+          return ok ? FrameType::SUBSCRIBE_ANNOUNCES_OK
+                    : FrameType::SUBSCRIBE_ANNOUNCES_ERROR;
       }
       folly::assume_unreachable();
+    }
+    FrameType getOkFrameType() const {
+      return getFrameType(true);
+    }
+
+    FrameType getErrorFrameType() const {
+      return getFrameType(false);
     }
 
     virtual folly::Expected<Type, folly::Unit> setError(

@@ -28,6 +28,16 @@ void expectOnRequestError(
       onRequestError(testing::_, getErrorFrameType(version, frameType)))
       .RetiresOnSaturation();
 }
+void expectOnRequestOk(
+    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
+    uint64_t version,
+    moxygen::FrameType frameType) {
+  auto expectedFrameType = (moxygen::getDraftMajorVersion(version) < 15)
+      ? frameType
+      : moxygen::FrameType::REQUEST_OK;
+  EXPECT_CALL(callback, onRequestOk(testing::_, expectedFrameType))
+      .RetiresOnSaturation();
+}
 
 } // namespace
 
@@ -71,7 +81,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onPublishOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
     EXPECT_CALL(callback, onAnnounce(testing::_));
-    EXPECT_CALL(callback, onAnnounceOk(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::ANNOUNCE_OK);
     expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
     EXPECT_CALL(callback, onUnannounce(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
@@ -79,7 +89,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
-    EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_OK);
     expectOnRequestError(
         callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
     EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
@@ -123,7 +133,8 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onPublishOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
     EXPECT_CALL(callback, onAnnounce(testing::_));
-    EXPECT_CALL(callback, onAnnounceOk(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::ANNOUNCE_OK);
+
     expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
     EXPECT_CALL(callback, onUnannounce(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
@@ -131,7 +142,8 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
-    EXPECT_CALL(callback, onSubscribeAnnouncesOk(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_OK);
+
     expectOnRequestError(
         callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
     EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));

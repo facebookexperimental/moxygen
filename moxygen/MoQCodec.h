@@ -59,9 +59,8 @@ class MoQControlCodec : public MoQCodec {
     virtual void onSubscribe(SubscribeRequest subscribeRequest) = 0;
     virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) = 0;
     virtual void onSubscribeOk(SubscribeOk subscribeOk) = 0;
-    virtual void onRequestError(
-        RequestError subscribeError,
-        FrameType frameType) = 0;
+    virtual void onRequestOk(RequestOk ok, FrameType frameType) = 0;
+    virtual void onRequestError(RequestError error, FrameType frameType) = 0;
     virtual void onSubscribeDone(SubscribeDone subscribeDone) = 0;
     virtual void onUnsubscribe(Unsubscribe unsubscribe) = 0;
     virtual void onPublish(PublishRequest publish) = 0;
@@ -72,13 +71,10 @@ class MoQControlCodec : public MoQCodec {
     virtual void onFetchCancel(FetchCancel fetchCancel) = 0;
     virtual void onFetchOk(FetchOk fetchOk) = 0;
     virtual void onAnnounce(Announce announce) = 0;
-    virtual void onAnnounceOk(AnnounceOk announceOk) = 0;
     virtual void onUnannounce(Unannounce unannounce) = 0;
     virtual void onAnnounceCancel(AnnounceCancel announceCancel) = 0;
     virtual void onSubscribeAnnounces(
         SubscribeAnnounces subscribeAnnounces) = 0;
-    virtual void onSubscribeAnnouncesOk(
-        SubscribeAnnouncesOk subscribeAnnouncesOk) = 0;
     virtual void onUnsubscribeAnnounces(
         UnsubscribeAnnounces unsubscribeAnnounces) = 0;
     virtual void onTrackStatus(TrackStatus trackStatus) = 0;
@@ -103,9 +99,11 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::SUBSCRIBE:
       case FrameType::SUBSCRIBE_UPDATE:
       case FrameType::SUBSCRIBE_OK:
-      case FrameType::SUBSCRIBE_ERROR:
+      // case FrameType::SUBSCRIBE_ERROR:
+      case FrameType::REQUEST_ERROR:
       case FrameType::ANNOUNCE:
-      case FrameType::ANNOUNCE_OK:
+      // case FrameType::ANNOUNCE_OK:
+      case FrameType::REQUEST_OK:
       case FrameType::ANNOUNCE_ERROR:
       case FrameType::UNANNOUNCE:
       case FrameType::UNSUBSCRIBE:
