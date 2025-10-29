@@ -193,6 +193,17 @@ void MoQServer::pauseRead() {
   hqServer_->pauseRead();
 }
 
+void MoQServer::setFizzContext(
+    std::shared_ptr<const fizz::server::FizzServerContext> ctx) {
+  hqServer_->setFizzContext(std::move(ctx));
+}
+
+void MoQServer::setFizzContext(
+    folly::EventBase* evb,
+    std::shared_ptr<const fizz::server::FizzServerContext> ctx) {
+  hqServer_->setFizzContext(evb, std::move(ctx));
+}
+
 folly::Try<ServerSetup> MoQServer::onClientSetup(
     ClientSetup setup,
     const std::shared_ptr<MoQSession>& session) {

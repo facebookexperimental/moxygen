@@ -88,6 +88,13 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   void rejectNewConnections(bool reject);
   void pauseRead();
 
+  void setFizzContext(
+      std::shared_ptr<const fizz::server::FizzServerContext> ctx);
+
+  void setFizzContext(
+      folly::EventBase* evb,
+      std::shared_ptr<const fizz::server::FizzServerContext> ctx);
+
  protected:
   virtual std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
