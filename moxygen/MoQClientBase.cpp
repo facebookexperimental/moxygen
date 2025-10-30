@@ -41,7 +41,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       folly::SocketAddress(
           url_.getHost(), url_.getPort(), true), // blocking DNS,
       connect_timeout,
-      nullptr, // default verifier will be used
+      verifier_,
       alpn,
       transportSettings);
 

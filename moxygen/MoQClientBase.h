@@ -30,10 +30,14 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       folly::MaybeManagedPtr<proxygen::WebTransport>,
       std::shared_ptr<MoQExecutor>)>;
 
-  MoQClientBase(std::shared_ptr<MoQExecutor> exec, proxygen::URL url)
+  MoQClientBase(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
       : exec_(std::move(exec)),
         url_(std::move(url)),
-        sessionFactory_(defaultSessionFactory()) {}
+        sessionFactory_(defaultSessionFactory()),
+        verifier_(std::move(verifier)) {}
 
   MoQClientBase(
       std::shared_ptr<MoQExecutor> exec,
@@ -96,6 +100,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   SessionFactory sessionFactory_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
   folly::Optional<std::string> negotiatedProtocol_;
+  std::shared_ptr<fizz::CertificateVerifier> verifier_;
 };
 
 } // namespace moxygen
