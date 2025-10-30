@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <fizz/protocol/CertificateVerifier.h>
 #include <folly/CancellationToken.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/synchronization/Baton.h>
@@ -47,7 +48,8 @@ class MoQVideoPublisher
   bool setup(
       const std::string& connectURL,
       std::shared_ptr<Subscriber> subscriber = nullptr,
-      bool useLegacySetup = false);
+      bool useLegacySetup = false,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
 
   /**
    * Publishes a single frame of the video stream.

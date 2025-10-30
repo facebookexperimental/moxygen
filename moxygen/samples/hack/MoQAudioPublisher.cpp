@@ -90,14 +90,15 @@ folly::Executor::KeepAlive<folly::EventBase> MoQAudioPublisher::getExecutor()
 bool MoQAudioPublisher::setup(
     const std::string& connectURL,
     std::shared_ptr<Subscriber> subscriber,
-    bool useLegacySetup) {
+    bool useLegacySetup,
+    std::shared_ptr<fizz::CertificateVerifier> verifier) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << connectURL;
     return false;
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
-      std::make_unique<MoQClient>(moqExecutor_, url));
+      std::make_unique<MoQClient>(moqExecutor_, url, std::move(verifier)));
 
   std::vector<std::string> alpns;
   if (useLegacySetup) {

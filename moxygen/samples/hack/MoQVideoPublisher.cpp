@@ -208,14 +208,15 @@ void MoQVideoPublisher::noteClientAudioSendTs(uint64_t ptsUs, uint64_t t0Us) {
 bool MoQVideoPublisher::setup(
     const std::string& connectURL,
     std::shared_ptr<Subscriber> subscriber,
-    bool useLegacySetup) {
+    bool useLegacySetup,
+    std::shared_ptr<fizz::CertificateVerifier> verifier) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << connectURL;
     return false;
   }
   relayClient_ = std::make_unique<MoQRelayClient>(
-      std::make_unique<MoQClient>(moqExecutor_, url));
+      std::make_unique<MoQClient>(moqExecutor_, url, std::move(verifier)));
 
   std::vector<std::string> alpns;
   if (useLegacySetup) {
