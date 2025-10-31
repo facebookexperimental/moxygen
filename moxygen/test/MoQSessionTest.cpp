@@ -2058,9 +2058,8 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
               [this](TrackStatus request)
                   -> folly::coro::Task<Publisher::TrackStatusResult> {
                 EXPECT_EQ(request.params.size(), 5);
-                auto verifyParam = [this](
-                                       const auto& param,
-                                       const std::string& expectedTokenValue) {
+                auto verifyParam = [](const auto& param,
+                                      const std::string& expectedTokenValue) {
                   return param.key ==
                       folly::to_underlying(
                              TrackRequestParamKey::AUTHORIZATION_TOKEN) &&
@@ -2101,7 +2100,7 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
 CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
   co_await setupMoQSession();
 
-  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     EXPECT_EQ(sub.params.size(), 2);
     EXPECT_EQ(
         sub.params.at(0).key,
@@ -3007,9 +3006,8 @@ CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
   EXPECT_CALL(*serverSubscriber, publish(_, _))
       .WillOnce(
           testing::Invoke(
-              [this](
-                  const PublishRequest& actualPub,
-                  std::shared_ptr<SubscriptionHandle>)
+              [](const PublishRequest& actualPub,
+                 std::shared_ptr<SubscriptionHandle>)
                   -> Subscriber::PublishResult {
                 // Verify delivery timeout parameter was received
                 EXPECT_EQ(actualPub.params.size(), 1);
@@ -3546,7 +3544,7 @@ CO_TEST_P_X(MoQSessionTest, DeliveryCallbackMultipleStreams) {
         // Set the delivery callback
         pub->setDeliveryCallback(deliveryCallback);
 
-        eventBase_.add([this, pub, sub, deliveryCallback, serverWt] {
+        eventBase_.add([this, pub, sub, deliveryCallback] {
           EXPECT_CALL(
               *serverPublisherStatsCallback_, onSubscriptionStreamOpened())
               .Times(testing::AtLeast(1));
@@ -3821,9 +3819,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
   EXPECT_CALL(*serverSubscriber, publish(_, _))
       .WillOnce(
           testing::Invoke(
-              [this](
-                  const PublishRequest& actualPub,
-                  std::shared_ptr<SubscriptionHandle>)
+              [](const PublishRequest& actualPub,
+                 std::shared_ptr<SubscriptionHandle>)
                   -> Subscriber::PublishResult {
                 auto mockConsumer = std::make_shared<MockTrackConsumer>();
                 EXPECT_CALL(*mockConsumer, setTrackAlias(_))
@@ -3936,9 +3933,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
   EXPECT_CALL(*serverSubscriber, publish(_, _))
       .WillOnce(
           testing::Invoke(
-              [this](
-                  const PublishRequest& actualPub,
-                  std::shared_ptr<SubscriptionHandle>)
+              [](const PublishRequest& actualPub,
+                 std::shared_ptr<SubscriptionHandle>)
                   -> Subscriber::PublishResult {
                 auto mockConsumer = std::make_shared<MockTrackConsumer>();
                 EXPECT_CALL(*mockConsumer, setTrackAlias(_))
