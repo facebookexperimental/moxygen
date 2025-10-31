@@ -470,9 +470,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     forwarder->setGroupOrder(pubGroupOrder);
 
     // Store upstream delivery timeout in forwarder
-    // add delivery timeout to downstream sub
     auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
         subRes.value()->subscribeOk().params, sessionVersion.value());
+
+    // Add delivery timeout to downstream subscriber explicitly as this is the
+    // first subscriber. Forwarder can add it to subsequent subscribers
     if (deliveryTimeout && *deliveryTimeout > 0) {
       forwarder->setDeliveryTimeout(*deliveryTimeout);
       subscriber->setParam(
@@ -508,16 +510,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     }
     auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
-
-    // add delivery timeout to downstream sub
-    if (forwarder->upstreamDeliveryTimeout().count() > 0) {
-      subscriber->setParam(
-          {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-           "",
-           static_cast<uint64_t>(forwarder->upstreamDeliveryTimeout().count()),
-           {}});
-    }
-
     co_return subscriber;
   }
 }

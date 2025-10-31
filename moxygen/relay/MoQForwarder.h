@@ -175,6 +175,13 @@ class MoQForwarder : public TrackConsumer {
         toSubscribeRange(subReq, largest_),
         std::move(consumer),
         subReq.forward);
+    if (upstreamDeliveryTimeout_.count() > 0) {
+      subscriber->setParam(
+          {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+           "",
+           static_cast<uint64_t>(upstreamDeliveryTimeout_.count()),
+           {}});
+    }
     subscribers_.emplace(sessionPtr, subscriber);
     return subscriber;
   }

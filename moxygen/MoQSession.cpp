@@ -2782,7 +2782,22 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   setRequestSession();
   auto requestID = sub.requestID;
   auto fullTrackName = sub.fullTrackName;
-  auto params = sub.params;
+  auto& params = sub.params;
+
+  // TODO: Formalize after parameter refactor
+  // We should only keep e2e params here and remove everything else
+  //// Remove DELIVERY_TIMEOUT param from params before passing to
+  //// publishHandler_
+  params.erase(
+      std::remove_if(
+          params.begin(),
+          params.end(),
+          [](const TrackRequestParameter& param) {
+            return param.key ==
+                folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
+          }),
+      params.end());
+
   auto subscribeResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->subscribe(
