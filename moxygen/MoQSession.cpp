@@ -1131,6 +1131,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
  private:
   void onDeliveryTimeoutChanged(
       folly::Optional<std::chrono::milliseconds> newTimeout);
+
+  std::chrono::microseconds getCurrentRtt() const {
+    return session_->getTransportInfo().srtt;
+  }
+
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
   folly::Optional<TrackAlias> trackAlias_;
@@ -1280,8 +1285,10 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   std::unique_ptr<MoQDeliveryTimer> timer = nullptr;
   auto effectiveTimeout = deliveryTimeoutManager_.getEffectiveTimeout();
   if (effectiveTimeout.has_value()) {
-    timer =
-        std::make_unique<MoQDeliveryTimer>(session_->exec_, *effectiveTimeout);
+    timer = std::make_unique<MoQDeliveryTimer>(
+        session_->exec_, *effectiveTimeout, [this]() {
+          return getCurrentRtt();
+        });
   }
 
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
@@ -1317,22 +1324,23 @@ void MoQSession::TrackPublisherImpl::onStreamComplete(
   if (session_) {
     session_->onSubscriptionStreamClosed();
   }
-  // The reason we need the keepalive is that when we call subgroups_.erase(),
-  // we might end up erasing the last SubgroupPublisherImpl that has a
-  // shared_ptr reference to this TrackPublisherImpl, causing the destruction of
-  // the map while erasing from it.
+  // The reason we need the keepalive is that when we call
+  // subgroups_.erase(), we might end up erasing the last
+  // SubgroupPublisherImpl that has a shared_ptr reference to this
+  // TrackPublisherImpl, causing the destruction of the map while erasing
+  // from it.
   auto keepalive = shared_from_this();
   subgroups_.erase({finalHeader.group, finalHeader.subgroup});
 }
 
 void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
   // Note: There is one case in which this reset can be problematic. If some
-  // streams have been created, but have been reset before the subgroup header
-  // is sent out, then there can be a stream count discrepancy. We could, some
-  // time in the future, change this to a reliable reset so that we're ensured
-  // that the stream counts are consistent. We can also add in a timeout for the
-  // stream count discrepancy so that the peer doesn't hang indefinitely waiting
-  // for the stream counts to equalize.
+  // streams have been created, but have been reset before the subgroup
+  // header is sent out, then there can be a stream count discrepancy. We
+  // could, some time in the future, change this to a reliable reset so that
+  // we're ensured that the stream counts are consistent. We can also add in
+  // a timeout for the stream count discrepancy so that the peer doesn't
+  // hang indefinitely waiting for the stream counts to equalize.
   terminatePublish(
       SubscribeDone(
           {requestID_,
@@ -2599,9 +2607,10 @@ MoQSession::headerParsed(
     constexpr std::chrono::milliseconds kUnknownAliasTimeout(5000);
     auto waitRes = co_await co_awaitTry(baton.wait(kUnknownAliasTimeout));
     if (waitRes.hasException()) {
-      // TODO: Remove the baton we created from bufferedSubgroups_. The removal
-      // would be a lot easier once we've implemented a TimedBaton/TimedBarrier
-      // that allows multiple waiters on the same object.
+      // TODO: Remove the baton we created from bufferedSubgroups_. The
+      // removal would be a lot easier once we've implemented a
+      // TimedBaton/TimedBarrier that allows multiple waiters on the same
+      // object.
       MoQPublishError err(
           MoQPublishError::CANCELLED, "Timed out waiting for unknown alias");
       co_return folly::makeUnexpected(err);
@@ -2940,7 +2949,8 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     return;
   }
 
-  // Extract delivery timeout from PUBLISH_OK params and update trackPublisher
+  // Extract delivery timeout from PUBLISH_OK params and update
+  // trackPublisher
   auto trackIt = pubTracks_.find(publishOk.requestID);
   if (trackIt != pubTracks_.end()) {
     auto trackPublisher =
@@ -3233,8 +3243,8 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
 
   // TODO: handle final object and status code
   // TODO: there could still be objects in flight.  Removing from maps now
-  // will prevent their delivery.  I think the only way to handle this is with
-  // timeouts.
+  // will prevent their delivery.  I think the only way to handle this is
+  // with timeouts.
   auto alias = trackAliasIt->second;
   auto reqId = subscribeDone.requestID;
   auto trackReceiveStateIt = subTracks_.find(alias);
@@ -3314,8 +3324,9 @@ void MoQSession::onFetch(Fetch fetch) {
   }
   if (standalone) {
     if (standalone->end <= standalone->start) {
-      // If the end object is zero this indicates a fetch for the entire group,
-      // which is valid as long as the start and end group are the same.
+      // If the end object is zero this indicates a fetch for the entire
+      // group, which is valid as long as the start and end group are the
+      // same.
       if (!(standalone->end.group == standalone->start.group &&
             standalone->end.object == 0)) {
         fetchError(
@@ -3379,12 +3390,13 @@ folly::coro::Task<void> MoQSession::handleFetch(
       publishHandler_->fetch(
           std::move(fetch), fetchPublisher->getStreamPublisher())));
   if (fetchResult.hasException() || fetchResult->hasError()) {
-    // We need to call reset() in order to ensure that the StreamPublisherImpl
-    // is destructed, otherwise there could be memory leaks, since the
-    // StreamPublisherImpl and the PublisherImpl hold references to each other.
-    // This doesn't actually reset the stream unless the user wrote something to
-    // it within the fetch handler, because the stream creation is deferred
-    // until the user actually writes something to a stream.
+    // We need to call reset() in order to ensure that the
+    // StreamPublisherImpl is destructed, otherwise there could be memory
+    // leaks, since the StreamPublisherImpl and the PublisherImpl hold
+    // references to each other. This doesn't actually reset the stream
+    // unless the user wrote something to it within the fetch handler,
+    // because the stream creation is deferred until the user actually
+    // writes something to a stream.
     fetchPublisher->reset(ResetStreamErrorCode::INTERNAL_ERROR);
   }
 
@@ -3409,7 +3421,8 @@ folly::coro::Task<void> MoQSession::handleFetch(
     fetchOkMsg.requestID = requestID;
     fetchOk(fetchOkMsg);
     fetchPublisher->setFetchHandle(std::move(fetchHandle));
-  } // else, no need to fetchError, state has been removed on both sides already
+  } // else, no need to fetchError, state has been removed on both sides
+    // already
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
@@ -3786,7 +3799,8 @@ Subscriber::PublishResult MoQSession::publish(
           auto it = pubTracks_.find(rid);
           if (it != pubTracks_.end()) {
             // If Receive PublishOk is received, update the trackPublisher
-            // If Receive PublishError, the session is reset in onPublishError()
+            // If Receive PublishError, the session is reset in
+            // onPublishError()
             trackPublisher->setForward(result.value().forward);
             trackPublisher->setGroupOrder(result.value().groupOrder);
             trackPublisher->setSubPriority(result.value().subscriberPriority);
@@ -4004,7 +4018,8 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   // no more callbacks after unsubscribe
   XLOG(DBG1) << "unsubscribing from ftn=" << trackIt->second->fullTrackName()
              << " sess=" << this;
-  // cancel() should send STOP_SENDING on any open streams for this subscription
+  // cancel() should send STOP_SENDING on any open streams for this
+  // subscription
   trackIt->second->cancel();
   subTracks_.erase(trackIt);
   reqIdToTrackAlias_.erase(trackAliasIt);
