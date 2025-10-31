@@ -45,6 +45,10 @@ DEFINE_bool(
     use_legacy_setup,
     false,
     "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
+DEFINE_uint64(
+    delivery_timeout,
+    0,
+    "Delivery timeout in milliseconds (0 = disabled)");
 
 namespace {
 using namespace moxygen;
@@ -425,6 +429,14 @@ int main(int argc, char* argv[]) {
   });
 
   auto subParams = flags2params();
+  std::vector<TrackRequestParameter> params;
+  if (FLAGS_delivery_timeout > 0) {
+    params.push_back(
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         "",
+         FLAGS_delivery_timeout,
+         {}});
+  }
   co_withExecutor(
       &eventBase,
       textClient->run(
@@ -436,7 +448,7 @@ int main(int argc, char* argv[]) {
               subParams.locType,
               subParams.start,
               subParams.endGroup,
-              {})))
+              std::move(params))))
       .start()
       .via(&eventBase)
       .thenTry([&handler](auto) { handler.unreg(); });

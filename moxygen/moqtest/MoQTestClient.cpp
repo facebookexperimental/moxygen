@@ -78,6 +78,15 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   sub.locType = kDefaultLocationType;
   sub.endGroup = kDefaultEndGroup;
 
+  // Add delivery timeout parameter if configured
+  if (params.deliveryTimeout > 0) {
+    sub.params.push_back(
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         "",
+         params.deliveryTimeout,
+         {}});
+  }
+
   // Set Current Request
   receivingType_ = ReceivingType::SUBSCRIBE;
   initializeExpecteds(params);

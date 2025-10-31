@@ -46,6 +46,8 @@ struct MoQTestParameters {
   int testVariableExtension = -1; // Tuple Field 14
   uint64_t publisherDeliveryTimeout =
       kDefaultPublisherDeliveryTimeout; // Tuple Field 15
+  uint64_t deliveryTimeout =
+      0; // Tuple Field 16 - Delivery timeout in milliseconds (0 = disabled)
 
   uint64_t lastObjectInTrack = this->objectsPerGroup +
       this->sendEndOfGroupMarkers; // Tuple Field 5 (Out of Order to Ensure

@@ -30,6 +30,10 @@ DEFINE_string(video_track_name, "video0", "Video track Name");
 DEFINE_string(audio_track_name, "audio0", "Track Name");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
+DEFINE_uint64(
+    delivery_timeout,
+    0,
+    "Delivery timeout in milliseconds (0 = disabled)");
 DEFINE_int32(
     dejitter_buffer_size_ms,
     300,
@@ -403,6 +407,16 @@ class MoQFlvReceiverClient
       uint64_t negotiatedVersion =
           *(moqClient_->moqSession_->getNegotiatedVersion());
 
+      std::vector<TrackRequestParameter> params{
+          getAuthParam(negotiatedVersion, FLAGS_auth)};
+      if (FLAGS_delivery_timeout > 0) {
+        params.push_back(
+            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+             "",
+             FLAGS_delivery_timeout,
+             {}});
+      }
+
       auto subAudio = SubscribeRequest::make(
           moxygen::FullTrackName(
               {{TrackNamespace(
@@ -414,7 +428,7 @@ class MoQFlvReceiverClient
           LocationType::LargestObject,
           folly::none,
           0,
-          {getAuthParam(negotiatedVersion, FLAGS_auth)});
+          params);
       auto subVideo = SubscribeRequest::make(
           moxygen::FullTrackName(
               {TrackNamespace(
@@ -426,7 +440,7 @@ class MoQFlvReceiverClient
           LocationType::LargestObject,
           folly::none,
           0,
-          {getAuthParam(negotiatedVersion, FLAGS_auth)});
+          params);
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(

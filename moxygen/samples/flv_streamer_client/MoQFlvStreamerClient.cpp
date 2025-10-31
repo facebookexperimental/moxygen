@@ -30,6 +30,10 @@ DEFINE_bool(
     use_legacy_setup,
     false,
     "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
+DEFINE_uint64(
+    delivery_timeout,
+    0,
+    "Delivery timeout in milliseconds (0 = disabled)");
 
 namespace {
 using namespace moxygen;
@@ -182,6 +186,17 @@ class MoQFlvStreamerClient
               SubscribeErrorCode::TRACK_NOT_EXIST,
               "Full trackname NOT available"});
     }
+
+    // Build response parameters
+    std::vector<TrackRequestParameter> params;
+    if (FLAGS_delivery_timeout > 0) {
+      params.push_back(
+          {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+           "",
+           FLAGS_delivery_timeout,
+           {}});
+    }
+
     // Save subscribe
     auto subscription = std::make_shared<Subscription>(
         SubscribeOk{
@@ -191,7 +206,7 @@ class MoQFlvStreamerClient
             MoQSession::resolveGroupOrder(
                 GroupOrder::OldestFirst, subscribeReq.groupOrder),
             largest,
-            {}},
+            std::move(params)},
         consumerPtr,
         *this);
     subscriptions_.emplace(subscribeReq.requestID, subscription);

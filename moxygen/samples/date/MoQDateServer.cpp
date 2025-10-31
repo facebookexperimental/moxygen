@@ -34,6 +34,7 @@ DEFINE_bool(
     use_legacy_setup,
     false,
     "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
+DEFINE_int32(delivery_timeout, 0, "the delivery timeout in ms for server");
 
 namespace {
 using namespace moxygen;
@@ -255,8 +256,10 @@ class MoQDateServer : public MoQServer,
       co_withExecutor(session->getExecutor(), publishDateLoop()).start();
     }
 
-    co_return forwarder_.addSubscriber(
+    forwarder_.setDeliveryTimeout(FLAGS_delivery_timeout);
+    auto subscriber = forwarder_.addSubscriber(
         std::move(session), subReq, std::move(consumer));
+    co_return subscriber;
   }
 
   class FetchHandle : public Publisher::FetchHandle {

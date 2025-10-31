@@ -55,6 +55,10 @@ DEFINE_uint64(
     last_object_in_track,
     FLAGS_objects_per_group + (int)FLAGS_send_end_of_group_markers,
     "Last object in track");
+DEFINE_uint64(
+    delivery_timeout,
+    0,
+    "Delivery timeout in milliseconds (0 = disabled)");
 DEFINE_string(
     request,
     "subscribe",
@@ -90,6 +94,7 @@ int main(int argc, char** argv) {
   defaultMoqParams.testIntegerExtension = FLAGS_test_integer_extension;
   defaultMoqParams.testVariableExtension = FLAGS_test_variable_extension;
   defaultMoqParams.publisherDeliveryTimeout = FLAGS_publisher_delivery_timeout;
+  defaultMoqParams.deliveryTimeout = FLAGS_delivery_timeout;
   defaultMoqParams.lastObjectInTrack = FLAGS_last_object_in_track;
 
   auto url = proxygen::URL(FLAGS_url);
