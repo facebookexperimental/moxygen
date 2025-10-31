@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/flv_parser/FlvReader.h"
+#include <folly/io/IOBufQueue.h>
 #include <netinet/in.h>
 
 namespace moxygen::flv {
@@ -52,24 +53,37 @@ FlvTag FlvReader::readNextTag() {
 }
 
 std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
-  std::unique_ptr<folly::IOBuf> ret;
   if (n > std::numeric_limits<int32_t>::max()) {
     throw std::runtime_error(
-        fmt::format("Cannot read more than int64_t::max {}", n));
+        fmt::format("Cannot read more than int32_t::max {}", n));
   }
-  const int64_t bytesToRead = n;
-  uint8_t tmp[bytesToRead];
-  f_.read((char*)tmp, bytesToRead);
-  if (f_.gcount() == bytesToRead && f_.rdstate() == std::ios::goodbit) {
-    ret = folly::IOBuf::copyBuffer(tmp, bytesToRead);
-  } else {
-    throw std::runtime_error(
-        fmt::format(
-            "Failed to read {} bytes at offset {}",
-            n,
-            static_cast<int>(f_.tellg())));
+
+  folly::IOBufQueue queue;
+  size_t remaining = n;
+  constexpr size_t kChunkSize = 4096; // 4KB chunks
+
+  while (remaining > 0) {
+    size_t toRead = std::min(remaining, kChunkSize);
+    auto buf = queue.preallocate(toRead, toRead);
+    f_.read(reinterpret_cast<char*>(buf.first), toRead);
+
+    if (f_.gcount() != static_cast<std::streamsize>(toRead) ||
+        f_.rdstate() != std::ios::goodbit) {
+      throw std::runtime_error(
+          fmt::format(
+              "Failed to read {} bytes at offset {} "
+              "(got {} bytes, state: 0x{:x})",
+              n,
+              static_cast<int>(f_.tellg()),
+              f_.gcount(),
+              static_cast<unsigned int>(f_.rdstate())));
+    }
+
+    queue.postallocate(toRead);
+    remaining -= toRead;
   }
-  return ret;
+
+  return queue.move();
 }
 
 } // namespace moxygen::flv
