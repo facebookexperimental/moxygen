@@ -38,11 +38,18 @@ class MoQWebTransportClient : public MoQClient {
   class HTTPHandler : public proxygen::HTTPTransactionHandler {
    public:
     explicit HTTPHandler(MoQWebTransportClient& client) : client_(client) {}
+    ~HTTPHandler() override {
+      if (txn_) {
+        txn_->setHandler(nullptr);
+      }
+    }
 
     void setTransaction(proxygen::HTTPTransaction* txn) noexcept override {
       txn_ = txn;
     }
-    void detachTransaction() noexcept override {}
+    void detachTransaction() noexcept override {
+      txn_ = nullptr;
+    }
     void onHeadersComplete(
         std::unique_ptr<proxygen::HTTPMessage> resp) noexcept override;
 
