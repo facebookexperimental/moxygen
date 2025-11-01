@@ -151,6 +151,18 @@ std::string getSupportedVersionsString() {
   return result;
 }
 
+folly::Optional<uint64_t> getFirstIntParam(
+    const std::vector<TrackRequestParameter>& params,
+    TrackRequestParamKey key) {
+  auto keyValue = folly::to_underlying(key);
+  for (const auto& param : params) {
+    if (param.key == keyValue) {
+      return param.asUint64;
+    }
+  }
+  return folly::none;
+}
+
 std::string toString(LocationType loctype) {
   switch (loctype) {
     case LocationType::NextGroupStart: {
@@ -2524,19 +2536,24 @@ void MoQFrameWriter::writeTrackRequestParams(
     bool& error) const noexcept {
   CHECK(*version_) << "Version must be set before writing track request params";
   writeVarint(writeBuf, params.size(), size, error);
-  const auto authKey =
-      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
-  const auto deliveryKey =
-      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
-  const auto cacheKey =
-      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION);
   for (auto& param : params) {
     writeVarint(writeBuf, param.key, size, error);
 
-    if (param.key == authKey) {
-      writeFixedString(writeBuf, param.asString, size, error);
-    } else if (param.key == deliveryKey || param.key == cacheKey) {
-      writeVarint(writeBuf, param.asUint64, size, error);
+    switch (static_cast<TrackRequestParamKey>(param.key)) {
+      case TrackRequestParamKey::AUTHORIZATION_TOKEN:
+        writeFixedString(writeBuf, param.asString, size, error);
+        break;
+      case TrackRequestParamKey::DELIVERY_TIMEOUT:
+      case TrackRequestParamKey::MAX_CACHE_DURATION:
+        writeVarint(writeBuf, param.asUint64, size, error);
+        break;
+      default:
+        if ((param.key & 0x01) == 0) {
+          writeVarint(writeBuf, param.asUint64, size, error);
+        } else {
+          writeFixedString(writeBuf, param.asString, size, error);
+        }
+        break;
     }
   }
 }

@@ -44,6 +44,17 @@ static std::vector<TrackRequestParameter> getTestTrackRequestParameters(
        {}}};
 }
 
+static std::vector<TrackRequestParameter> getTestPublisherTrackRequestParams(
+    const MoQFrameWriter& moqFrameWriter) {
+  auto params = getTestTrackRequestParameters(moqFrameWriter);
+  params.push_back(
+      {folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
+       "",
+       100,
+       {}});
+  return params;
+}
+
 std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     TestControlMessages in,
     const MoQFrameWriter& moqFrameWriter,
@@ -127,7 +138,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            GroupOrder::Default,
            folly::none,
            0,
-           getTestTrackRequestParameters(moqFrameWriter)}));
+           getTestPublisherTrackRequestParams(moqFrameWriter)}));
   res = moqFrameWriter.writePublishOk(
       writeBuf,
       PublishOk(

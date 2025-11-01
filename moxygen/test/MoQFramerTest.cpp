@@ -120,6 +120,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     skip(cursor, 1);
     auto r8a = parser_.parsePublish(cursor, frameLength(cursor));
     testUnderflowResult(r8a);
+    EXPECT_TRUE(getFirstIntParam(
+        r8a->params, TrackRequestParamKey::PUBLISHER_PRIORITY));
 
     skip(cursor, 1);
     auto r8b = parser_.parsePublishOk(cursor, frameLength(cursor));

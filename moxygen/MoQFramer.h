@@ -312,6 +312,7 @@ enum class TrackRequestParamKey : uint64_t {
   AUTHORIZATION_TOKEN = 3,
   DELIVERY_TIMEOUT = 2,
   MAX_CACHE_DURATION = 4,
+  PUBLISHER_PRIORITY = 0x0E,
 };
 
 // ALPN constants for version negotiation
@@ -338,6 +339,11 @@ bool isSupportedVersion(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.
 std::string getSupportedVersionsString();
+
+// Helper function to extract an integer parameter by key from a parameter list
+folly::Optional<uint64_t> getFirstIntParam(
+    const std::vector<TrackRequestParameter>& params,
+    TrackRequestParamKey key);
 
 void writeVarint(
     folly::IOBufQueue& buf,

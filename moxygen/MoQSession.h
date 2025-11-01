@@ -246,6 +246,14 @@ class MoQSession : public Subscriber,
       groupOrder_ = groupOrder;
     }
 
+    folly::Optional<uint8_t> getPublisherPriority() const {
+      return publisherPriority_;
+    }
+
+    void setPublisherPriority(uint8_t priority) {
+      publisherPriority_ = priority;
+    }
+
     void setSession(MoQSession* session) {
       session_ = session;
     }
@@ -308,6 +316,7 @@ class MoQSession : public Subscriber,
     uint64_t version_;
     uint64_t bytesBuffered_{0};
     uint64_t bytesBufferedThreshold_{0};
+    folly::Optional<uint8_t> publisherPriority_;
   };
 
   void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
@@ -436,6 +445,12 @@ class MoQSession : public Subscriber,
       const std::vector<SetupParameter>& params);
   static bool shouldIncludeMoqtImplementationParam(
       const std::vector<uint64_t>& supportedVersions);
+  void setPublisherPriorityFromParams(
+      const std::vector<TrackRequestParameter>& params,
+      const std::shared_ptr<TrackPublisherImpl>& trackPublisher);
+  void setPublisherPriorityFromParams(
+      const std::vector<TrackRequestParameter>& params,
+      const std::shared_ptr<SubscribeTrackReceiveState>& trackPublisher);
 
  protected:
   // Protected members and methods for MoQRelaySession subclass access

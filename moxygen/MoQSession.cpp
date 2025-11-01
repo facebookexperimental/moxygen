@@ -1655,6 +1655,14 @@ class MoQSession::SubscribeTrackReceiveState
     currentStreamId_ = id;
   }
 
+  folly::Optional<uint8_t> getPublisherPriority() const {
+    return publisherPriority_;
+  }
+
+  void setPublisherPriority(uint8_t priority) {
+    publisherPriority_ = priority;
+  }
+
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<TrackConsumer> callback_;
@@ -1665,6 +1673,9 @@ class MoQSession::SubscribeTrackReceiveState
 
   // Indicates whether receiveState is for Publish
   bool publish_;
+
+  // Publisher priority from SUBSCRIBE_OK or PUBLISH parameter
+  folly::Optional<uint8_t> publisherPriority_;
 };
 
 class MoQSession::FetchTrackReceiveState
@@ -2832,10 +2843,40 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     auto subOk = subHandle->subscribeOk();
     subOk.requestID = requestID;
 
+    setPublisherPriorityFromParams(params, trackPublisher);
+
     // TODO: verify TrackAlias is unique
     subscribeOk(subOk);
 
     trackPublisher->setSubscriptionHandle(std::move(subHandle));
+  }
+}
+
+void MoQSession::setPublisherPriorityFromParams(
+    const std::vector<TrackRequestParameter>& params,
+    const std::shared_ptr<TrackPublisherImpl>& trackPublisher) {
+  // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    auto publisherPriority =
+        getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
+    if (publisherPriority && *publisherPriority <= 255) {
+      trackPublisher->setPublisherPriority(
+          static_cast<uint8_t>(*publisherPriority));
+    }
+  }
+}
+
+void MoQSession::setPublisherPriorityFromParams(
+    const std::vector<TrackRequestParameter>& params,
+    const std::shared_ptr<SubscribeTrackReceiveState>& trackReceiveState) {
+  // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    auto publisherPriority =
+        getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
+    if (publisherPriority && *publisherPriority <= 255) {
+      trackReceiveState->setPublisherPriority(
+          static_cast<uint8_t>(*publisherPriority));
+    }
   }
 }
 
@@ -3071,6 +3112,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
   }
   auto trackAlias = subOk.trackAlias;
+  setPublisherPriorityFromParams(subOk.params, trackReceiveState);
   trackReceiveState->subscribeOK(std::move(subOk));
   if (trackReceiveState->getSubscribeCallback()) {
     trackReceiveState->getSubscribeCallback()->setTrackAlias(trackAlias);
@@ -3168,6 +3210,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
   auto requestID = publish.requestID;
   auto alias = publish.trackAlias;
   auto ftn = publish.fullTrackName;
+  auto params = publish.params;
 
   // PubError if error occurs
   auto publishErr =
@@ -3203,6 +3246,10 @@ folly::coro::Task<void> MoQSession::handlePublish(
         // Add ReceiveState to subTracks_
         auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
             ftn, requestID, initiator.consumer, logger_, true);
+
+        // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
+        setPublisherPriorityFromParams(params, trackReceiveState);
+
         initiator.consumer->setTrackAlias(alias);
         subTracks_.emplace(alias, trackReceiveState);
         // Ensure the PublishOk we send back corresponds to the inbound
@@ -3776,6 +3823,9 @@ Subscriber::PublishResult MoQSession::publish(
 
   // Set publishHandle in trackPublisher so it can cancel on unsubscribes
   trackPublisher->setSubscriptionHandle(handle);
+
+  // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
+  setPublisherPriorityFromParams(pub.params, trackPublisher);
 
   // Store the track publisher for later lookup
   pubTracks_.emplace(pub.requestID, trackPublisher);
