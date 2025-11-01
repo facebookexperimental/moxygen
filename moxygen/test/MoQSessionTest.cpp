@@ -2155,15 +2155,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
   co_await setupMoQSession();
 
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
-    EXPECT_EQ(sub.params.size(), 2);
+    EXPECT_EQ(sub.params.size(), 1);
     EXPECT_EQ(
         sub.params.at(0).key,
-        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-    EXPECT_EQ(sub.params.at(0).asUint64, 5000);
-    EXPECT_EQ(
-        sub.params.at(1).key,
         folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-    EXPECT_EQ(sub.params.at(1).asAuthToken.tokenValue, "auth_token_value");
+    EXPECT_EQ(sub.params.at(0).asAuthToken.tokenValue, "auth_token_value");
 
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub);
