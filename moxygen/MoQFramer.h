@@ -287,11 +287,81 @@ struct AuthToken {
   static constexpr folly::Optional<uint64_t> DontRegister = folly::none;
 };
 
+struct AbsoluteLocation {
+  uint64_t group{0};
+  uint64_t object{0};
+
+  AbsoluteLocation() = default;
+  constexpr AbsoluteLocation(uint64_t g, uint64_t o) : group(g), object(o) {}
+
+  bool operator==(const AbsoluteLocation& other) const {
+    return group == other.group && object == other.object;
+  }
+
+  bool operator!=(const AbsoluteLocation& other) const {
+    return !(*this == other);
+  }
+
+  bool operator<(const AbsoluteLocation& other) const {
+    if (group < other.group) {
+      return true;
+    } else if (group == other.group) {
+      return object < other.object;
+    }
+    return false;
+  }
+
+  bool operator<=(const AbsoluteLocation& other) const {
+    return *this < other || *this == other;
+  }
+
+  bool operator>(const AbsoluteLocation& other) const {
+    return !(*this <= other);
+  }
+
+  bool operator>=(const AbsoluteLocation& other) const {
+    return !(*this < other);
+  }
+
+  friend std::ostream& operator<<(
+      std::ostream& os,
+      const AbsoluteLocation& loc) {
+    os << loc.describe();
+    return os;
+  }
+
+  std::string describe() const {
+    return folly::to<std::string>("{", group, ",", object, "}");
+  }
+};
+
+constexpr AbsoluteLocation kLocationMin;
+constexpr AbsoluteLocation kLocationMax{
+    quic::kEightByteLimit,
+    quic::kEightByteLimit};
+
+enum class LocationType : uint8_t {
+  NextGroupStart = 1,
+  LargestObject = 2,
+  AbsoluteStart = 3,
+  AbsoluteRange = 4,
+  LargestGroup = 250,
+};
+
+std::string toString(LocationType locType);
+
+struct SubscriptionFilter {
+  LocationType filterType;
+  folly::Optional<AbsoluteLocation> location;
+  folly::Optional<uint64_t> endGroup;
+};
+
 struct Parameter {
   uint64_t key;
   std::string asString;
   uint64_t asUint64;
   AuthToken asAuthToken;
+  SubscriptionFilter asSubscriptionFilter;
 };
 
 using SetupParameter = Parameter;
@@ -302,6 +372,7 @@ enum class TrackRequestParamKey : uint64_t {
   DELIVERY_TIMEOUT = 2,
   MAX_CACHE_DURATION = 4,
   PUBLISHER_PRIORITY = 0x0E,
+  SUBSCRIPTION_FILTER = 0x21,
 };
 
 class Parameters {
@@ -710,69 +781,6 @@ struct DatagramObjectHeader {
 };
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);
-
-enum class LocationType : uint8_t {
-  NextGroupStart = 1,
-  LargestObject = 2,
-  AbsoluteStart = 3,
-  AbsoluteRange = 4,
-  LargestGroup = 250,
-};
-
-std::string toString(LocationType locType);
-
-struct AbsoluteLocation {
-  uint64_t group{0};
-  uint64_t object{0};
-
-  AbsoluteLocation() = default;
-  constexpr AbsoluteLocation(uint64_t g, uint64_t o) : group(g), object(o) {}
-
-  bool operator==(const AbsoluteLocation& other) const {
-    return group == other.group && object == other.object;
-  }
-
-  bool operator!=(const AbsoluteLocation& other) const {
-    return !(*this == other);
-  }
-
-  bool operator<(const AbsoluteLocation& other) const {
-    if (group < other.group) {
-      return true;
-    } else if (group == other.group) {
-      return object < other.object;
-    }
-    return false;
-  }
-
-  bool operator<=(const AbsoluteLocation& other) const {
-    return *this < other || *this == other;
-  }
-
-  bool operator>(const AbsoluteLocation& other) const {
-    return !(*this <= other);
-  }
-
-  bool operator>=(const AbsoluteLocation& other) const {
-    return !(*this < other);
-  }
-
-  friend std::ostream& operator<<(
-      std::ostream& os,
-      const AbsoluteLocation& loc) {
-    os << loc.describe();
-    return os;
-  }
-
-  std::string describe() const {
-    return folly::to<std::string>("{", group, ",", object, "}");
-  }
-};
-
-constexpr AbsoluteLocation kLocationMin;
-constexpr AbsoluteLocation kLocationMax{
-    quic::kEightByteLimit,
-    quic::kEightByteLimit};
 
 struct TrackNamespace {
   std::vector<std::string> trackNamespace;
