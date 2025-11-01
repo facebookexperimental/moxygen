@@ -109,13 +109,15 @@ class MoQForwarder : public TrackConsumer {
     // Updates the params of the subscribeOk
     // updates existing param if key matches, otherwise adds new param
     void setParam(const TrackRequestParameter& param) {
-      for (auto& existingParam : subscribeOk_->params) {
+      for (size_t i = 0; i < subscribeOk_->params.size(); i++) {
+        const auto& existingParam = subscribeOk_->params.at(i);
         if (existingParam.key == param.key) {
-          existingParam = param;
+          subscribeOk_->params.modifyParam(
+              i, param.asString, param.asUint64, param.asAuthToken);
           return;
         }
       }
-      subscribeOk_->params.push_back(param);
+      subscribeOk_->params.insertParam(param);
     }
 
     void subscribeUpdate(SubscribeUpdate subscribeUpdate) override {

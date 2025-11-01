@@ -34,5 +34,9 @@ inline std::unique_ptr<folly::IOBuf> writeAllMessages(
 std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size = 10);
 
 std::vector<Extension> getTestExtensions();
+TrackRequestParameters getTestTrackRequestParameters(
+    const MoQFrameWriter& moqFrameWriter);
+TrackRequestParameters getTestPublisherTrackRequestParams(
+    const MoQFrameWriter& moqFrameWriter);
 
 } // namespace moxygen::test

@@ -36,7 +36,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     size_t& length,
     uint64_t version,
     size_t numParams,
-    std::vector<Parameter>& params,
+    Parameters& params,
     MoQTokenCache& tokenCache,
     ParamsType paramsType);
 folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
@@ -151,7 +151,7 @@ std::string getSupportedVersionsString() {
 }
 
 folly::Optional<uint64_t> getFirstIntParam(
-    const std::vector<TrackRequestParameter>& params,
+    const TrackRequestParameters& params,
     TrackRequestParamKey key) {
   auto keyValue = folly::to_underlying(key);
   for (const auto& param : params) {
@@ -385,7 +385,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     size_t& length,
     uint64_t version,
     size_t numParams,
-    std::vector<Parameter>& params,
+    Parameters& params,
     MoQTokenCache& tokenCache,
     ParamsType paramsType) {
   for (auto i = 0u; i < numParams; i++) {
@@ -413,7 +413,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
       return folly::makeUnexpected(res.error());
     }
     if (*res) {
-      params.emplace_back(std::move(*res.value()));
+      params.insertParam(std::move(*res.value()));
     } // else the param was not an error but shouldn't be added to the set
   }
   if (length > 0) {
@@ -841,7 +841,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     folly::io::Cursor& cursor,
     size_t& length,
     size_t numParams,
-    std::vector<TrackRequestParameter>& params) const noexcept {
+    TrackRequestParameters& params) const noexcept {
   CHECK(version_.hasValue())
       << "The version must be set before parsing track request params";
   return parseParams(
@@ -2504,7 +2504,7 @@ TrackRequestParameter getAuthParam(
 
 void MoQFrameWriter::writeTrackRequestParams(
     folly::IOBufQueue& writeBuf,
-    const std::vector<TrackRequestParameter>& params,
+    const TrackRequestParameters& params,
     size_t& size,
     bool& error) const noexcept {
   CHECK(*version_) << "Version must be set before writing track request params";

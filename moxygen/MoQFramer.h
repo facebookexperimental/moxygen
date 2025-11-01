@@ -448,7 +448,7 @@ std::string getSupportedVersionsString();
 
 // Helper function to extract an integer parameter by key from a parameter list
 folly::Optional<uint64_t> getFirstIntParam(
-    const std::vector<TrackRequestParameter>& params,
+    const TrackRequestParameters& params,
     TrackRequestParamKey key);
 
 void writeVarint(
@@ -459,12 +459,12 @@ void writeVarint(
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
-  std::vector<SetupParameter> params;
+  SetupParameters params;
 };
 
 struct ServerSetup {
   uint64_t selectedVersion;
-  std::vector<SetupParameter> params;
+  SetupParameters params;
 };
 
 enum class ObjectStatus : uint64_t {
@@ -897,7 +897,7 @@ struct SubscribeRequest {
       LocationType locType = LocationType::LargestGroup,
       folly::Optional<AbsoluteLocation> start = folly::none,
       uint64_t endGroup = 0,
-      std::vector<TrackRequestParameter> params = {}) {
+      TrackRequestParameters params = {}) {
     return SubscribeRequest{
         RequestID(), // Default constructed RequestID
         folly::none, // Default constructed TrackAlias (folly::none)
@@ -920,7 +920,7 @@ struct SubscribeRequest {
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   uint64_t endGroup;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 struct SubscribeUpdate {
@@ -930,7 +930,7 @@ struct SubscribeUpdate {
   uint64_t endGroup;
   uint8_t priority{kDefaultPriority};
   bool forward{true}; // Only used in draft-12 and above
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 struct SubscribeOk {
@@ -940,7 +940,7 @@ struct SubscribeOk {
   GroupOrder groupOrder;
   // context exists is inferred from presence of largest
   folly::Optional<AbsoluteLocation> largest;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 // SubscribeError is now an alias for RequestError - see below
@@ -963,7 +963,7 @@ struct PublishRequest {
   GroupOrder groupOrder{GroupOrder::Default};
   folly::Optional<AbsoluteLocation> largest;
   bool forward{true};
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 struct PublishOk {
@@ -974,7 +974,7 @@ struct PublishOk {
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   folly::Optional<uint64_t> endGroup;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 // PublishError is now an alias for RequestError - see below
@@ -982,7 +982,7 @@ struct PublishOk {
 struct Announce {
   RequestID requestID;
   TrackNamespace trackNamespace;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 // AnnounceError is now an alias for RequestError - see below
@@ -1008,7 +1008,7 @@ struct TrackStatusOk {
   GroupOrder groupOrder{};
   // context exists is inferred from presence of largest
   folly::Optional<AbsoluteLocation> largest;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
   // < v14 parameters maintained for compatibility
   FullTrackName fullTrackName;
   TrackStatusCode statusCode{};
@@ -1067,7 +1067,7 @@ struct Fetch {
       AbsoluteLocation e,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
-      std::vector<TrackRequestParameter> pa = {})
+      TrackRequestParameters pa = {})
       : requestID(su),
         fullTrackName(std::move(ftn)),
         priority(p),
@@ -1083,7 +1083,7 @@ struct Fetch {
       FetchType fetchType,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
-      std::vector<TrackRequestParameter> pa = {})
+      TrackRequestParameters pa = {})
       : requestID(su),
         priority(p),
         groupOrder(g),
@@ -1097,7 +1097,7 @@ struct Fetch {
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
   std::variant<StandaloneFetch, JoiningFetch> args;
 };
 
@@ -1115,7 +1115,7 @@ struct FetchOk {
   GroupOrder groupOrder;
   uint8_t endOfTrack;
   AbsoluteLocation endLocation;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 // FetchError is now an alias for RequestError - see below
@@ -1123,7 +1123,7 @@ struct FetchOk {
 struct SubscribeAnnounces {
   RequestID requestID;
   TrackNamespace trackNamespacePrefix;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 // SubscribeAnnouncesError is now an alias for RequestError - see below
@@ -1134,7 +1134,7 @@ struct UnsubscribeAnnounces {
 
 struct RequestOk {
   RequestID requestID;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
 };
 
 using SubscribeAnnouncesOk = RequestOk;
@@ -1416,7 +1416,7 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length,
       size_t numParams,
-      std::vector<TrackRequestParameter>& params) const noexcept;
+      TrackRequestParameters& params) const noexcept;
 
   folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
       folly::io::Cursor& cursor,
@@ -1648,7 +1648,7 @@ class MoQFrameWriter {
 
   void writeTrackRequestParams(
       folly::IOBufQueue& writeBuf,
-      const std::vector<TrackRequestParameter>& params,
+      const TrackRequestParameters& params,
       size_t& size,
       bool& error) const noexcept;
 

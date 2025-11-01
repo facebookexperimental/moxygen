@@ -178,7 +178,7 @@ class MoQSession : public Subscriber,
       uint64_t joiningStart,
       uint8_t fetchPri,
       GroupOrder fetchOrder,
-      std::vector<TrackRequestParameter> fetchParams,
+      TrackRequestParameters fetchParams,
       std::shared_ptr<FetchConsumer> fetchCallback,
       FetchType fetchType);
 
@@ -345,7 +345,7 @@ class MoQSession : public Subscriber,
   // Making this public temporarily until we have param management in a single
   // place
   static folly::Optional<uint64_t> getDeliveryTimeoutIfPresent(
-      const std::vector<TrackRequestParameter>& params,
+      const TrackRequestParameters& params,
       uint64_t version);
 
  private:
@@ -434,19 +434,18 @@ class MoQSession : public Subscriber,
   // Get the max requestID from the setup params. If MAX_REQUEST_ID key
   // is not present, we default to 0 as specified. 0 means that the peer
   // MUST NOT create any subscriptions
-  static uint64_t getMaxRequestIDIfPresent(
-      const std::vector<SetupParameter>& params);
+  static uint64_t getMaxRequestIDIfPresent(const SetupParameters& params);
   static uint64_t getMaxAuthTokenCacheSizeIfPresent(
-      const std::vector<SetupParameter>& params);
+      const SetupParameters& params);
   static folly::Optional<std::string> getMoQTImplementationIfPresent(
-      const std::vector<SetupParameter>& params);
+      const SetupParameters& params);
   static bool shouldIncludeMoqtImplementationParam(
       const std::vector<uint64_t>& supportedVersions);
   void setPublisherPriorityFromParams(
-      const std::vector<TrackRequestParameter>& params,
+      const TrackRequestParameters& params,
       const std::shared_ptr<TrackPublisherImpl>& trackPublisher);
   void setPublisherPriorityFromParams(
-      const std::vector<TrackRequestParameter>& params,
+      const TrackRequestParameters& params,
       const std::shared_ptr<SubscribeTrackReceiveState>& trackPublisher);
 
  protected:
@@ -486,7 +485,7 @@ class MoQSession : public Subscriber,
   }
   void deliverBufferedData(TrackAlias trackAlias);
   void aliasifyAuthTokens(
-      std::vector<Parameter>& params,
+      Parameters& params,
       const folly::Optional<uint64_t>& forceVersion = folly::none);
   RequestID getNextRequestID();
   void setRequestSession() {

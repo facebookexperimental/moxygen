@@ -651,7 +651,7 @@ void MLogger::logSubscribeAnnouncesError(
 }
 
 std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
-    const std::vector<SetupParameter>& params) {
+    const SetupParameters& params) {
   // Add Params to params vector
   std::vector<MOQTParameter> moqParams;
 
@@ -691,7 +691,7 @@ std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
 }
 
 std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
-    const std::vector<TrackRequestParameter>& params) {
+    const TrackRequestParameters& params) {
   std::vector<MOQTParameter> moqParams;
   for (const auto& param : params) {
     MOQTParameter p;

@@ -2056,7 +2056,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
   if (shouldIncludeMoqtImplementationParam(setup.supportedVersions)) {
-    setup.params.emplace_back(SetupParameter(
+    setup.params.insertParam(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
          getMoQTImplementationString(),
          0,
@@ -2221,7 +2221,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
 
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
-    serverSetup->params.emplace_back(SetupParameter(
+    serverSetup->params.insertParam(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
          getMoQTImplementationString(),
          0,
@@ -2867,15 +2867,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   // We should only keep e2e params here and remove everything else
   //// Remove DELIVERY_TIMEOUT param from params before passing to
   //// publishHandler_
-  params.erase(
-      std::remove_if(
-          params.begin(),
-          params.end(),
-          [](const TrackRequestParameter& param) {
-            return param.key ==
-                folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT);
-          }),
-      params.end());
+  params.eraseAllParamsOfType(TrackRequestParamKey::DELIVERY_TIMEOUT);
 
   auto subscribeResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
@@ -2912,7 +2904,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
 }
 
 void MoQSession::setPublisherPriorityFromParams(
-    const std::vector<TrackRequestParameter>& params,
+    const TrackRequestParameters& params,
     const std::shared_ptr<TrackPublisherImpl>& trackPublisher) {
   // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
@@ -2933,7 +2925,7 @@ void MoQSession::setPublisherPriorityFromParams(
 }
 
 void MoQSession::setPublisherPriorityFromParams(
-    const std::vector<TrackRequestParameter>& params,
+    const TrackRequestParameters& params,
     const std::shared_ptr<SubscribeTrackReceiveState>& trackReceiveState) {
   // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
@@ -4443,7 +4435,7 @@ folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
     uint64_t joiningStart,
     uint8_t fetchPri,
     GroupOrder fetchOrder,
-    std::vector<TrackRequestParameter> fetchParams,
+    TrackRequestParameters fetchParams,
     std::shared_ptr<FetchConsumer> fetchCallback,
     FetchType fetchType) {
   Fetch fetchReq(
@@ -4644,8 +4636,7 @@ void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
 }
 
 /*static*/
-uint64_t MoQSession::getMaxRequestIDIfPresent(
-    const std::vector<SetupParameter>& params) {
+uint64_t MoQSession::getMaxRequestIDIfPresent(const SetupParameters& params) {
   for (const auto& param : params) {
     if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID)) {
       return param.asUint64;
@@ -4656,7 +4647,7 @@ uint64_t MoQSession::getMaxRequestIDIfPresent(
 
 /*static*/
 folly::Optional<std::string> MoQSession::getMoQTImplementationIfPresent(
-    const std::vector<SetupParameter>& params) {
+    const SetupParameters& params) {
   for (const auto& param : params) {
     if (param.key == folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION)) {
       return param.asString;
@@ -4683,7 +4674,7 @@ bool MoQSession::shouldIncludeMoqtImplementationParam(
 }
 
 uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
-    const std::vector<SetupParameter>& params) {
+    const SetupParameters& params) {
   constexpr uint64_t kMaxAuthTokenCacheSize = 4096;
   for (const auto& param : params) {
     if (param.key ==
@@ -4696,7 +4687,7 @@ uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
 
 /*static*/
 folly::Optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
-    const std::vector<TrackRequestParameter>& params,
+    const TrackRequestParameters& params,
     uint64_t version) {
   for (const auto& param : params) {
     if (param.key ==
@@ -4708,7 +4699,7 @@ folly::Optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
 }
 
 void MoQSession::aliasifyAuthTokens(
-    std::vector<Parameter>& params,
+    Parameters& params,
     const folly::Optional<uint64_t>& forceVersion) {
   auto version = forceVersion ? forceVersion : getNegotiatedVersion();
   if (!version) {
@@ -4717,39 +4708,55 @@ void MoQSession::aliasifyAuthTokens(
 
   auto authParamKey =
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
-  for (auto it = params.begin(); it != params.end(); ++it) {
-    if (it->key == authParamKey) {
-      const auto& token = it->asAuthToken;
-      if (token.alias && token.tokenValue.size() < tokenCache_.maxTokenSize()) {
-        auto lookupRes =
-            tokenCache_.getAliasForToken(token.tokenType, token.tokenValue);
-        if (lookupRes) {
-          it->asString = moqFrameWriter_.encodeUseAlias(*lookupRes);
-          continue;
-        } // else, evict tokens and register this one
-        auto tokenCopy = token;
-        it = params.erase(it);
-        while (!tokenCache_.canRegister(token.tokenType, token.tokenValue)) {
-          auto aliasToEvict = tokenCache_.evictLRU();
-          Parameter p;
-          p.key = authParamKey;
-          p.asString = moqFrameWriter_.encodeDeleteTokenAlias(aliasToEvict);
-          it = params.insert(it, std::move(p));
-          ++it;
-        }
-        auto alias =
-            tokenCache_.registerToken(tokenCopy.tokenType, tokenCopy.tokenValue)
-                .value();
+
+  size_t currentPosition = 0;
+
+  while (currentPosition < params.size()) {
+    const auto& param = params.at(currentPosition);
+    if (param.key != authParamKey) {
+      ++currentPosition;
+      continue;
+    }
+
+    const auto& token = param.asAuthToken;
+    if (token.alias && token.tokenValue.size() < tokenCache_.maxTokenSize()) {
+      auto lookupRes =
+          tokenCache_.getAliasForToken(token.tokenType, token.tokenValue);
+      if (lookupRes) {
+        params.modifyString(
+            currentPosition, moqFrameWriter_.encodeUseAlias(*lookupRes));
+        ++currentPosition;
+        continue;
+      }
+
+      auto tokenCopy = token;
+      params.eraseParam(currentPosition);
+      while (!tokenCache_.canRegister(token.tokenType, token.tokenValue)) {
+        auto aliasToEvict = tokenCache_.evictLRU();
         Parameter p;
         p.key = authParamKey;
-        p.asString = moqFrameWriter_.encodeRegisterToken(
-            alias, tokenCopy.tokenType, tokenCopy.tokenValue);
-        it = params.insert(it, std::move(p));
-      } else {
-        it->asString = moqFrameWriter_.encodeTokenValue(
-            token.tokenType, token.tokenValue, version);
+        p.asString = moqFrameWriter_.encodeDeleteTokenAlias(aliasToEvict);
+        params.insertParam(currentPosition, std::move(p));
+        ++currentPosition;
       }
+
+      auto alias =
+          tokenCache_.registerToken(tokenCopy.tokenType, tokenCopy.tokenValue)
+              .value();
+      Parameter p;
+      p.key = authParamKey;
+      p.asString = moqFrameWriter_.encodeRegisterToken(
+          alias, tokenCopy.tokenType, tokenCopy.tokenValue);
+      params.insertParam(currentPosition, std::move(p));
+      ++currentPosition;
+      continue;
     }
+
+    params.modifyString(
+        currentPosition,
+        moqFrameWriter_.encodeTokenValue(
+            token.tokenType, token.tokenValue, version));
+    ++currentPosition;
   }
 }
 

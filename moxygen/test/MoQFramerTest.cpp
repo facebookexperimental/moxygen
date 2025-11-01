@@ -719,9 +719,9 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
     }
     EXPECT_EQ(parseClientSetupResult->params.size(), 1);
     EXPECT_EQ(
-        parseClientSetupResult->params[0].key,
+        parseClientSetupResult->params.at(0).key,
         folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-    EXPECT_EQ(parseClientSetupResult->params[0].asUint64, maxRequestID);
+    EXPECT_EQ(parseClientSetupResult->params.at(0).asUint64, maxRequestID);
   }
 }
 
@@ -936,12 +936,12 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
       TrackStatus::make(FullTrackName({TrackNamespace({"hello"}), "world"}));
   ts.locType = LocationType::LargestObject;
   // Add some parameters to the TrackStatus.
-  ts.params.push_back(
+  ts.params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        writer_.encodeTokenValue(0, "stampolli"),
        0,
        {}});
-  ts.params.push_back(
+  ts.params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
        "",
        999,
@@ -960,14 +960,14 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
   EXPECT_EQ(parseResult->params.size(), 2);
   EXPECT_EQ(
-      parseResult->params[0].key,
+      parseResult->params.at(0).key,
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
-  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
+  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
+  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
   EXPECT_EQ(
-      parseResult->params[1].key,
+      parseResult->params.at(1).key,
       folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-  EXPECT_EQ(parseResult->params[1].asUint64, 999);
+  EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
 }
 
 TEST_P(MoQFramerTest, ParseTrackStatusOk) {
@@ -979,14 +979,14 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
   trackStatusOk.largest = AbsoluteLocation({19, 77});
   trackStatusOk.groupOrder = GroupOrder::OldestFirst;
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
   // Add some parameters to the TrackStatus.
-  params.push_back(
+  params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        writer_.encodeTokenValue(0, "stampolli"),
        0,
        {}});
-  params.push_back(
+  params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
        "",
        999,
@@ -1007,14 +1007,14 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
   EXPECT_EQ(parseResult->params.size(), 2);
   EXPECT_EQ(
-      parseResult->params[0].key,
+      parseResult->params.at(0).key,
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenType, 0);
-  EXPECT_EQ(parseResult->params[0].asAuthToken.tokenValue, "stampolli");
+  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
+  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
   EXPECT_EQ(
-      parseResult->params[1].key,
+      parseResult->params.at(1).key,
       folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-  EXPECT_EQ(parseResult->params[1].asUint64, 999);
+  EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
 }
 
 static std::string encodeToken(
@@ -1058,7 +1058,7 @@ static size_t writeSubscribeRequestWithAuthToken(
 
   auto encodedToken =
       encodeToken(writer, aliasType, alias, tokenType, tokenValue);
-  req.params.push_back(
+  req.params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        encodedToken,
        0,
@@ -1115,10 +1115,11 @@ TEST_P(MoQFramerAuthTest, AuthTokenTest) {
     } else {
       EXPECT_EQ(parseResult->params.size(), 1);
       EXPECT_EQ(
-          parseResult->params[0].asAuthToken.tokenType, expectedTokenType[i])
+          parseResult->params.at(0).asAuthToken.tokenType, expectedTokenType[i])
           << i;
       EXPECT_EQ(
-          parseResult->params[0].asAuthToken.tokenValue, expectedTokenValue[i])
+          parseResult->params.at(0).asAuthToken.tokenValue,
+          expectedTokenValue[i])
           << i;
     }
   }

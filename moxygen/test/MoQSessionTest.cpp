@@ -55,30 +55,31 @@ class ParamBuilder {
 
   // Add a uint64_t parameter
   ParamBuilder& add(TrackRequestParamKey key, uint64_t value) {
-    params_.push_back({folly::to_underlying(key), "", value, {}});
+    params_.insertParam(Parameter{folly::to_underlying(key), "", value, {}});
     return *this;
   }
 
   // Add a string parameter (for AUTHORIZATION_TOKEN)
   ParamBuilder& add(TrackRequestParamKey key, const std::string& value) {
     if (key == TrackRequestParamKey::AUTHORIZATION_TOKEN) {
-      params_.push_back(
-          {folly::to_underlying(key),
-           "",
-           0,
-           AuthToken{0, value, AuthToken::DontRegister}});
+      params_.insertParam(
+          Parameter{
+              folly::to_underlying(key),
+              "",
+              0,
+              AuthToken{0, value, AuthToken::DontRegister}});
     } else {
-      params_.push_back({folly::to_underlying(key), value, 0, {}});
+      params_.insertParam(Parameter{folly::to_underlying(key), value, 0, {}});
     }
     return *this;
   }
 
-  std::vector<TrackRequestParameter> build() {
+  TrackRequestParameters build() {
     return std::move(params_);
   }
 
  private:
-  std::vector<TrackRequestParameter> params_;
+  TrackRequestParameters params_;
 };
 
 auto makeSubscribeOkResult(
@@ -433,7 +434,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
             setup.supportedVersions.begin(),
             setup.supportedVersions.end(),
             kVersionDraft12) != setup.supportedVersions.end()) {
-      setup.params.push_back(getAuthParam(
+      setup.params.insertParam(getAuthParam(
           kVersionDraft12, "auth_token_value", 0, AuthToken::Register));
     }
     return setup;
@@ -2134,7 +2135,7 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
               }));
   TrackStatus request = getTrackStatus();
   auto addAuthToken = [](auto& params, const AuthToken& token) {
-    params.push_back(
+    params.insertParam(
         {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
          "",
          0,
@@ -2168,12 +2169,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
   expectSubscribeDone();
 
   SubscribeRequest subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.params.push_back(
+  subscribeRequest.params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
        "",
        5000,
        {}});
-  subscribeRequest.params.push_back(
+  subscribeRequest.params.insertParam(
       getAuthParam(getServerSelectedVersion(), "auth_token_value"));
 
   auto res =
@@ -3046,7 +3047,7 @@ CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
   };
 
   // Add delivery timeout parameter (5000ms)
-  pub.params.push_back(
+  pub.params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
        "",
        5000,
@@ -3129,7 +3130,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
     };
 
     // Add delivery timeout parameter (7000ms)
-    subscribeUpdate.params.push_back(
+    subscribeUpdate.params.insertParam(
         {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
          "",
          7000,
@@ -3898,7 +3899,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                 };
 
                 // Add delivery timeout parameter (3000ms)
-                publishOk.params.push_back(
+                publishOk.params.insertParam(
                     {folly::to_underlying(
                          TrackRequestParamKey::DELIVERY_TIMEOUT),
                      "",
@@ -4010,7 +4011,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
                     {}};
 
                 // Add zero delivery timeout parameter
-                publishOk.params.push_back(
+                publishOk.params.insertParam(
                     {folly::to_underlying(
                          TrackRequestParamKey::DELIVERY_TIMEOUT),
                      "",

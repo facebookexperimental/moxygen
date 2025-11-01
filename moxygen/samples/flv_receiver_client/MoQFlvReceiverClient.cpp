@@ -407,10 +407,10 @@ class MoQFlvReceiverClient
       uint64_t negotiatedVersion =
           *(moqClient_->moqSession_->getNegotiatedVersion());
 
-      std::vector<TrackRequestParameter> params{
+      TrackRequestParameters params{
           getAuthParam(negotiatedVersion, FLAGS_auth)};
       if (FLAGS_delivery_timeout > 0) {
-        params.push_back(
+        params.insertParam(
             {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
              "",
              FLAGS_delivery_timeout,

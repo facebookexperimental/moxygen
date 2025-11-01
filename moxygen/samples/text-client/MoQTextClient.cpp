@@ -429,9 +429,9 @@ int main(int argc, char* argv[]) {
   });
 
   auto subParams = flags2params();
-  std::vector<TrackRequestParameter> params;
+  TrackRequestParameters params;
   if (FLAGS_delivery_timeout > 0) {
-    params.push_back(
+    params.insertParam(
         {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
          "",
          FLAGS_delivery_timeout,

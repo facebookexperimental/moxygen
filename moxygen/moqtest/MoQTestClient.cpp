@@ -80,7 +80,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 
   // Add delivery timeout parameter if configured
   if (params.deliveryTimeout > 0) {
-    sub.params.push_back(
+    sub.params.insertParam(
         {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
          "",
          params.deliveryTimeout,

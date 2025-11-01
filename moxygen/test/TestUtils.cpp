@@ -30,7 +30,7 @@ static TrackRequestParameter getTestAuthParam(
       {}};
 }
 
-static std::vector<TrackRequestParameter> getTestTrackRequestParameters(
+TrackRequestParameters getTestTrackRequestParameters(
     const MoQFrameWriter& moqFrameWriter) {
   return {
       getTestAuthParam(moqFrameWriter, "binky"),
@@ -44,10 +44,10 @@ static std::vector<TrackRequestParameter> getTestTrackRequestParameters(
        {}}};
 }
 
-static std::vector<TrackRequestParameter> getTestPublisherTrackRequestParams(
+TrackRequestParameters getTestPublisherTrackRequestParams(
     const MoQFrameWriter& moqFrameWriter) {
   auto params = getTestTrackRequestParameters(moqFrameWriter);
-  params.push_back(
+  params.insertParam(
       {folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
        "",
        100,
@@ -96,8 +96,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeSubscribeUpdate(
       writeBuf,
       SubscribeUpdate(
-          {0,
-           0,
+          {RequestID(0),
+           RequestID(0),
            {1, 2},
            3,
            255,
@@ -111,9 +111,11 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            std::chrono::milliseconds(0),
            GroupOrder::OldestFirst,
            AbsoluteLocation{2, 5},
-           {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-             "",
-             3600000}}}));
+           TrackRequestParameters(
+               {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+                 "",
+                 3600000,
+                 {}}})}));
   res = moqFrameWriter.writeMaxRequestID(writeBuf, {.requestID = 50000});
   res = moqFrameWriter.writeRequestsBlocked(writeBuf, {.maxRequestID = 50000});
   res = moqFrameWriter.writeRequestError(
@@ -128,11 +130,12 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       }));
   res = moqFrameWriter.writeSubscribeDone(
       writeBuf,
-      SubscribeDone({0, SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 7, ""}));
+      SubscribeDone(
+          {RequestID(0), SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 7, ""}));
   res = moqFrameWriter.writePublish(
       writeBuf,
       PublishRequest(
-          {0,
+          {RequestID(0),
            FullTrackName({TrackNamespace({"hello"}), "world"}),
            255,
            GroupOrder::Default,
@@ -163,13 +166,16 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       Announce(
           {1,
            TrackNamespace({"hello"}),
-           {getTestAuthParam(moqFrameWriter, "binky"),
-            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-             "",
-             1000},
-            {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-             "",
-             3600000}}}));
+           TrackRequestParameters(
+               {getTestAuthParam(moqFrameWriter, "binky"),
+                {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+                 "",
+                 1000,
+                 {}},
+                {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+                 "",
+                 3600000,
+                 {}}})}));
   res = moqFrameWriter.writeAnnounceOk(writeBuf, AnnounceOk({1, {}}));
   res = moqFrameWriter.writeRequestError(
       writeBuf,

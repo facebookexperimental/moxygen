@@ -220,12 +220,12 @@ class MLogger {
       const std::string& t,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
   std::vector<MOQTParameter> convertTrackParamsToMoQTParams(
-      const std::vector<TrackRequestParameter>& params);
+      const TrackRequestParameters& params);
   std::vector<MOQTByteString> convertTrackNamespaceToByteStringFormat(
       const std::vector<std::string>& ns,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
   std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
-      const std::vector<SetupParameter>& params);
+      const SetupParameters& params);
   bool isHexstring(const std::string& s);
   void logControlMessage(
       ControlMessageType controlType,
