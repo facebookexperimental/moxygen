@@ -2003,7 +2003,7 @@ static auto parseAndCheckDatagram(
     uint64_t expectedTrackAlias,
     uint64_t expectedGroup,
     uint64_t expectedId,
-    uint8_t expectedPriority,
+    folly::Optional<uint8_t> expectedPriority,
     ObjectStatus expectedStatus,
     std::optional<uint64_t> expectedLength = std::nullopt) {
   folly::io::Cursor cursor(buf);
@@ -2048,7 +2048,7 @@ TEST(MoQFramerTest, DatagramWithoutPriority) {
       22,
       33,
       44,
-      kDefaultPriority,
+      folly::none,
       ObjectStatus::NORMAL,
       7);
 }
@@ -2139,7 +2139,7 @@ TEST(MoQFramerTest, StatusDatagramWithoutPriority) {
       22,
       33,
       55,
-      kDefaultPriority,
+      folly::none,
       ObjectStatus::END_OF_GROUP,
       0);
 }
@@ -2222,4 +2222,104 @@ TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
     EXPECT_EQ(isValidSubgroupType(version15, t), shouldBeValidV15)
         << "v15: 0x" << std::hex << t;
   }
+}
+
+// Helper for round-trip datagram test
+void testDatagramPriorityRoundTrip(
+    uint64_t version,
+    folly::Optional<uint8_t> priority,
+    DatagramType expectedType,
+    folly::Optional<uint8_t> expectedPriority) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader objHeader = {
+      100, 0, 200, priority, ObjectStatus::NORMAL, noExtensions(), 7};
+  auto result = writer.writeDatagramObject(
+      writeBuf, TrackAlias(50), objHeader, folly::IOBuf::copyBuffer("payload"));
+  EXPECT_TRUE(result.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto parsedType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(parsedType.has_value());
+  EXPECT_EQ(parsedType->first, folly::to_underlying(expectedType));
+
+  cursor = folly::io::Cursor(serialized.get());
+  parsedType = quic::follyutils::decodeQuicInteger(cursor);
+  auto length = cursor.totalLength();
+  auto parseResult = parser.parseDatagramObjectHeader(
+      cursor, DatagramType(parsedType->first), length);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->trackAlias, TrackAlias(50));
+  EXPECT_EQ(parseResult->objectHeader.group, 100);
+  EXPECT_EQ(parseResult->objectHeader.id, 200);
+  EXPECT_EQ(parseResult->objectHeader.priority, expectedPriority);
+  EXPECT_EQ(parseResult->objectHeader.status, ObjectStatus::NORMAL);
+}
+
+// Then each test becomes a one-liner:
+TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripNone) {
+  testDatagramPriorityRoundTrip(
+      kVersionDraft15,
+      folly::none,
+      DatagramType::OBJECT_DATAGRAM_NO_EXT_NO_PRI,
+      folly::none);
+}
+TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripValue) {
+  testDatagramPriorityRoundTrip(
+      kVersionDraft15, 64, DatagramType::OBJECT_DATAGRAM_NO_EXT, 64);
+}
+
+// Helper for round-trip subgroup header test
+void testSubgroupPriorityRoundTrip(
+    uint64_t version,
+    folly::Optional<uint8_t> priority,
+    StreamType expectedType,
+    folly::Optional<uint8_t> expectedPriority) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  ObjectHeader objHeader = {
+      100, 50, 200, priority, ObjectStatus::NORMAL, noExtensions(), 0};
+
+  auto result = writer.writeSubgroupHeader(
+      writeBuf, TrackAlias(25), objHeader, SubgroupIDFormat::Present, false);
+  EXPECT_TRUE(result.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(parsedStreamType.has_value());
+  auto streamType = StreamType(parsedStreamType->first);
+  EXPECT_EQ(streamType, expectedType);
+  auto sgOptions = getSubgroupOptions(version, streamType);
+  auto parseResult = parser.parseSubgroupHeader(cursor, sgOptions);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->trackAlias, TrackAlias(25));
+  EXPECT_EQ(parseResult->objectHeader.group, 100);
+  EXPECT_EQ(parseResult->objectHeader.subgroup, 50);
+  EXPECT_EQ(parseResult->objectHeader.priority, expectedPriority);
+}
+
+// Test round-trip write/read with folly::none priority in subgroup (v15)
+TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripNone) {
+  testSubgroupPriorityRoundTrip(
+      kVersionDraft15,
+      folly::none,
+      StreamType::SUBGROUP_HEADER_SG_NO_PRI,
+      folly::none);
+}
+
+// Test round-trip write/read with explicit priority in subgroup (v15)
+TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripValue) {
+  testSubgroupPriorityRoundTrip(
+      kVersionDraft15, 80, StreamType::SUBGROUP_HEADER_SG, 80);
 }

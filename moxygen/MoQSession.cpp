@@ -1363,7 +1363,7 @@ MoQSession::TrackPublisherImpl::objectStream(
   auto subgroup = beginSubgroup(
       objHeader.group,
       objHeader.subgroup,
-      objHeader.priority,
+      objHeader.priority.value_or(kDefaultPriority),
       objHeader.subgroup == objHeader.id ? SubgroupIDFormat::FirstObject
                                          : SubgroupIDFormat::Present,
       !extensions.empty());

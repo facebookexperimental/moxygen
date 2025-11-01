@@ -601,8 +601,8 @@ MoQFrameParser::parseDatagramObjectHeader(
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
-    // Use default priority (128) if not present
-    objectHeader.priority = kDefaultPriority;
+    // Leave priority as folly::none if not present
+    objectHeader.priority = folly::none;
   }
   if (datagramTypeHasExtensions(*version_, datagramType)) {
     auto ext = parseExtensions(cursor, length, objectHeader);
@@ -715,9 +715,9 @@ MoQFrameParser::parseSubgroupHeader(
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
-    // Use default priority (128) if not present
+    // Leave priority as folly::none if not present
     XCHECK_GE(getDraftMajorVersion(*version_), 15);
-    objectHeader.priority = kDefaultPriority;
+    objectHeader.priority = folly::none;
   }
   if (parseObjectID) {
     auto tmpCursor = cursor; // we reparse the object ID later
@@ -2332,11 +2332,19 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
     bool includeExtensions) const noexcept {
   size_t size = 0;
   bool error = false;
+
+  bool priorityPresent = objectHeader.priority.hasValue();
+  if (getDraftMajorVersion(version_.value()) < 15 && !priorityPresent) {
+    XLOG(ERR) << "Priority must be set for Draft-14 and earlier versions";
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+
   auto streamType = getSubgroupStreamType(
       *version_,
       objectHeader.subgroup == 0 ? SubgroupIDFormat::Zero : format,
       includeExtensions,
-      /*endOfGroup=*/false);
+      /*endOfGroup=*/false,
+      priorityPresent);
   auto streamTypeInt = folly::to_underlying(streamType);
   writeVarint(writeBuf, streamTypeInt, size, error);
   writeVarint(writeBuf, trackAlias.value, size, error);
@@ -2344,8 +2352,12 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
   if (streamTypeInt & SG_HAS_SUBGROUP_ID) {
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
-  writeBuf.append(&objectHeader.priority, 1);
-  size += 1;
+  // Only write priority if present
+  if (priorityPresent) {
+    uint8_t priority = objectHeader.priority.value_or(kDefaultPriority);
+    writeBuf.append(&priority, 1);
+    size += 1;
+  }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -2587,6 +2599,13 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   bool hasExtensions = objectHeader.extensions.size() > 0;
 
+  if (getDraftMajorVersion(version_.value()) < 15 &&
+      !objectHeader.priority.hasValue()) {
+    XLOG(ERR) << "Priority must be set for Draft-14 and earlier versions";
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  bool priorityPresent = objectHeader.priority.hasValue();
+
   // Set this only if version >= 14. Else ObjId is always written on the wire
   bool isObjectIdZero =
       (objectHeader.id == 0 && (getDraftMajorVersion(version_.value()) >= 14));
@@ -2599,7 +2618,12 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeVarint(
         writeBuf,
         folly::to_underlying(getDatagramType(
-            *version_, true, hasExtensions, false, isObjectIdZero)),
+            *version_,
+            true,
+            hasExtensions,
+            false,
+            isObjectIdZero,
+            priorityPresent)),
         size,
         error);
     writeVarint(writeBuf, trackAlias.value, size, error);
@@ -2610,8 +2634,11 @@ WriteResult MoQFrameWriter::writeDatagramObject(
       writeVarint(writeBuf, objectHeader.id, size, error);
     }
 
-    writeBuf.append(&objectHeader.priority, 1);
-    size += 1;
+    if (priorityPresent) {
+      uint8_t priority = objectHeader.priority.value_or(kDefaultPriority);
+      writeBuf.append(&priority, 1);
+      size += 1;
+    }
     if (hasExtensions) {
       writeExtensions(writeBuf, objectHeader.extensions, size, error);
     }
@@ -2621,7 +2648,12 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     writeVarint(
         writeBuf,
         folly::to_underlying(getDatagramType(
-            *version_, false, hasExtensions, false, isObjectIdZero)),
+            *version_,
+            false,
+            hasExtensions,
+            false,
+            isObjectIdZero,
+            priorityPresent)),
         size,
         error);
     writeVarint(writeBuf, trackAlias.value, size, error);
@@ -2629,8 +2661,12 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     if (!isObjectIdZero) {
       writeVarint(writeBuf, objectHeader.id, size, error);
     }
-    writeBuf.append(&objectHeader.priority, 1);
-    size += 1;
+    // Only write priority if present
+    if (priorityPresent) {
+      uint8_t priority = objectHeader.priority.value_or(kDefaultPriority);
+      writeBuf.append(&priority, 1);
+      size += 1;
+    }
     if (hasExtensions) {
       writeExtensions(writeBuf, objectHeader.extensions, size, error);
     }
@@ -3472,7 +3508,10 @@ std::ostream& operator<<(std::ostream& os, RequestID id) {
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
   os << " group=" << header.group << " subgroup=" << header.subgroup
-     << " id=" << header.id << " priority=" << uint32_t(header.priority)
+     << " id=" << header.id << " priority="
+     << (header.priority.hasValue()
+             ? std::to_string(uint32_t(header.priority.value()))
+             : "none")
      << " status=" << getObjectStatusString(header.status) << " length="
      << (header.length.hasValue() ? std::to_string(header.length.value())
                                   : "none");

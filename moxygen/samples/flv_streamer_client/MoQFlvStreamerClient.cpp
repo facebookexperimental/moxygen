@@ -295,8 +295,9 @@ class MoQFlvStreamerClient
   }
 
  private:
-  static const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */
-  static const uint8_t VIDEO_STREAM_PRIORITY = 200;
+  static constexpr uint8_t AUDIO_STREAM_PRIORITY =
+      100; /* Lower is higher pri */
+  static constexpr uint8_t VIDEO_STREAM_PRIORITY = 200;
 
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   MoQRelayClient moqClient_;

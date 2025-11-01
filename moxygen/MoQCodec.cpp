@@ -223,7 +223,7 @@ void MoQObjectStreamCodec::onIngress(
               res->trackAlias,
               curObjectHeader_.group,
               curObjectHeader_.subgroup,
-              curObjectHeader_.priority);
+              curObjectHeader_.priority.value_or(kDefaultPriority));
         }
         parseState_ = ParseState::MULTI_OBJECT_HEADER;
         cursor = newCursor;
@@ -288,7 +288,7 @@ void MoQObjectStreamCodec::onIngress(
                 curObjectHeader_.group,
                 curObjectHeader_.subgroup,
                 curObjectHeader_.id,
-                curObjectHeader_.priority,
+                curObjectHeader_.priority.value_or(kDefaultPriority),
                 curObjectHeader_.status,
                 std::move(curObjectHeader_.extensions));
           }

@@ -586,7 +586,7 @@ struct ObjectHeader {
       uint64_t groupIn,
       uint64_t subgroupIn,
       uint64_t idIn,
-      uint8_t priorityIn = 128,
+      folly::Optional<uint8_t> priorityIn = kDefaultPriority,
       ObjectStatus statusIn = ObjectStatus::NORMAL,
       Extensions extensionsIn = noExtensions(),
       folly::Optional<uint64_t> lengthIn = folly::none)
@@ -601,7 +601,7 @@ struct ObjectHeader {
       uint64_t groupIn,
       uint64_t subgroupIn,
       uint64_t idIn,
-      uint8_t priorityIn,
+      folly::Optional<uint8_t> priorityIn,
       uint64_t lengthIn,
       Extensions extensionsIn = noExtensions())
       : group(groupIn),
@@ -614,7 +614,7 @@ struct ObjectHeader {
   uint64_t group;
   uint64_t subgroup{0}; // meaningless for Datagram
   uint64_t id;
-  uint8_t priority{kDefaultPriority};
+  folly::Optional<uint8_t> priority{kDefaultPriority};
   ObjectStatus status{ObjectStatus::NORMAL};
   Extensions extensions;
   folly::Optional<uint64_t> length{folly::none};
