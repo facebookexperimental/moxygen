@@ -170,32 +170,22 @@ void MoQObjectStreamCodec::onIngress(
           connError_ = ErrorCode::PARSE_UNDERFLOW;
           break;
         }
+        auto version = moqFrameParser_.getVersion();
         cursor = newCursor;
         streamType_ = StreamType(type->first);
-        auto version = moqFrameParser_.getVersion();
-        if (streamType_ != StreamType::FETCH_HEADER) {
-          auto options = getSubgroupOptions(*version, streamType_);
-          if (options) {
-            streamType_ = StreamType::SUBGROUP_HEADER_SG;
-            subgroupFormat_ = options->subgroupIDFormat;
-            includeExtensions_ = options->hasExtensions;
-            parseState_ = ParseState::OBJECT_STREAM;
-          } // else unknown stream type
-        }
-        switch (streamType_) {
-          case StreamType::SUBGROUP_HEADER_SG:
-            parseState_ = ParseState::OBJECT_STREAM;
-            break;
-          case StreamType::FETCH_HEADER:
-            parseState_ = ParseState::FETCH_HEADER;
-            break;
-            //  CONTROL doesn't have a wire type yet.
-          default:
-            XLOG(DBG4) << "Stream not allowed: 0x" << std::setfill('0')
-                       << std::setw(sizeof(uint64_t) * 2) << std::hex
-                       << (uint64_t)streamType_ << " on streamID=" << streamId_;
-            connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
-            break;
+        if (streamType_ == StreamType::FETCH_HEADER) {
+          parseState_ = ParseState::FETCH_HEADER;
+        } else if (isValidSubgroupType(*version, type->first)) {
+          parseState_ = ParseState::OBJECT_STREAM;
+          subgroupOptions_ = getSubgroupOptions(*version, streamType_);
+          streamType_ = StreamType::SUBGROUP_HEADER_SG;
+        } else {
+          // Invalid stream type encountered
+          XLOG(ERR) << "Invalid stream type: 0x" << std::setfill('0')
+                    << std::setw(sizeof(uint64_t) * 2) << std::hex
+                    << (uint64_t)type->first << " on streamID=" << streamId_;
+          connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
+          break;
         }
         break;
       }
@@ -217,8 +207,8 @@ void MoQObjectStreamCodec::onIngress(
       }
       case ParseState::OBJECT_STREAM: {
         auto newCursor = cursor;
-        auto res = moqFrameParser_.parseSubgroupHeader(
-            newCursor, subgroupFormat_, includeExtensions_);
+        auto res =
+            moqFrameParser_.parseSubgroupHeader(newCursor, subgroupOptions_);
 
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
@@ -248,7 +238,7 @@ void MoQObjectStreamCodec::onIngress(
         } else {
           DCHECK(streamType_ == StreamType::SUBGROUP_HEADER_SG);
           res = moqFrameParser_.parseSubgroupObjectHeader(
-              newCursor, curObjectHeader_, subgroupFormat_, includeExtensions_);
+              newCursor, curObjectHeader_, subgroupOptions_);
         }
         if (res.hasError()) {
           XLOG(DBG6) << __func__ << " " << uint32_t(res.error());

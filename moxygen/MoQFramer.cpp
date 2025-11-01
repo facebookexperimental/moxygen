@@ -671,8 +671,9 @@ MoQFrameParser::parseSubgroupTypeAndAlias(
 folly::Expected<MoQFrameParser::SubgroupHeaderResult, ErrorCode>
 MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
-    SubgroupIDFormat format,
-    bool /* includeExtensions*/) const noexcept {
+    const SubgroupOptions& options) const noexcept {
+  CHECK(version_.hasValue())
+      << "The version must be set before parsing subgroup header";
   auto length = cursor.totalLength();
   SubgroupHeaderResult result;
   ObjectHeader& objectHeader = result.objectHeader;
@@ -694,23 +695,29 @@ MoQFrameParser::parseSubgroupHeader(
   objectHeader.group = group->first;
 
   bool parseObjectID = false;
-  if (format == SubgroupIDFormat::Present) {
+  if (options.subgroupIDFormat == SubgroupIDFormat::Present) {
     auto subgroup = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!subgroup) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     objectHeader.subgroup = subgroup->first;
     length -= subgroup->second;
-  } else if (format == SubgroupIDFormat::Zero) {
+  } else if (options.subgroupIDFormat == SubgroupIDFormat::Zero) {
     objectHeader.subgroup = 0;
   } else {
     parseObjectID = true;
   }
-  if (length > 0 || cursor.canAdvance(1)) {
+  // Conditionally parse priority based on version and stream type
+  if (options.priorityPresent) {
+    if (length == 0 || !cursor.canAdvance(1)) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    // Use default priority (128) if not present
+    XCHECK_GE(getDraftMajorVersion(*version_), 15);
+    objectHeader.priority = kDefaultPriority;
   }
   if (parseObjectID) {
     auto tmpCursor = cursor; // we reparse the object ID later
@@ -803,8 +810,7 @@ folly::Expected<ObjectHeader, ErrorCode>
 MoQFrameParser::parseSubgroupObjectHeader(
     folly::io::Cursor& cursor,
     const ObjectHeader& headerTemplate,
-    SubgroupIDFormat /*format*/,
-    bool includeExtensions) const noexcept {
+    const SubgroupOptions& options) const noexcept {
   // TODO get rid of this
   auto length = cursor.totalLength();
   ObjectHeader objectHeader = headerTemplate;
@@ -827,7 +833,7 @@ MoQFrameParser::parseSubgroupObjectHeader(
     previousObjectID_ = objectHeader.id;
   }
 
-  if (includeExtensions) {
+  if (options.hasExtensions) {
     auto ext = parseExtensions(cursor, length, objectHeader);
     if (!ext) {
       return folly::makeUnexpected(ext.error());
@@ -3489,6 +3495,20 @@ std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
   auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
   auto joining = std::get_if<JoiningFetch>(&fetch.args);
   return {standalone, joining};
+}
+
+bool isValidSubgroupType(uint64_t version, uint64_t streamType) {
+  if ((streamType & 0x10) == 0) { // subgroup bit
+    return false;
+  }
+  if ((streamType & 0x06) == 0x06) { // invalid subgroup type
+    return false;
+  }
+  uint64_t max = 0x3D;
+  if (getDraftMajorVersion(version) < 15) {
+    max = 0x1D;
+  }
+  return (streamType <= max);
 }
 
 bool isValidDatagramType(uint64_t version, uint64_t datagramType) {

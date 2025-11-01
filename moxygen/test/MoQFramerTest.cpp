@@ -36,7 +36,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   StreamType parseStreamType(folly::io::Cursor& cursor) {
     auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     if (!frameType) {
-      throw std::runtime_error("Failed to decode frame type");
+      throw TestUnderflow();
     }
     return StreamType(frameType->first);
   }
@@ -44,7 +44,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   DatagramType parseDatagramType(folly::io::Cursor& cursor) {
     auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     if (!frameType) {
-      throw std::runtime_error("Failed to decode frame type");
+      throw TestUnderflow();
     }
     return DatagramType(frameType->first);
   }
@@ -199,33 +199,33 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
         cursor, frameLength(cursor), FrameType::FETCH_ERROR);
     testUnderflowResult(r19);
 
-    skip(cursor, 1);
-    auto res =
-        parser_.parseSubgroupHeader(cursor, SubgroupIDFormat::Present, true);
+    auto streamType = parseStreamType(cursor);
+    SubgroupOptions options = getSubgroupOptions(GetParam(), streamType);
+    auto res = parser_.parseSubgroupHeader(cursor, options);
     testUnderflowResult(res);
     EXPECT_EQ(res->objectHeader.group, 2);
 
-    auto r15 = parser_.parseSubgroupObjectHeader(
-        cursor, res->objectHeader, SubgroupIDFormat::Present, true);
+    auto r15 =
+        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
     testUnderflowResult(r15);
     EXPECT_EQ(r15.value().id, 4);
     skip(cursor, *r15.value().length);
 
-    auto r15a = parser_.parseSubgroupObjectHeader(
-        cursor, res->objectHeader, SubgroupIDFormat::Present, true);
+    auto r15a =
+        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
     testUnderflowResult(r15a);
     EXPECT_EQ(r15a.value().id, 5);
     EXPECT_EQ(
         r15a.value().extensions, Extensions(test::getTestExtensions(), {}));
     skip(cursor, *r15a.value().length);
 
-    auto r20 = parser_.parseSubgroupObjectHeader(
-        cursor, res->objectHeader, SubgroupIDFormat::Present, true);
+    auto r20 =
+        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
     testUnderflowResult(r20);
     EXPECT_EQ(r20.value().status, ObjectStatus::OBJECT_NOT_EXIST);
 
-    auto r20a = parser_.parseSubgroupObjectHeader(
-        cursor, res->objectHeader, SubgroupIDFormat::Present, true);
+    auto r20a =
+        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
     testUnderflowResult(r20a);
     EXPECT_EQ(
         r20a.value().extensions, Extensions(test::getTestExtensions(), {}));
@@ -602,14 +602,11 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
   EXPECT_EQ(parseStreamType(cursor), streamType);
-  auto parseStreamHeaderResult =
-      parser_.parseSubgroupHeader(cursor, SubgroupIDFormat::Zero, false);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor, sgOptions);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult = parser_.parseSubgroupObjectHeader(
-      cursor,
-      parseStreamHeaderResult->objectHeader,
-      SubgroupIDFormat::Zero,
-      false);
+      cursor, parseStreamHeaderResult->objectHeader, sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
@@ -621,10 +618,7 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   cursor.skip(*parseResult->length);
 
   parseResult = parser_.parseSubgroupObjectHeader(
-      cursor,
-      parseStreamHeaderResult->objectHeader,
-      SubgroupIDFormat::Zero,
-      false);
+      cursor, parseStreamHeaderResult->objectHeader, sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
@@ -916,19 +910,15 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
 
   auto streamType = getSubgroupStreamType(
       GetParam(), SubgroupIDFormat::FirstObject, false, false);
-  auto hasExtensions = (folly::to_underlying(streamType) & 0x1);
   auto parsedST = parseStreamType(cursor);
   EXPECT_EQ(parsedST, streamType)
       << GetParam() << " " << folly::to_underlying(parsedST) << " "
       << folly::to_underlying(streamType);
-  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(
-      cursor, SubgroupIDFormat::FirstObject, hasExtensions);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor, sgOptions);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult = parser_.parseSubgroupObjectHeader(
-      cursor,
-      parseStreamHeaderResult->objectHeader,
-      SubgroupIDFormat::FirstObject,
-      hasExtensions);
+      cursor, parseStreamHeaderResult->objectHeader, sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
@@ -1375,11 +1365,11 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
   auto streamType = getSubgroupStreamType(
       GetParam(), SubgroupIDFormat::Present, true, /*endOfGroup=*/false);
   EXPECT_EQ(parseStreamType(cursor), streamType);
-  auto hdrRes =
-      parser_.parseSubgroupHeader(cursor, SubgroupIDFormat::Present, true);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  auto hdrRes = parser_.parseSubgroupHeader(cursor, sgOptions);
   EXPECT_TRUE(hdrRes.hasValue());
   auto objRes = parser_.parseSubgroupObjectHeader(
-      cursor, hdrRes->objectHeader, SubgroupIDFormat::Present, true);
+      cursor, hdrRes->objectHeader, sgOptions);
   EXPECT_TRUE(objRes.hasValue());
   ASSERT_EQ(objRes->extensions.size(), 1);
   EXPECT_TRUE(objRes->extensions.getMutableExtensions()[0].isOddType());
@@ -2212,4 +2202,24 @@ TEST(MoQFramerTest, ValidDatagramTypesV14) {
   EXPECT_FALSE(isValidDatagramType(version, 0x24));
   EXPECT_FALSE(isValidDatagramType(version, 0x25));
   EXPECT_FALSE(isValidDatagramType(version, 0x28));
+}
+
+TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
+  static const std::set<uint64_t> validV14 = {
+      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D};
+  static const std::set<uint64_t> validV15 = {
+      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+      0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D};
+
+  uint64_t version14 = kVersionDraft14;
+  uint64_t version15 = kVersionDraft15;
+
+  for (uint64_t t = 0; t <= 255; ++t) {
+    bool shouldBeValidV14 = validV14.count(t) > 0;
+    EXPECT_EQ(isValidSubgroupType(version14, t), shouldBeValidV14)
+        << "v14: 0x" << std::hex << t;
+    bool shouldBeValidV15 = validV15.count(t) > 0;
+    EXPECT_EQ(isValidSubgroupType(version15, t), shouldBeValidV15)
+        << "v15: 0x" << std::hex << t;
+  }
 }

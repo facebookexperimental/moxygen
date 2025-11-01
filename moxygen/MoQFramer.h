@@ -227,6 +227,20 @@ enum class StreamType : uint64_t {
   SUBGROUP_HEADER_SG_FIRST_EXT_EOG = 0x1B,
   SUBGROUP_HEADER_SG_EOG = 0x1C,
   SUBGROUP_HEADER_SG_EXT_EOG = 0x1D,
+
+  // Version 15+ subgroup types without priority
+  SUBGROUP_HEADER_SG_ZERO_NO_PRI = 0x30,
+  SUBGROUP_HEADER_SG_ZERO_EXT_NO_PRI = 0x31,
+  SUBGROUP_HEADER_SG_FIRST_NO_PRI = 0x32,
+  SUBGROUP_HEADER_SG_FIRST_EXT_NO_PRI = 0x33,
+  SUBGROUP_HEADER_SG_NO_PRI = 0x34,
+  SUBGROUP_HEADER_SG_EXT_NO_PRI = 0x35,
+  SUBGROUP_HEADER_SG_ZERO_EOG_NO_PRI = 0x38,
+  SUBGROUP_HEADER_SG_ZERO_EXT_EOG_NO_PRI = 0x39,
+  SUBGROUP_HEADER_SG_FIRST_EOG_NO_PRI = 0x3A,
+  SUBGROUP_HEADER_SG_FIRST_EXT_EOG_NO_PRI = 0x3B,
+  SUBGROUP_HEADER_SG_EOG_NO_PRI = 0x3C,
+  SUBGROUP_HEADER_SG_EXT_EOG_NO_PRI = 0x3D,
 };
 
 // Subgroup Bit Fields
@@ -234,6 +248,7 @@ constexpr uint8_t SG_HAS_EXTENSIONS = 0x1;
 constexpr uint8_t SG_SUBGROUP_VALUE = 0x2;
 constexpr uint8_t SG_HAS_SUBGROUP_ID = 0x4;
 constexpr uint8_t SG_HAS_END_OF_GROUP = 0x8;
+constexpr uint8_t SG_PRIORITY_NOT_PRESENT = 0x20;
 
 // Datagram Type Bit Fields
 constexpr uint8_t DG_HAS_EXTENSIONS = 0x1;
@@ -1080,7 +1095,8 @@ inline StreamType getSubgroupStreamType(
     uint64_t version,
     SubgroupIDFormat format,
     bool includeExtensions,
-    bool endOfGroup) {
+    bool endOfGroup,
+    bool priorityPresent = true) {
   auto majorVersion = getDraftMajorVersion(version);
   if (majorVersion == 11) {
     return StreamType(
@@ -1094,43 +1110,37 @@ inline StreamType getSubgroupStreamType(
         (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
         (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
         (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
-        (endOfGroup ? SG_HAS_END_OF_GROUP : 0));
+        (endOfGroup ? SG_HAS_END_OF_GROUP : 0) |
+        (majorVersion >= 15 && !priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0));
   }
 }
-inline folly::Optional<SubgroupOptions> getSubgroupOptions(
+
+bool isValidSubgroupType(uint64_t version, uint64_t streamType);
+
+inline SubgroupOptions getSubgroupOptions(
     uint64_t version,
     StreamType streamType) {
   SubgroupOptions options;
   auto streamTypeInt = folly::to_underlying(streamType);
   auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion == 11) {
-    if ((streamTypeInt &
-         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11)) == 0) {
-      return folly::none;
-    }
-    streamTypeInt &=
-        ~folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11);
-  } else {
-    if ((streamTypeInt &
-         folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK)) == 0) {
-      return folly::none;
-    }
-    streamTypeInt &= ~folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK);
-    options.hasEndOfGroup =
-        folly::to_underlying(streamType) & SG_HAS_END_OF_GROUP;
-  }
 
   options.hasExtensions = streamTypeInt & SG_HAS_EXTENSIONS;
   options.subgroupIDFormat = streamTypeInt & SG_HAS_SUBGROUP_ID
       ? SubgroupIDFormat::Present
       : (streamTypeInt & SG_SUBGROUP_VALUE) ? SubgroupIDFormat::FirstObject
                                             : SubgroupIDFormat::Zero;
-  options.hasEndOfGroup = false;
+  options.hasEndOfGroup =
+      folly::to_underlying(streamType) & SG_HAS_END_OF_GROUP;
+  // In Draft 15+, check if priority is not present
+  if (majorVersion >= 15) {
+    options.priorityPresent = !(streamTypeInt & SG_PRIORITY_NOT_PRESENT);
+  }
   return options;
 }
 
 bool isValidDatagramType(uint64_t version, uint64_t datagramType);
 bool datagramPriorityPresent(uint64_t version, DatagramType datagramType);
+bool subgroupPriorityPresent(uint64_t version, StreamType streamType);
 
 inline DatagramType getDatagramType(
     uint64_t version,
@@ -1188,8 +1198,7 @@ class MoQFrameParser {
 
   folly::Expected<SubgroupHeaderResult, ErrorCode> parseSubgroupHeader(
       folly::io::Cursor& cursor,
-      SubgroupIDFormat format,
-      bool includeExtensions) const noexcept;
+      const SubgroupOptions& options) const noexcept;
 
   // Parses the stream header and if it's a subgroup type,
   // parses and returns the Track Alias.  For non-subgroups,
@@ -1205,8 +1214,7 @@ class MoQFrameParser {
   folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
       folly::io::Cursor& cursor,
       const ObjectHeader& headerTemplate,
-      SubgroupIDFormat format,
-      bool includeExtensions) const noexcept;
+      const SubgroupOptions& options) const noexcept;
 
   folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
       folly::io::Cursor& cursor,
