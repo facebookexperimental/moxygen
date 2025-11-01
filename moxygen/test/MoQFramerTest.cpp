@@ -1975,3 +1975,241 @@ TEST(MoQFramerTest, ClientSetupRejectsUseAlias) {
   EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION)
       << "CLIENT_SETUP must reject USE_ALIAS (0x2) alias type";
 }
+// Helper to write a datagram to a buffer
+static void writeDatagram(
+    folly::IOBufQueue& writeBuf,
+    DatagramType dgType,
+    uint64_t trackAlias,
+    uint64_t group,
+    std::optional<uint64_t> objectId,
+    std::optional<uint8_t> priority,
+    std::optional<ObjectStatus> status,
+    const std::string& payload = "") {
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, folly::to_underlying(dgType), size, error); // type
+  writeVarint(writeBuf, trackAlias, size, error); // track alias
+  writeVarint(writeBuf, group, size, error);      // group
+  if (objectId.has_value()) {
+    writeVarint(writeBuf, *objectId, size, error); // object ID
+  }
+  if (priority.has_value()) {
+    folly::io::QueueAppender appender(&writeBuf, 1);
+    appender.writeBE<uint8_t>(*priority); // priority
+  }
+  if (status.has_value()) {
+    writeVarint(writeBuf, folly::to_underlying(*status), size, error); // status
+  }
+  if (!payload.empty()) {
+    writeBuf.append(folly::IOBuf::copyBuffer(payload));
+  }
+}
+
+// Helper to parse and check datagram header
+static auto parseAndCheckDatagram(
+    MoQFrameParser& parser,
+    folly::IOBuf* buf,
+    DatagramType expectedType,
+    uint64_t expectedTrackAlias,
+    uint64_t expectedGroup,
+    uint64_t expectedId,
+    uint8_t expectedPriority,
+    ObjectStatus expectedStatus,
+    std::optional<uint64_t> expectedLength = std::nullopt) {
+  folly::io::Cursor cursor(buf);
+  auto parsedType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(parsedType.has_value());
+  EXPECT_EQ(parsedType->first, folly::to_underlying(expectedType));
+  auto length = cursor.totalLength();
+  auto parseResult = parser.parseDatagramObjectHeader(
+      cursor, DatagramType(parsedType->first), length);
+  EXPECT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->trackAlias, TrackAlias(expectedTrackAlias));
+  EXPECT_EQ(parseResult->objectHeader.group, expectedGroup);
+  EXPECT_EQ(parseResult->objectHeader.id, expectedId);
+  EXPECT_EQ(parseResult->objectHeader.priority, expectedPriority);
+  EXPECT_EQ(parseResult->objectHeader.status, expectedStatus);
+  if (expectedLength.has_value()) {
+    EXPECT_EQ(parseResult->objectHeader.length, *expectedLength);
+  }
+  return parseResult;
+}
+
+// Test datagram types without priority (v15+)
+TEST(MoQFramerTest, DatagramWithoutPriority) {
+  uint64_t version = kVersionDraft15;
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto dgType = getDatagramType(
+      version, false, false, false, false, false); // priority NOT present
+  EXPECT_EQ(dgType, DatagramType::OBJECT_DATAGRAM_NO_EXT_NO_PRI);
+
+  writeDatagram(
+      writeBuf, dgType, 22, 33, 44, std::nullopt, std::nullopt, "payload");
+  auto serialized = writeBuf.move();
+  parseAndCheckDatagram(
+      parser,
+      serialized.get(),
+      dgType,
+      22,
+      33,
+      44,
+      kDefaultPriority,
+      ObjectStatus::NORMAL,
+      7);
+}
+
+// Test datagram with priority present in v15
+TEST(MoQFramerTest, DatagramWithPriority) {
+  uint64_t version = kVersionDraft15;
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto dgType = getDatagramType(
+      version, false, false, false, false, true); // priority present
+  EXPECT_EQ(dgType, DatagramType::OBJECT_DATAGRAM_NO_EXT);
+
+  writeDatagram(writeBuf, dgType, 22, 33, 44, 200, std::nullopt, "payload");
+  auto serialized = writeBuf.move();
+  parseAndCheckDatagram(
+      parser, serialized.get(), dgType, 22, 33, 44, 200, ObjectStatus::NORMAL);
+}
+
+// Test status datagram with Object ID
+TEST(MoQFramerTest, StatusDatagramWithObjectID) {
+  uint64_t version = kVersionDraft15;
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto dgType = getDatagramType(
+      version,
+      true,
+      false,
+      false,
+      true,
+      true); // status, object ID zero, priority present
+  EXPECT_EQ(dgType, DatagramType::OBJECT_DATAGRAM_STATUS_ID_ZERO);
+
+  writeDatagram(
+      writeBuf,
+      dgType,
+      22,
+      33,
+      std::nullopt, // object ID not on wire (zero)
+      100,
+      ObjectStatus::OBJECT_NOT_EXIST);
+  auto serialized = writeBuf.move();
+  parseAndCheckDatagram(
+      parser,
+      serialized.get(),
+      dgType,
+      22,
+      33,
+      0,
+      100,
+      ObjectStatus::OBJECT_NOT_EXIST,
+      0);
+}
+
+// Test status datagram without priority
+TEST(MoQFramerTest, StatusDatagramWithoutPriority) {
+  uint64_t version = kVersionDraft15;
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto dgType = getDatagramType(
+      version,
+      true,
+      false,
+      false,
+      false,
+      false); // status, object ID present, no priority
+  EXPECT_EQ(dgType, DatagramType::OBJECT_DATAGRAM_STATUS_NO_PRI);
+
+  writeDatagram(
+      writeBuf, dgType, 22, 33, 55, std::nullopt, ObjectStatus::END_OF_GROUP);
+  auto serialized = writeBuf.move();
+  parseAndCheckDatagram(
+      parser,
+      serialized.get(),
+      dgType,
+      22,
+      33,
+      55,
+      kDefaultPriority,
+      ObjectStatus::END_OF_GROUP,
+      0);
+}
+
+// Test that v14 doesn't support priority-less datagrams
+TEST(MoQFramerTest, V14DoesNotSupportPriorityNotPresent) {
+  uint64_t version = kVersionDraft14;
+  auto dgType = getDatagramType(
+      version,
+      false,
+      false,
+      false,
+      false,
+      false); // priority NOT present (should be ignored in v14)
+  EXPECT_EQ(dgType, DatagramType::OBJECT_DATAGRAM_NO_EXT);
+}
+
+// Test isValidDatagramType for v15 types
+TEST(MoQFramerTest, ValidDatagramTypesV15) {
+  uint64_t version = kVersionDraft15;
+  // All payload types (0x00-0x0F) should be valid
+  for (uint64_t type = 0x00; type <= 0x0F; ++type) {
+    EXPECT_TRUE(isValidDatagramType(version, type))
+        << "Type 0x" << std::hex << type << " should be valid";
+  }
+  // Status types (0x20-0x25, 0x28-0x2D) should be valid
+  for (uint64_t type = 0x20; type <= 0x25; ++type) {
+    EXPECT_TRUE(isValidDatagramType(version, type))
+        << "Type 0x" << std::hex << type << " should be valid";
+  }
+  for (uint64_t type = 0x28; type <= 0x2D; ++type) {
+    EXPECT_TRUE(isValidDatagramType(version, type))
+        << "Type 0x" << std::hex << type << " should be valid";
+  }
+  // Invalid types should be rejected
+  EXPECT_FALSE(isValidDatagramType(version, 0x10));
+  EXPECT_FALSE(isValidDatagramType(version, 0x1F));
+  EXPECT_FALSE(isValidDatagramType(version, 0x26));
+  EXPECT_FALSE(isValidDatagramType(version, 0x27));
+  EXPECT_FALSE(isValidDatagramType(version, 0x2E));
+  EXPECT_FALSE(isValidDatagramType(version, 0x30));
+}
+
+// Test isValidDatagramType for v14 types
+TEST(MoQFramerTest, ValidDatagramTypesV14) {
+  uint64_t version = kVersionDraft14;
+  // Only types 0x00-0x07 and 0x20-0x21 should be valid
+  for (uint64_t type = 0x00; type <= 0x07; ++type) {
+    EXPECT_TRUE(isValidDatagramType(version, type))
+        << "Type 0x" << std::hex << type << " should be valid in v14";
+  }
+  EXPECT_TRUE(isValidDatagramType(version, 0x20));
+  EXPECT_TRUE(isValidDatagramType(version, 0x21));
+  // Types 0x08-0x0F should NOT be valid in v14
+  for (uint64_t type = 0x08; type <= 0x0F; ++type) {
+    EXPECT_FALSE(isValidDatagramType(version, type))
+        << "Type 0x" << std::hex << type << " should NOT be valid in v14";
+  }
+  // Status types with Object ID should NOT be valid in v14
+  EXPECT_FALSE(isValidDatagramType(version, 0x24));
+  EXPECT_FALSE(isValidDatagramType(version, 0x25));
+  EXPECT_FALSE(isValidDatagramType(version, 0x28));
+}

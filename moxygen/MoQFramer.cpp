@@ -555,6 +555,14 @@ bool datagramObjectIdZero(uint64_t version, DatagramType datagramType) {
   return (folly::to_underlying(datagramType) & DG_OBJECT_ID_ZERO);
 }
 
+bool datagramPriorityPresent(uint64_t version, DatagramType datagramType) {
+  // Priority is only conditionally present in version 15+
+  if (getDraftMajorVersion(version) < 15) {
+    return true; // Always present in older versions
+  }
+  return !(folly::to_underlying(datagramType) & DG_PRIORITY_NOT_PRESENT);
+}
+
 folly::Expected<DatagramObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
@@ -586,11 +594,16 @@ MoQFrameParser::parseDatagramObjectHeader(
     objectHeader.id = 0;
   }
 
-  if (length == 0 || !cursor.canAdvance(1)) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  if (datagramPriorityPresent(*version_, datagramType)) {
+    if (length == 0 || !cursor.canAdvance(1)) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    objectHeader.priority = cursor.readBE<uint8_t>();
+    length -= 1;
+  } else {
+    // Use default priority (128) if not present
+    objectHeader.priority = kDefaultPriority;
   }
-  objectHeader.priority = cursor.readBE<uint8_t>();
-  length -= 1;
   if (datagramTypeHasExtensions(*version_, datagramType)) {
     auto ext = parseExtensions(cursor, length, objectHeader);
     if (!ext) {
@@ -3483,7 +3496,8 @@ bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
   if (majorVersion == 11) {
     return datagramType <=
         folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT_V11);
-  } else {
+  } else if (majorVersion < 15) {
+    // v12-14: types 0x00-0x07 (payload) and 0x20-0x21 (status)
     return (
         datagramType <= folly::to_underlying(
                             DatagramType::OBJECT_DATAGRAM_EXT_EOG_ID_ZERO) ||
@@ -3491,6 +3505,22 @@ bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
              folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) &&
          datagramType <=
              folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS_EXT)));
+  } else {
+    // v15+: types 0x00-0x0F (payload) and 0x20-0x25, 0x28-0x2D (status)
+    return (
+        datagramType <=
+            folly::to_underlying(
+                DatagramType::OBJECT_DATAGRAM_EXT_EOG_ID_ZERO_NO_PRI) ||
+        (datagramType >=
+             folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) &&
+         datagramType <=
+             folly::to_underlying(
+                 DatagramType::OBJECT_DATAGRAM_STATUS_EXT_ID_ZERO)) ||
+        (datagramType >= folly::to_underlying(
+                             DatagramType::OBJECT_DATAGRAM_STATUS_NO_PRI) &&
+         datagramType <=
+             folly::to_underlying(
+                 DatagramType::OBJECT_DATAGRAM_STATUS_EXT_ID_ZERO_NO_PRI)));
   }
 }
 

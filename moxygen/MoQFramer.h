@@ -186,6 +186,22 @@ enum class DatagramType : uint64_t {
   OBJECT_DATAGRAM_EXT_EOG_ID_ZERO = 0x7,
   OBJECT_DATAGRAM_STATUS = 0x20,
   OBJECT_DATAGRAM_STATUS_EXT = 0x21,
+  OBJECT_DATAGRAM_STATUS_ID_ZERO = 0x24,
+  OBJECT_DATAGRAM_STATUS_EXT_ID_ZERO = 0x25,
+
+  // Version 15+ datagram types without priority
+  OBJECT_DATAGRAM_NO_EXT_NO_PRI = 0x8,
+  OBJECT_DATAGRAM_EXT_NO_PRI = 0x9,
+  OBJECT_DATAGRAM_NO_EXT_EOG_NO_PRI = 0xA,
+  OBJECT_DATAGRAM_EXT_EOG_NO_PRI = 0xB,
+  OBJECT_DATAGRAM_NO_EXT_ID_ZERO_NO_PRI = 0xC,
+  OBJECT_DATAGRAM_EXT_ID_ZERO_NO_PRI = 0xD,
+  OBJECT_DATAGRAM_NO_EXT_EOG_ID_ZERO_NO_PRI = 0xE,
+  OBJECT_DATAGRAM_EXT_EOG_ID_ZERO_NO_PRI = 0xF,
+  OBJECT_DATAGRAM_STATUS_NO_PRI = 0x28,
+  OBJECT_DATAGRAM_STATUS_EXT_NO_PRI = 0x29,
+  OBJECT_DATAGRAM_STATUS_ID_ZERO_NO_PRI = 0x2C,
+  OBJECT_DATAGRAM_STATUS_EXT_ID_ZERO_NO_PRI = 0x2D,
 };
 
 enum class StreamType : uint64_t {
@@ -224,6 +240,8 @@ constexpr uint8_t DG_HAS_EXTENSIONS = 0x1;
 constexpr uint8_t DG_HAS_STATUS_V11 = 0x2;
 constexpr uint8_t DG_HAS_END_OF_GROUP = 0x2;
 constexpr uint8_t DG_OBJECT_ID_ZERO = 0x4;
+constexpr uint8_t DG_PRIORITY_NOT_PRESENT = 0x8;
+constexpr uint8_t DG_IS_STATUS = 0x20;
 
 enum class SubgroupIDFormat : uint8_t { Present, Zero, FirstObject };
 
@@ -231,6 +249,7 @@ struct SubgroupOptions {
   bool hasExtensions{false};
   SubgroupIDFormat subgroupIDFormat{SubgroupIDFormat::Present};
   bool hasEndOfGroup{false};
+  bool priorityPresent{true};
 };
 
 std::ostream& operator<<(std::ostream& os, FrameType type);
@@ -1111,13 +1130,15 @@ inline folly::Optional<SubgroupOptions> getSubgroupOptions(
 }
 
 bool isValidDatagramType(uint64_t version, uint64_t datagramType);
+bool datagramPriorityPresent(uint64_t version, DatagramType datagramType);
 
 inline DatagramType getDatagramType(
     uint64_t version,
     bool status,
     bool includeExtensions,
     bool endOfGroup,
-    bool isObjectIdZero) {
+    bool isObjectIdZero,
+    bool priorityPresent = true) {
   auto majorVersion = getDraftMajorVersion(version);
   if (majorVersion == 11) {
     return DatagramType(
@@ -1125,14 +1146,15 @@ inline DatagramType getDatagramType(
         (includeExtensions ? DG_HAS_EXTENSIONS : 0));
   } else if (status) {
     return DatagramType(
-        folly::to_underlying(DatagramType::OBJECT_DATAGRAM_STATUS) |
-        (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
-        (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0));
+        DG_IS_STATUS | (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
+        (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0) |
+        (majorVersion >= 15 && !priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
   } else {
     return DatagramType(
         (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
         (endOfGroup ? DG_HAS_END_OF_GROUP : 0) |
-        (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0));
+        (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0) |
+        (majorVersion >= 15 && !priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
   }
 }
 
