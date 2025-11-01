@@ -260,7 +260,9 @@ TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
       ObjectHeader(2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
 
-  EXPECT_CALL(objectStreamCodecCallback_, onSubgroup(TrackAlias(1), 2, 3, 5));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, true));
@@ -276,7 +278,9 @@ TEST_P(MoQCodecTest, ObjectStreamPayload) {
       ObjectHeader(2, 3, 4, 5, 11),
       folly::IOBuf::copyBuffer("hello world"));
 
-  EXPECT_CALL(objectStreamCodecCallback_, onSubgroup(TrackAlias(1), 2, 3, 5));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, _, true, false));
@@ -294,10 +298,18 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
       ObjectHeader(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
       nullptr);
 
-  EXPECT_CALL(objectStreamCodecCallback_, onSubgroup(TrackAlias(1), 2, 3, 5));
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onObjectStatus(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST, _));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectStatus(
+          2,
+          3,
+          4,
+          folly::Optional<uint8_t>(5),
+          ObjectStatus::OBJECT_NOT_EXIST,
+          _));
   EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
   // extra coverage of underflow in header
   objectStreamCodec_.onIngress(writeBuf.split(3), false);
@@ -394,7 +406,8 @@ TEST_P(MoQCodecTest, Fetch) {
       onObjectBegin(2, 3, 4, testing::_, 5, _, true, false));
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onObjectStatus(3, 3, 0, 5, ObjectStatus::END_OF_TRACK, _));
+      onObjectStatus(
+          3, 3, 0, folly::Optional<uint8_t>(5), ObjectStatus::END_OF_TRACK, _));
   // object after terminal status
   EXPECT_CALL(
       objectStreamCodecCallback_,

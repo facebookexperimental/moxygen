@@ -161,7 +161,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         TrackAlias alias,
         uint64_t group,
         uint64_t subgroup,
-        uint8_t priority) = 0;
+        folly::Optional<uint8_t> priority) = 0;
     virtual void onObjectBegin(
         uint64_t group,
         uint64_t subgroup,
@@ -175,7 +175,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t group,
         uint64_t subgroup,
         uint64_t objectID,
-        Priority pri,
+        folly::Optional<uint8_t> priority,
         ObjectStatus status,
         Extensions extensions) = 0;
     virtual void onObjectPayload(Payload payload, bool objectComplete) = 0;

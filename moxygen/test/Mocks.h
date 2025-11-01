@@ -55,7 +55,10 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));
 
   MOCK_METHOD(void, onFetchHeader, (RequestID));
-  MOCK_METHOD(void, onSubgroup, (TrackAlias, uint64_t, uint64_t, uint8_t));
+  MOCK_METHOD(
+      void,
+      onSubgroup,
+      (TrackAlias, uint64_t, uint64_t, folly::Optional<uint8_t>));
   MOCK_METHOD(
       void,
       onObjectBegin,
@@ -70,7 +73,12 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(
       void,
       onObjectStatus,
-      (uint64_t, uint64_t, uint64_t, Priority, ObjectStatus, Extensions));
+      (uint64_t,
+       uint64_t,
+       uint64_t,
+       folly::Optional<uint8_t>,
+       ObjectStatus,
+       Extensions));
   MOCK_METHOD(void, onObjectPayload, (Payload, bool));
   MOCK_METHOD(void, onEndOfStream, ());
 };

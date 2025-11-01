@@ -2247,9 +2247,6 @@ void testDatagramPriorityRoundTrip(
   auto parsedType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_TRUE(parsedType.has_value());
   EXPECT_EQ(parsedType->first, folly::to_underlying(expectedType));
-
-  cursor = folly::io::Cursor(serialized.get());
-  parsedType = quic::follyutils::decodeQuicInteger(cursor);
   auto length = cursor.totalLength();
   auto parseResult = parser.parseDatagramObjectHeader(
       cursor, DatagramType(parsedType->first), length);

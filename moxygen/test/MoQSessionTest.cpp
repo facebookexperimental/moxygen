@@ -48,17 +48,55 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
       location,
       {}});
 }
+// Helper class to build a vector of TrackRequestParameter for tests
+class ParamBuilder {
+ public:
+  ParamBuilder() = default;
+
+  // Add a uint64_t parameter
+  ParamBuilder& add(TrackRequestParamKey key, uint64_t value) {
+    params_.push_back({folly::to_underlying(key), "", value, {}});
+    return *this;
+  }
+
+  // Add a string parameter (for AUTHORIZATION_TOKEN)
+  ParamBuilder& add(TrackRequestParamKey key, const std::string& value) {
+    if (key == TrackRequestParamKey::AUTHORIZATION_TOKEN) {
+      params_.push_back(
+          {folly::to_underlying(key),
+           "",
+           0,
+           AuthToken{0, value, AuthToken::DontRegister}});
+    } else {
+      params_.push_back({folly::to_underlying(key), value, 0, {}});
+    }
+    return *this;
+  }
+
+  std::vector<TrackRequestParameter> build() {
+    return std::move(params_);
+  }
+
+ private:
+  std::vector<TrackRequestParameter> params_;
+};
 
 auto makeSubscribeOkResult(
     const SubscribeRequest& sub,
-    const folly::Optional<AbsoluteLocation>& largest = folly::none) {
+    const folly::Optional<AbsoluteLocation>& largest = folly::none,
+    const folly::Optional<uint8_t>& publisherPriority = folly::none) {
+  ParamBuilder paramBuilder;
+  if (publisherPriority.has_value()) {
+    paramBuilder.add(
+        TrackRequestParamKey::PUBLISHER_PRIORITY, publisherPriority.value());
+  }
   return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
       sub.requestID,
       TrackAlias(sub.requestID.value),
       std::chrono::milliseconds(0),
       GroupOrder::OldestFirst,
       largest,
-      {}});
+      paramBuilder.build()});
 }
 
 auto makeTrackStatusOkResult(
@@ -132,10 +170,20 @@ std::vector<VersionParams> getSupportedVersionParams() {
   return result;
 }
 
+// Timeout callback to prevent tests from hanging indefinitely
+class TestTimeoutCallback : public folly::HHWheelTimer::Callback {
+ public:
+  void timeoutExpired() noexcept override {
+    XLOG(FATAL) << "Test timeout expired after 10 seconds - test hung!";
+  }
+};
+
 class MoQSessionTest : public testing::TestWithParam<VersionParams>,
                        public MoQSession::ServerSetupCallback {
  public:
   void SetUp() override {
+    // Schedule timeout to crash test if it hangs
+    eventBase_.timer().scheduleTimeout(&testTimeout_, std::chrono::seconds(10));
     MoQExecutor_ = std::make_shared<MoQFollyExecutorImpl>(&eventBase_);
     std::tie(clientWt_, serverWt_) =
         proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
@@ -182,6 +230,11 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
         serverSession_->validateAndSetVersionFromAlpn(alpn.value());
       }
     }
+  }
+
+  void TearDown() override {
+    // Cancel the timeout to prevent false alarms after test completes
+    testTimeout_.cancelTimeout();
   }
 
   folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
@@ -430,6 +483,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   std::shared_ptr<MockPublisherStats> clientPublisherStatsCallback_;
   std::shared_ptr<MockSubscriberStats> serverSubscriberStatsCallback_;
   std::shared_ptr<MockPublisherStats> serverPublisherStatsCallback_;
+  TestTimeoutCallback testTimeout_;
 };
 
 // Helper function to make a Fetch request
@@ -3702,6 +3756,12 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraft12, kVersionDraft14}, kVersionDraft14}));
 
+using V15PlusTests = MoQSessionTest;
+INSTANTIATE_TEST_SUITE_P(
+    V15PlusTests,
+    V15PlusTests,
+    testing::Values(VersionParams{{kVersionDraft15}, kVersionDraft15}));
+
 CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
@@ -3982,6 +4042,183 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
   EXPECT_EQ(replyResult->params.size(), 1);
   EXPECT_EQ(replyResult->params.at(0).asUint64, 0);
 
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// === OPTIONAL PRIORITY tests ===
+// These tests require Draft 15+ for PUBLISHER_PRIORITY parameter
+
+CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+
+  // Set publisher priority to 64 (non-default value)
+  constexpr uint8_t kPublisherPriority = 64;
+
+  expectSubscribe(
+      [this, &trackConsumer, kPublisherPriority](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, sub] {
+          // Begin subgroup with default priority (128)
+          // This will be sent on wire WITH a priority field because the
+          // PUBLISHER updated the default value to 64.
+          auto sgp = pub->beginSubgroup(0, 0, kDefaultPriority).value();
+          sgp->object(0, moxygen::test::makeBuf(10));
+          sgp->endOfTrackAndGroup(1);
+          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        });
+        // Return SubscribeOk with PUBLISHER_PRIORITY parameter
+        co_return makeSubscribeOkResult(sub, folly::none, kPublisherPriority);
+      });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton endOfTrackReceived;
+  // Subgroup has kDefaultPriority (128)
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kDefaultPriority))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+    endOfTrackReceived.post();
+    return folly::unit;
+  }));
+  expectSubscribeDone();
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await endOfTrackReceived;
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+
+  constexpr uint8_t kObjectPriority = 32;
+
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, sub] {
+          // Begin subgroup with explicit priority
+          auto sgp = pub->beginSubgroup(0, 0, kObjectPriority).value();
+          sgp->object(0, moxygen::test::makeBuf(10));
+          sgp->endOfTrackAndGroup(1);
+          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        });
+        // Return SubscribeOk with PUBLISHER_PRIORITY parameter
+        constexpr uint8_t kPublisherPriority = 64;
+        co_return makeSubscribeOkResult(sub, folly::none, kPublisherPriority);
+      });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton endOfTrackReceived;
+  // When object has explicit priority, it should use that (32) not publisher
+  // priority
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kObjectPriority))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+    endOfTrackReceived.post();
+    return folly::unit;
+  }));
+  expectSubscribeDone();
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await endOfTrackReceived;
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+
+  constexpr uint8_t kPublisherPriority = 64;
+
+  expectSubscribe(
+      [this, &trackConsumer, kPublisherPriority](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, sub] {
+          // Send objectNotExists with default priority
+          auto sgp = pub->beginSubgroup(0, 0, kDefaultPriority).value();
+          sgp->objectNotExists(0);
+          sgp->endOfTrackAndGroup(1);
+          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        });
+        // Return SubscribeOk with PUBLISHER_PRIORITY parameter
+        co_return makeSubscribeOkResult(sub, folly::none, kPublisherPriority);
+      });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton endOfTrackReceived;
+  // Object status with no explicit priority should use publisher priority
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kDefaultPriority))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, objectNotExists(0, _, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+    endOfTrackReceived.post();
+    return folly::unit;
+  }));
+  expectSubscribeDone();
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await endOfTrackReceived;
+  co_await subscribeDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(V15PlusTests, PublisherPriorityDefaultValue) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, sub] {
+          // Begin subgroup with default priority
+          auto sgp = pub->beginSubgroup(0, 0, kDefaultPriority).value();
+          sgp->object(0, moxygen::test::makeBuf(10));
+          sgp->endOfTrackAndGroup(1);
+          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        });
+        // Return SubscribeOk WITHOUT PUBLISHER_PRIORITY parameter
+        // Should default to 128
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton endOfTrackReceived;
+  // Without PUBLISHER_PRIORITY param, should default to kDefaultPriority (128)
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kDefaultPriority))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+    endOfTrackReceived.post();
+    return folly::unit;
+  }));
+  expectSubscribeDone();
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await endOfTrackReceived;
+  co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

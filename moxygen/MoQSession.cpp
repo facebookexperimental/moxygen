@@ -61,6 +61,30 @@ uint64_t getStreamPriority(
       subgroupBits);
 }
 
+// Helper function to validate priority from application is set.
+// Applications must always provide a set priority value.
+folly::Expected<folly::Unit, MoQPublishError> validatePrioritySet(
+    const folly::Optional<uint8_t>& priority) {
+  if (!priority.has_value()) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR,
+        "Application must provide a priority value (cannot be unset)"));
+  }
+  return folly::unit;
+}
+
+// Helper function to elide priority for writing if it matches publisher
+// priority from the control plane. Returns folly::none if priority matches
+// publisherPriority, otherwise returns the original priority.
+folly::Optional<uint8_t> elidePriorityForWrite(
+    uint8_t priority,
+    const folly::Optional<uint8_t>& publisherPriority) {
+  if (priority == publisherPriority) {
+    return folly::none;
+  }
+  return priority;
+}
+
 // Helper function to log RequestError with the correct logger method based on
 // frameType
 void logRequestError(
@@ -123,6 +147,7 @@ class StreamPublisherImpl
       TrackAlias alias,
       uint64_t groupID,
       uint64_t subgroupID,
+      const folly::Optional<uint8_t>& sgPriority,
       SubgroupIDFormat format,
       bool includeExtensions,
       std::shared_ptr<MLogger> logger = nullptr,
@@ -476,6 +501,7 @@ StreamPublisherImpl::StreamPublisherImpl(
     TrackAlias alias,
     uint64_t groupID,
     uint64_t subgroupID,
+    const folly::Optional<uint8_t>& sgPriority,
     SubgroupIDFormat format,
     bool includeExtensions,
     std::shared_ptr<MLogger> logger,
@@ -488,11 +514,20 @@ StreamPublisherImpl::StreamPublisherImpl(
           std::move(deliveryTimer)) {
   CHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
+  // When sgPriority is none, the receiver will use the value from
+  // PUBLISHER_PRIORITY, which defaults to 128 if not sent by the publisher when
+  // establishing the subscription.
   streamType_ = getSubgroupStreamType(
-      publisher->getVersion(), format, includeExtensions, false);
+      publisher->getVersion(),
+      format,
+      includeExtensions,
+      false,
+      sgPriority.hasValue());
   trackAlias_ = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
+  // Set the priority in the header
+  header_.priority = sgPriority;
   logger_ = logger;
   if (logger_) {
     logger_->logStreamTypeSet(
@@ -1291,12 +1326,16 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
         });
   }
 
+  // Elide priority if it matches publisher priority from control plane
+  auto elidedPriority = elidePriorityForWrite(pubPriority, publisherPriority_);
+
   auto subgroupPublisher = std::make_shared<StreamPublisherImpl>(
       shared_from_this(),
       *stream,
       *trackAlias_,
       groupID,
       subgroupID,
+      elidedPriority,
       format,
       includeExtensions,
       logger_,
@@ -1358,12 +1397,17 @@ MoQSession::TrackPublisherImpl::objectStream(
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Must set track alias first"));
   }
+  // Validate that application provided a priority value
+  auto priorityValidation = validatePrioritySet(objHeader.priority);
+  if (priorityValidation.hasError()) {
+    return folly::makeUnexpected(std::move(priorityValidation.error()));
+  }
   XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
   Extensions extensions = objHeader.extensions;
   auto subgroup = beginSubgroup(
       objHeader.group,
       objHeader.subgroup,
-      objHeader.priority.value_or(kDefaultPriority),
+      *objHeader.priority,
       objHeader.subgroup == objHeader.id ? SubgroupIDFormat::FirstObject
                                          : SubgroupIDFormat::Present,
       !extensions.empty());
@@ -1429,6 +1473,11 @@ MoQSession::TrackPublisherImpl::datagram(
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Must set track alias first"));
   }
+  // Validate that application provided a priority value
+  auto priorityValidation = validatePrioritySet(header.priority);
+  if (priorityValidation.hasError()) {
+    return folly::makeUnexpected(std::move(priorityValidation.error()));
+  }
   if (!forward_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR,
@@ -1449,6 +1498,10 @@ MoQSession::TrackPublisherImpl::datagram(
     }
   }
 
+  // Elide priority if it matches publisher priority
+  auto elidedPriority =
+      elidePriorityForWrite(*header.priority, publisherPriority_);
+
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint64_t headerLength = 0;
   if (header.length) {
@@ -1464,7 +1517,7 @@ MoQSession::TrackPublisherImpl::datagram(
           header.group,
           header.id,
           header.id,
-          header.priority,
+          elidedPriority,
           header.status,
           header.extensions,
           headerLength),
@@ -1655,8 +1708,9 @@ class MoQSession::SubscribeTrackReceiveState
     currentStreamId_ = id;
   }
 
-  folly::Optional<uint8_t> getPublisherPriority() const {
-    return publisherPriority_;
+  uint8_t getPublisherPriority() const {
+    // Fallback to kDefaultPriority if not set
+    return publisherPriority_.value_or(kDefaultPriority);
   }
 
   void setPublisherPriority(uint8_t priority) {
@@ -1675,6 +1729,8 @@ class MoQSession::SubscribeTrackReceiveState
   bool publish_;
 
   // Publisher priority from SUBSCRIBE_OK or PUBLISH parameter
+  // Stored as optional; if not set from SUBSCRIBE_OK, defaults to
+  // kDefaultPriority
   folly::Optional<uint8_t> publisherPriority_;
 };
 
@@ -2306,7 +2362,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
-      Priority priority) override {
+      folly::Optional<uint8_t> priority) override {
     XCHECK(subscribeState_);
     trackAlias_ = alias; // Store for use in onObjectBegin logging
     session_->onSubscriptionStreamOpenedByPeer();
@@ -2323,7 +2379,10 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       XLOG(DBG2) << "No callback for subgroup";
       return;
     }
-    auto res = callback->beginSubgroup(group, subgroup, priority);
+    // Use object priority if present, else fall back to publisher priority
+    uint8_t effectivePriority =
+        priority.value_or(subscribeState_->getPublisherPriority());
+    auto res = callback->beginSubgroup(group, subgroup, effectivePriority);
     if (res.hasValue()) {
       subgroupCallback_ = *res;
     } else {
@@ -2331,7 +2390,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     }
     if (logger_) {
       logger_->logSubgroupHeaderParsed(
-          currentStreamId_, alias, group, subgroup, priority);
+          currentStreamId_, alias, group, subgroup, effectivePriority);
     }
 
     subscribeState_->setCurrentStreamId(currentStreamId_);
@@ -2447,13 +2506,17 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t group,
       uint64_t subgroup,
       uint64_t objectID,
-      Priority pri,
+      folly::Optional<uint8_t> priority,
       ObjectStatus status,
       Extensions extensions) override {
     if (isCancelled()) {
       return;
     }
     folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    // Use object priority if present, else fall back to publisher priority
+    uint8_t effectivePriority = priority.value_or(
+        subscribeState_ ? subscribeState_->getPublisherPriority()
+                        : kDefaultPriority);
     // Handle subscription/fetch consumers
     switch (status) {
       case ObjectStatus::NORMAL:
@@ -2475,7 +2538,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
               group, subgroup, std::move(extensions), false);
         } else {
           res = subscribeState_->getSubscribeCallback()->groupNotExists(
-              group, subgroup, pri, std::move(extensions));
+              group, subgroup, effectivePriority, std::move(extensions));
           endOfSubgroup();
         }
         break;
@@ -2843,7 +2906,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     auto subOk = subHandle->subscribeOk();
     subOk.requestID = requestID;
 
-    setPublisherPriorityFromParams(params, trackPublisher);
+    setPublisherPriorityFromParams(subOk.params, trackPublisher);
 
     // TODO: verify TrackAlias is unique
     subscribeOk(subOk);
@@ -2859,9 +2922,16 @@ void MoQSession::setPublisherPriorityFromParams(
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
     auto publisherPriority =
         getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
-    if (publisherPriority && *publisherPriority <= 255) {
-      trackPublisher->setPublisherPriority(
-          static_cast<uint8_t>(*publisherPriority));
+    if (publisherPriority) {
+      if (*publisherPriority <= 255) {
+        trackPublisher->setPublisherPriority(
+            static_cast<uint8_t>(*publisherPriority));
+      } else {
+        XLOG(WARN) << "Invalid priority value: "
+                   << static_cast<uint64_t>(*publisherPriority);
+      }
+    } else {
+      trackPublisher->setPublisherPriority(kDefaultPriority);
     }
   }
 }
@@ -2873,9 +2943,14 @@ void MoQSession::setPublisherPriorityFromParams(
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
     auto publisherPriority =
         getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
-    if (publisherPriority && *publisherPriority <= 255) {
-      trackReceiveState->setPublisherPriority(
-          static_cast<uint8_t>(*publisherPriority));
+    if (publisherPriority) {
+      if (*publisherPriority <= 255) {
+        trackReceiveState->setPublisherPriority(
+            static_cast<uint8_t>(*publisherPriority));
+      } else {
+        XLOG(ERR) << "Invalid priority value: "
+                  << static_cast<uint64_t>(*publisherPriority);
+      }
     }
   }
 }
@@ -4525,6 +4600,10 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   if (state) {
     auto callback = state->getSubscribeCallback();
     if (callback) {
+      // Populate priority from publisher priority if not set in object header
+      if (!objHeader.objectHeader.priority.hasValue()) {
+        objHeader.objectHeader.priority = state->getPublisherPriority();
+      }
       callback->datagram(objHeader.objectHeader, readBuf.move());
     }
   }
