@@ -1438,10 +1438,6 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
 
-  folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
-      folly::io::Cursor& cursor,
-      size_t& length) const noexcept;
-
   folly::Expected<folly::Unit, ErrorCode> parseExtensionKvPairs(
       folly::io::Cursor& cursor,
       ObjectHeader& objectHeader,
@@ -1657,6 +1653,12 @@ class MoQFrameWriter {
   void writeTrackRequestParams(
       folly::IOBufQueue& writeBuf,
       const TrackRequestParameters& params,
+      size_t& size,
+      bool& error) const noexcept;
+
+  void writeSubscriptionFilter(
+      folly::IOBufQueue& writeBuf,
+      const SubscriptionFilter& filter,
       size_t& size,
       bool& error) const noexcept;
 

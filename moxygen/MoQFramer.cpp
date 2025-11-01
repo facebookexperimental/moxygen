@@ -51,6 +51,12 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
     uint64_t key,
     MoQTokenCache& tokenCache,
     ParamsType paramsType);
+folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept;
+folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept;
 folly::Expected<folly::Optional<Parameter>, ErrorCode> parseIntParam(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -320,6 +326,75 @@ folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
   }
 
   return token;
+}
+
+folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept {
+  AbsoluteLocation location;
+  auto group = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!group) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  location.group = group->first;
+  length -= group->second;
+
+  auto object = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!object) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  location.object = object->first;
+  length -= object->second;
+
+  return location;
+}
+
+folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept {
+  SubscriptionFilter filter;
+
+  // Parse filter type
+  auto filterType = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!filterType) {
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= filterType->second;
+
+  // Validate filter type
+  switch (filterType->first) {
+    case folly::to_underlying(LocationType::NextGroupStart):
+    case folly::to_underlying(LocationType::LargestObject):
+    case folly::to_underlying(LocationType::AbsoluteStart):
+    case folly::to_underlying(LocationType::AbsoluteRange):
+      break;
+    default:
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  filter.filterType = LocationType(filterType->first);
+
+  // Parse start location if present (for AbsoluteStart and AbsoluteRange)
+  if (filter.filterType == LocationType::AbsoluteStart ||
+      filter.filterType == LocationType::AbsoluteRange) {
+    auto location = parseAbsoluteLocation(cursor, length);
+    if (!location) {
+      return folly::makeUnexpected(location.error());
+    }
+    filter.location = *location;
+  }
+
+  // Parse end group if present (only for AbsoluteRange)
+  if (filter.filterType == LocationType::AbsoluteRange) {
+    auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!endGroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    filter.endGroup = endGroup->first;
+    length -= endGroup->second;
+  }
+
+  return filter;
 }
 
 folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
@@ -1833,27 +1908,6 @@ folly::Expected<FullTrackName, ErrorCode> MoQFrameParser::parseFullTrackName(
   return fullTrackName;
 }
 
-folly::Expected<AbsoluteLocation, ErrorCode>
-MoQFrameParser::parseAbsoluteLocation(folly::io::Cursor& cursor, size_t& length)
-    const noexcept {
-  AbsoluteLocation location;
-  auto group = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!group) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  location.group = group->first;
-  length -= group->second;
-
-  auto object = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!object) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  location.object = object->first;
-  length -= object->second;
-
-  return location;
-}
-
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -2527,6 +2581,42 @@ void MoQFrameWriter::writeTrackRequestParams(
           writeFixedString(writeBuf, param.asString, size, error);
         }
         break;
+    }
+  }
+}
+
+void MoQFrameWriter::writeSubscriptionFilter(
+    folly::IOBufQueue& writeBuf,
+    const SubscriptionFilter& filter,
+    size_t& size,
+    bool& error) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version must be set before writing subscription filter";
+
+  // Write filter type
+  writeVarint(
+      writeBuf,
+      getLocationTypeValue(filter.filterType, getDraftMajorVersion(*version_)),
+      size,
+      error);
+
+  // Write start location for AbsoluteStart and AbsoluteRange
+  if (filter.filterType == LocationType::AbsoluteStart ||
+      filter.filterType == LocationType::AbsoluteRange) {
+    if (filter.location.hasValue()) {
+      writeVarint(writeBuf, filter.location->group, size, error);
+      writeVarint(writeBuf, filter.location->object, size, error);
+    } else {
+      error = true;
+    }
+  }
+
+  // Write end group for AbsoluteRange
+  if (filter.filterType == LocationType::AbsoluteRange) {
+    if (filter.endGroup.hasValue()) {
+      writeVarint(writeBuf, *filter.endGroup, size, error);
+    } else {
+      error = true;
     }
   }
 }
