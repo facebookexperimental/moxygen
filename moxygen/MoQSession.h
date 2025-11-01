@@ -275,9 +275,6 @@ class MoQSession : public Subscriber,
       return (bytesBuffered_ + numBytes <= bytesBufferedThreshold_);
     }
 
-    folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-        SubscribeDone subDone);
-
     void fetchComplete();
 
     proxygen::WebTransport* getWebTransport() const {
@@ -381,7 +378,7 @@ class MoQSession : public Subscriber,
   void subscribeError(const SubscribeError& subErr);
   void unsubscribe(const Unsubscribe& unsubscribe);
   void subscribeUpdate(const SubscribeUpdate& subUpdate);
-  void subscribeDone(const SubscribeDone& subDone);
+  void sendSubscribeDone(const SubscribeDone& subDone);
 
   folly::coro::Task<void> handleFetch(
       Fetch fetch,

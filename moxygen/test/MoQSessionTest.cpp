@@ -4222,6 +4222,66 @@ CO_TEST_P_X(V15PlusTests, PublisherPriorityDefaultValue) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Test that after publish, closing and destroying the session,
+// consumer->objectStream returns an error
+CO_TEST_P_X(MoQSessionTest, PublishConsumerObjectStreamAfterSessionClose) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100},
+      true,
+      {}};
+
+  // Setup server to respond with PUBLISH_OK and provide a consumer
+  std::shared_ptr<MockTrackConsumer> mockConsumer =
+      std::make_shared<MockTrackConsumer>();
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          testing::Invoke(
+              [mockConsumer](
+                  const PublishRequest& actualPub,
+                  std::shared_ptr<SubscriptionHandle>)
+                  -> Subscriber::PublishResult {
+                // Set default behavior for setTrackAlias to return success
+                EXPECT_CALL(*mockConsumer, setTrackAlias(_))
+                    .WillRepeatedly(
+                        testing::Return(
+                            folly::Expected<folly::Unit, MoQPublishError>(
+                                folly::unit)));
+                // Return PublishOk and the consumer
+                return makePublishOkResult(actualPub);
+              }));
+
+  auto handle = makePublishHandle();
+
+  // Initiate publish
+  auto result = clientSession_->publish(pub, handle);
+  EXPECT_TRUE(result.hasValue());
+
+  // Save the consumer for later
+  auto consumer = std::static_pointer_cast<MockTrackConsumer>(result->consumer);
+
+  // Wait for publish reply to complete
+  auto replyResult = co_await std::move(result->reply);
+  EXPECT_TRUE(replyResult.hasValue());
+
+  // Close the session
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+  // Destroy the session (reset shared_ptr)
+  clientSession_.reset();
+
+  // After session is closed and destroyed, objectStream should return an error
+  auto res = consumer->objectStream(
+      ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
+  EXPECT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::API_ERROR);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,
