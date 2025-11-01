@@ -171,11 +171,6 @@ enum class FrameType : uint64_t {
 };
 
 enum class DatagramType : uint64_t {
-  OBJECT_DATAGRAM_NO_EXT_V11 = 0x0,
-  OBJECT_DATAGRAM_EXT_V11 = 0x1,
-  OBJECT_DATAGRAM_STATUS_V11 = 0x2,
-  OBJECT_DATAGRAM_STATUS_EXT_V11 = 0x3,
-
   OBJECT_DATAGRAM_NO_EXT = 0x0,
   OBJECT_DATAGRAM_EXT = 0x1,
   OBJECT_DATAGRAM_NO_EXT_EOG = 0x2,
@@ -206,13 +201,6 @@ enum class DatagramType : uint64_t {
 
 enum class StreamType : uint64_t {
   FETCH_HEADER = 0x5,
-  SUBGROUP_HEADER_MASK_V11 = 0x8,
-  SUBGROUP_HEADER_SG_ZERO_V11 = 0x8,
-  SUBGROUP_HEADER_SG_ZERO_EXT_V11 = 0x9,
-  SUBGROUP_HEADER_SG_FIRST_V11 = 0xA,
-  SUBGROUP_HEADER_SG_FIRST_EXT_V11 = 0xB,
-  SUBGROUP_HEADER_SG_V11 = 0xC,
-  SUBGROUP_HEADER_SG_EXT_V11 = 0xD,
 
   SUBGROUP_HEADER_MASK = 0x10,
   SUBGROUP_HEADER_SG_ZERO = 0x10,
@@ -334,7 +322,6 @@ constexpr uint64_t kVersionDraft08_exp9 = 0xff080009; // Draft 8 Extensions
 
 constexpr uint64_t kVersionDraft09 = 0xff000009;
 constexpr uint64_t kVersionDraft10 = 0xff00000A;
-constexpr uint64_t kVersionDraft11 = 0xff00000B;
 constexpr uint64_t kVersionDraft12 = 0xff00000C;
 constexpr uint64_t kVersionDraft13 = 0xff00000D;
 constexpr uint64_t kVersionDraft14 = 0xff00000E;
@@ -844,7 +831,7 @@ struct SubscribeRequest {
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
-  bool forward{true}; // Only used in draft-11 and above
+  bool forward{true}; // Only used in draft-12 and above
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   uint64_t endGroup;
@@ -857,7 +844,7 @@ struct SubscribeUpdate {
   AbsoluteLocation start;
   uint64_t endGroup;
   uint8_t priority{kDefaultPriority};
-  bool forward{true}; // Only used in draft-11 and above
+  bool forward{true}; // Only used in draft-12 and above
   std::vector<TrackRequestParameter> params;
 };
 
@@ -1098,21 +1085,13 @@ inline StreamType getSubgroupStreamType(
     bool endOfGroup,
     bool priorityPresent = true) {
   auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion == 11) {
-    return StreamType(
-        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK_V11) |
-        (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
-        (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
-        (includeExtensions ? SG_HAS_EXTENSIONS : 0));
-  } else {
-    return StreamType(
-        folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
-        (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
-        (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
-        (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
-        (endOfGroup ? SG_HAS_END_OF_GROUP : 0) |
-        (majorVersion >= 15 && !priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0));
-  }
+  return StreamType(
+      folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
+      (format == SubgroupIDFormat::Present ? SG_HAS_SUBGROUP_ID : 0) |
+      (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
+      (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
+      (endOfGroup ? SG_HAS_END_OF_GROUP : 0) |
+      (majorVersion >= 15 && !priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0));
 }
 
 bool isValidSubgroupType(uint64_t version, uint64_t streamType);

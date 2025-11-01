@@ -1430,10 +1430,6 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
 }
 
 TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
-  auto alpnDraft11 = getAlpnFromVersion(kVersionDraft11);
-  ASSERT_TRUE(alpnDraft11.hasValue());
-  EXPECT_EQ(*alpnDraft11, "moq-00");
-
   auto alpnDraft12 = getAlpnFromVersion(kVersionDraft12);
   ASSERT_TRUE(alpnDraft12.hasValue());
   EXPECT_EQ(*alpnDraft12, "moq-00");

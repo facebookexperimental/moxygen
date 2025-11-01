@@ -1628,11 +1628,6 @@ class MoQSession::SubscribeTrackReceiveState
     return std::move(contract.second);
   }
 
-  TrackAlias getTrackAlias() const {
-    // This is only called when version < 12
-    return TrackAlias(requestID_.value);
-  }
-
   [[nodiscard]] const FullTrackName& fullTrackName() const {
     return fullTrackName_;
   }
@@ -2077,9 +2072,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   controlCodec_.setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(setup.params));
   // Optimistically registers params without knowing peer's capabilities
-  if (getDraftMajorVersion(setupSerializationVersion) >= 12) {
-    aliasifyAuthTokens(setup.params, setupSerializationVersion);
-  }
+  aliasifyAuthTokens(setup.params, setupSerializationVersion);
   auto res =
       writeClientSetup(controlWriteBuf_, setup, setupSerializationVersion);
   if (!res) {
@@ -2205,11 +2198,11 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
       return;
     }
 
-    // Check if selected version is < 11 and handle appropriately
-    if (majorVersion < 11) {
+    // Check if selected version is < 12 and handle appropriately
+    if (majorVersion < 12) {
       XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
                 << " (major=" << majorVersion
-                << ") is not supported. Minimum version is 11. sess=" << this;
+                << ") is not supported. Minimum version is 12. sess=" << this;
       close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
       return;
     }
@@ -3171,9 +3164,6 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   }
   auto trackReceiveState = std::move(*trackPtr);
   pendingRequests_.erase(it);
-  if (getDraftMajorVersion(*getNegotiatedVersion()) < 12) {
-    subOk.trackAlias = trackReceiveState->getTrackAlias();
-  }
 
   auto res = reqIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
   if (!res.second) {
