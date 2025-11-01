@@ -18,6 +18,7 @@
 #include <quic/QuicException.h>
 #include <quic/codec/QuicInteger.h>
 #include <quic/folly_utils/Utils.h>
+#include <algorithm>
 #include <vector>
 
 namespace moxygen {
@@ -296,6 +297,97 @@ struct Parameter {
 using SetupParameter = Parameter;
 using TrackRequestParameter = Parameter;
 
+enum class TrackRequestParamKey : uint64_t {
+  AUTHORIZATION_TOKEN = 3,
+  DELIVERY_TIMEOUT = 2,
+  MAX_CACHE_DURATION = 4,
+  PUBLISHER_PRIORITY = 0x0E,
+};
+
+class Parameters {
+ public:
+  using const_iterator = std::vector<Parameter>::const_iterator;
+
+  Parameters() = default;
+
+  /* implicit */ Parameters(std::initializer_list<Parameter> params)
+      : params_(params) {}
+
+  const Parameter& getParam(size_t position) const {
+    return params_.at(position);
+  }
+
+  const Parameter& at(size_t position) const {
+    return params_.at(position);
+  }
+
+  void insertParam(Parameter&& param) {
+    params_.emplace_back(std::move(param));
+  }
+
+  void insertParam(const Parameter& param) {
+    params_.emplace_back(param);
+  }
+
+  void insertParam(size_t position, Parameter&& param) {
+    CHECK_LE(position, params_.size());
+    params_.insert(params_.begin() + position, std::move(param));
+  }
+
+  void eraseParam(size_t position) {
+    CHECK_LT(position, params_.size());
+    params_.erase(params_.begin() + position);
+  }
+
+  void modifyString(size_t position, const std::string& newValue) {
+    params_.at(position).asString = newValue;
+  }
+
+  void eraseAllParamsOfType(TrackRequestParamKey key) {
+    const auto targetKey = static_cast<uint64_t>(key);
+    params_.erase(
+        std::remove_if(
+            params_.begin(),
+            params_.end(),
+            [targetKey](const Parameter& param) {
+              return param.key == targetKey;
+            }),
+        params_.end());
+  }
+
+  void modifyParam(
+      size_t position,
+      const std::string& newString,
+      uint64_t newInt64,
+      AuthToken newAuthToken) {
+    params_.at(position).asString = newString;
+    params_.at(position).asUint64 = newInt64;
+    params_.at(position).asAuthToken = std::move(newAuthToken);
+  }
+
+  const_iterator begin() const {
+    return params_.begin();
+  }
+
+  const_iterator end() const {
+    return params_.end();
+  }
+
+  size_t size() const {
+    return params_.size();
+  }
+
+  bool empty() const {
+    return params_.empty();
+  }
+
+ private:
+  std::vector<Parameter> params_;
+};
+
+using SetupParameters = Parameters;
+using TrackRequestParameters = Parameters;
+
 constexpr uint64_t kVersionDraft01 = 0xff000001;
 constexpr uint64_t kVersionDraft02 = 0xff000002;
 constexpr uint64_t kVersionDraft03 = 0xff000003;
@@ -328,13 +420,6 @@ constexpr uint64_t kVersionDraft14 = 0xff00000E;
 constexpr uint64_t kVersionDraft15 = 0xff00000F;
 
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
-
-enum class TrackRequestParamKey : uint64_t {
-  AUTHORIZATION_TOKEN = 3,
-  DELIVERY_TIMEOUT = 2,
-  MAX_CACHE_DURATION = 4,
-  PUBLISHER_PRIORITY = 0x0E,
-};
 
 // ALPN constants for version negotiation
 constexpr std::string_view kAlpnMoqtLegacy = "moq-00";
