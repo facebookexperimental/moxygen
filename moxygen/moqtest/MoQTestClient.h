@@ -83,7 +83,7 @@ class MoQTestClient : public moxygen::Subscriber,
 
   folly::coro::Task<void> trackStatus(TrackStatus req);
   void subscribeUpdate(SubscribeUpdate update);
-  folly::coro::Task<MoQSession::SubscribeAnnouncesResult> subscribeAnnounces(
+  folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
       SubscribeAnnounces announces);
   void unsubscribeAnnounces(UnsubscribeAnnounces unann);
 
@@ -115,8 +115,8 @@ class MoQTestClient : public moxygen::Subscriber,
   uint64_t datagramObjects_{};
 
   // Handles
-  std::shared_ptr<MoQSession::SubscriptionHandle> subHandle_;
-  std::shared_ptr<MoQSession::FetchHandle> fetchHandle_;
+  std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
+  std::shared_ptr<Publisher::FetchHandle> fetchHandle_;
   std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subAnnouncesHandle_;
 
   // Subscription Data Validation functions

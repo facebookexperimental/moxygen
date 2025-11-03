@@ -558,7 +558,7 @@ folly::coro::Task<void> MoQTestClient::trackStatus(TrackStatus req) {
   co_await moqClient_->moqSession_->trackStatus(req);
 }
 
-folly::coro::Task<MoQSession::SubscribeAnnouncesResult>
+folly::coro::Task<Publisher::SubscribeAnnouncesResult>
 MoQTestClient::subscribeAnnounces(SubscribeAnnounces ann) {
   auto res = co_await moqClient_->moqSession_->subscribeAnnounces(ann);
   if (res.hasValue()) {
