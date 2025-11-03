@@ -628,11 +628,12 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
       !publisher_->canBufferBytes(writeBuf_.chainLength())) {
     publisher_->onTooManyBytesBuffered();
     return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::TOO_FAR_BEHIND));
+        MoQPublishError(MoQPublishError::TOO_FAR_BEHIND, "Too far behind"));
   }
 
   if (!writeHandle_) {
-    return folly::makeUnexpected(MoQPublishError(MoQPublishError::CANCELLED));
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "Cancelled"));
   }
 
   auto writeHandle = writeHandle_;

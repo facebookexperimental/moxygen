@@ -62,7 +62,8 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
         callback_->onObject(trackAlias_, header_, std::move(payload));
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
       if (streamType_ == StreamType::FETCH_HEADER) {
-        return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::BLOCKED, "blocked"));
       } else {
         XLOG(WARN) << "ObjectReceiverCallback returned BLOCKED for Subscribe";
       }
@@ -103,7 +104,12 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
       auto fcState = callback_->onObject(trackAlias_, header_, payload_.move());
       if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
         // Is it bad that we can't return DONE here?
-        return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
+        if (streamType_ == StreamType::FETCH_HEADER) {
+          return folly::makeUnexpected(
+              MoQPublishError(MoQPublishError::BLOCKED, "blocked"));
+        } else {
+          XLOG(WARN) << "ObjectReceiverCallback returned BLOCKED for Subscribe";
+        }
       }
       return ObjectPublishStatus::DONE;
     }
@@ -179,7 +185,12 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
       Payload payload) override {
     auto fcState = callback_->onObject(trackAlias_, header, std::move(payload));
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
-      return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
+      if (fetchPublisher_) {
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::BLOCKED, "blocked"));
+      } else {
+        XLOG(WARN) << "ObjectReceiverCallback returned BLOCKED for Subscribe";
+      }
     }
     return folly::unit;
   }
