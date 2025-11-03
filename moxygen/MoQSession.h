@@ -374,7 +374,7 @@ class MoQSession : public Subscriber,
   folly::coro::Task<void> handleSubscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackPublisherImpl> trackPublisher);
-  std::shared_ptr<TrackConsumer> subscribeOk(const SubscribeOk& subOk);
+  void sendSubscribeOk(const SubscribeOk& subOk);
   void subscribeError(const SubscribeError& subErr);
   void unsubscribe(const Unsubscribe& unsubscribe);
   void subscribeUpdate(const SubscribeUpdate& subUpdate);
