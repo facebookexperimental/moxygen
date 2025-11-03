@@ -642,12 +642,14 @@ MoQFrameParser::parseDatagramObjectHeader(
   ObjectHeader objectHeader;
   auto trackAlias = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
+    XLOG(DBG4) << "parseDatagramObjectHeader: UNDERFLOW on trackAlias";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= trackAlias->second;
 
   auto group = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!group) {
+    XLOG(DBG4) << "parseDatagramObjectHeader: UNDERFLOW on group";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= group->second;
@@ -656,6 +658,7 @@ MoQFrameParser::parseDatagramObjectHeader(
   if (!datagramObjectIdZero(*version_, datagramType)) {
     auto id = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!id) {
+      XLOG(DBG4) << "parseDatagramObjectHeader: UNDERFLOW on id";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= id->second;
@@ -667,6 +670,7 @@ MoQFrameParser::parseDatagramObjectHeader(
 
   if (datagramPriorityPresent(*version_, datagramType)) {
     if (length == 0 || !cursor.canAdvance(1)) {
+      XLOG(DBG4) << "parseDatagramObjectHeader: UNDERFLOW on priority";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     objectHeader.priority = cursor.readBE<uint8_t>();
@@ -678,6 +682,8 @@ MoQFrameParser::parseDatagramObjectHeader(
   if (datagramTypeHasExtensions(*version_, datagramType)) {
     auto ext = parseExtensions(cursor, length, objectHeader);
     if (!ext) {
+      XLOG(DBG4) << "parseDatagramObjectHeader: error in parseExtensions: "
+                 << uint64_t(ext.error());
       return folly::makeUnexpected(ext.error());
     }
   }
@@ -685,6 +691,7 @@ MoQFrameParser::parseDatagramObjectHeader(
   if (datagramTypeIsStatus(*version_, datagramType)) {
     auto status = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!status) {
+      XLOG(DBG4) << "parseDatagramObjectHeader: UNDERFLOW on status";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= status->second;
@@ -716,6 +723,7 @@ MoQFrameParser::parseSubgroupTypeAndAlias(
 
   auto type = quic::follyutils::decodeQuicInteger(cursor);
   if (!type) {
+    XLOG(DBG4) << "parseSubgroupTypeAndAlias: UNDERFLOW on type";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= type->second;
@@ -727,6 +735,7 @@ MoQFrameParser::parseSubgroupTypeAndAlias(
 
   auto trackAlias = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!trackAlias) {
+    XLOG(DBG4) << "parseSubgroupTypeAndAlias: UNDERFLOW on trackAlias";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= trackAlias->second;
@@ -747,6 +756,7 @@ MoQFrameParser::parseSubgroupHeader(
 
   auto parsedTrackAlias = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!parsedTrackAlias) {
+    XLOG(DBG4) << "parseSubgroupHeader: UNDERFLOW on trackAlias";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= parsedTrackAlias->second;
@@ -754,6 +764,7 @@ MoQFrameParser::parseSubgroupHeader(
 
   auto group = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!group) {
+    XLOG(DBG4) << "parseSubgroupHeader: UNDERFLOW on group";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= group->second;
@@ -763,6 +774,7 @@ MoQFrameParser::parseSubgroupHeader(
   if (options.subgroupIDFormat == SubgroupIDFormat::Present) {
     auto subgroup = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!subgroup) {
+      XLOG(DBG4) << "parseSubgroupHeader: UNDERFLOW on subgroup";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     objectHeader.subgroup = subgroup->first;
@@ -775,6 +787,7 @@ MoQFrameParser::parseSubgroupHeader(
   // Conditionally parse priority based on version and stream type
   if (options.priorityPresent) {
     if (length == 0 || !cursor.canAdvance(1)) {
+      XLOG(DBG4) << "parseSubgroupHeader: UNDERFLOW on priority";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     objectHeader.priority = cursor.readBE<uint8_t>();
@@ -788,6 +801,7 @@ MoQFrameParser::parseSubgroupHeader(
     auto tmpCursor = cursor; // we reparse the object ID later
     auto id = quic::follyutils::decodeQuicInteger(tmpCursor, length);
     if (!id) {
+      XLOG(DBG4) << "parseSubgroupHeader: UNDERFLOW on id";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     objectHeader.subgroup = objectHeader.id = id->first;
@@ -801,6 +815,7 @@ MoQFrameParser::parseObjectStatusAndLength(
     ObjectHeader& objectHeader) const noexcept {
   auto payloadLength = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!payloadLength) {
+    XLOG(DBG4) << "parseObjectStatusAndLength: UNDERFLOW on payloadLength";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= payloadLength->second;
@@ -809,6 +824,7 @@ MoQFrameParser::parseObjectStatusAndLength(
   if (objectHeader.length == 0) {
     auto objectStatus = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!objectStatus) {
+      XLOG(DBG4) << "parseObjectStatusAndLength: UNDERFLOW on objectStatus";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     if (objectStatus->first >
@@ -834,6 +850,7 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
 
   auto group = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!group) {
+    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on group";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= group->second;
@@ -841,6 +858,7 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
 
   auto subgroup = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!subgroup) {
+    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on subgroup";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= subgroup->second;
@@ -848,12 +866,14 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
 
   auto id = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!id) {
+    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on id";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= id->second;
   objectHeader.id = id->first;
 
   if (length < 2) {
+    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on priority/length";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   objectHeader.priority = cursor.readBE<uint8_t>();
@@ -861,11 +881,16 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
 
   auto ext = parseExtensions(cursor, length, objectHeader);
   if (!ext) {
+    XLOG(DBG4) << "parseFetchObjectHeader: error in parseExtensions: "
+               << folly::to_underlying(ext.error());
     return folly::makeUnexpected(ext.error());
   }
 
   auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
   if (!res) {
+    XLOG(DBG4)
+        << "parseFetchObjectHeader: error in parseObjectStatusAndLength: "
+        << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
   }
   return objectHeader;
@@ -881,6 +906,7 @@ MoQFrameParser::parseSubgroupObjectHeader(
   ObjectHeader objectHeader = headerTemplate;
   auto id = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!id) {
+    XLOG(DBG4) << "parseSubgroupObjectHeader: UNDERFLOW on id";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= id->second;
@@ -901,12 +927,17 @@ MoQFrameParser::parseSubgroupObjectHeader(
   if (options.hasExtensions) {
     auto ext = parseExtensions(cursor, length, objectHeader);
     if (!ext) {
+      XLOG(DBG4) << "parseSubgroupObjectHeader: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
       return folly::makeUnexpected(ext.error());
     }
   }
 
   auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
   if (!res) {
+    XLOG(DBG4)
+        << "parseSubgroupObjectHeader: error in parseObjectStatusAndLength: "
+        << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
   }
   return objectHeader;
@@ -937,6 +968,7 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   SubscribeRequest subscribeRequest;
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!requestID) {
+    XLOG(DBG4) << "parseSubscribeRequest: UNDERFLOW on requestID";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= requestID->second;
@@ -1918,11 +1950,12 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
   // Parse the length of the extension block
   auto extLen = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!extLen) {
+    XLOG(DBG4) << "parseExtensions: UNDERFLOW on extLen";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= extLen->second;
   if (extLen->first > length) {
-    XLOG(ERR) << "Extension block length provided exceeds remaining length";
+    XLOG(DBG4) << "Extension block length provided exceeds remaining length";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   // Parse the extensions
@@ -1930,6 +1963,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
   auto parseExtensionKvPairsResult =
       parseExtensionKvPairs(cursor, objectHeader, extensionBlockLength, true);
   if (!parseExtensionKvPairsResult.hasValue()) {
+    XLOG(DBG4) << "parseExtensions: error in parseExtensionKvPairs: "
+               << folly::to_underlying(parseExtensionKvPairsResult.error());
     return folly::makeUnexpected(parseExtensionKvPairsResult.error());
   }
   length -= extLen->first;
@@ -1948,6 +1983,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensionKvPairs(
     auto parseExtensionResult = parseExtension(
         cursor, extensionBlockLength, objectHeader, allowImmutable);
     if (parseExtensionResult.hasError()) {
+      XLOG(DBG4) << "parseExtensionKvPairs: error in parseExtension: "
+                 << folly::to_underlying(parseExtensionResult.error());
       return folly::makeUnexpected(parseExtensionResult.error());
     }
   }
@@ -1961,6 +1998,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
     bool allowImmutable) const noexcept {
   auto type = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!type) {
+    XLOG(DBG4) << "parseExtension: UNDERFLOW on type";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= type->second;
@@ -1989,10 +2027,12 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
   if (ext.type & 0x1) {
     auto extLen = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!extLen) {
+      XLOG(DBG4) << "parseExtension: UNDERFLOW on extLen";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= extLen->second;
     if (length < extLen->first) {
+      XLOG(DBG4) << "parseExtension: UNDERFLOW on ext array value";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     if (extLen->first > kMaxExtensionLength) {
@@ -2010,6 +2050,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
           extLen->first,
           /*allowImmutable=*/false);
       if (parseInnerResult.hasError()) {
+        XLOG(DBG4)
+            << "parseExtension: error in parseExtensionKvPairs (immutable): "
+            << folly::to_underlying(parseInnerResult.error());
         return folly::makeUnexpected(parseInnerResult.error());
       }
       // Advance the outer cursor past the immutable container payload and
@@ -2027,6 +2070,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
     // Even-type extension (integer value)
     auto iVal = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!iVal) {
+      XLOG(DBG4) << "parseExtension: UNDERFLOW on intValue";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= iVal->second;
