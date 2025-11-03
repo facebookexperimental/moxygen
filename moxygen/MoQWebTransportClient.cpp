@@ -44,6 +44,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
     const proxygen::URL& url,
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
+    std::shared_ptr<fizz::CertificateVerifier> verifier,
     const quic::TransportSettings& transportSettings) {
   // Establish an H3 connection
   class ConnectCallback : public proxygen::HQConnector::Callback {
@@ -88,7 +89,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
       folly::none,
       folly::SocketAddress(url.getHost(), url.getPort(), true), // blocking DNS,
       std::move(fizzContext),
-      nullptr, // default verifier will be used
+      verifier,
       connect_timeout,
       folly::emptySocketOptionMap,
       url.getHost());
@@ -117,6 +118,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
       url_,
       connect_timeout,
       transaction_timeout,
+      verifier_,
       transportSettings);
 
   // Establish WebTransport session

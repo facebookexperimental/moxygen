@@ -42,10 +42,12 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   MoQClientBase(
       std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,
-      SessionFactory sessionFactory)
+      SessionFactory sessionFactory,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
       : exec_(std::move(exec)),
         url_(std::move(url)),
-        sessionFactory_(std::move(sessionFactory)) {}
+        sessionFactory_(std::move(sessionFactory)),
+        verifier_(std::move(verifier)) {}
 
   std::shared_ptr<MoQExecutor> getEventBase() {
     return exec_;

@@ -18,14 +18,20 @@ class MoQWebTransportClient : public MoQClient {
  public:
   MoQWebTransportClient(
       std::shared_ptr<MoQFollyExecutorImpl> exec,
-      proxygen::URL url)
-      : MoQClient(std::move(exec), std::move(url)) {}
+      proxygen::URL url,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      : MoQClient(std::move(exec), std::move(url), std::move(verifier)) {}
 
   MoQWebTransportClient(
       std::shared_ptr<MoQFollyExecutorImpl> exec,
       proxygen::URL url,
-      SessionFactory sessionFactory)
-      : MoQClient(std::move(exec), std::move(url), std::move(sessionFactory)) {}
+      SessionFactory sessionFactory,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      : MoQClient(
+            std::move(exec),
+            std::move(url),
+            std::move(sessionFactory),
+            std::move(verifier)) {}
 
   folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,
