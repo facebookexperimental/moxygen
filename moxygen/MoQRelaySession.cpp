@@ -442,6 +442,7 @@ void MoQRelaySession::onAnnounce(Announce ann) {
             ann.requestID,
             AnnounceErrorCode::NOT_SUPPORTED,
             "Not a subscriber"});
+    return;
   }
   co_withExecutor(exec_.get(), handleAnnounce(std::move(ann))).start();
 }
