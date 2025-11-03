@@ -96,7 +96,11 @@ QuicConnector::connectQuic(
           .setCertificateVerifier(std::move(verifier))
           .build(),
       /*connectionIdSize=*/0);
-  quicClient->setTransportSettings(transportSettings);
+  // Make a copy of transportSettings and enable datagram support
+  auto ts = transportSettings;
+  ts.datagramConfig.enabled = true;
+
+  quicClient->setTransportSettings(ts);
   quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
   folly::CancellationToken cancellationToken =
