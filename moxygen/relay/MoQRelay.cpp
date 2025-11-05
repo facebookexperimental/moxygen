@@ -80,6 +80,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
       // Check if the subscription's FullTrackName is in this namespace
       if (it->first.trackNamespace.startsWith(ann.trackNamespace) &&
           it->second.upstream == nodePtr->sourceSession) {
+        XLOG(DBG4) << "Erasing subscription to " << it->first;
         it = subscriptions_.erase(it);
       } else {
         ++it;
@@ -174,6 +175,7 @@ Subscriber::PublishResult MoQRelay::publish(
          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
          0, // filled in by session
          "upstream disconnect"});
+    XLOG(DBG4) << "Erasing subscription to " << it->first;
     subscriptions_.erase(it);
   }
   auto session = MoQSession::getRequestSession();
@@ -468,6 +470,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       auto it = subscriptions_.find(trackName);
       if (it != subscriptions_.end()) {
         it->second.promise.setException(std::runtime_error("failed"));
+        XLOG(DBG4) << "Erasing subscription to " << it->first;
         subscriptions_.erase(it);
       }
     });
@@ -489,6 +492,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
            folly::to<std::string>(
                "upstream subscribe failed: ", subRes.error().reasonPhrase)}));
     }
+    // is it more correct to co_await folly::coro::co_safe_point here?
     g.dismiss();
     auto largest = subRes.value()->subscribeOk().largest;
     if (largest) {
@@ -515,7 +519,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
 
     subscriber->setPublisherGroupOrder(pubGroupOrder);
     auto it = subscriptions_.find(subReq.fullTrackName);
-    XCHECK(it != subscriptions_.end());
+    // There are cases that remove the subscription like failing to
+    // publish a datagram that was received before the subscribeOK
+    // and then gets flushed
+    if (it == subscriptions_.end()) {
+      XLOG(ERR) << "Subscription is GONE, returning exception";
+      co_yield folly::coro::co_error(
+          std::runtime_error("subscription is gone"));
+    }
     auto& rsub = it->second;
     rsub.requestID = subRes.value()->subscribeOk().requestID;
     rsub.handle = std::move(subRes.value());
@@ -644,6 +655,7 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
       }
     }
     if (!subscription.isPublish) {
+      XLOG(DBG4) << "Erasing subscription to " << subscriptionIt->first;
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     }
     return;
@@ -714,6 +726,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
            0, // filled in by session
            "upstream disconnect"});
       if (isPublish) {
+        XLOG(DBG4) << "Erasing subscription to " << curIt->first;
         subscriptions_.erase(curIt);
       }
     } else {
