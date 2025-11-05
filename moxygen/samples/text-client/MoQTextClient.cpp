@@ -13,6 +13,7 @@
 #include <moxygen/MoQWebTransportClient.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/relay/MoQRelayClient.h>
+#include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
@@ -49,6 +50,10 @@ DEFINE_uint64(
     delivery_timeout,
     0,
     "Delivery timeout in milliseconds (0 = disabled)");
+DEFINE_bool(
+    insecure,
+    false,
+    "Use insecure verifier (skip certificate validation)");
 
 namespace {
 using namespace moxygen;
@@ -151,17 +156,20 @@ class MoQTextClient : public Subscriber,
   MoQTextClient(
       std::shared_ptr<MoQFollyExecutorImpl> evb,
       proxygen::URL url,
-      FullTrackName ftn)
+      FullTrackName ftn,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
       : moqClient_(
             FLAGS_quic_transport
                 ? std::make_unique<MoQClient>(
                       evb,
                       std::move(url),
-                      MoQRelaySession::createRelaySessionFactory())
+                      MoQRelaySession::createRelaySessionFactory(),
+                      verifier)
                 : std::make_unique<MoQWebTransportClient>(
                       evb,
                       std::move(url),
-                      MoQRelaySession::createRelaySessionFactory())),
+                      MoQRelaySession::createRelaySessionFactory(),
+                      verifier)),
         fullTrackName_(std::move(ftn)) {}
 
   folly::coro::Task<MoQSession::SubscribeAnnouncesResult> subscribeAnnounces(
@@ -399,8 +407,16 @@ int main(int argc, char* argv[]) {
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb =
       std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr;
+  if (FLAGS_insecure) {
+    verifier = std::make_shared<
+        moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>();
+  }
   auto textClient = std::make_shared<MoQTextClient>(
-      moqEvb, std::move(url), moxygen::FullTrackName({ns, FLAGS_track_name}));
+      moqEvb,
+      std::move(url),
+      moxygen::FullTrackName({ns, FLAGS_track_name}),
+      verifier);
 
   class SigHandler : public folly::AsyncSignalHandler {
    public:
