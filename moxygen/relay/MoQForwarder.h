@@ -54,6 +54,7 @@ class MoQForwarder : public TrackConsumer {
    public:
     virtual ~Callback() = default;
     virtual void onEmpty(MoQForwarder*) = 0;
+    virtual void forwardChanged(MoQForwarder*) {}
   };
 
   void setCallback(std::shared_ptr<Callback> callback) {
@@ -127,7 +128,13 @@ class MoQForwarder : public TrackConsumer {
       // generate SUBSCRIBE_DONE
       range.start = subscribeUpdate.start;
       range.end = {subscribeUpdate.endGroup, 0};
+      auto wasForwarding = shouldForward;
       shouldForward = subscribeUpdate.forward;
+      if (shouldForward && !wasForwarding) {
+        forwarder.addForwardingSubscriber();
+      } else if (wasForwarding && !shouldForward) {
+        forwarder.removeForwardingSubscriber();
+      }
     }
 
     void unsubscribe() override {
@@ -186,6 +193,9 @@ class MoQForwarder : public TrackConsumer {
            {}});
     }
     subscribers_.emplace(sessionPtr, subscriber);
+    if (subReq.forward) {
+      addForwardingSubscriber();
+    }
     return subscriber;
   }
 
@@ -208,6 +218,9 @@ class MoQForwarder : public TrackConsumer {
         nullptr,
         pub.forward);
     subscribers_.emplace(sessionPtr, subscriber);
+    if (pub.forward) {
+      addForwardingSubscriber();
+    }
     return subscriber;
   }
 
@@ -269,6 +282,14 @@ class MoQForwarder : public TrackConsumer {
       return;
     }
     subscribeDone(*subIt->second, subDone);
+    if (subIt->second->shouldForward) {
+      if (subscribers_.size() == 1) {
+        // don't trigger a forwardUpdated callback here, we will trigger onEmpty
+        forwardingSubscribers_--;
+      } else {
+        removeForwardingSubscriber();
+      }
+    }
     subscribers_.erase(subIt);
     XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
     if (subscribers_.empty() && callback_) {
@@ -692,6 +713,22 @@ class MoQForwarder : public TrackConsumer {
     }
   };
 
+  void addForwardingSubscriber() {
+    if (forwardingSubscribers_++ == 0 && callback_) {
+      callback_->forwardChanged(this);
+    }
+  }
+
+  void removeForwardingSubscriber() {
+    if (--forwardingSubscribers_ == 0 && callback_) {
+      callback_->forwardChanged(this);
+    }
+  }
+
+  uint64_t numForwardingSubscribers() const {
+    return forwardingSubscribers_;
+  }
+
  private:
   static Payload maybeClone(const Payload& payload) {
     return payload ? payload->clone() : nullptr;
@@ -710,6 +747,7 @@ class MoQForwarder : public TrackConsumer {
   // This should eventually be a vector of params that can be cascaded e2e
   std::chrono::milliseconds upstreamDeliveryTimeout_{};
   std::shared_ptr<Callback> callback_;
+  uint64_t forwardingSubscribers_{0};
 };
 
 } // namespace moxygen

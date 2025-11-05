@@ -113,6 +113,7 @@ class MoQRelay : public Publisher,
   };
 
   void onEmpty(MoQForwarder* forwarder) override;
+  void forwardChanged(MoQForwarder* forwarder) override;
 
   folly::coro::Task<void> announceToSession(
       std::shared_ptr<MoQSession> session,

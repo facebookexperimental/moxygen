@@ -480,7 +480,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
         std::move(session), subReq, std::move(consumer));
     // As per the spec, we must set forward = true in the subscribe request
     // to the upstream.
-    subReq.forward = true;
+    // But should we if this is forward=0?
+    subReq.forward = forwarder->numForwardingSubscribers() > 0;
 
     emplaceRes.first->second.requestID = upstreamSession->peekNextRequestID();
     auto subRes = co_await upstreamSession->subscribe(
@@ -548,8 +549,21 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
               "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to largest
     }
+    bool forwarding =
+        subscriptionIt->second.forwarder->numForwardingSubscribers() > 0;
     auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
+    if (!forwarding &&
+        subscriptionIt->second.forwarder->numForwardingSubscribers() > 0) {
+      subscriptionIt->second.handle->subscribeUpdate(
+          {RequestID(0),
+           subscriptionIt->second.handle->subscribeOk().requestID,
+           kLocationMin,
+           kLocationMax.group,
+           kDefaultPriority,
+           /*forward=*/true,
+           {}});
+    }
     co_return subscriber;
   }
 }
@@ -658,6 +672,30 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
       XLOG(DBG4) << "Erasing subscription to " << subscriptionIt->first;
       subscriptionIt = subscriptions_.erase(subscriptionIt);
     }
+    return;
+  }
+}
+
+void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
+  // TODO: we shouldn't need a linear search if forwarder stores FullTrackName
+  for (auto subscriptionIt = subscriptions_.begin();
+       subscriptionIt != subscriptions_.end();
+       ++subscriptionIt) {
+    auto& subscription = subscriptionIt->second;
+    if (subscription.forwarder.get() != forwarder) {
+      continue;
+    }
+    XLOG(INFO) << "Updating forward for " << subscriptionIt->first
+               << " numForwardingSubs="
+               << forwarder->numForwardingSubscribers();
+    subscription.handle->subscribeUpdate(
+        {RequestID(0),
+         subscription.handle->subscribeOk().requestID,
+         kLocationMin,
+         kLocationMax.group,
+         kDefaultPriority,
+         /*forward=*/forwarder->numForwardingSubscribers() > 0,
+         {}});
     return;
   }
 }
