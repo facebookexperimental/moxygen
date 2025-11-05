@@ -84,6 +84,7 @@ class MoQRelay : public Publisher,
             announcements;
     // The session that ANNOUNCEd this node
     std::shared_ptr<MoQSession> sourceSession;
+    std::shared_ptr<AnnounceCallback> announceCallback;
 
     MoQRelay& relay_;
   };

@@ -47,7 +47,7 @@ std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
 
 folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
     Announce ann,
-    std::shared_ptr<Subscriber::AnnounceCallback>) {
+    std::shared_ptr<Subscriber::AnnounceCallback> callback) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace;
   // check auth
   if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
@@ -62,9 +62,37 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
       MatchType::Exact,
       &sessions);
 
+  // Log if there is already a session that has announced this track
+  if (nodePtr->sourceSession) {
+    XLOG(WARNING) << "Announce: Existing session ("
+                  << nodePtr->sourceSession.get()
+                  << ") has already announced trackNamespace="
+                  << ann.trackNamespace;
+    // Since we don't fully support multiple publishers -- cancel the old
+    // announcement and remove ongoing subscriptions to this publisher
+    // in that namespace.  Note: it could have announced a more specific
+    // namespace which hasn't been overridden by the new publisher, but
+    // for now we don't support that.
+    nodePtr->announceCallback->announceCancel(
+        AnnounceErrorCode::CANCELLED, "New publisher");
+    nodePtr->announceCallback.reset();
+    for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
+      // Check if the subscription's FullTrackName is in this namespace
+      if (it->first.trackNamespace.startsWith(ann.trackNamespace) &&
+          it->second.upstream == nodePtr->sourceSession) {
+        it = subscriptions_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
+    nodePtr->sourceSession.reset();
+  }
+
   // TODO: store auth for forwarding on future SubscribeAnnounces?
   auto session = MoQSession::getRequestSession();
   nodePtr->sourceSession = std::move(session);
+  nodePtr->announceCallback = std::move(callback);
   nodePtr->trackNamespace_ = ann.trackNamespace;
   nodePtr->setAnnounceOk({ann.requestID, {}});
   for (auto& outSession : sessions) {
@@ -96,6 +124,7 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   auto nodePtr = findNamespaceNode(trackNamespace);
   XCHECK(nodePtr);
   nodePtr->sourceSession = nullptr;
+  nodePtr->announceCallback.reset();
   for (auto& announcement : nodePtr->announcements) {
     auto exec = announcement.first->getExecutor();
     exec->add([announceHandle = announcement.second] {
@@ -645,6 +674,7 @@ void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
     if (nodePtr->sourceSession == session) {
       // This session is unannouncing
       nodePtr->sourceSession = nullptr;
+      nodePtr->announceCallback.reset();
       for (auto& announcement : nodePtr->announcements) {
         auto exec = announcement.first->getExecutor();
         exec->add([announceHandle = announcement.second] {
