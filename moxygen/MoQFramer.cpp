@@ -25,6 +25,15 @@ uint64_t getLocationTypeValue(
   return folly::to_underlying(locationType);
 }
 
+bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
+  switch (key) {
+    case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
+      return true;
+    default:
+      return false;
+  }
+}
+
 } // namespace
 
 namespace moxygen {
@@ -37,6 +46,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     uint64_t version,
     size_t numParams,
     Parameters& params,
+    std::vector<Parameter>& requestSpecificParams,
     MoQTokenCache& tokenCache,
     ParamsType paramsType);
 folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
@@ -410,6 +420,8 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
   // Auth in setup from v12
   const auto authKey =
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
+  const auto subscriptionFilterKey =
+      folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
   if (key == authKey) {
     auto res = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!res) {
@@ -429,7 +441,16 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
       return folly::none;
     }
     p.asAuthToken = std::move(*tokenRes.value());
-  } else {
+  } else if (
+      key == subscriptionFilterKey && getDraftMajorVersion(version) >= 15) {
+    auto res = parseSubscriptionFilter(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    p.asSubscriptionFilter = res.value();
+  }
+
+  else {
     auto res = parseFixedString(cursor, length);
     if (!res) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -461,6 +482,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     uint64_t version,
     size_t numParams,
     Parameters& params,
+    std::vector<Parameter>& requestSpecificParams,
     MoQTokenCache& tokenCache,
     ParamsType paramsType) {
   for (auto i = 0u; i < numParams; i++) {
@@ -488,7 +510,14 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
       return folly::makeUnexpected(res.error());
     }
     if (*res) {
-      params.insertParam(std::move(*res.value()));
+      TrackRequestParamKey trackRequestParamKey =
+          (TrackRequestParamKey)key->first;
+      if (getDraftMajorVersion(version) >= 15 &&
+          isRequestSpecificParam(trackRequestParamKey)) {
+        requestSpecificParams.push_back(std::move(*res.value()));
+      } else {
+        params.insertParam(std::move(*res.value()));
+      }
     } // else the param was not an error but shouldn't be added to the set
   }
   if (length > 0) {
@@ -537,12 +566,14 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto res = parseParams(
       cursor,
       length,
       serializationVersion,
       numParams->first,
       clientSetup.params,
+      requestSpecificParams,
       tokenCache_,
       ParamsType::ClientSetup);
   if (res.hasError()) {
@@ -584,12 +615,14 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto res = parseParams(
       cursor,
       length,
       version_ ? *version_ : serverSetup.selectedVersion,
       numParams->first,
       serverSetup.params,
+      requestSpecificParams,
       tokenCache_,
       ParamsType::ServerSetup);
   if (res.hasError()) {
@@ -947,7 +980,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     folly::io::Cursor& cursor,
     size_t& length,
     size_t numParams,
-    TrackRequestParameters& params) const noexcept {
+    TrackRequestParameters& params,
+    std::vector<Parameter>& requestSpecificParams) const noexcept {
   CHECK(version_.hasValue())
       << "The version must be set before parsing track request params";
   return parseParams(
@@ -956,6 +990,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       *version_,
       numParams,
       params,
+      requestSpecificParams,
       tokenCache_,
       ParamsType::Request);
 }
@@ -1036,8 +1071,13 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto res2 = parseTrackRequestParams(
-      cursor, length, numParams->first, subscribeRequest.params);
+      cursor,
+      length,
+      numParams->first,
+      subscribeRequest.params,
+      requestSpecificParams);
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
@@ -1106,8 +1146,13 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
   }
   length -= numParams->second;
 
+  std::vector<Parameter> requestSpecificParams;
   auto res2 = parseTrackRequestParams(
-      cursor, length, numParams->first, subscribeUpdate.params);
+      cursor,
+      length,
+      numParams->first,
+      subscribeUpdate.params,
+      requestSpecificParams);
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
@@ -1164,8 +1209,13 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto res2 = parseTrackRequestParams(
-      cursor, length, numParams->first, subscribeOk.params);
+      cursor,
+      length,
+      numParams->first,
+      subscribeOk.params,
+      requestSpecificParams);
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
@@ -1307,8 +1357,9 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
-  auto paramRes =
-      parseTrackRequestParams(cursor, length, numParams->first, publish.params);
+  std::vector<Parameter> requestSpecificParams;
+  auto paramRes = parseTrackRequestParams(
+      cursor, length, numParams->first, publish.params, requestSpecificParams);
   if (!paramRes) {
     return folly::makeUnexpected(paramRes.error());
   }
@@ -1392,8 +1443,13 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto paramRes = parseTrackRequestParams(
-      cursor, length, numParams->first, publishOk.params);
+      cursor,
+      length,
+      numParams->first,
+      publishOk.params,
+      requestSpecificParams);
   if (!paramRes) {
     return folly::makeUnexpected(paramRes.error());
   }
@@ -1424,8 +1480,9 @@ folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto res2 = parseTrackRequestParams(
-      cursor, length, numParams->first, announce.params);
+      cursor, length, numParams->first, announce.params, requestSpecificParams);
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
@@ -1465,8 +1522,13 @@ folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseRequestOk(
         // no params supported
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
       }
+      std::vector<Parameter> requestSpecificParams;
       auto res = parseTrackRequestParams(
-          cursor, length, numParams->first, requestOk.params);
+          cursor,
+          length,
+          numParams->first,
+          requestOk.params,
+          requestSpecificParams);
       if (!res) {
         return folly::makeUnexpected(res.error());
       }
@@ -1556,8 +1618,13 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto parseParamsResult = parseTrackRequestParams(
-      cursor, length, numParams->first, trackStatus.params);
+      cursor,
+      length,
+      numParams->first,
+      trackStatus.params,
+      requestSpecificParams);
   if (!parseParamsResult) {
     return folly::makeUnexpected(parseParamsResult.error());
   }
@@ -1619,8 +1686,13 @@ folly::Expected<TrackStatusOk, ErrorCode> MoQFrameParser::parseTrackStatusOk(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
   auto parseParamsResult = parseTrackRequestParams(
-      cursor, length, numParams->first, trackStatusOk.params);
+      cursor,
+      length,
+      numParams->first,
+      trackStatusOk.params,
+      requestSpecificParams);
   if (!parseParamsResult) {
     return folly::makeUnexpected(parseParamsResult.error());
   }
@@ -1760,8 +1832,9 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
-  auto res5 =
-      parseTrackRequestParams(cursor, length, numParams->first, fetch.params);
+  std::vector<Parameter> requestSpecificParams;
+  auto res5 = parseTrackRequestParams(
+      cursor, length, numParams->first, fetch.params, requestSpecificParams);
   if (!res5) {
     return folly::makeUnexpected(res5.error());
   }
@@ -1822,8 +1895,9 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
-  auto res3 =
-      parseTrackRequestParams(cursor, length, numParams->first, fetchOk.params);
+  std::vector<Parameter> requestSpecificParams;
+  auto res3 = parseTrackRequestParams(
+      cursor, length, numParams->first, fetchOk.params, requestSpecificParams);
   if (!res3) {
     return folly::makeUnexpected(res3.error());
   }
@@ -2603,10 +2677,15 @@ TrackRequestParameter getAuthParam(
 void MoQFrameWriter::writeTrackRequestParams(
     folly::IOBufQueue& writeBuf,
     const TrackRequestParameters& params,
+    const std::vector<Parameter>& requestSpecificParams,
     size_t& size,
     bool& error) const noexcept {
   CHECK(*version_) << "Version must be set before writing track request params";
-  writeVarint(writeBuf, params.size(), size, error);
+  // Write total count of all parameters
+  writeVarint(
+      writeBuf, params.size() + requestSpecificParams.size(), size, error);
+
+  // Write regular params
   for (auto& param : params) {
     writeVarint(writeBuf, param.key, size, error);
 
@@ -2625,6 +2704,21 @@ void MoQFrameWriter::writeTrackRequestParams(
           writeFixedString(writeBuf, param.asString, size, error);
         }
         break;
+    }
+  }
+
+  const auto subscriptionFilterKey =
+      folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+
+  // Write request-specific params
+  if (getDraftMajorVersion(*version_) >= 15) {
+    for (auto& param : requestSpecificParams) {
+      writeVarint(writeBuf, param.key, size, error);
+
+      if (param.key == subscriptionFilterKey) {
+        writeSubscriptionFilter(
+            writeBuf, param.asSubscriptionFilter, size, error);
+      }
     }
   }
 }
@@ -2875,7 +2969,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
     }
   }
 
-  writeTrackRequestParams(writeBuf, subscribeRequest.params, size, error);
+  writeTrackRequestParams(writeBuf, subscribeRequest.params, {}, size, error);
   return size;
 }
 
@@ -2899,7 +2993,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   uint8_t forwardFlag = (update.forward) ? 1 : 0;
   writeBuf.append(&forwardFlag, 1);
   size += 1;
-  writeTrackRequestParams(writeBuf, update.params, size, error);
+  writeTrackRequestParams(writeBuf, update.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -2944,7 +3038,7 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     writeVarint(writeBuf, subscribeOk.largest->group, size, error);
     writeVarint(writeBuf, subscribeOk.largest->object, size, error);
   }
-  writeTrackRequestParams(writeBuf, subscribeOk.params, size, error);
+  writeTrackRequestParams(writeBuf, subscribeOk.params, {}, size, error);
   return size;
 }
 
@@ -3048,7 +3142,7 @@ WriteResult MoQFrameWriter::writePublish(
   writeBuf.append(&forwardFlag, 1);
   size += 1;
 
-  writeTrackRequestParams(writeBuf, publish.params, size, error);
+  writeTrackRequestParams(writeBuf, publish.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -3105,7 +3199,7 @@ WriteResult MoQFrameWriter::writePublishOk(
     }
   }
 
-  writeTrackRequestParams(writeBuf, publishOk.params, size, error);
+  writeTrackRequestParams(writeBuf, publishOk.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -3122,7 +3216,7 @@ WriteResult MoQFrameWriter::writeAnnounce(
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE, error);
   writeVarint(writeBuf, announce.requestID.value, size, error);
   writeTrackNamespace(writeBuf, announce.trackNamespace, size, error);
-  writeTrackRequestParams(writeBuf, announce.params, size, error);
+  writeTrackRequestParams(writeBuf, announce.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -3155,7 +3249,7 @@ WriteResult MoQFrameWriter::writeRequestOk(
       return folly::makeUnexpected(
           quic::TransportErrorCode::PROTOCOL_VIOLATION);
     }
-    writeTrackRequestParams(writeBuf, requestOk.params, size, error);
+    writeTrackRequestParams(writeBuf, requestOk.params, {}, size, error);
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -3216,7 +3310,7 @@ WriteResult MoQFrameWriter::writeTrackStatus(
   } else {
     writeVarint(writeBuf, trackStatus.requestID.value, size, error);
     writeFullTrackName(writeBuf, trackStatus.fullTrackName, size, error);
-    writeTrackRequestParams(writeBuf, trackStatus.params, size, error);
+    writeTrackRequestParams(writeBuf, trackStatus.params, {}, size, error);
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -3258,7 +3352,7 @@ WriteResult MoQFrameWriter::writeTrackStatusOk(
       writeVarint(writeBuf, 0, size, error);
       writeVarint(writeBuf, 0, size, error);
     }
-    writeTrackRequestParams(writeBuf, trackStatusOk.params, size, error);
+    writeTrackRequestParams(writeBuf, trackStatusOk.params, {}, size, error);
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -3301,7 +3395,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
   writeVarint(writeBuf, subscribeAnnounces.requestID.value, size, error);
   writeTrackNamespace(
       writeBuf, subscribeAnnounces.trackNamespacePrefix, size, error);
-  writeTrackRequestParams(writeBuf, subscribeAnnounces.params, size, error);
+  writeTrackRequestParams(writeBuf, subscribeAnnounces.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -3366,7 +3460,7 @@ WriteResult MoQFrameWriter::writeFetch(
     writeVarint(writeBuf, joining->joiningRequestID.value, size, error);
     writeVarint(writeBuf, joining->joiningStart, size, error);
   }
-  writeTrackRequestParams(writeBuf, fetch.params, size, error);
+  writeTrackRequestParams(writeBuf, fetch.params, {}, size, error);
 
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -3405,7 +3499,7 @@ WriteResult MoQFrameWriter::writeFetchOk(
   size += 1;
   writeVarint(writeBuf, fetchOk.endLocation.group, size, error);
   writeVarint(writeBuf, fetchOk.endLocation.object, size, error);
-  writeTrackRequestParams(writeBuf, fetchOk.params, size, error);
+  writeTrackRequestParams(writeBuf, fetchOk.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

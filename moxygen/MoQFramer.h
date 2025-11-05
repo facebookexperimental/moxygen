@@ -1424,7 +1424,8 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length,
       size_t numParams,
-      TrackRequestParameters& params) const noexcept;
+      TrackRequestParameters& params,
+      std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
       folly::io::Cursor& cursor,
@@ -1653,6 +1654,7 @@ class MoQFrameWriter {
   void writeTrackRequestParams(
       folly::IOBufQueue& writeBuf,
       const TrackRequestParameters& params,
+      const std::vector<Parameter>& requestSpecificParams,
       size_t& size,
       bool& error) const noexcept;
 
