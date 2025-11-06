@@ -995,6 +995,17 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       ParamsType::Request);
 }
 
+folly::Optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  for (const auto& param : requestSpecificParams) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
+      return param.asSubscriptionFilter;
+    }
+  }
+  return folly::none;
+}
+
 folly::Expected<SubscribeRequest, ErrorCode>
 MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     const noexcept {
@@ -1033,38 +1044,41 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   }
   subscribeRequest.forward = (forwardFlag == 1);
   length--;
-  auto locType = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!locType) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  switch (locType->first) {
-    case folly::to_underlying(LocationType::LargestObject):
-    case folly::to_underlying(LocationType::LargestGroup):
-    case folly::to_underlying(LocationType::AbsoluteStart):
-    case folly::to_underlying(LocationType::AbsoluteRange):
-    case folly::to_underlying(LocationType::NextGroupStart):
-      break;
-    default:
-      XLOG(ERR) << "Invalid locType =" << locType->first;
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  length -= locType->second;
-  subscribeRequest.locType = LocationType(locType->first);
-  if (subscribeRequest.locType == LocationType::AbsoluteStart ||
-      subscribeRequest.locType == LocationType::AbsoluteRange) {
-    auto location = parseAbsoluteLocation(cursor, length);
-    if (!location) {
-      return folly::makeUnexpected(location.error());
-    }
-    subscribeRequest.start = *location;
-  }
-  if (subscribeRequest.locType == LocationType::AbsoluteRange) {
-    auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!endGroup) {
+
+  if (getDraftMajorVersion(*version_) < 15) {
+    auto locType = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!locType) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeRequest.endGroup = endGroup->first;
-    length -= endGroup->second;
+    switch (locType->first) {
+      case folly::to_underlying(LocationType::LargestObject):
+      case folly::to_underlying(LocationType::LargestGroup):
+      case folly::to_underlying(LocationType::AbsoluteStart):
+      case folly::to_underlying(LocationType::AbsoluteRange):
+      case folly::to_underlying(LocationType::NextGroupStart):
+        break;
+      default:
+        XLOG(ERR) << "Invalid locType =" << locType->first;
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    length -= locType->second;
+    subscribeRequest.locType = LocationType(locType->first);
+    if (subscribeRequest.locType == LocationType::AbsoluteStart ||
+        subscribeRequest.locType == LocationType::AbsoluteRange) {
+      auto location = parseAbsoluteLocation(cursor, length);
+      if (!location) {
+        return folly::makeUnexpected(location.error());
+      }
+      subscribeRequest.start = *location;
+    }
+    if (subscribeRequest.locType == LocationType::AbsoluteRange) {
+      auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
+      if (!endGroup) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      subscribeRequest.endGroup = endGroup->first;
+      length -= endGroup->second;
+    }
   }
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1081,10 +1095,31 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
+  handleRequestSpecificParams(subscribeRequest, requestSpecificParams);
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return subscribeRequest;
+}
+
+void MoQFrameParser::handleRequestSpecificParams(
+    SubscribeRequest& subscribeRequest,
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  if (getDraftMajorVersion(*version_) >= 15) {
+    auto filter = extractSubscriptionFilter(requestSpecificParams);
+    if (filter.has_value()) {
+      subscribeRequest.locType = filter->filterType;
+      subscribeRequest.start = filter->location;
+      if (filter->endGroup.has_value()) {
+        subscribeRequest.endGroup = filter->endGroup.value();
+      }
+    } else {
+      // Set defaults indicating an unfiltered subscribe
+      subscribeRequest.locType = LocationType::AbsoluteStart;
+      subscribeRequest.start = AbsoluteLocation{0, 0};
+      subscribeRequest.endGroup = 0; // ignored for AbsoluteStart
+    }
+  }
 }
 
 folly::Expected<SubscribeUpdate, ErrorCode>
@@ -1111,18 +1146,20 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     length -= subscriptionRequestID->second;
   }
 
-  auto start = parseAbsoluteLocation(cursor, length);
-  if (!start) {
-    return folly::makeUnexpected(start.error());
-  }
-  subscribeUpdate.start = start.value();
+  if (getDraftMajorVersion(*version_) < 15) {
+    auto start = parseAbsoluteLocation(cursor, length);
+    if (!start) {
+      return folly::makeUnexpected(start.error());
+    }
+    subscribeUpdate.start = start.value();
 
-  auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!endGroup) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!endGroup) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    subscribeUpdate.endGroup = endGroup->first;
+    length -= endGroup->second;
   }
-  subscribeUpdate.endGroup = endGroup->first;
-  length -= endGroup->second;
 
   if (length < 2) {
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1156,10 +1193,42 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
+  handleRequestSpecificParams(subscribeUpdate, requestSpecificParams);
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return subscribeUpdate;
+}
+
+void MoQFrameParser::handleRequestSpecificParams(
+    SubscribeUpdate& subscribeUpdate,
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  if (getDraftMajorVersion(*version_) >= 15) {
+    auto filter = extractSubscriptionFilter(requestSpecificParams);
+    if (filter.has_value()) {
+      if (filter->location.has_value()) {
+        subscribeUpdate.start = filter->location.value();
+      }
+      if (filter->endGroup.has_value()) {
+        // We're doing this because we assume that endGroup in the
+        // subscribeUpdate signifies the last group + 1.
+        subscribeUpdate.endGroup = filter->endGroup.value() + 1;
+      } else {
+        // 0 means open ended
+        subscribeUpdate.endGroup = 0;
+      }
+    } else {
+      // Set defaults
+      //
+      // TODO: We may want to change the SubscribeRequest struct so that
+      // it has optional fields for "start" and "endGroup", allowing us
+      // to leave it as none there. Right now, if no SUBSCRIBE_FILTER is
+      // set, we'll just set the "start" and "endGroup" to default values,
+      // which is probably not what we want.
+      subscribeUpdate.start = AbsoluteLocation{0, 0};
+      subscribeUpdate.endGroup = 0;
+    }
+  }
 }
 
 folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
@@ -1401,41 +1470,43 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
   publishOk.groupOrder = static_cast<GroupOrder>(order);
   length -= 3;
 
-  auto locType = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!locType) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  switch (locType->first) {
-    case folly::to_underlying(LocationType::LargestObject):
-    case folly::to_underlying(LocationType::LargestGroup):
-    case folly::to_underlying(LocationType::AbsoluteStart):
-    case folly::to_underlying(LocationType::AbsoluteRange):
-    case folly::to_underlying(LocationType::NextGroupStart):
-      break;
-    default:
-      XLOG(ERR) << "Invalid locType =" << locType->first;
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  length -= locType->second;
-  publishOk.locType = LocationType(locType->first);
-
-  if (publishOk.locType == LocationType::AbsoluteStart ||
-      publishOk.locType == LocationType::AbsoluteRange) {
-    auto location = parseAbsoluteLocation(cursor, length);
-    if (!location) {
-      return folly::makeUnexpected(location.error());
-    }
-    publishOk.start = *location;
-  }
-  if (publishOk.locType == LocationType::AbsoluteRange) {
-    auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!endGroup) {
+  if (getDraftMajorVersion(*version_) < 15) {
+    auto locType = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!locType) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    publishOk.endGroup = endGroup->first;
-    length -= endGroup->second;
-  } else {
-    publishOk.endGroup = folly::none;
+    switch (locType->first) {
+      case folly::to_underlying(LocationType::LargestObject):
+      case folly::to_underlying(LocationType::LargestGroup):
+      case folly::to_underlying(LocationType::AbsoluteStart):
+      case folly::to_underlying(LocationType::AbsoluteRange):
+      case folly::to_underlying(LocationType::NextGroupStart):
+        break;
+      default:
+        XLOG(ERR) << "Invalid locType =" << locType->first;
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    length -= locType->second;
+    publishOk.locType = LocationType(locType->first);
+
+    if (publishOk.locType == LocationType::AbsoluteStart ||
+        publishOk.locType == LocationType::AbsoluteRange) {
+      auto location = parseAbsoluteLocation(cursor, length);
+      if (!location) {
+        return folly::makeUnexpected(location.error());
+      }
+      publishOk.start = *location;
+    }
+    if (publishOk.locType == LocationType::AbsoluteRange) {
+      auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
+      if (!endGroup) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      publishOk.endGroup = endGroup->first;
+      length -= endGroup->second;
+    } else {
+      publishOk.endGroup = folly::none;
+    }
   }
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -1453,10 +1524,33 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
   if (!paramRes) {
     return folly::makeUnexpected(paramRes.error());
   }
+  handleRequestSpecificParams(publishOk, requestSpecificParams);
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return publishOk;
+}
+
+void MoQFrameParser::handleRequestSpecificParams(
+    PublishOk& publishOk,
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  if (getDraftMajorVersion(*version_) >= 15) {
+    auto filter = extractSubscriptionFilter(requestSpecificParams);
+    if (filter.has_value()) {
+      publishOk.locType = filter->filterType;
+      publishOk.start = filter->location;
+      if (filter->endGroup.has_value()) {
+        publishOk.endGroup = filter->endGroup.value();
+      } else {
+        publishOk.endGroup = folly::none;
+      }
+    } else {
+      // Set defaults
+      publishOk.locType = LocationType::AbsoluteStart;
+      publishOk.start = AbsoluteLocation{0, 0};
+      publishOk.endGroup = folly::none;
+    }
+  }
 }
 
 folly::Expected<Announce, ErrorCode> MoQFrameParser::parseAnnounce(
@@ -2685,6 +2779,21 @@ void MoQFrameWriter::writeTrackRequestParams(
   writeVarint(
       writeBuf, params.size() + requestSpecificParams.size(), size, error);
 
+  const auto subscriptionFilterKey =
+      folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+
+  // Write request-specific params
+  if (getDraftMajorVersion(*version_) >= 15) {
+    for (auto& param : requestSpecificParams) {
+      writeVarint(writeBuf, param.key, size, error);
+
+      if (param.key == subscriptionFilterKey) {
+        writeSubscriptionFilter(
+            writeBuf, param.asSubscriptionFilter, size, error);
+      }
+    }
+  }
+
   // Write regular params
   for (auto& param : params) {
     writeVarint(writeBuf, param.key, size, error);
@@ -2704,21 +2813,6 @@ void MoQFrameWriter::writeTrackRequestParams(
           writeFixedString(writeBuf, param.asString, size, error);
         }
         break;
-    }
-  }
-
-  const auto subscriptionFilterKey =
-      folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
-
-  // Write request-specific params
-  if (getDraftMajorVersion(*version_) >= 15) {
-    for (auto& param : requestSpecificParams) {
-      writeVarint(writeBuf, param.key, size, error);
-
-      if (param.key == subscriptionFilterKey) {
-        writeSubscriptionFilter(
-            writeBuf, param.asSubscriptionFilter, size, error);
-      }
     }
   }
 }
@@ -2943,33 +3037,49 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
   uint8_t forwardFlag = (subscribeRequest.forward) ? 1 : 0;
   writeBuf.append(&forwardFlag, 1);
   size += 1;
-  writeVarint(
-      writeBuf,
-      getLocationTypeValue(
-          subscribeRequest.locType, getDraftMajorVersion(*version_)),
-      size,
-      error);
 
-  switch (subscribeRequest.locType) {
-    case LocationType::AbsoluteStart: {
-      writeVarint(writeBuf, subscribeRequest.start->group, size, error);
-      writeVarint(writeBuf, subscribeRequest.start->object, size, error);
-      break;
-    }
+  std::vector<Parameter> requestSpecificParams;
+  if (getDraftMajorVersion(*version_) >= 15) {
+    Parameter subscriptionFilterParam;
+    subscriptionFilterParam.key =
+        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+    subscriptionFilterParam.asSubscriptionFilter = SubscriptionFilter(
+        subscribeRequest.locType,
+        subscribeRequest.start,
+        subscribeRequest.locType == LocationType::AbsoluteRange
+            ? folly::Optional<uint64_t>(subscribeRequest.endGroup)
+            : folly::none);
+    requestSpecificParams.push_back(subscriptionFilterParam);
+  } else {
+    writeVarint(
+        writeBuf,
+        getLocationTypeValue(
+            subscribeRequest.locType, getDraftMajorVersion(*version_)),
+        size,
+        error);
 
-    case LocationType::AbsoluteRange: {
-      writeVarint(writeBuf, subscribeRequest.start->group, size, error);
-      writeVarint(writeBuf, subscribeRequest.start->object, size, error);
-      writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
-      break;
-    }
+    switch (subscribeRequest.locType) {
+      case LocationType::AbsoluteStart: {
+        writeVarint(writeBuf, subscribeRequest.start->group, size, error);
+        writeVarint(writeBuf, subscribeRequest.start->object, size, error);
+        break;
+      }
 
-    default: {
-      break;
+      case LocationType::AbsoluteRange: {
+        writeVarint(writeBuf, subscribeRequest.start->group, size, error);
+        writeVarint(writeBuf, subscribeRequest.start->object, size, error);
+        writeVarint(writeBuf, subscribeRequest.endGroup, size, error);
+        break;
+      }
+
+      default: {
+        break;
+      }
     }
   }
 
-  writeTrackRequestParams(writeBuf, subscribeRequest.params, {}, size, error);
+  writeTrackRequestParams(
+      writeBuf, subscribeRequest.params, requestSpecificParams, size, error);
   return size;
 }
 
@@ -2985,15 +3095,38 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   if (getDraftMajorVersion(*version_) >= 14) {
     writeVarint(writeBuf, update.subscriptionRequestID.value, size, error);
   }
-  writeVarint(writeBuf, update.start.group, size, error);
-  writeVarint(writeBuf, update.start.object, size, error);
-  writeVarint(writeBuf, update.endGroup, size, error);
+
+  std::vector<Parameter> requestSpecificParams;
+  if (getDraftMajorVersion(*version_) >= 15) {
+    Parameter subscriptionFilterParam;
+    subscriptionFilterParam.key =
+        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+    // Here, we're trying to keep in line with the SubscribeUpdate usage, in
+    // that update.endGroup is the end group id + 1. If update.endGroup == 0,
+    // that means that the subscription is open ended.
+    LocationType locationType = (update.endGroup == 0)
+        ? LocationType::AbsoluteStart
+        : LocationType::AbsoluteRange;
+    folly::Optional<uint64_t> endGroup = folly::none;
+    if (update.endGroup > 0) {
+      endGroup = update.endGroup - 1;
+    }
+    subscriptionFilterParam.asSubscriptionFilter =
+        SubscriptionFilter(locationType, update.start, endGroup);
+    requestSpecificParams.push_back(subscriptionFilterParam);
+  } else {
+    writeVarint(writeBuf, update.start.group, size, error);
+    writeVarint(writeBuf, update.start.object, size, error);
+    writeVarint(writeBuf, update.endGroup, size, error);
+  }
+
   writeBuf.append(&update.priority, 1);
   size += 1;
   uint8_t forwardFlag = (update.forward) ? 1 : 0;
   writeBuf.append(&forwardFlag, 1);
   size += 1;
-  writeTrackRequestParams(writeBuf, update.params, {}, size, error);
+  writeTrackRequestParams(
+      writeBuf, update.params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -3170,36 +3303,51 @@ WriteResult MoQFrameWriter::writePublishOk(
   writeBuf.append(&order, 1);
   size += 1;
 
-  writeVarint(
-      writeBuf,
-      getLocationTypeValue(publishOk.locType, getDraftMajorVersion(*version_)),
-      size,
-      error);
+  std::vector<Parameter> requestSpecificParams;
+  if (getDraftMajorVersion(*version_) >= 15) {
+    Parameter subscriptionFilterParam;
+    subscriptionFilterParam.key =
+        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+    subscriptionFilterParam.asSubscriptionFilter = SubscriptionFilter(
+        publishOk.locType,
+        publishOk.start,
+        publishOk.locType == LocationType::AbsoluteRange ? publishOk.endGroup
+                                                         : folly::none);
+    requestSpecificParams.push_back(subscriptionFilterParam);
+  } else {
+    writeVarint(
+        writeBuf,
+        getLocationTypeValue(
+            publishOk.locType, getDraftMajorVersion(*version_)),
+        size,
+        error);
 
-  switch (publishOk.locType) {
-    case LocationType::AbsoluteStart: {
-      if (publishOk.start.hasValue()) {
-        writeVarint(writeBuf, publishOk.start->group, size, error);
-        writeVarint(writeBuf, publishOk.start->object, size, error);
+    switch (publishOk.locType) {
+      case LocationType::AbsoluteStart: {
+        if (publishOk.start.hasValue()) {
+          writeVarint(writeBuf, publishOk.start->group, size, error);
+          writeVarint(writeBuf, publishOk.start->object, size, error);
+        }
+        break;
       }
-      break;
-    }
-    case LocationType::AbsoluteRange: {
-      if (publishOk.start.hasValue()) {
-        writeVarint(writeBuf, publishOk.start->group, size, error);
-        writeVarint(writeBuf, publishOk.start->object, size, error);
+      case LocationType::AbsoluteRange: {
+        if (publishOk.start.hasValue()) {
+          writeVarint(writeBuf, publishOk.start->group, size, error);
+          writeVarint(writeBuf, publishOk.start->object, size, error);
+        }
+        if (publishOk.endGroup.hasValue()) {
+          writeVarint(writeBuf, publishOk.endGroup.value(), size, error);
+        }
+        break;
       }
-      if (publishOk.endGroup.hasValue()) {
-        writeVarint(writeBuf, publishOk.endGroup.value(), size, error);
+      default: {
+        break;
       }
-      break;
-    }
-    default: {
-      break;
     }
   }
 
-  writeTrackRequestParams(writeBuf, publishOk.params, {}, size, error);
+  writeTrackRequestParams(
+      writeBuf, publishOk.params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

@@ -1126,31 +1126,28 @@ TEST_P(MoQFramerAuthTest, AuthTokenTest) {
 }
 
 TEST_P(MoQFramerAuthTest, AuthTokenErrorCases) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  folly::IOBufQueue writeBufs[5];
   parser_.setTokenCacheMaxSize(22); // Set a small cache size for testing
 
   // Register token with alias=0, type=0, value="abc"
   writeSubscribeRequestWithAuthToken(
-      writeBuf, writer_, AliasType::REGISTER, 0, 0, "abc");
+      writeBufs[0], writer_, AliasType::REGISTER, 0, 0, "abc");
 
   // Attempt to register another token with the same alias=0
   writeSubscribeRequestWithAuthToken(
-      writeBuf, writer_, AliasType::REGISTER, 0, 1, "def");
+      writeBufs[1], writer_, AliasType::REGISTER, 0, 1, "def");
 
   // Attempt to use an alias that doesn't exist (alias=2)
   writeSubscribeRequestWithAuthToken(
-      writeBuf, writer_, AliasType::USE_ALIAS, 2, 0, "");
+      writeBufs[2], writer_, AliasType::USE_ALIAS, 2, 0, "");
 
   // Attempt to delete an alias that doesn't exist (alias=3)
   writeSubscribeRequestWithAuthToken(
-      writeBuf, writer_, AliasType::DELETE, 3, 0, "");
+      writeBufs[3], writer_, AliasType::DELETE, 3, 0, "");
 
   // Register a token that exceeds the max token cache size
   writeSubscribeRequestWithAuthToken(
-      writeBuf, writer_, AliasType::REGISTER, 1, 3, "jklmnop");
-
-  auto serialized = writeBuf.move();
-  folly::io::Cursor cursor(serialized.get());
+      writeBufs[4], writer_, AliasType::REGISTER, 1, 3, "jklmnop");
 
   std::vector expectedErrors = {
       ErrorCode::NO_ERROR,
@@ -1160,6 +1157,9 @@ TEST_P(MoQFramerAuthTest, AuthTokenErrorCases) {
       ErrorCode::AUTH_TOKEN_CACHE_OVERFLOW};
   // Parse and verify each token
   for (int i = 0; i < 5; ++i) {
+    auto serialized = writeBufs[i].move();
+    folly::io::Cursor cursor(serialized.get());
+
     auto frameType = quic::follyutils::decodeQuicInteger(cursor);
     EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
     auto parseResult =
@@ -1213,7 +1213,10 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
 
   for (int j = 0; j < 4; ++j) {
     auto frameHeader = writeBufs[j].split(3);
-    auto front = writeBufs[j].split(19);
+    // Version 15+ don't have the filter within the request, but in the
+    // parameters
+    uint32_t frontLength = (getDraftMajorVersion(GetParam()) >= 15) ? 16 : 19;
+    auto front = writeBufs[j].split(frontLength);
     auto origTokenLengthBytes = tokenLengths[j] > 64 ? 2 : 1;
     auto tokenLengthBuf = writeBufs[j].split(origTokenLengthBytes);
     auto tail = writeBufs[j].move();
@@ -1379,6 +1382,56 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
       objRes->extensions.getMutableExtensions()[0]
           .arrayValue->computeChainDataLength(),
       64);
+}
+
+TEST_P(MoQFramerTest, SubscribeRequestEncodeDecode) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Build a SubscribeRequest with non-default locType/start/endGroup
+  FullTrackName ftn{TrackNamespace({"ns"}), "track"};
+  AbsoluteLocation startLoc{10, 20};
+  auto req = SubscribeRequest::make(
+      ftn,
+      /*priority*/ 7,
+      /*groupOrder*/ GroupOrder::NewestFirst,
+      /*forward*/ false,
+      /*locType*/ LocationType::AbsoluteRange,
+      /*start*/ folly::make_optional(startLoc),
+      /*endGroup*/ 30,
+      /*params*/ {});
+
+  auto writeRes = writer_.writeSubscribeRequest(writeBuf, req);
+  EXPECT_TRUE(writeRes.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Verify frame type and parse with a draft 15 parser
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto parseRes = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseRes.hasValue());
+
+  // Check that parsed SubscribeRequest matches the original
+  EXPECT_EQ(
+      parseRes->fullTrackName.trackNamespace.size(),
+      req.fullTrackName.trackNamespace.size());
+  if (!req.fullTrackName.trackNamespace.empty()) {
+    EXPECT_EQ(
+        parseRes->fullTrackName.trackNamespace[0],
+        req.fullTrackName.trackNamespace[0]);
+  }
+  EXPECT_EQ(parseRes->fullTrackName.trackName, req.fullTrackName.trackName);
+  EXPECT_EQ(parseRes->priority, req.priority);
+  EXPECT_EQ(parseRes->groupOrder, req.groupOrder);
+  EXPECT_EQ(parseRes->forward, req.forward);
+  EXPECT_EQ(parseRes->locType, req.locType);
+  ASSERT_TRUE(parseRes->start.has_value());
+  ASSERT_TRUE(req.start.has_value());
+  EXPECT_EQ(parseRes->start->group, req.start->group);
+  EXPECT_EQ(parseRes->start->object, req.start->object);
+  EXPECT_EQ(parseRes->endGroup, req.endGroup);
+  EXPECT_EQ(parseRes->params.size(), req.params.size());
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -354,6 +354,13 @@ struct SubscriptionFilter {
   LocationType filterType;
   folly::Optional<AbsoluteLocation> location;
   folly::Optional<uint64_t> endGroup;
+
+  SubscriptionFilter() = default;
+  SubscriptionFilter(
+      LocationType ft,
+      folly::Optional<AbsoluteLocation> loc,
+      folly::Optional<uint64_t> eg)
+      : filterType(ft), location(loc), endGroup(std::move(eg)) {}
 };
 
 struct Parameter {
@@ -1450,6 +1457,21 @@ class MoQFrameParser {
       size_t& length,
       ObjectHeader& objectHeader,
       bool allowImmutable = true) const noexcept;
+
+  folly::Optional<SubscriptionFilter> extractSubscriptionFilter(
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleRequestSpecificParams(
+      SubscribeRequest& subscribeRequest,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleRequestSpecificParams(
+      SubscribeUpdate& subscribeUpdate,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleRequestSpecificParams(
+      PublishOk& publishOk,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   folly::Optional<uint64_t> version_;
   mutable MoQTokenCache tokenCache_;
