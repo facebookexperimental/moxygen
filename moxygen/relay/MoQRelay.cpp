@@ -685,9 +685,14 @@ void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
     if (subscription.forwarder.get() != forwarder) {
       continue;
     }
+    if (!subscriptionIt->second.promise.isFulfilled()) {
+      // Ignore: it's the first subscriber, forward update not needed
+      return;
+    }
     XLOG(INFO) << "Updating forward for " << subscriptionIt->first
                << " numForwardingSubs="
                << forwarder->numForwardingSubscribers();
+
     subscription.handle->subscribeUpdate(
         {RequestID(0),
          subscription.handle->subscribeOk().requestID,
