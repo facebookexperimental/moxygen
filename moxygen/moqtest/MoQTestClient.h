@@ -40,13 +40,11 @@ enum AdjustedExpectedResult : int {
   ERROR_RECEIVING_DATA = 2
 };
 
-class MoQTestClient : public moxygen::Subscriber,
-                      public std::enable_shared_from_this<MoQTestClient>,
-                      public ObjectReceiverCallback {
+class MoQTestClient {
  public:
   MoQTestClient(folly::EventBase* evb, proxygen::URL url);
 
-  ~MoQTestClient() override {}
+  ~MoQTestClient() {}
 
   MoQTestClient(const MoQTestClient&) = delete;
   MoQTestClient& operator=(const MoQTestClient&) = delete;
@@ -62,39 +60,66 @@ class MoQTestClient : public moxygen::Subscriber,
 
   folly::coro::Task<moxygen::TrackNamespace> fetch(MoQTestParameters params);
 
-  // Override Vritual Functions for now to return basic print statements
-  virtual FlowControlState onObject(
-      folly::Optional<TrackAlias> trackAlias,
-      const ObjectHeader& objHeader,
-      Payload payload) override;
-  virtual void onObjectStatus(
-      folly::Optional<TrackAlias> trackAlias,
-      const ObjectHeader& objHeader) override;
-  virtual void onEndOfStream() override;
-  virtual void onError(ResetStreamErrorCode) override;
-  virtual void onSubscribeDone(SubscribeDone done) override;
-
   void setLogger(const std::shared_ptr<MLogger>& logger);
-
-  virtual void goaway(Goaway goaway) override;
-  virtual folly::coro::Task<AnnounceResult> announce(
-      Announce ann,
-      std::shared_ptr<AnnounceCallback> callback = nullptr) override;
 
   folly::coro::Task<void> trackStatus(TrackStatus req);
   void subscribeUpdate(SubscribeUpdate update);
-  folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
-      SubscribeAnnounces announces);
-  void unsubscribeAnnounces(UnsubscribeAnnounces unann);
-
-  void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase);
 
  private:
+  // An ObjectReceiverCallback implementation that forwards calls to a
+  // MoQTestClient.
+  class ObjectReceiverCallback : public moxygen::ObjectReceiverCallback {
+   public:
+    explicit ObjectReceiverCallback(MoQTestClient& client) : client_(client) {}
+
+    FlowControlState onObject(
+        folly::Optional<TrackAlias> trackAlias,
+        const ObjectHeader& objHeader,
+        Payload payload) override {
+      return client_.onObject(
+          std::move(trackAlias), objHeader, std::move(payload));
+    }
+
+    void onObjectStatus(
+        folly::Optional<TrackAlias> trackAlias,
+        const ObjectHeader& objHeader) override {
+      client_.onObjectStatus(std::move(trackAlias), objHeader);
+    }
+
+    void onEndOfStream() override {
+      client_.onEndOfStream();
+    }
+
+    void onError(ResetStreamErrorCode code) override {
+      client_.onError(code);
+    }
+
+    void onSubscribeDone(SubscribeDone done) override {
+      client_.onSubscribeDone(std::move(done));
+    }
+
+   private:
+    MoQTestClient& client_;
+  };
+
+  // Override Vritual Functions for now to return basic print statements
+  ObjectReceiverCallback::FlowControlState onObject(
+      const folly::Optional<TrackAlias>& trackAlias,
+      const ObjectHeader& objHeader,
+      Payload payload);
+  void onObjectStatus(
+      const folly::Optional<TrackAlias>& trackAlias,
+      const ObjectHeader& objHeader);
+  void onEndOfStream();
+  void onError(ResetStreamErrorCode);
+  void onSubscribeDone(const SubscribeDone& done);
+
+  ObjectReceiverCallback objectReceiverCallback_{*this};
+
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;
-  std::shared_ptr<AnnounceCallback> announceCallback_;
 
   // Holds Current Request Parameters
   ReceivingType receivingType_ = ReceivingType::UNKNOWN_RECEIVING_TYPE;
@@ -117,7 +142,6 @@ class MoQTestClient : public moxygen::Subscriber,
   // Handles
   std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
   std::shared_ptr<Publisher::FetchHandle> fetchHandle_;
-  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subAnnouncesHandle_;
 
   // Subscription Data Validation functions
   void initializeExpecteds(MoQTestParameters& params);

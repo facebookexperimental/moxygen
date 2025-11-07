@@ -43,7 +43,7 @@ folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {
       std::chrono::milliseconds(FLAGS_connect_timeout),
       std::chrono::seconds(FLAGS_transaction_timeout),
       nullptr,
-      shared_from_this(),
+      nullptr,
       quic::TransportSettings());
 
   co_return;
@@ -53,10 +53,12 @@ void MoQTestClient::initialize() {
   // Create a receiver for the client
   subReceiver_ = std::make_shared<ObjectReceiver>(
       ObjectReceiver::SUBSCRIBE,
-      std::shared_ptr<MoQTestClient>(shared_from_this()));
+      std::shared_ptr<ObjectReceiverCallback>(
+          std::shared_ptr<void>(), &objectReceiverCallback_));
   fetchReceiver_ = std::make_shared<ObjectReceiver>(
       ObjectReceiver::FETCH,
-      std::shared_ptr<MoQTestClient>(shared_from_this()));
+      std::shared_ptr<ObjectReceiverCallback>(
+          std::shared_ptr<void>(), &objectReceiverCallback_));
 }
 
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
@@ -136,7 +138,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
 }
 
 ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
-    folly::Optional<TrackAlias> /* trackAlias */,
+    const folly::Optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader,
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
@@ -161,7 +163,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
 }
 
 void MoQTestClient::onObjectStatus(
-    folly::Optional<TrackAlias> /* trackAlias */,
+    const folly::Optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onObjectStatus";
 
@@ -201,7 +203,7 @@ void MoQTestClient::onEndOfStream() {
 void MoQTestClient::onError(ResetStreamErrorCode) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onError";
 }
-void MoQTestClient::onSubscribeDone(SubscribeDone done) {
+void MoQTestClient::onSubscribeDone(const SubscribeDone& done) {
   XLOG(DBG1) << "MoQTest DEBUGGING: onSubscribeDone";
 
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
@@ -507,61 +509,8 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
   return true;
 }
 
-void MoQTestClient::goaway(Goaway goaway) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: calling goaway";
-  moqClient_->goaway(goaway);
-};
-
-void MoQTestClient::announceCancel(
-    AnnounceErrorCode errorCode,
-    std::string reasonPhrase) {
-  if (announceCallback_) {
-    announceCallback_->announceCancel(errorCode, std::move(reasonPhrase));
-  }
-}
-
-folly::coro::Task<MoQSession::AnnounceResult> MoQTestClient::announce(
-    Announce ann,
-    std::shared_ptr<AnnounceCallback> callback) {
-  LOG(INFO) << "MoQTest DEBUGGING: calling announce";
-  auto track = convertMoqTestParamToTrackNamespace(&params_);
-
-  if (callback) {
-    announceCallback_ = callback;
-  }
-
-  if (track.hasError()) {
-    AnnounceError error{
-        requestID_,
-        AnnounceErrorCode::INTERNAL_ERROR,
-        "Parameters couldn't be converted to TrackNamespace"};
-    co_return folly::makeUnexpected(error);
-  }
-
-  AnnounceOk ok = {
-      requestID_,
-      {},
-  };
-  co_return std::make_shared<AnnounceHandle>(ok);
-}
-
 folly::coro::Task<void> MoQTestClient::trackStatus(TrackStatus req) {
   co_await moqClient_->moqSession_->trackStatus(req);
-}
-
-folly::coro::Task<Publisher::SubscribeAnnouncesResult>
-MoQTestClient::subscribeAnnounces(SubscribeAnnounces ann) {
-  auto res = co_await moqClient_->moqSession_->subscribeAnnounces(ann);
-  if (res.hasValue()) {
-    subAnnouncesHandle_ = res.value();
-  }
-  co_return res;
-}
-
-void MoQTestClient::unsubscribeAnnounces(UnsubscribeAnnounces unann) {
-  if (subAnnouncesHandle_) {
-    subAnnouncesHandle_->unsubscribeAnnounces();
-  }
 }
 
 } // namespace moxygen
