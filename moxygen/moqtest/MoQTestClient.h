@@ -130,7 +130,7 @@ class MoQTestClient {
   // expected data)
   uint64_t expectedGroup_{};
   uint64_t expectedSubgroup_{};
-  uint64_t expectedObjectId_{};
+  std::array<uint64_t, 2> subgroupToExpectedObjId_{};
 
   // Holds if current request expects end of group markers
   bool expectEndOfGroup_{};
@@ -152,12 +152,15 @@ class MoQTestClient {
       const std::vector<Extension>& extensions,
       MoQTestParameters* params);
 
-  AdjustedExpectedResult adjustExpected(MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpected(
+      MoQTestParameters& params,
+      const ObjectHeader* header);
   AdjustedExpectedResult adjustExpectedForOneSubgroupPerGroup(
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForOneSubgroupPerObject(
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForTwoSubgroupsPerGroup(
+      const ObjectHeader* header,
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForDatagram(MoQTestParameters& params);
   bool validateDatagramObjects(const ObjectHeader& header);
