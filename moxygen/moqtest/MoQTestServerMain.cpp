@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     server->logger_ =
         std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::SERVER);
     server->logger_->setPath(FLAGS_mlog_path);
-    std::cout << "Type Anything To Exit Server..." << std::endl;
+    std::cout << "Type Anything To Exit Server...";
     std::string line;
     std::getline(std::cin, line);
     server->logger_->outputLogsToFile();

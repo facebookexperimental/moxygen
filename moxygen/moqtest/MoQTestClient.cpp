@@ -32,7 +32,7 @@ void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
 }
 
 void MoQTestClient::subscribeUpdate(SubscribeUpdate update) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: calling subscribeUpdate" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling subscribeUpdate";
   if (receivingType_ == ReceivingType::SUBSCRIBE && subHandle_) {
     subHandle_->subscribeUpdate(std::move(update));
   }
@@ -139,13 +139,12 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     folly::Optional<TrackAlias> /* trackAlias */,
     const ObjectHeader& objHeader,
     Payload payload) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
 
   // Validate the received data
   if (!validateSubscribedData(objHeader, payload->toString())) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Data Validation Failed"
-        << std::endl;
+        << "MoQTest verification result: FAILURE! reason: Data Validation Failed";
     if (receivingType_ == ReceivingType::SUBSCRIBE) {
       subHandle_->unsubscribe();
     } else if (receivingType_ == ReceivingType::FETCH) {
@@ -164,59 +163,56 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
 void MoQTestClient::onObjectStatus(
     folly::Optional<TrackAlias> /* trackAlias */,
     const ObjectHeader& objHeader) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: calling onObjectStatus" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling onObjectStatus";
 
   ObjectHeader header = objHeader;
   // Validate the received data
   if (header.status != ObjectStatus::END_OF_GROUP) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Unknown object status received: "
-        << header.status << std::endl;
+        << header.status;
     return;
   }
 
   if (!params_.sendEndOfGroupMarkers) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: End of Group Marker Recieved When Not Expected"
-        << std::endl;
+        << "MoQTest verification result: FAILURE! reason: End of Group Marker Recieved When Not Expected";
     return;
   }
 
   if (header.id != params_.lastObjectInTrack) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Object Id Mismatch For End of Group Marker: Actual="
-        << header.id << "  Expected=" << params_.lastObjectInTrack << std::endl;
+        << header.id << "  Expected=" << params_.lastObjectInTrack;
     return;
   }
 
   // Adjust the expected data
   if (adjustExpected(params_) == AdjustedExpectedResult::RECEIVED_ALL_DATA) {
     XLOG(DBG1)
-        << "MoQTest DEBUGGING: onObjectStatus: No more data to be expected"
-        << std::endl;
+        << "MoQTest DEBUGGING: onObjectStatus: No more data to be expected";
   }
 }
 
 void MoQTestClient::onEndOfStream() {
-  XLOG(DBG1) << "MoQTest DEBUGGING: calling onEndOfStream" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling onEndOfStream";
 }
 
 void MoQTestClient::onError(ResetStreamErrorCode) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: calling onError" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling onError";
 }
 void MoQTestClient::onSubscribeDone(SubscribeDone done) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: onSubscribeDone" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: onSubscribeDone";
 
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
     if (datagramObjects_ == 0) {
       XLOG(ERR)
-          << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Recieved"
-          << std::endl;
+          << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Recieved";
       subHandle_->unsubscribe();
       return;
     } else {
       XLOG(DBG1) << "MoQTest verification result: SUCCESS! Datagram Recieved "
-                 << datagramObjects_ << " objects" << std::endl;
+                 << datagramObjects_ << " objects";
       return;
     }
   }
@@ -240,13 +236,12 @@ bool MoQTestClient::validateSubscribedData(
              << " Expected ObjectId=" << expectedObjectId_;
   XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
              << " end of group markers=" << params_.sendEndOfGroupMarkers
-             << " expected end of group markers=" << expectEndOfGroup_
-             << std::endl;
+             << " expected end of group markers=" << expectEndOfGroup_;
   if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
       header.group != expectedGroup_) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Group Mismatch: Actual="
-        << header.group << "  Expected=" << expectedGroup_ << std::endl;
+        << header.group << "  Expected=" << expectedGroup_;
     return false;
   }
 
@@ -254,7 +249,7 @@ bool MoQTestClient::validateSubscribedData(
       header.subgroup != expectedSubgroup_) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: SubGroup Mismatch: Actual="
-        << header.subgroup << "  Expected=" << expectedSubgroup_ << std::endl;
+        << header.subgroup << "  Expected=" << expectedSubgroup_;
     return false;
   }
 
@@ -269,7 +264,7 @@ bool MoQTestClient::validateSubscribedData(
       header.id != expectedObjectId_) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Object Id Mismatch: Actual="
-        << header.id << "  Expected=" << expectedObjectId_ << std::endl;
+        << header.id << "  Expected=" << expectedObjectId_;
     return false;
   }
 
@@ -278,8 +273,7 @@ bool MoQTestClient::validateSubscribedData(
     if (header.status != ObjectStatus::END_OF_GROUP) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: End of Group Mismatch: Actual="
-          << header.status << "  Expected=" << ObjectStatus::END_OF_GROUP
-          << std::endl;
+          << header.status << "  Expected=" << ObjectStatus::END_OF_GROUP;
       return false;
     }
   }
@@ -291,7 +285,7 @@ bool MoQTestClient::validateSubscribedData(
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Extension Error="
         << std::to_string(result.error().code)
-        << " Reason=" << result.error().reason << std::endl;
+        << " Reason=" << result.error().reason;
     return false;
   }
 
@@ -300,8 +294,7 @@ bool MoQTestClient::validateSubscribedData(
   if (!validatePayload(objectSize, payload)) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Payload Mismatch: Actual="
-        << payload << "  Expected=" << std::string(objectSize, 't')
-        << std::endl;
+        << payload << "  Expected=" << std::string(objectSize, 't');
     return false;
   }
 
@@ -481,8 +474,7 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
   if (header.group % params_.groupIncrement != 0) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Datagram Group Mismatch: Actual="
-        << header.group << "Expected Increment of " << params_.groupIncrement
-        << std::endl;
+        << header.group << "Expected Increment of " << params_.groupIncrement;
     return false;
   }
 
@@ -491,7 +483,7 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Datagram Group Mismatch: Actual="
         << header.group << "Can't be greater than last group "
-        << params_.lastGroupInTrack << std::endl;
+        << params_.lastGroupInTrack;
     return false;
   }
 
@@ -499,8 +491,7 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
   if (header.id % params_.objectIncrement != 0) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Datagram Object Id Mismatch: Actual="
-        << header.id << "Expected Increment of " << params_.objectIncrement
-        << std::endl;
+        << header.id << "Expected Increment of " << params_.objectIncrement;
     return false;
   }
 
@@ -509,7 +500,7 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Datagram Object Id Mismatch: Actual="
         << header.id << "Can't be greater than last object "
-        << params_.lastObjectInTrack << std::endl;
+        << params_.lastObjectInTrack;
     return false;
   }
 
@@ -517,7 +508,7 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
 }
 
 void MoQTestClient::goaway(Goaway goaway) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: calling goaway" << std::endl;
+  XLOG(DBG1) << "MoQTest DEBUGGING: calling goaway";
   moqClient_->goaway(goaway);
 };
 

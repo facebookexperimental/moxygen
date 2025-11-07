@@ -281,7 +281,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Objects
-  LOG(INFO) << "Starting Two Subgroups Per Group" << std::endl;
+  LOG(INFO) << "Starting Two Subgroups Per Group";
 
   // Odd number of objects in track means end on subgroupZero
   bool endZero = (params.lastObjectInTrack - params.startObject) % 2 == 1;
