@@ -967,7 +967,7 @@ struct Unsubscribe {
 struct SubscribeDone {
   RequestID requestID;
   SubscribeDoneStatusCode statusCode;
-  uint64_t streamCount;
+  uint64_t streamCount{0};
   std::string reasonPhrase;
 };
 

@@ -21,7 +21,7 @@ const int kDefaultExpires = 0;
 const std::string kDefaultSubscribeDoneReason = "Testing";
 
 void MoQTestSubscriptionHandle::unsubscribe() {
-  cancelSource_->requestCancellation();
+  cancelSource_.requestCancellation();
 }
 
 void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
@@ -29,20 +29,7 @@ void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
 }
 
 void MoQTestFetchHandle::fetchCancel() {
-  cancelSource_->requestCancellation();
-}
-
-void MoQTestServer::goaway(Goaway goaway) {
-  LOG(INFO) << "Server goaway uri=" << goaway.newSessionUri;
-
-  // Call Go Away on sessions
-  if (subSession_) {
-    subSession_->goaway(goaway);
-  }
-
-  if (fetchSession_) {
-    fetchSession_->goaway(goaway);
-  }
+  cancelSource_.requestCancellation();
 }
 
 MoQTestServer::MoQTestServer()
@@ -59,16 +46,6 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     std::shared_ptr<TrackConsumer> callback) {
   LOG(INFO) << "Recieved Subscription";
 
-  if (subCancelSource_) {
-    SubscribeError error;
-    error.requestID = sub.requestID;
-    error.errorCode = SubscribeErrorCode::INTERNAL_ERROR;
-    error.reasonPhrase = "Cannot have concurrent subscriptions";
-    return folly::coro::makeTask<SubscribeResult>(folly::makeUnexpected(error));
-  }
-
-  subCancelSource_ = std::make_shared<folly::CancellationSource>();
-
   // Ensure Params are valid according to spec, if not return SubscribeError
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
       &sub.fullTrackName.trackNamespace);
@@ -77,16 +54,20 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     error.requestID = sub.requestID;
     error.errorCode = SubscribeErrorCode::NOT_SUPPORTED;
     error.reasonPhrase = "Invalid Parameters";
-    return folly::coro::makeTask<SubscribeResult>(folly::makeUnexpected(error));
+    co_return folly::makeUnexpected(error);
   }
-
-  // Request Session
-  subSession_ = MoQSession::getRequestSession();
 
   // Start a Co-routine to send objects back according to spec
   auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
   callback->setTrackAlias(alias);
-  co_withExecutor(subSession_->getExecutor(), onSubscribe(sub, callback))
+  // Declare cancellation source
+  folly::CancellationSource cancelSource;
+
+  co_withCancellation(
+      cancelSource.getToken(),
+      co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          onSubscribe(sub, callback)))
       .start();
 
   // Return a SubscribeOk
@@ -94,11 +75,10 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
       sub.requestID,
       alias,
       std::chrono::milliseconds(kDefaultExpires),
-      sub.groupOrder,
+      MoQSession::resolveGroupOrder(GroupOrder::OldestFirst, sub.groupOrder),
       folly::none};
-  return folly::coro::makeTask<SubscribeResult>(
-      std::make_shared<MoQTestSubscriptionHandle>(
-          subRes, &(*subCancelSource_)));
+  co_return std::make_shared<MoQTestSubscriptionHandle>(
+      subRes, std::move(cancelSource));
 }
 
 // Perform Co-routine
@@ -109,7 +89,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   // function)
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
       &sub.fullTrackName.trackNamespace);
-  CHECK(res.hasValue())
+  XCHECK(res.hasValue())
       << "Only valid params must be passed into this function";
   MoQTestParameters params = res.value();
 
@@ -136,17 +116,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
     }
 
     case (ForwardingPreference::DATAGRAM): {
-      auto res = co_await MoQTestServer::sendDatagram(sub, params, callback);
-      if (res.hasError()) {
-        // Return a SubscribeDone With an Error to indicate Datagram process
-        // failed
-        SubscribeDone done;
-        done.requestID = sub.requestID;
-        done.reasonPhrase = "Error Sending Datagram Objects";
-        done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
-        callback->subscribeDone(done);
-        co_return;
-      }
+      co_await MoQTestServer::sendDatagram(sub, params, callback);
       break;
     }
 
@@ -161,18 +131,14 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   SubscribeDone done;
   done.requestID = sub.requestID;
   done.reasonPhrase = kDefaultSubscribeDoneReason;
-  callback->subscribeDone(done);
-
-  // Reset Session
-  subCancelSource_ = nullptr;
-
-  co_return;
+  callback->subscribeDone(std::move(done));
 }
 
 folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Groups
+  auto token = co_await folly::coro::co_current_cancellation_token;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
@@ -185,7 +151,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isSubCancelled()) {
+      if (token.isCancellationRequested()) {
         co_return;
       }
       // Find Object Size
@@ -217,7 +183,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     }
 
     // If SubGroup Hasn't Been Ended Already
-    if (!isSubCancelled() && !params.sendEndOfGroupMarkers) {
+    if (!token.isCancellationRequested() && !params.sendEndOfGroupMarkers) {
       subConsumer->endOfSubgroup();
     }
   }
@@ -227,6 +193,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Objects
+  auto token = co_await folly::coro::co_current_cancellation_token;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
@@ -234,7 +201,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isSubCancelled()) {
+      if (token.isCancellationRequested()) {
         co_return;
       }
       // Begin a New Subgroup per object (Default Priority)
@@ -282,7 +249,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Objects
   LOG(INFO) << "Starting Two Subgroups Per Group";
-
+  auto token = co_await folly::coro::co_current_cancellation_token;
   // Odd number of objects in track means end on subgroupZero
   bool endZero = (params.lastObjectInTrack - params.startObject) % 2 == 1;
   for (uint64_t groupNum = params.startGroup;
@@ -301,7 +268,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isSubCancelled()) {
+      if (token.isCancellationRequested()) {
         co_return;
       }
       // Find Object Size
@@ -346,7 +313,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
     }
 
     // If SubGroup Hasn't Been Ended Already
-    if (!isSubCancelled() && !params.sendEndOfGroupMarkers) {
+    if (!token.isCancellationRequested() && !params.sendEndOfGroupMarkers) {
       subConsumers[0]->endOfSubgroup();
       if (params.objectsPerGroup > 1) {
         subConsumers[1]->endOfSubgroup();
@@ -357,12 +324,13 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
   co_return;
 }
 
-folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
+folly::coro::Task<void> MoQTestServer::sendDatagram(
     SubscribeRequest sub,
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
   auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
   callback->setTrackAlias(alias);
+  auto token = co_await folly::coro::co_current_cancellation_token;
   // Iterate through Objects
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
@@ -371,12 +339,14 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isSubCancelled()) {
-        co_return folly::makeUnexpected(
-            SubscribeError{
-                sub.requestID,
-                SubscribeErrorCode::INTERNAL_ERROR,
-                "Datagram Subscription Cancelled"});
+      if (token.isCancellationRequested()) {
+        // Instead of returning an error, callback->subscribeDone with error
+        SubscribeDone done;
+        done.requestID = sub.requestID;
+        done.reasonPhrase = "Datagram Subscription Cancelled";
+        done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
+        callback->subscribeDone(std::move(done));
+        co_return;
       }
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
@@ -396,11 +366,13 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
 
       auto res = callback->datagram(header, std::move(objectPayload));
       if (res.hasError()) {
-        co_return folly::makeUnexpected(
-            SubscribeError{
-                sub.requestID,
-                SubscribeErrorCode::INTERNAL_ERROR,
-                "Error Sending Datagram Objects"});
+        // If sending datagram fails, callback->subscribeDone with error
+        SubscribeDone done;
+        done.requestID = sub.requestID;
+        done.reasonPhrase = "Error Sending Datagram Objects";
+        done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
+        callback->subscribeDone(std::move(done));
+        co_return;
       }
 
       // Set Delay Based on Object Frequency
@@ -411,15 +383,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::sendDatagram(
     }
   }
 
-  // Return SubscribeOK
-  SubscribeOk subRes{
-      sub.requestID,
-      alias,
-      std::chrono::milliseconds(kDefaultExpires),
-      sub.groupOrder,
-      folly::none};
-  co_return std::make_shared<MoQTestSubscriptionHandle>(
-      subRes, &(*subCancelSource_));
+  co_return;
 }
 
 // Fetch Methods
@@ -427,15 +391,6 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> fetchCallback) {
   LOG(INFO) << "Recieved Fetch Request";
-
-  if (fetchCancelSource_) {
-    FetchError error;
-    error.requestID = fetch.requestID;
-    error.errorCode = FetchErrorCode::INTERNAL_ERROR;
-    error.reasonPhrase = "Cannot have concurrent fetches";
-    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
-  }
-  fetchCancelSource_ = std::make_shared<folly::CancellationSource>();
 
   // Ensure Params are valid according to spec, if not return FetchError
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
@@ -445,7 +400,7 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     error.requestID = fetch.requestID;
     error.errorCode = FetchErrorCode::NOT_SUPPORTED;
     error.reasonPhrase = "Invalid Parameters";
-    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
+    co_return folly::makeUnexpected(error);
   }
   if (res.value().forwardingPreference == ForwardingPreference::DATAGRAM) {
     FetchError error;
@@ -453,22 +408,25 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     error.errorCode = FetchErrorCode::NOT_SUPPORTED;
     error.reasonPhrase =
         "Datagram Forwarding Preference is not supported for fetch";
-    return folly::coro::makeTask<FetchResult>(folly::makeUnexpected(error));
+    co_return folly::makeUnexpected(error);
   }
 
-  // Request Session
-  fetchSession_ = MoQSession::getRequestSession();
+  // Declare cancellation source
+  folly::CancellationSource cancelSource;
 
-  // Start a Co-routine
-  co_withExecutor(fetchSession_->getExecutor(), onFetch(fetch, fetchCallback))
+  // Start a Co-routine with cancellation support
+  co_withCancellation(
+      cancelSource.getToken(),
+      co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          onFetch(fetch, fetchCallback)))
       .start();
 
   FetchOk ok;
   ok.requestID = fetch.requestID;
   ok.groupOrder = fetch.groupOrder;
 
-  return folly::coro::makeTask<FetchResult>(
-      std::make_shared<MoQTestFetchHandle>(ok, &(*fetchCancelSource_)));
+  co_return std::make_shared<MoQTestFetchHandle>(ok, std::move(cancelSource));
 }
 
 folly::coro::Task<void> MoQTestServer::onFetch(
@@ -478,7 +436,7 @@ folly::coro::Task<void> MoQTestServer::onFetch(
   // function)
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
       &fetch.fullTrackName.trackNamespace);
-  CHECK(res.hasValue())
+  XCHECK(res.hasValue())
       << "Only valid params must be passed into this function";
   CHECK_NE(
       static_cast<int>(res.value().forwardingPreference),
@@ -512,9 +470,6 @@ folly::coro::Task<void> MoQTestServer::onFetch(
     }
   }
 
-  // Reset Session
-  fetchCancelSource_ = nullptr;
-
   co_return;
 }
 
@@ -522,6 +477,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
+  auto token = co_await folly::coro::co_current_cancellation_token;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
@@ -529,7 +485,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isFetchCancelled()) {
+      if (token.isCancellationRequested()) {
         co_return;
       }
       // Find Object Size
@@ -576,6 +532,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
+  auto token = co_await folly::coro::co_current_cancellation_token;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
@@ -583,7 +540,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isFetchCancelled()) {
+      if (token.isCancellationRequested()) {
         co_return;
       }
       // Find Object Size
@@ -626,6 +583,7 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
+  auto token = co_await folly::coro::co_current_cancellation_token;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
@@ -633,7 +591,7 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
     for (uint64_t objectId = params.startObject;
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
-      if (isFetchCancelled()) {
+      if (token.isCancellationRequested()) {
         co_return;
       }
       // Find Object Size
@@ -677,31 +635,4 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
   // Inform Consumer that fetch is completed
   callback->endOfFetch();
 }
-
-bool MoQTestServer::isSubCancelled() {
-  return subCancelSource_->isCancellationRequested();
-}
-
-bool MoQTestServer::isFetchCancelled() {
-  return fetchCancelSource_->isCancellationRequested();
-}
-
-void MoQTAnnounceCallback::announceCancel(
-    AnnounceErrorCode errorCode,
-    std::string reasonPhrase) {
-  LOG(INFO) << "Calling Announce Cancel";
-}
-
-folly::coro::Task<MoQSession::SubscribeAnnouncesResult>
-MoQTestServer::subscribeAnnounces(SubscribeAnnounces subAnn) {
-  SubscribeAnnouncesOk ok{subAnn.requestID, {}};
-  auto handle =
-      std::make_shared<MoQTestSubscribeAnnouncesHandle>(std::move(ok));
-  co_return handle;
-}
-
-void MoQTestSubscribeAnnouncesHandle::unsubscribeAnnounces() {
-  LOG(INFO) << "CALLING unsubscribeAnnounces";
-}
-
 } // namespace moxygen

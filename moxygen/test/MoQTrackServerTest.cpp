@@ -97,8 +97,6 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
 
-  server_.initializeCancellationSources();
-
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
@@ -156,8 +154,6 @@ TEST_F(
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
-
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -232,7 +228,6 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
 
   // Create a mock subgroup consumer
   auto mockSubgroupConsumer = std::make_shared<moxygen::MockSubgroupConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -287,7 +282,6 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -379,7 +373,6 @@ TEST_F(
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -483,8 +476,6 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   params_.testIntegerExtension = -1;
   params_.testVariableExtension = -1;
 
-  server_.initializeCancellationSources();
-
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
 
@@ -553,7 +544,6 @@ TEST_F(
 
   // Wait for the coroutine to complete and get the result
   auto result = folly::coro::blockingWait(std::move(task));
-  server_.initializeCancellationSources();
 
   // Check that the result is an error
   ASSERT_TRUE(result.hasError());
@@ -569,8 +559,6 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
-
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -627,7 +615,6 @@ TEST_F(
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -697,7 +684,6 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -752,7 +738,6 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
@@ -816,7 +801,6 @@ TEST_F(
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
-  server_.initializeCancellationSources();
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
