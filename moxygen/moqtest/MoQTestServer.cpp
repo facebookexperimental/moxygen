@@ -225,14 +225,9 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
             objectId,
             std::move(objectPayload),
             Extensions(extensions, {}),
-            false);
+            true);
       } else {
         subConsumer->endOfGroup(objectId);
-      }
-
-      // If SubGroup Hasn't Been Ended Already
-      if (!params.sendEndOfGroupMarkers) {
-        subConsumer->endOfSubgroup();
       }
 
       // Set Delay Based on Object Frequency
@@ -250,17 +245,26 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
   LOG(INFO) << "Starting Two Subgroups Per Group";
   auto token = co_await folly::coro::co_current_cancellation_token;
   // Odd number of objects in track means end on subgroupZero
-  bool endZero = (params.lastObjectInTrack - params.startObject) % 2 == 1;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
     std::vector<std::shared_ptr<SubgroupConsumer>> subConsumers;
-    subConsumers.push_back(
-        callback->beginSubgroup(groupNum, 0, kDefaultPriority).value());
+    if (params.startObject % 2 == 0 ||
+        (params.objectsPerGroup > 1 && params.objectIncrement % 2 == 1)) {
+      // we have at least one even object
+      subConsumers.push_back(
+          callback->beginSubgroup(groupNum, 0, kDefaultPriority).value());
+    } else {
+      subConsumers.push_back(nullptr);
+    }
 
-    if (params.objectsPerGroup > 1) {
+    if (params.startObject % 2 == 1 ||
+        (params.objectsPerGroup > 1 && params.objectIncrement % 2 == 1)) {
+      // we have at least one odd object
       subConsumers.push_back(
           callback->beginSubgroup(groupNum, 1, kDefaultPriority).value());
+    } else {
+      subConsumers.push_back(nullptr);
     }
 
     // Iterate Through Objects in SubGroup
@@ -281,12 +285,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
       if (objectId < params.lastObjectInTrack ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
-        int index;
-        if (params.objectsPerGroup > 1) {
-          index = (objectId - params.startObject) % 2;
-        } else {
-          index = 0;
-        }
+        int index = objectId % 2;
         LOG(INFO) << "Sending Object " << objectId << " to Subgroup " << index;
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
@@ -297,12 +296,13 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
             false);
 
       } else {
-        LOG(INFO) << "Sending End of Group Marker to Subgroup " << !endZero;
-        subConsumers[(int)!endZero]->endOfGroup(objectId);
+        auto lastSubgroup = objectId % 2;
+        LOG(INFO) << "Sending End of Group Marker to Subgroup " << lastSubgroup;
+        subConsumers[lastSubgroup]->endOfGroup(objectId);
 
         // For case of only 1 object being sent
-        if (params.objectsPerGroup > 1) {
-          subConsumers[(int)endZero]->endOfSubgroup();
+        if (subConsumers[1 - lastSubgroup]) {
+          subConsumers[1 - lastSubgroup]->endOfSubgroup();
         }
       }
 
@@ -313,9 +313,10 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
 
     // If SubGroup Hasn't Been Ended Already
     if (!token.isCancellationRequested() && !params.sendEndOfGroupMarkers) {
-      subConsumers[0]->endOfSubgroup();
-      if (params.objectsPerGroup > 1) {
-        subConsumers[1]->endOfSubgroup();
+      for (auto& subConsumer : subConsumers) {
+        if (subConsumer) {
+          subConsumer->endOfSubgroup();
+        }
       }
     }
   }
@@ -401,14 +402,6 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestServer::fetch(
     error.reasonPhrase = "Invalid Parameters";
     co_return folly::makeUnexpected(error);
   }
-  if (res.value().forwardingPreference == ForwardingPreference::DATAGRAM) {
-    FetchError error;
-    error.requestID = fetch.requestID;
-    error.errorCode = FetchErrorCode::NOT_SUPPORTED;
-    error.reasonPhrase =
-        "Datagram Forwarding Preference is not supported for fetch";
-    co_return folly::makeUnexpected(error);
-  }
 
   // Declare cancellation source
   folly::CancellationSource cancelSource;
@@ -437,10 +430,6 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       &fetch.fullTrackName.trackNamespace);
   XCHECK(res.hasValue())
       << "Only valid params must be passed into this function";
-  CHECK_NE(
-      static_cast<int>(res.value().forwardingPreference),
-      static_cast<int>(ForwardingPreference::DATAGRAM))
-      << "Datagram Forwarding Preference is not supported for fetch";
   MoQTestParameters params = res.value();
 
   // Publish Objects in Accordance to params
@@ -454,7 +443,8 @@ folly::coro::Task<void> MoQTestServer::onFetch(
       break;
     }
 
-    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
+    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT):
+    case (ForwardingPreference::DATAGRAM): {
       co_await fetchOneSubgroupPerObject(params, fetchCallback);
       break;
     }

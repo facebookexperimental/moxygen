@@ -120,6 +120,12 @@ class MoQTestServer : public moxygen::Publisher,
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback);
 
+  folly::coro::Task<void> fetchDatagram(
+      MoQTestParameters params,
+      std::shared_ptr<FetchConsumer> callback) {
+    co_return co_await fetchOneSubgroupPerObject(params, std::move(callback));
+  }
+
  private:
   folly::coro::Task<void> doRelaySetup(
       const std::string& relayUrl,
