@@ -12,7 +12,7 @@
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
-std::string kEndpointName = "fake_endpoint";
+std::string kEndpointName = "/test";
 
 namespace moxygen {
 
