@@ -28,9 +28,10 @@ FAILED_TESTS=0
 declare -a TEST_RESULTS
 
 # Section tracking
-declare -A SECTION_TOTAL
-declare -A SECTION_PASSED
-declare -A SECTION_FAILED
+declare -a SECTION_NAMES
+declare -a SECTION_TOTAL
+declare -a SECTION_PASSED
+declare -a SECTION_FAILED
 CURRENT_SECTION=""
 
 # Check arguments
@@ -56,9 +57,14 @@ if [ ! -x "$CLIENT_BINARY" ]; then
     exit 1
 fi
 
+# If the getdeps.py script exists, set up the moxygen environment
+if [ -x "./build/fbcode_builder/getdeps.py" ]; then
+    eval "$("./build/fbcode_builder/getdeps.py" env moxygen)"
+fi
 
 # Function to set the current test section
 set_section() {
+    SECTION_NAMES[$1]="$2"
     CURRENT_SECTION="$1"
     if [ -z "${SECTION_TOTAL[$CURRENT_SECTION]}" ]; then
         SECTION_TOTAL[$CURRENT_SECTION]=0
@@ -132,7 +138,7 @@ echo "Start Time: $(date)"
 # SECTION 1: Basic Forwarding Preferences (Tests 1-8)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 1: Basic Forwarding Preferences ===${NC}"
-set_section "Basic Forwarding Preferences"
+set_section "1" "Basic Forwarding Preferences"
 
 # Test 1: Default parameters (ONE_SUBGROUP_PER_GROUP)
 run_test "Basic subscribe with default parameters" \
@@ -197,7 +203,7 @@ fi
 # SECTION 2: Object and Group Counts (Tests 9-16)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 2: Object and Group Counts ===${NC}"
-set_section "Object and Group Counts"
+set_section "2" "Object and Group Counts"
 
 # Test 9: Single object per group
 run_test "Single object per group" \
@@ -272,7 +278,7 @@ fi
 # SECTION 3: Object Sizes (Tests 17-24)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 3: Object Sizes ===${NC}"
-set_section "Object Sizes"
+set_section "3" "Object Sizes"
 
 # Test 17: Tiny objects
 run_test "Tiny objects (10 bytes)" \
@@ -353,7 +359,7 @@ run_test "Very different object sizes" \
 # SECTION 4: Increments (Tests 25-30)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 4: Group and Object Increments ===${NC}"
-set_section "Group and Object Increments"
+set_section "4" "Group and Object Increments"
 
 # Test 25: Group increment of 2
 run_test "Group increment of 2" \
@@ -413,7 +419,7 @@ run_test "Large increments (group=10, object=5)" \
 # SECTION 5: End of Group Markers (Tests 31-36)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 5: End of Group Markers ===${NC}"
-set_section "End of Group Markers"
+set_section "5" "End of Group Markers"
 
 # Test 31: End of group markers - basic
 run_test "End of group markers - basic" \
@@ -471,7 +477,7 @@ run_test "End of group markers with single object" \
 # SECTION 6: Extensions (Tests 37-42)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 6: Extensions ===${NC}"
-set_section "Extensions"
+set_section "6" "Extensions"
 
 # Test 37: Integer extension only
 run_test "Integer extension (ID=2)" \
@@ -533,7 +539,7 @@ run_test "Extensions with end of group markers" \
 # SECTION 7: Complex Scenarios (Tests 43-50)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 7: Complex Scenarios ===${NC}"
-set_section "Complex Scenarios"
+set_section "7" "Complex Scenarios"
 
 # Test 43: High frequency updates
 run_test "High frequency updates (100ms)" \
@@ -641,16 +647,18 @@ fi
 echo -e "\n${BLUE}Results by Test Section:${NC}"
 echo "----------------------------------------"
 for section in "${!SECTION_TOTAL[@]}"; do
+    section_name=${SECTION_NAMES[$section]}
     total=${SECTION_TOTAL[$section]}
     passed=${SECTION_PASSED[$section]}
     failed=${SECTION_FAILED[$section]}
     section_rate=$(awk "BEGIN {printf \"%.1f\", ($passed/$total)*100}")
 
     if [ "$failed" -eq 0 ]; then
-        echo -e "${GREEN}✓${NC} $section: $passed/$total (${section_rate}%)"
+        echo -e "${GREEN}✓${NC} $section ($section_name): $passed/$total (${section_rate}%)"
     else
-        echo -e "${YELLOW}◐${NC} $section: $passed/$total (${section_rate}%) - $failed failed"
+        echo -e "${YELLOW}◐${NC} $section ($section_name): $passed/$total (${section_rate}%) - $failed failed"
     fi
+
 done | sort
 
 
