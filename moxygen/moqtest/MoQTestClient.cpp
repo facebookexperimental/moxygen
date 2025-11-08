@@ -11,6 +11,7 @@
 #include <utility>
 #include "moxygen/MoQClient.h"
 #include "moxygen/moqtest/Utils.h"
+#include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
 namespace moxygen {
 
@@ -25,7 +26,24 @@ const TrackAlias kDefaultTrackAlias = TrackAlias(0);
 
 MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
     : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
-      moqClient_(std::make_unique<MoQClient>(moqExecutor_, std::move(url))) {}
+      moqClient_(
+          std::make_unique<MoQClient>(
+              moqExecutor_,
+              std::move(url),
+              std::make_shared<
+                  test::InsecureVerifierDangerousDoNotUseInProduction>())),
+      subReceiver_(
+          std::make_shared<ObjectReceiver>(
+              ObjectReceiver::SUBSCRIBE,
+              std::shared_ptr<ObjectReceiverCallback>(
+                  std::shared_ptr<void>(),
+                  &objectReceiverCallback_))),
+      fetchReceiver_(
+          std::make_shared<ObjectReceiver>(
+              ObjectReceiver::FETCH,
+              std::shared_ptr<ObjectReceiverCallback>(
+                  std::shared_ptr<void>(),
+                  &objectReceiverCallback_))) {}
 
 void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   moqClient_->setLogger(logger);
@@ -44,26 +62,26 @@ folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {
       std::chrono::seconds(FLAGS_transaction_timeout),
       nullptr,
       nullptr,
-      quic::TransportSettings());
+      [] {
+        quic::TransportSettings ts;
+        ts.orderedReadCallbacks = true;
+        return ts;
+      }());
 
   co_return;
-}
-
-void MoQTestClient::initialize() {
-  // Create a receiver for the client
-  subReceiver_ = std::make_shared<ObjectReceiver>(
-      ObjectReceiver::SUBSCRIBE,
-      std::shared_ptr<ObjectReceiverCallback>(
-          std::shared_ptr<void>(), &objectReceiverCallback_));
-  fetchReceiver_ = std::make_shared<ObjectReceiver>(
-      ObjectReceiver::FETCH,
-      std::shared_ptr<ObjectReceiverCallback>(
-          std::shared_ptr<void>(), &objectReceiverCallback_));
 }
 
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
     MoQTestParameters params) {
   auto trackNamespace = convertMoqTestParamToTrackNamespace(&params);
+  if (trackNamespace.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: "
+        << "FAILURE! Reason: Error Converting Parameters to TrackNamespace: "
+        << trackNamespace.error().what();
+    moqClient_->moqSession_->drain();
+    co_yield folly::coro::co_error(trackNamespace.error());
+  }
 
   // Create a SubRequest with the created TrackNamespace as its fullTrackName
   SubscribeRequest sub;
@@ -95,12 +113,22 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 
   // Subscribe to the reciever
   auto res = co_await moqClient_->moqSession_->subscribe(sub, subReceiver_);
+  moqClient_->moqSession_->drain();
 
   if (!res.hasError()) {
     subHandle_ = res.value();
   } else {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! Reason: Error Subscribing to receiver";
+        << "MoQTest verification result: FAILURE! Reason: Error Subscribing to receiver. "
+        << "Error code: " << static_cast<uint64_t>(res.error().errorCode)
+        << ", Reason: " << res.error().reasonPhrase;
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "Error code: ",
+                static_cast<uint64_t>(res.error().errorCode),
+                ", Reason: ",
+                res.error().reasonPhrase)));
   }
 
   co_return trackNamespace.value();
@@ -109,6 +137,14 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
     MoQTestParameters params) {
   auto trackNamespace = convertMoqTestParamToTrackNamespace(&params);
+  if (trackNamespace.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: "
+        << "FAILURE! Reason: Error Converting Parameters to TrackNamespace: "
+        << trackNamespace.error().what();
+    moqClient_->moqSession_->drain();
+    co_yield folly::coro::co_error(trackNamespace.error());
+  }
 
   // Create a Fetch with the created TrackNamespace as its fullTrackName
   Fetch fetch;
@@ -127,11 +163,21 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
 
   // Fetch to the reciever
   auto res = co_await moqClient_->moqSession_->fetch(fetch, fetchReceiver_);
+  moqClient_->moqSession_->drain();
   if (!res.hasError()) {
     fetchHandle_ = res.value();
   } else {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! Reason: Error Fetching to receiver";
+        << "MoQTest verification result: FAILURE! Reason: Error Fetching to receiver. "
+        << "Error code: " << static_cast<uint64_t>(res.error().errorCode)
+        << ", Reason: " << res.error().reasonPhrase;
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "Error code: ",
+                static_cast<uint64_t>(res.error().errorCode),
+                ", Reason: ",
+                res.error().reasonPhrase)));
   }
 
   co_return trackNamespace.value();
@@ -209,6 +255,9 @@ void MoQTestClient::onError(ResetStreamErrorCode) {
 }
 void MoQTestClient::onSubscribeDone(const SubscribeDone& done) {
   XLOG(DBG1) << "MoQTest DEBUGGING: onSubscribeDone";
+  // Ensure subHandle_ is reset at the end of this function, even if an early
+  // return occurs
+  auto subHandleResetGuard = folly::makeGuard([this] { subHandle_.reset(); });
 
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
     if (datagramObjects_ == 0) {
@@ -217,7 +266,7 @@ void MoQTestClient::onSubscribeDone(const SubscribeDone& done) {
       subHandle_->unsubscribe();
       return;
     } else {
-      XLOG(DBG1) << "MoQTest verification result: SUCCESS! Datagram Recieved "
+      XLOG(INFO) << "MoQTest verification result: SUCCESS! Datagram Recieved "
                  << datagramObjects_ << " objects";
       return;
     }
@@ -231,7 +280,7 @@ void MoQTestClient::onSubscribeDone(const SubscribeDone& done) {
     return;
   }
 
-  XLOG(DBG1) << "MoQTest verification result: SUCCESS! All Data Recieved";
+  XLOG(INFO) << "MoQTest verification result: SUCCESS! All Data Recieved";
 }
 
 bool MoQTestClient::validateSubscribedData(

@@ -53,8 +53,6 @@ class MoQTestClient {
 
   folly::coro::Task<void> connect(folly::EventBase* evb);
 
-  void initialize();
-
   folly::coro::Task<moxygen::TrackNamespace> subscribe(
       MoQTestParameters params);
 
