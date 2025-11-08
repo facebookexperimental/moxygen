@@ -21,7 +21,7 @@ enum class ForwardingPreference : int {
 const uint64_t kDefaultObjectsPerGroup = 10;
 const uint64_t kDefaultSizeOfObjectZero = 1024;
 const uint64_t kDefaultSizeOfObjectGreaterThanZero = 100;
-const uint64_t kDefaultObjectFrequency = 1000;
+const uint64_t kDefaultObjectFrequency = 50;
 const uint64_t kDefaultLastGroupInTrack = (1ULL << 62) - 1;
 const uint64_t kDefaultStart = 0;
 const uint64_t kDefaultIncrement = 1;

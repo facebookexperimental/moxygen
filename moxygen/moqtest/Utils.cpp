@@ -45,10 +45,12 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
   }
 
   // Check if Last Object is Less than Maximum allowed value (Tuple Field 5)
-  uint64_t maximumObjects =
-      track->objectsPerGroup + static_cast<int>(track->sendEndOfGroupMarkers);
+  uint64_t highestExpectedObjectId =
+      (track->objectsPerGroup +
+       static_cast<int>(track->sendEndOfGroupMarkers)) *
+      track->objectIncrement;
 
-  if (track->lastObjectInTrack > maximumObjects) {
+  if (track->lastObjectInTrack > highestExpectedObjectId) {
     return folly::makeUnexpected(
         std::runtime_error(
             "Last Object In Track field exceeds maximum allowed objects"));
@@ -71,9 +73,9 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
 
 folly::Expected<moxygen::TrackNamespace, std::runtime_error>
 convertMoqTestParamToTrackNamespace(MoQTestParameters* params) {
-  if (!validateMoQTestParameters(params)) {
-    return folly::makeUnexpected(
-        std::runtime_error("MoQTestParameters are invalid"));
+  auto validateResult = validateMoQTestParameters(params);
+  if (!validateResult) {
+    return folly::makeUnexpected(validateResult.error());
   }
 
   TrackNamespace trackNamespace({

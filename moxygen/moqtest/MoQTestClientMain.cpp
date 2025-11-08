@@ -53,7 +53,7 @@ DEFINE_uint64(
     "Publisher delivery timeout");
 DEFINE_uint64(
     last_object_in_track,
-    FLAGS_objects_per_group + (int)FLAGS_send_end_of_group_markers,
+    moxygen::kLocationMax.object,
     "Last object in track");
 DEFINE_uint64(
     delivery_timeout,
@@ -95,7 +95,11 @@ int main(int argc, char** argv) {
   defaultMoqParams.testVariableExtension = FLAGS_test_variable_extension;
   defaultMoqParams.publisherDeliveryTimeout = FLAGS_publisher_delivery_timeout;
   defaultMoqParams.deliveryTimeout = FLAGS_delivery_timeout;
-  defaultMoqParams.lastObjectInTrack = FLAGS_last_object_in_track;
+  defaultMoqParams.lastObjectInTrack =
+      FLAGS_last_object_in_track == moxygen::kLocationMax.object
+      ? FLAGS_object_increment *
+          (FLAGS_objects_per_group + (int)FLAGS_send_end_of_group_markers)
+      : FLAGS_last_object_in_track;
 
   auto url = proxygen::URL(FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
