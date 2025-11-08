@@ -68,6 +68,10 @@ DEFINE_bool(
     false,
     "Log to mlog file.  Default is false.  If true, will log to mlog file");
 DEFINE_string(mlog_path, moxygen::kDefaultClientFilePath, "Path to mlog file.");
+DEFINE_bool(
+    quic_transport,
+    false,
+    "Use QUIC transport instead of WebTransport");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
@@ -103,7 +107,7 @@ int main(int argc, char** argv) {
 
   auto url = proxygen::URL(FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
-      std::make_shared<moxygen::MoQTestClient>(&evb, url);
+      std::make_shared<moxygen::MoQTestClient>(&evb, url, FLAGS_quic_transport);
 
   std::shared_ptr<moxygen::MLogger> logger;
   if (FLAGS_log) {

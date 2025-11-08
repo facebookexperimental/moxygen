@@ -42,7 +42,10 @@ enum AdjustedExpectedResult : int {
 
 class MoQTestClient {
  public:
-  MoQTestClient(folly::EventBase* evb, proxygen::URL url);
+  MoQTestClient(
+      folly::EventBase* evb,
+      proxygen::URL url,
+      bool useQuicTransport);
 
   ~MoQTestClient() {}
 

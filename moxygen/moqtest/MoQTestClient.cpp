@@ -10,6 +10,7 @@
 
 #include <utility>
 #include "moxygen/MoQClient.h"
+#include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
@@ -24,14 +25,25 @@ const LocationType kDefaultLocationType = LocationType::NextGroupStart;
 const uint64_t kDefaultEndGroup = 10;
 const TrackAlias kDefaultTrackAlias = TrackAlias(0);
 
-MoQTestClient::MoQTestClient(folly::EventBase* evb, proxygen::URL url)
+MoQTestClient::MoQTestClient(
+    folly::EventBase* evb,
+    proxygen::URL url,
+    bool useQuicTransport)
     : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
       moqClient_(
-          std::make_unique<MoQClient>(
-              moqExecutor_,
-              std::move(url),
-              std::make_shared<
-                  test::InsecureVerifierDangerousDoNotUseInProduction>())),
+          useQuicTransport
+              ? std::make_unique<MoQClient>(
+                    moqExecutor_,
+                    std::move(url),
+                    std::make_shared<
+                        test::InsecureVerifierDangerousDoNotUseInProduction>())
+              : std::make_unique<MoQWebTransportClient>(
+                    moqExecutor_,
+                    std::move(url),
+                    std::make_shared<
+                        test::
+                            InsecureVerifierDangerousDoNotUseInProduction>())),
+
       subReceiver_(
           std::make_shared<ObjectReceiver>(
               ObjectReceiver::SUBSCRIBE,
