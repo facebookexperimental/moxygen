@@ -10,9 +10,8 @@
 #include <folly/coro/Sleep.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include "moxygen/moqtest/Utils.h"
+#include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
-std::string kCert = "fake_cert";
-std::string kKey = "fake_key";
 std::string kEndpointName = "fake_endpoint";
 
 namespace moxygen {
@@ -32,13 +31,13 @@ void MoQTestFetchHandle::fetchCancel() {
   cancelSource_.requestCancellation();
 }
 
-MoQTestServer::MoQTestServer()
+MoQTestServer::MoQTestServer(const std::string& cert, const std::string& key)
     : MoQServer(
           quic::samples::createFizzServerContextWithInsecureDefault(
               {"h3", "moq-00"},
               fizz::server::ClientAuthMode::None,
-              kCert,
-              kKey),
+              cert,
+              key),
           kEndpointName) {}
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
@@ -635,4 +634,91 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
   // Inform Consumer that fetch is completed
   callback->endOfFetch();
 }
+
+folly::coro::Task<void> MoQTestServer::doRelaySetup(
+    const std::string& relayUrl,
+    int32_t connectTimeout,
+    int32_t transactionTimeout) {
+  // Setup MoQ session on the client
+  co_await relayClient_->setupMoQSession(
+      std::chrono::milliseconds(connectTimeout),
+      std::chrono::milliseconds(transactionTimeout),
+      /*publishHandler=*/shared_from_this(),
+      /*subscribeHandler=*/nullptr,
+      quic::TransportSettings(),
+      {});
+
+  // Get the session
+  relaySession_ =
+      std::dynamic_pointer_cast<MoQRelaySession>(relayClient_->moqSession_);
+  if (!relaySession_) {
+    XLOG(ERR) << "Failed to get MoQRelaySession";
+    co_return;
+  }
+
+  // Send ANNOUNCE for the base namespace "moq-test-00"
+  Announce announce;
+  announce.trackNamespace = TrackNamespace("moq-test-00", "/");
+
+  auto announceResult = co_await relaySession_->announce(announce);
+  if (announceResult.hasError()) {
+    XLOG(ERR) << "Failed to announce namespace: "
+              << announceResult.error().reasonPhrase;
+    co_return;
+  }
+
+  // Store announce handle to keep it alive
+  announceHandle_ = announceResult.value();
+
+  XLOG(INFO) << "Successfully announced namespace 'moq-test-00' to relay at "
+             << relayUrl;
+
+  // Pass session to onNewSession to treat it like any other client
+  onNewSession(relaySession_);
+
+  co_return;
+}
+
+bool MoQTestServer::startRelayClient(
+    const std::string& relayUrl,
+    int32_t connectTimeout,
+    int32_t transactionTimeout,
+    bool useQuicTransport) {
+  proxygen::URL url(relayUrl);
+  if (!url.isValid() || !url.hasHost()) {
+    XLOG(ERR) << "Invalid relay url: " << relayUrl;
+    return false;
+  }
+
+  // Get event base and create executor
+  auto evb = getWorkerEvbs()[0];
+  if (!moqEvb_) {
+    moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(evb);
+  }
+
+  // Create client connection with MoQRelaySession factory
+  if (useQuicTransport) {
+    relayClient_ = std::make_unique<MoQClient>(
+        moqEvb_,
+        url,
+        MoQRelaySession::createRelaySessionFactory(),
+        std::make_shared<
+            test::InsecureVerifierDangerousDoNotUseInProduction>());
+  } else {
+    relayClient_ = std::make_unique<MoQWebTransportClient>(
+        moqEvb_,
+        url,
+        MoQRelaySession::createRelaySessionFactory(),
+        std::make_shared<
+            test::InsecureVerifierDangerousDoNotUseInProduction>());
+  }
+
+  // Start async relay setup (schedule on evb, don't block)
+  co_withExecutor(
+      evb, doRelaySetup(relayUrl, connectTimeout, transactionTimeout))
+      .start();
+
+  return true;
+}
+
 } // namespace moxygen

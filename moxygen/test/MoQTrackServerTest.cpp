@@ -114,17 +114,15 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
           *mockSubgroupConsumer,
           object(objectId, testing::_, testing::_, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize](
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto,
-                                  auto) {
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }));
+          .WillOnce([objectSize](
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        const auto&,
+                        auto) {
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          });
       // .WillOnce(::testing::Return(
       //     folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
     }
@@ -172,34 +170,32 @@ TEST_F(
           *mockSubgroupConsumer,
           object(objectId, testing::_, testing::_, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize, integerExtension, variableExtension](
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto extensions,
-                                  auto) {
-                // Check Extensions Generate
-                EXPECT_EQ(extensions.size(), 2);
+          .WillOnce([objectSize, variableExtension](
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        auto extensions,
+                        auto) {
+            // Check Extensions Generate
+            EXPECT_EQ(extensions.size(), 2);
 
-                // Check if Integer Extension type is 2*Field
-                auto& mutable_exts = extensions.getMutableExtensions();
-                EXPECT_EQ(mutable_exts[0].type, 2);
+            // Check if Integer Extension type is 2*Field
+            auto& mutable_exts = extensions.getMutableExtensions();
+            EXPECT_EQ(mutable_exts[0].type, 2);
 
-                // Check if Variable Extension type is 2*Field + 1
-                EXPECT_EQ(mutable_exts[1].type, 3);
+            // Check if Variable Extension type is 2*Field + 1
+            EXPECT_EQ(mutable_exts[1].type, 3);
 
-                // Check if Variable Extension is within size range of 1-20
-                bool check =
-                    mutable_exts[1].arrayValue->computeChainDataLength() >= 1 &&
-                    mutable_exts[1].arrayValue->computeChainDataLength() <= 20;
-                EXPECT_TRUE(check);
+            // Check if Variable Extension is within size range of 1-20
+            bool check =
+                mutable_exts[1].arrayValue->computeChainDataLength() >= 1 &&
+                mutable_exts[1].arrayValue->computeChainDataLength() <= 20;
+            EXPECT_TRUE(check);
 
-                // Check Payload
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }))
+            // Check Payload
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          })
           .WillRepeatedly(
               ::testing::Return(
                   folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
@@ -244,17 +240,15 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
           *mockSubgroupConsumer,
           object(objectId, testing::_, testing::_, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize](
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto,
-                                  auto) {
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }))
+          .WillOnce([objectSize](
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        const auto&,
+                        auto) {
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          })
           .WillOnce(
               ::testing::Return(
                   folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
@@ -305,17 +299,15 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
             *mockSubgroupConsumerZero,
             object(objectId, testing::_, testing::_, testing::_))
             .Times(1)
-            .WillOnce(
-                testing::Invoke([objectSize](
-                                    auto,
-                                    std::unique_ptr<folly::IOBuf> payload,
-                                    auto,
-                                    auto) {
-                  int payloadLength = (*payload).length();
-                  EXPECT_EQ(payloadLength, objectSize);
-                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                      {});
-                }))
+            .WillOnce([objectSize](
+                          auto,
+                          std::unique_ptr<folly::IOBuf> payload,
+                          const auto&,
+                          auto) {
+              auto payloadLength = (*payload).length();
+              EXPECT_EQ(payloadLength, objectSize);
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            })
             .WillOnce(
                 ::testing::Return(
                     folly::Expected<folly::Unit, moxygen::MoQPublishError>(
@@ -325,17 +317,15 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
             *mockSubgroupConsumerOne,
             object(objectId, testing::_, testing::_, testing::_))
             .Times(1)
-            .WillOnce(
-                testing::Invoke([objectSize](
-                                    auto,
-                                    std::unique_ptr<folly::IOBuf> payload,
-                                    auto,
-                                    auto) {
-                  int payloadLength = (*payload).length();
-                  EXPECT_EQ(payloadLength, objectSize);
-                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                      {});
-                }))
+            .WillOnce([objectSize](
+                          auto,
+                          std::unique_ptr<folly::IOBuf> payload,
+                          const auto&,
+                          auto) {
+              auto payloadLength = (*payload).length();
+              EXPECT_EQ(payloadLength, objectSize);
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            })
             .WillOnce(
                 ::testing::Return(
                     folly::Expected<folly::Unit, moxygen::MoQPublishError>(
@@ -422,33 +412,29 @@ TEST_F(
             *mockSubgroupConsumerZero,
             object(objectId, testing::_, testing::_, testing::_))
             .Times(1)
-            .WillOnce(
-                testing::Invoke([objectSize](
-                                    auto,
-                                    std::unique_ptr<folly::IOBuf> payload,
-                                    auto,
-                                    auto) {
-                  int payloadLength = (*payload).length();
-                  EXPECT_EQ(payloadLength, objectSize);
-                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                      {});
-                }));
+            .WillOnce([objectSize](
+                          auto,
+                          std::unique_ptr<folly::IOBuf> payload,
+                          const auto&,
+                          auto) {
+              auto payloadLength = (*payload).length();
+              EXPECT_EQ(payloadLength, objectSize);
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            });
       } else {
         EXPECT_CALL(
             *mockSubgroupConsumerOne,
             object(objectId, testing::_, testing::_, testing::_))
             .Times(1)
-            .WillOnce(
-                testing::Invoke([objectSize](
-                                    auto,
-                                    std::unique_ptr<folly::IOBuf> payload,
-                                    auto,
-                                    auto) {
-                  int payloadLength = (*payload).length();
-                  EXPECT_EQ(payloadLength, objectSize);
-                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                      {});
-                }));
+            .WillOnce([objectSize](
+                          auto,
+                          std::unique_ptr<folly::IOBuf> payload,
+                          const auto&,
+                          auto) {
+              auto payloadLength = (*payload).length();
+              EXPECT_EQ(payloadLength, objectSize);
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            });
       }
     }
   }
@@ -502,23 +488,20 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
 
       EXPECT_CALL(*mockConsumer, datagram(expectedHeader, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([expectedHeader,
-                               objectId,
-                               objectSize,
-                               expectedTrackAlias = *sub.trackAlias](
-                                  auto header, auto objectPayload) {
-                // Check Object Header
-                EXPECT_EQ(expectedHeader.group, header.group);
-                EXPECT_EQ(expectedHeader.id, header.id);
-                EXPECT_EQ(expectedHeader.extensions, header.extensions);
+          .WillOnce([expectedHeader,
+                     objectSize,
+                     expectedTrackAlias = *sub.trackAlias](
+                        const auto& header, auto objectPayload) {
+            // Check Object Header
+            EXPECT_EQ(expectedHeader.group, header.group);
+            EXPECT_EQ(expectedHeader.id, header.id);
+            EXPECT_EQ(expectedHeader.extensions, header.extensions);
 
-                // Check Object Payload
-                int payloadLength = (*objectPayload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }));
+            // Check Object Payload
+            auto payloadLength = (*objectPayload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          });
     }
   }
 
@@ -572,19 +555,17 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
           *mockConsumer,
           object(groupId, 0, objectId, testing::_, testing::_, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize](
-                                  auto,
-                                  auto,
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto,
-                                  auto) {
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }))
+          .WillOnce([objectSize](
+                        auto,
+                        auto,
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        const auto&,
+                        auto) {
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          })
           .WillRepeatedly(
               ::testing::Return(
                   folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
@@ -628,36 +609,34 @@ TEST_F(
           *mockConsumer,
           object(groupId, 0, objectId, testing::_, testing::_, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize, integerExtension, variableExtension](
-                                  auto,
-                                  auto,
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto extensions,
-                                  auto) {
-                // Check Extensions Generate
-                EXPECT_EQ(extensions.size(), 2);
+          .WillOnce([objectSize, integerExtension](
+                        auto,
+                        auto,
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        auto extensions,
+                        auto) {
+            // Check Extensions Generate
+            EXPECT_EQ(extensions.size(), 2);
 
-                // Check if Integer Extension type is 2*Field
-                auto& mutable_exts = extensions.getMutableExtensions();
-                EXPECT_EQ(mutable_exts[0].type, 2);
+            // Check if Integer Extension type is 2*Field
+            auto& mutable_exts = extensions.getMutableExtensions();
+            EXPECT_EQ(mutable_exts[0].type, 2);
 
-                // Check if Variable Extension type is 2*Field + 1
-                EXPECT_EQ(mutable_exts[1].type, 3);
+            // Check if Variable Extension type is 2*Field + 1
+            EXPECT_EQ(mutable_exts[1].type, 3);
 
-                // Check if Variable Extension is within size range of 1-20
-                bool check =
-                    mutable_exts[1].arrayValue->computeChainDataLength() >= 1 &&
-                    mutable_exts[1].arrayValue->computeChainDataLength() <= 20;
-                EXPECT_TRUE(check);
+            // Check if Variable Extension is within size range of 1-20
+            bool check =
+                mutable_exts[1].arrayValue->computeChainDataLength() >= 1 &&
+                mutable_exts[1].arrayValue->computeChainDataLength() <= 20;
+            EXPECT_TRUE(check);
 
-                // Check Payload
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }))
+            // Check Payload
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          })
           .WillRepeatedly(
               ::testing::Return(
                   folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
@@ -679,9 +658,6 @@ TEST_F(
 
 TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  int integerExtension = 1;
-  int variableExtension = 1;
-
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
 
@@ -698,20 +674,18 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
           object(
               groupId, objectId, objectId, testing::_, testing::_, testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize, integerExtension, variableExtension](
-                                  auto,
-                                  auto,
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto,
-                                  auto) {
-                // Check Payload
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }))
+          .WillOnce([objectSize](
+                        auto,
+                        auto,
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        const auto&,
+                        auto) {
+            // Check Payload
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          })
           .WillRepeatedly(
               ::testing::Return(
                   folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
@@ -733,9 +707,6 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
 
 TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  int integerExtension = 1;
-  int variableExtension = 1;
-
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
 
@@ -757,20 +728,18 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
               testing::_,
               testing::_))
           .Times(1)
-          .WillOnce(
-              testing::Invoke([objectSize, integerExtension, variableExtension](
-                                  auto,
-                                  auto,
-                                  auto,
-                                  std::unique_ptr<folly::IOBuf> payload,
-                                  auto,
-                                  auto) {
-                // Check Payload
-                int payloadLength = (*payload).length();
-                EXPECT_EQ(payloadLength, objectSize);
-                return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
-              }))
+          .WillOnce([objectSize](
+                        auto,
+                        auto,
+                        auto,
+                        std::unique_ptr<folly::IOBuf> payload,
+                        const auto&,
+                        auto) {
+            // Check Payload
+            auto payloadLength = (*payload).length();
+            EXPECT_EQ(payloadLength, objectSize);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+          })
           .WillRepeatedly(
               ::testing::Return(
                   folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
@@ -794,8 +763,6 @@ TEST_F(
     MoQTrackServerTest,
     ValidateFetchWithForwardPreferenceTwoAndEndOfGroupMarkers) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  int integerExtension = 1;
-  int variableExtension = 1;
   params_.sendEndOfGroupMarkers = true;
   params_.objectsPerGroup = 10;
 
@@ -821,22 +788,18 @@ TEST_F(
                 testing::_,
                 testing::_))
             .Times(1)
-            .WillOnce(
-                testing::Invoke([objectSize,
-                                 integerExtension,
-                                 variableExtension](
-                                    auto,
-                                    auto,
-                                    auto,
-                                    std::unique_ptr<folly::IOBuf> payload,
-                                    auto,
-                                    auto) {
-                  // Check Payload
-                  int payloadLength = (*payload).length();
-                  EXPECT_EQ(payloadLength, objectSize);
-                  return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                      {});
-                }))
+            .WillOnce([objectSize](
+                          auto,
+                          auto,
+                          auto,
+                          std::unique_ptr<folly::IOBuf> payload,
+                          const auto&,
+                          auto) {
+              // Check Payload
+              auto payloadLength = (*payload).length();
+              EXPECT_EQ(payloadLength, objectSize);
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            })
             .WillOnce(
                 ::testing::Return(
                     folly::Expected<folly::Unit, moxygen::MoQPublishError>(

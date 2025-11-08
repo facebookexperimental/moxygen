@@ -10,12 +10,15 @@
 
 #include <utility>
 
+#include "moxygen/MoQClient.h"
+#include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQServer.h"
+#include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/Publisher.h"
+#include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/Types.h"
 
 namespace moxygen {
-
 class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
  public:
   MoQTestSubscriptionHandle(
@@ -52,7 +55,8 @@ class MoQTestServer : public moxygen::Publisher,
                       public moxygen::MoQServer,
                       public std::enable_shared_from_this<MoQTestServer> {
  public:
-  MoQTestServer();
+  MoQTestServer(const std::string& cert = "", const std::string& key = "");
+
   //  Override onNewSession to set publisher handler to be this object
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {
@@ -61,6 +65,13 @@ class MoQTestServer : public moxygen::Publisher,
       clientSession->setLogger(logger_);
     }
   }
+
+  // Relay client support
+  bool startRelayClient(
+      const std::string& relayUrl,
+      int32_t connectTimeout,
+      int32_t transactionTimeout,
+      bool useQuicTransport);
 
   // Subscribing Methods
   virtual folly::coro::Task<SubscribeResult> subscribe(
@@ -108,6 +119,18 @@ class MoQTestServer : public moxygen::Publisher,
   folly::coro::Task<void> fetchTwoSubgroupsPerGroup(
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback);
+
+ private:
+  folly::coro::Task<void> doRelaySetup(
+      const std::string& relayUrl,
+      int32_t connectTimeout,
+      int32_t transactionTimeout);
+
+  // Relay client connection (if using relay mode)
+  std::unique_ptr<MoQClient> relayClient_;
+  std::shared_ptr<MoQRelaySession> relaySession_;
+  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 
 } // namespace moxygen
