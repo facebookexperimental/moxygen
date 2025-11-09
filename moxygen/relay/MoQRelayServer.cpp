@@ -17,6 +17,11 @@ DEFINE_string(key, "", "Key path");
 DEFINE_string(endpoint, "/moq-relay", "End point");
 DEFINE_int32(port, 9668, "Relay Server Port");
 DEFINE_bool(enable_cache, false, "Enable relay cache");
+DEFINE_int32(max_cached_tracks, 100, "Maximum number of cached tracks");
+DEFINE_int32(
+    max_cached_groups_per_track,
+    3,
+    "Maximum groups per track in cache");
 
 namespace {
 using namespace moxygen;
@@ -45,8 +50,10 @@ class MoQRelayServer : public MoQServer {
   }
 
  private:
-  std::shared_ptr<MoQRelay> relay_{
-      std::make_shared<MoQRelay>(FLAGS_enable_cache)};
+  std::shared_ptr<MoQRelay> relay_{std::make_shared<MoQRelay>(
+      FLAGS_enable_cache,
+      FLAGS_max_cached_tracks,
+      FLAGS_max_cached_groups_per_track)};
 };
 } // namespace
 
