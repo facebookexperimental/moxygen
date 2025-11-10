@@ -12,9 +12,25 @@ Fig2: Relay architecture overview
 
 ## Installation
 
-- Just execute:
+- Set environment variables
+```
+eval $(./build/fbcode_builder/getdeps.py env --src-dir moxygen:. moxygen)
+```
+
+- Build it
 ```
 ./build/fbcode_builder/getdeps.py build moxygen
+```
+
+## Rebuild
+If you need to modify the code and rebuild it, you can do:
+```
+./build/fbcode_builder/getdeps.py build moxygen --src-dir=.
+```
+
+Follwing cmd can be a little faster if you do not need to rebuilt dependencies:
+```
+./build/fbcode_builder/getdeps.py build moxygen --src-dir=. --no-deps
 ```
 
 ## Test preconditions
@@ -24,17 +40,24 @@ cd scripts
 ./create-server-certs.sh
 ```
 
+### Get build directory
+```
+MOXYGEN_BUILD_PATH=`./build/fbcode_builder/getdeps.py show-build-dir moxygen`
+```
+
 ### Test with date server
 
 - Execute date server (from project root dir)
 ```
-./_build/bin/moqdateserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/samples/date/moqdateserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key --logging DBG1
 ```
 
 - Execute text client
 ```
-./_build/bin/moqtextclient --connect_url "https://localhost:4433/moq-date" --track_namespace "moq-date" --track_name "date"
+$MOXYGEN_BUILD_PATH/moxygen/samples/text-client/moqtextclient --insecure --connect_url "https://localhost:4433/moq-date" --track_namespace "moq-date" --track_name "date"
 ```
+
+Note: the `--insecure` flag is ONLY required to connect to servers with self-signed certificates, similar to `curl -k``. It should never be used in production
 
 - You should see an output like:
 ```
@@ -83,7 +106,7 @@ They work with FLV packager. Since [ffmpeg](https://www.ffmpeg.org/ffmpeg.html) 
 
 - To start the relay you can do (from project root dir)
 ```
-./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG
+$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert ./certs/certificate.pem --key ./certs/certificate.key --endpoint "/moq" --logging=DBG1  --port 4433
 ```
 
 ## Local test with web media client
@@ -92,7 +115,7 @@ Assuming all running in localhost
 
 - Execute (from project root dir)
 ```
-./_build/bin/moqrelayserver -port 4433 -cert [moq-encoder-player]/certs/certificate.pem -key [moq-encoder-player]/certs/certificate.key -endpoint "/moq" --logging DBG
+$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
 Note: [moq-encoder-player] indicate the root directory of that project. So you need to use those certs to enable connections from Chrome to localhost

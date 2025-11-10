@@ -67,7 +67,7 @@ Important you follow the next steps in order (when fifo pipes are involved is im
 
 - Start relay (terminal1)
 ```
-./_build/bin/moqrelayserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key -endpoint "/moq" --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert ./certs/certificate.pem --key ./certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
 Note: Look at [README.md](./README.md) on how to generate certificates
@@ -83,7 +83,7 @@ Note: fontfile location can change depending on OS
 
 - Connect streamer to that fifo (terminal3)
 ```
-./_build/bin/moqflvstreamerclient -input_flv_file ~/Movies/fifo.flv --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/samples/flv_streamer_client/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
 This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (default value) to the relay
 
@@ -94,7 +94,7 @@ Assuming we already did all specified in [Stream VOD file simulating live stream
 
 - Start receiver (terminal4)
 ```
-./_build/bin/moqflvreceiverclient --flv_outpath ~/Movies/my-moq-out.flv --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/samples/flv_receiver_client/moqflvreceiverclient --insecure --flv_outpath ~/Movies/my-moq-out.flv --logging DBG1
 ```
 This will subscribe to video `video0` and audio `audio0` tracks from `flvstreamer` namespace (default values), demux the data from MOQMi, and mux it into valid FLV data. It is expecting 1 video in h264 and 1 audio in AAC-LC.
 
@@ -131,7 +131,7 @@ ffplay ~/Movies/fifo-out.flv
 
 - Start receiver (terminal5)
 ```
-./_build/bin/moqflvreceiverclient --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/samples/flv_receiver_client/moqflvreceiverclient --insecure --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
 ```
 
 ![Live playback](./pics/moq-streamer-play.png)
@@ -141,7 +141,7 @@ Fig3: Live playback via ffplay
 
 Assuming you have moxygen running in localhost with following params (terminal1):
 ```
-./_build/bin/moqrelayserver -port 4433 -cert ../moq-encoder-player/certs/certificate.pem -key ../moq-encoder-player/certs/certificate.key  -endpoint "/moq" --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
 - Stream FLV live stream in real time to a fifo (Speed = x1) (terminal2)
@@ -155,7 +155,7 @@ Note: fontfile location can change depending on OS
 
 - Connect streamer to that fifo (terminal3)
 ```
-./_build/bin/moqflvstreamerclient -input_flv_file ~/Movies/fifo.flv --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/samples/flv_streamer_client/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
 This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (default value) to the relay
 
@@ -173,7 +173,7 @@ Fig4: Live playback in the brower using Webcodecs
 
 Assuming you have moxygen running in localhost with following params:
 ```
-./_build/bin/moqrelayserver -port 4433 -cert ../moq-encoder-player/certs/certificate.pem -key ../moq-encoder-player/certs/certificate.key  -endpoint "/moq" --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
 - Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [this instructions](./README.md#local-test-with-web-media-client)
@@ -199,7 +199,7 @@ ffplay ~/Movies/fifo-out.flv
 
 - Start receiver (terminal5)
 ```
-./_build/bin/moqflvreceiverclient --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
+$MOXYGEN_BUILD_PATH/moxygen/samples/flv_receiver_client/moqflvreceiverclient --insecure --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
 ```
 
 You should see /listen now live playback from browser to ffplay
