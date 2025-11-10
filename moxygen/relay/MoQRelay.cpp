@@ -642,67 +642,56 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
 }
 
 void MoQRelay::onEmpty(MoQForwarder* forwarder) {
-  // TODO: we shouldn't need a linear search if forwarder stores FullTrackName
-  for (auto subscriptionIt = subscriptions_.begin();
-       subscriptionIt != subscriptions_.end();
-       ++subscriptionIt) {
-    auto& subscription = subscriptionIt->second;
-    if (subscription.forwarder.get() != forwarder) {
-      continue;
-    }
-    XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-    if (subscription.handle) {
-      if (subscription.isPublish) {
-        // if it's publish, don't unsubscribe, just subscribeUpdate
-        // forward=false
-        XLOG(DBG1) << "Updating upstream subscription forward=false";
-        subscription.handle->subscribeUpdate(
-            {RequestID(0),
-             subscription.handle->subscribeOk().requestID,
-             kLocationMin,
-             kLocationMax.group,
-             kDefaultPriority,
-             /*forward=*/false,
-             {}});
-      } else {
-        subscription.handle->unsubscribe();
-      }
-    }
-    if (!subscription.isPublish) {
-      XLOG(DBG4) << "Erasing subscription to " << subscriptionIt->first;
-      subscriptionIt = subscriptions_.erase(subscriptionIt);
-    }
+  auto subscriptionIt = subscriptions_.find(forwarder->fullTrackName());
+  if (subscriptionIt == subscriptions_.end()) {
     return;
+  }
+  auto& subscription = subscriptionIt->second;
+  XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
+  if (subscription.handle) {
+    if (subscription.isPublish) {
+      // if it's publish, don't unsubscribe, just subscribeUpdate
+      // forward=false
+      XLOG(DBG1) << "Updating upstream subscription forward=false";
+      subscription.handle->subscribeUpdate(
+          {RequestID(0),
+           subscription.handle->subscribeOk().requestID,
+           kLocationMin,
+           kLocationMax.group,
+           kDefaultPriority,
+           /*forward=*/false,
+           {}});
+    } else {
+      subscription.handle->unsubscribe();
+    }
+  }
+  if (!subscription.isPublish) {
+    XLOG(DBG4) << "Erasing subscription to " << subscriptionIt->first;
+    subscriptions_.erase(subscriptionIt);
   }
 }
 
 void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
-  // TODO: we shouldn't need a linear search if forwarder stores FullTrackName
-  for (auto subscriptionIt = subscriptions_.begin();
-       subscriptionIt != subscriptions_.end();
-       ++subscriptionIt) {
-    auto& subscription = subscriptionIt->second;
-    if (subscription.forwarder.get() != forwarder) {
-      continue;
-    }
-    if (!subscriptionIt->second.promise.isFulfilled()) {
-      // Ignore: it's the first subscriber, forward update not needed
-      return;
-    }
-    XLOG(INFO) << "Updating forward for " << subscriptionIt->first
-               << " numForwardingSubs="
-               << forwarder->numForwardingSubscribers();
-
-    subscription.handle->subscribeUpdate(
-        {RequestID(0),
-         subscription.handle->subscribeOk().requestID,
-         kLocationMin,
-         kLocationMax.group,
-         kDefaultPriority,
-         /*forward=*/forwarder->numForwardingSubscribers() > 0,
-         {}});
+  auto subscriptionIt = subscriptions_.find(forwarder->fullTrackName());
+  if (subscriptionIt == subscriptions_.end()) {
     return;
   }
+  auto& subscription = subscriptionIt->second;
+  if (!subscription.promise.isFulfilled()) {
+    // Ignore: it's the first subscriber, forward update not needed
+    return;
+  }
+  XLOG(INFO) << "Updating forward for " << subscriptionIt->first
+             << " numForwardingSubs=" << forwarder->numForwardingSubscribers();
+
+  subscription.handle->subscribeUpdate(
+      {RequestID(0),
+       subscription.handle->subscribeOk().requestID,
+       kLocationMin,
+       kLocationMax.group,
+       kDefaultPriority,
+       /*forward=*/forwarder->numForwardingSubscribers() > 0,
+       {}});
 }
 
 void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
