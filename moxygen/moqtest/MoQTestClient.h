@@ -52,7 +52,7 @@ class MoQTestClient {
   MoQTestClient(const MoQTestClient&) = delete;
   MoQTestClient& operator=(const MoQTestClient&) = delete;
   MoQTestClient(MoQTestClient&&) = default;
-  MoQTestClient& operator=(MoQTestClient&&) = default;
+  MoQTestClient& operator=(MoQTestClient&&) = delete;
 
   folly::coro::Task<void> connect(folly::EventBase* evb);
 

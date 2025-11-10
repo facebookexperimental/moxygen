@@ -172,7 +172,7 @@ std::vector<Extension> getExtensions(
   return extensions;
 }
 
-int getObjectSize(int objectId, MoQTestParameters* params) {
+int getObjectSize(uint64_t objectId, MoQTestParameters* params) {
   if (objectId == params->startObject) {
     return params->sizeOfObjectZero;
   } else {
@@ -185,16 +185,24 @@ bool validateExtensionSize(
     std::vector<Extension> extensions,
     MoQTestParameters* params) {
   return extensions.size() ==
-      (int)(params->testIntegerExtension >= 0) +
-      (int)(params->testVariableExtension >= 0);
+      static_cast<size_t>(params->testIntegerExtension >= 0) +
+      static_cast<size_t>(params->testVariableExtension >= 0);
 }
 
 bool validateIntExtensions(Extension intExt, MoQTestParameters* params) {
-  return intExt.type == 2 * params->testIntegerExtension;
+  if (params->testIntegerExtension < 0) {
+    return false;
+  }
+  return intExt.type == static_cast<uint64_t>(2 * params->testIntegerExtension);
 }
 
 bool validateVarExtensions(Extension varExt, MoQTestParameters* params) {
-  return (varExt.type == 2 * params->testVariableExtension + 1);
+  if (params->testVariableExtension < 0) {
+    return false;
+  }
+  return (
+      varExt.type ==
+      static_cast<uint64_t>(2 * params->testVariableExtension + 1));
 }
 
 // Payload Validation Helper Function

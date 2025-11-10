@@ -827,7 +827,7 @@ MoQFrameParser::parseSubgroupHeader(
     length -= 1;
   } else {
     // Leave priority as folly::none if not present
-    XCHECK_GE(getDraftMajorVersion(*version_), 15);
+    XCHECK_GE(getDraftMajorVersion(*version_), 15u);
     objectHeader.priority = folly::none;
   }
   if (parseObjectID) {
@@ -2415,7 +2415,6 @@ std::string MoQFrameWriter::encodeTokenValue(
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
-  auto version = forceVersion ? forceVersion : version_;
   writeVarint(
       writeBuf, folly::to_underlying(AliasType::USE_VALUE), size, error);
   writeVarint(writeBuf, tokenType, size, error);

@@ -23,7 +23,7 @@ std::vector<Extension> getExtensions(
     int integerExtensionId,
     int variableExtensionId);
 
-int getObjectSize(int objectId, MoQTestParameters* params);
+int getObjectSize(uint64_t objectId, MoQTestParameters* params);
 
 bool validatePayload(int objectSize, std::string payload);
 

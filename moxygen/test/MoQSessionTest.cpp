@@ -2110,7 +2110,7 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
   EXPECT_CALL(*serverPublisher, trackStatus(_))
       .WillOnce(
           testing::Invoke(
-              [this](TrackStatus request)
+              [](TrackStatus request)
                   -> folly::coro::Task<Publisher::TrackStatusResult> {
                 EXPECT_EQ(request.params.size(), 5);
                 auto verifyParam = [](const auto& param,
