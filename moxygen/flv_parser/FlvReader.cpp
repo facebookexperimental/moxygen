@@ -83,7 +83,10 @@ std::unique_ptr<folly::IOBuf> FlvReader::readBytes(size_t n) {
     remaining -= toRead;
   }
 
-  return queue.move();
+  auto b = queue.move();
+  // This funcion is expected to return a single IOBuff
+  b->coalesce();
+  return b;
 }
 
 } // namespace moxygen::flv
