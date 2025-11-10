@@ -6,6 +6,11 @@
 
 #include "moxygen/flv_parser/FlvCommon.h"
 
+namespace {
+const uint32_t kAudioTagHeaderSize = 2;
+const uint32_t kVideoTagHeaderSize = 5;
+} // namespace
+
 namespace moxygen::flv {
 
 std::unique_ptr<flv::FlvScriptTag> createScriptTag(
@@ -117,10 +122,12 @@ flv::FlvTag createTag(
     }
 
     // Read data
-    if (tag->size > 2) {
-      data->trimStart(2);
-      data->trimEnd(data->length() - tag->size + 2);
-      audioTag->data = std::move(data);
+    if (tag->size > kAudioTagHeaderSize) {
+      auto trimmed = std::make_unique<folly::IOBuf>();
+      // Tag size includes the AudioTagHeader = 2 bytes which we have already
+      // parsed. Extract the rest but trim any padding bytes.
+      cursor.clone(trimmed, tag->size - kAudioTagHeaderSize);
+      audioTag->data = std::move(trimmed);
     }
     return audioTag;
   }
@@ -148,10 +155,12 @@ flv::FlvTag createTag(
     videoTag->compositionTime = read3Bytes(cursor);
 
     // Read data
-    if (tag->size > 5) {
-      data->trimStart(5);
-      data->trimEnd(data->length() - tag->size + 5);
-      videoTag->data = std::move(data);
+    if (tag->size > kVideoTagHeaderSize) {
+      auto trimmed = std::make_unique<folly::IOBuf>();
+      // Tag size includes the VideoTagHeader which we have already
+      // parsed. Extract the rest but trim any padding bytes.
+      cursor.clone(trimmed, tag->size - kVideoTagHeaderSize);
+      videoTag->data = std::move(trimmed);
     }
 
     return videoTag;
@@ -162,8 +171,10 @@ flv::FlvTag createTag(
     scriptTag = std::make_unique<FlvScriptTag>(*tag);
     // Read data
     if (tag->size > 0) {
-      data->trimEnd(data->length() - tag->size);
-      scriptTag->data = std::move(data);
+      auto trimmed = std::make_unique<folly::IOBuf>();
+      // No header to parse. Tag size indicates the payload size.
+      cursor.clone(trimmed, tag->size);
+      scriptTag->data = std::move(trimmed);
     }
     return scriptTag;
   }
