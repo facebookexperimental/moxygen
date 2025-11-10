@@ -8,6 +8,7 @@
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <folly/portability/GFlags.h>
 #include <signal.h>
+#include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 #include <filesystem>
 #include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/flv_parser/FlvReader.h"
@@ -34,6 +35,10 @@ DEFINE_uint64(
     delivery_timeout,
     0,
     "Delivery timeout in milliseconds (0 = disabled)");
+DEFINE_bool(
+    insecure,
+    false,
+    "Use insecure verifier (skip certificate validation)");
 
 namespace {
 using namespace moxygen;
@@ -43,12 +48,23 @@ class MoQFlvStreamerClient
       public std::enable_shared_from_this<MoQFlvStreamerClient> {
  public:
   MoQFlvStreamerClient(
-      folly::EventBase* evb,
+      std::shared_ptr<MoQFollyExecutorImpl> evb,
       proxygen::URL url,
       FullTrackName fvtn,
-      FullTrackName fatn)
-      : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
-        moqClient_(moqExecutor_, std::move(url)),
+      FullTrackName fatn,
+      bool useQuic,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      : moqClient_(
+            useQuic ? std::make_unique<MoQClient>(
+                          evb,
+                          std::move(url),
+                          MoQRelaySession::createRelaySessionFactory(),
+                          verifier)
+                    : std::make_unique<MoQWebTransportClient>(
+                          evb,
+                          std::move(url),
+                          MoQRelaySession::createRelaySessionFactory(),
+                          verifier)),
         fullVideoTrackName_(std::move(fvtn)),
         fullAudioTrackName_(std::move(fatn)) {}
 
@@ -96,6 +112,7 @@ class MoQFlvStreamerClient
     }
     if (moqClient_.getSession()) {
       moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
+      moqClient_.shutdown();
     }
   }
 
@@ -299,7 +316,6 @@ class MoQFlvStreamerClient
       100; /* Lower is higher pri */
   static constexpr uint8_t VIDEO_STREAM_PRIORITY = 200;
 
-  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   MoQRelayClient moqClient_;
   std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   FullTrackName fullVideoTrackName_;
@@ -361,13 +377,23 @@ int main(int argc, char* argv[]) {
       "Starting publisher that will use: Stream(subGroup) per object for audio and Stream(subGroup) per GOP for video. Input file/pipe: {}",
       FLAGS_input_flv_file);
 
+  std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr;
+  if (FLAGS_insecure) {
+    verifier = std::make_shared<
+        moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>();
+  }
+  std::shared_ptr<MoQFollyExecutorImpl> moqEvb =
+      std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   auto streamerClient = std::make_shared<MoQFlvStreamerClient>(
-      &eventBase,
+      moqEvb,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_video_track_name}),
-      moxygen::FullTrackName({ns, FLAGS_audio_track_name}));
+      moxygen::FullTrackName({ns, FLAGS_audio_track_name}),
+      FLAGS_quic_transport,
+      verifier);
 
   class SigHandler : public folly::AsyncSignalHandler {
    public:
