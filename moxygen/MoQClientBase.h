@@ -60,7 +60,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler,
       const quic::TransportSettings& transportSettings,
-      const std::vector<std::string>& alpns = {}) noexcept;
+      const std::vector<std::string>& alpns = {});
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
 

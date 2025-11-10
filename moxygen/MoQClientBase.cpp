@@ -5,6 +5,7 @@
  */
 
 #include <fizz/protocol/CertificateVerifier.h>
+#include <folly/coro/Error.h>
 #include <quic/client/QuicClientTransport.h>
 #include <moxygen/MoQClientBase.h>
 
@@ -26,7 +27,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler,
     const quic::TransportSettings& transportSettings,
-    const std::vector<std::string>& alpns) noexcept {
+    const std::vector<std::string>& alpns) {
   proxygen::WebTransport* wt = nullptr;
 
   std::vector<std::string> alpn;
@@ -58,11 +59,15 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   quicWebTransport_->setHandler(this);
   wt = quicWebTransport_.get();
 
-  co_await completeSetupMoQSession(
+  auto result = co_await folly::coro::co_awaitTry(completeSetupMoQSession(
       wt,
       url_.getPath(),
       std::move(publishHandler),
-      std::move(subscribeHandler));
+      std::move(subscribeHandler)));
+
+  if (result.hasException()) {
+    co_yield folly::coro::co_error(result.exception());
+  }
 }
 
 folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
