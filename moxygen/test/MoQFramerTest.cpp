@@ -1212,10 +1212,19 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
   tokenLengths.push_back(len);
 
   for (int j = 0; j < 4; ++j) {
+    /*
+     * The five buffer operations in AuthTokenUnderflowTest carve the serialized
+     * SUBSCRIBE frame into pieces so the test can fiddle with the token-length
+     * field while keeping the rest of the frame intact:
+     */
     auto frameHeader = writeBufs[j].split(3);
     // Version 15+ don't have the filter within the request, but in the
     // parameters
-    uint32_t frontLength = (getDraftMajorVersion(GetParam()) >= 15) ? 16 : 19;
+    const uint32_t kDraft15PreambleLength = 15;
+    const uint32_t kDraft14PreambleLength = 19;
+    uint32_t frontLength = (getDraftMajorVersion(GetParam()) >= 15)
+        ? kDraft15PreambleLength
+        : kDraft14PreambleLength;
     auto front = writeBufs[j].split(frontLength);
     auto origTokenLengthBytes = tokenLengths[j] > 64 ? 2 : 1;
     auto tokenLengthBuf = writeBufs[j].split(origTokenLengthBytes);

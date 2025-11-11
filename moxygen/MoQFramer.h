@@ -380,6 +380,7 @@ enum class TrackRequestParamKey : uint64_t {
   MAX_CACHE_DURATION = 4,
   PUBLISHER_PRIORITY = 0x0E,
   SUBSCRIPTION_FILTER = 0x21,
+  GROUP_ORDER = 0x22,
 };
 
 class Parameters {
@@ -525,9 +526,18 @@ bool isSupportedVersion(uint64_t version);
 std::string getSupportedVersionsString();
 
 // Helper function to extract an integer parameter by key from a parameter list
+template <class T>
 folly::Optional<uint64_t> getFirstIntParam(
-    const TrackRequestParameters& params,
-    TrackRequestParamKey key);
+    const T& params,
+    TrackRequestParamKey key) {
+  auto keyValue = folly::to_underlying(key);
+  for (const auto& param : params) {
+    if (param.key == keyValue) {
+      return param.asUint64;
+    }
+  }
+  return folly::none;
+}
 
 void writeVarint(
     folly::IOBufQueue& buf,
@@ -1466,11 +1476,27 @@ class MoQFrameParser {
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   void handleRequestSpecificParams(
+      SubscribeOk& subscribeOk,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleRequestSpecificParams(
       SubscribeUpdate& subscribeUpdate,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   void handleRequestSpecificParams(
+      PublishRequest& publishRequest,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleRequestSpecificParams(
       PublishOk& publishOk,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleRequestSpecificParams(
+      Fetch& fetchRequest,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleGroupOrderParam(
+      GroupOrder& groupOrderField,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   folly::Optional<uint64_t> version_;
