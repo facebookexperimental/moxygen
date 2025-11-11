@@ -581,14 +581,14 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
         XLOG(DBG4) << "parseClientSetup: UNDERFLOW on version";
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
+      length -= version->second;
       if (!isSupportedVersion(version->first)) {
         XLOG(WARN) << "Peer advertised unsupported version " << version->first
                    << ", supported versions are: "
                    << getSupportedVersionsString();
-        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+        continue;
       }
       clientSetup.supportedVersions.push_back(version->first);
-      length -= version->second;
     }
   } else {
     XLOG(DBG3)

@@ -417,6 +417,88 @@ TEST(MoQFramerTest, ParseServerSetupLengthParseParam) {
   parser.parseServerSetup(cursor, sizeToGive);
 }
 
+TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
+  // Compose a CLIENT_SETUP with both supported and unknown versions, and extra
+  // params
+  // Compose a CLIENT_SETUP with two supported versions (one valid, one
+  // unknown/unsupported)
+  ClientSetup clientSetup{
+      .supportedVersions = {kVersionDraftCurrent, kVersionDraftCurrent},
+      .params =
+          {
+              {
+                  .key = folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+                  .asString = "",
+                  .asUint64 = 42,
+              },
+              {
+                  .key = folly::to_underlying(SetupKey::PATH),
+                  .asString = "/foo/bar",
+                  .asUint64 = 0,
+              },
+          },
+  };
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto resultWrite =
+      writeClientSetup(writeBuf, clientSetup, kVersionDraftCurrent);
+  EXPECT_TRUE(resultWrite.hasValue()) << "Failed to write CLIENT_SETUP";
+
+  // Coalesce the buffer so we can index into it
+  auto buffer = writeBuf.move();
+  buffer->coalesce();
+
+  // Overwrite the second version with kVersionDraft03 (unsupported) by splicing
+  // in a new IOBuf Layout: [1 byte frame type][2 byte length][1 byte
+  // num_versions][varint][varint] So offset = 1 (frame type) + 2 (length) + 1
+  // (num_versions) + <size of first version>
+  size_t offset = 1 + 2 + 1;
+  size_t firstVersionSize = *quic::getQuicIntegerSize(kVersionDraftCurrent);
+  size_t secondVersionOffset = offset + firstVersionSize;
+  size_t secondVersionSize = *quic::getQuicIntegerSize(kVersionDraftCurrent);
+
+  // Create a new IOBuf with kVersionDraft03 encoded as a quic varint
+  folly::IOBufQueue patchBuf{folly::IOBufQueue::cacheChainLength()};
+  folly::io::QueueAppender appender(&patchBuf, kMaxFrameHeaderSize);
+  XCHECK(quic::encodeQuicInteger(kVersionDraft03, [&](auto val) {
+    appender.writeBE(val);
+  }));
+  auto patchIOBuf = patchBuf.move();
+
+  // Splice: [head][patch][tail]
+  auto head = buffer->cloneOne();
+  head->trimEnd(buffer->length() - secondVersionOffset);
+  auto tail = buffer->cloneOne();
+  tail->trimStart(secondVersionOffset + secondVersionSize);
+
+  // Build new buffer chain: head -> patchIOBuf -> tail
+  head->appendToChain(std::move(patchIOBuf));
+  head->appendToChain(std::move(tail));
+  buffer = std::move(head);
+
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
+
+  cursor.skip(3);
+  auto length = buffer->computeChainDataLength() - 3;
+  auto result = parser.parseClientSetup(cursor, length);
+  EXPECT_TRUE(result.hasValue())
+      << "Parsing CLIENT_SETUP with mixed versions should succeed";
+  // Check only supported versions are present in the parsed setup
+  ASSERT_EQ(result->supportedVersions.size(), 1);
+  EXPECT_EQ(result->supportedVersions[0], kVersionDraftCurrent);
+  // Check parameters
+  ASSERT_EQ(result->params.size(), 2);
+  auto it = result->params.begin();
+  EXPECT_EQ(it->key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+  EXPECT_EQ(it->asUint64, 42);
+  ++it;
+  EXPECT_EQ(it->key, folly::to_underlying(SetupKey::PATH));
+  EXPECT_EQ(it->asString, "/foo/bar");
+}
+
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     folly::IOBufQueue& writeBuf,
     bool isStatus,
