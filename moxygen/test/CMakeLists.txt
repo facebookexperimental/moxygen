@@ -34,6 +34,25 @@ target_compile_options(
 )
 target_link_libraries(moqtestutils PUBLIC moxygen)
 
+add_library(moqsessiontestcommon MoQSessionTestCommon.cpp)
+target_include_directories(
+    moqsessiontestcommon PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    ${LIBGMOCK_INCLUDE_DIR}
+    ${LIBGTEST_INCLUDE_DIR}
+)
+target_compile_options(
+    moqsessiontestcommon PRIVATE
+    ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+target_link_libraries(
+    moqsessiontestcommon PUBLIC
+    moqtestutils
+    moqrelaysession
+    moqfollyexecutorimpl
+    moxygenclient
+    Folly::folly
+)
 
 moxygen_add_test(TARGET MoQTests
   PREFIX "MoQ"
@@ -50,10 +69,7 @@ moxygen_add_test(TARGET MoQSessionTests
   SOURCES
     MoQSessionTest.cpp
   DEPENDS
-    moqtestutils
-    moqrelaysession
-    moqfollyexecutorimpl
-    moxygenclient
+    moqsessiontestcommon
     testmain
 )
 
