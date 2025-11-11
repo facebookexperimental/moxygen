@@ -20,9 +20,13 @@ class MoQRelay : public Publisher,
                  public std::enable_shared_from_this<MoQRelay>,
                  public MoQForwarder::Callback {
  public:
-  explicit MoQRelay(bool enableCache) {
+  explicit MoQRelay(
+      bool enableCache,
+      size_t maxCachedTracks = kDefaultMaxCachedTracks,
+      size_t maxCachedGroupsPerTrack = kDefaultMaxCachedGroupsPerTrack) {
     if (enableCache) {
-      cache_ = std::make_unique<MoQCache>();
+      cache_ =
+          std::make_unique<MoQCache>(maxCachedTracks, maxCachedGroupsPerTrack);
     }
   }
 
