@@ -26,7 +26,7 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
-add_library(moqrelay MoQRelay.cpp MoQCache.cpp)
+add_library(moqrelay MoQRelay.cpp MoQCache.cpp MoQForwarder.cpp)
 target_include_directories(
   moqrelay PUBLIC
   $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
