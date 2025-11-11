@@ -1658,7 +1658,7 @@ class MoQSession::SubscribeTrackReceiveState
     if (!subscribePromise_.isFulfilled()) {
       subErr.requestID = requestID_;
       subscribePromise_.setValue(folly::makeUnexpected(std::move(subErr)));
-    } else {
+    } else if (!deliveredDone_) {
       processSubscribeDone(
           {requestID_,
            SubscribeDoneStatusCode::SESSION_CLOSED,
@@ -1679,6 +1679,7 @@ class MoQSession::SubscribeTrackReceiveState
     if (pendingSubscribeDone_ &&
         streamCount_ >= pendingSubscribeDone_->streamCount) {
       if (callback_) {
+        deliveredDone_ = true;
         callback_->subscribeDone(std::move(*pendingSubscribeDone_));
         pendingSubscribeDone_.reset();
       }
@@ -1700,6 +1701,7 @@ class MoQSession::SubscribeTrackReceiveState
         // TODO: timeout
         return false;
       } else {
+        deliveredDone_ = true;
         callback_->subscribeDone(std::move(subDone));
       }
     } // else, unsubscribe raced with subscribeDone and callback was removed
@@ -1729,6 +1731,7 @@ class MoQSession::SubscribeTrackReceiveState
 
   // Indicates whether receiveState is for Publish
   bool publish_;
+  bool deliveredDone_{false};
 
   // Publisher priority from SUBSCRIBE_OK or PUBLISH parameter
   // Stored as optional; if not set from SUBSCRIBE_OK, defaults to
@@ -2274,6 +2277,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     }
     if (streamData->data || streamData->fin) {
       try {
+        auto guard = shared_from_this();
         controlCodec_.onIngress(std::move(streamData->data), streamData->fin);
       } catch (const std::exception& ex) {
         XLOG(FATAL) << "exception thrown from onIngress ex="
