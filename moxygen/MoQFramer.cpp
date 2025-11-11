@@ -2208,7 +2208,10 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
       parseExtensionKvPairs(cursor, objectHeader, extensionBlockLength, true);
   if (!parseExtensionKvPairsResult.hasValue()) {
     XLOG(DBG4) << "parseExtensions: error in parseExtensionKvPairs: "
-               << folly::to_underlying(parseExtensionKvPairsResult.error());
+               << folly::to_underlying(parseExtensionKvPairsResult.error())
+               << " group=" << objectHeader.group
+               << " subgroup=" << objectHeader.subgroup
+               << " id=" << objectHeader.id;
     return folly::makeUnexpected(parseExtensionKvPairsResult.error());
   }
   length -= extLen->first;
@@ -2271,12 +2274,15 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
   if (ext.type & 0x1) {
     auto extLen = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!extLen) {
-      XLOG(DBG4) << "parseExtension: UNDERFLOW on extLen";
+      XLOG(DBG4) << "parseExtension: UNDERFLOW on extLen, ext.type=" << ext.type
+                 << " length=" << length;
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= extLen->second;
     if (length < extLen->first) {
-      XLOG(DBG4) << "parseExtension: UNDERFLOW on ext array value";
+      XLOG(DBG4) << "parseExtension: UNDERFLOW on ext array value"
+                 << " ext.type=" << ext.type << " length=" << length
+                 << " extLen=" << extLen->first;
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     if (extLen->first > kMaxExtensionLength) {
@@ -2296,7 +2302,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
       if (parseInnerResult.hasError()) {
         XLOG(DBG4)
             << "parseExtension: error in parseExtensionKvPairs (immutable): "
-            << folly::to_underlying(parseInnerResult.error());
+            << folly::to_underlying(parseInnerResult.error())
+            << " ext.type=" << ext.type << " length=" << length
+            << " extLen=" << extLen->first;
         return folly::makeUnexpected(parseInnerResult.error());
       }
       // Advance the outer cursor past the immutable container payload and
@@ -2314,7 +2322,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
     // Even-type extension (integer value)
     auto iVal = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!iVal) {
-      XLOG(DBG4) << "parseExtension: UNDERFLOW on intValue";
+      XLOG(DBG4) << "parseExtension: UNDERFLOW on intValue"
+                 << " ext.type=" << ext.type << " length=" << length;
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= iVal->second;

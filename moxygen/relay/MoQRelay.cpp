@@ -449,7 +449,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       co_return folly::makeUnexpected(SubscribeError(
           {subReq.requestID,
            SubscribeErrorCode::TRACK_NOT_EXIST,
-           "no such namespace"}));
+           "no such namespace or track"}));
     }
     subReq.priority = kDefaultUpstreamPriority;
     subReq.groupOrder = GroupOrder::Default;
