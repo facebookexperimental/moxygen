@@ -351,7 +351,7 @@ enum class LocationType : uint8_t {
 std::string toString(LocationType locType);
 
 struct SubscriptionFilter {
-  LocationType filterType;
+  LocationType filterType{LocationType::AbsoluteStart};
   folly::Optional<AbsoluteLocation> location;
   folly::Optional<uint64_t> endGroup;
 
@@ -364,11 +364,62 @@ struct SubscriptionFilter {
 };
 
 struct Parameter {
-  uint64_t key;
+  uint64_t key = 0;
   std::string asString;
-  uint64_t asUint64;
+  uint64_t asUint64 = 0;
   AuthToken asAuthToken;
   SubscriptionFilter asSubscriptionFilter;
+  folly::Optional<AbsoluteLocation> largestObject;
+
+  // Constructors for Parameter for each type, provided the key and the type
+
+  // String parameter
+  Parameter(uint64_t keyIn, const std::string& str)
+      : key(keyIn),
+        asString(str),
+        asUint64(0),
+        asAuthToken(),
+        asSubscriptionFilter(),
+        largestObject() {}
+
+  // uint64_t parameter
+  Parameter(uint64_t keyIn, uint64_t uint64)
+      : key(keyIn),
+        asString(),
+        asUint64(uint64),
+        asAuthToken(),
+        asSubscriptionFilter(),
+        largestObject() {}
+
+  // AuthToken parameter
+  Parameter(uint64_t keyIn, const AuthToken& token)
+      : key(keyIn),
+        asString(),
+        asUint64(0),
+        asAuthToken(token),
+        asSubscriptionFilter(),
+        largestObject() {}
+
+  // SubscriptionFilter parameter
+  Parameter(uint64_t keyIn, const SubscriptionFilter& filter)
+      : key(keyIn),
+        asString(),
+        asUint64(0),
+        asAuthToken(),
+        asSubscriptionFilter(filter),
+        largestObject() {}
+
+  // LargestObject parameter (folly::Optional<AbsoluteLocation>)
+  Parameter(uint64_t keyIn, const folly::Optional<AbsoluteLocation>& loc)
+      : key(keyIn),
+        asString(),
+        asUint64(0),
+        asAuthToken(),
+        asSubscriptionFilter(),
+        largestObject(loc) {}
+
+  // Default constructor
+  Parameter() = default;
 };
 
 using SetupParameter = Parameter;

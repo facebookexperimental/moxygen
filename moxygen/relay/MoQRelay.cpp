@@ -278,9 +278,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     forwarder->setDeliveryTimeout(*deliveryTimeout);
     subscriber->setParam(
         {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         "",
-         *deliveryTimeout,
-         {}});
+         *deliveryTimeout});
   }
 }
 
@@ -513,9 +511,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       forwarder->setDeliveryTimeout(*deliveryTimeout);
       subscriber->setParam(
           {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-           "",
-           *deliveryTimeout,
-           {}});
+           *deliveryTimeout});
     }
 
     subscriber->setPublisherGroupOrder(pubGroupOrder);

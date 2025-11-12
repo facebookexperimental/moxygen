@@ -442,8 +442,8 @@ TEST_P(MoQCodecTest, ClientGetsClientSetup) {
       ClientSetup(
           {{GetParam()},
            {
-               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-               {folly::to_underlying(SetupKey::MAX_REQUEST_ID), "", 100},
+               Parameter(folly::to_underlying(SetupKey::PATH), "/foo"),
+               Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100),
            }}),
       GetParam());
 
@@ -473,7 +473,7 @@ TEST_P(MoQCodecTest, TwoSetups) {
       ServerSetup(
           {GetParam(),
            {
-               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+               {folly::to_underlying(SetupKey::PATH), "/foo"},
            }}),
       GetParam());
   auto serverSetup = writeBuf.front()->clone();
@@ -493,7 +493,7 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
       ServerSetup(
           {GetParam(),
            {
-               {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+               {folly::to_underlying(SetupKey::PATH), "/foo"},
            }}),
       GetParam());
   auto serverSetup = writeBuf.front()->clone();

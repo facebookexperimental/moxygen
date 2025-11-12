@@ -250,17 +250,12 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(
   // take in the value from ClientSetup
   static constexpr size_t kDefaultMaxRequestID = 100;
   static constexpr size_t kMaxAuthTokenCacheSize = 1024;
-  ServerSetup serverSetup = ServerSetup({
+  ServerSetup serverSetup{
       negotiatedVersion,
-      {{folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-        "",
-        kDefaultMaxRequestID,
-        {}},
+      {{folly::to_underlying(SetupKey::MAX_REQUEST_ID), kDefaultMaxRequestID},
        {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-        "",
-        kMaxAuthTokenCacheSize,
-        {}}},
-  });
+        kMaxAuthTokenCacheSize}},
+  };
 
   // Log Server Setup
   if (logger_) {

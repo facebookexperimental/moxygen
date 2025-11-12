@@ -109,18 +109,16 @@ ClientSetup MoQClientBase::getClientSetup(
   ClientSetup clientSetup{
       legacyVersions,
       SetupParameters{
-          {folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-           "",
-           kDefaultMaxRequestID,
-           {}},
-          {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-           "",
-           kMaxAuthTokenCacheSize,
-           {}}}};
+          Parameter(
+              folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+              kDefaultMaxRequestID),
+          Parameter(
+              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+              kMaxAuthTokenCacheSize)}};
 
   if (path) {
     clientSetup.params.insertParam(
-        SetupParameter({folly::to_underlying(SetupKey::PATH), *path, 0, {}}));
+        SetupParameter(folly::to_underlying(SetupKey::PATH), *path));
   }
 
   if (shouldSendAuthorityParam(clientSetup.supportedVersions)) {
@@ -132,8 +130,8 @@ ClientSetup MoQClientBase::getClientSetup(
         authority += ":" + std::to_string(url_.getPort());
       }
 
-      clientSetup.params.insertParam(SetupParameter(
-          {folly::to_underlying(SetupKey::AUTHORITY), authority, 0}));
+      clientSetup.params.insertParam(
+          SetupParameter(folly::to_underlying(SetupKey::AUTHORITY), authority));
     }
   }
 

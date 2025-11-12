@@ -23,35 +23,27 @@ std::vector<Extension> getTestExtensions() {
 static TrackRequestParameter getTestAuthParam(
     const MoQFrameWriter& moqFrameWriter,
     const std::string& authValue) {
-  return TrackRequestParameter{
+  return TrackRequestParameter(
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-      moqFrameWriter.encodeTokenValue(0, authValue),
-      0,
-      {}};
+      moqFrameWriter.encodeTokenValue(0, authValue));
 }
 
 TrackRequestParameters getTestTrackRequestParameters(
     const MoQFrameWriter& moqFrameWriter) {
   return {
       getTestAuthParam(moqFrameWriter, "binky"),
-      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-       "",
-       1000,
-       {}},
-      {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-       "",
-       3600000,
-       {}}};
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 1000),
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+          3600000)};
 }
 
 TrackRequestParameters getTestPublisherTrackRequestParams(
     const MoQFrameWriter& moqFrameWriter) {
   auto params = getTestTrackRequestParameters(moqFrameWriter);
-  params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
-       "",
-       100,
-       {}});
+  params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY), 100));
   return params;
 }
 
@@ -67,8 +59,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
         ClientSetup(
             {{version},
              {
-                 {folly::to_underlying(SetupKey::PATH), "/foo", 0},
-                 {folly::to_underlying(SetupKey::MAX_REQUEST_ID), "", 100},
+                 Parameter(folly::to_underlying(SetupKey::PATH), "/foo"),
+                 Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100),
              }}),
         version);
   }
@@ -78,7 +70,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
         ServerSetup(
             {version,
              {
-                 {folly::to_underlying(SetupKey::PATH), "/foo", 0},
+                 Parameter(folly::to_underlying(SetupKey::PATH), "/foo"),
              }}),
         version);
   }
@@ -111,11 +103,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            std::chrono::milliseconds(0),
            GroupOrder::OldestFirst,
            AbsoluteLocation{2, 5},
-           TrackRequestParameters(
-               {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-                 "",
-                 3600000,
-                 {}}})}));
+           TrackRequestParameters({Parameter(
+               folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+               3600000)})}));
   res = moqFrameWriter.writeMaxRequestID(writeBuf, {.requestID = 50000});
   res = moqFrameWriter.writeRequestsBlocked(writeBuf, {.maxRequestID = 50000});
   res = moqFrameWriter.writeRequestError(
@@ -168,14 +158,14 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            TrackNamespace({"hello"}),
            TrackRequestParameters(
                {getTestAuthParam(moqFrameWriter, "binky"),
-                {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-                 "",
-                 1000,
-                 {}},
-                {folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-                 "",
-                 3600000,
-                 {}}})}));
+                Parameter(
+                    folly::to_underlying(
+                        TrackRequestParamKey::DELIVERY_TIMEOUT),
+                    1000),
+                Parameter(
+                    folly::to_underlying(
+                        TrackRequestParamKey::MAX_CACHE_DURATION),
+                    3600000)})}));
   res = moqFrameWriter.writeAnnounceOk(writeBuf, AnnounceOk({1, {}}));
   res = moqFrameWriter.writeRequestError(
       writeBuf,
@@ -250,10 +240,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            GroupOrder::NewestFirst,
            1,
            AbsoluteLocation({0, 0}),
-           {{folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
-             "",
-             1000,
-             {}}}}));
+           {Parameter(
+               folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+               1000)}}));
   res = moqFrameWriter.writeRequestError(
       writeBuf,
       FetchError({0, FetchErrorCode::INVALID_RANGE, "Invalid range"}),

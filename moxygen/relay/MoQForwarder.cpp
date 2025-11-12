@@ -53,9 +53,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
   if (upstreamDeliveryTimeout_.count() > 0) {
     subscriber->setParam(
         {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         "",
-         static_cast<uint64_t>(upstreamDeliveryTimeout_.count()),
-         {}});
+         static_cast<uint64_t>(upstreamDeliveryTimeout_.count())});
   }
   subscribers_.emplace(sessionPtr, subscriber);
   if (subReq.forward) {

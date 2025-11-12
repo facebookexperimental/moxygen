@@ -8,6 +8,8 @@
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
 
+#include <utility>
+
 namespace {
 constexpr uint64_t kMaxExtensionLength = 1024;
 
@@ -2981,9 +2983,7 @@ TrackRequestParameter getAuthParam(
     folly::Optional<uint64_t> registerToken) {
   return TrackRequestParameter(
       {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-       "",
-       0,
-       {tokenType, std::move(token), registerToken}});
+       {tokenType, std::move(token), std::move(registerToken)}});
 }
 
 void MoQFrameWriter::writeTrackRequestParams(

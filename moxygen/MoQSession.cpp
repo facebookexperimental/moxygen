@@ -2066,9 +2066,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   if (shouldIncludeMoqtImplementationParam(setup.supportedVersions)) {
     setup.params.insertParam(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-         getMoQTImplementationString(),
-         0,
-         {}}));
+         getMoQTImplementationString()}));
   }
 
   uint64_t setupSerializationVersion = kVersionDraft12;
@@ -2231,9 +2229,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
     serverSetup->params.insertParam(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-         getMoQTImplementationString(),
-         0,
-         {}}));
+         getMoQTImplementationString()}));
   }
 
   XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();

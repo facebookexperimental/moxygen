@@ -1514,11 +1514,9 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
               }));
   TrackStatus request = getTrackStatus();
   auto addAuthToken = [](auto& params, const AuthToken& token) {
-    params.insertParam(
-        {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-         "",
-         0,
-         token});
+    params.insertParam(Parameter(
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+        token));
   };
 
   addAuthToken(request.params, {0, "abc", AuthToken::DontRegister});
@@ -1548,11 +1546,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
   expectSubscribeDone();
 
   SubscribeRequest subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-       "",
-       5000,
-       {}});
+  subscribeRequest.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000));
   subscribeRequest.params.insertParam(
       getAuthParam(getServerSelectedVersion(), "auth_token_value"));
 
@@ -2426,11 +2421,8 @@ CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
   };
 
   // Add delivery timeout parameter (5000ms)
-  pub.params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-       "",
-       5000,
-       {}});
+  pub.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000));
 
   // Setup server to verify params and respond with PUBLISH_OK
   EXPECT_CALL(*serverSubscriber, publish(_, _))
@@ -2509,11 +2501,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
     };
 
     // Add delivery timeout parameter (7000ms)
-    subscribeUpdate.params.insertParam(
-        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         "",
-         7000,
-         {}});
+    subscribeUpdate.params.insertParam(Parameter(
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 7000));
 
     EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
     EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
@@ -3281,9 +3270,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                 publishOk.params.insertParam(
                     {folly::to_underlying(
                          TrackRequestParamKey::DELIVERY_TIMEOUT),
-                     "",
-                     3000,
-                     {}});
+                     3000});
 
                 auto replyTask = folly::coro::makeTask<
                     folly::Expected<PublishOk, PublishError>>(
@@ -3393,9 +3380,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
                 publishOk.params.insertParam(
                     {folly::to_underlying(
                          TrackRequestParamKey::DELIVERY_TIMEOUT),
-                     "",
-                     0,
-                     {}});
+                     0});
 
                 auto replyTask = folly::coro::makeTask<
                     folly::Expected<PublishOk, PublishError>>(

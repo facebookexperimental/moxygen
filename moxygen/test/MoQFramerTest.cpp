@@ -427,14 +427,12 @@ TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
       .params =
           {
               {
-                  .key = folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-                  .asString = "",
-                  .asUint64 = 42,
+                  folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+                  42,
               },
               {
-                  .key = folly::to_underlying(SetupKey::PATH),
-                  .asString = "/foo/bar",
-                  .asUint64 = 0,
+                  folly::to_underlying(SetupKey::PATH),
+                  "/foo/bar",
               },
           },
   };
@@ -775,10 +773,8 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
   for (auto maxRequestID : kTestMaxRequestIDs) {
     auto clientSetup = ClientSetup{
         .supportedVersions = {kVersionDraftCurrent},
-        .params =
-            {{{.key = folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-               .asString = "",
-               .asUint64 = maxRequestID}}},
+        .params = {Parameter(
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID)},
     };
 
     folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -1018,16 +1014,11 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
       TrackStatus::make(FullTrackName({TrackNamespace({"hello"}), "world"}));
   ts.locType = LocationType::LargestObject;
   // Add some parameters to the TrackStatus.
-  ts.params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-       writer_.encodeTokenValue(0, "stampolli"),
-       0,
-       {}});
-  ts.params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-       "",
-       999,
-       {}});
+  ts.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      writer_.encodeTokenValue(0, "stampolli")));
+  ts.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 999));
   auto writeResult = writer_.writeTrackStatus(writeBuf, ts);
   EXPECT_TRUE(writeResult.hasValue());
 
@@ -1063,16 +1054,11 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   trackStatusOk.groupOrder = GroupOrder::OldestFirst;
   TrackRequestParameters params;
   // Add some parameters to the TrackStatus.
-  params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-       writer_.encodeTokenValue(0, "stampolli"),
-       0,
-       {}});
-  params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-       "",
-       999,
-       {}});
+  params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      writer_.encodeTokenValue(0, "stampolli")));
+  params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 999));
   trackStatusOk.params = params;
   auto writeResult = writer_.writeTrackStatusOk(writeBuf, trackStatusOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -1140,11 +1126,9 @@ static size_t writeSubscribeRequestWithAuthToken(
 
   auto encodedToken =
       encodeToken(writer, aliasType, alias, tokenType, tokenValue);
-  req.params.insertParam(
-      {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-       encodedToken,
-       0,
-       {}});
+  req.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      encodedToken));
   auto writeResult = writer.writeSubscribeRequest(writeBuf, req);
   EXPECT_TRUE(writeResult.hasValue());
   return encodedToken.size();

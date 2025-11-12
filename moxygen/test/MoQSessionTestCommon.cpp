@@ -115,7 +115,7 @@ std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {
 
 // ParamBuilder implementation
 ParamBuilder& ParamBuilder::add(TrackRequestParamKey key, uint64_t value) {
-  params_.insertParam(Parameter{folly::to_underlying(key), "", value, {}, {}});
+  params_.insertParam(Parameter{folly::to_underlying(key), value});
   return *this;
 }
 
@@ -126,12 +126,9 @@ ParamBuilder& ParamBuilder::add(
     params_.insertParam(
         Parameter{
             folly::to_underlying(key),
-            "",
-            0,
-            AuthToken{0, value, AuthToken::DontRegister},
-            {}});
+            AuthToken{0, value, AuthToken::DontRegister}});
   } else {
-    params_.insertParam(Parameter{folly::to_underlying(key), value, 0, {}, {}});
+    params_.insertParam(Parameter{folly::to_underlying(key), value});
   }
   return *this;
 }
@@ -255,16 +252,9 @@ folly::Try<ServerSetup> MoQSessionTest::onClientSetup(
       .params = {
           SetupParameter{
               folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-              "",
-              initialMaxRequestID_,
-              {},
-              {}},
+              initialMaxRequestID_},
           SetupParameter{
-              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-              "",
-              16,
-              {},
-              {}}}});
+              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16}}});
 }
 
 folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
@@ -458,20 +448,12 @@ ClientSetup MoQSessionTest::getClientSetup(uint64_t initialMaxRequestID) {
   ClientSetup setup{
       .supportedVersions = getClientSupportedVersions(),
       .params = {
-          SetupParameter{
-              folly::to_underlying(SetupKey::PATH), "/foo", 0, {}, {}},
+          SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo"},
           SetupParameter{
               folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-              "",
-              initialMaxRequestID,
-              {},
-              {}},
+              initialMaxRequestID},
           SetupParameter{
-              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-              "",
-              16,
-              {},
-              {}}}};
+              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16}}};
   if (std::find(
           setup.supportedVersions.begin(),
           setup.supportedVersions.end(),

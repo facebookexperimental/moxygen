@@ -114,9 +114,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   if (params.deliveryTimeout > 0) {
     sub.params.insertParam(
         {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         "",
-         params.deliveryTimeout,
-         {}});
+         params.deliveryTimeout});
   }
 
   // Set Current Request

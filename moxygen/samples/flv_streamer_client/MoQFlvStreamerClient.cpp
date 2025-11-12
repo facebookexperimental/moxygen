@@ -209,9 +209,7 @@ class MoQFlvStreamerClient
     if (FLAGS_delivery_timeout > 0) {
       params.insertParam(
           {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-           "",
-           FLAGS_delivery_timeout,
-           {}});
+           FLAGS_delivery_timeout});
     }
 
     // Save subscribe
