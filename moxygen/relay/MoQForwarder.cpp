@@ -32,12 +32,15 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
     const SubscribeRequest& subReq,
     std::shared_ptr<TrackConsumer> consumer) {
   auto sessionPtr = session.get();
+  auto trackAlias =
+      subReq.trackAlias.value_or(trackAlias_.value_or(subReq.requestID.value));
+  XCHECK(consumer);
+  consumer->setTrackAlias(trackAlias);
   auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
       *this,
       SubscribeOk{
           subReq.requestID,
-          subReq.trackAlias.value_or(
-              trackAlias_.value_or(TrackAlias(subReq.requestID.value))),
+          trackAlias,
           std::chrono::milliseconds(0),
           MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
           largest_,

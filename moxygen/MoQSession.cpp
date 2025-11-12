@@ -1083,6 +1083,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     if (!session_) {
       return;
     }
+    setTrackAlias(subscribeOk.trackAlias);
     setGroupOrder(subscribeOk.groupOrder);
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
         subscribeOk.params, *session_->getNegotiatedVersion());
