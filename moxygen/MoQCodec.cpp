@@ -646,6 +646,13 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::TRACK_STATUS_OK: {
+      // Version > 14: TRACK_STATUS_OK is deprecated, use REQUEST_OK
+      if (getDraftMajorVersion(*moqFrameParser_.getVersion()) > 14) {
+        XLOG(ERR) << "Received deprecated TRACK_STATUS_OK frame in version="
+                  << getDraftMajorVersion(*moqFrameParser_.getVersion());
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+
       auto res = moqFrameParser_.parseTrackStatusOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {

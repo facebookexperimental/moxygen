@@ -158,8 +158,14 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r14a);
 
     skip(cursor, 1);
-    auto r14b = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
-    testUnderflowResult(r14b);
+    if (getDraftMajorVersion(GetParam()) < 15) {
+      auto r14b = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
+      testUnderflowResult(r14b);
+    } else {
+      auto r14b = parser_.parseRequestOk(
+          cursor, frameLength(cursor), FrameType::REQUEST_OK);
+      testUnderflowResult(r14b);
+    }
 
     skip(cursor, 1);
     auto r14 = parser_.parseGoaway(cursor, frameLength(cursor));
@@ -1066,9 +1072,19 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_OK));
-  auto parseResult = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
-  EXPECT_TRUE(parseResult.hasValue());
+  folly::Expected<TrackStatusOk, ErrorCode> parseResult;
+  if (getDraftMajorVersion(GetParam()) < 15) {
+    EXPECT_EQ(
+        frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_OK));
+    parseResult = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
+    EXPECT_TRUE(parseResult.hasValue());
+  } else {
+    EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
+    auto result = parser_.parseRequestOk(
+        cursor, frameLength(cursor), FrameType::REQUEST_OK);
+    EXPECT_TRUE(result.hasValue());
+    parseResult = result->toTrackStatusOk();
+  }
   EXPECT_EQ(parseResult->requestID, 7);
   EXPECT_EQ(parseResult->largest->group, 19);
   EXPECT_EQ(parseResult->largest->object, 77);

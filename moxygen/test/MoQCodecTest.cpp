@@ -39,6 +39,18 @@ void expectOnRequestOk(
       .RetiresOnSaturation();
 }
 
+void expectOnTrackStatusOk(
+    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
+    uint64_t version) {
+  if (moxygen::getDraftMajorVersion(version) < 15) {
+    EXPECT_CALL(callback, onTrackStatusOk(testing::_)).RetiresOnSaturation();
+  } else {
+    EXPECT_CALL(
+        callback, onRequestOk(testing::_, moxygen::FrameType::REQUEST_OK))
+        .RetiresOnSaturation();
+  }
+}
+
 } // namespace
 
 namespace moxygen::test {
@@ -85,7 +97,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
     EXPECT_CALL(callback, onUnannounce(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
-    EXPECT_CALL(callback, onTrackStatusOk(testing::_));
+    expectOnTrackStatusOk(callback, GetParam());
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
@@ -138,7 +150,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
     EXPECT_CALL(callback, onUnannounce(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
-    EXPECT_CALL(callback, onTrackStatusOk(testing::_));
+    expectOnTrackStatusOk(callback, GetParam());
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
     EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));

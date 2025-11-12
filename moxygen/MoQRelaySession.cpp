@@ -298,6 +298,8 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
 
   auto reqID = requestOk.requestID;
   auto reqIt = pendingRequests_.find(reqID);
+  bool shouldErasePendingRequest = true;
+
   if (reqIt == pendingRequests_.end()) {
     // unknown
     XLOG(ERR) << "No matching announce reqID=" << reqID << " sess=" << this;
@@ -350,10 +352,18 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
       subscribeAnnouncesPtr->setValue(std::move(requestOk));
       break;
     }
+    case moxygen::FrameType::TRACK_STATUS_OK: {
+      // Use base class helper
+      handleTrackStatusOkFromRequestOk(requestOk);
+      shouldErasePendingRequest = false;
+      break;
+    }
     default:
       break;
   }
-  pendingRequests_.erase(reqIt);
+  if (shouldErasePendingRequest) {
+    pendingRequests_.erase(reqIt);
+  }
 }
 
 void MoQRelaySession::onAnnounceCancel(AnnounceCancel announceCancel) {

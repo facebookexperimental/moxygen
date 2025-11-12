@@ -679,6 +679,14 @@ class MoQSession : public Subscriber,
       RequestID::hash>
       pendingRequests_;
 
+  // Type alias for pending request iterator
+  using PendingRequestIterator = folly::F14FastMap<
+      RequestID,
+      std::unique_ptr<PendingRequestState>,
+      RequestID::hash>::iterator;
+
+  void handleTrackStatusOkFromRequestOk(const RequestOk& requestOk);
+
  private:
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);

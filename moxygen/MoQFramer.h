@@ -431,7 +431,9 @@ enum class TrackRequestParamKey : uint64_t {
   MAX_CACHE_DURATION = 4,
   PUBLISHER_PRIORITY = 0x0E,
   SUBSCRIPTION_FILTER = 0x21,
+  EXPIRES = 8,
   GROUP_ORDER = 0x22,
+  LARGEST_OBJECT = 0x9,
 };
 
 class Parameters {
@@ -1211,6 +1213,10 @@ struct UnsubscribeAnnounces {
 struct RequestOk {
   RequestID requestID;
   TrackRequestParameters params;
+  std::vector<Parameter> requestSpecificParams;
+
+  TrackStatusOk toTrackStatusOk() const;
+  static RequestOk fromTrackStatusOk(const TrackStatusOk& trackStatusOk);
 };
 
 using SubscribeAnnouncesOk = RequestOk;

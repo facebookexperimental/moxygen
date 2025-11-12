@@ -3670,6 +3670,13 @@ void MoQSession::trackStatusError(const TrackStatusError& trackStatusError) {
   }
 }
 
+void MoQSession::handleTrackStatusOkFromRequestOk(const RequestOk& requestOk) {
+  XLOG(DBG1) << __func__ << " redId=" << requestOk.requestID
+             << " sess=" << this;
+  auto trackStatusOk = requestOk.toTrackStatusOk();
+  onTrackStatusOk(std::move(trackStatusOk));
+}
+
 folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
     TrackStatus trackStatus) {
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
@@ -4757,10 +4764,38 @@ void MoQSession::onAnnounce(Announce announce) {
           "Announce not supported by simple client"});
 }
 
-void MoQSession::onRequestOk(RequestOk /*requestOk*/, FrameType /*frameType*/) {
-  XLOG(DBG1) << __func__
-             << " REQUEST_OK unexpected in simple client, sess=" << this;
-  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
+  XLOG(DBG1) << __func__ << " ReqId=" << requestOk.requestID.value
+             << " frameType=" << folly::to_underlying(frameType)
+             << " sess=" << this;
+
+  auto reqId = requestOk.requestID;
+  auto reqIt = pendingRequests_.find(reqId);
+
+  if (reqIt == pendingRequests_.end()) {
+    XLOG(ERR) << "No matching request for reqID=" << reqId << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  // In v15+, convert REQUEST_OK back to specific frame type
+  if (*getNegotiatedVersion() > 14) {
+    frameType = reqIt->second->getOkFrameType();
+  }
+
+  switch (frameType) {
+    case FrameType::TRACK_STATUS_OK: {
+      handleTrackStatusOkFromRequestOk(requestOk);
+      break;
+    }
+    default: {
+      XLOG(ERR) << "Unexpected REQUEST_OK type "
+                << folly::to_underlying(frameType)
+                << " in simple client, sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      break;
+    }
+  }
 }
 
 void MoQSession::onUnannounce(Unannounce unannounce) {

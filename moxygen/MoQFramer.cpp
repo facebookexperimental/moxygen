@@ -30,6 +30,8 @@ uint64_t getLocationTypeValue(
 bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
   switch (key) {
     case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
+    case moxygen::TrackRequestParamKey::LARGEST_OBJECT:
+    case moxygen::TrackRequestParamKey::EXPIRES:
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
       return true;
     default:
@@ -537,6 +539,20 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
               folly::to_underlying(
                   TrackRequestParamKey::AUTHORIZATION_TOKEN)))) {
       res = parseIntParam(cursor, length, version, key->first);
+    } else if (
+        // Parse the largestObject param
+        key->first ==
+        folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT)) {
+      if (getDraftMajorVersion(version) < 15) {
+        XLOG(ERR) << "Invalid parameter LARGEST_OBJECT for version " << version;
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+
+      auto largestLocation = parseAbsoluteLocation(cursor, length);
+      if (!largestLocation) {
+        return folly::makeUnexpected(largestLocation.error());
+      }
+      res = Parameter(key->first, largestLocation.value());
     } else {
       res = parseVariableParam(
           cursor, length, version, key->first, tokenCache, paramsType);
@@ -1774,18 +1790,16 @@ folly::Expected<AnnounceOk, ErrorCode> MoQFrameParser::parseRequestOk(
     }
     length -= numParams->second;
     if (numParams->first > 0) {
-      if (frameType == FrameType::ANNOUNCE_OK ||
-          frameType == FrameType::SUBSCRIBE_ANNOUNCES_OK) {
+      if (frameType == FrameType::SUBSCRIBE_ANNOUNCES_OK) {
         // no params supported
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
       }
-      std::vector<Parameter> requestSpecificParams;
       auto res = parseTrackRequestParams(
           cursor,
           length,
           numParams->first,
           requestOk.params,
-          requestSpecificParams);
+          requestOk.requestSpecificParams);
       if (!res) {
         return folly::makeUnexpected(res.error());
       }
@@ -2499,6 +2513,64 @@ MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length)
   return items;
 }
 
+//// Transforms /////
+TrackStatusOk RequestOk::toTrackStatusOk() const {
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = requestID;
+  trackStatusOk.params = params;
+
+  // There may or may not be any value in attempting to convert the full object
+  // since we only need the request Id to resolve the promise, except for
+  // logging. We still do the best we can here to move all fields
+
+  // In v15+, extra fields (expires, groupOrder, largest) are encoded as params
+  // Track Alias is NOT USED per spec
+  trackStatusOk.trackAlias = TrackAlias{0};
+
+  // Go through request specific params and assign the fields
+  for (const auto& param : requestSpecificParams) {
+    switch (static_cast<TrackRequestParamKey>(param.key)) {
+      case TrackRequestParamKey::EXPIRES:
+        trackStatusOk.expires = std::chrono::milliseconds(param.asUint64);
+        break;
+      case TrackRequestParamKey::GROUP_ORDER:
+        trackStatusOk.groupOrder = static_cast<GroupOrder>(param.asUint64);
+        break;
+      case TrackRequestParamKey::LARGEST_OBJECT:
+        trackStatusOk.largest = param.largestObject;
+        break;
+      default:
+        break;
+    }
+  }
+  return trackStatusOk;
+}
+
+// static
+RequestOk RequestOk::fromTrackStatusOk(const TrackStatusOk& trackStatusOk) {
+  RequestOk requestOk;
+  requestOk.requestID = trackStatusOk.requestID;
+  requestOk.params = trackStatusOk.params;
+
+  // Add expires parameter
+  requestOk.requestSpecificParams.emplace_back(
+      folly::to_underlying(TrackRequestParamKey::EXPIRES),
+      static_cast<uint64_t>(trackStatusOk.expires.count()));
+
+  // Add group order parameter
+  requestOk.requestSpecificParams.emplace_back(
+      folly::to_underlying(TrackRequestParamKey::GROUP_ORDER),
+      folly::to_underlying(trackStatusOk.groupOrder));
+
+  // Add the LARGEST_OBJECT param if present
+  if (trackStatusOk.largest) {
+    requestOk.requestSpecificParams.emplace_back(
+        folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
+        trackStatusOk.largest.value());
+  }
+  return requestOk;
+}
+
 //// Egress ////
 
 void writeVarint(
@@ -3000,6 +3072,14 @@ void MoQFrameWriter::writeTrackRequestParams(
   const auto subscriptionFilterKey =
       folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
 
+  const auto largestObjectKey =
+      folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT);
+
+  const auto expiresKey = folly::to_underlying(TrackRequestParamKey::EXPIRES);
+
+  const auto groupOrderKey =
+      folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
+
   // Write request-specific params
   if (getDraftMajorVersion(*version_) >= 15) {
     for (auto& param : requestSpecificParams) {
@@ -3008,6 +3088,13 @@ void MoQFrameWriter::writeTrackRequestParams(
       if (param.key == subscriptionFilterKey) {
         writeSubscriptionFilter(
             writeBuf, param.asSubscriptionFilter, size, error);
+      } else if (param.key == largestObjectKey) {
+        writeVarint(writeBuf, param.largestObject->group, size, error);
+        writeVarint(writeBuf, param.largestObject->object, size, error);
+      } else if (param.key == expiresKey) {
+        writeVarint(writeBuf, param.asUint64, size, error);
+      } else if (param.key == groupOrderKey) {
+        writeVarint(writeBuf, param.asUint64, size, error);
       } else if ((param.key & 0x01) == 0) {
         writeVarint(writeBuf, param.asUint64, size, error);
       } else {
@@ -3662,13 +3749,17 @@ WriteResult MoQFrameWriter::writeRequestOk(
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
   writeVarint(writeBuf, requestOk.requestID.value, size, error);
   if (getDraftMajorVersion(*version_) > 14) {
-    if ((frameType == FrameType::ANNOUNCE_OK ||
-         frameType == FrameType::SUBSCRIBE_ANNOUNCES_OK) &&
+    if (frameType == FrameType::SUBSCRIBE_ANNOUNCES_OK &&
         !requestOk.params.empty()) {
       return folly::makeUnexpected(
           quic::TransportErrorCode::PROTOCOL_VIOLATION);
     }
-    writeTrackRequestParams(writeBuf, requestOk.params, {}, size, error);
+    writeTrackRequestParams(
+        writeBuf,
+        requestOk.params,
+        requestOk.requestSpecificParams,
+        size,
+        error);
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -3745,6 +3836,12 @@ WriteResult MoQFrameWriter::writeTrackStatusOk(
 
   size_t size = 0;
   bool error = false;
+
+  if (getDraftMajorVersion(*version_) >= 15) {
+    auto requestOk = RequestOk::fromTrackStatusOk(trackStatusOk);
+    return writeRequestOk(writeBuf, requestOk, FrameType::REQUEST_OK);
+  }
+
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS_OK, error);
   if (getDraftMajorVersion(*version_) >= 14) {
     auto res = writeSubscribeOkHelper(
