@@ -1669,9 +1669,7 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
   // returns true if subscription can be removed from state
-  bool onSubgroup(
-      const std::shared_ptr<MoQSession>& session,
-      TrackAlias alias) {
+  bool onSubgroup(MoQSession* session, TrackAlias alias) {
     if (logger_) {
       logger_->logStreamTypeSet(
           currentStreamId_, MOQTStreamType::SUBGROUP_HEADER, Owner::REMOTE);
@@ -1764,7 +1762,7 @@ class MoQSession::FetchTrackReceiveState
     return callback_;
   }
 
-  void resetFetchCallback(const std::shared_ptr<MoQSession>& session) {
+  void resetFetchCallback(MoQSession* session) {
     callback_.reset();
     if (fetchOkAndAllDataReceived()) {
       session->fetches_.erase(requestID_);
@@ -1772,7 +1770,7 @@ class MoQSession::FetchTrackReceiveState
     }
   }
 
-  void cancel(const std::shared_ptr<MoQSession>& session) {
+  void cancel(MoQSession* session) {
     cancelSource_.requestCancellation();
     fetchError({requestID_, FetchErrorCode::CANCELLED, "cancelled"});
     resetFetchCallback(session);
@@ -2345,9 +2343,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   }
 
  public:
-  ObjectStreamCallback(
-      std::shared_ptr<MoQSession> session,
-      folly::CancellationToken& token)
+  ObjectStreamCallback(MoQSession* session, folly::CancellationToken& token)
       : session_(session), token_(token) {}
 
   void setCurrentStreamId(uint64_t id) {
@@ -2637,7 +2633,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     }
   }
   std::shared_ptr<MLogger> logger_ = nullptr;
-  std::shared_ptr<MoQSession> session_;
+  MoQSession* session_{nullptr};
   folly::CancellationToken& token_;
   std::shared_ptr<MoQSession::SubscribeTrackReceiveState> subscribeState_;
   std::shared_ptr<SubgroupConsumer> subgroupCallback_;
@@ -2726,7 +2722,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
 
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
-  detail::ObjectStreamCallback dcb(session, /*by ref*/ token);
+  detail::ObjectStreamCallback dcb(session.get(), /*by ref*/ token);
   if (logger_) {
     dcb.setLogger(logger_);
   }
@@ -4413,7 +4409,7 @@ void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
               << " sess=" << this;
     return;
   }
-  trackIt->second->cancel(shared_from_this());
+  trackIt->second->cancel(this);
   auto res = moqFrameWriter_.writeFetchCancel(controlWriteBuf_, fetchCan);
   if (!res) {
     XLOG(ERR) << "writeFetchCancel failed sess=" << this;
