@@ -1032,6 +1032,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       subDone.streamCount = streamCount_;
       pendingSubscribeDone_.reset();
       XCHECK(session_);
+      subscriptionHandle_.reset();
       session_->sendSubscribeDone(subDone);
     }
   }
@@ -1109,6 +1110,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       subscriptionHandle_->unsubscribe();
     }
     resetAllSubgroups(ResetStreamErrorCode::CANCELLED);
+    subscriptionHandle_.reset();
   }
 
   void terminatePublish(SubscribeDone subDone, ResetStreamErrorCode code)
@@ -1119,6 +1121,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       session->subscribeError(
           {subDone.requestID, SubscribeErrorCode::INTERNAL_ERROR, "terminate"});
     } else {
+      subscriptionHandle_.reset();
       session->sendSubscribeDone(subDone);
     }
   }
@@ -1553,6 +1556,7 @@ MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
     return folly::unit;
   }
   subDone.streamCount = streamCount_;
+  subscriptionHandle_.reset();
   session_->sendSubscribeDone(subDone);
   return folly::unit;
 }
