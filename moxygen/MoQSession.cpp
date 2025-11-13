@@ -1660,7 +1660,7 @@ class MoQSession::SubscribeTrackReceiveState
 
   void subscribeError(SubscribeError subErr) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
-    if (!subscribePromise_.isFulfilled()) {
+    if (!publish_ && !subscribePromise_.isFulfilled()) {
       subErr.requestID = requestID_;
       subscribePromise_.setValue(folly::makeUnexpected(std::move(subErr)));
     } else if (!deliveredDone_) {
@@ -1907,11 +1907,12 @@ void MoQSession::cleanup() {
         ResetStreamErrorCode::SESSION_CLOSED);
   }
   for (auto& subTrack : subTracks_) {
-    if (!subTrack.second->isPublish()) {
-      subTrack.second->subscribeError({/*TrackReceiveState fills in subId*/ 0,
-                                       SubscribeErrorCode::INTERNAL_ERROR,
-                                       "session closed"});
-    }
+    // subscribeError handles both publish and non-publish tracks correctly:
+    // - For non-publish: promise not fulfilled, sets error on promise
+    // - For publish: promise fulfilled, calls subscribeDone on callback
+    subTrack.second->subscribeError({/*TrackReceiveState fills in subId*/ 0,
+                                     SubscribeErrorCode::INTERNAL_ERROR,
+                                     "session closed"});
   }
   subTracks_.clear();
   // We parse a subscribeDone after cleanup

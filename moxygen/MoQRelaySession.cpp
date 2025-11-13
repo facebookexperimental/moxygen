@@ -234,6 +234,14 @@ void MoQRelaySession::cleanup() {
   }
   subscriberAnnounces_.clear();
 
+  // Clean up subscribeAnnounces handles
+  for (auto& subAnn : subscribeAnnounces_) {
+    if (subAnn.second) {
+      subAnn.second->unsubscribeAnnounces();
+    }
+  }
+  subscribeAnnounces_.clear();
+
   // Call parent cleanup to handle base class cleanup
   MoQSession::cleanup();
 }

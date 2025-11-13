@@ -62,12 +62,18 @@ inline Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
   return std::make_shared<MockAnnounceHandle>(AnnounceOk({ann.requestID, {}}));
 }
 
-inline Subscriber::PublishResult makePublishOkResult(const auto& pub) {
+inline Subscriber::PublishResult makePublishOkResult(
+    const auto& pub,
+    bool expectDone = true) {
   auto mockConsumer = std::make_shared<MockTrackConsumer>();
   EXPECT_CALL(*mockConsumer, setTrackAlias(testing::_))
       .WillRepeatedly(
           testing::Return(
               folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  if (expectDone) {
+    EXPECT_CALL(*mockConsumer, subscribeDone(testing::_))
+        .WillOnce(testing::Return(folly::unit));
+  }
 
   // Create PublishOk directly
   PublishOk publishOk{

@@ -2227,6 +2227,8 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
+                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                    .WillOnce(testing::Return(folly::unit));
 
                 // Create the PublishOk directly instead of using a coroutine
                 PublishOk expectedOk{
@@ -2365,7 +2367,7 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
 
                 // Return a consumer and immediate success
                 // (we'll test cancel before the reply is processed)
-                return makePublishOkResult(actualPub);
+                return makePublishOkResult(actualPub, /*expectDone=*/false);
               }));
 
   auto handle = makePublishHandle();
@@ -2686,6 +2688,9 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
+                EXPECT_CALL(*trackConsumer, subscribeDone(_))
+                    .WillOnce(testing::Return(folly::unit));
+
                 // Verify that data is not delivered until PUBLISH_OK is
                 // returned
                 EXPECT_CALL(*trackConsumer, datagram(_, _)).Times(0);
@@ -2788,6 +2793,9 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
+                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                    .WillOnce(testing::Return(folly::unit));
+
                 // Return a PublishOk with a mismatched requestID to simulate a
                 // republish or handler miswiring; session should remap to
                 // inbound.
@@ -3253,6 +3261,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
+                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                    .WillOnce(testing::Return(folly::unit));
 
                 // Create PublishOk with delivery timeout parameter
                 PublishOk publishOk{
@@ -3365,6 +3375,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
+                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                    .WillOnce(testing::Return(folly::unit));
 
                 PublishOk publishOk{
                     actualPub.requestID,
