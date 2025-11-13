@@ -430,6 +430,7 @@ enum class TrackRequestParamKey : uint64_t {
   DELIVERY_TIMEOUT = 2,
   MAX_CACHE_DURATION = 4,
   PUBLISHER_PRIORITY = 0x0E,
+  SUBSCRIBER_PRIORITY = 0x20,
   SUBSCRIPTION_FILTER = 0x21,
   EXPIRES = 8,
   GROUP_ORDER = 0x22,
@@ -1554,6 +1555,10 @@ class MoQFrameParser {
 
   void handleGroupOrderParam(
       GroupOrder& groupOrderField,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleSubscriberPriorityParam(
+      uint8_t& priorityField,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   folly::Optional<uint64_t> version_;

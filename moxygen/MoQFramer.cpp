@@ -33,6 +33,7 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
     case moxygen::TrackRequestParamKey::LARGEST_OBJECT:
     case moxygen::TrackRequestParamKey::EXPIRES:
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
+    case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
       return true;
     default:
       return false;
@@ -50,11 +51,19 @@ bool isValidGroupOrderParam(uint64_t value) {
   return true;
 }
 
+bool isValidSubscriberPriorityParam(uint64_t value) {
+  // Valid range is 0-255
+  return value <= 255;
+}
+
 bool isIntParamValid(uint64_t version, uint64_t key, uint64_t value) {
   if (moxygen::getDraftMajorVersion(version) >= 15) {
     switch (key) {
       case folly::to_underlying(moxygen::TrackRequestParamKey::GROUP_ORDER):
         return isValidGroupOrderParam(value);
+      case folly::to_underlying(
+          moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY):
+        return isValidSubscriberPriorityParam(value);
       default:
         return true;
     }
@@ -1081,12 +1090,19 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     return folly::makeUnexpected(res.error());
   }
   subscribeRequest.fullTrackName = std::move(res.value());
-  if (length < 1) {
-    XLOG(DBG4) << "parseSubscribeRequest: UNDERFLOW on priority";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+
+  if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 1) {
+      XLOG(DBG4) << "parseSubscribeRequest: UNDERFLOW on priority";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    subscribeRequest.priority = cursor.readBE<uint8_t>();
+    length -= 1;
+  } else {
+    // For draft >= 15, set default priority to 128
+    // It will be overridden in handleRequestSpecificParams if present
+    subscribeRequest.priority = kDefaultPriority;
   }
-  subscribeRequest.priority = cursor.readBE<uint8_t>();
-  length -= 1;
 
   if (getDraftMajorVersion(*version_) < 15) {
     if (length < 1) {
@@ -1195,6 +1211,10 @@ void MoQFrameParser::handleRequestSpecificParams(
 
     // GROUP_ORDER
     handleGroupOrderParam(subscribeRequest.groupOrder, requestSpecificParams);
+
+    // SUBSCRIBER_PRIORITY
+    handleSubscriberPriorityParam(
+        subscribeRequest.priority, requestSpecificParams);
   }
 }
 
@@ -1240,14 +1260,20 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     length -= endGroup->second;
   }
 
-  if (length < 2) {
-    XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on priority";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 1) {
+      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on priority";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    subscribeUpdate.priority = cursor.readBE<uint8_t>();
+    length--;
+  } else {
+    // For draft >= 15, set default priority to 128
+    // It will be overridden in handleRequestSpecificParams if present
+    subscribeUpdate.priority = kDefaultPriority;
   }
-  subscribeUpdate.priority = cursor.readBE<uint8_t>();
-  length--;
 
-  if (length < 2) {
+  if (length < 1) {
     XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on forwardFlag";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
@@ -1310,6 +1336,10 @@ void MoQFrameParser::handleRequestSpecificParams(
       subscribeUpdate.start = AbsoluteLocation{0, 0};
       subscribeUpdate.endGroup = 0;
     }
+
+    // SUBSCRIBER_PRIORITY
+    handleSubscriberPriorityParam(
+        subscribeUpdate.priority, requestSpecificParams);
   }
 }
 
@@ -1612,11 +1642,17 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
   }
   publishOk.forward = (forwardFlag == 1);
 
-  if (length < 1) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 1) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    publishOk.subscriberPriority = cursor.readBE<uint8_t>();
+    length--;
+  } else {
+    // For draft >= 15, set default priority to 128
+    // It will be overridden in handleRequestSpecificParams if present
+    publishOk.subscriberPriority = kDefaultPriority;
   }
-  publishOk.subscriberPriority = cursor.readBE<uint8_t>();
-  length--;
 
   if (getDraftMajorVersion(*version_) < 15) {
     auto order = cursor.readBE<uint8_t>();
@@ -1715,6 +1751,10 @@ void MoQFrameParser::handleRequestSpecificParams(
 
     // GROUP_ORDER
     handleGroupOrderParam(publishOk.groupOrder, requestSpecificParams);
+
+    // SUBSCRIBER_PRIORITY
+    handleSubscriberPriorityParam(
+        publishOk.subscriberPriority, requestSpecificParams);
   }
 }
 
@@ -1725,6 +1765,16 @@ void MoQFrameParser::handleGroupOrderParam(
       requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
   if (maybeGroupOrder.hasValue()) {
     groupOrderField = (GroupOrder)*maybeGroupOrder;
+  }
+}
+
+void MoQFrameParser::handleSubscriberPriorityParam(
+    uint8_t& priorityField,
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  auto maybePriority = getFirstIntParam(
+      requestSpecificParams, TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+  if (maybePriority.hasValue()) {
+    priorityField = (uint8_t)*maybePriority;
   }
 }
 
@@ -2047,16 +2097,16 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   fetch.requestID = res->first;
   length -= res->second;
 
-  if (length < 1) {
-    XLOG(DBG4) << "parseFetch: UNDERFLOW on priority/order";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-
-  fetch.priority = cursor.readBE<uint8_t>();
-  length -= sizeof(uint8_t);
-
   if (getDraftMajorVersion(*version_) < 15) {
     if (length < 1) {
+      XLOG(DBG4) << "parseFetch: UNDERFLOW on priority";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    fetch.priority = cursor.readBE<uint8_t>();
+    length -= sizeof(uint8_t);
+
+    if (length < 1) {
+      XLOG(DBG4) << "parseFetch: UNDERFLOW on order";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
 
@@ -2067,6 +2117,12 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     }
     fetch.groupOrder = static_cast<GroupOrder>(order);
     length -= sizeof(uint8_t);
+  } else {
+    // For draft >= 15 these will be overridden by handleRequestSpecificParams.
+    // We set the defaults as appropriate so that we conform to what the spec
+    // says these values should be when the fields are omitted.
+    fetch.priority = kDefaultPriority;
+    fetch.groupOrder = GroupOrder::OldestFirst;
   }
 
   if (length < 1) {
@@ -3338,13 +3394,16 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
   bool error = false;
   writeVarint(writeBuf, subscribeRequest.requestID.value, size, error);
   writeFullTrackName(writeBuf, subscribeRequest.fullTrackName, size, error);
-  writeBuf.append(&subscribeRequest.priority, 1);
-  size += 1;
+
   if (getDraftMajorVersion(*version_) < 15) {
+    writeBuf.append(&subscribeRequest.priority, 1);
+    size += 1;
+
     uint8_t order = folly::to_underlying(subscribeRequest.groupOrder);
     writeBuf.append(&order, 1);
     size += 1;
   }
+
   uint8_t forwardFlag = (subscribeRequest.forward) ? 1 : 0;
   writeBuf.append(&forwardFlag, 1);
   size += 1;
@@ -3361,6 +3420,14 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
             ? folly::Optional<uint64_t>(subscribeRequest.endGroup)
             : folly::none);
     requestSpecificParams.push_back(subscriptionFilterParam);
+
+    if (subscribeRequest.priority != kDefaultPriority) {
+      Parameter priorityParam;
+      priorityParam.key =
+          folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+      priorityParam.asUint64 = subscribeRequest.priority;
+      requestSpecificParams.push_back(priorityParam);
+    }
 
     if (subscribeRequest.groupOrder != GroupOrder::Default) {
       Parameter groupOrderParam;
@@ -3434,14 +3501,25 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
     subscriptionFilterParam.asSubscriptionFilter =
         SubscriptionFilter(locationType, update.start, endGroup);
     requestSpecificParams.push_back(subscriptionFilterParam);
+
+    if (update.priority != kDefaultPriority) {
+      Parameter priorityParam;
+      priorityParam.key =
+          folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+      priorityParam.asUint64 = update.priority;
+      requestSpecificParams.push_back(priorityParam);
+    }
   } else {
     writeVarint(writeBuf, update.start.group, size, error);
     writeVarint(writeBuf, update.start.object, size, error);
     writeVarint(writeBuf, update.endGroup, size, error);
   }
 
-  writeBuf.append(&update.priority, 1);
-  size += 1;
+  if (getDraftMajorVersion(*version_) < 15) {
+    writeBuf.append(&update.priority, 1);
+    size += 1;
+  }
+
   uint8_t forwardFlag = (update.forward) ? 1 : 0;
   writeBuf.append(&forwardFlag, 1);
   size += 1;
@@ -3644,10 +3722,10 @@ WriteResult MoQFrameWriter::writePublishOk(
   writeBuf.append(&forwardFlag, 1);
   size += 1;
 
-  writeBuf.append(&publishOk.subscriberPriority, 1);
-  size += 1;
-
   if (getDraftMajorVersion(*version_) < 15) {
+    writeBuf.append(&publishOk.subscriberPriority, 1);
+    size += 1;
+
     uint8_t order = folly::to_underlying(publishOk.groupOrder);
     writeBuf.append(&order, 1);
     size += 1;
@@ -3664,6 +3742,14 @@ WriteResult MoQFrameWriter::writePublishOk(
         publishOk.locType == LocationType::AbsoluteRange ? publishOk.endGroup
                                                          : folly::none);
     requestSpecificParams.push_back(subscriptionFilterParam);
+
+    if (publishOk.subscriberPriority != kDefaultPriority) {
+      Parameter priorityParam;
+      priorityParam.key =
+          folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+      priorityParam.asUint64 = publishOk.subscriberPriority;
+      requestSpecificParams.push_back(priorityParam);
+    }
 
     if (publishOk.groupOrder != GroupOrder::Default) {
       Parameter groupOrderParam;
@@ -3953,10 +4039,10 @@ WriteResult MoQFrameWriter::writeFetch(
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
   writeVarint(writeBuf, fetch.requestID.value, size, error);
 
-  writeBuf.append(&fetch.priority, 1);
-  size += 1;
-
   if (getDraftMajorVersion(*version_) < 15) {
+    writeBuf.append(&fetch.priority, 1);
+    size += 1;
+
     auto order = folly::to_underlying(fetch.groupOrder);
     writeBuf.append(&order, 1);
     size += 1;
@@ -3982,6 +4068,14 @@ WriteResult MoQFrameWriter::writeFetch(
 
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
+    if (fetch.priority != kDefaultPriority) {
+      Parameter priorityParam;
+      priorityParam.key =
+          folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+      priorityParam.asUint64 = fetch.priority;
+      requestSpecificParams.push_back(priorityParam);
+    }
+
     if (fetch.groupOrder != GroupOrder::Default) {
       Parameter groupOrderParam;
       groupOrderParam.key =

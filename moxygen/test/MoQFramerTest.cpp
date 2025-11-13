@@ -1302,7 +1302,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
     auto frameHeader = writeBufs[j].split(3);
     // Version 15+ don't have the filter within the request, but in the
     // parameters
-    const uint32_t kDraft15PreambleLength = 15;
+    const uint32_t kDraft15PreambleLength = 14;
     const uint32_t kDraft14PreambleLength = 19;
     uint32_t frontLength = (getDraftMajorVersion(GetParam()) >= 15)
         ? kDraft15PreambleLength
