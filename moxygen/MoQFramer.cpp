@@ -559,6 +559,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
 
       auto largestLocation = parseAbsoluteLocation(cursor, length);
       if (!largestLocation) {
+        XLOG(DBG4) << "parseParams: returning error from parseAbsoluteLocation";
         return folly::makeUnexpected(largestLocation.error());
       }
       res = Parameter(key->first, largestLocation.value());
@@ -567,6 +568,10 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
           cursor, length, version, key->first, tokenCache, paramsType);
     }
     if (!res) {
+      XLOG(DBG4)
+          << "parseParams: returning error from parseVariableParam/parseIntParam"
+          << " at param index=" << i << ", key=" << key->first
+          << ", version=" << version << ", length=" << length;
       return folly::makeUnexpected(res.error());
     }
     if (*res) {
@@ -584,6 +589,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     XLOG(ERR) << "Invalid key-value length";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
+  XLOG(DBG4) << "parseParams: returning success";
   return folly::unit;
 }
 
@@ -1087,6 +1093,7 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   subscribeRequest.requestID = requestID->first;
   auto res = parseFullTrackName(cursor, length);
   if (!res) {
+    XLOG(DBG4) << "parseSubscribeRequest: Failed to parse track name";
     return folly::makeUnexpected(res.error());
   }
   subscribeRequest.fullTrackName = std::move(res.value());
@@ -1125,6 +1132,7 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
   }
   uint8_t forwardFlag = cursor.readBE<uint8_t>();
   if (forwardFlag > 1) {
+    XLOG(ERR) << "parseSubscribeRequest: Invalid forward";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   subscribeRequest.forward = (forwardFlag == 1);
@@ -1153,6 +1161,8 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
         subscribeRequest.locType == LocationType::AbsoluteRange) {
       auto location = parseAbsoluteLocation(cursor, length);
       if (!location) {
+        XLOG(ERR) << "parseSubscribeRequest: error in parseAbsoluteLocation: "
+                  << folly::to_underlying(location.error());
         return folly::makeUnexpected(location.error());
       }
       subscribeRequest.start = *location;
@@ -1181,10 +1191,14 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
       subscribeRequest.params,
       requestSpecificParams);
   if (!res2) {
+    XLOG(ERR) << "parseSubscribeRequest: error in parseTrackRequestParams: "
+              << folly::to_underlying(res2.error());
     return folly::makeUnexpected(res2.error());
   }
   handleRequestSpecificParams(subscribeRequest, requestSpecificParams);
   if (length > 0) {
+    XLOG(ERR) << "parseSubscribeRequest: leftover bytes after parsing: "
+              << length;
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return subscribeRequest;
@@ -1412,9 +1426,11 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
       subscribeOk.params,
       requestSpecificParams);
   if (!res2) {
+    XLOG(DBG4) << "parseSubscribeOk: parseTrackRequestParams failed";
     return folly::makeUnexpected(res2.error());
   }
   if (length > 0) {
+    XLOG(DBG4) << "parseSubscribeOk: excess length";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
