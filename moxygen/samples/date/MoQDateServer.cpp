@@ -11,6 +11,7 @@
 #include <moxygen/MoQWebTransportClient.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
+#include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 #include <iomanip>
 
 using namespace quic::samples;
@@ -35,6 +36,10 @@ DEFINE_bool(
     false,
     "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
 DEFINE_int32(delivery_timeout, 0, "the delivery timeout in ms for server");
+DEFINE_bool(
+    insecure,
+    false,
+    "Use insecure verifier (skip certificate validation)");
 
 namespace {
 using namespace moxygen;
@@ -65,8 +70,24 @@ class MoQDateServer : public MoQServer,
  public:
   enum class Mode { STREAM_PER_GROUP, STREAM_PER_OBJECT, DATAGRAM };
 
+  // Constructor for the secure version, where we pass in the certificate and
+  // the key.
+  MoQDateServer(Mode mode, const std::string& cert, const std::string& key)
+      : MoQServer(cert, key, "/moq-date"),
+        forwarder_(dateTrackName()),
+        mode_(mode) {}
+
+  // Constructor for the insecure version
   explicit MoQDateServer(Mode mode)
-      : MoQServer(FLAGS_cert, FLAGS_key, "/moq-date"),
+      : MoQServer(
+            quic::samples::createFizzServerContextWithInsecureDefault(
+                {"h3",
+                 std::string(kAlpnMoqtDraft15),
+                 std::string(kAlpnMoqtLegacy)},
+                fizz::server::ClientAuthMode::None,
+                "" /* cert */,
+                "" /* key */),
+            "/moq-date"),
         forwarder_(dateTrackName()),
         mode_(mode) {}
 
@@ -80,12 +101,21 @@ class MoQDateServer : public MoQServer,
     if (!moqEvb_) {
       moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(evb);
     }
+    auto verifier = FLAGS_insecure
+        ? std::make_shared<
+              moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>()
+        : nullptr;
     relayClient_ = std::make_unique<MoQRelayClient>((
-        FLAGS_quic_transport
-            ? std::make_unique<MoQClient>(
-                  moqEvb_, url, MoQRelaySession::createRelaySessionFactory())
-            : std::make_unique<MoQWebTransportClient>(
-                  moqEvb_, url, MoQRelaySession::createRelaySessionFactory())));
+        FLAGS_quic_transport ? std::make_unique<MoQClient>(
+                                   moqEvb_,
+                                   url,
+                                   MoQRelaySession::createRelaySessionFactory(),
+                                   verifier)
+                             : std::make_unique<MoQWebTransportClient>(
+                                   moqEvb_,
+                                   url,
+                                   MoQRelaySession::createRelaySessionFactory(),
+                                   verifier)));
 
     std::vector<std::string> alpns;
     if (FLAGS_use_legacy_setup) {
@@ -557,7 +587,12 @@ int main(int argc, char* argv[]) {
     XLOG(ERR) << "Invalid mode: " << FLAGS_mode;
     return 1;
   }
-  auto server = std::make_shared<MoQDateServer>(mode);
+  std::shared_ptr<MoQDateServer> server = nullptr;
+  if (FLAGS_insecure) {
+    server = std::make_shared<MoQDateServer>(mode);
+  } else {
+    server = std::make_shared<MoQDateServer>(mode, FLAGS_cert, FLAGS_key);
+  }
   folly::SocketAddress addr("::", FLAGS_port);
   server->start(addr);
   if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
