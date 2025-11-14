@@ -82,6 +82,12 @@ void MoQServer::createMoQQuicSession(
   ts.copaDeltaParam = 0.05;
   ts.pacingEnabled = true;
   ts.experimentalPacer = true;
+  ts.maxCwndInMss = quic::kLargeMaxCwndInMss;
+  ts.batchingMode = quic::QuicBatchingMode::BATCHING_MODE_GSO;
+  ts.maxBatchSize = 48;
+  ts.dataPathType = quic::DataPathType::ContinuousMemory;
+  ts.writeConnectionDataPacketsLimit = 48;
+
   auto quicWebTransport =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
   auto qWtPtr = quicWebTransport.get();
