@@ -17,3 +17,13 @@ moxygen_add_test(TARGET MoQCacheTests
     moqtestutils
     testmain
 )
+
+moxygen_add_test(TARGET MoQRelayTest
+  PREFIX "MoQRelay"
+  SOURCES
+    MoQRelayTest.cpp
+  DEPENDS
+    moqrelay
+    moqtestutils
+    testmain
+)

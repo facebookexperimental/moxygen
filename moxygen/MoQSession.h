@@ -109,7 +109,7 @@ class MoQSession : public Subscriber,
       PublishRequest pub,
       std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
 
-  folly::Optional<uint64_t> getNegotiatedVersion() const {
+  virtual folly::Optional<uint64_t> getNegotiatedVersion() const {
     return negotiatedVersion_;
   }
 
