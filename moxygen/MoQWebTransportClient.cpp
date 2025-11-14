@@ -150,7 +150,7 @@ void MoQWebTransportClient::HTTPHandler::onHeadersComplete(
   auto protocolResult = proxygen::HTTPWebTransport::getWTProtocol(*resp);
   if (protocolResult.hasValue()) {
     client_.negotiatedProtocol_ = protocolResult.value();
-    XLOG(INFO) << "WebTransport client: Negotiated protocol: "
+    XLOG(DBG1) << "WebTransport client: Negotiated protocol: "
                << *client_.negotiatedProtocol_;
   } else {
     XLOG(WARN) << "WebTransport: No WT-Protocol header in response, "

@@ -100,7 +100,7 @@ void MoQDeliveryTimer::cancelAllTimers() {
   }
   objectTimers_.clear();
 
-  XLOG(INFO) << "MoQDeliveryTimer::cancelAllTimers: ALL TIMERS CANCELED";
+  XLOG(DBG2) << "MoQDeliveryTimer::cancelAllTimers: ALL TIMERS CANCELED";
 }
 
 void ObjectTimerCallback::timeoutExpired() noexcept {

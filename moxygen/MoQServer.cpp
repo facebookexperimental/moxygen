@@ -72,7 +72,7 @@ void MoQServer::createMoQQuicSession(
   folly::Optional<std::string> alpn;
   if (stdAlpn) {
     alpn = *stdAlpn;
-    XLOG(INFO) << "Server: Negotiated ALPN: " << *alpn;
+    XLOG(DBG1) << "Server: Negotiated ALPN: " << *alpn;
   }
 
   auto qevb = quicSocket->getEventBase();
@@ -213,7 +213,7 @@ void MoQServer::setFizzContext(
 folly::Try<ServerSetup> MoQServer::onClientSetup(
     ClientSetup setup,
     const std::shared_ptr<MoQSession>& session) {
-  XLOG(INFO) << "MoQServer::ClientSetup";
+  XLOG(DBG1) << "MoQServer::ClientSetup";
 
   uint64_t negotiatedVersion = 0;
 
@@ -222,7 +222,7 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(
   if (sessionVersion) {
     // ALPN mode: use the ALPN-negotiated version
     negotiatedVersion = *sessionVersion;
-    XLOG(INFO) << "MoQServer::ClientSetup: Using ALPN-negotiated version: moqt-"
+    XLOG(DBG1) << "MoQServer::ClientSetup: Using ALPN-negotiated version: moqt-"
                << getDraftMajorVersion(negotiatedVersion);
   } else if (!setup.supportedVersions.empty()) {
     // Legacy mode: negotiate from version array in CLIENT_SETUP
@@ -291,7 +291,7 @@ void MoQServer::Handler::onHeadersComplete(
   resp.setHTTPVersion(1, 1);
 
   if (req->getPathAsStringPiece() != server_.getEndpoint()) {
-    XLOG(INFO) << req->getPathAsStringPiece();
+    XLOG(DBG0) << req->getPathAsStringPiece();
     req->dumpMessage(0);
     resp.setStatusCode(404);
     txn_->sendHeadersWithEOM(resp);
@@ -314,7 +314,7 @@ void MoQServer::Handler::onHeadersComplete(
             wtAvailableProtocols.value(), supportedProtocols)) {
       HTTPWebTransport::setWTProtocol(resp, wtProtocol.value());
       negotiatedProtocol = wtProtocol.value();
-      XLOG(INFO) << "WebTransport: Negotiated protocol: " << *wtProtocol;
+      XLOG(DBG1) << "WebTransport: Negotiated protocol: " << *wtProtocol;
     } else {
       VLOG(4) << "Failed to negotiate WebTransport protocol";
       resp.setStatusCode(400);

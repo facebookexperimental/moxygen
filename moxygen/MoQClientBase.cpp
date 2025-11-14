@@ -50,7 +50,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   auto stdAlpn = quicClient->getAppProtocol();
   if (stdAlpn) {
     negotiatedProtocol_ = *stdAlpn;
-    XLOG(INFO) << "Client: Negotiated ALPN: " << *negotiatedProtocol_;
+    XLOG(DBG1) << "Client: Negotiated ALPN: " << *negotiatedProtocol_;
   }
 
   // Make WebTransport object
