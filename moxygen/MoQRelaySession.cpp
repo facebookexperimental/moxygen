@@ -390,8 +390,11 @@ void MoQRelaySession::onAnnounceCancel(AnnounceCancel announceCancel) {
   if (it == publisherAnnounces_.end()) {
     XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
   } else {
-    it->second->announceCancel(
-        announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
+    auto& cb = it->second;
+    if (cb) {
+      cb->announceCancel(
+          announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
+    }
     publisherAnnounces_.erase(it);
   }
 }
