@@ -9,8 +9,14 @@
 
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/portability/GFlags.h>
+#include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
+DEFINE_bool(
+    insecure,
+    false,
+    "Use insecure verifier (skip certificate validation)");
 DEFINE_string(chat_id, "", "ID for the chat to join");
 DEFINE_string(username, "", "Username to join chat");
 DEFINE_string(device, "12345", "Device ID");
@@ -36,7 +42,14 @@ MoQChatClient::MoQChatClient(
           folly::to<std::string>(std::chrono::system_clock::to_time_t(
               std::chrono::system_clock::now()))),
       executor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
-      moqClient_(executor_, std::move(url)) {}
+      moqClient_(
+          executor_,
+          std::move(url),
+          FLAGS_insecure
+              ? std::make_shared<
+                    moxygen::test::
+                        InsecureVerifierDangerousDoNotUseInProduction>()
+              : nullptr) {}
 
 folly::coro::Task<void> MoQChatClient::run() noexcept {
   XLOG(INFO) << __func__;
