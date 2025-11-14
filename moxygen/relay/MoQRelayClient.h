@@ -28,7 +28,8 @@ class MoQRelayClient {
             std::make_unique<MoQClient>(
                 std::move(exec),
                 std::move(url),
-                MoQRelaySession::createRelaySessionFactory())) {}
+                MoQRelaySession::createRelaySessionFactory(),
+                std::move(verifier))) {}
 
   folly::coro::Task<void> setup(
       std::shared_ptr<Publisher> publisher,
