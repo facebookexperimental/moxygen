@@ -2461,3 +2461,323 @@ TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripValue) {
   testSubgroupPriorityRoundTrip(
       kVersionDraft15, 80, StreamType::SUBGROUP_HEADER_SG, 80);
 }
+
+// Test class for GroupOrder defaults feature (draft 15+)
+// In v15+, GROUP_ORDER is passed as a parameter and parser uses defaults
+class MoQFramerV15PlusTest : public ::testing::TestWithParam<uint64_t> {
+ public:
+  void SetUp() override {
+    parser_.initializeVersion(GetParam());
+    writer_.initializeVersion(GetParam());
+  }
+
+ protected:
+  MoQFrameParser parser_;
+  MoQFrameWriter writer_;
+
+  size_t frameLength(folly::io::Cursor& cursor, bool checkAdvance = true) {
+    if (!cursor.canAdvance(2)) {
+      throw std::runtime_error("Cannot read frame length");
+    }
+    size_t res = cursor.readBE<uint16_t>();
+    if (checkAdvance && !cursor.canAdvance(res)) {
+      throw std::runtime_error("Frame length exceeds available data");
+    }
+    return res;
+  }
+};
+
+// Test default GroupOrder for SubscribeRequest when param not present
+TEST_P(MoQFramerV15PlusTest, SubscribeRequestDefaultGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeRequest req = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"ns"}), "track"}),
+      /*priority*/ 128,
+      /*groupOrder*/ GroupOrder::Default, // Writer won't write GROUP_ORDER
+                                          // param
+      /*forward*/ true,
+      /*locType*/ LocationType::LargestObject,
+      /*start*/ folly::none,
+      /*endGroup*/ 0,
+      /*params*/ {});
+
+  auto writeResult = writer_.writeSubscribeRequest(writeBuf, req);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+
+  auto parseResult = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // When GROUP_ORDER param is not written, parser should set to Default
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::Default);
+}
+
+// Test explicit GroupOrder param overrides default for SubscribeRequest
+TEST_P(MoQFramerV15PlusTest, SubscribeRequestExplicitGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeRequest req = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"ns"}), "track"}),
+      /*priority*/ 128,
+      /*groupOrder*/ GroupOrder::NewestFirst, // Non-default, writer will write
+                                              // it
+      /*forward*/ true,
+      /*locType*/ LocationType::LargestObject,
+      /*start*/ folly::none,
+      /*endGroup*/ 0,
+      /*params*/ {});
+
+  auto writeResult = writer_.writeSubscribeRequest(writeBuf, req);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+
+  auto parseResult = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Explicit value should be preserved
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+}
+
+// Test default GroupOrder for SubscribeOk when param not present
+TEST_P(MoQFramerV15PlusTest, SubscribeOkDefaultGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(42);
+  subscribeOk.trackAlias = TrackAlias(1);
+  subscribeOk.expires = std::chrono::milliseconds(1000);
+  subscribeOk.groupOrder =
+      GroupOrder::Default; // Writer won't write GROUP_ORDER param
+  subscribeOk.largest = AbsoluteLocation{10, 20};
+  subscribeOk.params = {};
+
+  auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_OK));
+
+  auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // When GROUP_ORDER param is not written, parser should set to OldestFirst
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::OldestFirst);
+}
+
+// Test explicit GroupOrder param overrides default for SubscribeOk
+TEST_P(MoQFramerV15PlusTest, SubscribeOkExplicitGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(42);
+  subscribeOk.trackAlias = TrackAlias(1);
+  subscribeOk.expires = std::chrono::milliseconds(1000);
+  subscribeOk.groupOrder =
+      GroupOrder::NewestFirst; // Non-default, will be written
+  subscribeOk.largest = AbsoluteLocation{10, 20};
+  subscribeOk.params = {};
+
+  auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_OK));
+
+  auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Explicit value should be preserved
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+}
+
+// Test default GroupOrder for Publish when param not present
+TEST_P(MoQFramerV15PlusTest, PublishDefaultGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishRequest publishRequest;
+  publishRequest.requestID = RequestID(100);
+  publishRequest.fullTrackName =
+      FullTrackName({TrackNamespace({"test"}), "pub"});
+  publishRequest.groupOrder =
+      GroupOrder::Default;    // Will be overridden by parser default
+  publishRequest.params = {}; // No GROUP_ORDER param
+
+  auto writeResult = writer_.writePublish(writeBuf, publishRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::PUBLISH));
+
+  auto parseResult = parser_.parsePublish(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // When GROUP_ORDER param is not in params, parser should set to OldestFirst
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::OldestFirst);
+}
+
+// Test explicit GroupOrder param overrides default for Publish
+TEST_P(MoQFramerV15PlusTest, PublishExplicitGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishRequest publishRequest;
+  publishRequest.requestID = RequestID(100);
+  publishRequest.fullTrackName =
+      FullTrackName({TrackNamespace({"test"}), "pub"});
+  publishRequest.groupOrder =
+      GroupOrder::NewestFirst; // Non-default, will be written
+  publishRequest.params = {};
+
+  auto writeResult = writer_.writePublish(writeBuf, publishRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::PUBLISH));
+
+  auto parseResult = parser_.parsePublish(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Explicit value should be preserved
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+}
+
+// Test default GroupOrder for PublishOk when param not present
+TEST_P(MoQFramerV15PlusTest, PublishOkDefaultGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishOk publishOk;
+  publishOk.requestID = RequestID(200);
+  publishOk.forward = true;
+  publishOk.subscriberPriority = 128;
+  publishOk.groupOrder =
+      GroupOrder::Default; // Writer won't write GROUP_ORDER param
+  publishOk.locType = LocationType::LargestObject;
+  publishOk.params = {};
+
+  auto writeResult = writer_.writePublishOk(writeBuf, publishOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::PUBLISH_OK));
+
+  auto parseResult = parser_.parsePublishOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // When GROUP_ORDER param is not written, parser should set to Default
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::Default);
+}
+
+// Test explicit GroupOrder param overrides default for PublishOk
+TEST_P(MoQFramerV15PlusTest, PublishOkExplicitGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishOk publishOk;
+  publishOk.requestID = RequestID(200);
+  publishOk.forward = true;
+  publishOk.subscriberPriority = 128;
+  publishOk.groupOrder =
+      GroupOrder::OldestFirst; // Non-default, will be written
+  publishOk.locType = LocationType::LargestObject;
+  publishOk.params = {};
+
+  auto writeResult = writer_.writePublishOk(writeBuf, publishOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::PUBLISH_OK));
+
+  auto parseResult = parser_.parsePublishOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Explicit value should be preserved
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::OldestFirst);
+}
+
+// Test default GroupOrder for Fetch when param not present
+TEST_P(MoQFramerV15PlusTest, FetchDefaultGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  Fetch fetchRequest(
+      RequestID(300),
+      FullTrackName({TrackNamespace({"test"}), "fetch"}),
+      AbsoluteLocation{5, 10},  // start
+      AbsoluteLocation{15, 20}, // end
+      kDefaultPriority,         // priority
+      GroupOrder::Default);     // Writer won't write GROUP_ORDER param
+
+  auto writeResult = writer_.writeFetch(writeBuf, fetchRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::FETCH));
+
+  auto parseResult = parser_.parseFetch(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // When GROUP_ORDER param is not written, parser should set to OldestFirst
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::OldestFirst);
+}
+
+// Test explicit GroupOrder param overrides default for Fetch
+TEST_P(MoQFramerV15PlusTest, FetchExplicitGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  Fetch fetchRequest(
+      RequestID(300),
+      FullTrackName({TrackNamespace({"test"}), "fetch"}),
+      AbsoluteLocation{5, 10},  // start
+      AbsoluteLocation{15, 20}, // end
+      kDefaultPriority,         // priority
+      GroupOrder::NewestFirst); // Non-default, will be written
+
+  auto writeResult = writer_.writeFetch(writeBuf, fetchRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::FETCH));
+
+  auto parseResult = parser_.parseFetch(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Explicit value should be preserved
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQFramerV15PlusTest,
+    MoQFramerV15PlusTest,
+    ::testing::Values(kVersionDraft15));

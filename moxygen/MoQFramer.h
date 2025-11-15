@@ -1555,7 +1555,8 @@ class MoQFrameParser {
 
   void handleGroupOrderParam(
       GroupOrder& groupOrderField,
-      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+      const std::vector<Parameter>& requestSpecificParams,
+      GroupOrder defaultGroupOrder) const noexcept;
 
   void handleSubscriberPriorityParam(
       uint8_t& priorityField,

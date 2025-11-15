@@ -415,6 +415,8 @@ folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     case folly::to_underlying(LocationType::AbsoluteRange):
       break;
     default:
+      XLOG(ERR) << "Invalid filter type in parseSubscriptionFilter, type="
+                << filterType->first;
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
@@ -1224,7 +1226,10 @@ void MoQFrameParser::handleRequestSpecificParams(
     }
 
     // GROUP_ORDER
-    handleGroupOrderParam(subscribeRequest.groupOrder, requestSpecificParams);
+    handleGroupOrderParam(
+        subscribeRequest.groupOrder,
+        requestSpecificParams,
+        GroupOrder::Default);
 
     // SUBSCRIBER_PRIORITY
     handleSubscriberPriorityParam(
@@ -1448,7 +1453,8 @@ void MoQFrameParser::handleRequestSpecificParams(
     SubscribeOk& subscribeOk,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   // GROUP_ORDER
-  handleGroupOrderParam(subscribeOk.groupOrder, requestSpecificParams);
+  handleGroupOrderParam(
+      subscribeOk.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
 }
 
 folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
@@ -1630,7 +1636,10 @@ void MoQFrameParser::handleRequestSpecificParams(
     PublishRequest& publishRequest,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   // GROUP_ORDER
-  handleGroupOrderParam(publishRequest.groupOrder, requestSpecificParams);
+  handleGroupOrderParam(
+      publishRequest.groupOrder,
+      requestSpecificParams,
+      GroupOrder::OldestFirst);
 }
 
 folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
@@ -1766,7 +1775,8 @@ void MoQFrameParser::handleRequestSpecificParams(
     }
 
     // GROUP_ORDER
-    handleGroupOrderParam(publishOk.groupOrder, requestSpecificParams);
+    handleGroupOrderParam(
+        publishOk.groupOrder, requestSpecificParams, GroupOrder::Default);
 
     // SUBSCRIBER_PRIORITY
     handleSubscriberPriorityParam(
@@ -1776,11 +1786,14 @@ void MoQFrameParser::handleRequestSpecificParams(
 
 void MoQFrameParser::handleGroupOrderParam(
     GroupOrder& groupOrderField,
-    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+    const std::vector<Parameter>& requestSpecificParams,
+    GroupOrder defaultGroupOrder) const noexcept {
   auto maybeGroupOrder = getFirstIntParam(
       requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
   if (maybeGroupOrder.hasValue()) {
     groupOrderField = (GroupOrder)*maybeGroupOrder;
+  } else {
+    groupOrderField = defaultGroupOrder;
   }
 }
 
@@ -2226,7 +2239,8 @@ void MoQFrameParser::handleRequestSpecificParams(
     Fetch& fetchRequest,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   // GROUP_ORDER
-  handleGroupOrderParam(fetchRequest.groupOrder, requestSpecificParams);
+  handleGroupOrderParam(
+      fetchRequest.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
 }
 
 folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
