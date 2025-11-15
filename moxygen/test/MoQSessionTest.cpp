@@ -1645,9 +1645,7 @@ CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
   serverWt_->createBidiStream();
   // Check that the client called stopSending and resetStream on the newly
   // created stream.
-  EXPECT_TRUE(clientWt_->readHandles.begin()
-                  ->second->stopSendingErrorCode()
-                  .hasValue());
+  EXPECT_TRUE(clientWt_->readHandles.begin()->second->writeException());
   EXPECT_TRUE(
       clientWt_->writeHandles.begin()->second->getWriteErr().hasValue());
   co_return;
@@ -1942,7 +1940,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
     co_await folly::coro::sleep(std::chrono::seconds(1));
   }
   EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().hasValue());
-  EXPECT_EQ(serverWt_->writeHandles[2]->stopSendingErrorCode().value(), 0);
+  EXPECT_EQ(serverWt_->writeHandles[2]->writeException()->error, 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -1995,7 +1993,7 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
     co_await folly::coro::sleep(std::chrono::milliseconds(250));
   }
   EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().hasValue());
-  EXPECT_EQ(serverWt_->writeHandles[2]->stopSendingErrorCode().value(), 0);
+  EXPECT_EQ(serverWt_->writeHandles[2]->writeException()->error, 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   // This don't get called by session

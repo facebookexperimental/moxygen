@@ -564,10 +564,9 @@ void StreamPublisherImpl::setWriteHandle(
 
   cancelCallback_.emplace(writeHandle_->getCancelToken(), [this] {
     if (writeHandle_) {
-      auto code = writeHandle_->stopSendingErrorCode();
+      auto* ex = writeHandle_->exception();
       XLOG(DBG1) << "Peer requested write termination code="
-                 << (code ? folly::to<std::string>(*code)
-                          : std::string("none"));
+                 << (ex ? ex->what() : "");
       reset(ResetStreamErrorCode::CANCELLED);
     }
   });
