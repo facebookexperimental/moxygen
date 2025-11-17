@@ -129,6 +129,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
 
   SubscribeDone done;
   done.requestID = sub.requestID;
+  done.statusCode = SubscribeDoneStatusCode::TRACK_ENDED;
   done.reasonPhrase = kDefaultSubscribeDoneReason;
   callback->subscribeDone(std::move(done));
 }
