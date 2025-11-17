@@ -15,10 +15,9 @@ const std::string kField0 = "moq-test-00";
 const int kTestVariableExtensionMax = 20;
 
 folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
-    MoQTestParameters* track) {
+    const MoQTestParameters& track) {
   // Check if Forwarding Preference is valid (0-3) (Tuple Field 1)
-  int forwardingPreferenceNumber =
-      static_cast<int>(track->forwardingPreference);
+  int forwardingPreferenceNumber = static_cast<int>(track.forwardingPreference);
   if (!(0 <= forwardingPreferenceNumber && forwardingPreferenceNumber <= 3)) {
     return folly::makeUnexpected(
         std::runtime_error("Invalid Forwarding Preference Value"));
@@ -26,19 +25,19 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
 
   // Check if Start Group and Start Object are less than last group and last
   // object (Tuple Fields 2 & 3)
-  if (track->startGroup > track->lastGroupInTrack) {
+  if (track.startGroup > track.lastGroupInTrack) {
     return folly::makeUnexpected(
         std::runtime_error("Start Group Exceeds Last Group in Track"));
   }
 
-  if (track->startObject > track->lastObjectInTrack) {
+  if (track.startObject > track.lastObjectInTrack) {
     return folly::makeUnexpected(
         std::runtime_error("Start Object Exceeds Last Object in Track"));
   }
 
   // Check if Last Group in track field is within valid range (less than max)
   // (Tuple Field 4)
-  if (track->lastGroupInTrack > static_cast<uint64_t>(pow(2, 62)) - 1) {
+  if (track.lastGroupInTrack > static_cast<uint64_t>(pow(2, 62)) - 1) {
     return folly::makeUnexpected(
         std::runtime_error(
             "Last Group In Track field exceeds maximum allowed groups"));
@@ -46,24 +45,23 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
 
   // Check if Last Object is Less than Maximum allowed value (Tuple Field 5)
   uint64_t highestExpectedObjectId =
-      (track->objectsPerGroup +
-       static_cast<int>(track->sendEndOfGroupMarkers)) *
-      track->objectIncrement;
+      (track.objectsPerGroup + static_cast<int>(track.sendEndOfGroupMarkers)) *
+      track.objectIncrement;
 
-  if (track->lastObjectInTrack > highestExpectedObjectId) {
+  if (track.lastObjectInTrack > highestExpectedObjectId) {
     return folly::makeUnexpected(
         std::runtime_error(
             "Last Object In Track field exceeds maximum allowed objects"));
   }
 
   // Checks for Tuple Field 10
-  if (track->groupIncrement == 0) {
+  if (track.groupIncrement == 0) {
     return folly::makeUnexpected(
         std::runtime_error("Group Increment Cannot Be Zero"));
   }
 
   // Checks for Tuple Field 11
-  if (track->objectIncrement == 0) {
+  if (track.objectIncrement == 0) {
     return folly::makeUnexpected(
         std::runtime_error("Object Increment Cannot Be Zero"));
   }
@@ -72,7 +70,7 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
 }
 
 folly::Expected<moxygen::TrackNamespace, std::runtime_error>
-convertMoqTestParamToTrackNamespace(MoQTestParameters* params) {
+convertMoqTestParamToTrackNamespace(const MoQTestParameters& params) {
   auto validateResult = validateMoQTestParameters(params);
   if (!validateResult) {
     return folly::makeUnexpected(validateResult.error());
@@ -80,21 +78,21 @@ convertMoqTestParamToTrackNamespace(MoQTestParameters* params) {
 
   TrackNamespace trackNamespace({
       kField0,
-      std::to_string(static_cast<int>(params->forwardingPreference)),
-      std::to_string(params->startGroup),
-      std::to_string(params->startObject),
-      std::to_string(params->lastGroupInTrack),
-      std::to_string(params->lastObjectInTrack),
-      std::to_string(params->objectsPerGroup),
-      std::to_string(params->sizeOfObjectZero),
-      std::to_string(params->sizeOfObjectGreaterThanZero),
-      std::to_string(params->objectFrequency),
-      std::to_string(params->groupIncrement),
-      std::to_string(params->objectIncrement),
-      std::to_string(static_cast<int>(params->sendEndOfGroupMarkers)),
-      std::to_string((params->testIntegerExtension)),
-      std::to_string((params->testVariableExtension)),
-      std::to_string(params->publisherDeliveryTimeout),
+      std::to_string(static_cast<int>(params.forwardingPreference)),
+      std::to_string(params.startGroup),
+      std::to_string(params.startObject),
+      std::to_string(params.lastGroupInTrack),
+      std::to_string(params.lastObjectInTrack),
+      std::to_string(params.objectsPerGroup),
+      std::to_string(params.sizeOfObjectZero),
+      std::to_string(params.sizeOfObjectGreaterThanZero),
+      std::to_string(params.objectFrequency),
+      std::to_string(params.groupIncrement),
+      std::to_string(params.objectIncrement),
+      std::to_string(static_cast<int>(params.sendEndOfGroupMarkers)),
+      std::to_string((params.testIntegerExtension)),
+      std::to_string((params.testVariableExtension)),
+      std::to_string(params.publisherDeliveryTimeout),
   });
   return trackNamespace;
 }
@@ -143,7 +141,7 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
   }
 
   // Check if the new params is Valid
-  auto res = validateMoQTestParameters(&params);
+  auto res = validateMoQTestParameters(params);
   if (res.hasError()) {
     return folly::makeUnexpected(
         std::runtime_error("MoQTestParameters was created, but is invalid."));

@@ -85,7 +85,7 @@ folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {
 
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
     MoQTestParameters params) {
-  auto trackNamespace = convertMoqTestParamToTrackNamespace(&params);
+  auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
   if (trackNamespace.hasError()) {
     XLOG(ERR)
         << "MoQTest verification result: "
@@ -146,7 +146,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
     MoQTestParameters params) {
-  auto trackNamespace = convertMoqTestParamToTrackNamespace(&params);
+  auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
   if (trackNamespace.hasError()) {
     XLOG(ERR)
         << "MoQTest verification result: "

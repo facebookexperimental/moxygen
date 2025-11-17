@@ -60,50 +60,50 @@ class MoQTrackTest : public testing::Test {
 
 // MoQTestParameters Validation Function Tests
 TEST_F(MoQTrackTest, testValidateTrackNamespaceAsDefault) {
-  EXPECT_NO_THROW(moxygen::validateMoQTestParameters(&params_));
+  EXPECT_NO_THROW(moxygen::validateMoQTestParameters(params_));
 }
 
 TEST_F(MoQTrackTest, testInvalidForwardPreference) {
   params_.forwardingPreference = moxygen::ForwardingPreference(4);
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
 TEST_F(MoQTrackTest, testStartGroupGreaterThanLastGroup) {
   params_.startGroup = 4;
   params_.lastGroupInTrack = 3;
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
 TEST_F(MoQTrackTest, testStartObjectGreaterThanLastObject) {
   params_.startObject = 4;
   params_.lastObjectInTrack = 3;
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
 TEST_F(MoQTrackTest, testLastGroupGreaterThanAllowedMaximum) {
   params_.lastGroupInTrack = static_cast<uint64_t>(pow(2, 62));
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
 TEST_F(MoQTrackTest, testLastObjectGreaterThanAllowedMaximum) {
   params_.lastObjectInTrack = 10000;
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
 TEST_F(MoQTrackTest, testGroupIncrementAsZero) {
   params_.groupIncrement = 0;
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
 TEST_F(MoQTrackTest, testObjectIncrementAsZero) {
   params_.objectIncrement = 0;
-  auto validateResult = moxygen::validateMoQTestParameters(&params_);
+  auto validateResult = moxygen::validateMoQTestParameters(params_);
   EXPECT_TRUE(validateResult.hasError());
 }
 
@@ -163,7 +163,7 @@ TEST_F(MoQTrackTest, testConversionWithTrackNamespaceHavingNonDigitValues) {
 // Test Conversion of MoQTestParameters to TrackNamespace
 TEST_F(MoQTrackTest, testConvertMoQTestParametersToTrackNamespace) {
   CreateDefaultMoQTestParameters();
-  auto track = moxygen::convertMoqTestParamToTrackNamespace(&params_);
+  auto track = moxygen::convertMoqTestParamToTrackNamespace(params_);
   ASSERT_FALSE(track.hasError());
   EXPECT_EQ(track.value().trackNamespace.size(), 16);
   EXPECT_EQ(track.value().trackNamespace[0], "moq-test-00");
@@ -189,6 +189,6 @@ TEST_F(
     testConvertMoQTestParametersToTrackNamespaceWithInvalidParams) {
   CreateDefaultMoQTestParameters();
   params_.lastObjectInTrack = 2;
-  auto track = moxygen::convertMoqTestParamToTrackNamespace(&params_);
+  auto track = moxygen::convertMoqTestParamToTrackNamespace(params_);
   EXPECT_TRUE(track.hasError());
 }
