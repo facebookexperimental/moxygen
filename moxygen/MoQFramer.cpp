@@ -413,6 +413,9 @@ folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     case folly::to_underlying(LocationType::LargestObject):
     case folly::to_underlying(LocationType::AbsoluteStart):
     case folly::to_underlying(LocationType::AbsoluteRange):
+    // Note: LargestGroup in SubscriptionFilter is non-spec at the
+    // time of writing this (draft-15), but will be soon
+    case folly::to_underlying(LocationType::LargestGroup):
       break;
     default:
       XLOG(ERR) << "Invalid filter type in parseSubscriptionFilter, type="

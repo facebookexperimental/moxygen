@@ -1525,6 +1525,38 @@ TEST_P(MoQFramerTest, SubscribeRequestEncodeDecode) {
   EXPECT_EQ(parseRes->params.size(), req.params.size());
 }
 
+TEST_P(MoQFramerTest, ParseSubscriptionFilterLargestGroup) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Build a SubscribeRequest with LargestGroup location type
+  FullTrackName ftn{TrackNamespace({"ns"}), "track"};
+  auto req = SubscribeRequest::make(
+      ftn,
+      /*priority*/ kDefaultPriority,
+      /*groupOrder*/ GroupOrder::Default,
+      /*forward*/ true,
+      /*locType*/ LocationType::LargestGroup,
+      /*start*/ folly::none,
+      /*endGroup*/ 0,
+      /*params*/ {});
+
+  auto writeRes = writer_.writeSubscribeRequest(writeBuf, req);
+  EXPECT_TRUE(writeRes.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Verify frame type and parse
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto parseRes = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseRes.hasValue());
+
+  // Check that parsed SubscribeRequest matches the original
+  EXPECT_EQ(parseRes->locType, LocationType::LargestGroup);
+  EXPECT_FALSE(parseRes->start.has_value());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
