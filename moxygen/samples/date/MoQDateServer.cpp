@@ -462,14 +462,22 @@ class MoQDateServer : public MoQServer,
       std::shared_ptr<SubgroupConsumer> subConsumer = nullptr) {
     auto cancelToken = co_await folly::coro::co_current_cancellation_token;
     std::shared_ptr<SubgroupConsumer> subgroupPublisher;
+    uint64_t currentMinute = now().first;
     if (subConsumer) {
       subgroupPublisher = subConsumer;
     }
     while (!cancelToken.isCancellationRequested()) {
+      auto [minute, second] = now();
       if (forwarder_.empty()) {
         forwarder_.setLargest(nowLocation());
+        // Reset subgroupPublisher when crossing minute boundary
+        // Otherwise we try to use the same subgroup publisher and publish does
+        // not happen
+        if (minute != currentMinute) {
+          subgroupPublisher.reset();
+          currentMinute = minute;
+        }
       } else {
-        auto [minute, second] = now();
         switch (mode_) {
           case Mode::STREAM_PER_GROUP:
             subgroupPublisher = publishDate(subgroupPublisher, minute, second);
