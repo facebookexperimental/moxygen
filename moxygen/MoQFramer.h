@@ -1319,6 +1319,12 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
     folly::io::Cursor& cursor,
     size_t& length);
 
+template <typename T>
+struct ParseResult {
+  T value;
+  size_t bytesConsumed;
+};
+
 class MoQFrameParser {
  public:
   folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
@@ -1335,16 +1341,19 @@ class MoQFrameParser {
       DatagramType datagramType,
       size_t& length) const noexcept;
 
-  folly::Expected<RequestID, ErrorCode> parseFetchHeader(
-      folly::io::Cursor& cursor) const noexcept;
+  folly::Expected<ParseResult<RequestID>, ErrorCode> parseFetchHeader(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
 
   struct SubgroupHeaderResult {
     TrackAlias trackAlias;
     ObjectHeader objectHeader;
   };
 
-  folly::Expected<SubgroupHeaderResult, ErrorCode> parseSubgroupHeader(
+  folly::Expected<ParseResult<SubgroupHeaderResult>, ErrorCode>
+  parseSubgroupHeader(
       folly::io::Cursor& cursor,
+      size_t length,
       const SubgroupOptions& options) const noexcept;
 
   // Parses the stream header and if it's a subgroup type,
@@ -1354,12 +1363,15 @@ class MoQFrameParser {
   parseSubgroupTypeAndAlias(folly::io::Cursor& cursor, size_t length)
       const noexcept;
 
-  folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeader(
+  folly::Expected<ParseResult<ObjectHeader>, ErrorCode> parseFetchObjectHeader(
       folly::io::Cursor& cursor,
+      size_t length,
       const ObjectHeader& headerTemplate) const noexcept;
 
-  folly::Expected<ObjectHeader, ErrorCode> parseSubgroupObjectHeader(
+  folly::Expected<ParseResult<ObjectHeader>, ErrorCode>
+  parseSubgroupObjectHeader(
       folly::io::Cursor& cursor,
+      size_t length,
       const ObjectHeader& headerTemplate,
       const SubgroupOptions& options) const noexcept;
 
@@ -1492,7 +1504,7 @@ class MoQFrameParser {
  private:
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
-      size_t length,
+      size_t& length,
       ObjectHeader& objectHeader) const noexcept;
 
   folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(

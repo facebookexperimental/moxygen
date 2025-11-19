@@ -207,64 +207,69 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
 
     auto streamType = parseStreamType(cursor);
     SubgroupOptions options = getSubgroupOptions(GetParam(), streamType);
-    auto res = parser_.parseSubgroupHeader(cursor, options);
+    auto res =
+        parser_.parseSubgroupHeader(cursor, cursor.totalLength(), options);
     testUnderflowResult(res);
-    EXPECT_EQ(res->objectHeader.group, 2);
+    EXPECT_EQ(res->value.objectHeader.group, 2);
 
-    auto r15 =
-        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
+    auto r15 = parser_.parseSubgroupObjectHeader(
+        cursor, cursor.totalLength(), res->value.objectHeader, options);
     testUnderflowResult(r15);
-    EXPECT_EQ(r15.value().id, 4);
-    skip(cursor, *r15.value().length);
+    EXPECT_EQ(r15->value.id, 4);
+    skip(cursor, *r15->value.length);
 
-    auto r15a =
-        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
+    auto r15a = parser_.parseSubgroupObjectHeader(
+        cursor, cursor.totalLength(), res->value.objectHeader, options);
     testUnderflowResult(r15a);
-    EXPECT_EQ(r15a.value().id, 5);
+    EXPECT_EQ(r15a->value.id, 5);
     EXPECT_EQ(
-        r15a.value().extensions, Extensions(test::getTestExtensions(), {}));
-    skip(cursor, *r15a.value().length);
+        r15a->value.extensions, Extensions(test::getTestExtensions(), {}));
+    skip(cursor, *r15a->value.length);
 
-    auto r20 =
-        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
+    auto r20 = parser_.parseSubgroupObjectHeader(
+        cursor, cursor.totalLength(), res->value.objectHeader, options);
     testUnderflowResult(r20);
-    EXPECT_EQ(r20.value().status, ObjectStatus::OBJECT_NOT_EXIST);
+    EXPECT_EQ(r20->value.status, ObjectStatus::OBJECT_NOT_EXIST);
 
-    auto r20a =
-        parser_.parseSubgroupObjectHeader(cursor, res->objectHeader, options);
+    auto r20a = parser_.parseSubgroupObjectHeader(
+        cursor, cursor.totalLength(), res->value.objectHeader, options);
     testUnderflowResult(r20a);
     EXPECT_EQ(
-        r20a.value().extensions, Extensions(test::getTestExtensions(), {}));
-    EXPECT_EQ(r20a.value().status, ObjectStatus::END_OF_TRACK);
+        r20a->value.extensions, Extensions(test::getTestExtensions(), {}));
+    EXPECT_EQ(r20a->value.status, ObjectStatus::END_OF_TRACK);
 
     skip(cursor, 1);
-    auto r21 = parser_.parseFetchHeader(cursor);
+    auto r21 = parser_.parseFetchHeader(cursor, cursor.totalLength());
     testUnderflowResult(r21);
-    EXPECT_EQ(r21.value(), RequestID(1));
+    EXPECT_EQ(r21->value, RequestID(1));
 
     ObjectHeader obj;
     // Fetch context uses placeholder TrackAlias(0)
-    auto r22 = parser_.parseFetchObjectHeader(cursor, obj);
+    auto r22 =
+        parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r22);
-    EXPECT_EQ(r22.value().id, 4);
-    skip(cursor, *r22.value().length);
+    EXPECT_EQ(r22->value.id, 4);
+    skip(cursor, *r22->value.length);
 
-    auto r22a = parser_.parseFetchObjectHeader(cursor, obj);
+    auto r22a =
+        parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r22a);
-    EXPECT_EQ(r22a.value().id, 5);
+    EXPECT_EQ(r22a->value.id, 5);
     EXPECT_EQ(
-        r22a.value().extensions, Extensions(test::getTestExtensions(), {}));
-    skip(cursor, *r22a.value().length);
+        r22a->value.extensions, Extensions(test::getTestExtensions(), {}));
+    skip(cursor, *r22a->value.length);
 
-    auto r23 = parser_.parseFetchObjectHeader(cursor, obj);
+    auto r23 =
+        parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23);
-    EXPECT_EQ(r23.value().status, ObjectStatus::END_OF_GROUP);
+    EXPECT_EQ(r23->value.status, ObjectStatus::END_OF_GROUP);
 
-    auto r23a = parser_.parseFetchObjectHeader(cursor, obj);
+    auto r23a =
+        parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23a);
     EXPECT_EQ(
-        r23a.value().extensions, Extensions(test::getTestExtensions(), {}));
-    EXPECT_EQ(r23a.value().status, ObjectStatus::END_OF_GROUP);
+        r23a->value.extensions, Extensions(test::getTestExtensions(), {}));
+    EXPECT_EQ(r23a->value.status, ObjectStatus::END_OF_GROUP);
   }
 
  protected:
@@ -689,29 +694,36 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   folly::io::Cursor cursor(serialized.get());
   EXPECT_EQ(parseStreamType(cursor), streamType);
   auto sgOptions = getSubgroupOptions(GetParam(), streamType);
-  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor, sgOptions);
+  auto parseStreamHeaderResult =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult = parser_.parseSubgroupObjectHeader(
-      cursor, parseStreamHeaderResult->objectHeader, sgOptions);
+      cursor,
+      cursor.totalLength(),
+      parseStreamHeaderResult->value.objectHeader,
+      sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
-  EXPECT_EQ(parseResult->group, 33);
-  EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->priority, 55);
-  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
-  EXPECT_EQ(*parseResult->length, 4);
-  cursor.skip(*parseResult->length);
+  EXPECT_EQ(parseResult->value.group, 33);
+  EXPECT_EQ(parseResult->value.id, 44);
+  EXPECT_EQ(parseResult->value.priority, 55);
+  EXPECT_EQ(parseResult->value.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*parseResult->value.length, 4);
+  cursor.skip(*parseResult->value.length);
 
   parseResult = parser_.parseSubgroupObjectHeader(
-      cursor, parseStreamHeaderResult->objectHeader, sgOptions);
+      cursor,
+      cursor.totalLength(),
+      parseStreamHeaderResult->value.objectHeader,
+      sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
-  EXPECT_EQ(parseResult->group, 33);
-  EXPECT_EQ(parseResult->id, 45);
-  EXPECT_EQ(parseResult->priority, 55);
-  EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
+  EXPECT_EQ(parseResult->value.group, 33);
+  EXPECT_EQ(parseResult->value.id, 45);
+  EXPECT_EQ(parseResult->value.priority, 55);
+  EXPECT_EQ(parseResult->value.status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
 TEST_P(MoQFramerTest, ParseFetchHeader) {
@@ -745,24 +757,27 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
   folly::io::Cursor cursor(serialized.get());
 
   EXPECT_EQ(parseStreamType(cursor), StreamType::FETCH_HEADER);
-  auto parseStreamHeaderResult = parser_.parseFetchHeader(cursor);
+  auto parseStreamHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   ObjectHeader headerTemplate;
-  auto parseResult = parser_.parseFetchObjectHeader(cursor, headerTemplate);
+  auto parseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->group, 33);
-  EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->priority, 55);
-  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
-  EXPECT_EQ(*parseResult->length, 4);
-  cursor.skip(*parseResult->length);
+  EXPECT_EQ(parseResult->value.group, 33);
+  EXPECT_EQ(parseResult->value.id, 44);
+  EXPECT_EQ(parseResult->value.priority, 55);
+  EXPECT_EQ(parseResult->value.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*parseResult->value.length, 4);
+  cursor.skip(*parseResult->value.length);
 
-  parseResult = parser_.parseFetchObjectHeader(cursor, headerTemplate);
+  parseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->group, 33);
-  EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->priority, 55);
-  EXPECT_EQ(parseResult->status, ObjectStatus::OBJECT_NOT_EXIST);
+  EXPECT_EQ(parseResult->value.group, 33);
+  EXPECT_EQ(parseResult->value.id, 44);
+  EXPECT_EQ(parseResult->value.priority, 55);
+  EXPECT_EQ(parseResult->value.status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
 TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
@@ -999,19 +1014,23 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
       << GetParam() << " " << folly::to_underlying(parsedST) << " "
       << folly::to_underlying(streamType);
   auto sgOptions = getSubgroupOptions(GetParam(), streamType);
-  auto parseStreamHeaderResult = parser_.parseSubgroupHeader(cursor, sgOptions);
+  auto parseStreamHeaderResult =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
   EXPECT_TRUE(parseStreamHeaderResult.hasValue());
   auto parseResult = parser_.parseSubgroupObjectHeader(
-      cursor, parseStreamHeaderResult->objectHeader, sgOptions);
+      cursor,
+      cursor.totalLength(),
+      parseStreamHeaderResult->value.objectHeader,
+      sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
   // trackAlias is no longer part of ObjectHeader, validated by function call
   // context
-  EXPECT_EQ(parseResult->group, 33);
-  EXPECT_EQ(parseResult->id, 44);
-  EXPECT_EQ(parseResult->priority, 55);
-  EXPECT_EQ(parseResult->status, ObjectStatus::NORMAL);
-  EXPECT_EQ(*parseResult->length, 4);
-  cursor.skip(*parseResult->length);
+  EXPECT_EQ(parseResult->value.group, 33);
+  EXPECT_EQ(parseResult->value.id, 44);
+  EXPECT_EQ(parseResult->value.priority, 55);
+  EXPECT_EQ(parseResult->value.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*parseResult->value.length, 4);
+  cursor.skip(*parseResult->value.length);
 }
 
 TEST_P(MoQFramerTest, ParseTrackStatus) {
@@ -1461,16 +1480,17 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
       GetParam(), SubgroupIDFormat::Present, true, /*endOfGroup=*/false);
   EXPECT_EQ(parseStreamType(cursor), streamType);
   auto sgOptions = getSubgroupOptions(GetParam(), streamType);
-  auto hdrRes = parser_.parseSubgroupHeader(cursor, sgOptions);
+  auto hdrRes =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
   EXPECT_TRUE(hdrRes.hasValue());
   auto objRes = parser_.parseSubgroupObjectHeader(
-      cursor, hdrRes->objectHeader, sgOptions);
+      cursor, cursor.totalLength(), hdrRes->value.objectHeader, sgOptions);
   EXPECT_TRUE(objRes.hasValue());
-  ASSERT_EQ(objRes->extensions.size(), 1);
-  EXPECT_TRUE(objRes->extensions.getMutableExtensions()[0].isOddType());
-  EXPECT_EQ(objRes->extensions.getMutableExtensions()[0].type, 13);
+  ASSERT_EQ(objRes->value.extensions.size(), 1);
+  EXPECT_TRUE(objRes->value.extensions.getMutableExtensions()[0].isOddType());
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[0].type, 13);
   EXPECT_EQ(
-      objRes->extensions.getMutableExtensions()[0]
+      objRes->value.extensions.getMutableExtensions()[0]
           .arrayValue->computeChainDataLength(),
       64);
 }
@@ -2471,12 +2491,13 @@ void testSubgroupPriorityRoundTrip(
   auto streamType = StreamType(parsedStreamType->first);
   EXPECT_EQ(streamType, expectedType);
   auto sgOptions = getSubgroupOptions(version, streamType);
-  auto parseResult = parser.parseSubgroupHeader(cursor, sgOptions);
+  auto parseResult =
+      parser.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->trackAlias, TrackAlias(25));
-  EXPECT_EQ(parseResult->objectHeader.group, 100);
-  EXPECT_EQ(parseResult->objectHeader.subgroup, 50);
-  EXPECT_EQ(parseResult->objectHeader.priority, expectedPriority);
+  EXPECT_EQ(parseResult->value.trackAlias, TrackAlias(25));
+  EXPECT_EQ(parseResult->value.objectHeader.group, 100);
+  EXPECT_EQ(parseResult->value.objectHeader.subgroup, 50);
+  EXPECT_EQ(parseResult->value.objectHeader.priority, expectedPriority);
 }
 
 // Test round-trip write/read with folly::none priority in subgroup (v15)

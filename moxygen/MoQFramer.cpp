@@ -710,14 +710,15 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
   return serverSetup;
 }
 
-folly::Expected<RequestID, ErrorCode> MoQFrameParser::parseFetchHeader(
-    folly::io::Cursor& cursor) const noexcept {
-  auto requestID = quic::follyutils::decodeQuicInteger(cursor);
+folly::Expected<ParseResult<RequestID>, ErrorCode>
+MoQFrameParser::parseFetchHeader(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
+  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!requestID) {
     XLOG(DBG4) << "parseFetchHeader: UNDERFLOW on requestID";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  return RequestID(requestID->first);
+  return ParseResult<RequestID>{RequestID(requestID->first), requestID->second};
 }
 
 bool datagramTypeHasExtensions(uint64_t version, DatagramType datagramType) {
@@ -852,13 +853,14 @@ MoQFrameParser::parseSubgroupTypeAndAlias(
   return TrackAlias(trackAlias->first);
 }
 
-folly::Expected<MoQFrameParser::SubgroupHeaderResult, ErrorCode>
+folly::Expected<ParseResult<MoQFrameParser::SubgroupHeaderResult>, ErrorCode>
 MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
+    size_t length,
     const SubgroupOptions& options) const noexcept {
   CHECK(version_.hasValue())
       << "The version must be set before parsing subgroup header";
-  auto length = cursor.totalLength();
+  auto startLength = length;
   SubgroupHeaderResult result;
   ObjectHeader& objectHeader = result.objectHeader;
   objectHeader.group = std::numeric_limits<uint64_t>::max(); // unset
@@ -916,12 +918,12 @@ MoQFrameParser::parseSubgroupHeader(
     }
     objectHeader.subgroup = objectHeader.id = id->first;
   }
-  return result;
+  return ParseResult<SubgroupHeaderResult>{result, startLength - length};
 }
 folly::Expected<folly::Unit, ErrorCode>
 MoQFrameParser::parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
-    size_t length,
+    size_t& length,
     ObjectHeader& objectHeader) const noexcept {
   auto payloadLength = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!payloadLength) {
@@ -951,11 +953,13 @@ MoQFrameParser::parseObjectStatusAndLength(
   return folly::unit;
 }
 
-folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
+folly::Expected<ParseResult<ObjectHeader>, ErrorCode>
+MoQFrameParser::parseFetchObjectHeader(
     folly::io::Cursor& cursor,
+    size_t length,
     const ObjectHeader& headerTemplate) const noexcept {
   // TODO get rid of this
-  auto length = cursor.totalLength();
+  auto startLength = length;
   ObjectHeader objectHeader = headerTemplate;
 
   auto group = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -1003,16 +1007,17 @@ folly::Expected<ObjectHeader, ErrorCode> MoQFrameParser::parseFetchObjectHeader(
         << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
   }
-  return objectHeader;
+  return ParseResult<ObjectHeader>{objectHeader, startLength - length};
 }
 
-folly::Expected<ObjectHeader, ErrorCode>
+folly::Expected<ParseResult<ObjectHeader>, ErrorCode>
 MoQFrameParser::parseSubgroupObjectHeader(
     folly::io::Cursor& cursor,
+    size_t length,
     const ObjectHeader& headerTemplate,
     const SubgroupOptions& options) const noexcept {
   // TODO get rid of this
-  auto length = cursor.totalLength();
+  auto startLength = length;
   ObjectHeader objectHeader = headerTemplate;
   auto id = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!id) {
@@ -1050,7 +1055,7 @@ MoQFrameParser::parseSubgroupObjectHeader(
         << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
   }
-  return objectHeader;
+  return ParseResult<ObjectHeader>{objectHeader, startLength - length};
 }
 
 folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
