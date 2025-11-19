@@ -45,8 +45,7 @@ class MoQRelayTest : public ::testing::Test {
 
   // Helper to remove a session from the relay and clean up mock state
   void removeSession(std::shared_ptr<MoQSession> sess) {
-    cleanupMockSession(sess);
-    relay_->removeSession(std::move(sess));
+    cleanupMockSession(std::move(sess));
   }
 
   // Helper to set up RequestContext for a session (simulates incoming request)

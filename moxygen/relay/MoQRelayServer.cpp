@@ -48,10 +48,6 @@ class MoQRelayServer : public MoQServer {
     clientSession->setSubscribeHandler(relay_);
   }
 
-  void terminateClientSession(std::shared_ptr<MoQSession> session) override {
-    relay_->removeSession(session);
-  }
-
  protected:
   std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,

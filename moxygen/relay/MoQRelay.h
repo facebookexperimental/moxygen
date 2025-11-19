@@ -49,18 +49,19 @@ class MoQRelay : public Publisher,
       PublishRequest pubReq,
       std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
 
-  void removeSession(const std::shared_ptr<MoQSession>& session);
-
   void goaway(Goaway goaway) override {
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
-    removeSession(MoQSession::getRequestSession());
   }
 
  private:
   class AnnouncesSubscription;
+  class TerminationFilter;
+
   void unsubscribeAnnounces(
       const TrackNamespace& prefix,
       std::shared_ptr<MoQSession> session);
+
+  void onPublishDone(const FullTrackName& ftn);
 
   struct AnnounceNode : public Subscriber::AnnounceHandle {
     explicit AnnounceNode(MoQRelay& relay) : relay_(relay) {}
@@ -133,10 +134,7 @@ class MoQRelay : public Publisher,
 
   std::shared_ptr<TrackConsumer> getSubscribeWriteback(
       const FullTrackName& ftn,
-      std::shared_ptr<TrackConsumer> consumer) {
-    return cache_ ? cache_->getSubscribeWriteback(ftn, std::move(consumer))
-                  : consumer;
-  }
+      std::shared_ptr<TrackConsumer> consumer);
   std::unique_ptr<MoQCache> cache_;
 };
 

@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/relay/MoQRelay.h"
+#include "moxygen/MoQFilters.h"
 
 namespace {
 constexpr uint8_t kDefaultUpstreamPriority = 128;
@@ -136,6 +137,35 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   // TODO: prune Announce tree
 }
 
+void MoQRelay::onPublishDone(const FullTrackName& ftn) {
+  XLOG(DBG1) << __func__ << " ftn=" << ftn;
+
+  auto it = subscriptions_.find(ftn);
+  if (it != subscriptions_.end()) {
+    if (it->second.isPublish) {
+      // Remove from publishes map
+      auto nodePtr = findNamespaceNode(ftn.trackNamespace);
+      if (nodePtr) {
+        nodePtr->publishes.erase(ftn.trackName);
+      }
+    }
+
+    // Clear the handle and upstream - this signals publisher is done
+    // Clearing upstream is important to break circular reference:
+    // session holds FilterConsumer, relay holds session in upstream
+    it->second.handle.reset();
+    it->second.upstream.reset();
+
+    // If forwarder has no subscribers, clean up immediately
+    // Otherwise onEmpty will be called when last subscriber leaves
+    if (it->second.forwarder->empty()) {
+      XLOG(DBG1) << "Publisher terminated with no subscribers, cleaning up "
+                 << ftn;
+      subscriptions_.erase(it);
+    }
+  }
+}
+
 Subscriber::PublishResult MoQRelay::publish(
     PublishRequest pub,
     std::shared_ptr<Publisher::SubscriptionHandle> handle) {
@@ -217,8 +247,14 @@ Subscriber::PublishResult MoQRelay::publish(
   }
   forwarder->setCallback(shared_from_this());
 
+  // Wrap forwarder in filter to intercept subscribeDone
+  auto filterImpl = std::make_shared<TerminationFilter>(
+      shared_from_this(), pub.fullTrackName, forwarder);
+  std::shared_ptr<TrackConsumer> filter =
+      std::static_pointer_cast<TrackConsumer>(filterImpl);
+
   return PublishConsumerAndReplyTask{
-      forwarder,
+      filter, // Return filter, not forwarder directly
       folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(PublishOk{
           pub.requestID,
           /*forward=*/(nSubscribers > 0),
@@ -307,6 +343,45 @@ class MoQRelay::AnnouncesSubscription
   std::shared_ptr<MoQSession> session_;
   TrackNamespace trackNamespacePrefix_;
 };
+
+// Filter TrackConsumer that intercepts subscribeDone to clean up relay state
+class MoQRelay::TerminationFilter : public TrackConsumerFilter {
+ public:
+  TerminationFilter(
+      std::shared_ptr<MoQRelay> relay,
+      FullTrackName ftn,
+      std::shared_ptr<TrackConsumer> downstream)
+      : TrackConsumerFilter(std::move(downstream)),
+        relay_(std::move(relay)),
+        ftn_(std::move(ftn)) {}
+
+  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
+      SubscribeDone subDone) override {
+    // Notify relay that publisher is done - this will:
+    // 1. Remove from nodePtr->publishes
+    // 2. Clear subscription.handle
+    if (relay_) {
+      relay_->onPublishDone(ftn_);
+    }
+    // Change the downstream code to something like "upstream ended"?
+    return TrackConsumerFilter::subscribeDone(std::move(subDone));
+  }
+
+ private:
+  std::shared_ptr<MoQRelay> relay_;
+  FullTrackName ftn_;
+};
+
+std::shared_ptr<TrackConsumer> MoQRelay::getSubscribeWriteback(
+    const FullTrackName& ftn,
+    std::shared_ptr<TrackConsumer> consumer) {
+  auto baseConsumer = cache_
+      ? cache_->getSubscribeWriteback(ftn, std::move(consumer))
+      : std::move(consumer);
+  auto filterConsumer = std::make_shared<TerminationFilter>(
+      shared_from_this(), ftn, std::move(baseConsumer));
+  return std::static_pointer_cast<TrackConsumer>(filterConsumer);
+}
 
 folly::coro::Task<Publisher::SubscribeAnnouncesResult>
 MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
@@ -643,25 +718,29 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
     return;
   }
   auto& subscription = subscriptionIt->second;
-  XLOG(INFO) << "Removed last subscriber for " << subscriptionIt->first;
-  if (subscription.handle) {
-    if (subscription.isPublish) {
-      // if it's publish, don't unsubscribe, just subscribeUpdate
-      // forward=false
-      XLOG(DBG1) << "Updating upstream subscription forward=false";
-      subscription.handle->subscribeUpdate(
-          {RequestID(0),
-           subscription.handle->subscribeOk().requestID,
-           kLocationMin,
-           kLocationMax.group,
-           kDefaultPriority,
-           /*forward=*/false,
-           {}});
-    } else {
-      subscription.handle->unsubscribe();
-    }
+
+  if (!subscription.handle) {
+    // Handle is null - publisher terminated via FilterConsumer
+    XLOG(INFO) << "Publisher terminated for " << subscriptionIt->first;
+    subscriptions_.erase(subscriptionIt);
+    return;
   }
-  if (!subscription.isPublish) {
+
+  // Handle exists - just last subscriber left
+  XLOG(INFO) << "Last subscriber removed for " << subscriptionIt->first;
+  if (subscription.isPublish) {
+    // if it's publish, don't unsubscribe, just subscribeUpdate forward=false
+    XLOG(DBG1) << "Updating upstream subscription forward=false";
+    subscription.handle->subscribeUpdate(
+        {RequestID(0),
+         subscription.handle->subscribeOk().requestID,
+         kLocationMin,
+         kLocationMax.group,
+         kDefaultPriority,
+         /*forward=*/false,
+         {}});
+  } else {
+    subscription.handle->unsubscribe();
     XLOG(DBG4) << "Erasing subscription to " << subscriptionIt->first;
     subscriptions_.erase(subscriptionIt);
   }
@@ -688,79 +767,6 @@ void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
        kDefaultPriority,
        /*forward=*/forwarder->numForwardingSubscribers() > 0,
        {}});
-}
-
-void MoQRelay::removeSession(const std::shared_ptr<MoQSession>& session) {
-  // TODO: remove linear search by having each session track it's active
-  // announcements, subscribes and subscribe namespaces
-  std::vector<std::shared_ptr<MoQSession>> notifySessions;
-  std::deque<std::tuple<TrackNamespace, AnnounceNode*>> nodes{
-      {TrackNamespace(), &announceRoot_}};
-  TrackNamespace prefix;
-  while (!nodes.empty()) {
-    auto [prefix, nodePtr] = std::move(*nodes.begin());
-    nodes.pop_front();
-    // Implicit UnsubscribeAnnounces
-    nodePtr->sessions.erase(session);
-
-    auto it = nodePtr->announcements.find(session);
-    if (it != nodePtr->announcements.end()) {
-      // we've announced this node to the removing session.
-      // Do we really need to unannounce?
-      it->second->unannounce();
-      nodePtr->announcements.erase(it);
-    }
-
-    if (nodePtr->sourceSession == session) {
-      // This session is unannouncing
-      nodePtr->sourceSession = nullptr;
-      nodePtr->announceCallback.reset();
-      for (auto& announcement : nodePtr->announcements) {
-        auto exec = announcement.first->getExecutor();
-        exec->add([announceHandle = announcement.second] {
-          announceHandle->unannounce();
-        });
-      }
-      nodePtr->announcements.clear();
-    }
-    for (auto pubIt = nodePtr->publishes.begin();
-         pubIt != nodePtr->publishes.end();) {
-      if (pubIt->second == session) {
-        pubIt = nodePtr->publishes.erase(pubIt);
-      } else {
-        ++pubIt;
-      }
-    }
-    for (auto& nextNode : nodePtr->children) {
-      TrackNamespace nodePrefix(prefix);
-      nodePrefix.append(nextNode.first);
-      nodes.emplace_back(
-          std::forward_as_tuple(std::move(nodePrefix), nextNode.second.get()));
-    }
-  }
-
-  // TODO: we should keep a map from this session to all its subscriptions
-  // and remove this linear search also
-  for (auto subscriptionIt = subscriptions_.begin();
-       subscriptionIt != subscriptions_.end();) {
-    auto& subscription = subscriptionIt->second;
-    auto curIt = subscriptionIt++;
-    bool isPublish = subscription.isPublish;
-    // these actions may erase the current subscription
-    if (subscription.upstream.get() == session.get()) {
-      subscription.forwarder->subscribeDone(
-          {RequestID(0),
-           SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
-           0, // filled in by session
-           "upstream disconnect"});
-      if (isPublish) {
-        XLOG(DBG4) << "Erasing subscription to " << curIt->first;
-        subscriptions_.erase(curIt);
-      }
-    } else {
-      subscription.forwarder->removeSession(session);
-    }
-  }
 }
 
 } // namespace moxygen
