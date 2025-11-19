@@ -49,6 +49,13 @@ class MoQClientBase : public proxygen::WebTransportHandler {
         sessionFactory_(std::move(sessionFactory)),
         verifier_(std::move(verifier)) {}
 
+  ~MoQClientBase() override {
+    if (moqSession_) {
+      moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+      moqSession_.reset();
+    }
+  }
+
   std::shared_ptr<MoQExecutor> getEventBase() {
     return exec_;
   }
