@@ -315,10 +315,13 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::subscribeDone(
     SubscribeDone subDone) {
   XLOG(DBG1) << __func__ << " subDone reason=" << subDone.reasonPhrase;
   forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    removeSubscriberOnError(
-        *sub,
-        MoQPublishError(MoQPublishError::API_ERROR, subDone.reasonPhrase),
-        "subscribeDone");
+    removeSession(
+        sub->session,
+        SubscribeDone{
+            sub->requestID,
+            subDone.statusCode,
+            0, // filled in by session
+            subDone.reasonPhrase});
   });
   return folly::unit;
 }
