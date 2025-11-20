@@ -149,6 +149,10 @@ void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) {
   }
 }
 
+void MoQClientBase::onSessionDrain() {
+  XLOG(DBG1) << "Received DRAIN_SESSION capsule";
+}
+
 void MoQClientBase::onNewBidiStream(
     proxygen::WebTransport::BidiStreamHandle bidi) {
   XLOG(DBG1) << __func__;

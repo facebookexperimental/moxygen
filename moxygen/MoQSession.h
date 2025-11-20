@@ -326,6 +326,9 @@ class MoQSession : public Subscriber,
     // The peer closed us, but we can close with NO_ERROR
     close(SessionCloseErrorCode::NO_ERROR);
   }
+  void onSessionDrain() override {
+    XLOG(DBG1) << __func__ << " sess=" << this;
+  }
 
   class TrackReceiveStateBase;
   class SubscribeTrackReceiveState;
