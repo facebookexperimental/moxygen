@@ -434,7 +434,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
       if (forwarder->empty()) {
         subscriptionIt->second.handle->subscribeUpdate(
             {RequestID(0),
-             subscriptionIt->second.handle->subscribeOk().requestID,
+             subscriptionIt->second.requestID,
              kLocationMin,
              kLocationMax.group,
              kDefaultPriority,
@@ -628,7 +628,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
         subscriptionIt->second.forwarder->numForwardingSubscribers() > 0) {
       subscriptionIt->second.handle->subscribeUpdate(
           {RequestID(0),
-           subscriptionIt->second.handle->subscribeOk().requestID,
+           subscriptionIt->second.requestID,
            kLocationMin,
            kLocationMax.group,
            kDefaultPriority,
@@ -733,7 +733,7 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
     XLOG(DBG1) << "Updating upstream subscription forward=false";
     subscription.handle->subscribeUpdate(
         {RequestID(0),
-         subscription.handle->subscribeOk().requestID,
+         subscription.requestID,
          kLocationMin,
          kLocationMax.group,
          kDefaultPriority,
@@ -761,7 +761,7 @@ void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
 
   subscription.handle->subscribeUpdate(
       {RequestID(0),
-       subscription.handle->subscribeOk().requestID,
+       subscription.requestID,
        kLocationMin,
        kLocationMax.group,
        kDefaultPriority,
