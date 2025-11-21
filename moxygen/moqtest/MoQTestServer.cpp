@@ -34,7 +34,13 @@ void MoQTestFetchHandle::fetchCancel() {
 MoQTestServer::MoQTestServer(const std::string& cert, const std::string& key)
     : MoQServer(
           quic::samples::createFizzServerContextWithInsecureDefault(
-              {"h3", "moq-00"},
+              []() {
+                std::vector<std::string> alpns = {"h3"};
+                auto moqt = getDefaultMoqtProtocols(
+                    true); // Always experimental for tests
+                alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+                return alpns;
+              }(),
               fizz::server::ClientAuthMode::None,
               cert,
               key),

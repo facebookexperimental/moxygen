@@ -21,6 +21,10 @@ DEFINE_bool(
     insecure,
     false,
     "Use insecure verifier (skip certificate validation)");
+DEFINE_bool(
+    use_legacy_setup,
+    false,
+    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
 
 namespace {
 using namespace moxygen;
@@ -35,9 +39,12 @@ class MoQRelayServer : public MoQServer {
   MoQRelayServer()
       : MoQServer(
             quic::samples::createFizzServerContextWithInsecureDefault(
-                {"h3",
-                 std::string(kAlpnMoqtDraft15),
-                 std::string(kAlpnMoqtLegacy)},
+                []() {
+                  std::vector<std::string> alpns = {"h3"};
+                  auto moqt = getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+                  alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+                  return alpns;
+                }(),
                 fizz::server::ClientAuthMode::None,
                 "" /* cert */,
                 "" /* key */),

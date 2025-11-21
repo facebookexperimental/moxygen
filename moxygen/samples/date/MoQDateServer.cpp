@@ -34,7 +34,7 @@ DEFINE_string(ns, "moq-date", "Namespace for date track");
 DEFINE_bool(
     use_legacy_setup,
     false,
-    "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
+    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
 DEFINE_int32(delivery_timeout, 0, "the delivery timeout in ms for server");
 DEFINE_bool(
     insecure,
@@ -81,9 +81,12 @@ class MoQDateServer : public MoQServer,
   explicit MoQDateServer(Mode mode)
       : MoQServer(
             quic::samples::createFizzServerContextWithInsecureDefault(
-                {"h3",
-                 std::string(kAlpnMoqtDraft15),
-                 std::string(kAlpnMoqtLegacy)},
+                []() {
+                  std::vector<std::string> alpns = {"h3"};
+                  auto moqt = getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+                  alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+                  return alpns;
+                }(),
                 fizz::server::ClientAuthMode::None,
                 "" /* cert */,
                 "" /* key */),
@@ -117,12 +120,10 @@ class MoQDateServer : public MoQServer,
                                    MoQRelaySession::createRelaySessionFactory(),
                                    verifier)));
 
-    std::vector<std::string> alpns;
-    if (FLAGS_use_legacy_setup) {
-      alpns = {std::string(kAlpnMoqtLegacy)};
-    } else {
-      alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
-    }
+    // Default to experimental protocols, override to legacy if flag set
+    std::vector<std::string> alpns =
+        getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+
     folly::coro::blockingWait(
         relayClient_
             ->setup(

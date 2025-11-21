@@ -218,15 +218,12 @@ bool MoQVideoPublisher::setup(
   relayClient_ = std::make_unique<MoQRelayClient>(
       std::make_unique<MoQClient>(moqExecutor_, url, std::move(verifier)));
 
-  std::vector<std::string> alpns;
-  if (useLegacySetup) {
-    alpns = {std::string(kAlpnMoqtLegacy)};
-  } else {
-    alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
-  }
-
   cancel_ = folly::CancellationSource();
   running_ = true;
+
+  // Get ALPN protocols based on legacy flag
+  std::vector<std::string> alpns = getDefaultMoqtProtocols(!useLegacySetup);
+
   folly::coro::blockingWait(co_withExecutor(
                                 evbThread_->getEventBase(),
                                 relayClient_->setup(

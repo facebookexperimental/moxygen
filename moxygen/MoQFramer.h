@@ -556,7 +556,8 @@ constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
 
 // ALPN constants for version negotiation
 constexpr std::string_view kAlpnMoqtLegacy = "moq-00";
-constexpr std::string_view kAlpnMoqtDraft15 = "moqt-15";
+constexpr std::string_view kAlpnMoqtDraft15Meta00 = "moqt-15-meta-00";
+constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta00;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -568,6 +569,11 @@ bool isLegacyAlpn(folly::StringPiece alpn);
 std::vector<uint64_t> getSupportedLegacyVersions();
 folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn);
 folly::Optional<std::string> getAlpnFromVersion(uint64_t version);
+
+// Returns the default list of supported MoQT protocols
+// includeExperimental: if true, includes experimental/draft protocols
+std::vector<std::string> getDefaultMoqtProtocols(
+    bool includeExperimental = false);
 
 constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft12,

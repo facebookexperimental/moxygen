@@ -100,6 +100,9 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::shared_ptr<MoQExecutor> executor);
 
+  // Register ALPN handlers for direct QUIC connections (internal use)
+  void registerAlpnHandler(const std::vector<std::string>& alpns);
+
  private:
   // AUTHORITY parameter validation methods
   // Not called for HTTP inside proxygen, we leave it to applications.
@@ -173,6 +176,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::string cert_;
   std::string key_;
   quic::samples::HQServerParams params_;
+  std::shared_ptr<const fizz::server::FizzServerContext> fizzContext_;
+  std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
 };

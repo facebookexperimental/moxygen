@@ -1609,9 +1609,13 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
   auto legacyVersion = getVersionFromAlpn("moq-00");
   EXPECT_FALSE(legacyVersion.hasValue());
 
-  auto draft15 = getVersionFromAlpn("moqt-15");
-  ASSERT_TRUE(draft15.hasValue());
-  EXPECT_EQ(*draft15, 0xff00000f);
+  auto draft15Meta = getVersionFromAlpn("moqt-15-meta-01");
+  ASSERT_TRUE(draft15Meta.hasValue());
+  EXPECT_EQ(*draft15Meta, 0xff00000f);
+
+  auto draft15Meta02 = getVersionFromAlpn("moqt-15-meta-02");
+  ASSERT_TRUE(draft15Meta02.hasValue());
+  EXPECT_EQ(*draft15Meta02, 0xff00000f);
 
   auto invalidAlpn1 = getVersionFromAlpn("h3");
   EXPECT_FALSE(invalidAlpn1.hasValue());
@@ -1637,22 +1641,7 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 
   auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
   ASSERT_TRUE(alpnDraft15.hasValue());
-  EXPECT_EQ(*alpnDraft15, "moqt-15");
-}
-
-TEST(MoQFramerTestUtils, AlpnRoundTrip) {
-  auto testRoundTrip = [](const std::string& alpn) {
-    auto version = getVersionFromAlpn(alpn);
-    ASSERT_TRUE(version.hasValue()) << "Failed to parse ALPN: " << alpn;
-    auto alpnBack = getAlpnFromVersion(*version);
-    ASSERT_TRUE(alpnBack.hasValue())
-        << "Failed to convert version back to ALPN";
-    EXPECT_EQ(*alpnBack, alpn) << "Round trip failed for ALPN: " << alpn;
-  };
-
-  testRoundTrip("moqt-15");
-  testRoundTrip("moqt-16");
-  testRoundTrip("moqt-20");
+  EXPECT_EQ(*alpnDraft15, "moqt-15-meta-00");
 }
 
 // Test class for immutable extensions feature (draft 14+)

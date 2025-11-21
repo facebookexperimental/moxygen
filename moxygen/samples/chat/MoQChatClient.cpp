@@ -25,7 +25,7 @@ DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_bool(
     use_legacy_setup,
     false,
-    "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
+    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
 
 namespace moxygen {
 
@@ -56,12 +56,9 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   try {
-    std::vector<std::string> alpns;
-    if (FLAGS_use_legacy_setup) {
-      alpns = {std::string(kAlpnMoqtLegacy)};
-    } else {
-      alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
-    }
+    // Default to experimental protocols, override to legacy if flag set
+    std::vector<std::string> alpns =
+        getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
     co_await moqClient_.setup(
         /*publisher=*/shared_from_this(),
         /*subscriber=*/shared_from_this(),

@@ -21,9 +21,12 @@ namespace moxygen {
 MoQServer::MoQServer(std::string cert, std::string key, std::string endpoint)
     : MoQServer(
           quic::samples::createFizzServerContext(
-              {"h3",
-               std::string(kAlpnMoqtDraft15),
-               std::string(kAlpnMoqtLegacy)},
+              []() {
+                std::vector<std::string> alpns = {"h3"};
+                auto moqt = getDefaultMoqtProtocols(false);
+                alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+                return alpns;
+              }(),
               fizz::server::ClientAuthMode::Optional,
               cert,
               key),
@@ -32,21 +35,38 @@ MoQServer::MoQServer(std::string cert, std::string key, std::string endpoint)
 MoQServer::MoQServer(
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
     std::string endpoint)
-    : endpoint_(std::move(endpoint)) {
+    : fizzContext_(std::move(fizzContext)), endpoint_(std::move(endpoint)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
 
-  auto factory = std::make_unique<HQServerTransportFactory>(
+  factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
-  factory->addAlpnHandler(
-      {std::string(kAlpnMoqtLegacy), std::string(kAlpnMoqtDraft15)},
+
+  // Register all handlers
+  registerAlpnHandler(getDefaultMoqtProtocols(true));
+
+  hqServer_ =
+      std::make_unique<HQServer>(params_, std::move(factory_), fizzContext_);
+}
+
+void MoQServer::registerAlpnHandler(const std::vector<std::string>& alpns) {
+  if (!factory_) {
+    XLOG(INFO) << "Cannot register ALPN handler: factory not initialized";
+    return;
+  }
+
+  if (hqServer_) {
+    XLOG(INFO) << "Cannot register ALPN handler: server already started";
+    return;
+  }
+
+  factory_->addAlpnHandler(
+      alpns,
       [this](
           std::shared_ptr<quic::QuicSocket> quicSocket,
           wangle::ConnectionManager*) {
         createMoQQuicSession(std::move(quicSocket));
       });
-  hqServer_ =
-      std::make_unique<HQServer>(params_, std::move(factory), fizzContext);
 }
 
 void MoQServer::start(
@@ -305,8 +325,9 @@ void MoQServer::Handler::onHeadersComplete(
   }
   resp.setStatusCode(200);
   resp.getHeaders().add("sec-webtransport-http3-draft", "draft02");
-  std::vector<std::string> supportedProtocols{
-      std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
+
+  // Use default MoQT protocols for WebTransport negotiation
+  std::vector<std::string> supportedProtocols = getDefaultMoqtProtocols(false);
   folly::Optional<std::string> negotiatedProtocol;
   if (auto wtAvailableProtocols =
           HTTPWebTransport::getWTAvailableProtocols(*req)) {

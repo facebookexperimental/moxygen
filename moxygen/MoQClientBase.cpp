@@ -30,13 +30,8 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     const std::vector<std::string>& alpns) {
   proxygen::WebTransport* wt = nullptr;
 
-  std::vector<std::string> alpn;
-  if (alpns.empty()) {
-    // Default: use both ALPNs
-    alpn = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
-  } else {
-    alpn = alpns;
-  }
+  std::vector<std::string> alpn =
+      alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
   // Establish QUIC connection with multiple ALPN options
   auto quicClient = co_await connectQuic(
       folly::SocketAddress(

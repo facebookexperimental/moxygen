@@ -45,7 +45,7 @@ DEFINE_string(auth, "secret", "MOQ subscription auth string");
 DEFINE_bool(
     use_legacy_setup,
     false,
-    "If true, use only moq-00 ALPN (legacy). If false, use both moqt-15 and moq-00");
+    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
 DEFINE_bool(
     insecure,
     false,
@@ -396,12 +396,9 @@ class MoQFlvReceiverClient
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      std::vector<std::string> alpns;
-      if (FLAGS_use_legacy_setup) {
-        alpns = {std::string(kAlpnMoqtLegacy)};
-      } else {
-        alpns = {std::string(kAlpnMoqtDraft15), std::string(kAlpnMoqtLegacy)};
-      }
+      // Default to experimental protocols, override to legacy if flag set
+      std::vector<std::string> alpns =
+          getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
       co_await moqClient_->setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),

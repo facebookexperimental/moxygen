@@ -25,16 +25,7 @@ proxygen::HTTPMessage getWebTransportConnectRequest(
   req.setUpgradeProtocol("webtransport");
 
   // Set available MoQT protocols for version negotiation
-  std::vector<std::string> availableProtocols;
-  if (alpns.empty()) {
-    // Default: use both ALPNs
-    availableProtocols = {
-        std::string(moxygen::kAlpnMoqtDraft15),
-        std::string(moxygen::kAlpnMoqtLegacy)};
-  } else {
-    availableProtocols = alpns;
-  }
-  proxygen::HTTPWebTransport::setWTAvailableProtocols(req, availableProtocols);
+  proxygen::HTTPWebTransport::setWTAvailableProtocols(req, alpns);
 
   return req;
 }
@@ -112,6 +103,10 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
     const quic::TransportSettings& transportSettings,
     const std::vector<std::string>& alpns) noexcept {
   proxygen::WebTransport* wt = nullptr;
+
+  std::vector<std::string> protocolList =
+      alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
+
   // Establish H3 connection
   auto session = co_await connectH3WithWebtransport(
       exec_->getTypedExecutor<MoQFollyExecutorImpl>(),
@@ -123,7 +118,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
 
   // Establish WebTransport session
   auto txn = session->newTransaction(&httpHandler_);
-  txn->sendHeaders(getWebTransportConnectRequest(url_, alpns));
+  txn->sendHeaders(getWebTransportConnectRequest(url_, protocolList));
   auto wtTry = co_await co_awaitTry(std::move(httpHandler_.wtContract.second));
   if (wtTry.hasException()) {
     XLOG(ERR) << wtTry.exception().what();

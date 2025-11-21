@@ -170,9 +170,16 @@ std::vector<uint64_t> getSupportedLegacyVersions() {
 }
 
 folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
-  // Parse "moqt-{N}" format
+  // Parse "[moqt-{N} | moqt-{N}-meta-{NN}]" format (for draft 15+)
   if (alpn.startsWith("moqt-")) {
     auto draftStr = alpn.subpiece(5); // skip "moqt-"
+
+    // Extract just the draft number (first 1-2 digits before any hyphen or end)
+    auto hyphenPos = draftStr.find('-');
+    if (hyphenPos != std::string::npos) {
+      draftStr = draftStr.subpiece(0, hyphenPos);
+    }
+
     auto draftNum = folly::tryTo<uint64_t>(draftStr);
     if (draftNum.hasValue() && draftNum.value() >= 15) {
       return 0xff000000 | draftNum.value();
@@ -189,8 +196,18 @@ folly::Optional<std::string> getAlpnFromVersion(uint64_t version) {
     return std::string(kAlpnMoqtLegacy);
   }
 
-  // Draft 15+ use "moqt-{N}" format
-  return folly::to<std::string>("moqt-", draftNum);
+  // We just have one alpn for now, but in the future we might want to return a
+  // vector
+  return std::string(kAlpnMoqtDraft15Latest);
+}
+
+std::vector<std::string> getDefaultMoqtProtocols(bool includeExperimental) {
+  std::vector<std::string> protocols;
+  if (includeExperimental) {
+    protocols.emplace_back(kAlpnMoqtDraft15Latest);
+  }
+  protocols.emplace_back(kAlpnMoqtLegacy);
+  return protocols;
 }
 
 std::string getSupportedVersionsString() {
