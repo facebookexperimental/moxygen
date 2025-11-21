@@ -1837,15 +1837,21 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKAfterSubgroup) {
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
   auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton objectDelivered;
+
+  // Expect object to be delivered after SUBSCRIBE_OK arrives
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
       .WillOnce(testing::Return(sg));
-  EXPECT_CALL(*sg, object(_, _, _, _))
-      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*sg, object(0, _, _, true))
+      .WillOnce(testing::Invoke([&objectDelivered]() {
+        objectDelivered.post();
+        return folly::unit;
+      }));
 
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
-
+  co_await objectDelivered;
   expectSubscribeDone();
   trackConsumer->subscribeDone(
       getTrackEndedSubscribeDone(subscribeRequest.requestID));

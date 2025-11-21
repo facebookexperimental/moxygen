@@ -54,9 +54,9 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onGoaway, (Goaway goaway));
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));
 
-  MOCK_METHOD(void, onFetchHeader, (RequestID));
+  MOCK_METHOD(MoQCodec::ParseResult, onFetchHeader, (RequestID));
   MOCK_METHOD(
-      void,
+      MoQCodec::ParseResult,
       onSubgroup,
       (TrackAlias, uint64_t, uint64_t, folly::Optional<uint8_t>));
   MOCK_METHOD(

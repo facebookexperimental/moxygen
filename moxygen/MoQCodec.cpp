@@ -16,7 +16,9 @@ void MoQCodec::onIngressStart(std::unique_ptr<folly::IOBuf> data) {
   ingress_.append(std::move(data));
 }
 
-void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
+MoQCodec::ParseResult MoQControlCodec::onIngress(
+    std::unique_ptr<folly::IOBuf> data,
+    bool eom) {
   onIngressStart(std::move(data));
   size_t remainingLength = ingress_.chainLength();
   folly::io::Cursor cursor(ingress_.front());
@@ -116,6 +118,11 @@ void MoQControlCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
     }
   }
   onIngressEnd(remainingLength, eom, callback_);
+
+  if (connError_) {
+    return ParseResult::ERROR_TERMINATE;
+  }
+  return ParseResult::UNBLOCKED;
 }
 
 void MoQCodec::onIngressEnd(
@@ -136,23 +143,7 @@ void MoQCodec::onIngressEnd(
   ingress_.move();
 }
 
-folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
-MoQObjectStreamCodec::parseSubgroupTypeAndAlias(
-    std::unique_ptr<folly::IOBuf> data,
-    bool eom) noexcept {
-  XCHECK(data || eom);
-  ingress_.append(std::move(data));
-  folly::IOBuf empty;
-  folly::io::Cursor cursor(ingress_.empty() ? &empty : ingress_.front());
-  auto res =
-      moqFrameParser_.parseSubgroupTypeAndAlias(cursor, ingress_.chainLength());
-  if (res.hasError() && res.error() == ErrorCode::PARSE_UNDERFLOW && eom) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  return res;
-}
-
-void MoQObjectStreamCodec::onIngress(
+MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
     std::unique_ptr<folly::IOBuf> data,
     bool endOfStream) {
   onIngressStart(std::move(data));
@@ -226,7 +217,11 @@ void MoQObjectStreamCodec::onIngress(
         totalBytesConsumed += res->bytesConsumed;
         auto requestID = res->value;
         if (callback_) {
-          callback_->onFetchHeader(requestID);
+          auto result = callback_->onFetchHeader(requestID);
+          if (result == ParseResult::ERROR_TERMINATE) {
+            connError_ = ErrorCode::PROTOCOL_VIOLATION;
+            break;
+          }
         }
         parseState_ = ParseState::MULTI_OBJECT_HEADER;
         break;
@@ -243,20 +238,30 @@ void MoQObjectStreamCodec::onIngress(
         }
         totalBytesConsumed += res->bytesConsumed;
         curObjectHeader_ = res->value.objectHeader;
+        parseState_ = ParseState::MULTI_OBJECT_HEADER;
         XCHECK_EQ(streamType_, StreamType::SUBGROUP_HEADER_SG);
         if (callback_) {
-          callback_->onSubgroup(
+          auto result = callback_->onSubgroup(
               res->value.trackAlias,
               curObjectHeader_.group,
               curObjectHeader_.subgroup,
               curObjectHeader_.priority);
+          if (result == ParseResult::BLOCKED) {
+            ingress_.trimStart(ingress_.chainLength() - cursor.totalLength());
+            return ParseResult::BLOCKED;
+          } else if (result == ParseResult::ERROR_TERMINATE) {
+            connError_ = ErrorCode::PROTOCOL_VIOLATION;
+            break;
+          }
         }
-        parseState_ = ParseState::MULTI_OBJECT_HEADER;
         [[fallthrough]];
       }
       case ParseState::MULTI_OBJECT_HEADER: {
         size_t remainingLength = ingress_.chainLength() - totalBytesConsumed;
-        folly::Expected<ParseResult<ObjectHeader>, ErrorCode> res;
+        folly::Expected<
+            MoQFrameParser::ParseResultAndLength<ObjectHeader>,
+            ErrorCode>
+            res;
         if (streamType_ == StreamType::FETCH_HEADER) {
           res = moqFrameParser_.parseFetchObjectHeader(
               cursor, remainingLength, curObjectHeader_);
@@ -375,6 +380,11 @@ void MoQObjectStreamCodec::onIngress(
     callback_->onEndOfStream();
   }
   onIngressEnd(remainingLength, endOfStream, callback_);
+
+  if (connError_) {
+    return ParseResult::ERROR_TERMINATE;
+  }
+  return ParseResult::UNBLOCKED;
 }
 
 folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(

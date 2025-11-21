@@ -12,6 +12,12 @@ namespace moxygen {
 
 class MoQCodec {
  public:
+  enum class ParseResult {
+    UNBLOCKED,
+    BLOCKED,
+    ERROR_TERMINATE,
+  };
+
   virtual ~MoQCodec() = default;
 
   class Callback {
@@ -33,7 +39,10 @@ class MoQCodec {
     moqFrameParser_.setTokenCacheMaxSize(size);
   }
 
-  virtual void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) = 0;
+  // If ParseResult::BLOCKED is returned, must call onIngress again to restart
+  virtual ParseResult onIngress(
+      std::unique_ptr<folly::IOBuf> data,
+      bool eom) = 0;
 
  protected:
   void onIngressStart(std::unique_ptr<folly::IOBuf> data);
@@ -91,7 +100,8 @@ class MoQControlCodec : public MoQCodec {
     callback_ = callback;
   }
 
-  void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
+  // If ParseResult::BLOCKED is returned, must call onIngress again to restart
+  ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
  private:
   bool checkFrameAllowed(FrameType f) {
@@ -156,8 +166,8 @@ class MoQObjectStreamCodec : public MoQCodec {
    public:
     ~ObjectCallback() override = default;
 
-    virtual void onFetchHeader(RequestID requestID) = 0;
-    virtual void onSubgroup(
+    virtual ParseResult onFetchHeader(RequestID requestID) = 0;
+    virtual ParseResult onSubgroup(
         TrackAlias alias,
         uint64_t group,
         uint64_t subgroup,
@@ -188,12 +198,7 @@ class MoQObjectStreamCodec : public MoQCodec {
     callback_ = callback;
   }
 
-  folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
-  parseSubgroupTypeAndAlias(
-      std::unique_ptr<folly::IOBuf> data,
-      bool eom) noexcept;
-
-  void onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
+  ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
  private:
   enum class ParseState {

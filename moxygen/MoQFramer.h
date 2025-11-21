@@ -1319,14 +1319,13 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
     folly::io::Cursor& cursor,
     size_t& length);
 
-template <typename T>
-struct ParseResult {
-  T value;
-  size_t bytesConsumed;
-};
-
 class MoQFrameParser {
  public:
+  template <typename T>
+  struct ParseResultAndLength {
+    T value;
+    size_t bytesConsumed;
+  };
   folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
       folly::io::Cursor& cursor,
       size_t length) noexcept;
@@ -1341,7 +1340,7 @@ class MoQFrameParser {
       DatagramType datagramType,
       size_t& length) const noexcept;
 
-  folly::Expected<ParseResult<RequestID>, ErrorCode> parseFetchHeader(
+  folly::Expected<ParseResultAndLength<RequestID>, ErrorCode> parseFetchHeader(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -1350,25 +1349,19 @@ class MoQFrameParser {
     ObjectHeader objectHeader;
   };
 
-  folly::Expected<ParseResult<SubgroupHeaderResult>, ErrorCode>
+  folly::Expected<ParseResultAndLength<SubgroupHeaderResult>, ErrorCode>
   parseSubgroupHeader(
       folly::io::Cursor& cursor,
       size_t length,
       const SubgroupOptions& options) const noexcept;
 
-  // Parses the stream header and if it's a subgroup type,
-  // parses and returns the Track Alias.  For non-subgroups,
-  // returns folly::none.
-  folly::Expected<folly::Optional<TrackAlias>, ErrorCode>
-  parseSubgroupTypeAndAlias(folly::io::Cursor& cursor, size_t length)
-      const noexcept;
-
-  folly::Expected<ParseResult<ObjectHeader>, ErrorCode> parseFetchObjectHeader(
+  folly::Expected<ParseResultAndLength<ObjectHeader>, ErrorCode>
+  parseFetchObjectHeader(
       folly::io::Cursor& cursor,
       size_t length,
       const ObjectHeader& headerTemplate) const noexcept;
 
-  folly::Expected<ParseResult<ObjectHeader>, ErrorCode>
+  folly::Expected<ParseResultAndLength<ObjectHeader>, ErrorCode>
   parseSubgroupObjectHeader(
       folly::io::Cursor& cursor,
       size_t length,

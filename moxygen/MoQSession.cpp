@@ -1641,7 +1641,7 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
   std::shared_ptr<TrackConsumer> getSubscribeCallback() const {
-    return callback_;
+    return cancelSource_.isCancellationRequested() ? nullptr : callback_;
   }
 
   void resetSubscribeCallback() {
@@ -2347,8 +2347,26 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   }
 
  public:
-  ObjectStreamCallback(MoQSession* session, folly::CancellationToken& token)
-      : session_(session), token_(token) {}
+  using OnSubgroupResult =
+      std::shared_ptr<MoQSession::SubscribeTrackReceiveState>;
+
+  using OnSubgroupFunc = std::function<OnSubgroupResult(
+      TrackAlias alias,
+      uint64_t group,
+      uint64_t subgroup,
+      folly::Optional<uint8_t> priority)>;
+
+  using OnFetchFunc =
+      std::function<std::shared_ptr<MoQSession::FetchTrackReceiveState>(
+          RequestID requestID)>;
+
+  ObjectStreamCallback(
+      MoQSession* session,
+      OnSubgroupFunc onSubgroupFunc,
+      OnFetchFunc onFetchFunc)
+      : session_(session),
+        onSubgroupFunc_(std::move(onSubgroupFunc)),
+        onFetchFunc_(std::move(onFetchFunc)) {}
 
   void setCurrentStreamId(uint64_t id) {
     currentStreamId_ = id;
@@ -2359,27 +2377,34 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     subscribeState_ = std::move(state);
   }
 
-  void onSubgroup(
+  MoQCodec::ParseResult onSubgroup(
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
       folly::Optional<uint8_t> priority) override {
-    XCHECK(subscribeState_);
     trackAlias_ = alias; // Store for use in onObjectBegin logging
-    session_->onSubscriptionStreamOpenedByPeer();
-    if (!subscribeState_) {
-      error_ = MoQPublishError(
-          MoQPublishError::CANCELLED, "Subgroup for unknown track");
-      return;
+
+    // Call lambda to get state
+    auto subscribeState = onSubgroupFunc_(alias, group, subgroup, priority);
+    if (!subscribeState) {
+      // State not ready, return BLOCKED and wait
+      XLOG(DBG4) << "onSubgroup: State not ready, returning BLOCKED";
+      return MoQCodec::ParseResult::BLOCKED;
     }
 
-    token_ = folly::cancellation_token_merge(
-        token_, subscribeState_->getCancelToken());
+    subscribeState_ = std::move(subscribeState);
+    session_->onSubscriptionStreamOpenedByPeer();
     auto callback = subscribeState_->getSubscribeCallback();
     if (!callback) {
-      XLOG(DBG2) << "No callback for subgroup";
-      return;
+      // This cannot happen in a SUBSCRIBE_DONE flow, because
+      // that also would have removed subscribeState.
+      XLOG(DBG2) << "No callback for subgroup (unsubscribed)";
+      error_ = MoQPublishError(
+          MoQPublishError::CANCELLED,
+          "No callback for subgroup (unsubscribed)");
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
+
     // Use object priority if present, else fall back to publisher priority
     uint8_t effectivePriority =
         priority.value_or(subscribeState_->getPublisherPriority());
@@ -2388,6 +2413,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       subgroupCallback_ = *res;
     } else {
       error_ = std::move(res.error());
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
     if (logger_) {
       logger_->logSubgroupHeaderParsed(
@@ -2396,20 +2422,22 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
     subscribeState_->setCurrentStreamId(currentStreamId_);
     subscribeState_->onSubgroup(session_, alias);
+    return MoQCodec::ParseResult::UNBLOCKED;
   }
 
-  void onFetchHeader(RequestID requestID) override {
-    fetchState_ = session_->getFetchTrackReceiveState(requestID);
+  MoQCodec::ParseResult onFetchHeader(RequestID requestID) override {
+    // Call lambda to get state - fetch should always be ready
+    fetchState_ = onFetchFunc_(requestID);
 
     if (!fetchState_) {
       error_ = MoQPublishError(
           MoQPublishError::CANCELLED, "Fetch response for unknown track");
-      return;
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
+
     fetchState_->setCurrentStreamId(currentStreamId_);
     fetchState_->onFetchHeader(requestID);
-    token_ =
-        folly::cancellation_token_merge(token_, fetchState_->getCancelToken());
+    return MoQCodec::ParseResult::UNBLOCKED;
   }
 
   void onObjectBegin(
@@ -2638,7 +2666,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   }
   std::shared_ptr<MLogger> logger_ = nullptr;
   MoQSession* session_{nullptr};
-  folly::CancellationToken& token_;
+  OnSubgroupFunc onSubgroupFunc_;
+  OnFetchFunc onFetchFunc_;
   std::shared_ptr<MoQSession::SubscribeTrackReceiveState> subscribeState_;
   std::shared_ptr<SubgroupConsumer> subgroupCallback_;
   std::shared_ptr<MoQSession::FetchTrackReceiveState> fetchState_;
@@ -2650,83 +2679,95 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
 } // namespace detail
 
-folly::coro::Task<folly::Expected<bool, MoQPublishError>>
-MoQSession::headerParsed(
-    MoQObjectStreamCodec& codec,
-    detail::ObjectStreamCallback& callback,
-    proxygen::WebTransport::StreamData& streamData) {
-  auto parseResult = codec.parseSubgroupTypeAndAlias(
-      std::move(streamData.data), streamData.fin);
-  if (parseResult.hasError()) {
-    if (parseResult.error() == ErrorCode::PARSE_UNDERFLOW) {
-      XLOG(DBG4) << "Underflow on uni stream header";
-      co_return false;
-    } else {
-      MoQPublishError err(
-          MoQPublishError::CANCELLED, "Error parsing subgroup type and alias");
-      co_return folly::makeUnexpected(err);
-    }
-  }
-  auto trackAlias = parseResult.value();
-  if (!trackAlias) {
-    // it's fetch
-    co_return true;
-  }
-  auto state = getSubscribeTrackReceiveState(*trackAlias);
-  if (!state) {
-    XLOG(DBG4) << "No receive state for alias=" << *trackAlias << " waiting";
-    TimedBaton baton;
-    auto res =
-        bufferedSubgroups_.emplace(*trackAlias, std::list<TimedBaton*>());
-    res.first->second.push_back(&baton);
-    constexpr std::chrono::milliseconds kUnknownAliasTimeout(5000);
-    auto waitRes = co_await co_awaitTry(baton.wait(kUnknownAliasTimeout));
-    if (waitRes.hasException()) {
-      // TODO: Remove the baton we created from bufferedSubgroups_. The
-      // removal would be a lot easier once we've implemented a
-      // TimedBaton/TimedBarrier that allows multiple waiters on the same
-      // object.
-      MoQPublishError err(
-          MoQPublishError::CANCELLED, "Timed out waiting for unknown alias");
-      co_return folly::makeUnexpected(err);
-    } else {
-      state = getSubscribeTrackReceiveState(*trackAlias);
-      if (!state->getSubscribeCallback()) {
-        co_return folly::makeUnexpected(MoQPublishError(
-            MoQPublishError::CANCELLED, "Canceled or unusbscribed"));
-      }
-      XCHECK(state);
-    }
-  }
-  callback.setSubscribeTrackReceiveState(std::move(state));
-  co_return true;
-}
-
 folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     std::shared_ptr<MoQSession> session,
     proxygen::WebTransport::StreamReadHandle* readHandle) {
+  co_await folly::coro::co_safe_point;
   auto id = readHandle->getID();
+  auto rhToken = readHandle->getCancelToken();
   XLOG(DBG1) << __func__ << " id=" << id << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this, id] {
     XLOG(DBG1) << "exit " << func << " id=" << id << " sess=" << this;
   });
-  co_await folly::coro::co_safe_point;
-  auto token = co_await folly::coro::co_current_cancellation_token;
+
+  // Add cancellation callback to null out readHandle on cancellation
+  folly::CancellationCallback cancelCb(
+      rhToken, [&readHandle]() { readHandle = nullptr; });
+
+  // Scope guard to unify stopSending on exit if readHandle is still valid
+  auto stopSendingGuard = folly::makeGuard([&readHandle]() {
+    if (readHandle) {
+      readHandle->stopSending(0);
+      readHandle = nullptr;
+    }
+  });
 
   if (!negotiatedVersion_.hasValue()) {
     auto versionBaton = std::make_shared<moxygen::TimedBaton>();
     subgroupsWaitingForVersion_.push_back(versionBaton);
-    constexpr std::chrono::milliseconds kVersionTimeout(5000);
-    auto waitRes = co_await co_awaitTry(versionBaton->wait(kVersionTimeout));
+    auto waitRes = co_await co_awaitTry(
+        versionBaton->wait(moqSettings_.versionNegotiationTimeout));
     if (waitRes.hasException()) {
-      readHandle->stopSending(0);
       co_return;
     }
   }
 
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
-  detail::ObjectStreamCallback dcb(session.get(), /*by ref*/ token);
+
+  // Baton for waiting on unknown alias
+  TimedBaton aliasBaton;
+
+  // Lambda for onSubgroup
+  TrackAlias deferredAlias{std::numeric_limits<uint64_t>::max()};
+  uint64_t deferredGroup = 0;
+  uint64_t deferredSubgroup = 0;
+  folly::Optional<uint8_t> deferredPriority;
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto onSubgroupFunc = [this,
+                         &token,
+                         &aliasBaton,
+                         &deferredAlias,
+                         &deferredGroup,
+                         &deferredSubgroup,
+                         &deferredPriority](
+                            TrackAlias alias,
+                            uint64_t group,
+                            uint64_t subgroup,
+                            const folly::Optional<uint8_t>& priority)
+      -> std::shared_ptr<SubscribeTrackReceiveState> {
+    auto state = getSubscribeTrackReceiveState(alias);
+    if (!state) {
+      // State not ready, add baton to wait list and return nullptr to indicate
+      // BLOCKED
+      XLOG(DBG4) << "State not ready, adding baton to bufferedSubgroups_["
+                 << alias << "]";
+      bufferedSubgroups_[alias].push_back(&aliasBaton);
+      deferredAlias = alias;
+      deferredGroup = group;
+      deferredSubgroup = subgroup;
+      deferredPriority = priority;
+      return nullptr;
+    } else {
+      // Allows breaking out of read when the app unsubscribes
+      token = folly::cancellation_token_merge(
+          std::move(token), state->getCancelToken());
+    }
+    return state;
+  };
+
+  // Lambda for onFetch
+  auto onFetchFunc = [this, &token](RequestID requestID) {
+    auto state = getFetchTrackReceiveState(requestID);
+    if (state) {
+      // Allows breaking out of read when the app cancels fetch
+      token = folly::cancellation_token_merge(
+          std::move(token), state->getCancelToken());
+    }
+    return state;
+  };
+
+  detail::ObjectStreamCallback dcb(this, onSubgroupFunc, onFetchFunc);
   if (logger_) {
     dcb.setLogger(logger_);
   }
@@ -2734,9 +2775,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   codec.setCallback(&dcb);
   codec.setStreamId(id);
 
-  bool fin = false;
-  bool headerParsed = false;
-  while (!fin && !token.isCancellationRequested()) {
+  while (readHandle && !token.isCancellationRequested()) {
     auto streamData = co_await co_awaitTry(co_withCancellation(
         token,
         folly::coro::toTaskInterruptOnCancel(
@@ -2749,8 +2788,6 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
           streamData.tryGetExceptionObject<proxygen::WebTransport::Exception>();
       if (wtEx) {
         errorCode = ResetStreamErrorCode(wtEx->error);
-      } else {
-        XLOG(ERR) << folly::exceptionStr(streamData.exception());
       }
       if (!dcb.reset(errorCode)) {
         XLOG(ERR) << __func__ << " terminating for unknown "
@@ -2759,39 +2796,51 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       break;
     }
     if (streamData->data || streamData->fin) {
-      fin = streamData->fin;
-      folly::Optional<MoQPublishError> err;
-      if (!headerParsed) {
-        auto res = co_await this->headerParsed(codec, dcb, streamData.value());
-        if (res.hasError()) {
-          err = res.error();
-        } else {
-          headerParsed = *res;
-          if (!headerParsed) {
-            continue;
+      MoQCodec::ParseResult result = MoQCodec::ParseResult::ERROR_TERMINATE;
+      try {
+        result = codec.onIngress(std::move(streamData->data), streamData->fin);
+
+        // Handle BLOCKED state
+        if (result == MoQCodec::ParseResult::BLOCKED) {
+          XLOG(DBG4) << "Parser returned BLOCKED, waiting for signal id=" << id;
+          auto waitRes = co_await co_awaitTry(
+              aliasBaton.wait(moqSettings_.unknownAliasTimeout));
+          if (waitRes.hasException()) {
+            XLOG(ERR) << "Timed out waiting for subscription state id=" << id
+                      << " sess=" << this;
+            break;
+          }
+          result = dcb.onSubgroup(
+              deferredAlias, deferredGroup, deferredSubgroup, deferredPriority);
+
+          if (result == MoQCodec::ParseResult::UNBLOCKED) {
+            // codec may have buffered excess ingress while blocked
+            result = codec.onIngress(nullptr, streamData->fin);
           }
         }
-      }
-      try {
-        if (!err) {
-          codec.onIngress(std::move(streamData->data), streamData->fin);
-          err = dcb.error();
-        }
+        XCHECK_NE(result, MoQCodec::ParseResult::BLOCKED);
       } catch (const std::exception& ex) {
-        err = MoQPublishError(
-            MoQPublishError::CANCELLED, folly::exceptionStr(ex).toStdString());
+        XLOG(ERR) << "Exception in stream processing: "
+                  << folly::exceptionStr(ex) << " id=" << id
+                  << " sess=" << this;
+        result = MoQCodec::ParseResult::ERROR_TERMINATE;
       }
-      XLOG_IF(DBG3, fin) << "End of stream id=" << id << " sess=" << this;
-      if (err) {
-        XLOG(ERR) << "Error parsing/consuming stream, " << err->describe()
-                  << " id=" << id << " sess=" << this;
-        if (!fin) {
-          readHandle->stopSending(/*error=*/0);
-          break;
-        }
+
+      if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
+        auto err = dcb.error();
+        XLOG(ERR) << "Error parsing/consuming stream"
+                  << (err ? (", " + err->describe()) : "") << " id=" << id
+                  << " sess=" << this;
+        break;
+      }
+
+      if (streamData->fin) {
+        XLOG(DBG3) << "End of stream id=" << id << " sess=" << this;
+        readHandle = nullptr;
       }
     } // else empty read
   }
+  // stopSendingGuard will handle stopSending if needed
 }
 
 void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
@@ -3111,6 +3160,8 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
       if (aliasIt != reqIdToTrackAlias_.end()) {
         removeSubscriptionState(aliasIt->second, error.requestID);
       }
+      // TODO: bufferedSubgroups_ cleanup not required - batons will timeout
+      // but we should clear them proactively
       break;
     }
     case FrameType::PUBLISH_ERROR: {
@@ -3199,6 +3250,8 @@ void MoQSession::deliverBufferedData(TrackAlias trackAlias) {
   if (subgroupsIt != bufferedSubgroups_.end()) {
     auto subgroups = std::move(subgroupsIt->second);
     bufferedSubgroups_.erase(subgroupsIt);
+    XLOG(DBG4) << "Signaling " << subgroups.size()
+               << " batons for alias=" << trackAlias;
     for (auto* baton : subgroups) {
       baton->signal();
     }
@@ -4457,7 +4510,8 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
   co_withExecutor(
       exec_.get(),
       co_withCancellation(
-          cancellationSource_.getToken(),
+          folly::cancellation_token_merge(
+              cancellationSource_.getToken(), rh->getCancelToken()),
           unidirectionalReadLoop(shared_from_this(), rh)))
       .start();
 }

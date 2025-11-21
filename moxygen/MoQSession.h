@@ -39,6 +39,10 @@ struct BufferingThresholds {
 
 struct MoQSettings {
   BufferingThresholds bufferingThresholds{};
+  // Timeout for waiting for version negotiation to complete
+  std::chrono::milliseconds versionNegotiationTimeout{std::chrono::seconds(2)};
+  // Timeout for waiting for unknown alias resolution
+  std::chrono::milliseconds unknownAliasTimeout{std::chrono::seconds(2)};
 };
 
 class MoQSession : public Subscriber,
@@ -358,10 +362,6 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle);
-  folly::coro::Task<folly::Expected<bool, MoQPublishError>> headerParsed(
-      MoQObjectStreamCodec& codec,
-      detail::ObjectStreamCallback& callback,
-      proxygen::WebTransport::StreamData& streamData);
 
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
