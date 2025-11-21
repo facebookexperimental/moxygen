@@ -34,6 +34,7 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
     case moxygen::TrackRequestParamKey::EXPIRES:
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
+    case moxygen::TrackRequestParamKey::FORWARD:
       return true;
     default:
       return false;
@@ -56,6 +57,11 @@ bool isValidSubscriberPriorityParam(uint64_t value) {
   return value <= 255;
 }
 
+bool isValidForwardParam(uint64_t value) {
+  // Valid values are 0 or 1
+  return value <= 1;
+}
+
 bool isIntParamValid(uint64_t version, uint64_t key, uint64_t value) {
   if (moxygen::getDraftMajorVersion(version) >= 15) {
     switch (key) {
@@ -64,6 +70,8 @@ bool isIntParamValid(uint64_t version, uint64_t key, uint64_t value) {
       case folly::to_underlying(
           moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY):
         return isValidSubscriberPriorityParam(value);
+      case folly::to_underlying(moxygen::TrackRequestParamKey::FORWARD):
+        return isValidForwardParam(value);
       default:
         return true;
     }
@@ -1127,19 +1135,23 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     }
     subscribeRequest.groupOrder = static_cast<GroupOrder>(order);
     length -= 1;
-  }
 
-  if (length < 1) {
-    XLOG(DBG4) << "parseSubscribeRequest: UNDERFLOW on forwardFlag";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    if (length < 1) {
+      XLOG(DBG4) << "parseSubscribeRequest: UNDERFLOW on forwardFlag";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    uint8_t forwardFlag = cursor.readBE<uint8_t>();
+    if (forwardFlag > 1) {
+      XLOG(ERR) << "parseSubscribeRequest: Invalid forward";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    subscribeRequest.forward = (forwardFlag == 1);
+    length--;
+  } else {
+    // For draft >= 15, set default forward to true
+    // It will be overridden in handleRequestSpecificParams if present
+    subscribeRequest.forward = true;
   }
-  uint8_t forwardFlag = cursor.readBE<uint8_t>();
-  if (forwardFlag > 1) {
-    XLOG(ERR) << "parseSubscribeRequest: Invalid forward";
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  subscribeRequest.forward = (forwardFlag == 1);
-  length--;
 
   if (getDraftMajorVersion(*version_) < 15) {
     auto locType = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -1235,6 +1247,9 @@ void MoQFrameParser::handleRequestSpecificParams(
     // SUBSCRIBER_PRIORITY
     handleSubscriberPriorityParam(
         subscribeRequest.priority, requestSpecificParams);
+
+    // FORWARD
+    handleForwardParam(subscribeRequest.forward, requestSpecificParams);
   }
 }
 
@@ -1287,22 +1302,26 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     }
     subscribeUpdate.priority = cursor.readBE<uint8_t>();
     length--;
+
+    if (length < 1) {
+      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on forwardFlag";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    uint8_t forwardFlag = cursor.readBE<uint8_t>();
+    if (forwardFlag > 1) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    subscribeUpdate.forward = (forwardFlag == 1);
+    length--;
   } else {
     // For draft >= 15, set default priority to 128
     // It will be overridden in handleRequestSpecificParams if present
     subscribeUpdate.priority = kDefaultPriority;
+    // For draft >= 15, forward field is left unset (folly::none) by default
+    // It will be set in handleRequestSpecificParams only if FORWARD param
+    // present This allows existing forward state to be preserved when param is
+    // absent
   }
-
-  if (length < 1) {
-    XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on forwardFlag";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  uint8_t forwardFlag = cursor.readBE<uint8_t>();
-  if (forwardFlag > 1) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  subscribeUpdate.forward = (forwardFlag == 1);
-  length--;
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1360,6 +1379,9 @@ void MoQFrameParser::handleRequestSpecificParams(
     // SUBSCRIBER_PRIORITY
     handleSubscriberPriorityParam(
         subscribeUpdate.priority, requestSpecificParams);
+
+    // FORWARD
+    handleForwardParam(subscribeUpdate.forward, requestSpecificParams);
   }
 }
 
@@ -1594,17 +1616,23 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     publish.largest = folly::none;
   }
 
-  if (length < 1) {
-    XLOG(DBG4) << "parsePublish: UNDERFLOW on forward";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
+  if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 1) {
+      XLOG(DBG4) << "parsePublish: UNDERFLOW on forward";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
 
-  uint8_t forwardFlag = cursor.readBE<uint8_t>();
-  if (forwardFlag > 1) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    uint8_t forwardFlag = cursor.readBE<uint8_t>();
+    if (forwardFlag > 1) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    publish.forward = (forwardFlag == 1);
+    length--;
+  } else {
+    // For draft >= 15, set default forward to true
+    // It will be overridden in handleRequestSpecificParams if present
+    publish.forward = true;
   }
-  publish.forward = (forwardFlag == 1);
-  length--;
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -1641,6 +1669,9 @@ void MoQFrameParser::handleRequestSpecificParams(
       publishRequest.groupOrder,
       requestSpecificParams,
       GroupOrder::OldestFirst);
+
+  // FORWARD
+  handleForwardParam(publishRequest.forward, requestSpecificParams);
 }
 
 folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
@@ -1657,24 +1688,27 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
   length -= requestID->second;
   publishOk.requestID = requestID->first;
 
-  if (length < 1) {
-    XLOG(DBG4) << "parsePublishOk: UNDERFLOW on forward/priority/order";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  uint8_t forwardFlag = cursor.readBE<uint8_t>();
-  length--;
-  if (forwardFlag > 1) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  publishOk.forward = (forwardFlag == 1);
-
   if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 1) {
+      XLOG(DBG4) << "parsePublishOk: UNDERFLOW on forward/priority/order";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    uint8_t forwardFlag = cursor.readBE<uint8_t>();
+    length--;
+    if (forwardFlag > 1) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    publishOk.forward = (forwardFlag == 1);
+
     if (length < 1) {
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     publishOk.subscriberPriority = cursor.readBE<uint8_t>();
     length--;
   } else {
+    // For draft >= 15, set default forward to true
+    // It will be overridden in handleRequestSpecificParams if present
+    publishOk.forward = true;
     // For draft >= 15, set default priority to 128
     // It will be overridden in handleRequestSpecificParams if present
     publishOk.subscriberPriority = kDefaultPriority;
@@ -1782,6 +1816,9 @@ void MoQFrameParser::handleRequestSpecificParams(
     // SUBSCRIBER_PRIORITY
     handleSubscriberPriorityParam(
         publishOk.subscriberPriority, requestSpecificParams);
+
+    // FORWARD
+    handleForwardParam(publishOk.forward, requestSpecificParams);
   }
 }
 
@@ -1805,6 +1842,28 @@ void MoQFrameParser::handleSubscriberPriorityParam(
       requestSpecificParams, TrackRequestParamKey::SUBSCRIBER_PRIORITY);
   if (maybePriority.hasValue()) {
     priorityField = (uint8_t)*maybePriority;
+  }
+}
+
+void MoQFrameParser::handleForwardParam(
+    bool& forwardField,
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  auto maybeForward =
+      getFirstIntParam(requestSpecificParams, TrackRequestParamKey::FORWARD);
+  if (maybeForward.hasValue()) {
+    forwardField = (*maybeForward == 1);
+  }
+}
+
+// Overload for Optional<bool> - used by SubscribeUpdate to allow
+// preserving existing forward state when parameter is absent
+void MoQFrameParser::handleForwardParam(
+    folly::Optional<bool>& forwardField,
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  auto maybeForward =
+      getFirstIntParam(requestSpecificParams, TrackRequestParamKey::FORWARD);
+  if (maybeForward.hasValue()) {
+    forwardField = (*maybeForward == 1);
   }
 }
 
@@ -3433,11 +3492,11 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
     uint8_t order = folly::to_underlying(subscribeRequest.groupOrder);
     writeBuf.append(&order, 1);
     size += 1;
-  }
 
-  uint8_t forwardFlag = (subscribeRequest.forward) ? 1 : 0;
-  writeBuf.append(&forwardFlag, 1);
-  size += 1;
+    uint8_t forwardFlag = (subscribeRequest.forward) ? 1 : 0;
+    writeBuf.append(&forwardFlag, 1);
+    size += 1;
+  }
 
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
@@ -3467,6 +3526,15 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       groupOrderParam.asUint64 =
           folly::to_underlying(subscribeRequest.groupOrder);
       requestSpecificParams.push_back(groupOrderParam);
+    }
+
+    if (subscribeRequest.forward == 0) {
+      // The forward param defaults to 1 if not specified, so we only need
+      // to insert the parameter if forward is 0.
+      Parameter forwardParam;
+      forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
+      forwardParam.asUint64 = 0;
+      requestSpecificParams.push_back(forwardParam);
     }
   } else {
     writeVarint(
@@ -3540,20 +3608,28 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
       priorityParam.asUint64 = update.priority;
       requestSpecificParams.push_back(priorityParam);
     }
+
+    // Only add FORWARD parameter if it's explicitly set (has value)
+    // When absent, the receiver preserves existing forward state per draft 15+
+    if (update.forward.hasValue()) {
+      Parameter forwardParam;
+      forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
+      forwardParam.asUint64 = *update.forward ? 1 : 0;
+      requestSpecificParams.push_back(forwardParam);
+    }
   } else {
     writeVarint(writeBuf, update.start.group, size, error);
     writeVarint(writeBuf, update.start.object, size, error);
     writeVarint(writeBuf, update.endGroup, size, error);
-  }
 
-  if (getDraftMajorVersion(*version_) < 15) {
     writeBuf.append(&update.priority, 1);
     size += 1;
-  }
 
-  uint8_t forwardFlag = (update.forward) ? 1 : 0;
-  writeBuf.append(&forwardFlag, 1);
-  size += 1;
+    // For draft < 15, forward is mandatory and always set during parsing
+    uint8_t forwardFlag = update.forward.value_or(true) ? 1 : 0;
+    writeBuf.append(&forwardFlag, 1);
+    size += 1;
+  }
   writeTrackRequestParams(
       writeBuf, update.params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
@@ -3716,10 +3792,6 @@ WriteResult MoQFrameWriter::writePublish(
     writeVarint(writeBuf, publish.largest->object, size, error);
   }
 
-  uint8_t forwardFlag = publish.forward ? 1 : 0;
-  writeBuf.append(&forwardFlag, 1);
-  size += 1;
-
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
     if (publish.groupOrder != GroupOrder::Default) {
@@ -3729,6 +3801,19 @@ WriteResult MoQFrameWriter::writePublish(
       groupOrderParam.asUint64 = folly::to_underlying(publish.groupOrder);
       requestSpecificParams.push_back(groupOrderParam);
     }
+
+    if (publish.forward == 0) {
+      // The forward param defaults to 1 if not specified, so we only need
+      // to insert the parameter if forward is 0.
+      Parameter forwardParam;
+      forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
+      forwardParam.asUint64 = 0;
+      requestSpecificParams.push_back(forwardParam);
+    }
+  } else {
+    uint8_t forwardFlag = publish.forward ? 1 : 0;
+    writeBuf.append(&forwardFlag, 1);
+    size += 1;
   }
 
   writeTrackRequestParams(
@@ -3749,11 +3834,11 @@ WriteResult MoQFrameWriter::writePublishOk(
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_OK, error);
   writeVarint(writeBuf, publishOk.requestID.value, size, error);
 
-  uint8_t forwardFlag = publishOk.forward ? 1 : 0;
-  writeBuf.append(&forwardFlag, 1);
-  size += 1;
-
   if (getDraftMajorVersion(*version_) < 15) {
+    uint8_t forwardFlag = publishOk.forward ? 1 : 0;
+    writeBuf.append(&forwardFlag, 1);
+    size += 1;
+
     writeBuf.append(&publishOk.subscriberPriority, 1);
     size += 1;
 
@@ -3788,6 +3873,15 @@ WriteResult MoQFrameWriter::writePublishOk(
           folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
       groupOrderParam.asUint64 = folly::to_underlying(publishOk.groupOrder);
       requestSpecificParams.push_back(groupOrderParam);
+    }
+
+    if (publishOk.forward == 0) {
+      // The forward param defaults to 1 if not specified, so we only need
+      // to insert the parameter if forward is 0.
+      Parameter forwardParam;
+      forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
+      forwardParam.asUint64 = 0;
+      requestSpecificParams.push_back(forwardParam);
     }
   } else {
     writeVarint(

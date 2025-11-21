@@ -391,7 +391,10 @@ void MoQForwarder::Subscriber::subscribeUpdate(
   range.start = subscribeUpdate.start;
   range.end = {subscribeUpdate.endGroup, 0};
   auto wasForwarding = shouldForward;
-  shouldForward = subscribeUpdate.forward;
+  // Only update forward state if explicitly provided (per draft 15+)
+  if (subscribeUpdate.forward.hasValue()) {
+    shouldForward = *subscribeUpdate.forward;
+  }
   if (shouldForward && !wasForwarding) {
     forwarder.addForwardingSubscriber();
   } else if (wasForwarding && !shouldForward) {

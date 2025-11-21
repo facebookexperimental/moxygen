@@ -1321,7 +1321,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
     auto frameHeader = writeBufs[j].split(3);
     // Version 15+ don't have the filter within the request, but in the
     // parameters
-    const uint32_t kDraft15PreambleLength = 14;
+    const uint32_t kDraft15PreambleLength = 13;
     const uint32_t kDraft14PreambleLength = 19;
     uint32_t frontLength = (getDraftMajorVersion(GetParam()) >= 15)
         ? kDraft15PreambleLength
@@ -1446,7 +1446,55 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   EXPECT_EQ(parseResult->start.object, 20);
   EXPECT_EQ(parseResult->endGroup, 30);
   EXPECT_EQ(parseResult->priority, 5);
-  EXPECT_EQ(parseResult->forward, true);
+  EXPECT_TRUE(parseResult->forward.hasValue());
+  EXPECT_EQ(*parseResult->forward, true);
+}
+
+TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
+  // Test that in draft 15+, a SUBSCRIBE_UPDATE without forward parameter
+  // is correctly serialized and parsed with forward field unset
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft15);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft15);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeUpdate subscribeUpdate;
+  subscribeUpdate.requestID = RequestID(123);
+  subscribeUpdate.subscriptionRequestID = RequestID(456);
+  subscribeUpdate.start = AbsoluteLocation{0, 0};
+  subscribeUpdate.endGroup = 0; // Open-ended subscription
+  subscribeUpdate.priority = kDefaultPriority;
+  // forward field intentionally left unset (folly::none)
+  subscribeUpdate.params = {};
+
+  auto writeResult = writer.writeSubscribeUpdate(writeBuf, subscribeUpdate);
+  EXPECT_TRUE(writeResult.hasValue()) << "Failed to write SUBSCRIBE_UPDATE";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  // Skip frame type
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_UPDATE));
+
+  // Skip frame length
+  size_t frameLength = cursor.readBE<uint16_t>();
+
+  // Parse the SUBSCRIBE_UPDATE
+  auto parseResult = parser.parseSubscribeUpdate(cursor, frameLength);
+  EXPECT_TRUE(parseResult.hasValue()) << "Failed to parse SUBSCRIBE_UPDATE";
+
+  EXPECT_EQ(parseResult->requestID.value, 123);
+  EXPECT_EQ(parseResult->subscriptionRequestID.value, 456);
+  EXPECT_EQ(parseResult->start.group, 0);
+  EXPECT_EQ(parseResult->start.object, 0);
+  EXPECT_EQ(parseResult->endGroup, 0);
+  EXPECT_EQ(parseResult->priority, kDefaultPriority);
+  // Verify forward field is NOT set (preserves existing state per draft 15+)
+  EXPECT_FALSE(parseResult->forward.hasValue());
 }
 
 TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
@@ -1641,7 +1689,7 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 
   auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
   ASSERT_TRUE(alpnDraft15.hasValue());
-  EXPECT_EQ(*alpnDraft15, "moqt-15-meta-00");
+  EXPECT_EQ(*alpnDraft15, "moqt-15-meta-01");
 }
 
 // Test class for immutable extensions feature (draft 14+)

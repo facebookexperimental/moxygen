@@ -435,6 +435,7 @@ enum class TrackRequestParamKey : uint64_t {
   EXPIRES = 8,
   GROUP_ORDER = 0x22,
   LARGEST_OBJECT = 0x9,
+  FORWARD = 0x10,
 };
 
 class Parameters {
@@ -556,7 +557,7 @@ constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
 
 // ALPN constants for version negotiation
 constexpr std::string_view kAlpnMoqtLegacy = "moq-00";
-constexpr std::string_view kAlpnMoqtDraft15Meta00 = "moqt-15-meta-00";
+constexpr std::string_view kAlpnMoqtDraft15Meta00 = "moqt-15-meta-01";
 constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta00;
 
 // In the terminology I'm using for this function, each draft has a "major"
@@ -1014,7 +1015,9 @@ struct SubscribeUpdate {
   AbsoluteLocation start;
   uint64_t endGroup;
   uint8_t priority{kDefaultPriority};
-  bool forward{true}; // Only used in draft-12 and above
+  // Draft 15+: Optional forward field. When absent, existing forward state is
+  // preserved. For earlier drafts, this is always set during parsing.
+  folly::Optional<bool> forward;
   TrackRequestParameters params;
 };
 
@@ -1571,6 +1574,15 @@ class MoQFrameParser {
 
   void handleSubscriberPriorityParam(
       uint8_t& priorityField,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  void handleForwardParam(
+      bool& forwardField,
+      const std::vector<Parameter>& requestSpecificParams) const noexcept;
+
+  // Overload for Optional<bool> - used by SubscribeUpdate
+  void handleForwardParam(
+      folly::Optional<bool>& forwardField,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   folly::Optional<uint64_t> version_;

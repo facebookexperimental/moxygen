@@ -1064,7 +1064,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
             << "MoQSession::TrackPublisherImpl::onSubscribeUpdate: No delivery timeout in params or timeout=0"
             << " requestID=" << requestID_;
       }
-      setForward(subscribeUpdate.forward);
+      // Only update forward state if the parameter was explicitly provided
+      // Otherwise, preserve existing forward state (per draft 15+)
+      if (subscribeUpdate.forward.hasValue()) {
+        setForward(*subscribeUpdate.forward);
+      }
       subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate));
     }
   }
