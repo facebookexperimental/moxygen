@@ -476,36 +476,4 @@ uint8_t MoQSessionTest::getRequestIDMultiplier() const {
   return 2;
 }
 
-folly::coro::Task<void> MoQSessionTest::publishValidationTest(
-    TestLogicFn testLogic) {
-  co_await setupMoQSession();
-  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
-  expectSubscribe(
-      [this, testLogic, sg1](auto sub, auto pub) -> TaskSubscribeResult {
-        EXPECT_CALL(
-            *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
-        EXPECT_CALL(
-            *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
-        auto sgp = pub->beginSubgroup(0, 0, 0).value();
-        eventBase_.add([testLogic, sub, pub, sgp, sg1]() {
-          testLogic(sub, pub, sgp, sg1);
-        });
-        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
-      });
-
-  folly::coro::Baton resetBaton;
-  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
-      .WillOnce(testing::Return(sg1));
-  EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::INTERNAL_ERROR))
-      .WillOnce([&](auto) { resetBaton.post(); });
-  expectSubscribeDone();
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
-  auto res = co_await clientSession_->subscribe(
-      getSubscribe(kTestTrackName), subscribeCallback_);
-  co_await subscribeDone_;
-  co_await resetBaton;
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
-
 }} // namespace moxygen::test

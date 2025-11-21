@@ -212,6 +212,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
   uint8_t getRequestIDMultiplier() const;
 
+  // Helper for object delivery validation tests (defined in
+  // MoQSessionObjectDeliveryTests.cpp)
   using TestLogicFn = std::function<void(
       const SubscribeRequest& sub,
       std::shared_ptr<TrackConsumer> pub,

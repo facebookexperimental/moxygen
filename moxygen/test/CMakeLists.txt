@@ -67,7 +67,14 @@ moxygen_add_test(TARGET MoQTests
 moxygen_add_test(TARGET MoQSessionTests
   PREFIX "MoQSession"
   SOURCES
-    MoQSessionTest.cpp
+    MoQSessionAnnounceTests.cpp
+    MoQSessionFetchTests.cpp
+    MoQSessionObjectDeliveryTests.cpp
+    MoQSessionPublishTests.cpp
+    MoQSessionSubscribeAnnouncesTests.cpp
+    MoQSessionSubscribeTests.cpp
+    MoQSessionTests.cpp
+    MoQSessionTrackStatusTests.cpp
   DEPENDS
     moqsessiontestcommon
     testmain
