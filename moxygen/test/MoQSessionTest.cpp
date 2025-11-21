@@ -27,6 +27,9 @@ TEST_P(MoQVersionNegotiationTest, Setup) {
 using CurrentVersionOnly = MoQSessionTest;
 
 CO_TEST_P_X(CurrentVersionOnly, SetupTimeout) {
+  MoQSettings moqSettings;
+  moqSettings.setupTimeout = std::chrono::milliseconds(500);
+  clientSession_->setMoqSettings(moqSettings);
   ClientSetup setup;
   setup.supportedVersions.push_back(kVersionDraftCurrent);
   auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));

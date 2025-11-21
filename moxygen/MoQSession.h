@@ -39,6 +39,8 @@ struct BufferingThresholds {
 
 struct MoQSettings {
   BufferingThresholds bufferingThresholds{};
+  // Timeout for waiting for setup to complete
+  std::chrono::milliseconds setupTimeout{std::chrono::seconds(5)};
   // Timeout for waiting for version negotiation to complete
   std::chrono::milliseconds versionNegotiationTimeout{std::chrono::seconds(2)};
   // Timeout for waiting for unknown alias resolution

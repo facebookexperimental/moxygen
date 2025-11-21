@@ -17,7 +17,6 @@
 
 namespace {
 using namespace moxygen;
-constexpr std::chrono::seconds kSetupTimeout(5);
 constexpr uint64_t kMaxSendTokenCacheSize(1024);
 
 constexpr uint32_t IdMask = 0x1FFFFF;
@@ -2166,7 +2165,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::cancellation_token_merge(deletedToken, token);
   auto serverSetup = co_await co_awaitTry(co_withCancellation(
-      mergeToken, folly::coro::timeout(std::move(setupFuture), kSetupTimeout)));
+      mergeToken,
+      folly::coro::timeout(std::move(setupFuture), moqSettings_.setupTimeout)));
   if (mergeToken.isCancellationRequested()) {
     co_yield folly::coro::co_error(folly::OperationCancelled());
   }
