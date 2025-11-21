@@ -43,6 +43,9 @@ struct MoQSettings {
   std::chrono::milliseconds versionNegotiationTimeout{std::chrono::seconds(2)};
   // Timeout for waiting for unknown alias resolution
   std::chrono::milliseconds unknownAliasTimeout{std::chrono::seconds(2)};
+  // Timeout for waiting for in-flight streams when SUBSCRIBE_DONE is received
+  std::chrono::milliseconds publishDoneStreamCountTimeout{
+      std::chrono::seconds(2)};
 };
 
 class MoQSession : public Subscriber,
@@ -117,7 +120,7 @@ class MoQSession : public Subscriber,
     return negotiatedVersion_;
   }
 
-  [[nodiscard]] folly::Executor* getExecutor() const {
+  [[nodiscard]] MoQExecutor* getExecutor() const {
     return exec_.get();
   }
 
@@ -693,6 +696,7 @@ class MoQSession : public Subscriber,
  private:
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
+  void removeBufferedSubgroupBaton(TrackAlias alias, TimedBaton* baton);
 
   // Private session state
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>

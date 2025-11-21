@@ -1604,6 +1604,10 @@ class MoQSession::TrackReceiveStateBase {
     return cancelSource_.getToken();
   }
 
+  bool isCancelled() const {
+    return cancelSource_.isCancellationRequested();
+  }
+
  protected:
   FullTrackName fullTrackName_;
   RequestID requestID_;
@@ -1614,16 +1618,39 @@ class MoQSession::SubscribeTrackReceiveState
     : public MoQSession::TrackReceiveStateBase {
  public:
   using SubscribeResult = folly::Expected<SubscribeOk, SubscribeError>;
+
+  // Timer callback for stream count timeout
+  class StreamCountTimeoutCallback : public quic::QuicTimerCallback {
+   public:
+    explicit StreamCountTimeoutCallback(SubscribeTrackReceiveState& state)
+        : state_(state) {}
+
+    void timeoutExpired() noexcept override {
+      state_.streamCountTimeoutExpired();
+    }
+
+   private:
+    SubscribeTrackReceiveState& state_;
+  };
+
   SubscribeTrackReceiveState(
       FullTrackName fullTrackName,
       RequestID requestID,
       std::shared_ptr<TrackConsumer> callback,
+      MoQSession* session,
+      TrackAlias alias,
       std::shared_ptr<MLogger> logger = nullptr,
       bool publish = false)
       : TrackReceiveStateBase(std::move(fullTrackName), requestID),
         callback_(std::move(callback)),
-        publish_(publish) {
+        publish_(publish),
+        session_(session),
+        alias_(alias) {
     logger_ = logger;
+  }
+
+  ~SubscribeTrackReceiveState() {
+    cancelStreamCountTimeout();
   }
 
   bool isPublish() {
@@ -1644,16 +1671,13 @@ class MoQSession::SubscribeTrackReceiveState
     return cancelSource_.isCancellationRequested() ? nullptr : callback_;
   }
 
-  void resetSubscribeCallback() {
-    callback_.reset();
-  }
-
   void cancel() {
     callback_.reset();
     cancelSource_.requestCancellation();
   }
 
   void processSubscribeOK(SubscribeOk subscribeOK) {
+    alias_ = subscribeOK.trackAlias;
     subscribePromise_.setValue(std::move(subscribeOK));
   }
 
@@ -1662,17 +1686,16 @@ class MoQSession::SubscribeTrackReceiveState
     if (!publish_ && !subscribePromise_.isFulfilled()) {
       subErr.requestID = requestID_;
       subscribePromise_.setValue(folly::makeUnexpected(std::move(subErr)));
-    } else if (!deliveredDone_) {
+    } else if (callback_) {
       processSubscribeDone(
           {requestID_,
            SubscribeDoneStatusCode::SESSION_CLOSED,
            0, // forces immediately invoking the callback
            "closed locally"});
-    }
+    } // else already unsubscribed or delivered done
   }
 
-  // returns true if subscription can be removed from state
-  bool onSubgroup(MoQSession* session, TrackAlias alias) {
+  void onSubgroup() {
     if (logger_) {
       logger_->logStreamTypeSet(
           currentStreamId_, MOQTStreamType::SUBGROUP_HEADER, Owner::REMOTE);
@@ -1680,34 +1703,35 @@ class MoQSession::SubscribeTrackReceiveState
     streamCount_++;
     if (pendingSubscribeDone_ &&
         streamCount_ >= pendingSubscribeDone_->streamCount) {
-      if (callback_) {
-        deliveredDone_ = true;
-        callback_->subscribeDone(std::move(*pendingSubscribeDone_));
-        pendingSubscribeDone_.reset();
-      }
-      session->removeSubscriptionState(alias, requestID_);
-      return true;
+      deliverSubscribeDoneAndRemove();
     }
-    return false;
   }
 
-  // return true if subscription can be removed from state
-  bool processSubscribeDone(SubscribeDone subDone) {
+  void processSubscribeDone(SubscribeDone subDone) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
-    if (callback_) {
-      if (subDone.streamCount > streamCount_) {
-        XLOG(DBG1) << "Waiting for streams in flight, have=" << streamCount_
-                   << " need=" << subDone.streamCount
-                   << " trackReceiveState=" << this;
-        pendingSubscribeDone_ = std::move(subDone);
-        // TODO: timeout
-        return false;
-      } else {
-        deliveredDone_ = true;
-        callback_->subscribeDone(std::move(subDone));
-      }
-    } // else, unsubscribe raced with subscribeDone and callback was removed
-    return true;
+    if (!callback_) {
+      // Unsubscribe raced with subscribeDone - just remove state
+      // TODO: I think alias_ will be wrong in SUBSCRIBE -> SUBSCRIBE_DONE
+      // But that should be a different error.
+      session_->removeSubscriptionState(alias_, requestID_);
+      return;
+    }
+    if (pendingSubscribeDone_) {
+      // TODO: protocol violation
+      XLOG(ERR) << "Duplicate SUBSCRIBE_DONE";
+      return;
+    }
+
+    pendingSubscribeDone_ = std::move(subDone);
+    if (pendingSubscribeDone_->streamCount > streamCount_) {
+      // Still waiting for streams - schedule timeout
+      XLOG(DBG1) << "Waiting for streams in flight, have=" << streamCount_
+                 << " need=" << pendingSubscribeDone_->streamCount
+                 << " trackReceiveState=" << this;
+      scheduleStreamCountTimeout();
+    } else {
+      deliverSubscribeDoneAndRemove();
+    }
   }
 
   void setCurrentStreamId(uint64_t id) {
@@ -1724,6 +1748,46 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
  private:
+  void deliverSubscribeDoneAndRemove() {
+    cancelStreamCountTimeout();
+    if (pendingSubscribeDone_) {
+      if (callback_) {
+        auto cb = std::exchange(callback_, nullptr);
+        cb->subscribeDone(std::move(*pendingSubscribeDone_));
+      }
+      pendingSubscribeDone_.reset();
+    }
+    session_->removeSubscriptionState(alias_, requestID_);
+  }
+
+  void scheduleStreamCountTimeout() {
+    if (!session_ || !session_->getExecutor()) {
+      XLOG(ERR) << "Cannot schedule timeout: session or executor unavailable";
+      return;
+    }
+
+    auto moqExec = session_->getExecutor();
+    streamCountTimeout_ = std::make_unique<StreamCountTimeoutCallback>(*this);
+    moqExec->scheduleTimeout(
+        streamCountTimeout_.get(),
+        session_->getMoqSettings().publishDoneStreamCountTimeout);
+  }
+
+  void cancelStreamCountTimeout() {
+    if (streamCountTimeout_) {
+      streamCountTimeout_->cancelTimerCallback();
+      streamCountTimeout_.reset();
+    }
+  }
+
+  void streamCountTimeoutExpired() {
+    XCHECK(pendingSubscribeDone_) << "Why is there no pendingSubscribeDone_";
+    XLOG(DBG1) << "Delivering SUBSCRIBE_DONE after timeout, have="
+               << streamCount_
+               << " expected=" << pendingSubscribeDone_->streamCount;
+    deliverSubscribeDoneAndRemove();
+  }
+
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<TrackConsumer> callback_;
   folly::coro::Promise<SubscribeResult> subscribePromise_;
@@ -1733,12 +1797,17 @@ class MoQSession::SubscribeTrackReceiveState
 
   // Indicates whether receiveState is for Publish
   bool publish_;
-  bool deliveredDone_{false};
 
   // Publisher priority from SUBSCRIBE_OK or PUBLISH parameter
   // Stored as optional; if not set from SUBSCRIBE_OK, defaults to
   // kDefaultPriority
   folly::Optional<uint8_t> publisherPriority_;
+
+  // Raw pointer to session (safe because SubscribeTrackReceiveState is owned
+  // by session in subTracks_)
+  MoQSession* session_;
+  TrackAlias alias_;
+  std::unique_ptr<StreamCountTimeoutCallback> streamCountTimeout_;
 };
 
 class MoQSession::FetchTrackReceiveState
@@ -1905,13 +1974,15 @@ void MoQSession::cleanup() {
              "Session Closed"}),
         ResetStreamErrorCode::SESSION_CLOSED);
   }
-  for (auto& subTrack : subTracks_) {
-    // subscribeError handles both publish and non-publish tracks correctly:
-    // - For non-publish: promise not fulfilled, sets error on promise
-    // - For publish: promise fulfilled, calls subscribeDone on callback
-    subTrack.second->subscribeError({/*TrackReceiveState fills in subId*/ 0,
-                                     SubscribeErrorCode::INTERNAL_ERROR,
-                                     "session closed"});
+  for (auto it = subTracks_.begin(); it != subTracks_.end();) {
+    auto sub = it->second;
+    ++it;
+    // For pending subscribe, delivers subscribeError
+    // For established subscriptions or pending publish, delivers subscribeDone
+    // which can erase from subTracks_.
+    sub->subscribeError({/*TrackReceiveState fills in subId*/ 0,
+                         SubscribeErrorCode::INTERNAL_ERROR,
+                         "session closed"});
   }
   subTracks_.clear();
   // We parse a subscribeDone after cleanup
@@ -2421,7 +2492,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     }
 
     subscribeState_->setCurrentStreamId(currentStreamId_);
-    subscribeState_->onSubgroup(session_, alias);
+    subscribeState_->onSubgroup();
     return MoQCodec::ParseResult::UNBLOCKED;
   }
 
@@ -2636,10 +2707,13 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
  private:
   bool isCancelled() const {
+    if (error_ && error_->code == MoQPublishError::CANCELLED) {
+      return true;
+    }
     if (fetchState_) {
       return !fetchState_->getFetchCallback();
     } else if (subscribeState_) {
-      return !subgroupCallback_ || !subscribeState_->getSubscribeCallback();
+      return !subgroupCallback_ || subscribeState_->isCancelled();
     }
     return true;
   }
@@ -2808,6 +2882,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
           if (waitRes.hasException()) {
             XLOG(ERR) << "Timed out waiting for subscription state id=" << id
                       << " sess=" << this;
+            removeBufferedSubgroupBaton(deferredAlias, &aliasBaton);
             break;
           }
           result = dcb.onSubgroup(
@@ -3258,6 +3333,20 @@ void MoQSession::deliverBufferedData(TrackAlias trackAlias) {
   }
 }
 
+// Helper to remove a particular alias/baton from bufferedSubgroups_
+void MoQSession::removeBufferedSubgroupBaton(
+    TrackAlias alias,
+    TimedBaton* baton) {
+  auto it = bufferedSubgroups_.find(alias);
+  if (it != bufferedSubgroups_.end()) {
+    auto& batonList = it->second;
+    batonList.remove(baton);
+    if (batonList.empty()) {
+      bufferedSubgroups_.erase(it);
+    }
+  }
+}
+
 class MoQSession::ReceiverSubscriptionHandle
     : public Publisher::SubscriptionHandle {
  public:
@@ -3363,7 +3452,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
 
         // Add ReceiveState to subTracks_
         auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
-            ftn, requestID, initiator.consumer, logger_, true);
+            ftn, requestID, initiator.consumer, this, alias, logger_, true);
 
         // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
         setPublisherPriorityFromParams(params, trackReceiveState);
@@ -3406,18 +3495,14 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
     return;
   }
 
-  // TODO: handle final object and status code
-  // TODO: there could still be objects in flight.  Removing from maps now
-  // will prevent their delivery.  I think the only way to handle this is
-  // with timeouts.
   auto alias = trackAliasIt->second;
-  auto reqId = subscribeDone.requestID;
   auto trackReceiveStateIt = subTracks_.find(alias);
   if (trackReceiveStateIt != subTracks_.end()) {
     auto state = trackReceiveStateIt->second;
-    if (state->processSubscribeDone(std::move(subscribeDone))) {
-      removeSubscriptionState(alias, reqId);
-    }
+    state->processSubscribeDone(std::move(subscribeDone));
+    // Note: State removal is handled by deliverSubscribeDoneAndRemove called
+    // from processSubscribeDone (when streams already arrived), onSubgroup
+    // (when stream count reached), or timeout callback (when timeout expires)
   } else {
     XLOG(DFATAL) << "trackAliasIt but no trackReceiveStateIt for id="
                  << subscribeDone.requestID << " sess=" << this;
@@ -4081,7 +4166,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   }
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
-      fullTrackName, reqID, callback, logger_);
+      fullTrackName, reqID, callback, this, trackAlias, logger_);
   pendingRequests_.emplace(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
   auto subscribeResultTry =

@@ -493,15 +493,18 @@ folly::coro::Task<void> MoQSessionTest::publishValidationTest(
         co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
       });
 
+  folly::coro::Baton resetBaton;
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
       .WillOnce(testing::Return(sg1));
-  EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::INTERNAL_ERROR))
+      .WillOnce([&](auto) { resetBaton.post(); });
   expectSubscribeDone();
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
   co_await subscribeDone_;
+  co_await resetBaton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

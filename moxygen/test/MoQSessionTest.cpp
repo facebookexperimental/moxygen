@@ -1859,6 +1859,75 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKAfterSubgroup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Test: SubscribeOK arrives after subgroup timeout; subscribe still succeeds,
+// but publisher cannot continue object
+CO_TEST_P_X(
+    MoQSessionTest,
+    SubscribeOKArrivesAfterSubgroupTimeout_SubscribeSucceeds) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.unknownAliasTimeout = std::chrono::milliseconds(500);
+  moqSettings.publishDoneStreamCountTimeout = std::chrono::milliseconds(500);
+  clientSession_->setMoqSettings(moqSettings);
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  std::shared_ptr<SubgroupConsumer> subgroupPublisher;
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
+
+  // The app should NOT get onSubgroup or object
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(_, _, _)).Times(0);
+  EXPECT_CALL(*sg, object(_, _, _, _)).Times(0);
+
+  // Simulate server subscribe handler that delays returning SubscribeOk
+  expectSubscribe(
+      [this, &trackConsumer, &subgroupPublisher, &mockSubscriptionHandle](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+
+        // Open subgroup and begin object, but do not return SubscribeOk yet
+        eventBase_.add([&subgroupPublisher, pub] {
+          // Begin subgroup and begin object with partial payload
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
+          subgroupPublisher = sgp;
+          // Begin object with length 10, send 5 bytes
+          auto beginRes = sgp->beginObject(0, 10, moxygen::test::makeBuf(5));
+          EXPECT_TRUE(beginRes.hasValue());
+        });
+
+        // Wait longer than the unknown alias timeout
+        co_await folly::coro::sleep(std::chrono::seconds(1));
+
+        // Now return SubscribeOk (arrives after timeout)
+        co_return mockSubscriptionHandle;
+      });
+
+  // Start the subscribe and await it (should succeed, but subgroup timed out)
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  // The result should be a success (subscribe still succeeds)
+  EXPECT_TRUE(res.hasValue());
+
+  // Now attempt to publish the rest of the object; should return error
+  // (subgroupPublisher should be valid, but the stream should be reset/stopped)
+  EXPECT_TRUE(subgroupPublisher != nullptr);
+  auto payloadRes =
+      subgroupPublisher->objectPayload(moxygen::test::makeBuf(5), true);
+  EXPECT_TRUE(payloadRes.hasError());
+  EXPECT_EQ(payloadRes.error().code, MoQPublishError::CANCELLED);
+
+  // The app should not get onSubgroup or object (enforced by StrictMock above)
+  expectSubscribeDone();
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDone_;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, SubscribeOKArrivesOneByteAtATime) {
   co_await setupMoQSession();
 
