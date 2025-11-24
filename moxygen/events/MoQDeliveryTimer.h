@@ -23,9 +23,6 @@ class ObjectTimerCallback;
 // Callback type for session close functionality
 using StreamResetCallback = std::function<void(ResetStreamErrorCode)>;
 
-// Callback type for getting current RTT
-using RttGetterCallback = std::function<std::chrono::microseconds()>;
-
 /*
  * Stream scoped delivery timeout manager used to track per object delivery
  * timeout.
@@ -35,9 +32,9 @@ class MoQDeliveryTimer {
   MoQDeliveryTimer(
       std::shared_ptr<MoQExecutor> exec,
       std::chrono::milliseconds deliveryTimeout,
-      RttGetterCallback rttGetter = nullptr)
+      StreamResetCallback streamResetCallback)
       : exec_(std::move(exec)),
-        rttGetter_(std::move(rttGetter)),
+        streamResetCallback_(std::move(streamResetCallback)),
         deliveryTimeout_(deliveryTimeout) {
     XLOG(DBG3) << "Setting delivery timeout to " << deliveryTimeout_.count()
                << "ms";
@@ -45,24 +42,14 @@ class MoQDeliveryTimer {
   ~MoQDeliveryTimer();
 
   /*
-   * Sets the callback to be called when a stream is reset if timed-out.
-   */
-  void setStreamResetCallback(StreamResetCallback streamResetCallback);
-
-  /*
    * Sets the delivery timeout.
    */
   void setDeliveryTimeout(std::chrono::milliseconds timeout);
 
-  /*
-   * Sets the RTT getter callback.
-   */
-  void setRttGetter(RttGetterCallback rttGetter);
-
   /**
    * Start the delivery timeout timer
    */
-  void startTimer(uint64_t objectId);
+  void startTimer(uint64_t objectId, std::chrono::microseconds srtt);
 
   /**
    * Cancel the active delivery timeout timer for a specific object
@@ -75,14 +62,15 @@ class MoQDeliveryTimer {
   void cancelAllTimers();
 
  private:
+  friend class ObjectTimerCallback;
+
   /*
    * Calculates the effective timeout that will be used for object timers
    */
-  std::chrono::milliseconds calculateTimeout();
+  std::chrono::milliseconds calculateTimeout(std::chrono::microseconds srtt);
 
   std::shared_ptr<MoQExecutor> exec_;
   StreamResetCallback streamResetCallback_;
-  RttGetterCallback rttGetter_;
   // (objectId -> timer)
   folly::F14FastMap<uint64_t, std::unique_ptr<ObjectTimerCallback>>
       objectTimers_;
@@ -91,16 +79,20 @@ class MoQDeliveryTimer {
 
 class ObjectTimerCallback : public quic::QuicTimerCallback {
  public:
-  ObjectTimerCallback(
-      uint64_t objectId,
-      StreamResetCallback streamResetCallback)
-      : objectId_(objectId),
-        streamResetCallback_(std::move(streamResetCallback)) {}
+  ObjectTimerCallback(uint64_t objectId, MoQDeliveryTimer& owner)
+      : objectId_(objectId), owner_(owner) {}
+
   void timeoutExpired() noexcept override;
+
+  // Don't invoke callback when timer is cancelled
+  void callbackCanceled() noexcept override {
+    XLOG(DBG6) << "MoQDeliveryTimer: ObjectID " << objectId_
+               << " timer cancelled";
+  }
 
  private:
   uint64_t objectId_;
-  StreamResetCallback streamResetCallback_;
+  MoQDeliveryTimer& owner_;
 };
 
 } // namespace moxygen

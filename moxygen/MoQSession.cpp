@@ -137,7 +137,7 @@ class StreamPublisherImpl
       std::shared_ptr<MoQSession::PublisherImpl> publisher,
       std::shared_ptr<MLogger> logger = nullptr,
       std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
-      std::unique_ptr<MoQDeliveryTimer> deliveryTimer = nullptr);
+      folly::Optional<std::chrono::milliseconds> deliveryTimeout = folly::none);
 
   // Subscribe constructor
   StreamPublisherImpl(
@@ -151,7 +151,7 @@ class StreamPublisherImpl
       bool includeExtensions,
       std::shared_ptr<MLogger> logger = nullptr,
       std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
-      std::unique_ptr<MoQDeliveryTimer> deliveryTimer = nullptr);
+      folly::Optional<std::chrono::milliseconds> deliveryTimeout = folly::none);
 
   // SubgroupConsumer overrides
   // Note where the interface uses finSubgroup, this class uses finStream,
@@ -284,30 +284,27 @@ class StreamPublisherImpl
 
   void onByteEvent(quic::StreamId id, uint64_t offset) noexcept override {
     // Notify delivery callback for all objects delivered up to this offset
-    while (!pendingDeliveries_.empty()) {
+    folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
+    if (streamType_ != StreamType::FETCH_HEADER) {
+      maybeTrackAlias = trackAlias_;
+    }
+    while (!pendingDeliveries_.empty() &&
+           pendingDeliveries_.front().endOffset <= offset) {
       auto& pendingDelivery = pendingDeliveries_.front();
 
-      if (pendingDelivery.endOffset <= offset) {
-        if (deliveryCallback_) {
-          folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
-          if (streamType_ != StreamType::FETCH_HEADER) {
-            maybeTrackAlias = trackAlias_;
-          }
-          deliveryCallback_->onDelivered(
-              maybeTrackAlias,
-              pendingDelivery.groupId,
-              pendingDelivery.subgroupId,
-              pendingDelivery.objectId);
-        }
-
-        // Cancel delivery timeout timer when object is successfully delivered
-        if (deliveryTimer_) {
-          deliveryTimer_->cancelTimer(pendingDelivery.objectId);
-        }
-        pendingDeliveries_.pop_front();
-      } else {
-        break;
+      if (deliveryCallback_) {
+        deliveryCallback_->onDelivered(
+            maybeTrackAlias,
+            pendingDelivery.groupId,
+            pendingDelivery.subgroupId,
+            pendingDelivery.objectId);
       }
+
+      // Cancel delivery timeout timer when object is successfully delivered
+      if (deliveryTimer_) {
+        deliveryTimer_->cancelTimer(pendingDelivery.objectId);
+      }
+      pendingDeliveries_.pop_front();
     }
     onByteEventCommon(id, offset);
   }
@@ -319,31 +316,28 @@ class StreamPublisherImpl
     // delivery must be cancelled for all offsets higher than the cancelled
     // offset as well;
 
-    while (!pendingDeliveries_.empty()) {
+    folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
+    if (streamType_ != StreamType::FETCH_HEADER) {
+      maybeTrackAlias = trackAlias_;
+    }
+    while (!pendingDeliveries_.empty() &&
+           pendingDeliveries_.back().endOffset >= offset) {
       auto& pendingDelivery = pendingDeliveries_.back();
 
-      if (pendingDelivery.endOffset >= offset) {
-        if (deliveryCallback_) {
-          folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
-          if (streamType_ != StreamType::FETCH_HEADER) {
-            maybeTrackAlias = trackAlias_;
-          }
-          deliveryCallback_->onDeliveryCancelled(
-              maybeTrackAlias,
-              pendingDelivery.groupId,
-              pendingDelivery.subgroupId,
-              pendingDelivery.objectId);
-        }
-
-        // Cancel delivery timeout timer when object delivery is cancelled
-        if (deliveryTimer_) {
-          deliveryTimer_->cancelTimer(pendingDelivery.objectId);
-        }
-
-        pendingDeliveries_.pop_back();
-      } else {
-        break;
+      if (deliveryCallback_) {
+        deliveryCallback_->onDeliveryCancelled(
+            maybeTrackAlias,
+            pendingDelivery.groupId,
+            pendingDelivery.subgroupId,
+            pendingDelivery.objectId);
       }
+
+      // Cancel delivery timeout timer when object delivery is cancelled
+      if (deliveryTimer_) {
+        deliveryTimer_->cancelTimer(pendingDelivery.objectId);
+      }
+
+      pendingDeliveries_.pop_back();
     }
     onByteEventCommon(id, offset);
   }
@@ -352,27 +346,17 @@ class StreamPublisherImpl
     forward_ = forwardIn;
   }
 
-  void setDeliveryTimeout(
-      folly::Optional<std::chrono::milliseconds> timeout,
-      std::shared_ptr<MoQExecutor> exec) {
+  void setDeliveryTimeout(folly::Optional<std::chrono::milliseconds> timeout) {
     if (timeout.has_value() && timeout->count() > 0) {
-      if (!deliveryTimer_) {
-        // Create new delivery timer.
+      if (deliveryTimer_) {
         XLOG(DBG6)
-            << "MoQSession::SubgroupPublisher::setDeliveryTimeout: CREATING new delivery timer"
-            << " timeout=" << timeout->count() << "ms";
-        if (!exec) {
-          XLOG(ERR)
-              << "MoQSession::SubgroupPublisher::setDeliveryTimeout: ERROR: No executor available. Delivery timeout was not set.";
-          return;
-        }
-        deliveryTimer_ = std::make_unique<MoQDeliveryTimer>(exec, *timeout);
-        setDeliveryTimeoutCallback();
-      } else {
-        XLOG(DBG6)
-            << "[MoQSession::SubgroupPublisher::setDeliveryTimeout: CALLING deliveryTimer->setDeliveryTimeout"
+            << "MoQSession::SubgroupPublisher::setDeliveryTimeout: CALLING deliveryTimer->setDeliveryTimeout"
             << " timeout=" << timeout->count() << "ms";
         deliveryTimer_->setDeliveryTimeout(*timeout);
+      } else {
+        XLOG(DBG6)
+            << "MoQSession::SubgroupPublisher::setDeliveryTimeout: No timer exists, ignoring timeout update"
+            << " timeout=" << timeout->count() << "ms";
       }
     }
   }
@@ -441,15 +425,6 @@ class StreamPublisherImpl
 
   void onStreamComplete();
 
-  void setDeliveryTimeoutCallback() {
-    if (deliveryTimer_) {
-      auto streamResetCallback = [this](ResetStreamErrorCode errorCode) {
-        this->reset(errorCode);
-      };
-      deliveryTimer_->setStreamResetCallback(streamResetCallback);
-    }
-  }
-
   std::shared_ptr<MoQSession::PublisherImpl> publisher_{nullptr};
   bool streamComplete_{false};
   folly::Optional<folly::CancellationCallback> cancelCallback_;
@@ -476,7 +451,7 @@ StreamPublisherImpl::StreamPublisherImpl(
     std::shared_ptr<MoQSession::PublisherImpl> publisher,
     std::shared_ptr<MLogger> logger,
     std::shared_ptr<DeliveryCallback> deliveryCallback,
-    std::unique_ptr<MoQDeliveryTimer> deliveryTimer)
+    folly::Optional<std::chrono::milliseconds> deliveryTimeout)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
@@ -487,11 +462,25 @@ StreamPublisherImpl::StreamPublisherImpl(
           ObjectStatus::NORMAL) {
   logger_ = logger;
   deliveryCallback_ = std::move(deliveryCallback);
-  deliveryTimer_ = std::move(deliveryTimer);
+
+  // Create delivery timer if timeout is provided
+  if (deliveryTimeout.has_value() && deliveryTimeout->count() > 0) {
+    auto exec = publisher_->getExecutor();
+    if (exec) {
+      deliveryTimer_ = std::make_unique<MoQDeliveryTimer>(
+          exec, *deliveryTimeout, [this](ResetStreamErrorCode errorCode) {
+            if (writeHandle_) {
+              this->reset(errorCode);
+            }
+          });
+    } else {
+      XLOG(ERR) << "MoQSession::StreamPublisherImpl: No executor available. "
+                   "Delivery timeout was not set.";
+    }
+  }
+
   moqFrameWriter_.initializeVersion(publisher->getVersion());
   (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->requestID());
-
-  setDeliveryTimeoutCallback();
 }
 
 StreamPublisherImpl::StreamPublisherImpl(
@@ -505,12 +494,12 @@ StreamPublisherImpl::StreamPublisherImpl(
     bool includeExtensions,
     std::shared_ptr<MLogger> logger,
     std::shared_ptr<DeliveryCallback> deliveryCallback,
-    std::unique_ptr<MoQDeliveryTimer> deliveryTimer)
+    folly::Optional<std::chrono::milliseconds> deliveryTimeout)
     : StreamPublisherImpl(
           publisher,
-          nullptr,
+          logger,
           deliveryCallback,
-          std::move(deliveryTimer)) {
+          std::move(deliveryTimeout)) {
   CHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
   // When sgPriority is none, the receiver will use the value from
@@ -542,8 +531,6 @@ StreamPublisherImpl::StreamPublisherImpl(
   writeBuf_.move(); // clear FETCH_HEADER
   (void)moqFrameWriter_.writeSubgroupHeader(
       writeBuf_, trackAlias_, header_, format, includeExtensions);
-
-  setDeliveryTimeoutCallback();
 }
 
 // Private methods
@@ -733,7 +720,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
 
   // Start delivery timeout timer when object begins being sent to stream
   if (deliveryTimer_) {
-    deliveryTimer_->startTimer(objectID);
+    deliveryTimer_->startTimer(objectID, publisher_->getTransportInfo().srtt);
   }
 
   return writeCurrentObject(
@@ -779,7 +766,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
 
   // Start delivery timeout timer when object begins being sent to stream
   if (deliveryTimer_) {
-    deliveryTimer_->startTimer(objectID);
+    deliveryTimer_->startTimer(objectID, publisher_->getTransportInfo().srtt);
   }
 
   return writeCurrentObject(
@@ -1328,15 +1315,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
           groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
       false);
 
-  // Create a new DeliveryTimer if effective timeout is set
-  std::unique_ptr<MoQDeliveryTimer> timer = nullptr;
+  // Get effective timeout to pass to StreamPublisherImpl
   auto effectiveTimeout = deliveryTimeoutManager_.getEffectiveTimeout();
-  if (effectiveTimeout.has_value()) {
-    timer = std::make_unique<MoQDeliveryTimer>(
-        session_->exec_, *effectiveTimeout, [this]() {
-          return getCurrentRtt();
-        });
-  }
 
   // Elide priority if it matches publisher priority from control plane
   auto elidedPriority = elidePriorityForWrite(pubPriority, publisherPriority_);
@@ -1352,7 +1332,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       includeExtensions,
       logger_,
       deliveryCallback_,
-      std::move(timer));
+      effectiveTimeout);
   // TODO: these are currently unused, but the intent might be to reset
   // open subgroups automatically from some path?
   subgroups_[{groupID, subgroupID}] = subgroupPublisher;
@@ -1583,7 +1563,7 @@ void MoQSession::TrackPublisherImpl::onDeliveryTimeoutChanged(
 
   // Propagate to all existing subgroups
   for (const auto& [_, subgroupPublisher] : subgroups_) {
-    subgroupPublisher->setDeliveryTimeout(*newTimeout, session_->exec_);
+    subgroupPublisher->setDeliveryTimeout(*newTimeout);
   }
 }
 
@@ -1719,6 +1699,9 @@ class MoQSession::SubscribeTrackReceiveState
   void processSubscribeDone(SubscribeDone subDone) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
     if (!callback_) {
+      XLOG(DBG0)
+          << "processSubscribeDone: No callback (unsubscribed); removing state alias="
+          << alias_ << " requestID=" << requestID_;
       // Unsubscribe raced with subscribeDone - just remove state
       // TODO: I think alias_ will be wrong in SUBSCRIBE -> SUBSCRIBE_DONE
       // But that should be a different error.

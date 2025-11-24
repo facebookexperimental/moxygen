@@ -312,6 +312,14 @@ class MoQSession : public Subscriber,
       return nullptr;
     }
 
+    std::shared_ptr<MoQExecutor> getExecutor() const {
+      return session_ ? session_->exec_ : nullptr;
+    }
+
+    quic::TransportInfo getTransportInfo() const {
+      return session_ ? session_->getTransportInfo() : quic::TransportInfo();
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
