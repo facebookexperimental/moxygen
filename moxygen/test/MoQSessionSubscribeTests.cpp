@@ -905,3 +905,47 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeImmediatelyAfterSubscribeReturns) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// When the SubscribeDone timeout handler fires, there may be no other
+// holders of the receive state. Unsubscribe from within subscribeDone
+// handler will delete it.
+CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinSubscribeDoneHandler) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings = clientSession_->getMoqSettings();
+  moqSettings.publishDoneStreamCountTimeout = std::chrono::milliseconds(500);
+  clientSession_->setMoqSettings(moqSettings);
+
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+
+  // Server subscribe handler returns OK and captures the track consumer
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        serverWt_->writeHandles[2]->setImmediateDelivery(false);
+        co_await folly::coro::co_reschedule_on_current_executor;
+        trackConsumer->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandle = res.value();
+
+  // When subscribeDone is delivered, immediately call unsubscribe() from
+  // handler
+  folly::coro::Baton subscribeDoneInvoked;
+  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+      .WillOnce(testing::Invoke([&](const auto&) {
+        subscribeHandle->unsubscribe();
+        subscribeDoneInvoked.post();
+        return folly::unit;
+      }));
+
+  trackConsumer->subscribeDone(
+      getTrackEndedSubscribeDone(subscribeRequest.requestID));
+  co_await subscribeDoneInvoked;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

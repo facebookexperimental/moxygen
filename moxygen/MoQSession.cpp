@@ -1761,8 +1761,12 @@ class MoQSession::SubscribeTrackReceiveState
     cancelStreamCountTimeout();
     if (pendingSubscribeDone_) {
       if (callback_) {
+        auto token = cancelSource_.getToken();
         auto cb = std::exchange(callback_, nullptr);
         cb->subscribeDone(std::move(*pendingSubscribeDone_));
+        if (token.isCancellationRequested()) {
+          return;
+        }
       }
       pendingSubscribeDone_.reset();
     }
