@@ -25,5 +25,6 @@ moxygen_add_test(TARGET MoQRelayTest
   DEPENDS
     moqrelay
     moqtestutils
+    moqfollyexecutorimpl
     testmain
 )

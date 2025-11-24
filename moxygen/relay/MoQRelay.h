@@ -53,6 +53,25 @@ class MoQRelay : public Publisher,
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
   }
 
+  std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
+
+  // Wrapper for compatibility - returns single session as vector
+  std::vector<std::shared_ptr<MoQSession>> findAnnounceSessions(
+      const TrackNamespace& ns) {
+    auto session = findAnnounceSession(ns);
+    if (session) {
+      return {session};
+    }
+    return {};
+  }
+
+  // Test accessor: check if a publish exists and return node/publish state
+  struct PublishState {
+    bool nodeExists{false};                       // true if tree node exists
+    std::shared_ptr<MoQSession> session{nullptr}; // publish session if exists
+  };
+  PublishState findPublishState(const FullTrackName& ftn);
+
  private:
   class AnnouncesSubscription;
   class TerminationFilter;
@@ -64,10 +83,22 @@ class MoQRelay : public Publisher,
   void onPublishDone(const FullTrackName& ftn);
 
   struct AnnounceNode : public Subscriber::AnnounceHandle {
-    explicit AnnounceNode(MoQRelay& relay) : relay_(relay) {}
+    explicit AnnounceNode(MoQRelay& relay, AnnounceNode* parent = nullptr)
+        : relay_(relay), parent_(parent) {}
 
     void unannounce() override {
       relay_.unannounce(trackNamespace_, this);
+    }
+
+    // Helper to check if THIS node (excluding children) has content
+    bool hasLocalSessions() const {
+      return !publishes.empty() || !sessions.empty() ||
+          !announcements.empty() || sourceSession != nullptr;
+    }
+
+    // Check if node should be kept (has content OR non-empty children)
+    bool shouldKeep() const {
+      return hasLocalSessions() || activeChildCount_ > 0;
     }
 
     using Subscriber::AnnounceHandle::setAnnounceOk;
@@ -88,6 +119,16 @@ class MoQRelay : public Publisher,
     std::shared_ptr<AnnounceCallback> announceCallback;
 
     MoQRelay& relay_;
+
+    // Pruning support: parent pointer and active child count
+    AnnounceNode* parent_{nullptr}; // back link (raw pointer, parent owns us)
+    size_t activeChildCount_{0};    // count of children with content
+
+    friend class MoQRelay;
+
+    void incrementActiveChildren();
+    void decrementActiveChildren();
+    void tryPruneChild(const std::string& childKey);
   };
 
   AnnounceNode announceRoot_{*this};
@@ -97,7 +138,6 @@ class MoQRelay : public Publisher,
       bool createMissingNodes = false,
       MatchType matchType = MatchType::Exact,
       std::vector<std::shared_ptr<MoQSession>>* sessions = nullptr);
-  std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
 
   struct RelaySubscription {
     RelaySubscription(

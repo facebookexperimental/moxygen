@@ -29,8 +29,9 @@ std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     auto it = nodePtr->children.find(name);
     if (it == nodePtr->children.end()) {
       if (createMissingNodes) {
-        auto node = std::make_shared<AnnounceNode>(*this);
+        auto node = std::make_shared<AnnounceNode>(*this, nodePtr.get());
         nodePtr->children.emplace(name, node);
+        // Don't increment yet - only when content is actually added
         nodePtr = std::move(node);
       } else if (
           matchType == MatchType::Prefix && nodePtr.get() != &announceRoot_) {
@@ -74,9 +75,11 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
     // in that namespace.  Note: it could have announced a more specific
     // namespace which hasn't been overridden by the new publisher, but
     // for now we don't support that.
-    nodePtr->announceCallback->announceCancel(
-        AnnounceErrorCode::CANCELLED, "New publisher");
-    nodePtr->announceCallback.reset();
+    if (nodePtr->announceCallback) {
+      nodePtr->announceCallback->announceCancel(
+          AnnounceErrorCode::CANCELLED, "New publisher");
+      nodePtr->announceCallback.reset();
+    }
     for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
       // Check if the subscription's FullTrackName is in this namespace
       if (it->first.trackNamespace.startsWith(ann.trackNamespace) &&
@@ -93,10 +96,16 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
 
   // TODO: store auth for forwarding on future SubscribeAnnounces?
   auto session = MoQSession::getRequestSession();
+  bool wasEmpty = !nodePtr->hasLocalSessions();
   nodePtr->sourceSession = std::move(session);
   nodePtr->announceCallback = std::move(callback);
   nodePtr->trackNamespace_ = ann.trackNamespace;
   nodePtr->setAnnounceOk({ann.requestID, {}});
+
+  // If this is the first content added to this node, notify parent
+  if (wasEmpty && nodePtr->parent_) {
+    nodePtr->parent_->incrementActiveChildren();
+  }
   for (auto& outSession : sessions) {
     if (outSession != session) {
       auto exec = outSession->getExecutor();
@@ -120,11 +129,85 @@ folly::coro::Task<void> MoQRelay::announceToSession(
   }
 }
 
+// AnnounceNode ref count management methods for pruning
+void MoQRelay::AnnounceNode::incrementActiveChildren() {
+  activeChildCount_++;
+  // Propagate up if this was the first active child
+  if (activeChildCount_ == 1 && parent_ && !hasLocalSessions()) {
+    parent_->incrementActiveChildren();
+  }
+}
+
+void MoQRelay::AnnounceNode::decrementActiveChildren() {
+  XCHECK_GT(activeChildCount_, 0);
+  activeChildCount_--;
+}
+
+// Walk up the tree to find and prune the highest empty ancestor
+void MoQRelay::AnnounceNode::tryPruneChild(const std::string& childKey) {
+  auto it = children.find(childKey);
+  if (it == children.end()) {
+    return;
+  }
+
+  auto childNode = it->second.get();
+  if (childNode->shouldKeep()) {
+    return;
+  }
+
+  // Walk up the tree, decrementing counts, to find highest empty ancestor
+  // Track the key to remove and the parent to remove it from
+  std::string keyToRemove = childKey;
+  AnnounceNode* parentOfNodeToRemove = this;
+  AnnounceNode* current = this;
+
+  while (current) {
+    XCHECK_GT(current->activeChildCount_, 0);
+    current->activeChildCount_--;
+
+    // If current still has content or children after decrement, stop walking
+    // Remove keyToRemove from parentOfNodeToRemove
+    if (current->hasLocalSessions() || current->activeChildCount_ > 0) {
+      break;
+    }
+
+    // Current is now empty too - if it has a parent, continue walking up
+    if (!current->parent_) {
+      // We've reached root - can't remove root, so stop
+      break;
+    }
+
+    // Current is empty and not root, so it becomes the new candidate for
+    // removal Find the key for current in its parent's children map
+    for (const auto& [key, node] : current->parent_->children) {
+      if (node.get() == current) {
+        keyToRemove = key;
+        parentOfNodeToRemove = current->parent_;
+        break;
+      }
+    }
+
+    current = current->parent_;
+  }
+
+  // Remove the highest empty node from its parent
+  XLOG(DBG1) << "Pruning empty subtree at: " << keyToRemove;
+  parentOfNodeToRemove->children.erase(keyToRemove);
+}
+
 void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   XLOG(DBG1) << __func__ << " ns=" << trackNamespace;
   // Node would be useful if there were back links
   auto nodePtr = findNamespaceNode(trackNamespace);
-  XCHECK(nodePtr);
+  if (!nodePtr) {
+    // Node was already pruned, nothing to do, maybe app called unannouce twice?
+    XLOG(DBG1) << "Node already pruned for ns=" << trackNamespace;
+    return;
+  }
+
+  // Track if node had local content before modification
+  bool hadLocalContent = nodePtr->hasLocalSessions();
+
   nodePtr->sourceSession = nullptr;
   nodePtr->announceCallback.reset();
   for (auto& announcement : nodePtr->announcements) {
@@ -134,7 +217,12 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
     });
   }
   nodePtr->announcements.clear();
-  // TODO: prune Announce tree
+
+  // Prune if node became empty and has a parent
+  if (hadLocalContent && !nodePtr->shouldKeep() && nodePtr->parent_ &&
+      !trackNamespace.trackNamespace.empty()) {
+    nodePtr->parent_->tryPruneChild(trackNamespace.trackNamespace.back());
+  }
 }
 
 void MoQRelay::onPublishDone(const FullTrackName& ftn) {
@@ -146,7 +234,15 @@ void MoQRelay::onPublishDone(const FullTrackName& ftn) {
       // Remove from publishes map
       auto nodePtr = findNamespaceNode(ftn.trackNamespace);
       if (nodePtr) {
+        bool hadLocalContent = nodePtr->hasLocalSessions();
         nodePtr->publishes.erase(ftn.trackName);
+
+        // Prune if node became empty and has a parent
+        if (hadLocalContent && !nodePtr->shouldKeep() && nodePtr->parent_ &&
+            !ftn.trackNamespace.trackNamespace.empty()) {
+          nodePtr->parent_->tryPruneChild(
+              ftn.trackNamespace.trackNamespace.back());
+        }
       }
     }
 
@@ -194,6 +290,9 @@ Subscriber::PublishResult MoQRelay::publish(
   sessions.insert(
       sessions.end(), nodePtr->sessions.begin(), nodePtr->sessions.end());
 
+  auto session = MoQSession::getRequestSession();
+  bool wasEmpty = !nodePtr->hasLocalSessions();
+
   auto it = subscriptions_.find(pub.fullTrackName);
   if (it != subscriptions_.end()) {
     // someone already announced this FTN, we don't support multipublisher
@@ -208,9 +307,13 @@ Subscriber::PublishResult MoQRelay::publish(
     XLOG(DBG4) << "Erasing subscription to " << it->first;
     subscriptions_.erase(it);
   }
-  auto session = MoQSession::getRequestSession();
   auto res = nodePtr->publishes.emplace(pub.fullTrackName.trackName, session);
   XCHECK(res.second) << "Duplicate publish";
+
+  // If this is the first content added to this node, notify parent
+  if (wasEmpty && nodePtr->hasLocalSessions() && nodePtr->parent_) {
+    nodePtr->parent_->incrementActiveChildren();
+  }
 
   // Create Forwarder for this publish
   auto forwarder =
@@ -397,7 +500,15 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   auto session = MoQSession::getRequestSession();
   auto nodePtr = findNamespaceNode(
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
+
+  // Check if this is the first session subscriber for this node
+  bool wasEmpty = !nodePtr->hasLocalSessions();
   nodePtr->sessions.emplace(session);
+
+  // If this is the first content added to this node, notify parent
+  if (wasEmpty && nodePtr->hasLocalSessions() && nodePtr->parent_) {
+    nodePtr->parent_->incrementActiveChildren();
+  }
 
   // Find all nested Announcements/Publishes and forward
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<AnnounceNode>>> nodes{
@@ -471,15 +582,24 @@ void MoQRelay::unsubscribeAnnounces(
     // TODO: maybe error?
     return;
   }
+
+  // Track if node had local content before modification
+  bool hadLocalContent = nodePtr->hasLocalSessions();
+
   auto it = nodePtr->sessions.find(session);
   if (it != nodePtr->sessions.end()) {
     nodePtr->sessions.erase(it);
+
+    // Prune if node became empty and has a parent
+    if (hadLocalContent && !nodePtr->shouldKeep() && nodePtr->parent_ &&
+        !trackNamespacePrefix.trackNamespace.empty()) {
+      nodePtr->parent_->tryPruneChild(
+          trackNamespacePrefix.trackNamespace.back());
+    }
     return;
   }
   // TODO: error?
   XLOG(DBG1) << "Namespace prefix was not subscribed by this session";
-
-  // TODO: prune Announce tree
 }
 
 std::shared_ptr<MoQSession> MoQRelay::findAnnounceSession(
@@ -496,6 +616,26 @@ std::shared_ptr<MoQSession> MoQRelay::findAnnounceSession(
     return nullptr;
   }
   return nodePtr->sourceSession;
+}
+
+MoQRelay::PublishState MoQRelay::findPublishState(const FullTrackName& ftn) {
+  PublishState state;
+  auto nodePtr = findNamespaceNode(
+      ftn.trackNamespace, /*createMissingNodes=*/false, MatchType::Exact);
+
+  if (!nodePtr) {
+    // Node doesn't exist - tree was properly pruned
+    return state;
+  }
+
+  state.nodeExists = true;
+
+  auto it = nodePtr->publishes.find(ftn.trackName);
+  if (it != nodePtr->publishes.end()) {
+    state.session = it->second;
+  }
+
+  return state;
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(

@@ -7,16 +7,10 @@ namespace moxygen::test {
 // Mock MoQSession for testing relay behavior
 class MockMoQSession : public MoQSession {
  public:
-  MockMoQSession()
+  explicit MockMoQSession(std::shared_ptr<MoQExecutor> exec)
       : MoQSession(
             folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
-            nullptr) {
-    evb_ = std::make_shared<folly::EventBase>();
-  }
-
-  folly::Executor* getExecutor() const {
-    return evb_.get();
-  }
+            exec) {}
 
   MOCK_METHOD(
       folly::coro::Task<AnnounceResult>,
@@ -47,7 +41,6 @@ class MockMoQSession : public MoQSession {
   }
 
  private:
-  std::shared_ptr<folly::EventBase> evb_;
   uint64_t nextRequestID_{1};
 };
 
