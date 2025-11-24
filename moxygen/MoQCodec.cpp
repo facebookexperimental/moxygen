@@ -254,7 +254,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
             break;
           }
         }
-        [[fallthrough]];
+        break;
       }
       case ParseState::MULTI_OBJECT_HEADER: {
         size_t remainingLength = ingress_.chainLength() - totalBytesConsumed;

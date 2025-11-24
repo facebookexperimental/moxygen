@@ -514,6 +514,29 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
   serverControlCodec_.onIngress(serverSetup->clone(), false);
 }
 
+// Test for codec fix: stream with only subgroup header and EOF
+// This tests the fix where a stream with only a STREAM_HEADER_SG_EXT and EOF
+// should only call onSubgroup and onEndOfStream, NOT fall through to
+// MULTI_OBJECT_HEADER. Before the fix, there was a [[fallthrough]] that would
+// incorrectly try to parse a multi-object header.
+TEST_P(MoQCodecTest, SubgroupHeaderWithEOF) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Write a subgroup header with extensions
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+  EXPECT_TRUE(res);
+
+  // Expect only onSubgroup and onEndOfStream
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+  EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
+
+  // Deliver with FIN=true and no additional data
+  objectStreamCodec_.onIngress(writeBuf.move(), true);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
