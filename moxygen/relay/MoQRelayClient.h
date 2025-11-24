@@ -31,6 +31,12 @@ class MoQRelayClient {
                 MoQRelaySession::createRelaySessionFactory(),
                 std::move(verifier))) {}
 
+  void setLogger(std::shared_ptr<MLogger> logger) {
+    if (moqClient_ && logger) {
+      moqClient_->setLogger(logger);
+    }
+  }
+
   folly::coro::Task<void> setup(
       std::shared_ptr<Publisher> publisher,
       std::shared_ptr<Subscriber> subscriber,
