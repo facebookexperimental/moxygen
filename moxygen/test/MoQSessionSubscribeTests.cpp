@@ -868,3 +868,40 @@ CO_TEST_P_X(MoQSessionTest, ServerClosesDuringSubscribeHandler) {
   // Ensure the client session is also closed
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Test for UAF fix: handle unsubscribe delete immediately after subscribe
+// This tests the fix where unsubscribe is called right after subscribe returns,
+// ensuring the code detects cancellation and avoids accessing deleted state.
+CO_TEST_P_X(MoQSessionTest, UnsubscribeImmediatelyAfterSubscribeReturns) {
+  co_await setupMoQSession();
+
+  expectSubscribe(
+      [this](auto sub, auto pub) -> TaskSubscribeResult {
+        auto sgp = pub->beginSubgroup(0, 0, 0);
+        XCHECK(sgp.hasValue());
+        sgp.value()->object(0, moxygen::test::makeBuf(10));
+        serverWt_->writeHandles[2]->setImmediateDelivery(false);
+        serverWt_->writeHandles[2]->deliverInflightData(2); // type and alias
+        co_await folly::coro::co_reschedule_on_current_executor;
+        co_await folly::coro::co_reschedule_on_current_executor;
+        auto result = makeSubscribeOkResult(sub);
+        co_return result;
+      },
+      MoQControlCodec::Direction::SERVER);
+
+  // Create a mock callback
+  auto callback = std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+  EXPECT_CALL(*callback, setTrackAlias(_))
+      .WillOnce(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res = co_await clientSession_->subscribe(subscribeRequest, callback);
+  EXPECT_FALSE(res.hasError());
+  // subgroup unblocked, but unsubscribe removes state
+  res.value()->unsubscribe();
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

@@ -2902,8 +2902,11 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
             // codec may have buffered excess ingress while blocked
             result = codec.onIngress(nullptr, streamData->fin);
           }
+          if (result == MoQCodec::ParseResult::BLOCKED) {
+            // state was deleted (unsubscribe)
+            result = MoQCodec::ParseResult::ERROR_TERMINATE;
+          }
         }
-        XCHECK_NE(result, MoQCodec::ParseResult::BLOCKED);
       } catch (const std::exception& ex) {
         XLOG(ERR) << "Exception in stream processing: "
                   << folly::exceptionStr(ex) << " id=" << id
