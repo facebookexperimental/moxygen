@@ -73,7 +73,7 @@ class MoqtestCogwheelTest(CogwheelTest):
                 "--logging",
                 "DBG1",
                 "--url",
-                "https://[" + ipadd + "]:" + str(port),
+                "https://[" + ipadd + "]:" + str(port) + "/test",
                 "--forwarding_preference",
                 str(params.forwardingPreference),
                 "--start_group",
