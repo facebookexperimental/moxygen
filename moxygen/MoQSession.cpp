@@ -1675,8 +1675,14 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
   void cancel() {
+    XLOG(DBG1) << __func__ << " alias=" << alias_
+               << " requestID=" << requestID_;
     callback_.reset();
     cancelSource_.requestCancellation();
+    // Cancel stream count timer if waiting for pending streams
+    cancelStreamCountTimeout();
+    // Clear pending subscribe done since we're unsubscribing
+    pendingSubscribeDone_.reset();
   }
 
   void processSubscribeOK(SubscribeOk subscribeOK) {
