@@ -1404,15 +1404,16 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   length -= trackAlias->second;
   subscribeOk.trackAlias = trackAlias->first;
 
-  auto expires = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!expires) {
-    XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on expires";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= expires->second;
-  subscribeOk.expires = std::chrono::milliseconds(expires->first);
-
+  // For < v15: parse expires and groupOrder from fixed fields
   if (getDraftMajorVersion(*version_) < 15) {
+    auto expires = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!expires) {
+      XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on expires";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= expires->second;
+    subscribeOk.expires = std::chrono::milliseconds(expires->first);
+
     if (length < 1) {
       XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on order";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1463,10 +1464,10 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   }
 
   if (getDraftMajorVersion(*version_) >= 15) {
-    // From the spec: If omitted from SUBSCRIBE_OK, the receiver uses Ascending
-    // (0x1). So, we set the groupOrder to be OldestFirst (aka Ascending), and
-    // this might be overridden in handleRequestSpecificParams.
+    // Set defaults for v15+ when parameters are absent
+    subscribeOk.expires = std::chrono::milliseconds(0);
     subscribeOk.groupOrder = GroupOrder::OldestFirst;
+    // Override from parameters if present
     handleRequestSpecificParams(subscribeOk, requestSpecificParams);
   }
   return subscribeOk;
@@ -1475,9 +1476,20 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
 void MoQFrameParser::handleRequestSpecificParams(
     SubscribeOk& subscribeOk,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
-  // GROUP_ORDER
-  handleGroupOrderParam(
-      subscribeOk.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
+  // Process request-specific parameters
+  for (const auto& param : requestSpecificParams) {
+    switch (static_cast<TrackRequestParamKey>(param.key)) {
+      case TrackRequestParamKey::EXPIRES:
+        subscribeOk.expires = std::chrono::milliseconds(param.asUint64);
+        break;
+      case TrackRequestParamKey::GROUP_ORDER:
+        subscribeOk.groupOrder = static_cast<GroupOrder>(param.asUint64);
+        break;
+      default:
+        // Ignore unknown request-specific parameters
+        break;
+    }
+  }
 }
 
 folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
@@ -3665,12 +3677,15 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
   bool error = false;
   writeVarint(writeBuf, subscribeOk.requestID.value, size, error);
   writeVarint(writeBuf, subscribeOk.trackAlias.value, size, error);
-  writeVarint(writeBuf, subscribeOk.expires.count(), size, error);
+
+  // For < v15: write expires and groupOrder as fixed fields
   if (getDraftMajorVersion(*version_) < 15) {
+    writeVarint(writeBuf, subscribeOk.expires.count(), size, error);
     auto order = folly::to_underlying(subscribeOk.groupOrder);
     writeBuf.append(&order, 1);
     size += 1;
   }
+
   uint8_t contentExists = (subscribeOk.largest) ? 1 : 0;
   writeBuf.append(&contentExists, 1);
   size += 1;
@@ -3681,6 +3696,16 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
 
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
+    // Add EXPIRES parameter (only if non-zero)
+    if (subscribeOk.expires.count() != 0) {
+      Parameter expiresParam;
+      expiresParam.key = folly::to_underlying(TrackRequestParamKey::EXPIRES);
+      expiresParam.asUint64 =
+          static_cast<uint64_t>(subscribeOk.expires.count());
+      requestSpecificParams.push_back(expiresParam);
+    }
+
+    // Add GROUP_ORDER parameter (only if non-default)
     if (subscribeOk.groupOrder != GroupOrder::Default) {
       Parameter groupOrderParam;
       groupOrderParam.key =

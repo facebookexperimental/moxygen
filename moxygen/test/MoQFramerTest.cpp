@@ -1689,7 +1689,7 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 
   auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
   ASSERT_TRUE(alpnDraft15.hasValue());
-  EXPECT_EQ(*alpnDraft15, "moqt-15-meta-01");
+  EXPECT_EQ(*alpnDraft15, "moqt-15-meta-02");
 }
 
 // Test class for immutable extensions feature (draft 14+)
@@ -2694,6 +2694,64 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExplicitGroupOrder) {
   EXPECT_TRUE(parseResult.hasValue());
 
   // Explicit value should be preserved
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+}
+
+TEST_P(MoQFramerV15PlusTest, SubscribeOkExpiresParameter) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(42);
+  subscribeOk.trackAlias = TrackAlias(1);
+  subscribeOk.expires = std::chrono::milliseconds(5000);
+  subscribeOk.groupOrder = GroupOrder::OldestFirst;
+  subscribeOk.largest = AbsoluteLocation{10, 20};
+  subscribeOk.params = {};
+
+  auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_OK));
+
+  auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Verify expires is correctly parsed from parameter
+  EXPECT_EQ(parseResult->expires, std::chrono::milliseconds(5000));
+  EXPECT_EQ(parseResult->requestID, RequestID(42));
+  EXPECT_EQ(parseResult->trackAlias, TrackAlias(1));
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::OldestFirst);
+}
+
+TEST_P(MoQFramerV15PlusTest, SubscribeOkExpiresZeroNotWritten) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(42);
+  subscribeOk.trackAlias = TrackAlias(1);
+  subscribeOk.expires = std::chrono::milliseconds(0); // Zero expires
+  subscribeOk.groupOrder = GroupOrder::NewestFirst;
+  subscribeOk.largest = AbsoluteLocation{10, 20};
+  subscribeOk.params = {};
+
+  auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_OK));
+
+  auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // When EXPIRES param not written (value=0), parser should default to 0
+  EXPECT_EQ(parseResult->expires, std::chrono::milliseconds(0));
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
 }
 
