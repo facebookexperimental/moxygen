@@ -129,21 +129,27 @@ class MOQTGoaway : public MOQTBaseControlMessage {
   std::unique_ptr<folly::IOBuf> newSessionUri;
 };
 
+struct MOQTLocation {
+  uint64_t group{0};
+  uint64_t object{0};
+
+  folly::dynamic toDynamic() const;
+};
+
 class MOQTSubscribe : public MOQTBaseControlMessage {
  public:
   MOQTSubscribe() {
     type = "subscribe";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
-  uint64_t trackAlias{0};
+  uint64_t requestId{0};
   std::vector<MOQTByteString> trackNamespace;
   MOQTByteString trackName;
   uint8_t subscriberPriority{};
   uint8_t groupOrder{};
+  uint8_t forward{};
   uint64_t filterType{};
-  folly::Optional<uint64_t> startGroup;
-  folly::Optional<uint64_t> startObject;
+  folly::Optional<MOQTLocation> startLocation;
   folly::Optional<uint64_t> endGroup;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> subscribeParameters;

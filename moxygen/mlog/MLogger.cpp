@@ -248,9 +248,7 @@ void MLogger::logSubscribe(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribe>();
-  baseMsg->subscribeId = req.requestID.value;
-  baseMsg->trackAlias =
-      req.trackAlias ? req.trackAlias->value : req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.fullTrackName.trackNamespace.trackNamespace, type);
   baseMsg->trackName =
@@ -259,8 +257,10 @@ void MLogger::logSubscribe(
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
   baseMsg->filterType = static_cast<uint8_t>(req.locType);
   if (req.start.hasValue()) {
-    baseMsg->startGroup = req.start.value().group;
-    baseMsg->startObject = req.start.value().object;
+    MOQTLocation loc;
+    loc.group = req.start.value().group;
+    loc.object = req.start.value().object;
+    baseMsg->startLocation = loc;
   }
   baseMsg->endGroup = req.endGroup;
   baseMsg->numberOfParameters = req.params.size();
