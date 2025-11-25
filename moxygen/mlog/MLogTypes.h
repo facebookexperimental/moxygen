@@ -280,14 +280,14 @@ class MOQTSubscribeOk : public MOQTBaseControlMessage {
     type = "subscribe_ok";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
+  uint64_t trackAlias{0};
   uint64_t expires{};
   uint8_t groupOrder{};
   uint8_t contentExists{};
-  folly::Optional<uint64_t> largestGroupId;
-  folly::Optional<uint64_t> largestObjectId;
+  folly::Optional<MOQTLocation> largestLocation;
   uint64_t numberOfParameters{};
-  std::vector<MOQTParameter> subscribeParameters;
+  std::vector<MOQTParameter> parameters;
 };
 
 class MOQTSubscribeError : public MOQTBaseControlMessage {

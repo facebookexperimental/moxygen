@@ -442,20 +442,23 @@ void MLogger::logSubscribeOk(
     const SubscribeOk& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeOk>();
-  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
+  baseMsg->trackAlias = req.trackAlias.value;
   baseMsg->expires = req.expires.count();
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
 
   if (req.largest.has_value()) {
     baseMsg->contentExists = 1;
-    baseMsg->largestGroupId = req.largest.value().group;
-    baseMsg->largestObjectId = req.largest.value().object;
+    MOQTLocation loc;
+    loc.group = req.largest.value().group;
+    loc.object = req.largest.value().object;
+    baseMsg->largestLocation = loc;
   } else {
     baseMsg->contentExists = 0;
   }
 
   baseMsg->numberOfParameters = req.params.size();
-  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
