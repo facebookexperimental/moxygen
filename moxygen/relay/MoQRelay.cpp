@@ -408,17 +408,6 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   subscriber->range =
       toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder->largest());
   subscriber->shouldForward = pubOk.forward;
-
-  // Extract delivery timeout from upstream PUBLISH_OK and propagate to
-  // subscriber
-  auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
-      pubOk.params, session->getNegotiatedVersion().value());
-  if (deliveryTimeout && *deliveryTimeout > 0) {
-    forwarder->setDeliveryTimeout(*deliveryTimeout);
-    subscriber->setParam(
-        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         *deliveryTimeout});
-  }
 }
 
 class MoQRelay::AnnouncesSubscription
