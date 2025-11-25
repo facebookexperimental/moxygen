@@ -468,7 +468,7 @@ void MLogger::logSubscribeError(
     const SubscribeError& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeError>();
-  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {

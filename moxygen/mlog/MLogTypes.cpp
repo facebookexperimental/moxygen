@@ -293,16 +293,13 @@ folly::dynamic MOQTSubscribeOk::toDynamic() const {
 folly::dynamic MOQTSubscribeError::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["subscribeId"] = std::to_string(subscribeId);
-  obj["errorCode"] = std::to_string(errorCode);
+  obj["request_id"] = requestId;
+  obj["error_code"] = errorCode;
   if (reason.hasValue()) {
     obj["reason"] = reason.value();
   }
   if (reasonBytes.hasValue()) {
-    obj["reasonBytes"] = reasonBytes.value();
-  }
-  if (trackAlias.hasValue()) {
-    obj["trackAlias"] = std::to_string(trackAlias.value());
+    obj["reason_bytes"] = reasonBytes.value();
   }
   return obj;
 }
