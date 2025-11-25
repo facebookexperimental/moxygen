@@ -712,12 +712,13 @@ CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
 
-  constexpr uint8_t kObjectPriority = 32;
+  const uint8_t kObjectPriority = 32;
 
   expectSubscribe(
-      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+      [this, &trackConsumer, kObjectPriority](
+          auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
-        eventBase_.add([pub, sub] {
+        eventBase_.add([pub, sub, kObjectPriority] {
           // Begin subgroup with explicit priority
           auto sgp = pub->beginSubgroup(0, 0, kObjectPriority).value();
           sgp->object(0, moxygen::test::makeBuf(10));
