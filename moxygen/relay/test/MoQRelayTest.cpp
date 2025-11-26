@@ -166,6 +166,78 @@ class MoQRelayTest : public ::testing::Test {
     }
   }
 
+  // Helper to announce a namespace
+  // Returns the AnnounceHandle so tests can use it for manual cleanup if needed
+  // If addToState is true, the handle is automatically saved for cleanup
+  std::shared_ptr<Subscriber::AnnounceHandle> doAnnounce(
+      std::shared_ptr<MoQSession> session,
+      const TrackNamespace& ns,
+      bool addToState = true) {
+    Announce ann;
+    ann.trackNamespace = ns;
+    return withSessionContext(session, [&]() {
+      auto task = relay_->announce(std::move(ann), nullptr);
+      auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      if (res.hasValue()) {
+        if (addToState) {
+          getOrCreateMockState(session)->announceHandles.push_back(*res);
+        }
+        return *res;
+      }
+      return std::shared_ptr<Subscriber::AnnounceHandle>(nullptr);
+    });
+  }
+
+  // Helper to publish a track
+  // Returns the TrackConsumer so tests can use it for manual operations if
+  // needed If addToState is true, the consumer is automatically saved for
+  // cleanup
+  std::shared_ptr<TrackConsumer> doPublish(
+      std::shared_ptr<MoQSession> session,
+      const FullTrackName& trackName,
+      bool addToState = true) {
+    PublishRequest pub;
+    pub.fullTrackName = trackName;
+    return withSessionContext(session, [&]() {
+      auto res = relay_->publish(std::move(pub), nullptr);
+      EXPECT_TRUE(res.hasValue());
+      if (res.hasValue()) {
+        if (addToState) {
+          getOrCreateMockState(session)->publishConsumers.push_back(
+              res->consumer);
+        }
+        return res->consumer;
+      }
+      return std::shared_ptr<TrackConsumer>(nullptr);
+    });
+  }
+
+  // Helper to subscribe to namespace announces
+  // Returns the SubscribeAnnouncesHandle so tests can use it for manual cleanup
+  // if needed If addToState is true, the handle is automatically saved for
+  // cleanup
+  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> doSubscribeAnnounces(
+      std::shared_ptr<MoQSession> session,
+      const TrackNamespace& nsPrefix,
+      bool addToState = true) {
+    SubscribeAnnounces subNs;
+    subNs.trackNamespacePrefix = nsPrefix;
+    return withSessionContext(session, [&]() {
+      auto task = relay_->subscribeAnnounces(std::move(subNs));
+      auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      if (res.hasValue()) {
+        if (addToState) {
+          getOrCreateMockState(session)->subscribeAnnouncesHandles.push_back(
+              *res);
+        }
+        return *res;
+      }
+      return std::shared_ptr<Publisher::SubscribeAnnouncesHandle>(nullptr);
+    });
+  }
+
   std::shared_ptr<TestMoQExecutor> exec_;
   std::shared_ptr<MoQRelay> relay_;
 };
@@ -195,29 +267,11 @@ TEST_F(MoQRelayTest, MockSessionCreation) {
 TEST_F(MoQRelayTest, PublishSuccess) {
   auto publisherSession = createMockSession();
 
-  // First, announce the namespace
-  Announce ann;
-  ann.trackNamespace = kTestNamespace;
+  // Announce the namespace
+  doAnnounce(publisherSession, kTestNamespace);
 
-  // Announce the namespace (this should succeed)
-  withSessionContext(publisherSession, [&]() {
-    auto res =
-        folly::coro::blockingWait(relay_->announce(std::move(ann), nullptr));
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisherSession)->announceHandles.push_back(*res);
-  });
-
-  // Now publish a track in that namespace
-  PublishRequest pub;
-  pub.fullTrackName = kTestTrackName;
-
-  // Publish the track (this should succeed)
-  withSessionContext(publisherSession, [&]() {
-    auto res = relay_->publish(std::move(pub), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisherSession)
-        ->publishConsumers.push_back(res->consumer);
-  });
+  // Publish the track
+  doPublish(publisherSession, kTestTrackName);
 
   // Cleanup: remove the session from relay to avoid mock leak warning
   removeSession(publisherSession);
@@ -230,29 +284,13 @@ TEST_F(MoQRelayTest, PruneLeafKeepSiblings) {
   auto publisherABC = createMockSession();
   auto publisherAD = createMockSession();
 
-  // Announce test/A/B/C
+  // Announce test/A/B/C (don't add to state because we unannounce manually)
   TrackNamespace nsABC{{"test", "A", "B", "C"}};
-  Announce annABC;
-  annABC.trackNamespace = nsABC;
-  std::shared_ptr<Subscriber::AnnounceHandle> handleABC;
-  withSessionContext(publisherABC, [&]() {
-    auto task = relay_->announce(std::move(annABC), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handleABC = std::move(*res);
-    // Not saving state, because we unannounce before remove
-  });
+  auto handleABC = doAnnounce(publisherABC, nsABC, /*addToState=*/false);
 
   // Announce test/A/D
   TrackNamespace nsAD{{"test", "A", "D"}};
-  Announce annAD;
-  annAD.trackNamespace = nsAD;
-  withSessionContext(publisherAD, [&]() {
-    auto task = relay_->announce(std::move(annAD), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisherAD)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisherAD, nsAD);
 
   // Unannounce test/A/B/C - should prune B (and C) but keep A and D
   withSessionContext(publisherABC, [&]() { handleABC->unannounce(); });
@@ -271,18 +309,9 @@ TEST_F(MoQRelayTest, PruneLeafKeepSiblings) {
 TEST_F(MoQRelayTest, PruneHighestEmptyAncestor) {
   auto publisher = createMockSession();
 
-  // Announce test/A/B/C
+  // Announce test/A/B/C (don't add to state because we unannounce manually)
   TrackNamespace nsABC{{"test", "A", "B", "C"}};
-  Announce ann;
-  ann.trackNamespace = nsABC;
-  std::shared_ptr<Subscriber::AnnounceHandle> handle;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handle = res.value();
-    // Not saving state, because we unannounce before remove
-  });
+  auto handle = doAnnounce(publisher, nsABC, /*addToState=*/false);
 
   // Unannounce test/A/B/C - should prune A (highest empty ancestor)
   withSessionContext(publisher, [&]() { handle->unannounce(); });
@@ -290,15 +319,7 @@ TEST_F(MoQRelayTest, PruneHighestEmptyAncestor) {
   // Try to announce test/A/B/C again with a new session - should create fresh
   // tree
   auto publisher2 = createMockSession();
-
-  Announce ann2;
-  ann2.trackNamespace = nsABC;
-  withSessionContext(publisher2, [&]() {
-    auto task = relay_->announce(std::move(ann2), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher2)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher2, nsABC);
 
   removeSession(publisher);
   removeSession(publisher2);
@@ -310,29 +331,14 @@ TEST_F(MoQRelayTest, PruneOnRemoveSession) {
 
   // Announce deep tree test/A/B/C/D
   TrackNamespace nsABCD{{"test", "A", "B", "C", "D"}};
-  Announce ann;
-  ann.trackNamespace = nsABCD;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher, nsABCD);
 
   // Remove session - should prune entire tree test/A/B/C/D
   removeSession(publisher);
 
   // Verify we can create test/A/B/C/D again (tree was pruned)
   auto publisher2 = createMockSession();
-
-  Announce ann2;
-  ann2.trackNamespace = nsABCD;
-  withSessionContext(publisher2, [&]() {
-    auto task = relay_->announce(std::move(ann2), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher2)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher2, nsABCD);
 
   removeSession(publisher2);
 }
@@ -344,38 +350,15 @@ TEST_F(MoQRelayTest, NoPruneWhenNodeHasContent) {
 
   // Both announce test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce ann1;
-  ann1.trackNamespace = nsAB;
-  std::shared_ptr<Subscriber::AnnounceHandle> handle1;
-  withSessionContext(publisher1, [&]() {
-    auto task = relay_->announce(std::move(ann1), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handle1 = res.value();
-    // Not saving state, because we unannounce before remove
-  });
-
-  Announce ann2;
-  ann2.trackNamespace = nsAB;
-  withSessionContext(publisher2, [&]() {
-    auto task = relay_->announce(std::move(ann2), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher2)->announceHandles.push_back(res.value());
-  });
+  auto handle1 = doAnnounce(publisher1, nsAB, /*addToState=*/false);
+  doAnnounce(publisher2, nsAB);
 
   // Unannounce from publisher1 - should NOT prune because publisher2 still
   // there
   withSessionContext(publisher1, [&]() { handle1->unannounce(); });
 
   // Verify test/A/B still exists by publishing a track through publisher2
-  PublishRequest pub;
-  pub.fullTrackName = FullTrackName{nsAB, "track1"};
-  withSessionContext(publisher2, [&]() {
-    auto res = relay_->publish(std::move(pub), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher2)->publishConsumers.push_back(res->consumer);
-  });
+  doPublish(publisher2, FullTrackName{nsAB, "track1"});
 
   removeSession(publisher1);
   removeSession(publisher2);
@@ -389,26 +372,12 @@ TEST_F(MoQRelayTest, PruneOnPublishDoneBug) {
 
   // Create deep tree test/A/B/C with only a publish (no announce)
   TrackNamespace nsABC{{"test", "A", "B", "C"}};
-  PublishRequest pub;
-  pub.fullTrackName = FullTrackName{nsABC, "track1"};
-  std::shared_ptr<TrackConsumer> consumer;
 
   // First announce so we can publish
-  Announce ann;
-  ann.trackNamespace = nsABC;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher, nsABC);
 
-  withSessionContext(publisher, [&]() {
-    auto res = relay_->publish(std::move(pub), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    consumer = res->consumer;
-    getOrCreateMockState(publisher)->publishConsumers.push_back(consumer);
-  });
+  // Publish a track
+  auto consumer = doPublish(publisher, FullTrackName{nsABC, "track1"});
 
   // Verify publish exists in the tree
   auto state = relay_->findPublishState(FullTrackName{nsABC, "track1"});
@@ -455,23 +424,10 @@ TEST_F(MoQRelayTest, MixedContentAnnounceAndPublish) {
 
   // Announce test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce ann;
-  ann.trackNamespace = nsAB;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher, nsAB);
 
   // Publish a track in test/A/B
-  PublishRequest pub;
-  pub.fullTrackName = FullTrackName{nsAB, "track1"};
-  withSessionContext(publisher, [&]() {
-    auto res = relay_->publish(std::move(pub), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->publishConsumers.push_back(res->consumer);
-  });
+  doPublish(publisher, FullTrackName{nsAB, "track1"});
 
   // Unannounce - should NOT prune because publish still exists
   withSessionContext(publisher, [&]() {
@@ -480,13 +436,7 @@ TEST_F(MoQRelayTest, MixedContentAnnounceAndPublish) {
   });
 
   // Verify node still exists by publishing another track
-  PublishRequest pub2;
-  pub2.fullTrackName = FullTrackName{nsAB, "track2"};
-  withSessionContext(publisher, [&]() {
-    auto res = relay_->publish(std::move(pub2), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->publishConsumers.push_back(res->consumer);
-  });
+  doPublish(publisher, FullTrackName{nsAB, "track2"});
 
   removeSession(publisher);
 }
@@ -498,25 +448,10 @@ TEST_F(MoQRelayTest, MixedContentAnnounceAndSessions) {
 
   // Announce test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce ann;
-  ann.trackNamespace = nsAB;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher, nsAB);
 
   // Subscribe to namespace from another session
-  SubscribeAnnounces subNs;
-  subNs.trackNamespacePrefix = nsAB;
-  withSessionContext(subscriber, [&]() {
-    auto task = relay_->subscribeAnnounces(std::move(subNs));
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(subscriber)
-        ->subscribeAnnouncesHandles.push_back(res.value());
-  });
+  doSubscribeAnnounces(subscriber, nsAB);
 
   // Unannounce from publisher - should NOT prune because subscriber still there
   std::shared_ptr<Subscriber::AnnounceHandle> handle =
@@ -526,14 +461,7 @@ TEST_F(MoQRelayTest, MixedContentAnnounceAndSessions) {
 
   // Announce again from a different publisher - should work (node still exists)
   auto publisher2 = createMockSession();
-  Announce ann2;
-  ann2.trackNamespace = nsAB;
-  withSessionContext(publisher2, [&]() {
-    auto task = relay_->announce(std::move(ann2), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher2)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher2, nsAB);
 
   removeSession(publisher);
   removeSession(publisher2);
@@ -546,30 +474,13 @@ TEST_F(MoQRelayTest, PruneOnUnsubscribeNamespace) {
 
   // Subscribe to test/A/B/C namespace (creates tree without announce)
   TrackNamespace nsABC{{"test", "A", "B", "C"}};
-  SubscribeAnnounces subNs;
-  subNs.trackNamespacePrefix = nsABC;
-  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> handle;
-  withSessionContext(subscriber, [&]() {
-    auto task = relay_->subscribeAnnounces(std::move(subNs));
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handle = res.value();
-    // Not saving to state because we'll manually unsubscribe
-  });
+  auto handle = doSubscribeAnnounces(subscriber, nsABC, /*addToState=*/false);
 
   // Unsubscribe - should prune the entire test/A/B/C tree
   withSessionContext(subscriber, [&]() { handle->unsubscribeAnnounces(); });
 
   // Verify tree was pruned by subscribing again - should create fresh tree
-  SubscribeAnnounces subNs2;
-  subNs2.trackNamespacePrefix = nsABC;
-  withSessionContext(subscriber, [&]() {
-    auto task = relay_->subscribeAnnounces(std::move(subNs2));
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(subscriber)
-        ->subscribeAnnouncesHandles.push_back(res.value());
-  });
+  doSubscribeAnnounces(subscriber, nsABC);
 
   removeSession(subscriber);
 }
@@ -583,26 +494,11 @@ TEST_F(MoQRelayTest, PruneMiddleEmptyNode) {
 
   // Announce test/A
   TrackNamespace nsA{{"test", "A"}};
-  Announce annA;
-  annA.trackNamespace = nsA;
-  withSessionContext(publisherA, [&]() {
-    auto task = relay_->announce(std::move(annA), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisherA)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisherA, nsA);
 
   // Announce test/A/B/C (this creates B as empty intermediate node)
   TrackNamespace nsABC{{"test", "A", "B", "C"}};
-  Announce annC;
-  annC.trackNamespace = nsABC;
-  std::shared_ptr<Subscriber::AnnounceHandle> handleC;
-  withSessionContext(publisherC, [&]() {
-    auto task = relay_->announce(std::move(annC), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handleC = res.value();
-  });
+  auto handleC = doAnnounce(publisherC, nsABC, /*addToState=*/false);
 
   // Unannounce test/A/B/C - should prune B and C but keep A
   withSessionContext(publisherC, [&]() { handleC->unannounce(); });
@@ -613,15 +509,8 @@ TEST_F(MoQRelayTest, PruneMiddleEmptyNode) {
   EXPECT_EQ(sessionsA[0], publisherA);
 
   // Verify test/A/B/C was pruned - should be able to announce it again
-  Announce annC2;
-  annC2.trackNamespace = nsABC;
   auto publisherC2 = createMockSession();
-  withSessionContext(publisherC2, [&]() {
-    auto task = relay_->announce(std::move(annC2), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisherC2)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisherC2, nsABC);
 
   removeSession(publisherA);
   removeSession(publisherC);
@@ -634,15 +523,7 @@ TEST_F(MoQRelayTest, DoubleUnannounce) {
 
   // Announce test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce ann;
-  ann.trackNamespace = nsAB;
-  std::shared_ptr<Subscriber::AnnounceHandle> handle;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handle = res.value();
-  });
+  auto handle = doAnnounce(publisher, nsAB, /*addToState=*/false);
 
   // Unannounce once
   withSessionContext(publisher, [&]() { handle->unannounce(); });
@@ -652,14 +533,7 @@ TEST_F(MoQRelayTest, DoubleUnannounce) {
 
   // Verify we can still use the relay
   auto publisher2 = createMockSession();
-  Announce ann2;
-  ann2.trackNamespace = nsAB;
-  withSessionContext(publisher2, [&]() {
-    auto task = relay_->announce(std::move(ann2), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher2)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher2, nsAB);
 
   removeSession(publisher);
   removeSession(publisher2);
@@ -675,39 +549,15 @@ TEST_F(MoQRelayTest, PruneOneOfMultipleChildren) {
 
   // Announce test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce annB;
-  annB.trackNamespace = nsAB;
-  std::shared_ptr<Subscriber::AnnounceHandle> handleB;
-  withSessionContext(publisherB, [&]() {
-    auto task = relay_->announce(std::move(annB), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    handleB = res.value();
-  });
+  auto handleB = doAnnounce(publisherB, nsAB, /*addToState=*/false);
 
   // Subscribe to test/A/C (creates C as empty node with session)
   TrackNamespace nsAC{{"test", "A", "C"}};
-  SubscribeAnnounces subC;
-  subC.trackNamespacePrefix = nsAC;
-  withSessionContext(subscriberC, [&]() {
-    auto task = relay_->subscribeAnnounces(std::move(subC));
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(subscriberC)
-        ->subscribeAnnouncesHandles.push_back(res.value());
-  });
+  doSubscribeAnnounces(subscriberC, nsAC);
 
   // Subscribe to test/A/D
   TrackNamespace nsAD{{"test", "A", "D"}};
-  SubscribeAnnounces subD;
-  subD.trackNamespacePrefix = nsAD;
-  withSessionContext(subscriberD, [&]() {
-    auto task = relay_->subscribeAnnounces(std::move(subD));
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(subscriberD)
-        ->subscribeAnnouncesHandles.push_back(res.value());
-  });
+  doSubscribeAnnounces(subscriberD, nsAD);
 
   // Unannounce test/A/B - should prune only B
   withSessionContext(publisherB, [&]() { handleB->unannounce(); });
@@ -716,14 +566,7 @@ TEST_F(MoQRelayTest, PruneOneOfMultipleChildren) {
   // Try to announce at test/A
   auto publisherA = createMockSession();
   TrackNamespace nsA{{"test", "A"}};
-  Announce annA;
-  annA.trackNamespace = nsA;
-  withSessionContext(publisherA, [&]() {
-    auto task = relay_->announce(std::move(annA), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisherA)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisherA, nsA);
 
   removeSession(publisherB);
   removeSession(publisherA);
@@ -737,11 +580,11 @@ TEST_F(MoQRelayTest, EmptyNamespaceUnannounce) {
 
   // Try to announce empty namespace (edge case)
   TrackNamespace emptyNs{{}};
-  Announce ann;
-  ann.trackNamespace = emptyNs;
 
   // This might fail or succeed depending on implementation
   // Just verify it doesn't crash
+  Announce ann;
+  ann.trackNamespace = emptyNs;
   withSessionContext(publisher, [&]() {
     auto task = relay_->announce(std::move(ann), nullptr);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
@@ -762,25 +605,10 @@ TEST_F(MoQRelayTest, ActiveChildCountConsistency) {
 
   // Build tree: test/A/B and test/A/C with different content types
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce annAB;
-  annAB.trackNamespace = nsAB;
-  withSessionContext(pub1, [&]() {
-    auto task = relay_->announce(std::move(annAB), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(pub1)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(pub1, nsAB);
 
   TrackNamespace nsAC{{"test", "A", "C"}};
-  SubscribeAnnounces subAC;
-  subAC.trackNamespacePrefix = nsAC;
-  withSessionContext(sub1, [&]() {
-    auto task = relay_->subscribeAnnounces(std::move(subAC));
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(sub1)->subscribeAnnouncesHandles.push_back(
-        res.value());
-  });
+  doSubscribeAnnounces(sub1, nsAC);
 
   // At this point, test/A should have activeChildCount_ == 2 (B and C)
   // We can't directly access private members, but we can verify behavior
@@ -791,14 +619,7 @@ TEST_F(MoQRelayTest, ActiveChildCountConsistency) {
   // A should still exist (C is still active)
   // Verify by announcing at test/A
   TrackNamespace nsA{{"test", "A"}};
-  Announce annA;
-  annA.trackNamespace = nsA;
-  withSessionContext(pub2, [&]() {
-    auto task = relay_->announce(std::move(annA), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(pub2)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(pub2, nsA);
 
   // Remove sub1 (which should remove C)
   removeSession(sub1);
@@ -817,23 +638,10 @@ TEST_F(MoQRelayTest, PublishKeepsNodeAliveAfterUnannounce) {
 
   // Announce test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
-  Announce ann;
-  ann.trackNamespace = nsAB;
-  withSessionContext(publisher, [&]() {
-    auto task = relay_->announce(std::move(ann), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->announceHandles.push_back(res.value());
-  });
+  doAnnounce(publisher, nsAB);
 
   // Publish track
-  PublishRequest pub;
-  pub.fullTrackName = FullTrackName{nsAB, "track1"};
-  withSessionContext(publisher, [&]() {
-    auto res = relay_->publish(std::move(pub), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->publishConsumers.push_back(res->consumer);
-  });
+  doPublish(publisher, FullTrackName{nsAB, "track1"});
 
   // Unannounce (but publish is still active)
   std::shared_ptr<Subscriber::AnnounceHandle> handle =
@@ -842,13 +650,7 @@ TEST_F(MoQRelayTest, PublishKeepsNodeAliveAfterUnannounce) {
   withSessionContext(publisher, [&]() { handle->unannounce(); });
 
   // Try to publish another track - should work (node still exists)
-  PublishRequest pub2;
-  pub2.fullTrackName = FullTrackName{nsAB, "track2"};
-  withSessionContext(publisher, [&]() {
-    auto res = relay_->publish(std::move(pub2), nullptr);
-    EXPECT_TRUE(res.hasValue());
-    getOrCreateMockState(publisher)->publishConsumers.push_back(res->consumer);
-  });
+  doPublish(publisher, FullTrackName{nsAB, "track2"});
 
   removeSession(publisher);
 }
