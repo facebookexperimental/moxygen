@@ -28,17 +28,18 @@ void MoQDeliveryTimer::startTimer(
     std::chrono::microseconds srtt) {
   XCHECK(exec_) << "MoQDeliveryTimer::startTimer: exec_ is not set";
 
-  if (objectTimers_.find(objId) != objectTimers_.end()) {
+  auto callback = std::make_unique<ObjectTimerCallback>(objId, *this);
+  auto* callbackPtr = callback.get();
+  auto [it, inserted] = objectTimers_.emplace(objId, std::move(callback));
+
+  if (inserted) {
+    auto timeout = calculateTimeout(srtt);
+    exec_->scheduleTimeout(callbackPtr, timeout);
+  } else {
     // ObjectID already sent, this is an internal error (?)
     XLOG(ERR) << "MoQDeliveryTimer::startTimer: Internal Error::ObjectID "
               << objId << " already has a timer.";
     streamResetCallback_(ResetStreamErrorCode::INTERNAL_ERROR);
-  } else {
-    auto callback = std::make_unique<ObjectTimerCallback>(objId, *this);
-    auto* callbackPtr = callback.get();
-    objectTimers_.emplace(objId, std::move(callback));
-    auto timeout = calculateTimeout(srtt);
-    exec_->scheduleTimeout(callbackPtr, timeout);
   }
 }
 
