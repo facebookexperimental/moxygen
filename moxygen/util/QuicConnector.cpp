@@ -100,11 +100,11 @@ QuicConnector::connectQuic(
   auto ts = transportSettings;
   ts.datagramConfig.enabled = true;
 
+  quicClient->setCongestionControllerFactory(
+      std::make_shared<quic::DefaultCongestionControllerFactory>());
   quicClient->setTransportSettings(ts);
   quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
-  quicClient->setCongestionControllerFactory(
-      std::make_shared<quic::DefaultCongestionControllerFactory>());
   folly::CancellationToken cancellationToken =
       co_await folly::coro::co_current_cancellation_token;
   QuicConnectCB cb(quicClient, std::move(cancellationToken));
