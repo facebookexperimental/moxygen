@@ -540,11 +540,18 @@ folly::dynamic MOQTExtensionHeader::toDynamic() const {
 
 folly::dynamic MOQTObjectDatagramCreated::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["trackAlias"] = std::to_string(trackAlias);
-  obj["groupId"] = std::to_string(groupId);
-  obj["objectId"] = std::to_string(objectId);
-  obj["publisherPriority"] = std::to_string(publisherPriority);
-  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
+  obj["track_alias"] = trackAlias;
+  obj["group_id"] = groupId;
+
+  if (objectId.hasValue()) {
+    obj["object_id"] = objectId.value();
+  }
+
+  obj["publisher_priority"] = publisherPriority;
+
+  if (extensionHeadersLength.hasValue()) {
+    obj["extension_headers_length"] = extensionHeadersLength.value();
+  }
 
   if (!extensionHeaders.empty()) {
     std::vector<folly::dynamic> headerObjects;
@@ -552,24 +559,38 @@ folly::dynamic MOQTObjectDatagramCreated::toDynamic() const {
     for (auto& header : extensionHeaders) {
       headerObjects.push_back(header.toDynamic());
     }
-    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
+    obj["extension_headers"] = folly::dynamic::array(headerObjects);
+  }
+
+  if (objectStatus.hasValue()) {
+    obj["object_status"] = objectStatus.value();
   }
 
   if (objectPayload) {
-    obj["objectPayload"] = std::string(
+    obj["object_payload"] = std::string(
         reinterpret_cast<const char*>(objectPayload->data()),
         objectPayload->length());
   }
+
+  obj["end_of_group"] = endOfGroup;
+
   return obj;
 }
 
 folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["trackAlias"] = std::to_string(trackAlias);
-  obj["groupId"] = std::to_string(groupId);
-  obj["objectId"] = std::to_string(objectId);
-  obj["publisherPriority"] = std::to_string(publisherPriority);
-  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
+  obj["track_alias"] = trackAlias;
+  obj["group_id"] = groupId;
+
+  if (objectId.hasValue()) {
+    obj["object_id"] = objectId.value();
+  }
+
+  obj["publisher_priority"] = publisherPriority;
+
+  if (extensionHeadersLength.hasValue()) {
+    obj["extension_headers_length"] = extensionHeadersLength.value();
+  }
 
   if (!extensionHeaders.empty()) {
     std::vector<folly::dynamic> headerObjects;
@@ -577,14 +598,21 @@ folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
     for (auto& header : extensionHeaders) {
       headerObjects.push_back(header.toDynamic());
     }
-    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
+    obj["extension_headers"] = folly::dynamic::array(headerObjects);
+  }
+
+  if (objectStatus.hasValue()) {
+    obj["object_status"] = objectStatus.value();
   }
 
   if (objectPayload) {
-    obj["objectPayload"] = std::string(
+    obj["object_payload"] = std::string(
         reinterpret_cast<const char*>(objectPayload->data()),
         objectPayload->length());
   }
+
+  obj["end_of_group"] = endOfGroup;
+
   return obj;
 }
 

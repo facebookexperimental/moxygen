@@ -817,10 +817,16 @@ void MLogger::logObjectDatagramCreated(
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority.value_or(kDefaultPriority);
-  baseMsg.extensionHeadersLength = header.extensions.size();
+  if (header.extensions.size() > 0) {
+    baseMsg.extensionHeadersLength = header.extensions.size();
+  }
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       header.extensions.getMutableExtensions());
+  if (header.status != ObjectStatus::NORMAL) {
+    baseMsg.objectStatus = static_cast<uint64_t>(header.status);
+  }
   baseMsg.objectPayload = payload->clone();
+  baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
   addObjectDatagramCreatedLog(std::move(baseMsg));
 }
 
@@ -833,12 +839,18 @@ void MLogger::logObjectDatagramParsed(
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
   baseMsg.publisherPriority = header.priority.value_or(kDefaultPriority);
-  baseMsg.extensionHeadersLength = header.extensions.size();
+  if (header.extensions.size() > 0) {
+    baseMsg.extensionHeadersLength = header.extensions.size();
+  }
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       header.extensions.getMutableExtensions());
+  if (header.status != ObjectStatus::NORMAL) {
+    baseMsg.objectStatus = static_cast<uint64_t>(header.status);
+  }
   std::unique_ptr<folly::IOBuf> objPayload =
       folly::IOBuf::copyBuffer({payload->data(), payload->length()});
   baseMsg.objectPayload = std::move(objPayload);
+  baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
   addObjectDatagramParsedLog(std::move(baseMsg));
 }
 

@@ -508,11 +508,13 @@ struct MOQTStreamTypeSet {
 struct MOQTObjectDatagramCreated {
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  uint64_t objectId{0};
+  folly::Optional<uint64_t> objectId;
   uint8_t publisherPriority{0};
-  uint64_t extensionHeadersLength{0};
+  folly::Optional<uint64_t> extensionHeadersLength;
   std::vector<MOQTExtensionHeader> extensionHeaders;
+  folly::Optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
+  bool endOfGroup{false};
 
   folly::dynamic toDynamic() const;
 };
@@ -520,11 +522,13 @@ struct MOQTObjectDatagramCreated {
 struct MOQTObjectDatagramParsed {
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  uint64_t objectId{0};
+  folly::Optional<uint64_t> objectId;
   uint8_t publisherPriority{0};
-  uint64_t extensionHeadersLength{0};
+  folly::Optional<uint64_t> extensionHeadersLength;
   std::vector<MOQTExtensionHeader> extensionHeaders;
+  folly::Optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
+  bool endOfGroup{false};
 
   folly::dynamic toDynamic() const;
 };
