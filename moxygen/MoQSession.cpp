@@ -109,7 +109,7 @@ void logRequestError(
       logger->logAnnounceError(error, TrackNamespace() /*TODO*/);
       break;
     case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
-      logger->logSubscribeAnnouncesError(error, TrackNamespace() /* TODO */);
+      logger->logSubscribeAnnouncesError(error);
       break;
     default:
       // Unknown or unsupported error type for logging
@@ -460,7 +460,7 @@ StreamPublisherImpl::StreamPublisherImpl(
           std::numeric_limits<uint64_t>::max(),
           0,
           ObjectStatus::NORMAL) {
-  logger_ = logger;
+  logger_ = std::move(logger);
   deliveryCallback_ = std::move(deliveryCallback);
 
   // Create delivery timer if timeout is provided
@@ -977,7 +977,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
             groupOrder,
             version,
             bytesBufferedThreshold),
-        trackAlias_(trackAlias),
+        trackAlias_(std::move(trackAlias)),
         forward_(forward) {
     // Set callback for delivery timeout changes
     deliveryTimeoutManager_.setOnChangeCallback(
@@ -1629,7 +1629,7 @@ class MoQSession::SubscribeTrackReceiveState
         publish_(publish),
         session_(session),
         alias_(alias) {
-    logger_ = logger;
+    logger_ = std::move(logger);
   }
 
   ~SubscribeTrackReceiveState() {
@@ -1817,7 +1817,7 @@ class MoQSession::FetchTrackReceiveState
       std::shared_ptr<MLogger> logger = nullptr)
       : TrackReceiveStateBase(std::move(fullTrackName), requestID),
         callback_(std::move(fetchCallback)) {
-    logger_ = logger;
+    logger_ = std::move(logger);
   }
 
   folly::coro::Future<FetchResult> fetchFuture() {
@@ -1935,7 +1935,7 @@ MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     std::shared_ptr<MoQExecutor> exec)
     : dir_(MoQControlCodec::Direction::CLIENT),
-      wt_(wt),
+      wt_(std::move(wt)),
       exec_(std::move(exec)),
       nextRequestID_(0),
       nextExpectedPeerRequestID_(1),
@@ -1946,7 +1946,7 @@ MoQSession::MoQSession(
     ServerSetupCallback& serverSetupCallback,
     std::shared_ptr<MoQExecutor> exec)
     : dir_(MoQControlCodec::Direction::SERVER),
-      wt_(wt),
+      wt_(std::move(wt)),
       exec_(std::move(exec)),
       nextRequestID_(1),
       nextExpectedPeerRequestID_(0),
@@ -2536,7 +2536,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         logger_->logFetchObjectParsed(
             currentStreamId_, obj, initialPayload->clone());
       } else {
-        currentObj_ = obj;
+        currentObj_ = std::move(obj);
       }
     }
 
@@ -5016,9 +5016,7 @@ void MoQSession::subscribeAnnouncesError(
     return;
   }
   if (logger_) {
-    logger_->logSubscribeAnnouncesError(
-        subscribeAnnouncesError, TrackNamespace() // TODO
-    );
+    logger_->logSubscribeAnnouncesError(subscribeAnnouncesError);
   }
   controlWriteEvent_.signal();
 }

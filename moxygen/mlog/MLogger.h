@@ -143,12 +143,9 @@ class MLogger {
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnouncesOk(
       const SubscribeAnnouncesOk& req,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeAnnouncesError(
       const SubscribeAnnouncesError& req,
-      const TrackNamespace& trackNamespace,
-      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
 
   void logStreamTypeSet(

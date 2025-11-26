@@ -417,7 +417,8 @@ void MLogger::logSubscribeAnnounces(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnounces>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+  baseMsg->requestId = req.requestID.value;
+  baseMsg->trackNamespacePrefix = convertTrackNamespaceToByteStringFormat(
       req.trackNamespacePrefix.trackNamespace, type);
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
@@ -621,13 +622,9 @@ void MLogger::logAnnounce(
 
 void MLogger::logSubscribeAnnouncesOk(
     const SubscribeAnnouncesOk& req,
-    const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesOk>();
-  // TODO
-  TrackNamespace ns;
-  baseMsg->trackNamespace =
-      convertTrackNamespaceToByteStringFormat(ns.trackNamespace, type);
+  baseMsg->requestId = req.requestID.value;
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -635,12 +632,9 @@ void MLogger::logSubscribeAnnouncesOk(
 
 void MLogger::logSubscribeAnnouncesError(
     const SubscribeAnnouncesError& req,
-    const TrackNamespace& trackNamespace,
-    const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesError>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      trackNamespace.trackNamespace, type);
+  baseMsg->requestId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {

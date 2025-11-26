@@ -342,10 +342,7 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
     }
     case moxygen::FrameType::SUBSCRIBE_ANNOUNCES_OK: {
       if (logger_) {
-        logger_->logSubscribeAnnouncesOk(
-            requestOk,
-            MOQTByteStringType::STRING_VALUE,
-            ControlMessageType::PARSED);
+        logger_->logSubscribeAnnouncesOk(requestOk, ControlMessageType::PARSED);
       }
       auto* subscribeAnnouncesPtr =
           MoQRelayPendingRequestState::tryGetSubscribeAnnounces(
