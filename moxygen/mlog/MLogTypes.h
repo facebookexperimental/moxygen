@@ -431,6 +431,53 @@ class MOQTSubscribeAnnouncesError : public MOQTBaseControlMessage {
   folly::Optional<std::string> reasonBytes;
 };
 
+class MOQTPublish : public MOQTBaseControlMessage {
+ public:
+  MOQTPublish() {
+    type = "publish";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
+  std::vector<MOQTByteString> trackNamespace;
+  MOQTByteString trackName;
+  uint64_t trackAlias{0};
+  uint8_t groupOrder{};
+  uint8_t contentExists{};
+  folly::Optional<MOQTLocation> largest;
+  uint8_t forward{};
+  uint64_t numberOfParameters{};
+  std::vector<MOQTParameter> parameters;
+};
+
+class MOQTPublishOk : public MOQTBaseControlMessage {
+ public:
+  MOQTPublishOk() {
+    type = "publish_ok";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
+  uint8_t forward{};
+  uint8_t subscriberPriority{};
+  uint8_t groupOrder{};
+  uint64_t filterType{};
+  folly::Optional<MOQTLocation> start;
+  folly::Optional<uint64_t> endGroup;
+  uint64_t numberOfParameters{};
+  std::vector<MOQTParameter> parameters;
+};
+
+class MOQTPublishError : public MOQTBaseControlMessage {
+ public:
+  MOQTPublishError() {
+    type = "publish_error";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
+  uint64_t errorCode{};
+  folly::Optional<std::string> reason;
+  folly::Optional<std::string> reasonBytes;
+};
+
 // MOQTEvents Structs
 struct MOQTControlMessageCreated {
   uint64_t streamId{0};

@@ -99,8 +99,7 @@ void logRequestError(
       logger->logSubscribeError(error, msgType);
       break;
     case FrameType::PUBLISH_ERROR:
-      // logger->logPublishError(static_cast<const PublishError&>(error),
-      // msgType);
+      logger->logPublishError(static_cast<const PublishError&>(error), msgType);
       break;
     case FrameType::FETCH_ERROR:
       logger->logFetchError(error, msgType);
@@ -3166,6 +3165,9 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
 void MoQSession::onPublishOk(PublishOk publishOk) {
   XLOG(DBG1) << __func__ << " reqID=" << publishOk.requestID
              << " sess=" << this;
+  if (logger_) {
+    logger_->logPublishOk(publishOk, ControlMessageType::PARSED);
+  }
   auto pubIt = pendingRequests_.find(publishOk.requestID);
   if (pubIt == pendingRequests_.end()) {
     XLOG(ERR) << "No matching publish reqID=" << publishOk.requestID
@@ -3384,6 +3386,10 @@ class MoQSession::ReceiverSubscriptionHandle
 
 void MoQSession::onPublish(PublishRequest publish) {
   XLOG(DBG1) << __func__ << " reqID=" << publish.requestID << " sess=" << this;
+  if (logger_) {
+    logger_->logPublish(
+        publish, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  }
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublish);
   if (closeSessionIfRequestIDInvalid(publish.requestID, false, true)) {
     return;
@@ -4008,6 +4014,10 @@ Subscriber::PublishResult MoQSession::publish(
             PublishErrorCode::INTERNAL_ERROR,
             "local write failed"});
   }
+  if (logger_) {
+    logger_->logPublish(
+        pub, MOQTByteStringType::STRING_VALUE, ControlMessageType::CREATED);
+  }
   controlWriteEvent_.signal();
 
   // Extract delivery timeout from publish params
@@ -4080,6 +4090,10 @@ void MoQSession::publishOk(const PublishOk& pubOk) {
   XLOG(DBG1) << __func__ << " reqID=" << pubOk.requestID << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishOk);
 
+  if (logger_) {
+    logger_->logPublishOk(pubOk, ControlMessageType::CREATED);
+  }
+
   auto res = moqFrameWriter_.writePublishOk(controlWriteBuf_, pubOk);
   if (!res) {
     XLOG(ERR) << "writePublishOk failed sess=" << this;
@@ -4093,6 +4107,9 @@ void MoQSession::publishError(const PublishError& publishError) {
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onPublishError, publishError.errorCode);
+  if (logger_) {
+    logger_->logPublishError(publishError, ControlMessageType::CREATED);
+  }
   auto res = moqFrameWriter_.writeRequestError(
       controlWriteBuf_, publishError, FrameType::PUBLISH_ERROR);
   if (!res) {

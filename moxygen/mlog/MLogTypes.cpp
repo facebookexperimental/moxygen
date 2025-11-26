@@ -780,4 +780,67 @@ folly::dynamic MOQTFetchObjectParsed::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTPublish::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["request_id"] = requestId;
+  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
+  obj["track_namespace"] =
+      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  obj["track_name"] = parseTrackName(trackName);
+  obj["track_alias"] = trackAlias;
+  obj["group_order"] = groupOrder;
+  obj["content_exists"] = contentExists;
+  if (largest.has_value()) {
+    obj["largest"] = largest->toDynamic();
+  }
+  obj["forward"] = forward;
+  obj["number_of_parameters"] = numberOfParameters;
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(parameters.size());
+  for (auto& param : parameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["parameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
+folly::dynamic MOQTPublishOk::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["request_id"] = requestId;
+  obj["forward"] = forward;
+  obj["subscriber_priority"] = subscriberPriority;
+  obj["group_order"] = groupOrder;
+  obj["filter_type"] = filterType;
+  if (start.has_value()) {
+    obj["start"] = start->toDynamic();
+  }
+  if (endGroup.has_value()) {
+    obj["end_group"] = endGroup.value();
+  }
+  obj["number_of_parameters"] = numberOfParameters;
+  std::vector<folly::dynamic> paramObjects;
+  paramObjects.reserve(parameters.size());
+  for (auto& param : parameters) {
+    paramObjects.push_back(param.toDynamic());
+  }
+  obj["parameters"] = folly::dynamic::array(paramObjects);
+  return obj;
+}
+
+folly::dynamic MOQTPublishError::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["request_id"] = requestId;
+  obj["error_code"] = errorCode;
+  if (reason.hasValue()) {
+    obj["reason"] = reason.value();
+  }
+  if (reasonBytes.hasValue()) {
+    obj["reason_bytes"] = reasonBytes.value();
+  }
+  return obj;
+}
+
 } // namespace moxygen

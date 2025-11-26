@@ -144,6 +144,16 @@ class MLogger {
   void logSubscribeAnnouncesError(
       const SubscribeAnnouncesError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
+  void logPublish(
+      const PublishRequest& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logPublishOk(
+      const PublishOk& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logPublishError(
+      const PublishError& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
 
   void logStreamTypeSet(
       uint64_t streamId,
