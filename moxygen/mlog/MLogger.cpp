@@ -347,13 +347,9 @@ void MLogger::logFetchCancel(
 
 void MLogger::logAnnounceOk(
     const AnnounceOk& req,
-    const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceOk>();
-  // TODO
-  TrackNamespace ns;
-  baseMsg->trackNamespace =
-      convertTrackNamespaceToByteStringFormat(ns.trackNamespace, type);
+  baseMsg->requestId = req.requestID.value;
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -361,12 +357,9 @@ void MLogger::logAnnounceOk(
 
 void MLogger::logAnnounceError(
     const AnnounceError& req,
-    const TrackNamespace& trackNamespace,
-    const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounceError>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      trackNamespace.trackNamespace, type);
+  baseMsg->requestId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {
@@ -611,6 +604,7 @@ void MLogger::logAnnounce(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTAnnounce>();
+  baseMsg->requestId = req.requestID.value;
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
   baseMsg->numberOfParameters = req.params.size();

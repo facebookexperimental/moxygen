@@ -217,7 +217,7 @@ class MOQTAnnounceOk : public MOQTBaseControlMessage {
     type = "announce_ok";
   }
   folly::dynamic toDynamic() const override;
-  std::vector<MOQTByteString> trackNamespace;
+  uint64_t requestId{0};
 };
 
 class MOQTAnnounceError : public MOQTBaseControlMessage {
@@ -226,7 +226,7 @@ class MOQTAnnounceError : public MOQTBaseControlMessage {
     type = "announce_error";
   }
   folly::dynamic toDynamic() const override;
-  std::vector<MOQTByteString> trackNamespace;
+  uint64_t requestId{0};
   uint64_t errorCode{};
   folly::Optional<std::string> reason;
   folly::Optional<std::string> reasonBytes;
@@ -367,6 +367,7 @@ class MOQTAnnounce : public MOQTBaseControlMessage {
     type = "announce";
   }
   folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
   std::vector<MOQTByteString> trackNamespace;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;

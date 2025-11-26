@@ -320,10 +320,7 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   switch (frameType) {
     case moxygen::FrameType::ANNOUNCE_OK: {
       if (logger_) {
-        logger_->logAnnounceOk(
-            requestOk,
-            MOQTByteStringType::STRING_VALUE,
-            ControlMessageType::PARSED);
+        logger_->logAnnounceOk(requestOk, ControlMessageType::PARSED);
       }
 
       auto* announcePtr =

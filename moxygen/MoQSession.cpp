@@ -106,7 +106,7 @@ void logRequestError(
       logger->logFetchError(error, msgType);
       break;
     case FrameType::ANNOUNCE_ERROR:
-      logger->logAnnounceError(error, TrackNamespace() /*TODO*/);
+      logger->logAnnounceError(error);
       break;
     case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
       logger->logSubscribeAnnouncesError(error);
@@ -4992,9 +4992,7 @@ void MoQSession::announceError(const AnnounceError& announceError) {
     return;
   }
   if (logger_) {
-    logger_->logAnnounceError(
-        announceError, TrackNamespace() // TODO
-    );
+    logger_->logAnnounceError(announceError);
   }
   controlWriteEvent_.signal();
 }
