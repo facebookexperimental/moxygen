@@ -10,6 +10,7 @@
 #include <moxygen/MoQCodec.h>
 #include <moxygen/events/MoQDeliveryTimer.h>
 #include <moxygen/events/MoQExecutor.h>
+#include <chrono>
 
 #include <folly/MaybeManagedPtr.h>
 #include <folly/Optional.h>
@@ -138,10 +139,21 @@ class MoQSession : public Subscriber,
   }
 
   [[nodiscard]] quic::TransportInfo getTransportInfo() const {
-    if (wt_) {
-      return wt_->getTransportInfo();
+    if (!wt_) {
+      return {};
     }
-    return {};
+
+    // Rate limit getTransportInfo calls to at most once per second
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - lastTransportInfoUpdate_);
+
+    if (elapsed >= std::chrono::seconds(1)) {
+      cachedTransportInfo_ = wt_->getTransportInfo();
+      lastTransportInfoUpdate_ = now;
+    }
+
+    return cachedTransportInfo_;
   }
 
   ~MoQSession() override;
@@ -737,5 +749,9 @@ class MoQSession : public Subscriber,
   folly::Optional<uint64_t> negotiatedVersion_;
   MoQControlCodec controlCodec_;
   MoQTokenCache tokenCache_{1024};
+
+  // Cached transport info to avoid expensive getTransportInfo calls
+  mutable quic::TransportInfo cachedTransportInfo_;
+  mutable std::chrono::steady_clock::time_point lastTransportInfoUpdate_{};
 };
 } // namespace moxygen
