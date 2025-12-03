@@ -51,13 +51,14 @@ int main(int argc, char** argv) {
   }
 
   if (FLAGS_log) {
-    server->logger_ =
+    auto logger =
         std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::SERVER);
-    server->logger_->setPath(FLAGS_mlog_path);
+    logger->setPath(FLAGS_mlog_path);
+    server->setLogger(logger);
     std::cout << "Type Anything To Exit Server...";
     std::string line;
     std::getline(std::cin, line);
-    server->logger_->outputLogsToFile();
+    server->getLogger()->outputLogsToFile();
     return 0;
   } else {
     folly::EventBase evb;

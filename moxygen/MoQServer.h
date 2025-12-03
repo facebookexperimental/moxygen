@@ -47,8 +47,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     return hqServer_->getWorkerEvbs();
   }
 
-  std::shared_ptr<MLogger> logger_;
   void setLogger(std::shared_ptr<MLogger> logger);
+  std::shared_ptr<MLogger> getLogger() const;
 
   // QUIC stats factory setter
   void setQuicStatsFactory(
@@ -180,5 +180,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
+  std::shared_ptr<MLogger> logger_;
 };
 } // namespace moxygen

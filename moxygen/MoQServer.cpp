@@ -366,6 +366,10 @@ void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {
   logger_ = std::move(logger);
 }
 
+std::shared_ptr<MLogger> MoQServer::getLogger() const {
+  return logger_;
+}
+
 void MoQServer::setQuicStatsFactory(
     std::unique_ptr<quic::QuicTransportStatsCallbackFactory> factory) {
   if (hqServer_) {
