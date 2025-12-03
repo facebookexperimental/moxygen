@@ -1482,11 +1482,7 @@ MoQSession::TrackPublisherImpl::datagram(
   }
 
   if (logger_) {
-    if (header.status == ObjectStatus::NORMAL) {
-      logger_->logObjectDatagramCreated(*trackAlias_, header, payload);
-    } else {
-      logger_->logObjectDatagramStatusCreated(*trackAlias_, header);
-    }
+    logger_->logObjectDatagramCreated(*trackAlias_, header, payload);
   }
 
   // Elide priority if it matches publisher priority
@@ -4715,13 +4711,16 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
   }
   readBuf.trimStart(readBuf.chainLength() - remainingLength);
   if (logger_) {
-    if (objHeader.objectHeader.status == ObjectStatus::NORMAL) {
-      logger_->logObjectDatagramParsed(
-          objHeader.trackAlias, objHeader.objectHeader, payload);
-    } else {
-      logger_->logObjectDatagramStatusParsed(
-          objHeader.trackAlias, objHeader.objectHeader);
+    if (payload) {
+      auto payloadChainLength = payload->computeChainDataLength();
+      if (payloadChainLength >= remainingLength) {
+        payload->trimStart(payloadChainLength - remainingLength);
+      } else {
+        payload.reset();
+      }
     }
+    logger_->logObjectDatagramParsed(
+        objHeader.trackAlias, objHeader.objectHeader, payload);
   }
   if (state) {
     auto callback = state->getSubscribeCallback();

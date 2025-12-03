@@ -533,30 +533,6 @@ struct MOQTObjectDatagramParsed {
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTObjectDatagramStatusCreated {
-  uint64_t trackAlias{0};
-  uint64_t groupId{0};
-  uint64_t objectId{0};
-  uint8_t publisherPriority{0};
-  uint64_t extensionHeadersLength{0};
-  std::vector<MOQTExtensionHeader> extensionHeaders;
-  uint64_t objectStatus{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTObjectDatagramStatusParsed {
-  uint64_t trackAlias{0};
-  uint64_t groupId{0};
-  uint64_t objectId{0};
-  uint8_t publisherPriority{0};
-  uint64_t extensionHeadersLength{0};
-  std::vector<MOQTExtensionHeader> extensionHeaders;
-  uint64_t objectStatus{0};
-
-  folly::dynamic toDynamic() const;
-};
-
 struct MOQTSubgroupHeaderCreated {
   uint64_t streamId{0};
   uint64_t trackAlias{0};

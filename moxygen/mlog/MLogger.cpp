@@ -46,20 +46,6 @@ void MLogger::addObjectDatagramParsedLog(MOQTObjectDatagramParsed req) {
   logs_.push_back(std::move(log));
 }
 
-void MLogger::addObjectDatagramStatusCreatedLog(
-    MOQTObjectDatagramStatusCreated req) {
-  auto log = eventCreator_.createObjectDatagramStatusCreatedEvent(
-      vantagePoint_, std::move(req));
-  logs_.push_back(std::move(log));
-}
-
-void MLogger::addObjectDatagramStatusParsedLog(
-    MOQTObjectDatagramStatusParsed req) {
-  auto log = eventCreator_.createObjectDatagramStatusParsedEvent(
-      vantagePoint_, std::move(req));
-  logs_.push_back(std::move(log));
-}
-
 void MLogger::addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req) {
   auto log = eventCreator_.createSubgroupHeaderCreatedEvent(
       vantagePoint_, std::move(req));
@@ -159,14 +145,6 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kObjectDatagramParsedName) {
     const MOQTObjectDatagramParsed& msg =
         std::get<MOQTObjectDatagramParsed>(log.data_);
-    logObject["data"] = msg.toDynamic();
-  } else if (log.name_ == kObjectDatagramStatusCreatedName) {
-    const MOQTObjectDatagramStatusCreated& msg =
-        std::get<MOQTObjectDatagramStatusCreated>(log.data_);
-    logObject["data"] = msg.toDynamic();
-  } else if (log.name_ == kObjectDatagramStatusParsedName) {
-    const MOQTObjectDatagramStatusParsed& msg =
-        std::get<MOQTObjectDatagramStatusParsed>(log.data_);
     logObject["data"] = msg.toDynamic();
   } else if (log.name_ == kSubgroupHeaderCreatedName) {
     const MOQTSubgroupHeaderCreated& msg =
@@ -825,7 +803,9 @@ void MLogger::logObjectDatagramCreated(
   if (header.status != ObjectStatus::NORMAL) {
     baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   }
-  baseMsg.objectPayload = payload->clone();
+  if (payload) {
+    baseMsg.objectPayload = payload->clone();
+  }
   baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
   addObjectDatagramCreatedLog(std::move(baseMsg));
 }
@@ -847,41 +827,13 @@ void MLogger::logObjectDatagramParsed(
   if (header.status != ObjectStatus::NORMAL) {
     baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   }
-  std::unique_ptr<folly::IOBuf> objPayload =
-      folly::IOBuf::copyBuffer({payload->data(), payload->length()});
-  baseMsg.objectPayload = std::move(objPayload);
+  if (payload) {
+    std::unique_ptr<folly::IOBuf> objPayload =
+        folly::IOBuf::copyBuffer({payload->data(), payload->length()});
+    baseMsg.objectPayload = std::move(objPayload);
+  }
   baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
   addObjectDatagramParsedLog(std::move(baseMsg));
-}
-
-void MLogger::logObjectDatagramStatusCreated(
-    TrackAlias trackAlias,
-    const ObjectHeader& header) {
-  MOQTObjectDatagramStatusCreated baseMsg;
-  baseMsg.trackAlias = trackAlias.value;
-  baseMsg.groupId = header.group;
-  baseMsg.objectId = header.id;
-  baseMsg.publisherPriority = header.priority.value_or(kDefaultPriority);
-  baseMsg.extensionHeadersLength = header.extensions.size();
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      header.extensions.getMutableExtensions());
-  baseMsg.objectStatus = static_cast<uint64_t>(header.status);
-  addObjectDatagramStatusCreatedLog(std::move(baseMsg));
-}
-
-void MLogger::logObjectDatagramStatusParsed(
-    TrackAlias trackAlias,
-    const ObjectHeader& header) {
-  MOQTObjectDatagramStatusParsed baseMsg;
-  baseMsg.trackAlias = trackAlias.value;
-  baseMsg.groupId = header.group;
-  baseMsg.objectId = header.id;
-  baseMsg.publisherPriority = header.priority.value_or(kDefaultPriority);
-  baseMsg.extensionHeadersLength = header.extensions.size();
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      header.extensions.getMutableExtensions());
-  baseMsg.objectStatus = static_cast<uint64_t>(header.status);
-  addObjectDatagramStatusParsedLog(std::move(baseMsg));
 }
 
 void MLogger::logSubgroupHeaderCreated(

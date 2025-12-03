@@ -40,8 +40,6 @@ class MLogger {
   void addStreamTypeSetLog(MOQTStreamTypeSet req);
   void addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req);
   void addObjectDatagramParsedLog(MOQTObjectDatagramParsed req);
-  void addObjectDatagramStatusCreatedLog(MOQTObjectDatagramStatusCreated req);
-  void addObjectDatagramStatusParsedLog(MOQTObjectDatagramStatusParsed req);
   void addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req);
   void addSubgroupHeaderParsedLog(MOQTSubgroupHeaderParsed req);
   void addSubgroupObjectCreatedLog(MOQTSubgroupObjectCreated req);
@@ -167,12 +165,6 @@ class MLogger {
       TrackAlias trackAlias,
       const ObjectHeader& header,
       const Payload& payload);
-  void logObjectDatagramStatusCreated(
-      TrackAlias trackAlias,
-      const ObjectHeader& header);
-  void logObjectDatagramStatusParsed(
-      TrackAlias trackAlias,
-      const ObjectHeader& header);
   void logSubgroupHeaderCreated(
       uint64_t streamId,
       TrackAlias trackAlias,

@@ -616,46 +616,6 @@ folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTObjectDatagramStatusCreated::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["trackAlias"] = std::to_string(trackAlias);
-  obj["groupId"] = std::to_string(groupId);
-  obj["objectId"] = std::to_string(objectId);
-  obj["publisherPriority"] = std::to_string(publisherPriority);
-  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
-
-  if (!extensionHeaders.empty()) {
-    std::vector<folly::dynamic> headerObjects;
-    headerObjects.reserve(extensionHeaders.size());
-    for (auto& header : extensionHeaders) {
-      headerObjects.push_back(header.toDynamic());
-    }
-    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
-  }
-  obj["objectStatus"] = std::to_string(objectStatus);
-  return obj;
-}
-
-folly::dynamic MOQTObjectDatagramStatusParsed::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["trackAlias"] = std::to_string(trackAlias);
-  obj["groupId"] = std::to_string(groupId);
-  obj["objectId"] = std::to_string(objectId);
-  obj["publisherPriority"] = std::to_string(publisherPriority);
-  obj["extensionHeadersLength"] = std::to_string(extensionHeadersLength);
-
-  if (!extensionHeaders.empty()) {
-    std::vector<folly::dynamic> headerObjects;
-    headerObjects.reserve(extensionHeaders.size());
-    for (auto& header : extensionHeaders) {
-      headerObjects.push_back(header.toDynamic());
-    }
-    obj["extensionHeaders"] = folly::dynamic::array(headerObjects);
-  }
-  obj["objectStatus"] = std::to_string(objectStatus);
-  return obj;
-}
-
 folly::dynamic MOQTSubgroupHeaderCreated::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["streamId"] = std::to_string(streamId);
