@@ -65,6 +65,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
   // Make a copy of transportSettings and enable datagram support
   auto ts = transportSettings;
   ts.datagramConfig.enabled = true;
+  ts.maxServerRecvPacketsPerLoop = 10;
   hqConnector.setTransportSettings(ts);
   hqConnector.setSupportedQuicVersions({quic::QuicVersion::QUIC_V1});
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();

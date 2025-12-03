@@ -98,6 +98,7 @@ QuicConnector::connectQuic(
       /*connectionIdSize=*/0);
   // Make a copy of transportSettings and enable datagram support
   auto ts = transportSettings;
+  ts.maxServerRecvPacketsPerLoop = 10;
   ts.datagramConfig.enabled = true;
 
   quicClient->setCongestionControllerFactory(

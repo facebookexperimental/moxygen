@@ -38,6 +38,18 @@ MoQServer::MoQServer(
     : fizzContext_(std::move(fizzContext)), endpoint_(std::move(endpoint)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
+  params_.transportSettings.defaultCongestionController =
+      quic::CongestionControlType::Copa;
+  params_.transportSettings.copaDeltaParam = 0.05;
+  params_.transportSettings.pacingEnabled = true;
+  params_.transportSettings.experimentalPacer = true;
+  params_.transportSettings.maxCwndInMss = quic::kLargeMaxCwndInMss;
+  params_.transportSettings.batchingMode =
+      quic::QuicBatchingMode::BATCHING_MODE_GSO;
+  params_.transportSettings.maxBatchSize = 48;
+  params_.transportSettings.dataPathType = quic::DataPathType::ContinuousMemory;
+  params_.transportSettings.maxServerRecvPacketsPerLoop = 10;
+  params_.transportSettings.writeConnectionDataPacketsLimit = 48;
 
   factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
@@ -96,18 +108,6 @@ void MoQServer::createMoQQuicSession(
   }
 
   auto qevb = quicSocket->getEventBase();
-  auto ts = quicSocket->getTransportSettings();
-  // TODO make this configurable, also have a shared pacing timer per thread.
-  ts.defaultCongestionController = quic::CongestionControlType::Copa;
-  ts.copaDeltaParam = 0.05;
-  ts.pacingEnabled = true;
-  ts.experimentalPacer = true;
-  ts.maxCwndInMss = quic::kLargeMaxCwndInMss;
-  ts.batchingMode = quic::QuicBatchingMode::BATCHING_MODE_GSO;
-  ts.maxBatchSize = 48;
-  ts.dataPathType = quic::DataPathType::ContinuousMemory;
-  ts.writeConnectionDataPacketsLimit = 48;
-
   auto quicWebTransport =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
   auto qWtPtr = quicWebTransport.get();
