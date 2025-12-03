@@ -6,6 +6,8 @@
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
+#include <folly/io/async/AsyncSignalHandler.h>
+#include <signal.h>
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/MoQWebTransportClient.h>
@@ -40,6 +42,7 @@ DEFINE_bool(
     insecure,
     false,
     "Use insecure verifier (skip certificate validation)");
+DEFINE_string(mlog_path, "", "Path to mlog file");
 
 namespace {
 using namespace moxygen;
@@ -120,6 +123,10 @@ class MoQDateServer : public MoQServer,
                                    MoQRelaySession::createRelaySessionFactory(),
                                    verifier)));
 
+    if (getLogger()) {
+      relayClient_->setLogger(getLogger());
+    }
+
     // Default to experimental protocols, override to legacy if flag set
     std::vector<std::string> alpns =
         getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
@@ -148,6 +155,9 @@ class MoQDateServer : public MoQServer,
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
+    if (getLogger()) {
+      clientSession->setLogger(getLogger());
+    }
   }
 
   std::pair<uint64_t, uint64_t> now() {
@@ -581,6 +591,28 @@ class MoQDateServer : public MoQServer,
   bool loopRunning_{false};
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
+
+class SigHandler : public folly::AsyncSignalHandler {
+ public:
+  explicit SigHandler(folly::EventBase* evb, std::function<void(int)> fn)
+      : folly::AsyncSignalHandler(evb), fn_(std::move(fn)) {
+    registerSignalHandler(SIGTERM);
+    registerSignalHandler(SIGINT);
+  }
+  void signalReceived(int signum) noexcept override {
+    fn_(signum);
+    unreg();
+  }
+
+  void unreg() {
+    unregisterSignalHandler(SIGTERM);
+    unregisterSignalHandler(SIGINT);
+  }
+
+ private:
+  std::function<void(int)> fn_;
+};
+
 } // namespace
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
@@ -602,12 +634,31 @@ int main(int argc, char* argv[]) {
   } else {
     server = std::make_shared<MoQDateServer>(mode, FLAGS_cert, FLAGS_key);
   }
+
+  if (!FLAGS_mlog_path.empty()) {
+    auto logger =
+        std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::SERVER);
+    logger->setPath(FLAGS_mlog_path);
+    server->setLogger(logger);
+  }
+
   folly::SocketAddress addr("::", FLAGS_port);
   server->start(addr);
   if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
     return 1;
   }
 
+  SigHandler handler(&evb, [&server, &evb](int) {
+    if (server->getLogger()) {
+      server->getLogger()->outputLogsToFile();
+    }
+    evb.terminateLoopSoon();
+  });
+
   evb.loopForever();
+
+  if (server->getLogger()) {
+    server->getLogger()->outputLogsToFile();
+  }
   return 0;
 }
