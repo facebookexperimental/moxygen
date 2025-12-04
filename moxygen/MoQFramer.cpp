@@ -921,6 +921,71 @@ MoQFrameParser::parseSubgroupHeader(
   return ParseResultAndLength<SubgroupHeaderResult>{
       result, startLength - length};
 }
+folly::Expected<ObjectHeader, ErrorCode>
+MoQFrameParser::parseFetchObjectHeaderLegacy(
+    folly::io::Cursor& cursor,
+    size_t& length,
+    const ObjectHeader& headerTemplate) const noexcept {
+  // Legacy FETCH object format (draft <= 14): all fields explicit
+  auto remainingLength = length;
+  ObjectHeader objectHeader = headerTemplate;
+
+  // Group ID (varint)
+  auto group = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+  if (!group) {
+    XLOG(DBG4) << "parseFetchObjectHeaderLegacy: UNDERFLOW on group";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  remainingLength -= group->second;
+  objectHeader.group = group->first;
+
+  // Subgroup ID (varint)
+  auto subgroup = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+  if (!subgroup) {
+    XLOG(DBG4) << "parseFetchObjectHeaderLegacy: UNDERFLOW on subgroup";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  remainingLength -= subgroup->second;
+  objectHeader.subgroup = subgroup->first;
+
+  // Object ID (varint)
+  auto id = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+  if (!id) {
+    XLOG(DBG4) << "parseFetchObjectHeaderLegacy: UNDERFLOW on id";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  remainingLength -= id->second;
+  objectHeader.id = id->first;
+
+  // Priority (8-bit)
+  if (remainingLength < 1) {
+    XLOG(DBG4) << "parseFetchObjectHeaderLegacy: UNDERFLOW on priority";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  objectHeader.priority = cursor.readBE<uint8_t>();
+  remainingLength -= 1;
+
+  // Extensions (if present)
+  auto ext = parseExtensions(cursor, remainingLength, objectHeader);
+  if (!ext) {
+    XLOG(DBG4) << "parseFetchObjectHeaderLegacy: error in parseExtensions: "
+               << folly::to_underlying(ext.error());
+    return folly::makeUnexpected(ext.error());
+  }
+
+  // Object status and payload length
+  auto res = parseObjectStatusAndLength(cursor, remainingLength, objectHeader);
+  if (!res) {
+    XLOG(DBG4)
+        << "parseFetchObjectHeaderLegacy: error in parseObjectStatusAndLength: "
+        << folly::to_underlying(res.error());
+    return folly::makeUnexpected(res.error());
+  }
+
+  length = remainingLength;
+  return objectHeader;
+}
+
 folly::Expected<folly::Unit, ErrorCode>
 MoQFrameParser::parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
@@ -959,56 +1024,17 @@ MoQFrameParser::parseFetchObjectHeader(
     folly::io::Cursor& cursor,
     size_t length,
     const ObjectHeader& headerTemplate) const noexcept {
-  // TODO get rid of this
   auto startLength = length;
-  ObjectHeader objectHeader = headerTemplate;
 
-  auto group = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!group) {
-    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on group";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= group->second;
-  objectHeader.group = group->first;
-
-  auto subgroup = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!subgroup) {
-    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on subgroup";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= subgroup->second;
-  objectHeader.subgroup = subgroup->first;
-
-  auto id = quic::follyutils::decodeQuicInteger(cursor, length);
-  if (!id) {
-    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on id";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  length -= id->second;
-  objectHeader.id = id->first;
-
-  if (length < 2) {
-    XLOG(DBG4) << "parseFetchObjectHeader: UNDERFLOW on priority/length";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  objectHeader.priority = cursor.readBE<uint8_t>();
-  length--;
-
-  auto ext = parseExtensions(cursor, length, objectHeader);
-  if (!ext) {
-    XLOG(DBG4) << "parseFetchObjectHeader: error in parseExtensions: "
-               << folly::to_underlying(ext.error());
-    return folly::makeUnexpected(ext.error());
+  // Use the legacy parser for all FETCH object parsing
+  auto objectHeader =
+      parseFetchObjectHeaderLegacy(cursor, length, headerTemplate);
+  if (!objectHeader) {
+    return folly::makeUnexpected(objectHeader.error());
   }
 
-  auto res = parseObjectStatusAndLength(cursor, length, objectHeader);
-  if (!res) {
-    XLOG(DBG4)
-        << "parseFetchObjectHeader: error in parseObjectStatusAndLength: "
-        << folly::to_underlying(res.error());
-    return folly::makeUnexpected(res.error());
-  }
-  return ParseResultAndLength<ObjectHeader>{objectHeader, startLength - length};
+  return ParseResultAndLength<ObjectHeader>{
+      std::move(objectHeader.value()), startLength - length};
 }
 
 folly::Expected<MoQFrameParser::ParseResultAndLength<ObjectHeader>, ErrorCode>
@@ -3409,6 +3435,19 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   return size;
 }
 
+void MoQFrameWriter::writeFetchObjectHeaderLegacy(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    size_t& size,
+    bool& error) const noexcept {
+  // Legacy FETCH object format (draft <= 14): all fields explicit
+  writeVarint(writeBuf, objectHeader.group, size, error);
+  writeVarint(writeBuf, objectHeader.subgroup, size, error);
+  writeVarint(writeBuf, objectHeader.id, size, error);
+  writeBuf.append(&objectHeader.priority, 1);
+  size += 1;
+}
+
 WriteResult MoQFrameWriter::writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
@@ -3419,11 +3458,8 @@ WriteResult MoQFrameWriter::writeStreamObject(
   size_t size = 0;
   bool error = false;
   if (streamType == StreamType::FETCH_HEADER) {
-    writeVarint(writeBuf, objectHeader.group, size, error);
-    writeVarint(writeBuf, objectHeader.subgroup, size, error);
-    writeVarint(writeBuf, objectHeader.id, size, error);
-    writeBuf.append(&objectHeader.priority, 1);
-    size += 1;
+    // Use the legacy writer for all FETCH object writing
+    writeFetchObjectHeaderLegacy(writeBuf, objectHeader, size, error);
   } else {
     if (getDraftMajorVersion(*version_) >= 14) {
       // Delta encoding of object ID

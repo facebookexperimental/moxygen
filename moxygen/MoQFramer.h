@@ -1506,6 +1506,11 @@ class MoQFrameParser {
   }
 
  private:
+  // Legacy FETCH object parser (draft <= 14)
+  folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeaderLegacy(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      const ObjectHeader& headerTemplate) const noexcept;
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
       size_t& length,
@@ -1807,6 +1812,13 @@ class MoQFrameWriter {
   WriteResult writeSubscribeRequestHelper(
       folly::IOBufQueue& writeBuf,
       const SubscribeRequest& subscribeRequest) const noexcept;
+
+  // Legacy FETCH object writer (draft <= 14)
+  void writeFetchObjectHeaderLegacy(
+      folly::IOBufQueue& writeBuf,
+      const ObjectHeader& objectHeader,
+      size_t& size,
+      bool& error) const noexcept;
 
   folly::Optional<uint64_t> version_;
   mutable folly::Optional<uint64_t> previousObjectID_;
