@@ -97,13 +97,13 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       std::shared_ptr<Subscriber> subscribeHandler);
   ClientSetup getClientSetup(const folly::Optional<std::string>& path);
 
-  void onSessionEnd(folly::Optional<uint32_t>) override;
-  void onSessionDrain() override;
+  void onSessionEnd(folly::Optional<uint32_t>) noexcept override;
+  void onSessionDrain() noexcept override;
   void onNewBidiStream(
-      proxygen::WebTransport::BidiStreamHandle handle) override;
+      proxygen::WebTransport::BidiStreamHandle handle) noexcept override;
   void onNewUniStream(
-      proxygen::WebTransport::StreamReadHandle* handle) override;
-  void onDatagram(std::unique_ptr<folly::IOBuf>) override;
+      proxygen::WebTransport::StreamReadHandle* handle) noexcept override;
+  void onDatagram(std::unique_ptr<folly::IOBuf>) noexcept override;
 
   std::shared_ptr<MoQExecutor> exec_;
   proxygen::URL url_;

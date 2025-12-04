@@ -133,7 +133,7 @@ ClientSetup MoQClientBase::getClientSetup(
   return clientSetup;
 }
 
-void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) {
+void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) noexcept {
   if (logger_) {
     logger_->outputLogsToFile();
   }
@@ -144,12 +144,12 @@ void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) {
   }
 }
 
-void MoQClientBase::onSessionDrain() {
+void MoQClientBase::onSessionDrain() noexcept {
   XLOG(DBG1) << "Received DRAIN_SESSION capsule";
 }
 
 void MoQClientBase::onNewBidiStream(
-    proxygen::WebTransport::BidiStreamHandle bidi) {
+    proxygen::WebTransport::BidiStreamHandle bidi) noexcept {
   XLOG(DBG1) << __func__;
   if (!moqSession_) {
     XLOG(DBG1) << "onNewBidiStream after session reset; ignoring";
@@ -159,7 +159,7 @@ void MoQClientBase::onNewBidiStream(
 }
 
 void MoQClientBase::onNewUniStream(
-    proxygen::WebTransport::StreamReadHandle* stream) {
+    proxygen::WebTransport::StreamReadHandle* stream) noexcept {
   XLOG(DBG1) << __func__;
   if (!moqSession_) {
     XLOG(DBG1) << "onNewUniStream after session reset; ignoring";
@@ -168,7 +168,8 @@ void MoQClientBase::onNewUniStream(
   moqSession_->onNewUniStream(stream);
 }
 
-void MoQClientBase::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
+void MoQClientBase::onDatagram(
+    std::unique_ptr<folly::IOBuf> datagram) noexcept {
   if (!moqSession_) {
     XLOG(DBG1) << "onDatagram after session reset; ignoring";
     return;

@@ -4597,7 +4597,8 @@ folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
   co_return {subscribeResult, fetchResult};
 }
 
-void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
+void MoQSession::onNewUniStream(
+    proxygen::WebTransport::StreamReadHandle* rh) noexcept {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (!setupComplete_) {
     XLOG(ERR) << "Uni stream before setup complete sess=" << this;
@@ -4614,7 +4615,8 @@ void MoQSession::onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) {
       .start();
 }
 
-void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
+void MoQSession::onNewBidiStream(
+    proxygen::WebTransport::BidiStreamHandle bh) noexcept {
   XLOG(DBG1) << __func__ << " sess=" << this;
   // TODO: prevent second control stream?
   if (dir_ == MoQControlCodec::Direction::CLIENT) {
@@ -4643,7 +4645,7 @@ void MoQSession::onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) {
   }
 }
 
-void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
+void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (!setupComplete_) {
     XLOG(ERR) << "Datagram before setup complete sess=" << this;

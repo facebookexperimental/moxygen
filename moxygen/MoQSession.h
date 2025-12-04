@@ -345,17 +345,19 @@ class MoQSession : public Subscriber,
     folly::Optional<uint8_t> publisherPriority_;
   };
 
-  void onNewUniStream(proxygen::WebTransport::StreamReadHandle* rh) override;
-  void onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bh) override;
-  void onDatagram(std::unique_ptr<folly::IOBuf> datagram) override;
-  void onSessionEnd(folly::Optional<uint32_t> err) override {
+  void onNewUniStream(
+      proxygen::WebTransport::StreamReadHandle* rh) noexcept override;
+  void onNewBidiStream(
+      proxygen::WebTransport::BidiStreamHandle bh) noexcept override;
+  void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
+  void onSessionEnd(folly::Optional<uint32_t> err) noexcept override {
     XLOG(DBG1) << __func__ << "err="
                << (err ? folly::to<std::string>(*err) : std::string("none"))
                << " sess=" << this;
     // The peer closed us, but we can close with NO_ERROR
     close(SessionCloseErrorCode::NO_ERROR);
   }
-  void onSessionDrain() override {
+  void onSessionDrain() noexcept override {
     XLOG(DBG1) << __func__ << " sess=" << this;
   }
 
