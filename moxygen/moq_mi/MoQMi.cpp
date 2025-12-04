@@ -41,21 +41,41 @@ std::unique_ptr<MoQMi::MoqMiObject> MoQMi::encodeToMoQMi(
           std::move(item->metadata));
     }
   } else if (item->type == MediaType::AUDIO) {
-    // Specify media type
-    ret->extensions.emplace_back(
-        folly::to_underlying(
-            HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
-        folly::to_underlying(
-            HeaderExtensionMediaTypeValues::
-                MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4));
+    // Check codecType to determine which codec to use
+    if (item->codecType == "opus") {
+      // Specify media type for Opus
+      ret->extensions.emplace_back(
+          folly::to_underlying(
+              HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+          folly::to_underlying(
+              HeaderExtensionMediaTypeValues::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS));
 
-    // Add metadata
-    auto extBuff = encodeMoqMiAACLCMetadata(*item);
-    ret->extensions.emplace_back(
-        folly::to_underlying(
-            HeaderExtensionsTypeIDs::
-                MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA),
-        std::move(extBuff));
+      // Add Opus metadata
+      auto extBuff = encodeMoqMiOpusMetadata(*item);
+      ret->extensions.emplace_back(
+          folly::to_underlying(
+              HeaderExtensionsTypeIDs::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_OPUS_METADATA),
+          std::move(extBuff));
+    } else {
+      // Default to AAC for backwards compatibility
+      // Specify media type
+      ret->extensions.emplace_back(
+          folly::to_underlying(
+              HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+          folly::to_underlying(
+              HeaderExtensionMediaTypeValues::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4));
+
+      // Add metadata
+      auto extBuff = encodeMoqMiAACLCMetadata(*item);
+      ret->extensions.emplace_back(
+          folly::to_underlying(
+              HeaderExtensionsTypeIDs::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA),
+          std::move(extBuff));
+    }
   } else {
     // Unknown media type
     return nullptr;
@@ -73,6 +93,7 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
   std::unique_ptr<folly::IOBuf> extradata;
   std::unique_ptr<VideoH264AVCCWCPData> videoH264AVCCWCPData;
   std::unique_ptr<AudioAACMP4LCWCPData> audioAACMP4LCWCPData;
+  std::unique_ptr<AudioOpusWCPData> audioOpusWCPData;
 
   // Parse extensions
   for (const Extension& ext : obj->extensions) {
@@ -99,6 +120,13 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
                   MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4)) {
         mediaType = HeaderExtensionMediaTypeValues::
             MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4;
+      } else if (
+          ext.intValue ==
+          folly::to_underlying(
+              HeaderExtensionMediaTypeValues::
+                  MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS)) {
+        mediaType = HeaderExtensionMediaTypeValues::
+            MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS;
       } else {
         // Unknown media type
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
@@ -160,6 +188,26 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
         return MoQMi::MoqMiReadCmd::MOQMI_ERR;
       }
     }
+
+    // Metadata Opus
+    if (ext.type ==
+        folly::to_underlying(
+            HeaderExtensionsTypeIDs::
+                MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_OPUS_METADATA)) {
+      if (audioOpusWCPData) {
+        // Multiple Opus metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      if (ext.arrayValue == nullptr) {
+        // Empty Opus metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+      audioOpusWCPData = decodeMoqMiOpusMetadata(*ext.arrayValue);
+      if (!audioOpusWCPData) {
+        // Error parsing Opus metadata
+        return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+      }
+    }
   }
 
   // Compose return value
@@ -181,6 +229,15 @@ MoQMi::MoqMiItem MoQMi::decodeMoQMi(
     }
     audioAACMP4LCWCPData->data = std::move(obj->payload);
     return audioAACMP4LCWCPData;
+  }
+  if (mediaType ==
+      HeaderExtensionMediaTypeValues::
+          MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS) {
+    if (!audioOpusWCPData) {
+      return MoQMi::MoqMiReadCmd::MOQMI_ERR;
+    }
+    audioOpusWCPData->data = std::move(obj->payload);
+    return audioOpusWCPData;
   }
   return MoQMi::MoqMiReadCmd::MOQMI_ERR;
 }
@@ -204,6 +261,25 @@ std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiAVCCMetadata(
 }
 
 std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiAACLCMetadata(
+    const MediaItem& item) noexcept {
+  folly::IOBufQueue buffQueue{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  writeVarint(buffQueue, item.id, size, error);
+  writeVarint(buffQueue, item.pts, size, error);
+  writeVarint(buffQueue, item.timescale, size, error);
+  writeVarint(buffQueue, item.sampleFreq, size, error);
+  writeVarint(buffQueue, item.numChannels, size, error);
+  writeVarint(buffQueue, item.duration, size, error);
+  writeVarint(buffQueue, item.wallclock, size, error);
+  if (error) {
+    return nullptr;
+  }
+  return buffQueue.move();
+}
+
+std::unique_ptr<folly::IOBuf> MoQMi::encodeMoqMiOpusMetadata(
     const MediaItem& item) noexcept {
   folly::IOBufQueue buffQueue{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
@@ -302,6 +378,48 @@ std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> MoQMi::decodeMoqMiAACLCMetadata(
       numChannels->first);
 }
 
+std::unique_ptr<MoQMi::AudioOpusWCPData> MoQMi::decodeMoqMiOpusMetadata(
+    const folly::IOBuf& extValue) noexcept {
+  folly::io::Cursor cursor(&extValue);
+  auto seqId = quic::follyutils::decodeQuicInteger(cursor);
+  if (!seqId) {
+    return nullptr;
+  }
+  auto pts = quic::follyutils::decodeQuicInteger(cursor);
+  if (!pts) {
+    return nullptr;
+  }
+  auto timescale = quic::follyutils::decodeQuicInteger(cursor);
+  if (!timescale) {
+    return nullptr;
+  }
+  auto sampleFreq = quic::follyutils::decodeQuicInteger(cursor);
+  if (!sampleFreq) {
+    return nullptr;
+  }
+  auto numChannels = quic::follyutils::decodeQuicInteger(cursor);
+  if (!numChannels) {
+    return nullptr;
+  }
+  auto duration = quic::follyutils::decodeQuicInteger(cursor);
+  if (!duration) {
+    return nullptr;
+  }
+  auto wallclock = quic::follyutils::decodeQuicInteger(cursor);
+  if (!wallclock) {
+    return nullptr;
+  }
+  return std::make_unique<AudioOpusWCPData>(
+      seqId->first,
+      pts->first,
+      timescale->first,
+      duration->first,
+      wallclock->first,
+      nullptr,
+      sampleFreq->first,
+      numChannels->first);
+}
+
 void MoQMi::writeBuffer(
     folly::IOBufQueue& buf,
     std::unique_ptr<folly::IOBuf> data,
@@ -355,6 +473,15 @@ std::ostream& operator<<(
      << ", sampleFreq: " << a.sampleFreq << ", numChannels: " << a.numChannels
      << ", timescale: " << a.timescale << ", duration: " << a.duration
      << ", wallclock: " << a.wallclock << ", data length: " << dataSize;
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, MoQMi::AudioOpusWCPData const& o) {
+  auto dataSize = o.data != nullptr ? o.data->computeChainDataLength() : 0;
+  os << "AudioOpus. id: " << o.seqId << ", pts: " << o.pts
+     << ", sampleFreq: " << o.sampleFreq << ", numChannels: " << o.numChannels
+     << ", timescale: " << o.timescale << ", duration: " << o.duration
+     << ", wallclock: " << o.wallclock << ", data length: " << dataSize;
   return os;
 }
 

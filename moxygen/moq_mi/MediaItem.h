@@ -36,6 +36,8 @@ struct MediaItem {
   uint64_t numChannels;
   bool isIdr;
   bool isEOF;
+  std::string codecType; // "opus", "aac", or empty (defaults to aac for
+                         // backward compat)
   MediaItem()
       : data(nullptr),
         metadata(nullptr),
@@ -49,7 +51,8 @@ struct MediaItem {
         sampleFreq(0),
         numChannels(0),
         isIdr{false},
-        isEOF{false} {}
+        isEOF{false},
+        codecType("") {}
   MediaItem(
       std::unique_ptr<folly::IOBuf> data,
       std::unique_ptr<folly::IOBuf> metadata,
@@ -74,7 +77,8 @@ struct MediaItem {
         sampleFreq(0),
         numChannels(0),
         isIdr{isIdr},
-        isEOF{isEOF} {}
+        isEOF{isEOF},
+        codecType("") {}
   MediaItem(
       std::unique_ptr<folly::IOBuf> data,
       MediaType type,
@@ -98,7 +102,8 @@ struct MediaItem {
         sampleFreq(sampleFreq),
         numChannels(numChannels),
         isIdr{true},
-        isEOF{isEOF} {}
+        isEOF{isEOF},
+        codecType("") {}
   explicit MediaItem(const MediaItem& m)
       : data(nullptr),
         metadata(nullptr),
@@ -112,7 +117,8 @@ struct MediaItem {
         sampleFreq(m.sampleFreq),
         numChannels(m.numChannels),
         isIdr(m.isIdr),
-        isEOF(m.isEOF) {}
+        isEOF(m.isEOF),
+        codecType(m.codecType) {}
 
   std::unique_ptr<MediaItem> clone() {
     auto clone = std::make_unique<MediaItem>(*this);

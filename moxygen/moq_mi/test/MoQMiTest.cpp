@@ -45,6 +45,16 @@ const auto kTestExpectedhAACLCMetadataExtensionWire = folly::IOBuf::copyBuffer(
     expectedAACLCMetadataExtensionWire,
     sizeof(expectedAACLCMetadataExtensionWire));
 
+uint8_t expectedOpusMetadataExtensionWire[56] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x05,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x06};
+const auto kTestExpectedOpusMetadataExtensionWire = folly::IOBuf::copyBuffer(
+    expectedOpusMetadataExtensionWire,
+    sizeof(expectedOpusMetadataExtensionWire));
+
 TEST(MoQMiTest, EncodeVideoH264TestNoMetadata) {
   auto item = std::make_unique<moxygen::MediaItem>(
       kTestData->clone(),
@@ -191,6 +201,96 @@ TEST(MoQMiTest, EncodeAudioAAC) {
       mi->extensions[1].arrayValue, kTestExpectedhAACLCMetadataExtensionWire));
 }
 
+TEST(MoQMiTest, EncodeAudioOpus) {
+  auto item = std::make_unique<moxygen::MediaItem>(
+      kTestData->clone(),
+      MediaType::AUDIO,
+      0x3FFFFFFFFFFFFF00 /* id */,
+      0x3FFFFFFFFFFFFF01 /* pts*/,
+      0x3FFFFFFFFFFFFF02 /* timescale */,
+      0x3FFFFFFFFFFFFF05 /* duration */,
+      0x3FFFFFFFFFFFFF06 /* wallclock */,
+      0x3FFFFFFFFFFFFF03 /* sampleFreq */,
+      0x3FFFFFFFFFFFFF04 /* NumChannels */,
+      false /* EOF*/);
+  item->codecType = "opus";
+
+  auto mi = MoQMi::encodeToMoQMi(item->clone());
+
+  EXPECT_NE(mi, nullptr);
+  // Check extensions
+  EXPECT_EQ(mi->extensions.size(), 2);
+  EXPECT_EQ(
+      mi->extensions[0].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+  EXPECT_EQ(
+      mi->extensions[0].intValue,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS));
+
+  EXPECT_EQ(
+      mi->extensions[1].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_OPUS_METADATA));
+
+  XLOG(INFO) << "MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_OPUS_METADATA: "
+             << proxygen::IOBufPrinter::printHexFolly(
+                    mi->extensions[1].arrayValue.get(), true);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(
+      eq(mi->extensions[1].arrayValue, kTestExpectedOpusMetadataExtensionWire));
+}
+
+TEST(MoQMiTest, EncodeAudioAACDefaultCodecType) {
+  // Test backward compatibility: empty codecType should default to AAC
+  auto item = std::make_unique<moxygen::MediaItem>(
+      kTestData->clone(),
+      MediaType::AUDIO,
+      0x3FFFFFFFFFFFFF00 /* id */,
+      0x3FFFFFFFFFFFFF01 /* pts*/,
+      0x3FFFFFFFFFFFFF02 /* timescale */,
+      0x3FFFFFFFFFFFFF05 /* duration */,
+      0x3FFFFFFFFFFFFF06 /* wallclock */,
+      0x3FFFFFFFFFFFFF03 /* sampleFreq */,
+      0x3FFFFFFFFFFFFF04 /* NumChannels */,
+      false /* EOF*/);
+  // codecType is empty by default, don't set it
+
+  auto mi = MoQMi::encodeToMoQMi(item->clone());
+
+  EXPECT_NE(mi, nullptr);
+  // Check extensions - should be AAC
+  EXPECT_EQ(mi->extensions.size(), 2);
+  EXPECT_EQ(
+      mi->extensions[0].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE));
+  EXPECT_EQ(
+      mi->extensions[0].intValue,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4));
+
+  EXPECT_EQ(
+      mi->extensions[1].type,
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA));
+
+  XLOG(INFO)
+      << "MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_AACLC_MPEG4_METADATA (default): "
+      << proxygen::IOBufPrinter::printHexFolly(
+             mi->extensions[1].arrayValue.get(), true);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(
+      mi->extensions[1].arrayValue, kTestExpectedhAACLCMetadataExtensionWire));
+}
+
 TEST(MoQMiTest, DecodeVideoH264TestWithExtradata) {
   std::vector<Extension> extensions;
   extensions.emplace_back(
@@ -295,6 +395,38 @@ TEST(MoQMiTest, DecodeAudioAAC) {
   EXPECT_TRUE(eq(std::get<1>(res)->data, kTestData));
 }
 
+TEST(MoQMiTest, DecodeAudioOpus) {
+  std::vector<Extension> extensions;
+  extensions.emplace_back(
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_TYPE),
+      folly::to_underlying(
+          MoQMi::HeaderExtensionMediaTypeValues::
+              MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS)); // MOQMI_MEDIA_TYPE
+
+  extensions.emplace_back(
+      folly::to_underlying(
+          MoQMi::HeaderExtensionsTypeIDs::
+              MOQ_EXT_HEADER_TYPE_MOQMI_AUDIO_OPUS_METADATA),
+      kTestExpectedOpusMetadataExtensionWire->clone()); // MOQMI_OPUS_METADATA
+
+  auto obj =
+      std::make_unique<MoQMi::MoqMiObject>(extensions, kTestData->clone());
+
+  auto res = MoQMi::decodeMoQMi(std::move(obj));
+
+  EXPECT_NE(std::get<2>(res), nullptr);
+  EXPECT_EQ(std::get<2>(res)->seqId, 0x3FFFFFFFFFFFFF00);
+  EXPECT_EQ(std::get<2>(res)->pts, 0x3FFFFFFFFFFFFF01);
+  EXPECT_EQ(std::get<2>(res)->timescale, 0x3FFFFFFFFFFFFF02);
+  EXPECT_EQ(std::get<2>(res)->duration, 0x3FFFFFFFFFFFFF05);
+  EXPECT_EQ(std::get<2>(res)->wallclock, 0x3FFFFFFFFFFFFF06);
+  EXPECT_EQ(std::get<2>(res)->sampleFreq, 0x3FFFFFFFFFFFFF03);
+  EXPECT_EQ(std::get<2>(res)->numChannels, 0x3FFFFFFFFFFFFF04);
+  folly::IOBufEqualTo eq;
+  EXPECT_TRUE(eq(std::get<2>(res)->data, kTestData));
+}
+
 TEST(MoQMi, OverrideStreamOpVideoH264) {
   std::string expected =
       "VideoH264. id: 1, pts: 2, dts: 6, timescale: 3, duration: 4, wallclock: 5, metadata length: 21, data length: 17";
@@ -321,6 +453,27 @@ TEST(MoQMi, OverrideStreamOpAudioAAC) {
       "AudioAAC. id: 1, pts: 2, sampleFreq: 6, numChannels: 7, timescale: 3, duration: 4, wallclock: 5, data length: 17";
 
   auto dataAudio = std::make_unique<MoQMi::AudioAACMP4LCWCPData>(
+      1,                  // SeqId
+      2,                  // Pts
+      3,                  // Timescale
+      4,                  // Duration
+      5,                  // Wallclock
+      kTestData->clone(), // Data
+      6,                  // SampleFreq
+      7                   // NumChannels
+  );
+
+  std::stringstream ss;
+
+  ss << *dataAudio;
+  EXPECT_EQ(ss.str(), expected);
+}
+
+TEST(MoQMi, OverrideStreamOpAudioOpus) {
+  std::string expected =
+      "AudioOpus. id: 1, pts: 2, sampleFreq: 6, numChannels: 7, timescale: 3, duration: 4, wallclock: 5, data length: 17";
+
+  auto dataAudio = std::make_unique<MoQMi::AudioOpusWCPData>(
       1,                  // SeqId
       2,                  // Pts
       3,                  // Timescale

@@ -38,6 +38,7 @@ class MoQMi {
   enum class HeaderExtensionMediaTypeValues : uint64_t {
     MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_VIDEO_H264_IN_AVCC = 0x00,
     MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_AACLC_MPEG4 = 0x03,
+    MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_AUDIO_AUDIO_OPUS = 0x04,
     MOQ_EXT_HEADER_TYPE_MOQMI_MEDIA_VALUE_UNKNOWN = 0xFF,
   };
 
@@ -165,6 +166,34 @@ class MoQMi {
     }
   };
 
+  struct AudioOpusWCPData : public CommonData {
+    uint64_t sampleFreq;
+    uint64_t numChannels;
+    AudioOpusWCPData() : CommonData(), sampleFreq(0), numChannels(0) {}
+    AudioOpusWCPData(
+        uint64_t seqId,
+        uint64_t pts,
+        uint64_t timescale,
+        uint64_t duration,
+        uint64_t wallclock,
+        std::unique_ptr<folly::IOBuf> data,
+        uint64_t sampleFreq,
+        uint64_t numChannels)
+        : CommonData(
+              seqId,
+              pts,
+              timescale,
+              duration,
+              wallclock,
+              std::move(data)),
+          sampleFreq(sampleFreq),
+          numChannels(numChannels) {}
+
+    friend std::ostream& operator<<(
+        std::ostream& os,
+        const AudioOpusWCPData& a);
+  };
+
   struct MoqMiObject {
     std::vector<Extension> extensions;
     std::unique_ptr<folly::IOBuf> payload;
@@ -180,11 +209,13 @@ class MoQMi {
   enum MoqMIItemTypeIndex {
     MOQMI_ITEM_INDEX_VIDEO_H264_AVC = 0,
     MOQMI_ITEM_INDEX_AUDIO_AAC_LC = 1,
-    MOQMI_ITEM_INDEX_READCMD = 2
+    MOQMI_ITEM_INDEX_AUDIO_OPUS = 2,
+    MOQMI_ITEM_INDEX_READCMD = 3
   };
   using MoqMiItem = std::variant<
       std::unique_ptr<MoQMi::VideoH264AVCCWCPData>,
       std::unique_ptr<MoQMi::AudioAACMP4LCWCPData>,
+      std::unique_ptr<MoQMi::AudioOpusWCPData>,
       MoqMiReadCmd>;
 
   explicit MoQMi() {}
@@ -199,10 +230,14 @@ class MoQMi {
       const MediaItem& item) noexcept;
   static std::unique_ptr<folly::IOBuf> encodeMoqMiAACLCMetadata(
       const MediaItem& item) noexcept;
+  static std::unique_ptr<folly::IOBuf> encodeMoqMiOpusMetadata(
+      const MediaItem& item) noexcept;
 
   static std::unique_ptr<MoQMi::VideoH264AVCCWCPData> decodeMoqMiAVCCMetadata(
       const folly::IOBuf& extValue) noexcept;
   static std::unique_ptr<MoQMi::AudioAACMP4LCWCPData> decodeMoqMiAACLCMetadata(
+      const folly::IOBuf& extValue) noexcept;
+  static std::unique_ptr<MoQMi::AudioOpusWCPData> decodeMoqMiOpusMetadata(
       const folly::IOBuf& extValue) noexcept;
 
  private:
