@@ -13,6 +13,18 @@
 namespace {
 constexpr uint64_t kMaxExtensionLength = 1024;
 
+enum class FetchHeaderSerializationBits : uint8_t {
+  RESERVED_BITMASK = 0xC0, // 0x40 | 0x80
+  GROUP_ID_BITMASK = 0x8,
+  SUBGROUP_MODE_BITMASK = 0x3,
+  SUBGROUP_ID_ZERO = 0x0,
+  SUBGROUP_ID_SAME_AS_PRIOR = 0x1,
+  SUBGROUP_ID_INC_BY_ONE = 0x2,
+  OBJECT_ID_BITMASK = 0x4,
+  PRIORITY_BITMASK = 0x10,
+  EXTENSIONS_BITMASK = 0x20
+};
+
 bool isDraftVariant(uint64_t version) {
   return (version & 0x00ff0000);
 }
@@ -743,8 +755,21 @@ MoQFrameParser::parseFetchHeader(folly::io::Cursor& cursor, size_t length)
     XLOG(DBG4) << "parseFetchHeader: UNDERFLOW on requestID";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
+
+  // Reset context tracking at the start of each FETCH stream. This shouldn't
+  // really be necessary since each stream has a separate MoQFrameParser, but
+  // we're keeping it just for the sake of completeness.
+  resetFetchContext();
+
   return ParseResultAndLength<RequestID>{
       RequestID(requestID->first), requestID->second};
+}
+
+void MoQFrameParser::resetFetchContext() const noexcept {
+  previousFetchGroup_.reset();
+  previousFetchSubgroup_.reset();
+  previousObjectID_.reset();
+  previousFetchPriority_.reset();
 }
 
 bool datagramTypeHasExtensions(uint64_t version, DatagramType datagramType) {
@@ -983,6 +1008,169 @@ MoQFrameParser::parseFetchObjectHeaderLegacy(
   }
 
   length = remainingLength;
+
+  return objectHeader;
+}
+
+folly::Expected<ObjectHeader, ErrorCode>
+MoQFrameParser::parseFetchObjectDraft15(
+    folly::io::Cursor& cursor,
+    size_t& length,
+    const ObjectHeader& headerTemplate) const noexcept {
+  // Draft-15+ parser with Serialization Flags
+  auto remainingLength = length;
+  ObjectHeader objectHeader = headerTemplate;
+
+  // Read Serialization Flags byte
+  if (remainingLength < 1) {
+    XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on flags";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  uint8_t flags = cursor.readBE<uint8_t>();
+  remainingLength--;
+
+  // Check reserved bits (0x40, 0x80)
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::RESERVED_BITMASK)) {
+    XLOG(ERR) << "parseFetchObjectDraft15: Reserved bits set in flags: 0x"
+              << std::hex << static_cast<int>(flags);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // Decode Group ID (flags & 0x08)
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK)) {
+    // Group ID field is present
+    auto group = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+    if (!group) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on group";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    remainingLength -= group->second;
+    objectHeader.group = group->first;
+  } else {
+    // Group ID is same as previous
+    if (!previousFetchGroup_.has_value()) {
+      XLOG(ERR) << "parseFetchObjectDraft15: First object must have explicit "
+                   "group ID";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    objectHeader.group = previousFetchGroup_.value();
+  }
+
+  // Decode Subgroup ID (flags & 0x03)
+  uint8_t subgroupMode = flags &
+      folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
+  switch (subgroupMode) {
+    case folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO):
+      // Subgroup ID is zero
+      objectHeader.subgroup = 0;
+      break;
+    case folly::to_underlying(
+        FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR):
+      // Subgroup ID is the prior Object's Subgroup ID
+      if (!previousFetchSubgroup_.has_value()) {
+        XLOG(ERR) << "parseFetchObjectDraft15: First object cannot reference "
+                     "prior subgroup";
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      objectHeader.subgroup = previousFetchSubgroup_.value();
+      break;
+    case folly::to_underlying(
+        FetchHeaderSerializationBits::SUBGROUP_ID_INC_BY_ONE):
+      // Subgroup ID is the prior Object's Subgroup ID plus one
+      if (!previousFetchSubgroup_.has_value()) {
+        XLOG(ERR) << "parseFetchObjectDraft15: First object cannot reference "
+                     "prior subgroup";
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      objectHeader.subgroup = previousFetchSubgroup_.value() + 1;
+      break;
+    case folly::to_underlying(
+        FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK):
+      // Subgroup ID field is present
+      auto subgroup =
+          quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+      if (!subgroup) {
+        XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on subgroup";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      remainingLength -= subgroup->second;
+      objectHeader.subgroup = subgroup->first;
+      break;
+  }
+
+  // Decode Object ID (flags & 0x04)
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK)) {
+    // Object ID field is present
+    auto id = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+    if (!id) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on id";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    remainingLength -= id->second;
+    objectHeader.id = id->first;
+  } else {
+    // Object ID is the prior Object's ID plus one
+    if (!previousObjectID_.has_value()) {
+      XLOG(ERR) << "parseFetchObjectDraft15: First object must have explicit "
+                   "object ID";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    objectHeader.id = previousObjectID_.value() + 1;
+  }
+
+  // Decode Priority (flags & 0x10)
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::PRIORITY_BITMASK)) {
+    // Priority field is present
+    if (remainingLength < 1) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on priority";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    objectHeader.priority = cursor.readBE<uint8_t>();
+    remainingLength--;
+  } else {
+    // Priority is the prior Object's Priority
+    if (!previousFetchPriority_.has_value()) {
+      XLOG(ERR) << "parseFetchObjectDraft15: First object must have explicit "
+                   "priority";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    objectHeader.priority = previousFetchPriority_.value();
+  }
+
+  // Decode Extensions (flags & 0x20)
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::EXTENSIONS_BITMASK)) {
+    // Extensions field is present
+    auto ext = parseExtensions(cursor, remainingLength, objectHeader);
+    if (!ext) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+  }
+  // If flag not set, no extensions (extensions remain empty)
+
+  // Parse Object Status and Length
+  auto res = parseObjectStatusAndLength(cursor, remainingLength, objectHeader);
+  if (!res) {
+    XLOG(DBG4)
+        << "parseFetchObjectDraft15: error in parseObjectStatusAndLength: "
+        << folly::to_underlying(res.error());
+    return folly::makeUnexpected(res.error());
+  }
+
+  // Update context for next object
+  previousFetchGroup_ = objectHeader.group;
+  previousFetchSubgroup_ = objectHeader.subgroup;
+  previousObjectID_ = objectHeader.id;
+  previousFetchPriority_ = objectHeader.priority;
+
+  length = remainingLength;
+
   return objectHeader;
 }
 

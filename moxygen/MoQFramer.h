@@ -1503,6 +1503,9 @@ class MoQFrameParser {
   // Test only
   void reset() {
     previousObjectID_ = folly::none;
+    previousFetchGroup_ = folly::none;
+    previousFetchSubgroup_ = folly::none;
+    previousFetchPriority_ = folly::none;
   }
 
  private:
@@ -1511,6 +1514,16 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length,
       const ObjectHeader& headerTemplate) const noexcept;
+
+  // Draft-15+ FETCH object parser with Serialization Flags
+  folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectDraft15(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      const ObjectHeader& headerTemplate) const noexcept;
+
+  // Reset fetch context at start of new FETCH stream
+  void resetFetchContext() const noexcept;
+
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
       size_t& length,
@@ -1595,6 +1608,10 @@ class MoQFrameParser {
   folly::Optional<uint64_t> version_;
   mutable MoQTokenCache tokenCache_;
   mutable folly::Optional<uint64_t> previousObjectID_;
+  // Context for FETCH object delta encoding (draft-15+)
+  mutable folly::Optional<uint64_t> previousFetchGroup_;
+  mutable folly::Optional<uint64_t> previousFetchSubgroup_;
+  mutable folly::Optional<uint8_t> previousFetchPriority_;
 };
 
 //// Egress ////
