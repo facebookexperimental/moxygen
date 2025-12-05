@@ -12,6 +12,7 @@
 #include <moxygen/relay/MoQRelay.h>
 #include <moxygen/test/MockMoQSession.h>
 #include <moxygen/test/Mocks.h>
+#include <moxygen/test/TestUtils.h>
 
 using namespace testing;
 
@@ -101,21 +102,29 @@ class MoQRelayTest : public ::testing::Test {
   }
 
   // Helper to subscribe a session to a track
-  void subscribeToTrack(
+  std::shared_ptr<SubscriptionHandle> subscribeToTrack(
       std::shared_ptr<MoQSession> session,
       const FullTrackName& trackName,
       std::shared_ptr<TrackConsumer> consumer,
-      RequestID requestID = RequestID(0)) {
+      RequestID requestID = RequestID(0),
+      bool addToState = true) {
     SubscribeRequest sub;
     sub.fullTrackName = trackName;
     sub.requestID = requestID;
     sub.locType = LocationType::LargestObject;
+    std::shared_ptr<SubscriptionHandle> handle{nullptr};
     withSessionContext(session, [&]() {
       auto task = relay_->subscribe(std::move(sub), consumer);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       EXPECT_TRUE(res.hasValue());
-      getOrCreateMockState(session)->subscribeHandles.push_back(*res);
+      if (res.hasValue()) {
+        handle = *res;
+        if (addToState) {
+          getOrCreateMockState(session)->subscribeHandles.push_back(handle);
+        }
+      }
     });
+    return handle;
   }
 
   // Helper to set up RequestContext for a session (simulates incoming request)
@@ -281,6 +290,28 @@ class MoQRelayTest : public ::testing::Test {
       }
       return std::shared_ptr<Publisher::SubscribeAnnouncesHandle>(nullptr);
     });
+  }
+
+  // Helper to set up a mock subgroup consumer with default expectations
+  std::shared_ptr<MockSubgroupConsumer> createMockSubgroupConsumer() {
+    auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+    ON_CALL(*sg, beginObject(_, _, _, _))
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    ON_CALL(*sg, objectPayload(_, _))
+        .WillByDefault(Return(
+            folly::makeExpected<MoQPublishError>(
+                ObjectPublishStatus::IN_PROGRESS)));
+    ON_CALL(*sg, endOfSubgroup())
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    ON_CALL(*sg, endOfGroup(_, _))
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    ON_CALL(*sg, endOfTrackAndGroup(_, _))
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    return sg;
   }
 
   std::shared_ptr<TestMoQExecutor> exec_;
@@ -785,6 +816,210 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
   removeSession(subscriber1);
   removeSession(subscriber2);
   removeSession(subscriber3);
+}
+
+// Test: Graceful session draining - comprehensive test of draining behavior
+// This test verifies that when a publisher calls subscribeDone, subscribers
+// are drained (receive subscribeDone) but their open subgroups are NOT reset.
+// Draining subscribers should not receive new subgroups and are removed when
+// their last subgroup closes.
+TEST_F(MoQRelayTest, GracefulSessionDraining) {
+  auto publisherSession = createMockSession();
+  std::array<std::shared_ptr<MoQSession>, 3> subscribers;
+  for (auto& s : subscribers) {
+    s = createMockSession();
+  }
+
+  // Setup: Publish track
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Create subscribers with different subgroup states
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 2> sub0_sgs;
+  std::shared_ptr<MockSubgroupConsumer> sub1_sg0;
+
+  std::array<std::shared_ptr<MockTrackConsumer>, 3> consumers;
+  for (auto& c : consumers) {
+    c = createMockConsumer();
+  }
+
+  // Subscriber1: will have 2 open subgroups (0, 1)
+  for (uint64_t i = 0; i < 2; ++i) {
+    EXPECT_CALL(*consumers[0], beginSubgroup(i, 0, _))
+        .WillOnce([this, i, &sub0_sgs](uint64_t, uint64_t, uint8_t) {
+          sub0_sgs[i] = createMockSubgroupConsumer();
+          return folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  sub0_sgs[i]);
+        });
+  }
+
+  // Subscriber2: will have 1 open subgroup (1)
+  EXPECT_CALL(*consumers[1], beginSubgroup(1, 0, _))
+      .WillOnce([this, &sub1_sg0](uint64_t, uint64_t, uint8_t) {
+        sub1_sg0 = createMockSubgroupConsumer();
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sub1_sg0);
+      });
+
+  std::array<std::shared_ptr<SubgroupConsumer>, 2> sgs;
+  subscribeToTrack(subscribers[0], kTestTrackName, consumers[0], RequestID(1));
+  sgs[0] = publishConsumer->beginSubgroup(0, 0, 0).value();
+  subscribeToTrack(subscribers[1], kTestTrackName, consumers[1], RequestID(2));
+  sgs[1] = publishConsumer->beginSubgroup(1, 0, 0).value();
+  subscribeToTrack(subscribers[2], kTestTrackName, consumers[2], RequestID(3));
+
+  // Trigger draining by calling subscribeDone from publisher
+  // All subscribers should receive subscribeDone but subgroups should NOT reset
+  // Note: subscribeDone may be called multiple times (during drain and cleanup)
+  for (auto& consumer : consumers) {
+    EXPECT_CALL(*consumer, subscribeDone(_))
+        .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  }
+
+  // Verify subgroups are NOT reset (no reset() calls expected)
+  EXPECT_CALL(*sub0_sgs[0], reset(_)).Times(0);
+  EXPECT_CALL(*sub0_sgs[1], reset(_)).Times(0);
+  EXPECT_CALL(*sub1_sg0, reset(_)).Times(0);
+
+  publishConsumer->subscribeDone(
+      SubscribeDone{
+          RequestID(0),
+          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "publisher ended"});
+
+  // At this point:
+  // - subscriber3 removed (had no subgroups)
+  // - subscriber1 still exists (has 2 open subgroups)
+  // - subscriber2 still exists (has 1 open subgroup)
+
+  // Close subgroup 0 -> subscriber2 removed (was its last subgroup)
+  // subscriber1 still has subgroup 1
+  EXPECT_TRUE(sgs[0]->endOfSubgroup().hasValue());
+
+  // Close subgroup 1 -> subscriber1 removed (was its last subgroup)
+  EXPECT_TRUE(sgs[1]->endOfSubgroup().hasValue());
+
+  removeSession(publisherSession);
+}
+
+// Test: removeSession (via unsubscribe) immediately resets all open subgroups
+TEST_F(MoQRelayTest, RemoveSessionResetsOpenSubgroups) {
+  auto publisherSession = createMockSession();
+  auto subscriber = createMockSession();
+
+  // Setup: Publish track
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Create subscriber with 2 open subgroups
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 2> sgs;
+  auto consumer = createMockConsumer();
+
+  for (uint64_t i = 0; i < sgs.size(); ++i) {
+    EXPECT_CALL(*consumer, beginSubgroup(i, 0, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+          sgs[i] = createMockSubgroupConsumer();
+          EXPECT_CALL(*sgs[i], object(0, testing::_, testing::_, false))
+              .WillOnce(testing::Return(folly::unit));
+          return folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  sgs[i]);
+        });
+  }
+
+  auto subHandle = subscribeToTrack(
+      subscriber, kTestTrackName, consumer, RequestID(1), /*addToState=*/false);
+
+  // Publish data to create subgroups and first objects
+  std::array<std::shared_ptr<SubgroupConsumer>, 2> pubSgs;
+  for (uint64_t i = 0; i < pubSgs.size(); ++i) {
+    auto sg = publishConsumer->beginSubgroup(i, 0, 0);
+    ASSERT_TRUE(sg.hasValue());
+    EXPECT_TRUE((*sg)->object(0, test::makeBuf(10)).hasValue());
+    pubSgs[i] = *sg;
+  }
+
+  // Expect both subgroups to be reset when subscriber unsubscribes
+  for (auto& sg : sgs) {
+    EXPECT_CALL(*sg, reset(ResetStreamErrorCode::CANCELLED));
+  }
+
+  // Unsubscribe triggers removeSession which resets all subgroups
+  withSessionContext(subscriber, [&]() { subHandle->unsubscribe(); });
+
+  for (uint64_t i = 0; i < pubSgs.size(); ++i) {
+    // Ensure each published subgroup is properly closed after unsubscribe
+    EXPECT_TRUE(pubSgs[i]->endOfSubgroup().hasValue());
+  }
+  removeSession(subscriber);
+  removeSession(publisherSession);
+}
+
+// Test: Draining subscriber removed when subgroup closes with error
+TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
+  auto publisherSession = createMockSession();
+  auto subscriber = createMockSession();
+
+  // Setup: Publish track
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Create subscriber with 3 open subgroups (0, 1, 2)
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 3> sgs;
+  auto consumer = createMockConsumer();
+
+  for (uint64_t i = 0; i < sgs.size(); ++i) {
+    EXPECT_CALL(*consumer, beginSubgroup(i, 0, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+          sgs[i] = createMockSubgroupConsumer();
+          return folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  sgs[i]);
+        });
+  }
+
+  subscribeToTrack(subscriber, kTestTrackName, consumer, RequestID(1));
+
+  // Publish data to create all 3 subgroups
+  std::array<std::shared_ptr<SubgroupConsumer>, 3> pubSgs;
+  for (uint64_t i = 0; i < 3; ++i) {
+    pubSgs[i] = publishConsumer->beginSubgroup(i, 0, 0).value();
+    EXPECT_TRUE((pubSgs[i])->beginObject(0, 10, 0).hasValue());
+  }
+
+  // Drain the subscriber - should mark it draining but not remove
+  // Note: subscribeDone may be called multiple times (during drain and cleanup)
+  EXPECT_CALL(*consumer, subscribeDone(_))
+      .Times(AtLeast(1))
+      .WillRepeatedly(
+          Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  // Subgroups should NOT be reset during drain
+  EXPECT_CALL(*sgs[0], reset(_)).Times(0);
+  EXPECT_CALL(*sgs[1], reset(_)).Times(0);
+  EXPECT_CALL(*sgs[2], reset(_)).Times(0);
+
+  publishConsumer->subscribeDone(
+      SubscribeDone{
+          RequestID(0),
+          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "publisher ended"});
+
+  // Now close subgroups one by one
+  // Test 1: Send error on subgroup 0 -> subscriber NOT removed (still has 1, 2)
+  EXPECT_CALL(*sgs[0], reset(ResetStreamErrorCode::INTERNAL_ERROR));
+  pubSgs[0]->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+
+  // Test 2: Close subgroup 1 normally -> subscriber NOT removed (still has 2)
+  EXPECT_CALL(*sgs[1], objectPayload(testing::_, true));
+  EXPECT_TRUE(pubSgs[1]->objectPayload(test::makeBuf(10), true));
+
+  // Test 3: Send error on subgroup 2 -> subscriber IS removed (was last)
+  EXPECT_CALL(*sgs[2], reset(ResetStreamErrorCode::INTERNAL_ERROR));
+  pubSgs[2]->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+
+  removeSession(publisherSession);
 }
 
 } // namespace moxygen::test

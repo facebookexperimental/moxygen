@@ -382,7 +382,7 @@ class MoQDateServer : public MoQServer,
     if (relayClient_ && relayClient_->getSession() == session) {
       // TODO: relay is going away
     } else {
-      forwarder_.removeSession(session);
+      forwarder_.removeSubscriber(session, folly::none, "unsubscribe");
     }
   }
 
@@ -578,7 +578,7 @@ class MoQDateServer : public MoQServer,
 
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << __func__;
-    forwarder_.removeSession(session);
+    forwarder_.removeSubscriber(session, folly::none, "terminateClientSession");
   }
 
  private:

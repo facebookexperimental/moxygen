@@ -133,18 +133,68 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
   }
 }
 
-void MoQForwarder::removeSession(
+void MoQForwarder::drainSubscriber(
     const std::shared_ptr<MoQSession>& session,
-    folly::Optional<SubscribeDone> subDone) {
-  XLOG(DBG1) << __func__ << " session=" << session.get();
+    SubscribeDone subDone,
+    const std::string& callsite) {
+  XLOG(DBG1) << __func__ << " from " << callsite
+             << " session=" << session.get();
   auto subIt = subscribers_.find(session.get());
   if (subIt == subscribers_.end()) {
-    // ?
-    XLOG(ERR) << "Session not found";
+    XLOG(WARNING) << "Session not found in drainSubscriber from " << callsite
+                  << " sess=" << session;
     return;
   }
-  subscribeDone(*subIt->second, subDone);
-  if (subIt->second->shouldForward) {
+
+  auto& subscriber = *subIt->second;
+
+  // Forward the subscribeDone message WITHOUT resetting subgroups
+  subDone.requestID = subscriber.requestID;
+  subscriber.trackConsumer->subscribeDone(std::move(subDone));
+
+  // If no open subgroups, delegate to removeSubscriberIt for cleanup
+  if (subscriber.subgroups.empty()) {
+    // Pass folly::none for subDone since we already forwarded it above
+    removeSubscriberIt(subIt, folly::none, callsite);
+    return;
+  }
+
+  // Otherwise, mark receivedSubscribeDone and wait for subgroups to close
+  subscriber.receivedSubscribeDone_ = true;
+  XLOG(DBG1) << "Subscriber " << &subscriber << " is draining with "
+             << subscriber.subgroups.size() << " open subgroups";
+}
+
+void MoQForwarder::removeSubscriber(
+    const std::shared_ptr<MoQSession>& session,
+    folly::Optional<SubscribeDone> subDone,
+    const std::string& callsite) {
+  XLOG(DBG1) << __func__ << " from " << callsite
+             << " session=" << session.get();
+  auto subIt = subscribers_.find(session.get());
+  if (subIt == subscribers_.end()) {
+    XLOG(WARNING) << "Session not found in removeSubscriber from " << callsite
+                  << " sess=" << session;
+    return;
+  }
+  removeSubscriberIt(subIt, std::move(subDone), callsite);
+}
+
+void MoQForwarder::removeSubscriberIt(
+    folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator subIt,
+    folly::Optional<SubscribeDone> subDone,
+    const std::string& callsite) {
+  auto& subscriber = *subIt->second;
+  XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
+  for (auto& subgroup : subscriber.subgroups) {
+    subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
+  }
+  if (subDone) {
+    subDone->requestID = subscriber.requestID;
+    subscriber.trackConsumer->subscribeDone(std::move(*subDone));
+  }
+
+  if (subscriber.shouldForward) {
     if (subscribers_.size() == 1) {
       // don't trigger a forwardUpdated callback here, we will trigger onEmpty
       forwardingSubscribers_--;
@@ -156,20 +206,6 @@ void MoQForwarder::removeSession(
   XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
   if (subscribers_.empty() && callback_) {
     callback_->onEmpty(this);
-  }
-}
-
-void MoQForwarder::subscribeDone(
-    Subscriber& subscriber,
-    folly::Optional<SubscribeDone> subDone) {
-  // TODO: Resetting subgroups here is too aggressive
-  XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
-  for (auto& subgroup : subscriber.subgroups) {
-    subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
-  }
-  if (subDone) {
-    subDone->requestID = subscriber.requestID;
-    subscriber.trackConsumer->subscribeDone(*subDone);
   }
 }
 
@@ -198,14 +234,15 @@ bool MoQForwarder::checkRange(const Subscriber& sub) {
   } else if (*largest_ > sub.range.end) {
     // now past, send subscribeDone
     // TOOD: maybe this is too early for a relay.
-    XLOG(DBG4) << "removeSession from checkRange";
-    removeSession(
+    XLOG(DBG4) << "removeSubscriber from checkRange";
+    removeSubscriber(
         sub.session,
         SubscribeDone{
             sub.requestID,
             SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
             0, // filled in by session
-            ""});
+            ""},
+        "checkRange");
     return false;
   }
   return true;
@@ -217,13 +254,14 @@ void MoQForwarder::removeSubscriberOnError(
     const std::string& callsite) {
   XLOG(ERR) << "Removing subscriber after error in " << callsite
             << " err=" << err.what();
-  removeSession(
+  removeSubscriber(
       sub.session,
       SubscribeDone{
           sub.requestID,
           SubscribeDoneStatusCode::INTERNAL_ERROR,
           0, // filled in by session
-          err.what()});
+          err.what()},
+      callsite);
 }
 
 folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::setTrackAlias(
@@ -315,13 +353,14 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::subscribeDone(
     SubscribeDone subDone) {
   XLOG(DBG1) << __func__ << " subDone reason=" << subDone.reasonPhrase;
   forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    removeSession(
+    drainSubscriber(
         sub->session,
         SubscribeDone{
             sub->requestID,
             subDone.statusCode,
             0, // filled in by session
-            subDone.reasonPhrase});
+            subDone.reasonPhrase},
+        "subscribeDone");
   });
   return folly::unit;
 }
@@ -404,7 +443,7 @@ void MoQForwarder::Subscriber::subscribeUpdate(
 
 void MoQForwarder::Subscriber::unsubscribe() {
   XLOG(DBG4) << "unsubscribe sess=" << this;
-  forwarder.removeSession(session);
+  forwarder.removeSubscriber(session, folly::none, "unsubscribe");
 }
 
 bool MoQForwarder::Subscriber::checkShouldForward() {
@@ -424,6 +463,16 @@ MoQForwarder::SubgroupForwarder::SubgroupForwarder(
     : forwarder_(forwarder),
       identifier_{group, subgroup},
       priority_(priority) {}
+
+void MoQForwarder::SubgroupForwarder::closeSubgroupForSubscriber(
+    const std::shared_ptr<Subscriber>& sub,
+    const std::string& callsite) {
+  sub->subgroups.erase(identifier_);
+  // If this subscriber is draining and this was the last subgroup, remove it
+  if (sub->shouldRemove()) {
+    forwarder_.removeSubscriber(sub->session, folly::none, callsite);
+  }
+}
 
 void MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
     std::function<void(
@@ -463,7 +512,8 @@ void MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
         // we set forward = true, then we'll create a new stream for the
         // subgroup.
         subgroupConsumerIt->second->reset(ResetStreamErrorCode::INTERNAL_ERROR);
-        sub->subgroups.erase(identifier_);
+        closeSubgroupForSubscriber(
+            sub, "SubgroupForwarder::forEachSubscriberSubgroup");
       } else {
         fn(sub, subgroupConsumerIt->second);
       }
@@ -492,7 +542,7 @@ MoQForwarder::SubgroupForwarder::object(
                   *sub, err, "SubgroupForwarder::object");
             });
         if (finSubgroup) {
-          sub->subgroups.erase(identifier_);
+          closeSubgroupForSubscriber(sub, "SubgroupForwarder::object");
         }
       });
   if (finSubgroup) {
@@ -520,7 +570,7 @@ MoQForwarder::SubgroupForwarder::objectNotExists(
                   *sub, err, "SubgroupForwarder::objectNotExists");
             });
         if (finSubgroup) {
-          sub->subgroups.erase(identifier_);
+          closeSubgroupForSubscriber(sub, "SubgroupForwarder::objectNotExists");
         }
       });
   if (finSubgroup) {
@@ -577,7 +627,7 @@ MoQForwarder::SubgroupForwarder::endOfGroup(
               forwarder_.removeSubscriberOnError(
                   *sub, err, "SubgroupForwarder::endOfGroup");
             });
-        sub->subgroups.erase(identifier_);
+        closeSubgroupForSubscriber(sub, "SubgroupForwarder::endOfGroup");
       });
   forwarder_.subgroups_.erase(identifier_);
   return folly::unit;
@@ -600,7 +650,8 @@ MoQForwarder::SubgroupForwarder::endOfTrackAndGroup(
               forwarder_.removeSubscriberOnError(
                   *sub, err, "SubgroupForwarder::endOfTrackAndGroup");
             });
-        sub->subgroups.erase(identifier_);
+        closeSubgroupForSubscriber(
+            sub, "SubgroupForwarder::endOfTrackAndGroup");
       });
   forwarder_.subgroups_.erase(identifier_);
   return folly::unit;
@@ -619,7 +670,7 @@ MoQForwarder::SubgroupForwarder::endOfSubgroup() {
           forwarder_.removeSubscriberOnError(
               *sub, err, "SubgroupForwarder::endOfSubgroup");
         });
-        sub->subgroups.erase(identifier_);
+        closeSubgroupForSubscriber(sub, "SubgroupForwarder::endOfSubgroup");
       },
       /*makeNew=*/false,
       "endOfSubgroup");
@@ -632,7 +683,7 @@ void MoQForwarder::SubgroupForwarder::reset(ResetStreamErrorCode error) {
       [&](const std::shared_ptr<Subscriber>& sub,
           const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
         subgroupConsumer->reset(error);
-        sub->subgroups.erase(identifier_);
+        closeSubgroupForSubscriber(sub, "SubgroupForwarder::reset");
       });
   forwarder_.subgroups_.erase(identifier_);
 }
@@ -661,7 +712,7 @@ MoQForwarder::SubgroupForwarder::objectPayload(
                   *sub, err, "SubgroupForwarder::objectPayload");
             });
         if (finSubgroup) {
-          sub->subgroups.erase(identifier_);
+          closeSubgroupForSubscriber(sub, "SubgroupForwarder::objectPayload");
         }
       },
       /*makeNew=*/false);

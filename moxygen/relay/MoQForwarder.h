@@ -98,6 +98,11 @@ class MoQForwarder : public TrackConsumer {
 
     bool checkShouldForward();
 
+    // Returns true if this subscriber is draining and all subgroups are closed
+    bool shouldRemove() const {
+      return receivedSubscribeDone_ && subgroups.empty();
+    }
+
     std::shared_ptr<MoQSession> session;
     RequestID requestID;
     SubscribeRange range;
@@ -108,6 +113,7 @@ class MoQForwarder : public TrackConsumer {
     SubgroupConsumerMap subgroups;
     MoQForwarder& forwarder;
     bool shouldForward;
+    bool receivedSubscribeDone_{false};
   };
 
   [[nodiscard]] bool empty() const {
@@ -127,13 +133,19 @@ class MoQForwarder : public TrackConsumer {
       const std::shared_ptr<MoQSession>& session,
       const JoiningFetch& joining) const;
 
-  void removeSession(
+  // Gracefully drains a subscriber - forwards subscribeDone but doesn't reset
+  // open subgroups. Calls removeSubscriber() if no subgroups are open.
+  void drainSubscriber(
       const std::shared_ptr<MoQSession>& session,
-      folly::Optional<SubscribeDone> subDone = folly::none);
+      SubscribeDone subDone,
+      const std::string& callsite);
 
-  void subscribeDone(
-      Subscriber& subscriber,
-      folly::Optional<SubscribeDone> subDone);
+  // Immediately removes a session - resets all open subgroups and removes
+  // from subscribers map
+  void removeSubscriber(
+      const std::shared_ptr<MoQSession>& session,
+      folly::Optional<SubscribeDone> subDone,
+      const std::string& callsite);
 
   void forEachSubscriber(
       std::function<void(const std::shared_ptr<Subscriber>&)> fn);
@@ -187,6 +199,12 @@ class MoQForwarder : public TrackConsumer {
         bool makeNew = true,
         const std::string& callsite = "");
 
+    // Helper to erase subgroup from subscriber and remove subscriber if
+    // draining
+    void closeSubgroupForSubscriber(
+        const std::shared_ptr<Subscriber>& sub,
+        const std::string& callsite);
+
    public:
     SubgroupForwarder(
         MoQForwarder& forwarder,
@@ -238,6 +256,13 @@ class MoQForwarder : public TrackConsumer {
 
  private:
   static Payload maybeClone(const Payload& payload);
+
+  // Helper that removes a subscriber given an iterator (avoids lookup)
+  void removeSubscriberIt(
+      folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator
+          subIt,
+      folly::Optional<SubscribeDone> subDone,
+      const std::string& callsite);
 
   FullTrackName fullTrackName_;
   folly::Optional<TrackAlias> trackAlias_;

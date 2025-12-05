@@ -376,8 +376,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     PublishRequest pub) {
   pub.forward = false;
   auto subscriber = forwarder->addSubscriber(session, pub);
-  auto guard = folly::makeGuard(
-      [forwarder, session] { forwarder->removeSession(session); });
+  auto guard = folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
   if (pub.largest) {
     subscriber->updateLargest(*pub.largest);
   }
