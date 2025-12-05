@@ -8,6 +8,64 @@
 
 namespace moxygen {
 
+// Template implementations
+
+template <typename Fn>
+void MoQForwarder::forEachSubscriber(Fn&& fn) {
+  for (auto subscriberIt = subscribers_.begin();
+       subscriberIt != subscribers_.end();) {
+    const auto& sub = subscriberIt->second;
+    subscriberIt++;
+    fn(sub);
+  }
+}
+
+template <typename Fn>
+void MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
+    Fn&& fn,
+    bool makeNew,
+    const std::string& callsite) {
+  forwarder_.forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
+    if (forwarder_.largest_ && forwarder_.checkRange(*sub)) {
+      auto subgroupConsumerIt = sub->subgroups.find(identifier_);
+      if (subgroupConsumerIt == sub->subgroups.end()) {
+        if (!sub->checkShouldForward()) {
+          // If shouldForward == false, we shouldn't be creating any
+          // subgroups.
+          return;
+        }
+        if (!makeNew) {
+          XLOG(DBG2) << "skipping creating subgroup for sub=" << sub.get();
+          return;
+        }
+        XCHECK(sub->trackConsumer);
+        XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
+                   << " " << callsite;
+        auto res = sub->trackConsumer->beginSubgroup(
+            identifier_.group, identifier_.subgroup, priority_);
+        if (res.hasError()) {
+          forwarder_.removeSubscriberOnError(*sub, res.error(), callsite);
+        } else {
+          auto emplaceRes = sub->subgroups.emplace(identifier_, res.value());
+          subgroupConsumerIt = emplaceRes.first;
+        }
+      }
+      if (!sub->checkShouldForward()) {
+        // If we're attempting to send anything on an existing subgroup when
+        // forward == false, then we reset the stream, so that we don't end
+        // up with "holes" in the subgroup. If, at some point in the future,
+        // we set forward = true, then we'll create a new stream for the
+        // subgroup.
+        subgroupConsumerIt->second->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+        closeSubgroupForSubscriber(
+            sub, "SubgroupForwarder::forEachSubscriberSubgroup");
+      } else {
+        fn(sub, subgroupConsumerIt->second);
+      }
+    }
+  });
+}
+
 // MoQForwarder implementation
 
 MoQForwarder::MoQForwarder(
@@ -214,16 +272,6 @@ void MoQForwarder::removeSubscriberIt(
   XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
   if (subscribers_.empty() && callback_) {
     callback_->onEmpty(this);
-  }
-}
-
-void MoQForwarder::forEachSubscriber(
-    std::function<void(const std::shared_ptr<Subscriber>&)> fn) {
-  for (auto subscriberIt = subscribers_.begin();
-       subscriberIt != subscribers_.end();) {
-    const auto& sub = subscriberIt->second;
-    subscriberIt++;
-    fn(sub);
   }
 }
 
@@ -481,53 +529,6 @@ void MoQForwarder::SubgroupForwarder::closeSubgroupForSubscriber(
   if (sub->shouldRemove()) {
     forwarder_.removeSubscriber(sub->session, folly::none, callsite);
   }
-}
-
-void MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
-    std::function<void(
-        const std::shared_ptr<Subscriber>& sub,
-        const std::shared_ptr<SubgroupConsumer>&)> fn,
-    bool makeNew,
-    const std::string& callsite) {
-  forwarder_.forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (forwarder_.largest_ && forwarder_.checkRange(*sub)) {
-      auto subgroupConsumerIt = sub->subgroups.find(identifier_);
-      if (subgroupConsumerIt == sub->subgroups.end()) {
-        if (!sub->checkShouldForward()) {
-          // If shouldForward == false, we shouldn't be creating any
-          // subgroups.
-          return;
-        }
-        if (!makeNew) {
-          XLOG(DBG2) << "skipping creating subgroup for sub=" << sub.get();
-          return;
-        }
-        XCHECK(sub->trackConsumer);
-        XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
-                   << " " << callsite;
-        auto res = sub->trackConsumer->beginSubgroup(
-            identifier_.group, identifier_.subgroup, priority_);
-        if (res.hasError()) {
-          forwarder_.removeSubscriberOnError(*sub, res.error(), callsite);
-        } else {
-          auto emplaceRes = sub->subgroups.emplace(identifier_, res.value());
-          subgroupConsumerIt = emplaceRes.first;
-        }
-      }
-      if (!sub->checkShouldForward()) {
-        // If we're attempting to send anything on an existing subgroup when
-        // forward == false, then we reset the stream, so that we don't end
-        // up with "holes" in the subgroup. If, at some point in the future,
-        // we set forward = true, then we'll create a new stream for the
-        // subgroup.
-        subgroupConsumerIt->second->reset(ResetStreamErrorCode::INTERNAL_ERROR);
-        closeSubgroupForSubscriber(
-            sub, "SubgroupForwarder::forEachSubscriberSubgroup");
-      } else {
-        fn(sub, subgroupConsumerIt->second);
-      }
-    }
-  });
 }
 
 folly::Expected<folly::Unit, MoQPublishError>

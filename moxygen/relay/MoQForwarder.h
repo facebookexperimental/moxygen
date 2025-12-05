@@ -147,8 +147,8 @@ class MoQForwarder : public TrackConsumer {
       folly::Optional<SubscribeDone> subDone,
       const std::string& callsite);
 
-  void forEachSubscriber(
-      std::function<void(const std::shared_ptr<Subscriber>&)> fn);
+  template <typename Fn>
+  void forEachSubscriber(Fn&& fn);
 
   void updateLargest(uint64_t group, uint64_t object = 0);
 
@@ -192,10 +192,9 @@ class MoQForwarder : public TrackConsumer {
     SubgroupIdentifier identifier_;
     Priority priority_;
 
+    template <typename Fn>
     void forEachSubscriberSubgroup(
-        std::function<void(
-            const std::shared_ptr<Subscriber>& sub,
-            const std::shared_ptr<SubgroupConsumer>&)> fn,
+        Fn&& fn,
         bool makeNew = true,
         const std::string& callsite = "");
 
