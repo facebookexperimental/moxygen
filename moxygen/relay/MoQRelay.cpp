@@ -265,7 +265,7 @@ void MoQRelay::onPublishDone(const FullTrackName& ftn) {
 Subscriber::PublishResult MoQRelay::publish(
     PublishRequest pub,
     std::shared_ptr<Publisher::SubscriptionHandle> handle) {
-  XLOG(DBG1) << __func__ << " ns=" << pub.fullTrackName.trackNamespace;
+  XLOG(DBG1) << __func__ << " ftn=" << pub.fullTrackName;
   XCHECK(handle) << "Publish handle cannot be null";
   if (!pub.fullTrackName.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     return folly::makeUnexpected(
@@ -376,6 +376,12 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     PublishRequest pub) {
   pub.forward = false;
   auto subscriber = forwarder->addSubscriber(session, pub);
+  if (!subscriber) {
+    XLOG(ERR) << "Subscribe failed: addSubscriber returned null for "
+              << forwarder->fullTrackName() << " reqID=" << pub.requestID;
+    co_return;
+  }
+  XLOG(DBG4) << "added subscriber for ftn=" << pub.fullTrackName;
   auto guard = folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
   if (pub.largest) {
     subscriber->updateLargest(*pub.largest);
@@ -680,6 +686,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     auto sessionVersion = session->getNegotiatedVersion();
     auto subscriber = forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
+    if (!subscriber) {
+      XLOG(ERR) << "addSubscriber returned null (draining?) for "
+                << subReq.fullTrackName << " reqID=" << subReq.requestID;
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subReq.requestID,
+              SubscribeErrorCode::INTERNAL_ERROR,
+              "failed to add subscriber"});
+    }
+    XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
     // As per the spec, we must set forward = true in the subscribe request
     // to the upstream.
     // But should we if this is forward=0?
@@ -753,6 +769,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
         subscriptionIt->second.forwarder->numForwardingSubscribers() > 0;
     auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
+    if (!subscriber) {
+      XLOG(ERR) << "addSubscriber returned null (draining?) for "
+                << subReq.fullTrackName << " reqID=" << subReq.requestID;
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subReq.requestID,
+              SubscribeErrorCode::INTERNAL_ERROR,
+              "failed to add subscriber"});
+    }
+    XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
     if (!forwarding &&
         subscriptionIt->second.forwarder->numForwardingSubscribers() > 0) {
       subscriptionIt->second.handle->subscribeUpdate(

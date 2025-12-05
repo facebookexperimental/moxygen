@@ -31,6 +31,10 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
     std::shared_ptr<MoQSession> session,
     const SubscribeRequest& subReq,
     std::shared_ptr<TrackConsumer> consumer) {
+  if (draining_) {
+    XLOG(ERR) << "addSubscriber called on draining track";
+    return nullptr;
+  }
   auto sessionPtr = session.get();
   auto trackAlias =
       subReq.trackAlias.value_or(trackAlias_.value_or(subReq.requestID.value));
@@ -65,6 +69,10 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
 std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
     std::shared_ptr<MoQSession> session,
     const PublishRequest& pub) {
+  if (draining_) {
+    XLOG(ERR) << "addSubscriber called on draining track";
+    return nullptr;
+  }
   auto sessionPtr = session.get();
   auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
       *this,
@@ -352,6 +360,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
 folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::subscribeDone(
     SubscribeDone subDone) {
   XLOG(DBG1) << __func__ << " subDone reason=" << subDone.reasonPhrase;
+  draining_ = true;
   forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     drainSubscriber(
         sub->session,

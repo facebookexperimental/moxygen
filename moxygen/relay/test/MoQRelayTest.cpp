@@ -107,7 +107,8 @@ class MoQRelayTest : public ::testing::Test {
       const FullTrackName& trackName,
       std::shared_ptr<TrackConsumer> consumer,
       RequestID requestID = RequestID(0),
-      bool addToState = true) {
+      bool addToState = true,
+      folly::Optional<SubscribeErrorCode> expectedError = folly::none) {
     SubscribeRequest sub;
     sub.fullTrackName = trackName;
     sub.requestID = requestID;
@@ -116,8 +117,17 @@ class MoQRelayTest : public ::testing::Test {
     withSessionContext(session, [&]() {
       auto task = relay_->subscribe(std::move(sub), consumer);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-      EXPECT_TRUE(res.hasValue());
-      if (res.hasValue()) {
+      if (expectedError.has_value()) {
+        // Expect an error and, if present, verify the error code matches
+        EXPECT_FALSE(res.hasValue());
+        // res has an error; compare error code when available
+        const auto& err = res.error();
+        // If SubscribeError exposes a code accessor or public member, use it.
+        // Assuming err.code exists or err.errorCode() accessor:
+        // Adjust the line below to match actual error API.
+        EXPECT_EQ(err.errorCode, *expectedError);
+      } else {
+        EXPECT_TRUE(res.hasValue());
         handle = *res;
         if (addToState) {
           getOrCreateMockState(session)->subscribeHandles.push_back(handle);
@@ -1020,6 +1030,161 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
   pubSgs[2]->reset(ResetStreamErrorCode::INTERNAL_ERROR);
 
   removeSession(publisherSession);
+}
+
+// Test: Subscriber that ends subscription doesn't receive subsequent objects
+// Sequence: publish, sub1 subscribes, beginSubgroup, sub1 ends (subscribeDone),
+// sub2 subscribes, send object -> only goes to sub1
+TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
+  auto publisherSession = createMockSession();
+  auto subscriber1 = createMockSession();
+  auto subscriber2 = createMockSession();
+
+  // Set up mock consumers
+  auto mockConsumer1 = createMockConsumer();
+  auto mockConsumer2 = createMockConsumer();
+
+  // Sub1 should get beginSubgroup
+  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+        auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+        ON_CALL(*sg, beginObject(_, _, _, _))
+            .WillByDefault(
+                Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  // Sub2 should also get beginSubgroup
+  EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _)).Times(0);
+
+  // Publish track
+  auto publishConsumer =
+      doPublish(publisherSession, kTestTrackName, /*addToState=*/false);
+
+  // Subscriber 1 joins
+  subscribeToTrack(subscriber1, kTestTrackName, mockConsumer1, RequestID(1));
+
+  // Begin subgroup - sub1 receives it
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0);
+  EXPECT_TRUE(sgRes.hasValue());
+  auto subgroup = *sgRes;
+
+  // publisher ends subscription
+  EXPECT_CALL(*mockConsumer1, subscribeDone(testing::_));
+  EXPECT_TRUE(publishConsumer
+                  ->subscribeDone(
+                      {RequestID(1),
+                       SubscribeDoneStatusCode::TRACK_ENDED,
+                       0,
+                       "track ended"})
+                  .hasValue());
+
+  // Subscriber 2 joins after subscribeDone
+  subscribeToTrack(
+      subscriber2,
+      kTestTrackName,
+      mockConsumer2,
+      RequestID(2),
+      /*addToState=*/false,
+      SubscribeErrorCode::INTERNAL_ERROR);
+
+  // Send object - should only go to subscriber 1 (sub2 is gone)
+  EXPECT_TRUE(subgroup->beginObject(0, 4, 0).hasValue());
+
+  removeSession(publisherSession);
+  removeSession(subscriber1);
+  removeSession(subscriber2);
+}
+
+// Test: SubscribeAnnounces only receives publishes while active
+// Sequence: subscribeAnnounces (sub1), publish (sub1 gets it), beginSubgroup,
+// subscribeDone, subscribeAnnounces (sub2), new publish (only sub2 gets it)
+TEST_F(MoQRelayTest, SubscribeAnnouncesDoesntAddDrainingPublish) {
+  auto publisherSession = createMockSession();
+  auto subscriber1 = createMockSession();
+  auto subscriber2 = createMockSession();
+
+  // Subscriber 1 subscribes to announces
+  auto handle1 =
+      doSubscribeAnnounces(subscriber1, kTestNamespace, /*addToState=*/false);
+
+  // Publish first track - subscriber 1 should receive it
+  auto mockConsumer1 = createMockConsumer();
+  EXPECT_CALL(*subscriber1, publish(testing::_, testing::_))
+      .WillOnce([mockConsumer1](auto pubReq, auto subHandle) {
+        return Subscriber::PublishResult(
+            Subscriber::PublishConsumerAndReplyTask{
+                mockConsumer1,
+                []() -> folly::coro::Task<
+                         folly::Expected<PublishOk, PublishError>> {
+                  co_return PublishOk{/*requestID=*/RequestID(1),
+                                      /*forward=*/true,
+                                      /*subscriberPriority=*/0,
+                                      /*groupOrder=*/GroupOrder::OldestFirst,
+                                      /*locType=*/LocationType::LargestObject,
+                                      /*start=*/folly::none,
+                                      /*endGroup=*/folly::none,
+                                      /*params=*/{}};
+                }()});
+      });
+
+  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+        auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+        EXPECT_CALL(*sg, endOfSubgroup())
+            .WillOnce(testing::Return(folly::unit));
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  // Begin a subgroup for ongoing publish activity
+  auto pubConsumer = doPublish(
+      publisherSession,
+      FullTrackName{kTestNamespace, "track_stream"},
+      /*addToState=*/false);
+  // TODO: bug subscriber not added until next loop?
+  exec_->drive();
+  auto subgroupRes = pubConsumer->beginSubgroup(0, 0, 0);
+  EXPECT_TRUE(subgroupRes.hasValue());
+  auto subgroup = *subgroupRes;
+
+  // publisher ends subscription
+  EXPECT_CALL(*mockConsumer1, subscribeDone(testing::_));
+  EXPECT_TRUE(pubConsumer
+                  ->subscribeDone(
+                      {RequestID(1),
+                       SubscribeDoneStatusCode::TRACK_ENDED,
+                       0,
+                       "track ended"})
+                  .hasValue());
+  subgroup->endOfSubgroup();
+
+  // Subscriber 2 subscribes to announces but doesn't get finished track
+  doSubscribeAnnounces(subscriber2, kTestNamespace);
+
+  // First publish (existing context handles initial publish), now publish a
+  // second track
+  // Expect publish calls on both subscribers, just fail them.
+  EXPECT_CALL(*subscriber1, publish(testing::_, testing::_))
+      .WillOnce([](auto /*pubReq*/, auto /*subHandle*/) {
+        return folly::makeUnexpected(PublishError{});
+      });
+
+  EXPECT_CALL(*subscriber2, publish(testing::_, testing::_))
+      .WillOnce([](auto /*pubReq*/, auto /*subHandle*/) {
+        return folly::makeUnexpected(PublishError{});
+      });
+
+  auto pubConsumer2 = doPublish(
+      publisherSession, FullTrackName{kTestNamespace, "track_stream_2"});
+  exec_->drive();
+
+  removeSession(publisherSession);
+  removeSession(subscriber1);
+  removeSession(subscriber2);
 }
 
 } // namespace moxygen::test

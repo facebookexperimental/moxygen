@@ -278,6 +278,7 @@ class MoQForwarder : public TrackConsumer {
   std::chrono::milliseconds upstreamDeliveryTimeout_{};
   std::shared_ptr<Callback> callback_;
   uint64_t forwardingSubscribers_{0};
+  bool draining_{false};
 };
 
 } // namespace moxygen
