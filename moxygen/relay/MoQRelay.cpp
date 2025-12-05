@@ -266,6 +266,7 @@ Subscriber::PublishResult MoQRelay::publish(
     PublishRequest pub,
     std::shared_ptr<Publisher::SubscriptionHandle> handle) {
   XLOG(DBG1) << __func__ << " ns=" << pub.fullTrackName.trackNamespace;
+  XCHECK(handle) << "Publish handle cannot be null";
   if (!pub.fullTrackName.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     return folly::makeUnexpected(
         PublishError{

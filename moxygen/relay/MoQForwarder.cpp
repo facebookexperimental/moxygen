@@ -214,8 +214,8 @@ bool MoQForwarder::checkRange(const Subscriber& sub) {
 void MoQForwarder::removeSubscriberOnError(
     const Subscriber& sub,
     const MoQPublishError& err,
-    const std::string& where) {
-  XLOG(ERR) << "Removing subscriber after error in " << where
+    const std::string& callsite) {
+  XLOG(ERR) << "Removing subscriber after error in " << callsite
             << " err=" << err.what();
   removeSession(
       sub.session,
@@ -428,7 +428,9 @@ MoQForwarder::SubgroupForwarder::SubgroupForwarder(
 void MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
     std::function<void(
         const std::shared_ptr<Subscriber>& sub,
-        const std::shared_ptr<SubgroupConsumer>&)> fn) {
+        const std::shared_ptr<SubgroupConsumer>&)> fn,
+    bool makeNew,
+    const std::string& callsite) {
   forwarder_.forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (forwarder_.largest_ && forwarder_.checkRange(*sub)) {
       auto subgroupConsumerIt = sub->subgroups.find(identifier_);
@@ -438,13 +440,17 @@ void MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
           // subgroups.
           return;
         }
+        if (!makeNew) {
+          XLOG(DBG2) << "skipping creating subgroup for sub=" << sub.get();
+          return;
+        }
+        XCHECK(sub->trackConsumer);
+        XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
+                   << " " << callsite;
         auto res = sub->trackConsumer->beginSubgroup(
             identifier_.group, identifier_.subgroup, priority_);
         if (res.hasError()) {
-          forwarder_.removeSubscriberOnError(
-              *sub,
-              res.error(),
-              "SubgroupForwarder::forEachSubscriberSubgroup");
+          forwarder_.removeSubscriberOnError(*sub, res.error(), callsite);
         } else {
           auto emplaceRes = sub->subgroups.emplace(identifier_, res.value());
           subgroupConsumerIt = emplaceRes.first;
@@ -614,7 +620,9 @@ MoQForwarder::SubgroupForwarder::endOfSubgroup() {
               *sub, err, "SubgroupForwarder::endOfSubgroup");
         });
         sub->subgroups.erase(identifier_);
-      });
+      },
+      /*makeNew=*/false,
+      "endOfSubgroup");
   forwarder_.subgroups_.erase(identifier_);
   return folly::unit;
 }
@@ -646,6 +654,7 @@ MoQForwarder::SubgroupForwarder::objectPayload(
   forEachSubscriberSubgroup(
       [&](const std::shared_ptr<Subscriber>& sub,
           const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
+        XCHECK(subgroupConsumer);
         subgroupConsumer->objectPayload(maybeClone(payload), finSubgroup)
             .onError([this, sub](const auto& err) {
               forwarder_.removeSubscriberOnError(
@@ -654,7 +663,8 @@ MoQForwarder::SubgroupForwarder::objectPayload(
         if (finSubgroup) {
           sub->subgroups.erase(identifier_);
         }
-      });
+      },
+      /*makeNew=*/false);
   if (*currentObjectLength_ == 0) {
     currentObjectLength_.reset();
     if (finSubgroup) {

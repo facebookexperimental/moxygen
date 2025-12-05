@@ -145,7 +145,7 @@ class MoQForwarder : public TrackConsumer {
   void removeSubscriberOnError(
       const Subscriber& sub,
       const MoQPublishError& err,
-      const std::string& where);
+      const std::string& callsite /*for logging*/);
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
       TrackAlias alias) override;
@@ -183,7 +183,9 @@ class MoQForwarder : public TrackConsumer {
     void forEachSubscriberSubgroup(
         std::function<void(
             const std::shared_ptr<Subscriber>& sub,
-            const std::shared_ptr<SubgroupConsumer>&)> fn);
+            const std::shared_ptr<SubgroupConsumer>&)> fn,
+        bool makeNew = true,
+        const std::string& callsite = "");
 
    public:
     SubgroupForwarder(

@@ -11,6 +11,7 @@
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/relay/MoQRelay.h>
 #include <moxygen/test/MockMoQSession.h>
+#include <moxygen/test/Mocks.h>
 
 using namespace testing;
 
@@ -69,9 +70,52 @@ class MoQRelayTest : public ::testing::Test {
     return session;
   }
 
+  // Helper to create a mock subscription handle for publish calls
+  std::shared_ptr<Publisher::SubscriptionHandle>
+  createMockSubscriptionHandle() {
+    SubscribeOk ok;
+    ok.requestID = RequestID(0);
+    ok.trackAlias = TrackAlias(0);
+    ok.expires = std::chrono::milliseconds(0);
+    ok.groupOrder = GroupOrder::Default;
+    auto handle =
+        std::make_shared<NiceMock<MockSubscriptionHandle>>(std::move(ok));
+    return handle;
+  }
+
   // Helper to remove a session from the relay and clean up mock state
   void removeSession(std::shared_ptr<MoQSession> sess) {
     cleanupMockSession(std::move(sess));
+  }
+
+  // Helper to create a mock consumer with default actions
+  std::shared_ptr<MockTrackConsumer> createMockConsumer() {
+    auto consumer = std::make_shared<NiceMock<MockTrackConsumer>>();
+    ON_CALL(*consumer, setTrackAlias(_))
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    ON_CALL(*consumer, subscribeDone(_))
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    return consumer;
+  }
+
+  // Helper to subscribe a session to a track
+  void subscribeToTrack(
+      std::shared_ptr<MoQSession> session,
+      const FullTrackName& trackName,
+      std::shared_ptr<TrackConsumer> consumer,
+      RequestID requestID = RequestID(0)) {
+    SubscribeRequest sub;
+    sub.fullTrackName = trackName;
+    sub.requestID = requestID;
+    sub.locType = LocationType::LargestObject;
+    withSessionContext(session, [&]() {
+      auto task = relay_->subscribe(std::move(sub), consumer);
+      auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      getOrCreateMockState(session)->subscribeHandles.push_back(*res);
+    });
   }
 
   // Helper to set up RequestContext for a session (simulates incoming request)
@@ -200,7 +244,8 @@ class MoQRelayTest : public ::testing::Test {
     PublishRequest pub;
     pub.fullTrackName = trackName;
     return withSessionContext(session, [&]() {
-      auto res = relay_->publish(std::move(pub), nullptr);
+      auto res =
+          relay_->publish(std::move(pub), createMockSubscriptionHandle());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
         if (addToState) {
@@ -653,6 +698,93 @@ TEST_F(MoQRelayTest, PublishKeepsNodeAliveAfterUnannounce) {
   doPublish(publisher, FullTrackName{nsAB, "track2"});
 
   removeSession(publisher);
+}
+
+// Test: Verify that subgroups are only created at appropriate times
+// Sequence: publish, sub1 joins, beginSubgroup (->1), beginObject (->1),
+// sub2 joins, beginObject (->1,2), sub3 joins, objectPayload (->1,2),
+// endOfSubgroup (->1,2)
+TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
+  auto publisherSession = createMockSession();
+  auto subscriber1 = createMockSession();
+  auto subscriber2 = createMockSession();
+  auto subscriber3 = createMockSession();
+
+  // Set up mock consumers with expectations
+  auto mockConsumer1 = createMockConsumer();
+  auto mockConsumer2 = createMockConsumer();
+  auto mockConsumer3 = createMockConsumer();
+
+  auto setupSubgroupConsumer = [](auto& sg) {
+    ON_CALL(*sg, beginObject(_, _, _, _))
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+    ON_CALL(*sg, objectPayload(_, _))
+        .WillByDefault(Return(
+            folly::makeExpected<MoQPublishError>(
+                ObjectPublishStatus::IN_PROGRESS)));
+    ON_CALL(*sg, endOfSubgroup())
+        .WillByDefault(
+            Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  };
+
+  // Subscriber 1 and 2 should get beginSubgroup
+  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+        auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+        setupSubgroupConsumer(sg);
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+        auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+        setupSubgroupConsumer(sg);
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  // Subscriber 3 joins mid-object and should NOT get beginSubgroup
+  EXPECT_CALL(*mockConsumer3, beginSubgroup(_, _, _)).Times(0);
+
+  // Setup: publish track
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Subscriber 1 joins before any data
+  subscribeToTrack(subscriber1, kTestTrackName, mockConsumer1, RequestID(1));
+
+  // Publisher sends data with subscribers joining at different points
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0);
+  EXPECT_TRUE(sgRes.hasValue());
+  auto subgroup = *sgRes;
+
+  // First object -> goes to subscriber 1
+  EXPECT_TRUE(subgroup->beginObject(0, 4, 0).hasValue());
+  EXPECT_TRUE(subgroup->objectPayload(folly::IOBuf::copyBuffer("test"), false)
+                  .hasValue());
+
+  // Subscriber 2 joins after first object
+  subscribeToTrack(subscriber2, kTestTrackName, mockConsumer2, RequestID(2));
+
+  // Second object -> goes to subscribers 1, 2
+  EXPECT_TRUE(subgroup->beginObject(1, 9, 0).hasValue());
+
+  // Subscriber 3 joins mid-object
+  subscribeToTrack(subscriber3, kTestTrackName, mockConsumer3, RequestID(3));
+
+  // Payload and endOfSubgroup -> only to subscribers 1, 2 (NOT 3)
+  EXPECT_TRUE(
+      subgroup->objectPayload(folly::IOBuf::copyBuffer("more data"), false)
+          .hasValue());
+  EXPECT_TRUE(subgroup->endOfSubgroup().hasValue());
+
+  removeSession(publisherSession);
+  removeSession(subscriber1);
+  removeSession(subscriber2);
+  removeSession(subscriber3);
 }
 
 } // namespace moxygen::test
