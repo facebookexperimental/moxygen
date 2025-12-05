@@ -1048,9 +1048,8 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
   EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
       .WillOnce([&](uint64_t, uint64_t, uint8_t) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
-        ON_CALL(*sg, beginObject(_, _, _, _))
-            .WillByDefault(
-                Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+        EXPECT_CALL(*sg, beginObject(_, _, _, _)).WillOnce(Return(folly::unit));
+        EXPECT_CALL(*sg, reset(_));
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -1092,6 +1091,7 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
 
   // Send object - should only go to subscriber 1 (sub2 is gone)
   EXPECT_TRUE(subgroup->beginObject(0, 4, 0).hasValue());
+  subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
 
   removeSession(publisherSession);
   removeSession(subscriber1);
@@ -1185,6 +1185,159 @@ TEST_F(MoQRelayTest, SubscribeAnnouncesDoesntAddDrainingPublish) {
   removeSession(publisherSession);
   removeSession(subscriber1);
   removeSession(subscriber2);
+}
+
+// Test: Data operations return CANCELLED when all subscribers fail and are
+// removed. This verifies that when a data operation (objectPayload with
+// fin=false) causes all subscribers to error out, the operation correctly
+// detects that data went nowhere and returns CANCELLED.
+TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
+  auto publisherSession = createMockSession();
+  std::array<std::shared_ptr<MoQSession>, 2> subscribers;
+  std::array<std::shared_ptr<MockTrackConsumer>, 2> consumers;
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 2> sgs;
+
+  for (auto& s : subscribers) {
+    s = createMockSession();
+  }
+  for (auto& c : consumers) {
+    c = createMockConsumer();
+  }
+
+  // Setup both subscribers to succeed on first payload, fail on second
+  for (size_t i = 0; i < 2; ++i) {
+    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+          sgs[i] = createMockSubgroupConsumer();
+          EXPECT_CALL(*sgs[i], objectPayload(_, false))
+              .WillOnce(Return(
+                  folly::makeExpected<MoQPublishError>(
+                      ObjectPublishStatus::IN_PROGRESS)))
+              .WillOnce(Return(
+                  folly::makeUnexpected(MoQPublishError(
+                      MoQPublishError::WRITE_ERROR, "write failed"))));
+          return folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  sgs[i]);
+        });
+  }
+
+  // Publish track and add subscribers
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  for (size_t i = 0; i < 2; ++i) {
+    subscribeToTrack(
+        subscribers[i], kTestTrackName, consumers[i], RequestID(i + 1));
+  }
+
+  // Begin subgroup and object
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto subgroup = *sgRes;
+  EXPECT_TRUE(subgroup->beginObject(0, 100, 0).hasValue());
+
+  // First objectPayload succeeds - both subscribers receive it
+  auto res1 = subgroup->objectPayload(folly::IOBuf::copyBuffer("data1"), false);
+  EXPECT_TRUE(res1.hasValue());
+  EXPECT_EQ(*res1, ObjectPublishStatus::IN_PROGRESS);
+
+  // Second objectPayload causes both subscribers to fail and get removed
+  // This should return CANCELLED because all subscribers are gone
+  auto res2 = subgroup->objectPayload(folly::IOBuf::copyBuffer("data2"), false);
+  EXPECT_FALSE(res2.hasValue());
+  EXPECT_EQ(res2.error().code, MoQPublishError::CANCELLED);
+
+  // Clean up
+  subgroup->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+  removeSession(publisherSession);
+  for (auto& s : subscribers) {
+    removeSession(s);
+  }
+}
+
+// Test: Partial subscriber failure does not cancel data operations.
+// This verifies that when some subscribers fail but others succeed, the
+// operation continues successfully and only returns CANCELLED when ALL
+// subscribers are gone.
+TEST_F(MoQRelayTest, PartialSubscriberFailureDoesNotCancelData) {
+  auto publisherSession = createMockSession();
+  std::array<std::shared_ptr<MoQSession>, 3> subscribers;
+  std::array<std::shared_ptr<MockTrackConsumer>, 3> consumers;
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 3> sgs;
+
+  for (auto& s : subscribers) {
+    s = createMockSession();
+  }
+  for (auto& c : consumers) {
+    c = createMockConsumer();
+  }
+
+  // Setup subscriber 0 - will fail on second objectPayload
+  EXPECT_CALL(*consumers[0], beginSubgroup(0, 0, _))
+      .WillOnce([this, &sgs](uint64_t, uint64_t, uint8_t) {
+        sgs[0] = createMockSubgroupConsumer();
+        EXPECT_CALL(*sgs[0], objectPayload(_, false))
+            .WillOnce(Return(
+                folly::makeExpected<MoQPublishError>(
+                    ObjectPublishStatus::IN_PROGRESS)))
+            .WillOnce(Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::WRITE_ERROR, "write failed"))));
+        // Expect reset when subscriber is removed
+        EXPECT_CALL(*sgs[0], reset(_)).Times(1);
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sgs[0]);
+      });
+
+  // Setup subscribers 1 and 2 - will succeed on objectPayload
+  // They will get reset during cleanup when the test calls subgroup->reset()
+  for (size_t i = 1; i < 3; ++i) {
+    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+          sgs[i] = createMockSubgroupConsumer();
+          EXPECT_CALL(*sgs[i], objectPayload(_, false))
+              .WillRepeatedly(Return(
+                  folly::makeExpected<MoQPublishError>(
+                      ObjectPublishStatus::IN_PROGRESS)));
+          // Will be reset by cleanup code at end of test
+          EXPECT_CALL(*sgs[i], reset(ResetStreamErrorCode::SESSION_CLOSED))
+              .Times(1);
+          return folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  sgs[i]);
+        });
+  }
+
+  // Publish track and add subscribers
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  for (size_t i = 0; i < 3; ++i) {
+    subscribeToTrack(
+        subscribers[i], kTestTrackName, consumers[i], RequestID(i + 1));
+  }
+
+  // Begin subgroup and object
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto subgroup = *sgRes;
+  EXPECT_TRUE(subgroup->beginObject(0, 100, 0).hasValue());
+
+  // First objectPayload succeeds - all 3 subscribers receive it
+  auto res1 = subgroup->objectPayload(folly::IOBuf::copyBuffer("data1"), false);
+  EXPECT_TRUE(res1.hasValue());
+  EXPECT_EQ(*res1, ObjectPublishStatus::IN_PROGRESS);
+
+  // Second objectPayload causes subscriber 0 to fail and get removed
+  // But subscribers 1 and 2 still exist, so operation succeeds
+  auto res2 = subgroup->objectPayload(folly::IOBuf::copyBuffer("data2"), false);
+  EXPECT_TRUE(res2.hasValue());
+  EXPECT_EQ(*res2, ObjectPublishStatus::IN_PROGRESS);
+
+  // Clean up - reset the subgroup which resets remaining subscribers 1 and 2
+  subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
+  removeSession(publisherSession);
+  for (auto& s : subscribers) {
+    removeSession(s);
+  }
 }
 
 } // namespace moxygen::test

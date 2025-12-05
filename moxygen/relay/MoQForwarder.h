@@ -148,7 +148,7 @@ class MoQForwarder : public TrackConsumer {
       const std::string& callsite);
 
   template <typename Fn>
-  void forEachSubscriber(Fn&& fn);
+  folly::Expected<folly::Unit, MoQPublishError> forEachSubscriber(Fn&& fn);
 
   void updateLargest(uint64_t group, uint64_t object = 0);
 
@@ -193,7 +193,7 @@ class MoQForwarder : public TrackConsumer {
     Priority priority_;
 
     template <typename Fn>
-    void forEachSubscriberSubgroup(
+    folly::Expected<folly::Unit, MoQPublishError> forEachSubscriberSubgroup(
         Fn&& fn,
         bool makeNew = true,
         const std::string& callsite = "");
@@ -203,6 +203,15 @@ class MoQForwarder : public TrackConsumer {
     void closeSubgroupForSubscriber(
         const std::shared_ptr<Subscriber>& sub,
         const std::string& callsite);
+
+    // Removes this subgroup from the forwarder and checks if forwarder is empty
+    folly::Expected<folly::Unit, MoQPublishError> removeSubgroupAndCheckEmpty();
+
+    // Removes subgroup if result contains error, otherwise returns result
+    // unchanged
+    template <typename T>
+    folly::Expected<T, MoQPublishError> cleanupOnError(
+        const folly::Expected<T, MoQPublishError>& result);
 
    public:
     SubgroupForwarder(
@@ -255,6 +264,10 @@ class MoQForwarder : public TrackConsumer {
 
  private:
   static Payload maybeClone(const Payload& payload);
+
+  // Helper that checks if both subscribers_ and subgroups_ are empty and
+  // fires onEmpty callback if so
+  void checkAndFireOnEmpty();
 
   // Helper that removes a subscriber given an iterator (avoids lookup)
   void removeSubscriberIt(
