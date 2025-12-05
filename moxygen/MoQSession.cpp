@@ -539,6 +539,7 @@ void StreamPublisherImpl::setWriteHandle(
   XCHECK(publisher_);
   XCHECK(!streamComplete_);
   XCHECK(!writeHandle_);
+  XCHECK(writeHandle);
   writeHandle_ = writeHandle;
   if (streamType_ == StreamType::FETCH_HEADER && logger_) {
     logger_->logStreamTypeSet(
@@ -616,8 +617,8 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
   }
 
   if (!writeHandle_) {
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::CANCELLED, "Cancelled"));
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::CANCELLED, "Cancelled: writeCurrentObject"));
   }
 
   auto writeHandle = writeHandle_;
@@ -785,7 +786,7 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
   }
   if (!writeHandle_) {
     return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::CANCELLED, "Cancelled"));
+        MoQPublishError(MoQPublishError::CANCELLED, "Cancelled objectPayload"));
   }
   auto validateObjectPublishRes =
       validateObjectPublishAndUpdateState(payload.get(), finStream);
@@ -878,6 +879,10 @@ StreamPublisherImpl::endOfSubgroup() {
 }
 
 void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
+  if (streamComplete_) {
+    XLOG(DBG4) << "Reset after streamComplete_ sgp=" << this;
+    return;
+  }
   if (!writeBuf_.empty()) {
     // TODO: stream header is pending, reliable reset?
     XLOG(WARN) << "Stream header pending on subgroup=" << header_;
@@ -916,8 +921,10 @@ StreamPublisherImpl::ensureWriteHandle() {
     return folly::unit;
   }
   if (streamComplete_) {
+    // TODO: return CANCELLED if after stop sending, since that's not an API
+    // error
     return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Write after stream complete"));
+        MoQPublishError::API_ERROR, "Write after stream complete or reset"));
   }
   XCHECK(publisher_) << "publisher_ has not been set";
   // This has to be FETCH, subscribe is created with a writeHandle_ and
