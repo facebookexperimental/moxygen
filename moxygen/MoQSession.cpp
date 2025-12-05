@@ -2771,8 +2771,12 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   if (!negotiatedVersion_.hasValue()) {
     auto versionBaton = std::make_shared<moxygen::TimedBaton>();
     subgroupsWaitingForVersion_.push_back(versionBaton);
-    auto waitRes = co_await co_awaitTry(
-        versionBaton->wait(moqSettings_.versionNegotiationTimeout));
+    // Merged token for baton waits (session + readHandle)
+    auto batonWaitToken = folly::cancellation_token_merge(
+        cancellationSource_.getToken(), rhToken);
+    auto waitRes = co_await co_awaitTry(co_withCancellation(
+        batonWaitToken,
+        versionBaton->wait(moqSettings_.versionNegotiationTimeout)));
     if (waitRes.hasException()) {
       co_return;
     }
@@ -2804,8 +2808,6 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       -> std::shared_ptr<SubscribeTrackReceiveState> {
     auto state = getSubscribeTrackReceiveState(alias);
     if (!state) {
-      // State not ready, add baton to wait list and return nullptr to indicate
-      // BLOCKED
       XLOG(DBG4) << "State not ready, adding baton to bufferedSubgroups_["
                  << alias << "]";
       bufferedSubgroups_[alias].push_back(&aliasBaton);
@@ -2813,11 +2815,11 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       deferredGroup = group;
       deferredSubgroup = subgroup;
       deferredPriority = priority;
+      // Indicates BLOCKED
       return nullptr;
     } else {
-      // Allows breaking out of read when the app unsubscribes
-      token = folly::cancellation_token_merge(
-          std::move(token), state->getCancelToken());
+      // SubscribeTrackReceiveState lifecycle now controls read loop
+      token = state->getCancelToken();
     }
     return state;
   };
@@ -2826,9 +2828,8 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   auto onFetchFunc = [this, &token](RequestID requestID) {
     auto state = getFetchTrackReceiveState(requestID);
     if (state) {
-      // Allows breaking out of read when the app cancels fetch
-      token = folly::cancellation_token_merge(
-          std::move(token), state->getCancelToken());
+      // FetchTrackReceiveState lifecycle now controls read loop
+      token = state->getCancelToken();
     }
     return state;
   };
@@ -2842,10 +2843,11 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   codec.setStreamId(id);
 
   while (readHandle && !token.isCancellationRequested()) {
-    auto streamData = co_await co_awaitTry(co_withCancellation(
-        token,
-        folly::coro::toTaskInterruptOnCancel(
-            readHandle->readStreamData().via(exec_.get()))));
+    // Use session or request state token for read (NOT readHandle token)
+    // This prevents exception masking when WebTransport cancels readHandle
+    auto streamData = co_await co_awaitTry(
+        folly::coro::co_withCancellation(
+            token, readHandle->readStreamData().via(exec_.get())));
     if (streamData.hasException()) {
       XLOG(ERR) << folly::exceptionStr(streamData.exception()) << " id=" << id
                 << " sess=" << this;
@@ -2869,8 +2871,12 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
         // Handle BLOCKED state
         if (result == MoQCodec::ParseResult::BLOCKED) {
           XLOG(DBG4) << "Parser returned BLOCKED, waiting for signal id=" << id;
-          auto waitRes = co_await co_awaitTry(
-              aliasBaton.wait(moqSettings_.unknownAliasTimeout));
+          // Merged token for baton waits (session + readHandle)
+          auto batonWaitToken = folly::cancellation_token_merge(
+              cancellationSource_.getToken(), rhToken);
+          auto waitRes = co_await co_awaitTry(co_withCancellation(
+              batonWaitToken,
+              aliasBaton.wait(moqSettings_.unknownAliasTimeout)));
           if (waitRes.hasException()) {
             XLOG(ERR) << "Timed out waiting for subscription state id=" << id
                       << " sess=" << this;
@@ -4609,8 +4615,7 @@ void MoQSession::onNewUniStream(
   co_withExecutor(
       exec_.get(),
       co_withCancellation(
-          folly::cancellation_token_merge(
-              cancellationSource_.getToken(), rh->getCancelToken()),
+          cancellationSource_.getToken(),
           unidirectionalReadLoop(shared_from_this(), rh)))
       .start();
 }

@@ -280,7 +280,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         if (curObjectHeader_.status == ObjectStatus::NORMAL) {
           XLOG(DBG2) << "Parsing object with length, need="
                      << *curObjectHeader_.length
-                     << " have=" << ingress_.chainLength();
+                     << " have=" << ingress_.chainLength() - totalBytesConsumed;
           trimStart();
 
           std::unique_ptr<folly::IOBuf> payload;

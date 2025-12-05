@@ -394,15 +394,21 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
         });
         return sg;
       }));
-  EXPECT_CALL(*sg, object(_, _, _, _))
-      .WillRepeatedly(testing::Return(folly::unit));
-  EXPECT_CALL(*sg, reset(_));
+  EXPECT_CALL(*sg, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg, object(1, _, _, true)).WillOnce(testing::Invoke([&] {
+    barricade.post();
+    return folly::unit;
+  }));
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
   co_await barricade;
+  barricade.reset();
   serverWt_->writeHandles[2]->deliverInflightData();
+
   EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
       .WillOnce(testing::Return(folly::unit));
+  co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, TestOnObjectPayload) {
