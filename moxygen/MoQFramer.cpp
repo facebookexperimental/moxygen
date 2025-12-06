@@ -1214,15 +1214,29 @@ MoQFrameParser::parseFetchObjectHeader(
     const ObjectHeader& headerTemplate) const noexcept {
   auto startLength = length;
 
-  // Use the legacy parser for all FETCH object parsing
-  auto objectHeader =
-      parseFetchObjectHeaderLegacy(cursor, length, headerTemplate);
-  if (!objectHeader) {
-    return folly::makeUnexpected(objectHeader.error());
-  }
+  if (getDraftMajorVersion(*version_) >= 15) {
+    auto draft15Header =
+        parseFetchObjectDraft15(cursor, length, headerTemplate);
+    if (!draft15Header) {
+      return folly::makeUnexpected(draft15Header.error());
+    }
 
-  return ParseResultAndLength<ObjectHeader>{
-      std::move(objectHeader.value()), startLength - length};
+    auto v15Consumed = startLength - length;
+
+    return ParseResultAndLength<ObjectHeader>{
+        std::move(draft15Header.value()), v15Consumed};
+  } else {
+    auto objectHeader =
+        parseFetchObjectHeaderLegacy(cursor, length, headerTemplate);
+    if (!objectHeader) {
+      return folly::makeUnexpected(objectHeader.error());
+    }
+
+    auto legacyConsumed = startLength - length;
+
+    return ParseResultAndLength<ObjectHeader>{
+        std::move(objectHeader.value()), legacyConsumed};
+  }
 }
 
 folly::Expected<MoQFrameParser::ParseResultAndLength<ObjectHeader>, ErrorCode>
@@ -3763,8 +3777,12 @@ WriteResult MoQFrameWriter::writeStreamObject(
   size_t size = 0;
   bool error = false;
   if (streamType == StreamType::FETCH_HEADER) {
-    // Use the legacy writer for all FETCH object writing
-    writeFetchObjectHeaderLegacy(writeBuf, objectHeader, size, error);
+    // Dispatch to appropriate FETCH object writer based on version
+    if (getDraftMajorVersion(*version_) >= 15) {
+      writeFetchObjectDraft15(writeBuf, objectHeader, size, error);
+    } else {
+      writeFetchObjectHeaderLegacy(writeBuf, objectHeader, size, error);
+    }
   } else {
     if (getDraftMajorVersion(*version_) >= 14) {
       // Delta encoding of object ID
@@ -3786,7 +3804,15 @@ WriteResult MoQFrameWriter::writeStreamObject(
       writeVarint(writeBuf, objectHeader.id, size, error);
     }
   }
-  if (folly::to_underlying(streamType) & 0x1) {
+  bool shouldWriteExtensions = folly::to_underlying(streamType) & 0x1;
+  if (streamType == StreamType::FETCH_HEADER &&
+      getDraftMajorVersion(*version_) >= 15) {
+    // Draft-15 FETCH streams only carry an extensions section when the
+    // serialization flags advertise it. Skip emitting the zero-length
+    // placeholder so the parser stays aligned with the flags we set.
+    shouldWriteExtensions = !objectHeader.extensions.empty();
+  }
+  if (shouldWriteExtensions) {
     // includes FETCH, watch out if we add more types!
     writeExtensions(writeBuf, objectHeader.extensions, size, error);
   }
