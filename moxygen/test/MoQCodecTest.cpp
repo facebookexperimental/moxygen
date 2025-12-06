@@ -537,6 +537,211 @@ TEST_P(MoQCodecTest, SubgroupHeaderWithEOF) {
   objectStreamCodec_.onIngress(writeBuf.move(), true);
 }
 
+// Test that when onObjectBegin returns ERROR_TERMINATE, the codec
+// short-circuits and returns immediately without processing more data
+TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectBegin) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+  // First object - will trigger ERROR_TERMINATE
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 4, 5, 11),
+      folly::IOBuf::copyBuffer("hello world"));
+  // Second object that should NOT be parsed after error
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 5, 5, 5),
+      folly::IOBuf::copyBuffer("after"));
+
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
+
+  // onObjectBegin for second object should NOT be called due to short-circuit
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(
+          2, 3, 5, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), true);
+  EXPECT_EQ(result, MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
+// Test that when onObjectPayload returns ERROR_TERMINATE, parsing stops
+TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectPayload) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 4, 5, 20),
+      nullptr);
+
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, false, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  objectStreamCodec_.onIngress(writeBuf.move(), false);
+
+  // Now send payload - return ERROR_TERMINATE
+  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
+  payloadBuf.append(folly::IOBuf::copyBuffer("hello"));
+
+  EXPECT_CALL(objectStreamCodecCallback_, onObjectPayload(testing::_, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
+
+  auto result = objectStreamCodec_.onIngress(payloadBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
+// Test that when onObjectStatus returns ERROR_TERMINATE, parsing stops
+TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+  // First object with status - will trigger ERROR_TERMINATE
+  ObjectHeader statusObj(2, 3, 4, 5);
+  statusObj.status = ObjectStatus::OBJECT_NOT_EXIST;
+  statusObj.length = 0;
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, statusObj, nullptr);
+  // Second object that should NOT be parsed
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 5, 5, 5),
+      folly::IOBuf::copyBuffer("after"));
+
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectStatus(
+          2,
+          3,
+          4,
+          folly::Optional<uint8_t>(5),
+          ObjectStatus::OBJECT_NOT_EXIST,
+          testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
+
+  // Second object should NOT be parsed
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(
+          2, 3, 5, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), true);
+  EXPECT_EQ(result, MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
+// Test that when onSubgroup returns ERROR_TERMINATE, parsing stops
+TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnSubgroup) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG,
+      ObjectHeader(2, 3, 4, 5, 5),
+      folly::IOBuf::copyBuffer("hello"));
+
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
+
+  // onObjectBegin should NOT be called
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .Times(0);
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), true);
+  EXPECT_EQ(result, MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
+// Test that when onFetchHeader returns ERROR_TERMINATE, parsing stops
+TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnFetchHeader) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  RequestID requestID(1);
+  ObjectHeader obj(2, 3, 4, 5);
+  StreamType streamType = StreamType::FETCH_HEADER;
+  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
+  obj.length = 5;
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
+
+  EXPECT_CALL(objectStreamCodecCallback_, onFetchHeader(testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
+
+  // onObjectBegin should NOT be called
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .Times(0);
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
+// Test that callbacks returning CONTINUE work as expected
+TEST_P(MoQCodecTest, CallbackReturnsContinue) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moqFrameWriter_.writeSingleObjectStream(
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5, 11),
+      folly::IOBuf::copyBuffer("hello world"));
+
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+
+  EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
+  result = objectStreamCodec_.onIngress(std::unique_ptr<folly::IOBuf>(), true);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,

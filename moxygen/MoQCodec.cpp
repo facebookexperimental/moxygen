@@ -122,7 +122,7 @@ MoQCodec::ParseResult MoQControlCodec::onIngress(
   if (connError_) {
     return ParseResult::ERROR_TERMINATE;
   }
-  return ParseResult::UNBLOCKED;
+  return ParseResult::CONTINUE;
 }
 
 void MoQCodec::onIngressEnd(
@@ -210,7 +210,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         size_t remainingLength = ingress_.chainLength() - totalBytesConsumed;
         auto res = moqFrameParser_.parseFetchHeader(cursor, remainingLength);
         if (res.hasError()) {
-          XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
+          XLOG(DBG4) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
           break;
         }
@@ -219,8 +219,8 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         if (callback_) {
           auto result = callback_->onFetchHeader(requestID);
           if (result == ParseResult::ERROR_TERMINATE) {
-            connError_ = ErrorCode::PROTOCOL_VIOLATION;
-            break;
+            XLOG(DBG4) << __func__ << " fetch callback returned terminate";
+            return result;
           }
         }
         parseState_ = ParseState::MULTI_OBJECT_HEADER;
@@ -250,8 +250,8 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
             ingress_.trimStart(ingress_.chainLength() - cursor.totalLength());
             return ParseResult::BLOCKED;
           } else if (result == ParseResult::ERROR_TERMINATE) {
-            connError_ = ErrorCode::PROTOCOL_VIOLATION;
-            break;
+            XLOG(DBG) << "subgroup callback returned ERROR_TERIMNATE";
+            return result;
           }
         }
         break;
@@ -271,7 +271,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
               cursor, remainingLength, curObjectHeader_, subgroupOptions_);
         }
         if (res.hasError()) {
-          XLOG(DBG6) << __func__ << " " << uint32_t(res.error());
+          XLOG(DBG4) << __func__ << " " << uint32_t(res.error());
           connError_ = res.error();
           break;
         }
@@ -296,7 +296,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
             break;
           }
           if (callback_) {
-            callback_->onObjectBegin(
+            auto result = callback_->onObjectBegin(
                 curObjectHeader_.group,
                 curObjectHeader_.subgroup,
                 curObjectHeader_.id,
@@ -305,6 +305,15 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
                 std::move(payload),
                 endOfObject,
                 endOfStream && ingress_.chainLength() == 0);
+            if (result == ParseResult::BLOCKED) {
+              XLOG(ERR)
+                  << "onObjectBegin returned BLOCKED, converting to ERROR";
+              connError_ = ErrorCode::INTERNAL_ERROR;
+              break;
+            } else if (result == ParseResult::ERROR_TERMINATE) {
+              XLOG(DBG) << "onObjectBegin callback returned ERROR_TERMINATE";
+              return result;
+            }
           }
           *curObjectHeader_.length -= chunkLen;
           if (endOfObject) {
@@ -319,13 +328,22 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
           }
         } else {
           if (callback_) {
-            callback_->onObjectStatus(
+            auto result = callback_->onObjectStatus(
                 curObjectHeader_.group,
                 curObjectHeader_.subgroup,
                 curObjectHeader_.id,
                 curObjectHeader_.priority,
                 curObjectHeader_.status,
                 std::move(curObjectHeader_.extensions));
+            if (result == ParseResult::BLOCKED) {
+              XLOG(ERR)
+                  << "onObjectStatus returned BLOCKED, converting to ERROR";
+              connError_ = ErrorCode::INTERNAL_ERROR;
+              break;
+            } else if (result == ParseResult::ERROR_TERMINATE) {
+              XLOG(DBG) << "onObjectStatus callback returned ERROR_TERMINATE";
+              return result;
+            }
           }
           if (curObjectHeader_.status == ObjectStatus::END_OF_TRACK ||
               (streamType_ == StreamType::SUBGROUP_HEADER_SG &&
@@ -358,7 +376,17 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         }
         bool endOfObject = (*curObjectHeader_.length == 0);
         if (callback_ && (payload || endOfObject)) {
-          callback_->onObjectPayload(std::move(payload), endOfObject);
+          auto result =
+              callback_->onObjectPayload(std::move(payload), endOfObject);
+          if (result == ParseResult::BLOCKED) {
+            XLOG(ERR)
+                << "onObjectPayload returned BLOCKED, converting to ERROR";
+            connError_ = ErrorCode::INTERNAL_ERROR;
+            break;
+          } else if (result == ParseResult::ERROR_TERMINATE) {
+            XLOG(DBG) << "onObjectPayload callback returned ERROR_TERMINATE";
+            return result;
+          }
         }
         if (endOfObject) {
           parseState_ = ParseState::MULTI_OBJECT_HEADER;
@@ -384,7 +412,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
   if (connError_) {
     return ParseResult::ERROR_TERMINATE;
   }
-  return ParseResult::UNBLOCKED;
+  return ParseResult::CONTINUE;
 }
 
 folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(

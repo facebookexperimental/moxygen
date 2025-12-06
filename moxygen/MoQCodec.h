@@ -13,7 +13,7 @@ namespace moxygen {
 class MoQCodec {
  public:
   enum class ParseResult {
-    UNBLOCKED,
+    CONTINUE,
     BLOCKED,
     ERROR_TERMINATE,
   };
@@ -172,7 +172,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t group,
         uint64_t subgroup,
         folly::Optional<uint8_t> priority) = 0;
-    virtual void onObjectBegin(
+    virtual ParseResult onObjectBegin(
         uint64_t group,
         uint64_t subgroup,
         uint64_t objectID,
@@ -181,14 +181,16 @@ class MoQObjectStreamCodec : public MoQCodec {
         Payload initialPayload,
         bool objectComplete,
         bool subgroupComplete) = 0;
-    virtual void onObjectStatus(
+    virtual ParseResult onObjectStatus(
         uint64_t group,
         uint64_t subgroup,
         uint64_t objectID,
         folly::Optional<uint8_t> priority,
         ObjectStatus status,
         Extensions extensions) = 0;
-    virtual void onObjectPayload(Payload payload, bool objectComplete) = 0;
+    virtual ParseResult onObjectPayload(
+        Payload payload,
+        bool objectComplete) = 0;
     virtual void onEndOfStream() = 0;
   };
 

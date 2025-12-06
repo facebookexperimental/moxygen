@@ -60,7 +60,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
       onSubgroup,
       (TrackAlias, uint64_t, uint64_t, folly::Optional<uint8_t>));
   MOCK_METHOD(
-      void,
+      MoQCodec::ParseResult,
       onObjectBegin,
       (uint64_t,
        uint64_t,
@@ -71,7 +71,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
        bool,
        bool));
   MOCK_METHOD(
-      void,
+      MoQCodec::ParseResult,
       onObjectStatus,
       (uint64_t,
        uint64_t,
@@ -79,7 +79,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
        folly::Optional<uint8_t>,
        ObjectStatus,
        Extensions));
-  MOCK_METHOD(void, onObjectPayload, (Payload, bool));
+  MOCK_METHOD(MoQCodec::ParseResult, onObjectPayload, (Payload, bool));
   MOCK_METHOD(void, onEndOfStream, ());
 };
 

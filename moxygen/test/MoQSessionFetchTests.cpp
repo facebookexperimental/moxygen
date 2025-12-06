@@ -434,3 +434,47 @@ CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Test that when a fetch callback returns an error, the fetch stream terminates
+CO_TEST_P_X(MoQSessionTest, FetchCallbackErrorTerminatesStream) {
+  co_await setupMoQSession();
+  std::shared_ptr<FetchConsumer> fetchConsumer;
+  expectFetch(
+      [this, &fetchConsumer](auto fetch, auto consumer) -> TaskFetchResult {
+        fetchConsumer = consumer;
+        eventBase_.add([consumer, fetch] {
+          // Send first object - should succeed
+          auto res1 = consumer->object(
+              0, 0, 0, moxygen::test::makeBuf(10), noExtensions(), false);
+          // Send second object - consumer will error, stream should terminate
+          auto res2 = consumer->object(
+              0, 0, 1, moxygen::test::makeBuf(10), noExtensions(), false);
+          // Send third object - should not be delivered
+          auto res3 = consumer->object(
+              0, 0, 2, moxygen::test::makeBuf(10), noExtensions(), false);
+        });
+        co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+      });
+
+  {
+    testing::InSequence enforceOrder;
+    // First object succeeds
+    EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, false))
+        .WillOnce(testing::Return(folly::unit));
+    // Second object returns error
+    EXPECT_CALL(*fetchCallback_, object(0, 0, 1, _, _, false))
+        .WillOnce(
+            testing::Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::CANCELLED, "test fetch error"))));
+    // Third object should NOT be delivered
+    EXPECT_CALL(*fetchCallback_, object(0, 0, 2, _, _, false)).Times(0);
+  }
+
+  auto fetch = getFetch(AbsoluteLocation{0, 0}, AbsoluteLocation{0, 2});
+  auto res = co_await clientSession_->fetch(fetch, fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

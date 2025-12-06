@@ -840,3 +840,60 @@ CO_TEST_P_X(V15PlusTests, PublisherPriorityDefaultValue) {
   co_await subscribeDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Test that when a subscriber's object callback returns an error,
+// the stream is terminated and no further callbacks are invoked
+CO_TEST_P_X(MoQSessionTest, SubscriberCallbackErrorTerminatesStream) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, sub] {
+          auto sgp1 = pub->beginSubgroup(0, 0, 0).value();
+          // Send first object - should succeed
+          sgp1->object(0, moxygen::test::makeBuf(10));
+          // Send second object - should succeed
+          sgp1->object(1, moxygen::test::makeBuf(10));
+          // Send third object - consumer will error on this, stream should
+          // terminate
+          sgp1->object(2, moxygen::test::makeBuf(10));
+          // Send fourth object - should not be delivered due to stream
+          // termination
+          sgp1->object(3, moxygen::test::makeBuf(10));
+        });
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*subscribeCallback_, subscribeDone(testing::_))
+      .WillOnce(testing::Return(folly::unit));
+
+  {
+    testing::InSequence enforceOrder;
+    // First object succeeds
+    EXPECT_CALL(*sg1, object(0, _, _, false))
+        .WillOnce(testing::Return(folly::unit));
+    // Second object succeeds
+    EXPECT_CALL(*sg1, object(1, _, _, false))
+        .WillOnce(testing::Return(folly::unit));
+    // Third object returns error
+    EXPECT_CALL(*sg1, object(2, _, _, false))
+        .WillOnce(
+            testing::Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::CANCELLED, "test error"))));
+    // Fourth object should NOT be delivered
+    EXPECT_CALL(*sg1, object(3, _, _, false)).Times(0);
+  }
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

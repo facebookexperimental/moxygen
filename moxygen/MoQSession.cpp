@@ -2469,9 +2469,6 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       // This cannot happen in a SUBSCRIBE_DONE flow, because
       // that also would have removed subscribeState.
       XLOG(DBG2) << "No callback for subgroup (unsubscribed)";
-      error_ = MoQPublishError(
-          MoQPublishError::CANCELLED,
-          "No callback for subgroup (unsubscribed)");
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
 
@@ -2482,7 +2479,6 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     if (res.hasValue()) {
       subgroupCallback_ = *res;
     } else {
-      error_ = std::move(res.error());
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
     if (logger_) {
@@ -2492,7 +2488,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
     subscribeState_->setCurrentStreamId(currentStreamId_);
     subscribeState_->onSubgroup();
-    return MoQCodec::ParseResult::UNBLOCKED;
+    return MoQCodec::ParseResult::CONTINUE;
   }
 
   MoQCodec::ParseResult onFetchHeader(RequestID requestID) override {
@@ -2500,17 +2496,16 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     fetchState_ = onFetchFunc_(requestID);
 
     if (!fetchState_) {
-      error_ = MoQPublishError(
-          MoQPublishError::CANCELLED, "Fetch response for unknown track");
+      XLOG(ERR) << "Fetch response for unknown track";
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
 
     fetchState_->setCurrentStreamId(currentStreamId_);
     fetchState_->onFetchHeader(requestID);
-    return MoQCodec::ParseResult::UNBLOCKED;
+    return MoQCodec::ParseResult::CONTINUE;
   }
 
-  void onObjectBegin(
+  MoQCodec::ParseResult onObjectBegin(
       uint64_t group,
       uint64_t subgroup,
       uint64_t objectID,
@@ -2520,7 +2515,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       bool objectComplete,
       bool streamComplete) override {
     if (isCancelled()) {
-      return;
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
 
     if (logger_) {
@@ -2567,14 +2562,14 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
           std::move(initialPayload),
           std::move(extensions));
     }
-    if (!res) {
-      error_ = std::move(res.error());
-    }
+    return res ? MoQCodec::ParseResult::CONTINUE
+               : MoQCodec::ParseResult::ERROR_TERMINATE;
   }
 
-  void onObjectPayload(Payload payload, bool objectComplete) override {
+  MoQCodec::ParseResult onObjectPayload(Payload payload, bool objectComplete)
+      override {
     if (isCancelled()) {
-      return;
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
 
     if (logger_ && objectComplete) {
@@ -2595,13 +2590,15 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         std::move(payload),
         finStream);
     if (!res) {
-      error_ = std::move(res.error());
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     } else {
+      // TODO: CHECK seems too aggressive
       XCHECK_EQ(objectComplete, res.value() == ObjectPublishStatus::DONE);
     }
+    return MoQCodec::ParseResult::CONTINUE;
   }
 
-  void onObjectStatus(
+  MoQCodec::ParseResult onObjectStatus(
       uint64_t group,
       uint64_t subgroup,
       uint64_t objectID,
@@ -2609,7 +2606,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       ObjectStatus status,
       Extensions extensions) override {
     if (isCancelled()) {
-      return;
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
     folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
     // Use object priority if present, else fall back to publisher priority
@@ -2666,9 +2663,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         endOfSubgroup();
         break;
     }
-    if (!res) {
-      error_ = std::move(res.error());
-    }
+    return res ? MoQCodec::ParseResult::CONTINUE
+               : MoQCodec::ParseResult::ERROR_TERMINATE;
   }
 
   void onEndOfStream() override {
@@ -2696,19 +2692,12 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     return true;
   }
 
-  folly::Optional<MoQPublishError> error() const {
-    return error_;
-  }
-
   void setLogger(std::shared_ptr<MLogger> logger) {
     logger_ = logger;
   }
 
  private:
   bool isCancelled() const {
-    if (error_ && error_->code == MoQPublishError::CANCELLED) {
-      return true;
-    }
     if (fetchState_) {
       return !fetchState_->getFetchCallback();
     } else if (subscribeState_) {
@@ -2744,7 +2733,6 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   std::shared_ptr<MoQSession::SubscribeTrackReceiveState> subscribeState_;
   std::shared_ptr<SubgroupConsumer> subgroupCallback_;
   std::shared_ptr<MoQSession::FetchTrackReceiveState> fetchState_;
-  folly::Optional<MoQPublishError> error_;
   uint64_t currentStreamId_{0};
   TrackAlias trackAlias_{0};
   ObjectHeader currentObj_;
@@ -2893,7 +2881,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
           result = dcb.onSubgroup(
               deferredAlias, deferredGroup, deferredSubgroup, deferredPriority);
 
-          if (result == MoQCodec::ParseResult::UNBLOCKED) {
+          if (result == MoQCodec::ParseResult::CONTINUE) {
             // codec may have buffered excess ingress while blocked
             result = codec.onIngress(nullptr, streamData->fin);
           }
@@ -2909,17 +2897,13 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
         result = MoQCodec::ParseResult::ERROR_TERMINATE;
       }
 
-      if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
-        auto err = dcb.error();
-        XLOG(ERR) << "Error parsing/consuming stream"
-                  << (err ? (", " + err->describe()) : "") << " id=" << id
-                  << " sess=" << this;
-        break;
-      }
-
       if (streamData->fin) {
         XLOG(DBG3) << "End of stream id=" << id << " sess=" << this;
         readHandle = nullptr;
+      } else if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
+        XLOG(ERR) << "Error parsing/consuming stream id=" << id
+                  << " sess=" << this;
+        break;
       }
     } // else empty read
   }
