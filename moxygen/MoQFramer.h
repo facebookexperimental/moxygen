@@ -1837,8 +1837,21 @@ class MoQFrameWriter {
       size_t& size,
       bool& error) const noexcept;
 
+  // Draft-15+ FETCH object writer with Serialization Flags
+  void writeFetchObjectDraft15(
+      folly::IOBufQueue& writeBuf,
+      const ObjectHeader& objectHeader,
+      size_t& size,
+      bool& error) const noexcept;
+
+  void resetWriterFetchContext() const noexcept;
+
   folly::Optional<uint64_t> version_;
   mutable folly::Optional<uint64_t> previousObjectID_;
+  // Context for FETCH object delta encoding (draft-15+)
+  mutable folly::Optional<uint64_t> previousFetchGroup_;
+  mutable folly::Optional<uint64_t> previousFetchSubgroup_;
+  mutable folly::Optional<uint8_t> previousFetchPriority_;
 };
 
 } // namespace moxygen

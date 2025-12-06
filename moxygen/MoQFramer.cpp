@@ -3244,6 +3244,12 @@ WriteResult MoQFrameWriter::writeFetchHeader(
   writeVarint(
       writeBuf, folly::to_underlying(StreamType::FETCH_HEADER), size, error);
   writeVarint(writeBuf, requestID.value, size, error);
+
+  // Reset writer context at the start of each FETCH stream. This shouldn't
+  // really be necessary since we create a MoQFrameWriter per-stream, but
+  // putting this here for completeness.
+  resetWriterFetchContext();
+
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -3634,6 +3640,117 @@ void MoQFrameWriter::writeFetchObjectHeaderLegacy(
   writeVarint(writeBuf, objectHeader.id, size, error);
   writeBuf.append(&objectHeader.priority, 1);
   size += 1;
+}
+
+void MoQFrameWriter::writeFetchObjectDraft15(
+    folly::IOBufQueue& writeBuf,
+    const ObjectHeader& objectHeader,
+    size_t& size,
+    bool& error) const noexcept {
+  // Draft-15+ FETCH object format with Serialization Flags
+  uint8_t flags = 0;
+
+  // Determine Subgroup ID mode (bits 0-1)
+  if (objectHeader.subgroup == 0) {
+    // Mode 0x00: Subgroup ID is zero
+    flags |=
+        folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO);
+  } else if (
+      previousFetchSubgroup_.hasValue() &&
+      objectHeader.subgroup == previousFetchSubgroup_.value()) {
+    // Mode 0x01: Same as prior
+    flags |= folly::to_underlying(
+        FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR);
+  } else if (
+      previousFetchSubgroup_.hasValue() &&
+      objectHeader.subgroup == previousFetchSubgroup_.value() + 1) {
+    // Mode 0x02: Prior + 1
+    flags |= folly::to_underlying(
+        FetchHeaderSerializationBits::SUBGROUP_ID_INC_BY_ONE);
+  } else {
+    // Mode 0x03: Explicit field
+    flags |= folly::to_underlying(
+        FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
+  }
+
+  // Bit 2 (0x04): Object ID present
+  if (!previousObjectID_.hasValue() ||
+      objectHeader.id != previousObjectID_.value() + 1) {
+    flags |=
+        folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK);
+  }
+
+  // Bit 3 (0x08): Group ID present
+  if (!previousFetchGroup_.hasValue() ||
+      objectHeader.group != previousFetchGroup_.value()) {
+    flags |=
+        folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK);
+  }
+
+  // Bit 4 (0x10): Priority present
+  if (!previousFetchPriority_.hasValue() ||
+      objectHeader.priority != previousFetchPriority_.value()) {
+    flags |=
+        folly::to_underlying(FetchHeaderSerializationBits::PRIORITY_BITMASK);
+  }
+
+  // Bit 5 (0x20): Extensions present
+  // Note: For FETCH streams, extensions are always written by
+  // writeStreamObject(), so we set this flag based on whether extensions exist,
+  // but it's informational.
+  if (!objectHeader.extensions.empty()) {
+    flags |=
+        folly::to_underlying(FetchHeaderSerializationBits::EXTENSIONS_BITMASK);
+  }
+
+  // Write Serialization Flags
+  writeBuf.append(&flags, 1);
+  size += 1;
+
+  // Write Group ID if flag set
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK)) {
+    writeVarint(writeBuf, objectHeader.group, size, error);
+  }
+
+  // Write Subgroup ID if mode is 0x03
+  if ((flags &
+       folly::to_underlying(
+           FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK)) ==
+      folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK)) {
+    writeVarint(writeBuf, objectHeader.subgroup, size, error);
+  }
+
+  // Write Object ID if flag set
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK)) {
+    writeVarint(writeBuf, objectHeader.id, size, error);
+  }
+
+  // Write Priority if flag set
+  if (flags &
+      folly::to_underlying(FetchHeaderSerializationBits::PRIORITY_BITMASK)) {
+    writeBuf.append(&objectHeader.priority, 1);
+    size += 1;
+  }
+
+  // Note: Extensions, status, and length are written by writeStreamObject(),
+  // not here. The 0x20 flag tells the parser whether extensions are present,
+  // but writeStreamObject() handles the actual writing.
+
+  // Update context for next object
+  previousFetchGroup_ = objectHeader.group;
+  previousFetchSubgroup_ = objectHeader.subgroup;
+  previousObjectID_ = objectHeader.id;
+  previousFetchPriority_ = objectHeader.priority;
+}
+
+void MoQFrameWriter::resetWriterFetchContext() const noexcept {
+  previousFetchGroup_.reset();
+  previousFetchSubgroup_.reset();
+  previousObjectID_.reset();
+  previousFetchPriority_.reset();
 }
 
 WriteResult MoQFrameWriter::writeStreamObject(
