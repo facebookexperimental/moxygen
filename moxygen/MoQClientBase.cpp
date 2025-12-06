@@ -142,6 +142,11 @@ void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) noexcept {
     XLOG(DBG1) << "resetting moqSession_";
     moqSession_.reset();
   }
+  if (quicWebTransport_) {
+    quicWebTransport_->setHandler(nullptr);
+    XLOG(DBG1) << "resetting quicWebTransport_";
+    quicWebTransport_.reset();
+  }
 }
 
 void MoQClientBase::onSessionDrain() noexcept {
