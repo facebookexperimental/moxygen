@@ -9,8 +9,6 @@
 #include <utility>
 
 #include <folly/Optional.h>
-#include <folly/container/F14Map.h>
-#include <folly/logging/xlog.h>
 
 #include <moxygen/MoQFramer.h>
 
