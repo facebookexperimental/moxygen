@@ -64,7 +64,14 @@ class DateSubscriptionHandle : public Publisher::SubscriptionHandle {
   void unsubscribe() override {}
 
   // To Be Implemented
-  void subscribeUpdate(SubscribeUpdate update) override {}
+  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+  subscribeUpdate(SubscribeUpdate update) override {
+    co_return folly::makeUnexpected(
+        SubscribeUpdateError{
+            update.requestID,
+            SubscribeUpdateErrorCode::NOT_SUPPORTED,
+            "Subscribe update not implemented"});
+  }
 };
 
 class MoQDateServer : public MoQServer,
@@ -200,7 +207,8 @@ class MoQDateServer : public MoQServer,
         trackStatus.requestID,
         0,
         std::chrono::milliseconds(0),
-        GroupOrder::Default,
+        GroupOrder::OldestFirst, // Use OldestFirst instead of Default for
+                                 // Draft-14 compatibility
         largest,
         {}};
   }

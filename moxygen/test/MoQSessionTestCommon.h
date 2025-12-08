@@ -111,6 +111,11 @@ moxygen::Announce getAnnounce();
 
 std::shared_ptr<MockSubscriptionHandle> makePublishHandle();
 
+// Helper to set up mock expectations for subscribeUpdate
+void expectSubscribeUpdate(
+    std::shared_ptr<MockSubscriptionHandle> mockHandle,
+    folly::coro::Baton& baton);
+
 // Helper class to build a vector of TrackRequestParameter for tests
 class ParamBuilder {
  public:

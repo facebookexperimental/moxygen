@@ -70,6 +70,14 @@ class MoQRelaySession : public MoQSession {
   void onRequestOk(RequestOk ok, FrameType frameType) override;
   void onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) override;
 
+  // Helper methods for handling RequestOk for different request types
+  void handleAnnounceOkFromRequestOk(
+      const RequestOk& requestOk,
+      PendingRequestIterator reqIt);
+  void handleSubscribeAnnouncesOkFromRequestOk(
+      const RequestOk& requestOk,
+      PendingRequestIterator reqIt);
+
   // Announcement-specific types (moved from base class)
   struct PendingAnnounce {
     TrackNamespace trackNamespace;

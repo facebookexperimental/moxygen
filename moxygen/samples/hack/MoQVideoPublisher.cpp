@@ -171,7 +171,14 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
     setSubscribeOk(std::move(ok));
   }
   void unsubscribe() override {}
-  void subscribeUpdate(SubscribeUpdate) override {}
+  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+  subscribeUpdate(SubscribeUpdate update) override {
+    co_return folly::makeUnexpected(
+        SubscribeUpdateError{
+            update.requestID,
+            SubscribeUpdateErrorCode::NOT_SUPPORTED,
+            "Subscribe update not implemented"});
+  }
 };
 
 const uint8_t AUDIO_STREAM_PRIORITY = 100; /* Lower is higher pri */

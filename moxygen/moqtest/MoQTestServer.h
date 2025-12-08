@@ -28,7 +28,9 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
         cancelSource_(std::move(cancellationSource)) {}
 
   virtual void unsubscribe() override;
-  virtual void subscribeUpdate(SubscribeUpdate subUpdate) override;
+  virtual folly::coro::Task<
+      folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+  subscribeUpdate(SubscribeUpdate update) override;
 
  private:
   SubscribeOk subscribeOk_;

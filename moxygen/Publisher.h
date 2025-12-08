@@ -44,7 +44,13 @@ class SubscriptionHandle {
   virtual ~SubscriptionHandle() = default;
 
   virtual void unsubscribe() = 0;
-  virtual void subscribeUpdate(SubscribeUpdate subUpdate) = 0;
+  using SubscribeUpdateResult =
+      folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>;
+  // Updates subscription parameters (start/end locations, priority, forward).
+  // This is a coroutine because it may do async work, such as forwarding the
+  // update to the upstream publisher in a relay scenario.
+  virtual folly::coro::Task<SubscribeUpdateResult> subscribeUpdate(
+      SubscribeUpdate subUpdate) = 0;
 
   const SubscribeOk& subscribeOk() const {
     return *subscribeOk_;

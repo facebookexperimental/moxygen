@@ -127,13 +127,19 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  folly::coro::Baton subscribeUpdateProcessed;
+
   expectSubscribeDone();
   expectSubscribe(
-      [&mockSubscriptionHandle, &trackConsumer](
+      [&mockSubscriptionHandle, &trackConsumer, &subscribeUpdateProcessed](
           auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+
+        // Set up mock expectations for subscribeUpdate for both versions
+        expectSubscribeUpdate(mockSubscriptionHandle, subscribeUpdateProcessed);
+
         co_return mockSubscriptionHandle;
       });
 
@@ -150,13 +156,16 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
       kDefaultPriority + 1,
       true,
       {}};
+
+  // Set expectations for stats callbacks for all versions
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
-  subscribeHandler->subscribeUpdate(subscribeUpdate);
-  folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
-      .WillOnce(testing::Invoke([&](auto) { subscribeUpdateInvoked.post(); }));
-  co_await subscribeUpdateInvoked;
+
+  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+
+  // Wait for subscribe update to be processed
+  co_await subscribeUpdateProcessed;
+
   trackConsumer->subscribeDone(
       getTrackEndedSubscribeDone(subscribeRequest.requestID));
   co_await subscribeDone_;
@@ -191,10 +200,23 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  folly::coro::Baton subscribeUpdateProcessed;
+
+  // For v15+, we set the largest location in subscribeOk so the session
+  // will include it in the response to SubscribeUpdate
+  const folly::Optional<AbsoluteLocation> expectedLargest =
+      (getDraftMajorVersion(getServerSelectedVersion()) >= 15)
+      ? folly::Optional<AbsoluteLocation>(AbsoluteLocation{100, 200})
+      : folly::Optional<AbsoluteLocation>(AbsoluteLocation{0, 0});
+
   expectSubscribeDone();
   expectSubscribe(
-      [&subgroupConsumer, &trackConsumer, &mockSubscriptionHandle, this](
-          auto sub, auto pub) -> TaskSubscribeResult {
+      [&subgroupConsumer,
+       &trackConsumer,
+       &mockSubscriptionHandle,
+       &subscribeUpdateProcessed,
+       &expectedLargest,
+       this](auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
         EXPECT_CALL(
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
@@ -206,8 +228,14 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
         auto objectResult =
             subgroupConsumer->object(0, moxygen::test::makeBuf(10));
         EXPECT_FALSE(objectResult.hasError());
-        mockSubscriptionHandle =
-            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+
+        mockSubscriptionHandle = makeSubscribeOkResult(sub, expectedLargest);
+
+        // Set up mock expectations for subscribeUpdate for both versions
+        // For v<15: fire-and-forget, async processing
+        // For v15+: request-response, will return the mock result
+        expectSubscribeUpdate(mockSubscriptionHandle, subscribeUpdateProcessed);
+
         co_return mockSubscriptionHandle;
       });
 
@@ -237,17 +265,42 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
       kDefaultPriority,
       false,
       {}};
-  subscribeHandler->subscribeUpdate(subscribeUpdate);
-  folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
-      .WillOnce(testing::Invoke([&](auto /*blag*/) {
-        subscribeUpdateInvoked.post();
-      }));
-  co_await subscribeUpdateInvoked;
+
+  // Set expectations for stats callbacks for all versions
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+
+  auto updateResult =
+      co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+  EXPECT_TRUE(updateResult.hasValue());
+
+  // For v15+, verify that the response contains the LARGEST_OBJECT parameter
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
+    const auto& response = updateResult.value();
+    EXPECT_EQ(response.requestSpecificParams.size(), 1)
+        << "Response should contain LARGEST_OBJECT parameter";
+    EXPECT_EQ(
+        response.requestSpecificParams.at(0).key,
+        folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT));
+    // The LARGEST_OBJECT should match what was set in the SubscribeOk
+    EXPECT_EQ(
+        response.requestSpecificParams.at(0).largestObject->group,
+        expectedLargest->group);
+    EXPECT_EQ(
+        response.requestSpecificParams.at(0).largestObject->object,
+        expectedLargest->object);
+  }
+
+  // Wait for subscribe update to be processed on the server side
+  // For v<15, this waits for the async processing to complete
+  // For v15+, this waits for the response handling to complete
+  co_await subscribeUpdateProcessed;
+
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
   auto pubResult = subgroupConsumer->object(1, moxygen::test::makeBuf(10));
   EXPECT_TRUE(pubResult.hasError());
+
   trackConsumer->subscribeDone(
       getTrackEndedSubscribeDone(subscribeRequest.requestID));
   co_await subscribeDone_;
@@ -798,13 +851,46 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  folly::coro::Baton subscribeUpdateProcessed;
+
   expectSubscribeDone();
   expectSubscribe(
-      [&mockSubscriptionHandle, &trackConsumer](
-          auto sub, auto pub) -> TaskSubscribeResult {
+      [&mockSubscriptionHandle,
+       &trackConsumer,
+       &subscribeUpdateProcessed,
+       this](auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+
+        // Set up mock expectations for subscribeUpdate for both versions
+        // For v15+, also verify requestID assignments
+        if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
+          EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
+              .WillOnce(
+                  testing::Invoke([&sub, &subscribeUpdateProcessed](
+                                      const auto& actualUpdate) {
+                    // Verify that subscriptionRequestID has original requestID
+                    // value
+                    EXPECT_EQ(
+                        actualUpdate.subscriptionRequestID.value,
+                        sub.requestID.value);
+                    // Verify that requestID has been assigned by session
+                    EXPECT_EQ(
+                        actualUpdate.requestID.value, sub.requestID.value + 2);
+
+                    subscribeUpdateProcessed.post();
+                  }));
+          EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateResult)
+              .WillOnce(
+                  testing::Return(
+                      folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>(
+                          SubscribeUpdateOk{})));
+        } else {
+          expectSubscribeUpdate(
+              mockSubscriptionHandle, subscribeUpdateProcessed);
+        }
+
         co_return mockSubscriptionHandle;
       });
 
@@ -822,23 +908,15 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
       true,
       {}};
 
+  // Set expectations for stats callbacks for all versions
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
 
-  subscribeHandler->subscribeUpdate(subscribeUpdate);
-  folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdate)
-      .WillOnce(testing::Invoke([&](const auto& actualUpdate) {
-        // Verify that subscriptionRequestID has original requestID value
-        EXPECT_EQ(
-            actualUpdate.subscriptionRequestID.value,
-            subscribeRequest.requestID.value);
-        // Verify that requestID has been assigned by session
-        EXPECT_EQ(
-            actualUpdate.requestID.value, subscribeRequest.requestID.value + 2);
-        subscribeUpdateInvoked.post();
-      }));
-  co_await subscribeUpdateInvoked;
+  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+
+  // Wait for subscribe update to be processed
+  co_await subscribeUpdateProcessed;
+
   trackConsumer->subscribeDone(
       getTrackEndedSubscribeDone(subscribeRequest.requestID));
   co_await subscribeDone_;

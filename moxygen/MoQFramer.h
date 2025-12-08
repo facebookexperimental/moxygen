@@ -82,6 +82,7 @@ enum class SubscribeDoneStatusCode : uint32_t {
   GOING_AWAY = 0x4,
   EXPIRED = 0x5,
   TOO_FAR_BEHIND = 0x6,
+  UPDATE_FAILED = 0x8,
   //
   SESSION_CLOSED = std::numeric_limits<uint32_t>::max()
 };
@@ -1234,6 +1235,7 @@ struct RequestOk {
 
 using SubscribeAnnouncesOk = RequestOk;
 using AnnounceOk = RequestOk;
+using SubscribeUpdateOk = RequestOk;
 
 // Consolidated request error structure
 struct RequestError {
@@ -1249,6 +1251,7 @@ using SubscribeAnnouncesError = RequestError;
 using AnnounceError = RequestError;
 using PublishError = RequestError;
 using TrackStatusError = RequestError;
+using SubscribeUpdateError = RequestError;
 
 // Error code aliases
 using SubscribeErrorCode = RequestErrorCode;
@@ -1257,6 +1260,7 @@ using SubscribeAnnouncesErrorCode = RequestErrorCode;
 using AnnounceErrorCode = RequestErrorCode;
 using PublishErrorCode = RequestErrorCode;
 using TrackStatusErrorCode = RequestErrorCode;
+using SubscribeUpdateErrorCode = RequestErrorCode;
 
 inline StreamType getSubgroupStreamType(
     uint64_t version,

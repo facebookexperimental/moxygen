@@ -330,7 +330,14 @@ class MoQFlvStreamerClient
 
     const TrackConsumer* consumer{nullptr};
 
-    void subscribeUpdate(SubscribeUpdate) override {}
+    folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+    subscribeUpdate(SubscribeUpdate update) override {
+      co_return folly::makeUnexpected(
+          SubscribeUpdateError{
+              update.requestID,
+              SubscribeUpdateErrorCode::NOT_SUPPORTED,
+              "Subscribe update not implemented"});
+    }
     void unsubscribe() override {
       auto requestID = subscribeOk_->requestID;
       XLOG(INFO) << "UNSUBSCRIBE reqID=" << requestID;

@@ -471,6 +471,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
         {}                        // params
     };
     std::shared_ptr<SubscriptionHandle> capturedHandle;
+    folly::coro::Baton subscribeUpdateProcessed;
+
     // Setup server to respond with PUBLISH_OK
     EXPECT_CALL(*serverSubscriber, publish(_, _))
         .WillOnce(
@@ -483,6 +485,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
                 }));
 
     auto handle = makePublishHandle();
+
+    // Set up mock expectations for subscribeUpdate
+    expectSubscribeUpdate(handle, subscribeUpdateProcessed);
 
     // Initiate publish
     auto publishResult = clientSession_->publish(std::move(pub), handle);
@@ -507,23 +512,14 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
     subscribeUpdate.params.insertParam(Parameter(
         folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 7000));
 
+    // Set expectations for stats callbacks for all versions
     EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
     EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
 
-    folly::coro::Baton subscribeUpdateInvoked;
-    EXPECT_CALL(*handle, subscribeUpdate)
-        .WillOnce(testing::Invoke([&](const auto& actualUpdate) {
-          // Verify delivery timeout parameter was received
-          EXPECT_EQ(actualUpdate.params.size(), 1);
-          EXPECT_EQ(
-              actualUpdate.params.at(0).key,
-              folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-          EXPECT_EQ(actualUpdate.params.at(0).asUint64, 7000);
-          subscribeUpdateInvoked.post();
-        }));
-    capturedHandle->subscribeUpdate(subscribeUpdate);
+    co_await capturedHandle->subscribeUpdate(subscribeUpdate);
 
-    co_await subscribeUpdateInvoked;
+    // Wait for subscribe update to be processed
+    co_await subscribeUpdateProcessed;
 
     clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   } catch (...) {
@@ -531,6 +527,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
                   << folly::exceptionStr(std::current_exception());
   }
 }
+
 CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
   try {
     co_await setupMoQSessionForPublish(initialMaxRequestID_);
@@ -545,6 +542,8 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
         {}                        // params
     };
     std::shared_ptr<SubscriptionHandle> capturedHandle;
+    folly::coro::Baton subscribeUpdateProcessed;
+
     // Setup server to respond with PUBLISH_OK
     EXPECT_CALL(*serverSubscriber, publish(_, _))
         .WillOnce(
@@ -557,6 +556,9 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
                 }));
 
     auto handle = makePublishHandle();
+
+    // Set up mock expectations for subscribeUpdate
+    expectSubscribeUpdate(handle, subscribeUpdateProcessed);
 
     // Initiate publish
     auto publishResult = clientSession_->publish(std::move(pub), handle);
@@ -576,16 +578,14 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
         true,
         {}};
 
+    // Set expectations for stats callbacks for all versions
     EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
     EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
 
-    folly::coro::Baton subscribeUpdateInvoked;
-    EXPECT_CALL(*handle, subscribeUpdate).WillOnce(testing::Invoke([&](auto) {
-      subscribeUpdateInvoked.post();
-    }));
-    capturedHandle->subscribeUpdate(subscribeUpdate);
+    co_await capturedHandle->subscribeUpdate(subscribeUpdate);
 
-    co_await subscribeUpdateInvoked;
+    // Wait for subscribe update to be processed
+    co_await subscribeUpdateProcessed;
 
     clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   } catch (...) {
@@ -593,6 +593,7 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
                   << folly::exceptionStr(std::current_exception());
   }
 }
+
 CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

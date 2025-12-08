@@ -31,7 +31,14 @@ class MoQChatClient : public Publisher,
   folly::coro::Task<Publisher::SubscribeResult> subscribe(
       SubscribeRequest subscribeReq,
       std::shared_ptr<TrackConsumer> consumer) override;
-  void subscribeUpdate(SubscribeUpdate) override {}
+  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+  subscribeUpdate(SubscribeUpdate update) override {
+    co_return folly::makeUnexpected(
+        SubscribeUpdateError{
+            update.requestID,
+            SubscribeUpdateErrorCode::NOT_SUPPORTED,
+            "Subscribe update not implemented"});
+  }
   void unsubscribe() override;
 
   class AnnounceHandle : public Subscriber::AnnounceHandle {

@@ -504,8 +504,8 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
   subscribeOk_->params.insertParam(param);
 }
 
-void MoQForwarder::Subscriber::subscribeUpdate(
-    SubscribeUpdate subscribeUpdate) {
+folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
   // TODO: Validate update subscription range conforms to SUBSCRIBE_UPDATE
   // rules
   // If it moved end before largest, then the next published object will
@@ -522,6 +522,7 @@ void MoQForwarder::Subscriber::subscribeUpdate(
   } else if (wasForwarding && !shouldForward) {
     forwarder.removeForwardingSubscriber();
   }
+  co_return SubscribeUpdateOk{subscribeUpdate.requestID, {}, {}};
 }
 
 void MoQForwarder::Subscriber::unsubscribe() {

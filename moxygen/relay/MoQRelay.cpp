@@ -13,6 +13,28 @@ constexpr uint8_t kDefaultUpstreamPriority = 128;
 
 namespace moxygen {
 
+// Sends SUBSCRIBE_UPDATE to update forwarding state. Called from:
+// - subscribeAnnounces: forwarder was empty, new subscriber added
+// (forward=true)
+// - subscribe: first forwarding subscriber added (forward=true)
+// - onEmpty: last subscriber left a publish subscription (forward=false)
+// - forwardChanged: forwarding subscriber count changed
+folly::coro::Task<void> MoQRelay::doSubscribeUpdate(
+    std::shared_ptr<Publisher::SubscriptionHandle> handle,
+    bool forward) {
+  auto updateRes = co_await handle->subscribeUpdate(
+      {RequestID(0),
+       handle->subscribeOk().requestID,
+       kLocationMin,
+       kLocationMax.group,
+       kDefaultPriority,
+       /*forward=*/forward,
+       {}});
+  if (updateRes.hasError()) {
+    XLOG(ERR) << "subscribeUpdate failed: " << updateRes.error().reasonPhrase;
+  }
+}
+
 std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
@@ -538,19 +560,14 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
       }
       auto& forwarder = subscriptionIt->second.forwarder;
       if (forwarder->empty()) {
-        subscriptionIt->second.handle->subscribeUpdate(
-            {RequestID(0),
-             subscriptionIt->second.requestID,
-             kLocationMin,
-             kLocationMax.group,
-             kDefaultPriority,
-             /*forward=*/true,
-             {}});
+        co_withExecutor(
+            exec,
+            doSubscribeUpdate(subscriptionIt->second.handle, /*forward=*/true))
+            .start();
       }
       pub.groupOrder = forwarder->groupOrder();
       pub.largest = forwarder->largest();
       if (publishSession != session) {
-        exec = publishSession->getExecutor();
         co_withExecutor(exec, publishToSession(session, forwarder, pub))
             .start();
       }
@@ -781,14 +798,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
     if (!forwarding &&
         subscriptionIt->second.forwarder->numForwardingSubscribers() > 0) {
-      subscriptionIt->second.handle->subscribeUpdate(
-          {RequestID(0),
-           subscriptionIt->second.requestID,
-           kLocationMin,
-           kLocationMax.group,
-           kDefaultPriority,
-           /*forward=*/true,
-           {}});
+      auto exec = subscriptionIt->second.upstream->getExecutor();
+      co_withExecutor(
+          exec,
+          doSubscribeUpdate(subscriptionIt->second.handle, /*forward=*/true))
+          .start();
     }
     co_return subscriber;
   }
@@ -886,14 +900,10 @@ void MoQRelay::onEmpty(MoQForwarder* forwarder) {
   if (subscription.isPublish) {
     // if it's publish, don't unsubscribe, just subscribeUpdate forward=false
     XLOG(DBG1) << "Updating upstream subscription forward=false";
-    subscription.handle->subscribeUpdate(
-        {RequestID(0),
-         subscription.requestID,
-         kLocationMin,
-         kLocationMax.group,
-         kDefaultPriority,
-         /*forward=*/false,
-         {}});
+    auto exec = subscription.upstream->getExecutor();
+    co_withExecutor(
+        exec, doSubscribeUpdate(subscription.handle, /*forward=*/false))
+        .start();
   } else {
     subscription.handle->unsubscribe();
     XLOG(DBG4) << "Erasing subscription to " << subscriptionIt->first;
@@ -914,14 +924,13 @@ void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
   XLOG(INFO) << "Updating forward for " << subscriptionIt->first
              << " numForwardingSubs=" << forwarder->numForwardingSubscribers();
 
-  subscription.handle->subscribeUpdate(
-      {RequestID(0),
-       subscription.requestID,
-       kLocationMin,
-       kLocationMax.group,
-       kDefaultPriority,
-       /*forward=*/forwarder->numForwardingSubscribers() > 0,
-       {}});
+  auto exec = subscription.upstream->getExecutor();
+  co_withExecutor(
+      exec,
+      doSubscribeUpdate(
+          subscription.handle,
+          /*forward=*/forwarder->numForwardingSubscribers() > 0))
+      .start();
 }
 
 } // namespace moxygen

@@ -166,6 +166,10 @@ class MoQRelay : public Publisher,
       std::shared_ptr<MoQForwarder> forwarder,
       PublishRequest pub);
 
+  folly::coro::Task<void> doSubscribeUpdate(
+      std::shared_ptr<Publisher::SubscriptionHandle> handle,
+      bool forward);
+
   void unannounce(const TrackNamespace& trackNamespace, AnnounceNode* node);
 
   TrackNamespace allowedNamespacePrefix_;

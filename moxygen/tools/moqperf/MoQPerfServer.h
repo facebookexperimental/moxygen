@@ -25,7 +25,14 @@ class PerfSubscriptionHandle : public Publisher::SubscriptionHandle {
     cancellationSource_->requestCancellation();
   }
 
-  void subscribeUpdate(SubscribeUpdate /* subUpdate */) override {}
+  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+  subscribeUpdate(SubscribeUpdate update) override {
+    co_return folly::makeUnexpected(
+        SubscribeUpdateError{
+            update.requestID,
+            SubscribeUpdateErrorCode::NOT_SUPPORTED,
+            "Subscribe update not implemented"});
+  }
 
  private:
   folly::CancellationSource* cancellationSource_;

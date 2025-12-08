@@ -244,7 +244,21 @@ class MockSubscriptionHandle : public SubscriptionHandle {
       : SubscriptionHandle(std::move(ok)) {}
 
   MOCK_METHOD(void, unsubscribe, (), (override));
-  MOCK_METHOD(void, subscribeUpdate, (SubscribeUpdate), (override));
+
+  // For async methods like subscribeUpdate, we can't use MOCK_METHOD directly
+  // Instead, provide a delegating implementation
+  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+  subscribeUpdate(SubscribeUpdate update) override {
+    subscribeUpdateCalled(update);
+    co_return subscribeUpdateResult();
+  }
+
+  // Mock these instead
+  MOCK_METHOD(void, subscribeUpdateCalled, (SubscribeUpdate));
+  MOCK_METHOD(
+      (folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>),
+      subscribeUpdateResult,
+      ());
 };
 
 class MockFetchHandle : public Publisher::FetchHandle {

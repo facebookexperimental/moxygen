@@ -4664,7 +4664,8 @@ WriteResult MoQFrameWriter::writeRequestError(
       frameType == FrameType::SUBSCRIBE_ANNOUNCES_ERROR ||
       frameType == FrameType::PUBLISH_ERROR ||
       frameType == FrameType::FETCH_ERROR ||
-      frameType == FrameType::TRACK_STATUS_ERROR)
+      frameType == FrameType::TRACK_STATUS_ERROR ||
+      frameType == FrameType::SUBSCRIBE_UPDATE)
       << "Invalid frameType passed to writeRequestError: "
       << static_cast<int>(frameType);
 

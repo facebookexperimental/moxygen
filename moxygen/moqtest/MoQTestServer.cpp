@@ -23,8 +23,14 @@ void MoQTestSubscriptionHandle::unsubscribe() {
   cancelSource_.requestCancellation();
 }
 
-void MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate subUpdate) {
+folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+MoQTestSubscriptionHandle::subscribeUpdate(SubscribeUpdate update) {
   LOG(INFO) << "Received Subscribe Update";
+  co_return folly::makeUnexpected(
+      SubscribeUpdateError{
+          update.requestID,
+          SubscribeUpdateErrorCode::NOT_SUPPORTED,
+          "Subscribe update not implemented"});
 }
 
 void MoQTestFetchHandle::fetchCancel() {

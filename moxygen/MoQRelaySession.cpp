@@ -318,46 +318,34 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
     frameType = reqIt->second->getOkFrameType();
   }
   switch (frameType) {
-    case moxygen::FrameType::ANNOUNCE_OK: {
-      if (logger_) {
-        logger_->logAnnounceOk(requestOk, ControlMessageType::PARSED);
-      }
-
-      auto* announcePtr =
-          MoQRelayPendingRequestState::tryGetAnnounce(reqIt->second.get());
-      if (!announcePtr) {
-        XLOG(ERR) << "Request ID " << reqID
-                  << " is not an announce request, sess=" << this;
-        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-        return;
-      }
-
-      publisherAnnounces_[announcePtr->trackNamespace] =
-          std::move(announcePtr->callback);
-      announcePtr->promise.setValue(std::move(requestOk));
-      break;
-    }
-    case moxygen::FrameType::SUBSCRIBE_ANNOUNCES_OK: {
-      if (logger_) {
-        logger_->logSubscribeAnnouncesOk(requestOk, ControlMessageType::PARSED);
-      }
-      auto* subscribeAnnouncesPtr =
-          MoQRelayPendingRequestState::tryGetSubscribeAnnounces(
-              reqIt->second.get());
-      if (!subscribeAnnouncesPtr) {
-        XLOG(ERR) << "Request ID " << reqID
-                  << " is not a subscribe announces request, sess=" << this;
-        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-        return;
-      }
-
-      subscribeAnnouncesPtr->setValue(std::move(requestOk));
-      break;
-    }
     case moxygen::FrameType::TRACK_STATUS_OK: {
       // Use base class helper
       handleTrackStatusOkFromRequestOk(requestOk);
       shouldErasePendingRequest = false;
+      break;
+    }
+    case moxygen::FrameType::SUBSCRIBE_ANNOUNCES_OK:
+    case moxygen::FrameType::REQUEST_OK: {
+      // ANNOUNCE_OK is an alias for REQUEST_OK (both = 0x7)
+      switch (reqIt->second->getType()) {
+        case PendingRequestState::Type::ANNOUNCE:
+          handleAnnounceOkFromRequestOk(requestOk, reqIt);
+          break;
+        case PendingRequestState::Type::SUBSCRIBE_ANNOUNCES:
+          handleSubscribeAnnouncesOkFromRequestOk(requestOk, reqIt);
+          break;
+        case PendingRequestState::Type::SUBSCRIBE_UPDATE:
+          // Use base class helper
+          handleSubscribeUpdateOkFromRequestOk(requestOk, reqIt);
+          shouldErasePendingRequest = false;
+          break;
+        default:
+          XLOG(ERR) << "Unexpected REQUEST_OK for type "
+                    << folly::to_underlying(reqIt->second->getType())
+                    << ", sess=" << this;
+          close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+          break;
+      }
       break;
     }
     default:
@@ -702,6 +690,54 @@ void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
     subscribeAnnounces_.erase(saIt);
     retireRequestID(/*signalWriteLoop=*/true);
   }
+}
+
+// Helper methods for handling RequestOk
+void MoQRelaySession::handleAnnounceOkFromRequestOk(
+    const RequestOk& requestOk,
+    PendingRequestIterator reqIt) {
+  XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
+             << " sess=" << this;
+
+  if (logger_) {
+    logger_->logAnnounceOk(requestOk, ControlMessageType::PARSED);
+  }
+
+  auto* announcePtr =
+      MoQRelayPendingRequestState::tryGetAnnounce(reqIt->second.get());
+  if (!announcePtr) {
+    XLOG(ERR) << "Request ID " << requestOk.requestID
+              << " is not an announce request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  publisherAnnounces_[announcePtr->trackNamespace] =
+      std::move(announcePtr->callback);
+  announcePtr->promise.setValue(requestOk);
+}
+
+void MoQRelaySession::handleSubscribeAnnouncesOkFromRequestOk(
+    const RequestOk& requestOk,
+    PendingRequestIterator reqIt) {
+  XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
+             << " sess=" << this;
+
+  if (logger_) {
+    logger_->logSubscribeAnnouncesOk(requestOk, ControlMessageType::PARSED);
+  }
+
+  auto* subscribeAnnouncesPtr =
+      MoQRelayPendingRequestState::tryGetSubscribeAnnounces(
+          reqIt->second.get());
+  if (!subscribeAnnouncesPtr) {
+    XLOG(ERR) << "Request ID " << requestOk.requestID
+              << " is not a subscribe announces request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  subscribeAnnouncesPtr->setValue(requestOk);
 }
 
 } // namespace moxygen

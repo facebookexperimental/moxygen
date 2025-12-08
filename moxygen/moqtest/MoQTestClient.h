@@ -67,6 +67,9 @@ class MoQTestClient {
   void subscribeUpdate(SubscribeUpdate update);
 
  private:
+  folly::coro::Task<void> doSubscribeUpdate(
+      std::shared_ptr<Publisher::SubscriptionHandle> handle,
+      SubscribeUpdate update);
   // An ObjectReceiverCallback implementation that forwards calls to a
   // MoQTestClient.
   class ObjectReceiverCallback : public moxygen::ObjectReceiverCallback {

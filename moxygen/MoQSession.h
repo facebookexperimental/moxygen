@@ -408,6 +408,10 @@ class MoQSession : public Subscriber,
   void subscribeError(const SubscribeError& subErr);
   void unsubscribe(const Unsubscribe& unsubscribe);
   void subscribeUpdate(const SubscribeUpdate& subUpdate);
+  void subscribeUpdateOk(const RequestOk& requestOk);
+  void subscribeUpdateError(
+      const SubscribeUpdateError& requestError,
+      RequestID subscriptionRequestID);
   void sendSubscribeDone(const SubscribeDone& subDone);
 
   folly::coro::Task<void> handleFetch(
@@ -552,6 +556,7 @@ class MoQSession : public Subscriber,
       PUBLISH,
       TRACK_STATUS,
       FETCH,
+      SUBSCRIBE_UPDATE,
       // Announcement types - only handled by MoQRelaySession subclass
       ANNOUNCE,
       SUBSCRIBE_ANNOUNCES
@@ -570,6 +575,9 @@ class MoQSession : public Subscriber,
       folly::coro::Promise<folly::Expected<TrackStatusOk, TrackStatusError>>
           trackStatus_;
       std::shared_ptr<FetchTrackReceiveState> fetchTrack_;
+      folly::coro::Promise<
+          folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
+          subscribeUpdate_;
     } storage_;
 
    public:
@@ -608,6 +616,15 @@ class MoQSession : public Subscriber,
       return result;
     }
 
+    static std::unique_ptr<PendingRequestState> makeSubscribeUpdate(
+        folly::coro::Promise<
+            folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>> promise) {
+      auto result = std::make_unique<PendingRequestState>();
+      result->type_ = Type::SUBSCRIBE_UPDATE;
+      new (&result->storage_.subscribeUpdate_) auto(std::move(promise));
+      return result;
+    }
+
     // Delete copy/move operations as this is held in unique_ptr
     PendingRequestState(const PendingRequestState&) = delete;
     PendingRequestState(PendingRequestState&&) = delete;
@@ -629,6 +646,9 @@ class MoQSession : public Subscriber,
         case Type::FETCH:
           // If FETCH storage is added, destroy it here, e.g.:
           storage_.fetchTrack_.~shared_ptr<FetchTrackReceiveState>();
+          break;
+        case Type::SUBSCRIBE_UPDATE:
+          storage_.subscribeUpdate_.~Promise();
           break;
         case Type::ANNOUNCE:
         case Type::SUBSCRIBE_ANNOUNCES:
@@ -653,6 +673,8 @@ class MoQSession : public Subscriber,
           return ok ? FrameType::TRACK_STATUS_OK : FrameType::TRACK_STATUS;
         case Type::FETCH:
           return ok ? FrameType::FETCH_OK : FrameType::FETCH_ERROR;
+        case Type::SUBSCRIBE_UPDATE:
+          return ok ? FrameType::REQUEST_OK : FrameType::REQUEST_ERROR;
         case Type::ANNOUNCE:
           return ok ? FrameType::ANNOUNCE_OK : FrameType::ANNOUNCE_ERROR;
         case Type::SUBSCRIBE_ANNOUNCES:
@@ -693,6 +715,13 @@ class MoQSession : public Subscriber,
       return type_ == Type::FETCH ? &storage_.fetchTrack_ : nullptr;
     }
 
+    folly::coro::Promise<
+        folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>*
+    tryGetSubscribeUpdate() {
+      return type_ == Type::SUBSCRIBE_UPDATE ? &storage_.subscribeUpdate_
+                                             : nullptr;
+    }
+
     Type getType() const {
       return type_;
     }
@@ -716,6 +745,9 @@ class MoQSession : public Subscriber,
       RequestID::hash>::iterator;
 
   void handleTrackStatusOkFromRequestOk(const RequestOk& requestOk);
+  void handleSubscribeUpdateOkFromRequestOk(
+      const RequestOk& requestOk,
+      PendingRequestIterator reqIt);
 
  private:
   // Private implementation methods
