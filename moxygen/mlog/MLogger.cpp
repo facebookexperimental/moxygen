@@ -841,13 +841,23 @@ void MLogger::logSubgroupHeaderCreated(
     TrackAlias trackAlias,
     uint64_t groupId,
     uint64_t sugroupId,
-    uint8_t publisherPriority) {
+    uint8_t publisherPriority,
+    SubgroupIDFormat format,
+    bool includeExtensions,
+    bool endOfGroup) {
   MOQTSubgroupHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = groupId;
-  baseMsg.subgroupId = sugroupId;
+
+  // Per spec: subgroup_id is omitted if it equals object_id of first object
+  if (format != SubgroupIDFormat::FirstObject) {
+    baseMsg.subgroupId = sugroupId;
+  }
+
   baseMsg.publisherPriority = publisherPriority;
+  baseMsg.containsEndOfGroup = endOfGroup;
+  baseMsg.extensionsPresent = includeExtensions;
   addSubgroupHeaderCreatedLog(std::move(baseMsg));
 }
 
@@ -856,13 +866,19 @@ void MLogger::logSubgroupHeaderParsed(
     TrackAlias trackAlias,
     uint64_t groupId,
     uint64_t sugroupId,
-    uint8_t publisherPriority) {
+    uint8_t publisherPriority,
+    const SubgroupOptions& options) {
   MOQTSubgroupHeaderParsed baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = groupId;
-  baseMsg.subgroupId = sugroupId;
+  // Only set subgroupId if it's not using FirstObject format
+  if (options.subgroupIDFormat != SubgroupIDFormat::FirstObject) {
+    baseMsg.subgroupId = sugroupId;
+  }
   baseMsg.publisherPriority = publisherPriority;
+  baseMsg.containsEndOfGroup = options.hasEndOfGroup;
+  baseMsg.extensionsPresent = options.hasExtensions;
   addSubgroupHeaderParsedLog(std::move(baseMsg));
 }
 

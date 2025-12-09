@@ -504,11 +504,12 @@ StreamPublisherImpl::StreamPublisherImpl(
   // When sgPriority is none, the receiver will use the value from
   // PUBLISHER_PRIORITY, which defaults to 128 if not sent by the publisher when
   // establishing the subscription.
+  bool endOfGroup = false;
   streamType_ = getSubgroupStreamType(
       publisher->getVersion(),
       format,
       includeExtensions,
-      false,
+      endOfGroup,
       sgPriority.hasValue());
   trackAlias_ = alias;
   setWriteHandle(writeHandle);
@@ -524,7 +525,10 @@ StreamPublisherImpl::StreamPublisherImpl(
         alias,
         groupID,
         subgroupID,
-        publisher->subPriority());
+        publisher->subPriority(),
+        format,
+        includeExtensions,
+        endOfGroup);
   }
 
   writeBuf_.move(); // clear FETCH_HEADER
@@ -2510,7 +2514,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
-      folly::Optional<uint8_t> priority)>;
+      folly::Optional<uint8_t> priority,
+      const SubgroupOptions& options)>;
 
   using OnFetchFunc =
       std::function<std::shared_ptr<MoQSession::FetchTrackReceiveState>(
@@ -2537,11 +2542,13 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
-      folly::Optional<uint8_t> priority) override {
+      folly::Optional<uint8_t> priority,
+      const SubgroupOptions& options) override {
     trackAlias_ = alias; // Store for use in onObjectBegin logging
 
     // Call lambda to get state
-    auto subscribeState = onSubgroupFunc_(alias, group, subgroup, priority);
+    auto subscribeState =
+        onSubgroupFunc_(alias, group, subgroup, priority, options);
     if (!subscribeState) {
       // State not ready, return BLOCKED and wait
       XLOG(DBG4) << "onSubgroup: State not ready, returning BLOCKED";
@@ -2569,7 +2576,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     }
     if (logger_) {
       logger_->logSubgroupHeaderParsed(
-          currentStreamId_, alias, group, subgroup, effectivePriority);
+          currentStreamId_, alias, group, subgroup, effectivePriority, options);
     }
 
     subscribeState_->setCurrentStreamId(currentStreamId_);
@@ -2874,6 +2881,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   uint64_t deferredGroup = 0;
   uint64_t deferredSubgroup = 0;
   folly::Optional<uint8_t> deferredPriority;
+  SubgroupOptions deferredOptions;
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto onSubgroupFunc = [this,
                          &token,
@@ -2881,11 +2889,13 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
                          &deferredAlias,
                          &deferredGroup,
                          &deferredSubgroup,
-                         &deferredPriority](
+                         &deferredPriority,
+                         &deferredOptions](
                             TrackAlias alias,
                             uint64_t group,
                             uint64_t subgroup,
-                            const folly::Optional<uint8_t>& priority)
+                            const folly::Optional<uint8_t>& priority,
+                            const SubgroupOptions& options)
       -> std::shared_ptr<SubscribeTrackReceiveState> {
     auto state = getSubscribeTrackReceiveState(alias);
     if (!state) {
@@ -2896,6 +2906,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       deferredGroup = group;
       deferredSubgroup = subgroup;
       deferredPriority = priority;
+      deferredOptions = options;
       // Indicates BLOCKED
       return nullptr;
     } else {
@@ -2965,7 +2976,11 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
             break;
           }
           result = dcb.onSubgroup(
-              deferredAlias, deferredGroup, deferredSubgroup, deferredPriority);
+              deferredAlias,
+              deferredGroup,
+              deferredSubgroup,
+              deferredPriority,
+              deferredOptions);
 
           if (result == MoQCodec::ParseResult::CONTINUE) {
             // codec may have buffered excess ingress while blocked

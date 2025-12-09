@@ -537,8 +537,10 @@ struct MOQTSubgroupHeaderCreated {
   uint64_t streamId{0};
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  uint64_t subgroupId{0};
+  folly::Optional<uint64_t> subgroupId;
   uint8_t publisherPriority{0};
+  bool containsEndOfGroup{false};
+  bool extensionsPresent{false};
 
   folly::dynamic toDynamic() const;
 };
@@ -547,8 +549,10 @@ struct MOQTSubgroupHeaderParsed {
   uint64_t streamId{0};
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  uint64_t subgroupId{0};
+  folly::Optional<uint64_t> subgroupId;
   uint8_t publisherPriority{0};
+  bool containsEndOfGroup{false};
+  bool extensionsPresent{false};
 
   folly::dynamic toDynamic() const;
 };
@@ -597,8 +601,8 @@ struct MOQTFetchHeaderParsed {
 
 struct MOQTFetchObjectCreated {
   uint64_t streamId{0};
-  uint64_t groupId;
-  uint64_t subgroupId;
+  uint64_t groupId{};
+  uint64_t subgroupId{};
   uint64_t objectId{0};
   uint8_t publisherPriority{0};
   uint64_t extensionHeadersLength{0};
@@ -612,8 +616,8 @@ struct MOQTFetchObjectCreated {
 
 struct MOQTFetchObjectParsed {
   uint64_t streamId{0};
-  uint64_t groupId;
-  uint64_t subgroupId;
+  uint64_t groupId{};
+  uint64_t subgroupId{};
   uint64_t objectId{0};
   uint8_t publisherPriority{0};
   uint64_t extensionHeadersLength{0};

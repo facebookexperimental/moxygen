@@ -171,7 +171,8 @@ class MoQObjectStreamCodec : public MoQCodec {
         TrackAlias alias,
         uint64_t group,
         uint64_t subgroup,
-        folly::Optional<uint8_t> priority) = 0;
+        folly::Optional<uint8_t> priority,
+        const SubgroupOptions& options) = 0;
     virtual ParseResult onObjectBegin(
         uint64_t group,
         uint64_t subgroup,

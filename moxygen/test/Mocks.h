@@ -58,7 +58,11 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(
       MoQCodec::ParseResult,
       onSubgroup,
-      (TrackAlias, uint64_t, uint64_t, folly::Optional<uint8_t>));
+      (TrackAlias,
+       uint64_t,
+       uint64_t,
+       folly::Optional<uint8_t>,
+       const SubgroupOptions&));
   MOCK_METHOD(
       MoQCodec::ParseResult,
       onObjectBegin,

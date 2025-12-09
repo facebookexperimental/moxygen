@@ -170,13 +170,17 @@ class MLogger {
       TrackAlias trackAlias,
       uint64_t groupId,
       uint64_t sugroupId,
-      uint8_t publisherPriority);
+      uint8_t publisherPriority,
+      SubgroupIDFormat format,
+      bool includeExtensions,
+      bool endOfGroup);
   void logSubgroupHeaderParsed(
       uint64_t streamId,
       TrackAlias trackAlias,
       uint64_t groupId,
       uint64_t sugroupId,
-      uint8_t publisherPriority);
+      uint8_t publisherPriority,
+      const SubgroupOptions& options);
   void logSubgroupObjectCreated(
       uint64_t streamId,
       TrackAlias trackAlias,

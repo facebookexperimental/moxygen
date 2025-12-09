@@ -203,7 +203,7 @@ TEST_P(MoQCodecTest, AllObject) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(testing::_, testing::_, testing::_, testing::_));
+      onSubgroup(testing::_, testing::_, testing::_, testing::_, testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(
@@ -242,7 +242,7 @@ TEST_P(MoQCodecTest, UnderflowObjects) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(testing::_, testing::_, testing::_, testing::_));
+      onSubgroup(testing::_, testing::_, testing::_, testing::_, testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(
@@ -274,7 +274,7 @@ TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, true));
@@ -292,7 +292,7 @@ TEST_P(MoQCodecTest, ObjectStreamPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, _, true, false));
@@ -312,7 +312,7 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
@@ -341,7 +341,7 @@ TEST_P(MoQCodecTest, TruncatedObject) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(testing::_, testing::_, testing::_, testing::_));
+      onSubgroup(testing::_, testing::_, testing::_, testing::_, testing::_));
   EXPECT_CALL(objectStreamCodecCallback_, onConnectionError(testing::_));
 
   objectStreamCodec_.onIngress(writeBuf.move(), true);
@@ -359,7 +359,7 @@ TEST_P(MoQCodecTest, TruncatedObjectPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(testing::_, testing::_, testing::_, testing::_));
+      onSubgroup(testing::_, testing::_, testing::_, testing::_, testing::_));
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
@@ -530,7 +530,7 @@ TEST_P(MoQCodecTest, SubgroupHeaderWithEOF) {
   // Expect only onSubgroup and onEndOfStream
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
 
   // Deliver with FIN=true and no additional data
@@ -558,7 +558,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectBegin) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, false))
@@ -588,7 +588,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, false, false))
@@ -627,7 +627,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)));
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
@@ -663,7 +663,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnSubgroup) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)))
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_))
       .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
 
   // onObjectBegin should NOT be called
@@ -727,7 +727,7 @@ TEST_P(MoQCodecTest, CallbackReturnsContinue) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5)))
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
   EXPECT_CALL(
       objectStreamCodecCallback_,

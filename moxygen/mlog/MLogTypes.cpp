@@ -618,21 +618,35 @@ folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
 
 folly::dynamic MOQTSubgroupHeaderCreated::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["streamId"] = std::to_string(streamId);
-  obj["trackAlias"] = std::to_string(trackAlias);
-  obj["groupId"] = std::to_string(groupId);
-  obj["subgroupId"] = std::to_string(subgroupId);
-  obj["publisherPriority"] = std::to_string(publisherPriority);
+  obj["stream_id"] = streamId;
+  obj["track_alias"] = trackAlias;
+  obj["group_id"] = groupId;
+
+  if (subgroupId.hasValue()) {
+    obj["subgroup_id"] = subgroupId.value();
+  }
+
+  obj["publisher_priority"] = publisherPriority;
+  obj["contains_end_of_group"] = containsEndOfGroup;
+  obj["extensions_present"] = extensionsPresent;
+
   return obj;
 }
 
 folly::dynamic MOQTSubgroupHeaderParsed::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["streamId"] = std::to_string(streamId);
-  obj["trackAlias"] = std::to_string(trackAlias);
-  obj["groupId"] = std::to_string(groupId);
-  obj["subgroupId"] = std::to_string(subgroupId);
-  obj["publisherPriority"] = std::to_string(publisherPriority);
+  obj["stream_id"] = streamId;
+  obj["track_alias"] = trackAlias;
+  obj["group_id"] = groupId;
+
+  if (subgroupId.hasValue()) {
+    obj["subgroup_id"] = subgroupId.value();
+  }
+
+  obj["publisher_priority"] = publisherPriority;
+  obj["contains_end_of_group"] = containsEndOfGroup;
+  obj["extensions_present"] = extensionsPresent;
+
   return obj;
 }
 

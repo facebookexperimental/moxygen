@@ -245,7 +245,8 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
               res->value.trackAlias,
               curObjectHeader_.group,
               curObjectHeader_.subgroup,
-              curObjectHeader_.priority);
+              curObjectHeader_.priority,
+              subgroupOptions_);
           if (result == ParseResult::BLOCKED) {
             ingress_.trimStart(ingress_.chainLength() - cursor.totalLength());
             return ParseResult::BLOCKED;
