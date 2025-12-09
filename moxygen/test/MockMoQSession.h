@@ -1,16 +1,41 @@
 #pragma once
 
+#include <thread>
+
 #include <moxygen/MoQSession.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 
 namespace moxygen::test {
 
 // Mock MoQSession for testing relay behavior
 class MockMoQSession : public MoQSession {
  public:
+  // Constructor that accepts an external executor
   explicit MockMoQSession(std::shared_ptr<MoQExecutor> exec)
       : MoQSession(
             folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
-            exec) {}
+            exec),
+        ownsEventBase_(false) {}
+
+  // Default constructor that creates and manages its own executor
+  MockMoQSession()
+      : MoQSession(
+            folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
+            std::make_shared<MoQFollyExecutorImpl>(&evb_)),
+        ownsEventBase_(true) {
+    // Start EventBase in background thread for async operations
+    evbThread_ = std::thread([this]() { evb_.loopForever(); });
+  }
+
+  ~MockMoQSession() {
+    if (ownsEventBase_) {
+      // Stop EventBase and wait for thread
+      evb_.terminateLoopSoon();
+      if (evbThread_.joinable()) {
+        evbThread_.join();
+      }
+    }
+  }
 
   MOCK_METHOD(
       folly::coro::Task<AnnounceResult>,
@@ -41,6 +66,9 @@ class MockMoQSession : public MoQSession {
   }
 
  private:
+  folly::EventBase evb_;
+  std::thread evbThread_;
+  bool ownsEventBase_;
   uint64_t nextRequestID_{1};
 };
 
