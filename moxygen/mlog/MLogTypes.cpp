@@ -233,10 +233,30 @@ folly::dynamic MOQTAnnounceCancel::toDynamic() const {
 folly::dynamic MOQTTrackStatus::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
+  obj["request_id"] = requestId;
   auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
-  obj["trackNamespace"] =
+  obj["track_namespace"] =
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
-  obj["trackName"] = parseTrackName(trackName);
+  obj["track_name"] = parseTrackName(trackName);
+  obj["subscriber_priority"] = subscriberPriority;
+  obj["group_order"] = groupOrder;
+  obj["forward"] = forward;
+  obj["filter_type"] = filterType;
+  if (startLocation.hasValue()) {
+    obj["start_location"] = startLocation->toDynamic();
+  }
+  if (endGroup.hasValue()) {
+    obj["end_group"] = endGroup.value();
+  }
+  obj["number_of_parameters"] = numberOfParameters;
+  if (numberOfParameters > 0) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (auto& param : parameters) {
+      paramObjects.push_back(param.toDynamic());
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
+  }
   return obj;
 }
 
@@ -391,36 +411,36 @@ folly::dynamic MOQTUnannounce::toDynamic() const {
 folly::dynamic MOQTTrackStatusOk::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["requestId"] = std::to_string(requestId);
-  obj["expires"] = std::to_string(expires);
-  obj["groupOrder"] = std::to_string(groupOrder);
-  obj["contentExists"] = std::to_string(contentExists);
-  if (largestGroupId.has_value()) {
-    obj["largestGroupId"] = std::to_string(largestGroupId.value());
+  obj["request_id"] = requestId;
+  obj["track_alias"] = trackAlias;
+  obj["expires"] = expires;
+  obj["group_order"] = groupOrder;
+  obj["content_exists"] = contentExists;
+  if (largestLocation.has_value()) {
+    obj["largest_location"] = largestLocation->toDynamic();
   }
-  if (largestObjectId.has_value()) {
-    obj["largestObjectId"] = std::to_string(largestObjectId.value());
+  obj["number_of_parameters"] = numberOfParameters;
+  if (numberOfParameters > 0) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (auto& param : parameters) {
+      paramObjects.push_back(param.toDynamic());
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["numberOfParameters"] = std::to_string(numberOfParameters);
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(subscribeParameters.size());
-  for (auto& param : subscribeParameters) {
-    paramObjects.push_back(param.toDynamic());
-  }
-  obj["trackRequestParameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
 folly::dynamic MOQTTrackStatusError::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["subscribeId"] = std::to_string(requestId);
-  obj["errorCode"] = std::to_string(errorCode);
+  obj["request_id"] = requestId;
+  obj["error_code"] = errorCode;
   if (reason.hasValue()) {
     obj["reason"] = reason.value();
   }
   if (reasonBytes.hasValue()) {
-    obj["reasonBytes"] = reasonBytes.value();
+    obj["reason_bytes"] = reasonBytes.value();
   }
   return obj;
 }

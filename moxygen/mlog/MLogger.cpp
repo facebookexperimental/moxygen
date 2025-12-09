@@ -374,10 +374,26 @@ void MLogger::logTrackStatus(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTTrackStatus>();
+  baseMsg->requestId = req.requestID.value;
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.fullTrackName.trackNamespace.trackNamespace, type);
   baseMsg->trackName =
       convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
+  baseMsg->subscriberPriority = req.priority;
+  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+  baseMsg->forward = req.forward;
+  baseMsg->filterType = 0;
+  if (req.start.has_value()) {
+    MOQTLocation loc;
+    loc.group = req.start.value().group;
+    loc.object = req.start.value().object;
+    baseMsg->startLocation = loc;
+  }
+  if (req.endGroup != 0) {
+    baseMsg->endGroup = req.endGroup;
+  }
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -531,19 +547,24 @@ void MLogger::logTrackStatusOk(
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTTrackStatusOk>();
   baseMsg->requestId = req.requestID.value;
+  if (req.trackAlias.value != 0) {
+    baseMsg->trackAlias = req.trackAlias.value;
+  }
   baseMsg->expires = req.expires.count();
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
 
   if (req.largest.has_value()) {
     baseMsg->contentExists = 1;
-    baseMsg->largestGroupId = req.largest.value().group;
-    baseMsg->largestObjectId = req.largest.value().object;
+    MOQTLocation loc;
+    loc.group = req.largest.value().group;
+    loc.object = req.largest.value().object;
+    baseMsg->largestLocation = loc;
   } else {
     baseMsg->contentExists = 0;
   }
 
   baseMsg->numberOfParameters = req.params.size();
-  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
