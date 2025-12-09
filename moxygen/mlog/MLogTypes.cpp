@@ -121,20 +121,22 @@ folly::dynamic MOQTSubscribe::toDynamic() const {
 folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["requestId"] = std::to_string(requestId);
-  obj["subscribeId"] = std::to_string(subscribeId);
-  obj["startGroup"] = std::to_string(startGroup);
-  obj["startObject"] = std::to_string(startObject);
-  obj["endGroup"] = std::to_string(endGroup);
-  obj["subscriberPriority"] = std::to_string(subscriberPriority);
-  obj["numberOfParameters"] = std::to_string(numberOfParameters);
+  obj["request_id"] = requestId;
+  obj["subscription_request_id"] = subscriptionRequestId;
+  obj["start_location"] = startLocation.toDynamic();
+  obj["end_group"] = endGroup;
+  obj["subscriber_priority"] = subscriberPriority;
+  obj["forward"] = forward;
+  obj["number_of_parameters"] = numberOfParameters;
 
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(subscribeParameters.size());
-  for (auto& param : subscribeParameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (numberOfParameters > 0) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (auto& param : parameters) {
+      paramObjects.push_back(param.toDynamic());
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["subscribeParameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 

@@ -253,13 +253,14 @@ void MLogger::logSubscribeUpdate(
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
   baseMsg->requestId = req.requestID.value;
-  baseMsg->subscribeId = req.subscriptionRequestID.value;
-  baseMsg->startGroup = req.start.group;
-  baseMsg->startObject = req.start.object;
+  baseMsg->subscriptionRequestId = req.subscriptionRequestID.value;
+  baseMsg->startLocation.group = req.start.group;
+  baseMsg->startLocation.object = req.start.object;
   baseMsg->endGroup = req.endGroup;
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->subscriberPriority = req.priority;
-  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+  baseMsg->forward = req.forward.value_or(false) ? 1 : 0;
+  baseMsg->numberOfParameters = req.params.size();
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));

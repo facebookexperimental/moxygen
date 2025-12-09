@@ -162,13 +162,13 @@ class MOQTSubscribeUpdate : public MOQTBaseControlMessage {
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
-  uint64_t subscribeId{0};
-  uint64_t startGroup{};
-  uint64_t startObject{};
+  uint64_t subscriptionRequestId{0};
+  MOQTLocation startLocation;
   uint64_t endGroup{};
   uint8_t subscriberPriority{};
+  uint8_t forward{};
   uint64_t numberOfParameters{};
-  std::vector<MOQTParameter> subscribeParameters;
+  std::vector<MOQTParameter> parameters;
 };
 
 class MOQTUnsubscribe : public MOQTBaseControlMessage {
