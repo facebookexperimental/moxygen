@@ -1585,23 +1585,10 @@ void MoQFrameParser::handleRequestSpecificParams(
         subscribeUpdate.start = filter->location.value();
       }
       if (filter->endGroup.has_value()) {
-        // We're doing this because we assume that endGroup in the
-        // subscribeUpdate signifies the last group + 1.
         subscribeUpdate.endGroup = filter->endGroup.value() + 1;
-      } else {
-        // 0 means open ended
+      } else if (filter->filterType == LocationType::AbsoluteStart) {
         subscribeUpdate.endGroup = 0;
       }
-    } else {
-      // Set defaults
-      //
-      // TODO: We may want to change the SubscribeRequest struct so that
-      // it has optional fields for "start" and "endGroup", allowing us
-      // to leave it as none there. Right now, if no SUBSCRIBE_FILTER is
-      // set, we'll just set the "start" and "endGroup" to default values,
-      // which is probably not what we want.
-      subscribeUpdate.start = AbsoluteLocation{0, 0};
-      subscribeUpdate.endGroup = 0;
     }
 
     // SUBSCRIBER_PRIORITY
@@ -3963,22 +3950,27 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
 
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
-    Parameter subscriptionFilterParam;
-    subscriptionFilterParam.key =
-        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
-    // Here, we're trying to keep in line with the SubscribeUpdate usage, in
-    // that update.endGroup is the end group id + 1. If update.endGroup == 0,
-    // that means that the subscription is open ended.
-    LocationType locationType = (update.endGroup == 0)
-        ? LocationType::AbsoluteStart
-        : LocationType::AbsoluteRange;
-    folly::Optional<uint64_t> endGroup = folly::none;
-    if (update.endGroup > 0) {
-      endGroup = update.endGroup - 1;
+    if (update.start.hasValue() || update.endGroup.hasValue()) {
+      Parameter subscriptionFilterParam;
+      subscriptionFilterParam.key =
+          folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+      // Here, we're trying to keep in line with the SubscribeUpdate usage, in
+      // that update.endGroup is the end group id + 1. If update.endGroup == 0,
+      // that means that the subscription is open ended.
+      LocationType locationType =
+          (!update.endGroup.hasValue() || *update.endGroup == 0)
+          ? LocationType::AbsoluteStart
+          : LocationType::AbsoluteRange;
+
+      folly::Optional<uint64_t> endGroup = folly::none;
+      if (update.endGroup.hasValue() && *update.endGroup > 0) {
+        endGroup = *update.endGroup - 1;
+      }
+
+      subscriptionFilterParam.asSubscriptionFilter =
+          SubscriptionFilter(locationType, update.start, endGroup);
+      requestSpecificParams.push_back(subscriptionFilterParam);
     }
-    subscriptionFilterParam.asSubscriptionFilter =
-        SubscriptionFilter(locationType, update.start, endGroup);
-    requestSpecificParams.push_back(subscriptionFilterParam);
 
     if (update.priority != kDefaultPriority) {
       Parameter priorityParam;
@@ -3997,9 +3989,13 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
       requestSpecificParams.push_back(forwardParam);
     }
   } else {
-    writeVarint(writeBuf, update.start.group, size, error);
-    writeVarint(writeBuf, update.start.object, size, error);
-    writeVarint(writeBuf, update.endGroup, size, error);
+    // For draft < 15, start and endGroup are mandatory
+    XCHECK(update.start.hasValue()) << "start is required for draft < 15";
+    XCHECK(update.endGroup.hasValue()) << "endGroup is required for draft < 15";
+
+    writeVarint(writeBuf, update.start->group, size, error);
+    writeVarint(writeBuf, update.start->object, size, error);
+    writeVarint(writeBuf, *update.endGroup, size, error);
 
     writeBuf.append(&update.priority, 1);
     size += 1;

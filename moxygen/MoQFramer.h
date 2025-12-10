@@ -1016,8 +1016,8 @@ struct SubscribeRequest {
 struct SubscribeUpdate {
   RequestID requestID;
   RequestID subscriptionRequestID;
-  AbsoluteLocation start;
-  uint64_t endGroup;
+  folly::Optional<AbsoluteLocation> start;
+  folly::Optional<uint64_t> endGroup;
   uint8_t priority{kDefaultPriority};
   // Draft 15+: Optional forward field. When absent, existing forward state is
   // preserved. For earlier drafts, this is always set during parsing.

@@ -90,10 +90,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       SubscribeUpdate(
           {RequestID(0),
            RequestID(0),
-           {1, 2},
-           3,
+           AbsoluteLocation{1, 2},
+           folly::Optional<uint64_t>(3),
            255,
-           true,
+           folly::Optional<bool>(true),
            getTestTrackRequestParameters(moqFrameWriter)}));
   res = moqFrameWriter.writeSubscribeOk(
       writeBuf,

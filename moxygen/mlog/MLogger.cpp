@@ -254,9 +254,13 @@ void MLogger::logSubscribeUpdate(
   auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->subscriptionRequestId = req.subscriptionRequestID.value;
-  baseMsg->startLocation.group = req.start.group;
-  baseMsg->startLocation.object = req.start.object;
-  baseMsg->endGroup = req.endGroup;
+  if (req.start.has_value()) {
+    baseMsg->startLocation.group = req.start->group;
+    baseMsg->startLocation.object = req.start->object;
+  }
+  if (req.endGroup.has_value()) {
+    baseMsg->endGroup = req.endGroup.value();
+  }
   baseMsg->subscriberPriority = req.priority;
   baseMsg->forward = req.forward.value_or(false) ? 1 : 0;
   baseMsg->numberOfParameters = req.params.size();

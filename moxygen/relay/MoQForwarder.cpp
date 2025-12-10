@@ -506,22 +506,56 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
 
 folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
 MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
-  // TODO: Validate update subscription range conforms to SUBSCRIBE_UPDATE
-  // rules
-  // If it moved end before largest, then the next published object will
-  // generate SUBSCRIBE_DONE
-  range.start = subscribeUpdate.start;
-  range.end = {subscribeUpdate.endGroup, 0};
+  // Validation:
+  // - Start location can only increase (never decrease)
+  // - End location can increase or decrease
+  // - For bounded subscriptions (endGroup > 0), end must be >= start
+  // - Forward state is optional and only updated if explicitly provided
+
+  // Only update start if provided
+  if (subscribeUpdate.start.hasValue()) {
+    // Validate start Location must not decrease
+    if (*subscribeUpdate.start < range.start) {
+      XLOG(ERR) << "Invalid subscribeUpdate: start Location decreased from "
+                << range.start << " to " << *subscribeUpdate.start;
+      session->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      co_return folly::makeUnexpected(SubscribeUpdateError(
+          subscribeUpdate.requestID,
+          RequestErrorCode::INVALID_RANGE,
+          "Start Location decreased"));
+    }
+    range.start = *subscribeUpdate.start;
+  }
+
+  // Only update end if provided
+  if (subscribeUpdate.endGroup.hasValue()) {
+    AbsoluteLocation newEnd{*subscribeUpdate.endGroup, 0};
+
+    // Validate: for bounded end, the end must not be less than the start
+    if (*subscribeUpdate.endGroup > 0 && range.start >= newEnd) {
+      XLOG(ERR) << "Invalid subscribeUpdate: end Location " << newEnd
+                << " is less than start " << range.start;
+      session->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      co_return folly::makeUnexpected(SubscribeUpdateError(
+          subscribeUpdate.requestID,
+          RequestErrorCode::INVALID_RANGE,
+          "End Location is less than start"));
+    }
+    range.end = newEnd;
+  }
+
   auto wasForwarding = shouldForward;
   // Only update forward state if explicitly provided (per draft 15+)
   if (subscribeUpdate.forward.hasValue()) {
     shouldForward = *subscribeUpdate.forward;
   }
+
   if (shouldForward && !wasForwarding) {
     forwarder.addForwardingSubscriber();
   } else if (wasForwarding && !shouldForward) {
     forwarder.removeForwardingSubscriber();
   }
+
   co_return SubscribeUpdateOk{subscribeUpdate.requestID, {}, {}};
 }
 

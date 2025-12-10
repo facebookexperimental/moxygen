@@ -1442,8 +1442,8 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
         0); // Not set by parser for v<14
   }
 
-  EXPECT_EQ(parseResult->start.group, 10);
-  EXPECT_EQ(parseResult->start.object, 20);
+  EXPECT_EQ(parseResult->start->group, 10);
+  EXPECT_EQ(parseResult->start->object, 20);
   EXPECT_EQ(parseResult->endGroup, 30);
   EXPECT_EQ(parseResult->priority, 5);
   EXPECT_TRUE(parseResult->forward.hasValue());
@@ -1489,8 +1489,8 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
 
   EXPECT_EQ(parseResult->requestID.value, 123);
   EXPECT_EQ(parseResult->subscriptionRequestID.value, 456);
-  EXPECT_EQ(parseResult->start.group, 0);
-  EXPECT_EQ(parseResult->start.object, 0);
+  EXPECT_EQ(parseResult->start->group, 0);
+  EXPECT_EQ(parseResult->start->object, 0);
   EXPECT_EQ(parseResult->endGroup, 0);
   EXPECT_EQ(parseResult->priority, kDefaultPriority);
   // Verify forward field is NOT set (preserves existing state per draft 15+)
