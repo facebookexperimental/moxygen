@@ -267,6 +267,10 @@ class MoQSession : public Subscriber,
       groupOrder_ = groupOrder;
     }
 
+    GroupOrder getGroupOrder() const {
+      return groupOrder_;
+    }
+
     folly::Optional<uint8_t> getPublisherPriority() const {
       return publisherPriority_;
     }

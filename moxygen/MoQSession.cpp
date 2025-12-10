@@ -392,11 +392,18 @@ class StreamPublisherImpl
   }
 
   bool setGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
-    if (groupID < header_.group) {
+    // Check group direction based on the publisher's GroupOrder
+    auto groupOrder =
+        publisher_ ? publisher_->getGroupOrder() : GroupOrder::OldestFirst;
+    bool isDescending = (groupOrder == GroupOrder::NewestFirst);
+    bool groupMovedWrongDirection = isDescending
+        ? (groupID > header_.group && header_.group != 0)
+        : (groupID < header_.group);
+    if (groupMovedWrongDirection) {
       return false;
-    } else if (groupID > header_.group) {
-      // TODO(T211026595): reverse this check with group order
-      // Fetch group advanced, reset expected object
+    }
+    if (groupID != header_.group) {
+      // Group changed, reset expected object
       header_.id = std::numeric_limits<uint64_t>::max();
     }
     header_.group = groupID;
