@@ -180,25 +180,34 @@ class MOQTUnsubscribe : public MOQTBaseControlMessage {
   uint64_t subscribeId{0};
 };
 
+struct MOQTStandaloneFetch {
+  std::vector<MOQTByteString> trackNamespace;
+  MOQTByteString trackName;
+  MOQTLocation startLocation;
+  MOQTLocation endLocation;
+
+  folly::dynamic toDynamic() const;
+};
+
+struct MOQTJoiningFetch {
+  uint64_t joiningRequestId{0};
+  uint64_t joiningStart{0};
+
+  folly::dynamic toDynamic() const;
+};
+
 class MOQTFetch : public MOQTBaseControlMessage {
  public:
   MOQTFetch() {
     type = "fetch";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
   uint8_t subscriberPriority{};
   uint8_t groupOrder{};
-  uint64_t fetchType{};
-  std::vector<MOQTByteString> trackNamespace;
-  folly::Optional<MOQTByteString> trackName;
-  folly::Optional<uint64_t> startGroup;
-  folly::Optional<uint64_t> startObject;
-  folly::Optional<uint64_t> endGroup;
-  folly::Optional<uint64_t> endObject;
-  folly::Optional<uint64_t> joiningSubscribeId;
-  folly::Optional<uint64_t> precedingGroupOffset;
-  uint64_t numberOfParameters{};
+  std::string fetchType;
+  folly::Optional<MOQTStandaloneFetch> standaloneFetch;
+  folly::Optional<MOQTJoiningFetch> joiningFetch;
   std::vector<MOQTParameter> parameters;
 };
 
@@ -208,7 +217,7 @@ class MOQTFetchCancel : public MOQTBaseControlMessage {
     type = "fetch_cancel";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
 };
 
 class MOQTAnnounceOk : public MOQTBaseControlMessage {
@@ -318,13 +327,12 @@ class MOQTFetchOk : public MOQTBaseControlMessage {
     type = "fetch_ok";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
   uint8_t groupOrder{};
   uint8_t endOfTrack{};
-  uint64_t largestGroupId{};
-  uint64_t largestObjectId{};
+  MOQTLocation endLocation;
   uint64_t numberOfParameters{};
-  std::vector<MOQTParameter> subscribeParameters;
+  std::vector<MOQTParameter> parameters;
 };
 
 class MOQTFetchError : public MOQTBaseControlMessage {
@@ -333,7 +341,7 @@ class MOQTFetchError : public MOQTBaseControlMessage {
     type = "fetch_error";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
   uint64_t errorCode{};
   folly::Optional<std::string> reason;
   folly::Optional<std::string> reasonBytes;

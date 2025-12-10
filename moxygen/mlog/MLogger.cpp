@@ -281,33 +281,41 @@ void MLogger::logFetch(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetch>();
-  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
   baseMsg->subscriberPriority = req.priority;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
 
   auto [standalone, joining] = fetchType(req);
   if (joining) {
-    baseMsg->fetchType = static_cast<uint64_t>(joining->fetchType);
-    baseMsg->joiningSubscribeId =
+    if (joining->fetchType == FetchType::RELATIVE_JOINING) {
+      baseMsg->fetchType = "relative_joining";
+    } else {
+      baseMsg->fetchType = "absolute_joining";
+    }
+    MOQTJoiningFetch joiningFetchMsg;
+    joiningFetchMsg.joiningRequestId =
         std::get<JoiningFetch>(req.args).joiningRequestID.value;
-    baseMsg->precedingGroupOffset =
+    joiningFetchMsg.joiningStart =
         std::get<JoiningFetch>(req.args).joiningStart;
+    baseMsg->joiningFetch = std::move(joiningFetchMsg);
   } else if (standalone) {
-    baseMsg->fetchType = static_cast<uint64_t>(FetchType::STANDALONE);
-    baseMsg->startGroup = std::get<StandaloneFetch>(req.args).start.group;
-    baseMsg->startObject = std::get<StandaloneFetch>(req.args).start.object;
-    baseMsg->endGroup = std::get<StandaloneFetch>(req.args).end.group;
-    baseMsg->endObject = std::get<StandaloneFetch>(req.args).end.object;
-  }
-
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.fullTrackName.trackNamespace.trackNamespace, type);
-  if (req.fullTrackName.trackName != "") {
-    baseMsg->trackName =
+    baseMsg->fetchType = "standalone";
+    MOQTStandaloneFetch standaloneFetchMsg;
+    standaloneFetchMsg.trackNamespace = convertTrackNamespaceToByteStringFormat(
+        req.fullTrackName.trackNamespace.trackNamespace, type);
+    standaloneFetchMsg.trackName =
         convertTrackNameToByteStringFormat(req.fullTrackName.trackName);
+    standaloneFetchMsg.startLocation.group =
+        std::get<StandaloneFetch>(req.args).start.group;
+    standaloneFetchMsg.startLocation.object =
+        std::get<StandaloneFetch>(req.args).start.object;
+    standaloneFetchMsg.endLocation.group =
+        std::get<StandaloneFetch>(req.args).end.group;
+    standaloneFetchMsg.endLocation.object =
+        std::get<StandaloneFetch>(req.args).end.object;
+    baseMsg->standaloneFetch = std::move(standaloneFetchMsg);
   }
 
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
   logControlMessage(
@@ -318,7 +326,7 @@ void MLogger::logFetchCancel(
     const FetchCancel& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchCancel>();
-  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -473,13 +481,13 @@ void MLogger::logSubscribeError(
 
 void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchOk>();
-  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
   baseMsg->endOfTrack = req.endOfTrack;
-  baseMsg->largestGroupId = req.endLocation.group;
-  baseMsg->largestObjectId = req.endLocation.object;
+  baseMsg->endLocation.group = req.endLocation.group;
+  baseMsg->endLocation.object = req.endLocation.object;
   baseMsg->numberOfParameters = req.params.size();
-  baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
@@ -489,7 +497,7 @@ void MLogger::logFetchError(
     const FetchError& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchError>();
-  baseMsg->subscribeId = req.requestID.value;
+  baseMsg->requestId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {
