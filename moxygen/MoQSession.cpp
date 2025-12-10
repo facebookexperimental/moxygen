@@ -3657,7 +3657,7 @@ void MoQSession::onMaxRequestID(MaxRequestID maxRequestID) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   if (logger_) {
-    logger_->logMaxSubscribeId(
+    logger_->logMaxRequestId(
         maxRequestID.requestID.value, ControlMessageType::PARSED);
   }
 
@@ -3683,7 +3683,7 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   // and send a new MaxRequestID.
 
   if (logger_) {
-    logger_->logSubscribesBlocked(
+    logger_->logRequestsBlocked(
         requestsBlocked.maxRequestID.value, ControlMessageType::PARSED);
   }
 
@@ -4540,7 +4540,7 @@ void MoQSession::sendMaxRequestID(bool signalWriteLoop) {
   }
 
   if (logger_) {
-    logger_->logMaxSubscribeId(maxRequestID_);
+    logger_->logMaxRequestId(maxRequestID_);
   }
 
   if (signalWriteLoop) {

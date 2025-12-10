@@ -383,17 +383,17 @@ folly::dynamic MOQTSubscribeDone::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTMaxSubscribeId::toDynamic() const {
+folly::dynamic MOQTMaxRequestId::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["maxSubscribeId"] = std::to_string(subscribeId);
+  obj["request_id"] = requestId;
   return obj;
 }
 
-folly::dynamic MOQTSubscribesBlocked::toDynamic() const {
+folly::dynamic MOQTRequestsBlocked::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["maximumSubscribeId"] = std::to_string(maximumSubscribeId);
+  obj["maximum_request_id"] = maximumRequestId;
   return obj;
 }
 

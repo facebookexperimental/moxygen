@@ -532,16 +532,6 @@ void MLogger::logSubscribeDone(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logMaxSubscribeId(
-    const uint64_t maxRequestID,
-    ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTMaxSubscribeId>();
-  baseMsg->subscribeId = maxRequestID;
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
-}
-
 void MLogger::logUnannounce(
     const Unannounce& req,
     const MOQTByteStringType& type,
@@ -601,11 +591,21 @@ void MLogger::logTrackStatusError(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribesBlocked(
-    const uint64_t maxRequestID,
+void MLogger::logMaxRequestId(
+    const uint64_t requestId,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribesBlocked>();
-  baseMsg->maximumSubscribeId = maxRequestID;
+  auto baseMsg = std::make_unique<MOQTMaxRequestId>();
+  baseMsg->requestId = requestId;
+
+  logControlMessage(
+      controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
+}
+
+void MLogger::logRequestsBlocked(
+    const uint64_t maximumRequestId,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTRequestsBlocked>();
+  baseMsg->maximumRequestId = maximumRequestId;
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));

@@ -114,11 +114,11 @@ class MLogger {
   void logSubscribeDone(
       const SubscribeDone& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logMaxSubscribeId(
-      const uint64_t maxRequestID,
+  void logMaxRequestId(
+      const uint64_t requestId,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logSubscribesBlocked(
-      const uint64_t maxRequestID,
+  void logRequestsBlocked(
+      const uint64_t maximumRequestId,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logAnnounce(
       const Announce& req,

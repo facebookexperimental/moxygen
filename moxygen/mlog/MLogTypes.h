@@ -360,22 +360,22 @@ class MOQTSubscribeDone : public MOQTBaseControlMessage {
   folly::Optional<std::string> reasonBytes;
 };
 
-class MOQTMaxSubscribeId : public MOQTBaseControlMessage {
+class MOQTMaxRequestId : public MOQTBaseControlMessage {
  public:
-  MOQTMaxSubscribeId() {
-    type = "max_subscribe_id";
+  MOQTMaxRequestId() {
+    type = "max_request_id";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
 };
 
-class MOQTSubscribesBlocked : public MOQTBaseControlMessage {
+class MOQTRequestsBlocked : public MOQTBaseControlMessage {
  public:
-  MOQTSubscribesBlocked() {
-    type = "subscribes_blocked";
+  MOQTRequestsBlocked() {
+    type = "requests_blocked";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t maximumSubscribeId{0};
+  uint64_t maximumRequestId{0};
 };
 
 class MOQTAnnounce : public MOQTBaseControlMessage {
