@@ -604,14 +604,14 @@ struct MOQTSubgroupObjectParsed {
 
 struct MOQTFetchHeaderCreated {
   uint64_t streamId{0};
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
 
   folly::dynamic toDynamic() const;
 };
 
 struct MOQTFetchHeaderParsed {
   uint64_t streamId{0};
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
 
   folly::dynamic toDynamic() const;
 };

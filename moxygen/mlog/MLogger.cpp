@@ -956,19 +956,19 @@ void MLogger::logSubgroupObjectParsed(
 
 void MLogger::logFetchHeaderCreated(
     const uint64_t streamId,
-    const uint64_t subscribeId) {
+    const uint64_t requestId) {
   MOQTFetchHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
-  baseMsg.subscribeId = subscribeId;
+  baseMsg.requestId = requestId;
   addFetchHeaderCreatedLog(std::move(baseMsg));
 }
 
 void MLogger::logFetchHeaderParsed(
     const uint64_t streamId,
-    const uint64_t subscribeId) {
+    const uint64_t requestId) {
   MOQTFetchHeaderParsed baseMsg;
   baseMsg.streamId = streamId;
-  baseMsg.subscribeId = subscribeId;
+  baseMsg.requestId = requestId;
   addFetchHeaderParsedLog(std::move(baseMsg));
 }
 

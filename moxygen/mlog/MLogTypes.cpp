@@ -749,15 +749,15 @@ folly::dynamic MOQTSubgroupObjectParsed::toDynamic() const {
 
 folly::dynamic MOQTFetchHeaderCreated::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["streamId"] = std::to_string(streamId);
-  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["stream_id"] = streamId;
+  obj["request_id"] = requestId;
   return obj;
 }
 
 folly::dynamic MOQTFetchHeaderParsed::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["streamId"] = std::to_string(streamId);
-  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["stream_id"] = streamId;
+  obj["request_id"] = requestId;
   return obj;
 }
 
