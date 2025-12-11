@@ -111,7 +111,7 @@ class MLogger {
   void logFetchError(
       const FetchError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logSubscribeDone(
+  void logPublishDone(
       const SubscribeDone& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logMaxRequestId(

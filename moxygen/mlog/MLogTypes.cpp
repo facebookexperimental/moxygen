@@ -368,17 +368,17 @@ folly::dynamic MOQTFetchError::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTSubscribeDone::toDynamic() const {
+folly::dynamic MOQTPublishDone::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["subscribeId"] = std::to_string(subscribeId);
-  obj["statusCode"] = std::to_string(statusCode);
-  obj["streamCount"] = std::to_string(streamCount);
+  obj["request_id"] = requestId;
+  obj["status_code"] = statusCode;
+  obj["stream_count"] = streamCount;
   if (reason.hasValue()) {
     obj["reason"] = reason.value();
   }
   if (reasonBytes.hasValue()) {
-    obj["reasonBytes"] = reasonBytes.value();
+    obj["reason_bytes"] = reasonBytes.value();
   }
   return obj;
 }

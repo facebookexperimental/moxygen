@@ -3619,7 +3619,7 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
              << " reason=" << subscribeDone.reasonPhrase;
 
   if (logger_) {
-    logger_->logSubscribeDone(subscribeDone, ControlMessageType::PARSED);
+    logger_->logPublishDone(subscribeDone, ControlMessageType::PARSED);
   }
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onSubscribeDone, subscribeDone.statusCode);
@@ -4466,7 +4466,7 @@ void MoQSession::sendSubscribeDone(const SubscribeDone& subDone) {
   }
 
   if (logger_) {
-    logger_->logSubscribeDone(subDone);
+    logger_->logPublishDone(subDone);
   }
   controlWriteEvent_.signal();
   retireRequestID(/*signalWriteLoop=*/false);

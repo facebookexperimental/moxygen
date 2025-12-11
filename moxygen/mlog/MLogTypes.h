@@ -347,13 +347,13 @@ class MOQTFetchError : public MOQTBaseControlMessage {
   folly::Optional<std::string> reasonBytes;
 };
 
-class MOQTSubscribeDone : public MOQTBaseControlMessage {
+class MOQTPublishDone : public MOQTBaseControlMessage {
  public:
-  MOQTSubscribeDone() {
-    type = "subscribe_done";
+  MOQTPublishDone() {
+    type = "publish_done";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t subscribeId{0};
+  uint64_t requestId{0};
   uint64_t statusCode{};
   uint64_t streamCount{};
   folly::Optional<std::string> reason;

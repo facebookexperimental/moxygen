@@ -514,11 +514,11 @@ void MLogger::logFetchError(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeDone(
+void MLogger::logPublishDone(
     const SubscribeDone& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeDone>();
-  baseMsg->subscribeId = req.requestID.value;
+  auto baseMsg = std::make_unique<MOQTPublishDone>();
+  baseMsg->requestId = req.requestID.value;
   baseMsg->statusCode = static_cast<uint64_t>(req.statusCode);
   baseMsg->streamCount = req.streamCount;
 
