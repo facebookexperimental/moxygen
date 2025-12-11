@@ -26,14 +26,21 @@ class ObjectReceiverCallback {
   virtual void onEndOfStream() = 0;
   virtual void onError(ResetStreamErrorCode) = 0;
   virtual void onSubscribeDone(SubscribeDone done) = 0;
+  // Called when SUBSCRIBE_DONE has arrived AND all outstanding subgroup
+  // streams have closed. Only fires for subscriptions, not fetches.
+  virtual void onAllDataReceived() {}
 };
+
+class ObjectReceiver;
 
 class ObjectSubgroupReceiver : public SubgroupConsumer {
   std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
+  std::shared_ptr<ObjectReceiver> parent_{nullptr};
   StreamType streamType_;
   ObjectHeader header_;
   folly::IOBufQueue payload_{folly::IOBufQueue::cacheChainLength()};
   folly::Optional<TrackAlias> trackAlias_;
+  bool finished_{false};
 
  public:
   explicit ObjectSubgroupReceiver(
@@ -46,6 +53,10 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
         streamType_(StreamType::SUBGROUP_HEADER_SG),
         header_(groupID, subgroupID, 0, priority),
         trackAlias_(trackAlias) {}
+
+  void setParent(std::shared_ptr<ObjectReceiver> parent) {
+    parent_ = std::move(parent);
+  }
 
   void setFetchGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
     streamType_ = StreamType::FETCH_HEADER;
@@ -138,18 +149,29 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override {
     callback_->onEndOfStream();
+    notifyParentFinished();
     return folly::unit;
   }
 
   void reset(ResetStreamErrorCode error) override {
     callback_->onError(error);
+    notifyParentFinished();
   }
+
+ private:
+  void notifyParentFinished();
 };
 
-class ObjectReceiver : public TrackConsumer, public FetchConsumer {
+class ObjectReceiver : public TrackConsumer,
+                       public FetchConsumer,
+                       public std::enable_shared_from_this<ObjectReceiver> {
   std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
   folly::Optional<ObjectSubgroupReceiver> fetchPublisher_;
   folly::Optional<TrackAlias> trackAlias_;
+  // Tracking for onAllDataReceived callback (subscription mode only)
+  size_t openSubgroups_{0};
+  bool subscribeDoneDelivered_{false};
+  bool allDataCallbackSent_{false};
 
  public:
   enum Type { SUBSCRIBE, FETCH };
@@ -171,8 +193,30 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
       override {
-    return std::make_shared<ObjectSubgroupReceiver>(
+    ++openSubgroups_;
+    auto receiver = std::make_shared<ObjectSubgroupReceiver>(
         callback_, trackAlias_, groupID, subgroupID, priority);
+    receiver->setParent(shared_from_this());
+    return receiver;
+  }
+
+  // Called when a subgroup stream finishes (via endOfSubgroup or reset)
+  void onSubgroupFinished() {
+    if (openSubgroups_ > 0) {
+      --openSubgroups_;
+    }
+    maybeFireAllDataReceived();
+  }
+
+  // Fire onAllDataReceived callback once when both conditions are met:
+  // 1. SUBSCRIBE_DONE has been received
+  // 2. All subgroup streams have closed
+  void maybeFireAllDataReceived() {
+    if (!allDataCallbackSent_ && subscribeDoneDelivered_ &&
+        openSubgroups_ == 0) {
+      allDataCallbackSent_ = true;
+      callback_->onAllDataReceived();
+    }
   }
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
@@ -222,6 +266,8 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
       SubscribeDone subDone) override {
     callback_->onSubscribeDone(std::move(subDone));
+    subscribeDoneDelivered_ = true;
+    maybeFireAllDataReceived();
     return folly::unit;
   }
 
@@ -310,5 +356,14 @@ class ObjectReceiver : public TrackConsumer, public FetchConsumer {
     return folly::makeSemiFuture<uint64_t>(0);
   }
 };
+
+// Definition of ObjectSubgroupReceiver::notifyParentFinished() - needs full
+// ObjectReceiver definition
+inline void ObjectSubgroupReceiver::notifyParentFinished() {
+  if (parent_ && !finished_) {
+    finished_ = true;
+    parent_->onSubgroupFinished();
+  }
+}
 
 } // namespace moxygen
