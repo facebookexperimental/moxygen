@@ -5199,9 +5199,30 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) {
 
 void MoQSession::onUnsubscribeAnnounces(
     UnsubscribeAnnounces unsubscribeAnnounces) {
-  XLOG(DBG1) << __func__
-             << " prefix=" << unsubscribeAnnounces.trackNamespacePrefix
-             << " - ignored by simple client, sess=" << this;
+  // v15+: Use Request ID
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    if (!unsubscribeAnnounces.requestID.hasValue()) {
+      XLOG(ERR) << __func__ << " sess=" << this
+                << " - missing requestID for v15+";
+      return;
+    }
+    XLOG(DBG1) << __func__
+               << " requestID=" << unsubscribeAnnounces.requestID.value()
+               << " sess=" << this;
+    // TODO: Implement actual unsubscribe logic when SUBSCRIBE_ANNOUNCES
+    // tracking is added For now, just log and update stats
+  } else {
+    // <v15: Use Track Namespace Prefix
+    if (!unsubscribeAnnounces.trackNamespacePrefix.hasValue()) {
+      XLOG(ERR) << __func__ << " sess=" << this
+                << " - missing trackNamespacePrefix for <v15";
+      return;
+    }
+    XLOG(DBG1) << __func__ << " prefix="
+               << unsubscribeAnnounces.trackNamespacePrefix.value()
+               << " - ignored by simple client, sess=" << this;
+  }
+
   if (logger_) {
     logger_->logUnsubscribeAnnounces(
         unsubscribeAnnounces,

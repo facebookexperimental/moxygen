@@ -438,8 +438,14 @@ void MLogger::logUnsubscribeAnnounces(
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTUnsubscribeAnnounces>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespacePrefix.trackNamespace, type);
+  if (req.trackNamespacePrefix.has_value()) {
+    baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+        req.trackNamespacePrefix.value().trackNamespace, type);
+  }
+
+  if (req.requestID.has_value()) {
+    baseMsg->requestID = req.requestID->value;
+  }
 
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));

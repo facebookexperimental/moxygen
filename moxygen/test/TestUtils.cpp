@@ -221,7 +221,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            "server error"}),
       FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
   res = moqFrameWriter.writeUnsubscribeAnnounces(
-      writeBuf, UnsubscribeAnnounces({TrackNamespace({"hello"})}));
+      writeBuf,
+      UnsubscribeAnnounces({RequestID(2), TrackNamespace({"hello"})}));
   res = moqFrameWriter.writeFetch(
       writeBuf,
       Fetch(

@@ -2676,12 +2676,25 @@ MoQFrameParser::parseUnsubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   UnsubscribeAnnounces unsubscribeAnnounces;
-  auto res = parseFixedTuple(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+
+  // v15+: Parse Request ID
+  if (getDraftMajorVersion(*version_) >= 15) {
+    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!requestID) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    unsubscribeAnnounces.requestID = RequestID(requestID->first);
+  } else {
+    // <v15: Parse Track Namespace Prefix
+    auto res = parseFixedTuple(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    unsubscribeAnnounces.trackNamespacePrefix =
+        TrackNamespace(std::move(res.value()));
   }
-  unsubscribeAnnounces.trackNamespacePrefix =
-      TrackNamespace(std::move(res.value()));
+
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -4534,8 +4547,19 @@ WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
   bool error = false;
   auto sizePtr =
       writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE_ANNOUNCES, error);
-  writeTrackNamespace(
-      writeBuf, unsubscribeAnnounces.trackNamespacePrefix, size, error);
+
+  // v15+: Write Request ID
+  if (getDraftMajorVersion(*version_) >= 15) {
+    writeVarint(
+        writeBuf, unsubscribeAnnounces.requestID.value().value, size, error);
+  } else {
+    writeTrackNamespace(
+        writeBuf,
+        unsubscribeAnnounces.trackNamespacePrefix.value(),
+        size,
+        error);
+  }
+
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

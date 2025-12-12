@@ -387,6 +387,8 @@ class MOQTUnsubscribeAnnounces : public MOQTBaseControlMessage {
     type = "unsubscribe_announces";
   }
   folly::dynamic toDynamic() const override;
+  // Keeping both to maintain compatibility between v15 and v15-
+  folly::Optional<uint64_t> requestID;
   std::vector<MOQTByteString> trackNamespace;
 };
 

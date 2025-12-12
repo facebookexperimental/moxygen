@@ -96,11 +96,23 @@ class MoQRelaySession : public MoQSession {
       std::shared_ptr<Subscriber::AnnounceCallback>,
       TrackNamespace::hash>
       publisherAnnounces_;
+
+  // SUBSCRIBE_ANNOUNCES tracking
+  // RequestID → SubscribeAnnouncesHandle (v15 and +)
+  folly::F14FastMap<
+      RequestID,
+      std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
+      RequestID::hash>
+      reqIdToSubscribeAnnounces_;
+
+  // trackNamespace → SubscribeAnnouncesHandle (v15-)
+  // This is for backward compatibility. We can remove this once we
+  // drop support for v15-
   folly::F14FastMap<
       TrackNamespace,
       std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
       TrackNamespace::hash>
-      subscribeAnnounces_;
+      trackNsTosubscribeAnnounces_;
 
   // Extended PendingRequestState for announcement support
   class MoQRelayPendingRequestState;

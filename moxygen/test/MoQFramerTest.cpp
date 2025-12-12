@@ -1689,7 +1689,7 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 
   auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
   ASSERT_TRUE(alpnDraft15.hasValue());
-  EXPECT_EQ(*alpnDraft15, "moqt-15-meta-03");
+  EXPECT_EQ(*alpnDraft15, kAlpnMoqtDraft15Latest);
 }
 
 // Test class for immutable extensions feature (draft 14+)

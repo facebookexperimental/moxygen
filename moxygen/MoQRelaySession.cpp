@@ -100,7 +100,17 @@ class MoQRelaySession::SubscribeAnnouncesHandle
 
   void unsubscribeAnnounces() override {
     if (session_) {
-      session_->unsubscribeAnnounces({trackNamespacePrefix_});
+      UnsubscribeAnnounces msg;
+
+      // v15+: Send requestID
+      if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
+        msg.requestID = subscribeAnnouncesOk_->requestID;
+      } else {
+        // <v15: Send namespace
+        msg.trackNamespacePrefix = trackNamespacePrefix_;
+      }
+
+      session_->unsubscribeAnnounces(msg);
       session_.reset();
     }
   }
@@ -234,13 +244,20 @@ void MoQRelaySession::cleanup() {
   }
   subscriberAnnounces_.clear();
 
-  // Clean up subscribeAnnounces handles
-  for (auto& subAnn : subscribeAnnounces_) {
+  // Clean up subscribeAnnounces handles for both maps
+  for (auto& subAnn : reqIdToSubscribeAnnounces_) {
     if (subAnn.second) {
       subAnn.second->unsubscribeAnnounces();
     }
   }
-  subscribeAnnounces_.clear();
+  reqIdToSubscribeAnnounces_.clear();
+
+  for (auto& subAnn : trackNsTosubscribeAnnounces_) {
+    if (subAnn.second) {
+      subAnn.second->unsubscribeAnnounces();
+    }
+  }
+  trackNsTosubscribeAnnounces_.clear();
 
   // Call parent cleanup to handle base class cleanup
   MoQSession::cleanup();
@@ -579,8 +596,16 @@ MoQRelaySession::subscribeAnnounces(SubscribeAnnounces sa) {
 
 void MoQRelaySession::unsubscribeAnnounces(
     const UnsubscribeAnnounces& unsubAnn) {
-  XLOG(DBG1) << __func__ << " prefix=" << unsubAnn.trackNamespacePrefix
-             << " sess=" << this;
+  // Log the appropriate field based on what's present
+  if (unsubAnn.trackNamespacePrefix.hasValue()) {
+    XLOG(DBG1) << __func__
+               << " prefix=" << unsubAnn.trackNamespacePrefix.value()
+               << " sess=" << this;
+  } else if (unsubAnn.requestID.hasValue()) {
+    XLOG(DBG1) << __func__ << " requestID=" << unsubAnn.requestID.value()
+               << " sess=" << this;
+  }
+
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribeAnnounces);
   auto res =
       moqFrameWriter_.writeUnsubscribeAnnounces(controlWriteBuf_, unsubAnn);
@@ -647,7 +672,15 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeAnnounces(
     auto handle = std::move(subAnnResult->value());
     auto subAnnOk = handle->subscribeAnnouncesOk();
     subscribeAnnouncesOk(subAnnOk);
-    subscribeAnnounces_[subAnn.trackNamespacePrefix] = std::move(handle);
+
+    if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+      // v15 and + only: Store Request ID lookup
+      reqIdToSubscribeAnnounces_[subAnn.requestID] = std::move(handle);
+    } else {
+      // Remove when we drop <v15 support
+      trackNsTosubscribeAnnounces_[subAnn.trackNamespacePrefix] =
+          std::move(handle);
+    }
   }
 }
 
@@ -668,8 +701,6 @@ void MoQRelaySession::subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk) {
 }
 
 void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
-  XLOG(DBG1) << __func__ << " prefix=" << unsub.trackNamespacePrefix
-             << " sess=" << this;
   if (logger_) {
     logger_->logUnsubscribeAnnounces(
         unsub, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
@@ -679,17 +710,56 @@ void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
     return;
   }
-  // TODO: also search pendingRequests_?
-  auto saIt = subscribeAnnounces_.find(unsub.trackNamespacePrefix);
-  if (saIt == subscribeAnnounces_.end()) {
-    XLOG(ERR) << "Invalid unsub announce nsp=" << unsub.trackNamespacePrefix;
+
+  // Version-based lookup
+  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> handle;
+  RequestID requestID;
+  TrackNamespace ns;
+
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    // v15+: Direct lookup by Request ID
+    if (!unsub.requestID.hasValue()) {
+      XLOG(ERR) << __func__ << " missing requestID for v15+, sess=" << this;
+      return;
+    }
+    requestID = unsub.requestID.value();
+    XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
+
+    auto saIt = reqIdToSubscribeAnnounces_.find(requestID);
+    if (saIt == reqIdToSubscribeAnnounces_.end()) {
+      XLOG(ERR) << "Invalid unsub announce requestID=" << requestID;
+      return;
+    }
+    handle = saIt->second;
   } else {
-    folly::RequestContextScopeGuard guard;
-    setRequestSession();
-    saIt->second->unsubscribeAnnounces();
-    subscribeAnnounces_.erase(saIt);
-    retireRequestID(/*signalWriteLoop=*/true);
+    // <v15: Two-step lookup via namespace
+    if (!unsub.trackNamespacePrefix.hasValue()) {
+      XLOG(ERR) << __func__
+                << " missing trackNamespacePrefix for <v15, sess=" << this;
+      return;
+    }
+    ns = unsub.trackNamespacePrefix.value();
+    XLOG(DBG1) << __func__ << " prefix=" << ns << " sess=" << this;
+
+    auto nsIt = trackNsTosubscribeAnnounces_.find(ns);
+    if (nsIt == trackNsTosubscribeAnnounces_.end()) {
+      XLOG(ERR) << "Invalid unsub announce nsp=" << ns;
+      return;
+    }
+    handle = nsIt->second;
   }
+
+  // Process unsubscribe
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  handle->unsubscribeAnnounces();
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    reqIdToSubscribeAnnounces_.erase(requestID);
+  } else {
+    trackNsTosubscribeAnnounces_.erase(ns);
+  }
+
+  retireRequestID(/*signalWriteLoop=*/true);
 }
 
 // Helper methods for handling RequestOk

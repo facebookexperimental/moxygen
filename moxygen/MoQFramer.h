@@ -562,7 +562,8 @@ constexpr std::string_view kAlpnMoqtDraft15Meta00 = "moqt-15-meta-00";
 constexpr std::string_view kAlpnMoqtDraft15Meta01 = "moqt-15-meta-01";
 constexpr std::string_view kAlpnMoqtDraft15Meta02 = "moqt-15-meta-02";
 constexpr std::string_view kAlpnMoqtDraft15Meta03 = "moqt-15-meta-03";
-constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta03;
+constexpr std::string_view kAlpnMoqtDraft15Meta04 = "moqt-15-meta-04";
+constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta04;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -1221,7 +1222,9 @@ struct SubscribeAnnounces {
 // SubscribeAnnouncesError is now an alias for RequestError - see below
 
 struct UnsubscribeAnnounces {
-  TrackNamespace trackNamespacePrefix;
+  // Keeping both to maintain compatibility between v15 and v15-
+  folly::Optional<RequestID> requestID;
+  folly::Optional<TrackNamespace> trackNamespacePrefix;
 };
 
 struct RequestOk {
