@@ -10,7 +10,6 @@
 
 #include <cstdint>
 #include <string>
-#include <variant>
 #include <vector>
 #include "folly/Optional.h"
 #include "folly/io/IOBuf.h"
@@ -64,76 +63,6 @@ class MOQTParameter {
   folly::dynamic toDynamic() const;
 };
 
-// Setup Parameter Types (Section 5.2 of the mLog spec)
-enum class MOQTAliasType { DELETE, REGISTER, USE_ALIAS, USE_VALUE };
-
-struct MOQTAuthoritySetupParameter {
-  std::string name = "authority";
-  std::string value;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTAuthorizationTokenSetupParameter {
-  std::string name = "authorization_token";
-  MOQTAliasType aliasType;
-  folly::Optional<uint64_t> tokenAlias;
-  folly::Optional<uint64_t> tokenType;
-  std::unique_ptr<folly::IOBuf> tokenValue;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTPathSetupParameter {
-  std::string name = "path";
-  std::string value;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTMaxRequestIdSetupParameter {
-  std::string name = "max_request_id";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTMaxAuthTokenCacheSizeSetupParameter {
-  std::string name = "max_auth_token_cache_size";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTImplementationSetupParameter {
-  std::string name = "implementation";
-  std::string value;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTUnknownSetupParameter {
-  std::string name = "unknown";
-  uint64_t nameBytes{0};
-  folly::Optional<uint64_t> length;
-  folly::Optional<uint64_t> value;
-  std::unique_ptr<folly::IOBuf> valueBytes;
-
-  folly::dynamic toDynamic() const;
-};
-
-using MOQTSetupParameter = std::variant<
-    MOQTAuthoritySetupParameter,
-    MOQTAuthorizationTokenSetupParameter,
-    MOQTPathSetupParameter,
-    MOQTMaxRequestIdSetupParameter,
-    MOQTMaxAuthTokenCacheSizeSetupParameter,
-    MOQTImplementationSetupParameter,
-    MOQTUnknownSetupParameter>;
-
-// Helper to convert variant to dynamic
-folly::dynamic setupParameterToDynamic(const MOQTSetupParameter& param);
-
 enum MOQTByteStringType { STRING_VALUE, VALUE_BYTES, UNKNOWN_VALUE };
 struct MOQTByteString {
   std::string value;
@@ -176,7 +105,7 @@ class MOQTClientSetupMessage : public MOQTBaseControlMessage {
   uint64_t numberOfSupportedVersions{0};
   std::vector<uint64_t> supportedVersions;
   uint64_t numberOfParameters{0};
-  std::vector<MOQTSetupParameter> setupParameters;
+  std::vector<MOQTParameter> setupParameters;
 };
 
 class MOQTServerSetupMessage : public MOQTBaseControlMessage {
@@ -187,7 +116,7 @@ class MOQTServerSetupMessage : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t selectedVersion{0};
   uint64_t numberOfParameters{0};
-  std::vector<MOQTSetupParameter> setupParameters;
+  std::vector<MOQTParameter> setupParameters;
 };
 
 class MOQTGoaway : public MOQTBaseControlMessage {
