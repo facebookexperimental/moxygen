@@ -45,50 +45,24 @@ struct MOQTExtensionHeader {
   folly::dynamic toDynamic() const;
 };
 
-// Parameter Types (Section 5.3 of the mLog spec)
+// No RawInfo Value Type For Now
+enum MOQTParameterType { STRING, INT, UNKNOWN };
 
-struct MOQTAuthorizationTokenParameter {
-  std::string name = "authorization_token";
-  uint64_t aliasType{0};
-  folly::Optional<uint64_t> tokenAlias;
-  folly::Optional<uint64_t> tokenType;
-  std::unique_ptr<folly::IOBuf> tokenValue;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTDeliveryTimeoutParameter {
-  std::string name = "delivery_timeout";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTMaxCacheDurationParameter {
-  std::string name = "max_cache_duration";
-  uint64_t value{0};
+class MOQTParameter {
+ public:
+  MOQTParameter() {}
+  MOQTParameter(const MOQTParameter& other) = default;
+  MOQTParameter& operator=(const MOQTParameter& other) = default;
+  MOQTParameter(MOQTParameter&& other) noexcept = default;
+  MOQTParameter& operator=(MOQTParameter&& other) noexcept = default;
+  MOQTParameterType type = MOQTParameterType::UNKNOWN;
+  std::string name;
+  std::string stringValue;
+  uint64_t intValue{};
+  ~MOQTParameter() {}
 
   folly::dynamic toDynamic() const;
 };
-
-struct MOQTUnknownParameter {
-  std::string name = "unknown";
-  uint64_t nameBytes{0};
-  folly::Optional<uint64_t> length;
-  folly::Optional<uint64_t> value;
-  std::unique_ptr<folly::IOBuf> valueBytes;
-
-  folly::dynamic toDynamic() const;
-};
-
-using MOQTParameter = std::variant<
-    MOQTAuthorizationTokenParameter,
-    MOQTDeliveryTimeoutParameter,
-    MOQTMaxCacheDurationParameter,
-    MOQTUnknownParameter>;
-
-// Helper to convert variant to dynamic
-folly::dynamic parameterToDynamic(const MOQTParameter& param);
 
 // Setup Parameter Types (Section 5.2 of the mLog spec)
 enum MOQTAliasType { DELETE, REGISTER, USE_ALIAS, USE_VALUE };
