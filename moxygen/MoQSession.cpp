@@ -476,6 +476,10 @@ StreamPublisherImpl::StreamPublisherImpl(
       deliveryTimer_ = std::make_unique<MoQDeliveryTimer>(
           exec, *deliveryTimeout, [this](ResetStreamErrorCode errorCode) {
             if (writeHandle_) {
+              XLOG(DBG1) << "Delivery Timeout: resetting sgp=" << this
+                         << " streamID=" << writeHandle_->getID()
+                         << " with errorCode="
+                         << folly::to_underlying(errorCode);
               this->reset(errorCode);
             }
           });
@@ -562,8 +566,9 @@ void StreamPublisherImpl::setWriteHandle(
   cancelCallback_.emplace(writeHandle_->getCancelToken(), [this] {
     if (writeHandle_) {
       auto* ex = writeHandle_->exception();
-      XLOG(DBG1) << "Peer requested write termination code="
-                 << (ex ? ex->what() : "");
+      XLOG(DBG0) << "Peer requested write termination id="
+                 << writeHandle_->getID() << " code=" << (ex ? ex->what() : "")
+                 << " sgp=" << this;
       reset(ResetStreamErrorCode::CANCELLED);
     }
   });
@@ -906,8 +911,9 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
   if (auto* wh = std::exchange(writeHandle_, nullptr)) {
     wh->resetStream(uint32_t(error));
   } else {
-    // Can happen on STOP_SENDING or prior to first fetch write
-    XLOG(ERR) << "reset with no write handle: sgp=" << this;
+    // Can happen on STOP_SENDING, delivery timeout, multiple resets,
+    // or prior to first fetch write
+    XLOG(DBG4) << "reset with no write handle: sgp=" << this;
   }
   onStreamComplete();
 }
@@ -1806,7 +1812,7 @@ class MoQSession::SubscribeTrackReceiveState
     pendingSubscribeDone_ = std::move(subDone);
     if (pendingSubscribeDone_->streamCount > streamCount_) {
       // Still waiting for streams - schedule timeout
-      XLOG(DBG1) << "Waiting for streams in flight, have=" << streamCount_
+      XLOG(DBG0) << "Waiting for streams in flight, have=" << streamCount_
                  << " need=" << pendingSubscribeDone_->streamCount
                  << " trackReceiveState=" << this;
       scheduleStreamCountTimeout();
@@ -1833,6 +1839,10 @@ class MoQSession::SubscribeTrackReceiveState
     cancelStreamCountTimeout();
     if (pendingSubscribeDone_) {
       if (callback_) {
+        XLOG(DBG0)
+            << "deliverSubscribeDoneAndRemove: Delivering SUBSCRIBE_DONE to app; statusCode="
+            << folly::to_underlying(pendingSubscribeDone_->statusCode)
+            << " alias=" << alias_ << " requestID=" << requestID_;
         auto token = cancelSource_.getToken();
         auto cb = std::exchange(callback_, nullptr);
         cb->subscribeDone(std::move(*pendingSubscribeDone_));
@@ -1842,6 +1852,9 @@ class MoQSession::SubscribeTrackReceiveState
       }
       pendingSubscribeDone_.reset();
     }
+    XLOG(DBG4)
+        << "deliverSubscribeDoneAndRemove: Removing subscription state alias="
+        << alias_ << " requestID=" << requestID_;
     session_->removeSubscriptionState(alias_, requestID_);
   }
 
@@ -1851,11 +1864,13 @@ class MoQSession::SubscribeTrackReceiveState
       return;
     }
 
-    auto moqExec = session_->getExecutor();
     streamCountTimeout_ = std::make_unique<StreamCountTimeoutCallback>(*this);
-    moqExec->scheduleTimeout(
-        streamCountTimeout_.get(),
-        session_->getMoqSettings().publishDoneStreamCountTimeout);
+    auto timeout = session_->getMoqSettings().publishDoneStreamCountTimeout;
+    XLOG(DBG4) << "scheduleStreamCountTimeout: Scheduling timer duration="
+               << timeout.count() << "ms alias=" << alias_
+               << " requestID=" << requestID_;
+    auto moqExec = session_->getExecutor();
+    moqExec->scheduleTimeout(streamCountTimeout_.get(), timeout);
   }
 
   void cancelStreamCountTimeout() {
@@ -1867,7 +1882,7 @@ class MoQSession::SubscribeTrackReceiveState
 
   void streamCountTimeoutExpired() {
     XCHECK(pendingSubscribeDone_) << "Why is there no pendingSubscribeDone_";
-    XLOG(DBG1) << "Delivering SUBSCRIBE_DONE after timeout, have="
+    XLOG(DBG0) << "Delivering SUBSCRIBE_DONE after timeout, have="
                << streamCount_
                << " expected=" << pendingSubscribeDone_->streamCount;
     deliverSubscribeDoneAndRemove();
@@ -2552,6 +2567,9 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       folly::Optional<uint8_t> priority,
       const SubgroupOptions& options) override {
     trackAlias_ = alias; // Store for use in onObjectBegin logging
+    XLOG(DBG1) << "onSubgroup: alias=" << trackAlias_ << " group=" << group
+               << " subgroup=" << subgroup << " priority="
+               << (priority.hasValue() ? std::to_string(*priority) : "none");
 
     // Call lambda to get state
     auto subscribeState =
@@ -2856,8 +2874,10 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       rhToken, [&readHandle]() { readHandle = nullptr; });
 
   // Scope guard to unify stopSending on exit if readHandle is still valid
-  auto stopSendingGuard = folly::makeGuard([&readHandle]() {
+  auto stopSendingGuard = folly::makeGuard([&readHandle, sess = this]() {
     if (readHandle) {
+      XLOG(DBG0) << "Sending STOP_SENDING id=" << readHandle->getID()
+                 << " sess=" << sess;
       readHandle->stopSending(0);
       readHandle = nullptr;
     }

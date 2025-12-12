@@ -98,7 +98,7 @@ void MoQDeliveryTimer::cancelAllTimers() {
 }
 
 void ObjectTimerCallback::timeoutExpired() noexcept {
-  XLOG(DBG6) << "MoQDeliveryTimer::timeoutExpired: ObjectID " << objectId_
+  XLOG(DBG0) << "MoQDeliveryTimer::timeoutExpired: ObjectID " << objectId_
              << " timed out.";
   if (owner_.streamResetCallback_) {
     owner_.streamResetCallback_(ResetStreamErrorCode::DELIVERY_TIMEOUT);
