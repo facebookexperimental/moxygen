@@ -2925,6 +2925,22 @@ TEST_P(MoQFramerV15PlusTest, FetchExplicitGroupOrder) {
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
 }
 
+TEST_P(MoQFramerV15PlusTest, ParseFetchObjectHeaderCursorUnderflow) {
+  auto emptyBuf = folly::IOBuf::create(0);
+  folly::io::Cursor cursor(emptyBuf.get());
+
+  ObjectHeader headerTemplate;
+  // Pass length = 1 so remainingLength >= 1 check passes,
+  // but cursor has no data to actually read
+  size_t length = 1;
+  auto parseResult =
+      parser_.parseFetchObjectHeader(cursor, length, headerTemplate);
+
+  // Should return PARSE_UNDERFLOW, not crash
+  EXPECT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV15PlusTest,
     MoQFramerV15PlusTest,

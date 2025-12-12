@@ -1022,7 +1022,7 @@ MoQFrameParser::parseFetchObjectDraft15(
   ObjectHeader objectHeader = headerTemplate;
 
   // Read Serialization Flags byte
-  if (remainingLength < 1) {
+  if (remainingLength < 1 || !cursor.canAdvance(1)) {
     XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on flags";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
