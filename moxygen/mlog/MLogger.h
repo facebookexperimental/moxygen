@@ -29,11 +29,11 @@ class MLogger {
       uint64_t numberOfSupportedVersions,
       std::vector<uint64_t> supportedVersions,
       uint64_t numberOfParameters,
-      std::vector<MOQTSetupParameter> params);
+      std::vector<MOQTParameter> params);
   MOQTServerSetupMessage createServerSetupControlMessage(
       uint64_t selectedVersion,
       uint64_t number_of_parameters,
-      std::vector<MOQTSetupParameter> params);
+      std::vector<MOQTParameter> params);
 
   void addControlMessageCreatedLog(MOQTControlMessageCreated req);
   void addControlMessageParsedLog(MOQTControlMessageParsed req);
@@ -221,8 +221,6 @@ class MLogger {
       const std::vector<std::string>& ns,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
   std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
-      const SetupParameters& params);
-  std::vector<MOQTSetupParameter> convertSetupParamsToMoQTSetupParams(
       const SetupParameters& params);
   bool isHexstring(const std::string& s);
   void logControlMessage(
