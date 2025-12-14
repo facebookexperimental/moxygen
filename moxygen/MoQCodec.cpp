@@ -164,8 +164,10 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
       payload = ingress_.move();
       cursor = folly::io::Cursor(&empty);
     } else {
-      payload = ingress_.split(size);
-      XCHECK(!ingress_.empty());
+      if (size > 0) {
+        payload = ingress_.split(size);
+      }
+      // Reset cursor after split (or after trimStart if size == 0)
       cursor = folly::io::Cursor(ingress_.front());
     }
     return payload;
@@ -286,9 +288,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
 
           std::unique_ptr<folly::IOBuf> payload;
           auto chunkLen = availableForObject(*curObjectHeader_.length);
-          if (chunkLen > 0) {
-            payload = splitAndResetCursor(chunkLen);
-          }
+          payload = splitAndResetCursor(chunkLen);
           auto endOfObject = chunkLen == *curObjectHeader_.length;
           if (endOfStream && !endOfObject) {
             XLOG(ERR) << "End of stream before end of object";
@@ -365,9 +365,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         XLOG(DBG2) << "Parsing object with length, need="
                    << *curObjectHeader_.length;
         auto chunkLen = availableForObject(*curObjectHeader_.length);
-        if (chunkLen > 0) {
-          payload = splitAndResetCursor(chunkLen);
-        }
+        payload = splitAndResetCursor(chunkLen);
         *curObjectHeader_.length -= chunkLen;
         if (endOfStream && *curObjectHeader_.length != 0) {
           XLOG(ERR) << "End of stream before end of object remaining length="

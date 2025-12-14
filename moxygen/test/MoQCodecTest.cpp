@@ -742,6 +742,61 @@ TEST_P(MoQCodecTest, CallbackReturnsContinue) {
   EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
 }
 
+// Test zero-length status object followed by normal object
+// This exposes a cursor invalidation bug where trimStart() invalidates the
+// cursor, but when chunkLen == 0, splitAndResetCursor() isn't called,
+// leaving the cursor stale for the next object parse.
+TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 0, 5),
+      SubgroupIDFormat::Present,
+      false);
+
+  // Write a zero-length status object (valid zero-length case)
+  ObjectHeader statusObj(0, 0, 4, 0);
+  statusObj.status = ObjectStatus::OBJECT_NOT_EXIST;
+  statusObj.length = 0;
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, StreamType::SUBGROUP_HEADER_SG, statusObj, nullptr);
+
+  // Write another object with non-zero length
+  ObjectHeader normalObj(0, 0, 5, 0, 5);
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG,
+      normalObj,
+      folly::IOBuf::copyBuffer("hello"));
+
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+
+  // Expect onObjectStatus for the zero-length status object
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectStatus(
+          2,
+          3,
+          4,
+          folly::Optional<uint8_t>(5),
+          ObjectStatus::OBJECT_NOT_EXIST,
+          testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  // Expect onObjectBegin for the normal object (this would crash without the
+  // fix)
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(2, 3, 5, testing::_, 5, testing::_, true, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
