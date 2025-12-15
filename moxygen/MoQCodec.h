@@ -187,8 +187,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t subgroup,
         uint64_t objectID,
         folly::Optional<uint8_t> priority,
-        ObjectStatus status,
-        Extensions extensions) = 0;
+        ObjectStatus status) = 0;
     virtual ParseResult onObjectPayload(
         Payload payload,
         bool objectComplete) = 0;

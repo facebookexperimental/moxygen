@@ -512,12 +512,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
             Extensions(extensions, {}),
             false);
       } else {
-        callback->endOfGroup(
-            groupNum,
-            0 /* subgroupId */,
-            objectId,
-            Extensions(extensions, {}),
-            false);
+        callback->endOfGroup(groupNum, 0 /* subgroupId */, objectId, false);
       }
 
       // Set Delay Based on Object Frequency
@@ -567,8 +562,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
             Extensions(extensions, {}),
             false);
       } else {
-        callback->endOfGroup(
-            groupNum, objectId, objectId, Extensions(extensions, {}), false);
+        callback->endOfGroup(groupNum, objectId, objectId, false);
       }
 
       // Set Delay Based on Object Frequency
@@ -624,8 +618,7 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
             Extensions(extensions, {}),
             false);
       } else {
-        callback->endOfGroup(
-            groupNum, subgroupId, objectId, Extensions(extensions, {}), false);
+        callback->endOfGroup(groupNum, subgroupId, objectId, false);
       }
 
       // Set Delay Based on Object Frequency

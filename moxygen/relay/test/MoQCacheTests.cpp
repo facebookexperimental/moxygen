@@ -34,7 +34,7 @@ class MoQCacheTest : public ::testing::Test {
     ON_CALL(*trackConsumer_, datagram(_, _)).WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, objectStream(_, _))
         .WillByDefault(Return(folly::unit));
-    ON_CALL(*trackConsumer_, groupNotExists(_, _, _, _))
+    ON_CALL(*trackConsumer_, groupNotExists(_, _, _))
         .WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, subscribeDone(_))
         .WillByDefault(Return(folly::unit));
@@ -47,7 +47,7 @@ class MoQCacheTest : public ::testing::Test {
     auto subgroupConsumer = std::make_shared<NiceMock<MockSubgroupConsumer>>();
     ON_CALL(*subgroupConsumer, object(_, _, _, _))
         .WillByDefault(Return(folly::unit));
-    ON_CALL(*subgroupConsumer, objectNotExists(_, _, _))
+    ON_CALL(*subgroupConsumer, objectNotExists(_, _))
         .WillByDefault(Return(folly::unit));
     ON_CALL(*subgroupConsumer, endOfSubgroup())
         .WillByDefault(Return(folly::unit));
@@ -56,9 +56,9 @@ class MoQCacheTest : public ::testing::Test {
         .WillByDefault(Return(folly::unit));
     ON_CALL(*subgroupConsumer, objectPayload(_, _))
         .WillByDefault(Return(ObjectPublishStatus{}));
-    ON_CALL(*subgroupConsumer, endOfGroup(_, _))
+    ON_CALL(*subgroupConsumer, endOfGroup(_))
         .WillByDefault(Return(folly::unit));
-    ON_CALL(*subgroupConsumer, endOfTrackAndGroup(_, _))
+    ON_CALL(*subgroupConsumer, endOfTrackAndGroup(_))
         .WillByDefault(Return(folly::unit));
     ON_CALL(*subgroupConsumer, reset(_)).WillByDefault(Return());
     return subgroupConsumer;
@@ -227,13 +227,12 @@ class MoQCacheTest : public ::testing::Test {
     while (current.group >= end.group) {
       if (current.object >= objectsPerGroup * objectIncrement) {
         if (endOfGroup && current.group != start.group) {
-          EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _, _))
-              .WillOnce(
-                  [current](auto group, auto, auto object, const auto&, auto) {
-                    EXPECT_EQ(group, current.group);
-                    EXPECT_EQ(object, current.object);
-                    return folly::unit;
-                  })
+          EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _))
+              .WillOnce([current](auto group, auto, auto object, auto) {
+                EXPECT_EQ(group, current.group);
+                EXPECT_EQ(object, current.object);
+                return folly::unit;
+              })
               .RetiresOnSaturation();
         }
 
@@ -285,8 +284,8 @@ class MoQCacheTest : public ::testing::Test {
     while (start < end) {
       if (start.object >= objectsPerGroup * objectIncrement) {
         if (endOfGroup) {
-          EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _, _))
-              .WillOnce([start](auto group, auto, auto object, auto, auto) {
+          EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _))
+              .WillOnce([start](auto group, auto, auto object, auto) {
                 EXPECT_EQ(group, start.group);
                 EXPECT_EQ(object, start.object);
                 return folly::unit;
@@ -501,7 +500,7 @@ CO_TEST_F(MoQCacheTest, TestFetchEndBeyondEndOfTrack) {
       ObjectHeader(0, 0, 5, 0, ObjectStatus::END_OF_TRACK), nullptr);
   writeback.reset();
   expectFetchObjects({0, 0}, {0, 5}, false);
-  EXPECT_CALL(*consumer_, endOfTrackAndGroup(0, 0, 5, _))
+  EXPECT_CALL(*consumer_, endOfTrackAndGroup(0, 0, 5))
       .WillOnce(Return(folly::unit));
 
   auto res =
@@ -727,7 +726,7 @@ CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExistObjectsAndGroups) {
   writeback->groupNotExists(1, 0, 0);
   writeback.reset();
 
-  EXPECT_CALL(*consumer_, endOfGroup(0, 0, 1, _, false))
+  EXPECT_CALL(*consumer_, endOfGroup(0, 0, 1, false))
       .WillOnce(Return(folly::unit));
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
   auto res =
@@ -849,7 +848,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesObjectNotExist) {
       .via(co_await folly::coro::co_current_executor)
       .thenTry([this](auto) {
         // Serve OBJECT_NOT_EXIST for the first object
-        upstreamFetchConsumer_->objectNotExists(0, 0, 1, noExtensions(), true);
+        upstreamFetchConsumer_->objectNotExists(0, 0, 1, true);
       });
 
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
@@ -868,7 +867,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupNotExist) {
       .via(co_await folly::coro::co_current_executor)
       .thenTry([this](auto) {
         // Serve GROUP_NOT_EXIST for the second group
-        upstreamFetchConsumer_->groupNotExists(1, 0, noExtensions(), true);
+        upstreamFetchConsumer_->groupNotExists(1, 0, true);
       });
 
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
@@ -894,7 +893,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesEndOfTrackAndGroup) {
 
   // Expect the consumer to handle the served statuses
   EXPECT_CALL(*consumer_, checkpoint());
-  EXPECT_CALL(*consumer_, endOfTrackAndGroup(2, 0, 0, _))
+  EXPECT_CALL(*consumer_, endOfTrackAndGroup(2, 0, 0))
       .WillOnce(Return(folly::unit));
   // Perform the fetch
   auto res =

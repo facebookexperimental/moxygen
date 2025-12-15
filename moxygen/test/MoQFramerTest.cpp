@@ -234,8 +234,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r20a = parser_.parseSubgroupObjectHeader(
         cursor, cursor.totalLength(), res->value.objectHeader, options);
     testUnderflowResult(r20a);
-    EXPECT_EQ(
-        r20a->value.extensions, Extensions(test::getTestExtensions(), {}));
+    EXPECT_EQ(r20a->value.extensions, Extensions({}, {}));
     EXPECT_EQ(r20a->value.status, ObjectStatus::END_OF_TRACK);
 
     skip(cursor, 1);
@@ -267,8 +266,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r23a =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23a);
-    EXPECT_EQ(
-        r23a->value.extensions, Extensions(test::getTestExtensions(), {}));
+    EXPECT_EQ(r23a->value.extensions, Extensions({}, {}));
     EXPECT_EQ(r23a->value.status, ObjectStatus::END_OF_GROUP);
   }
 
@@ -587,13 +585,16 @@ TEST_P(MoQFramerTest, testParseDatagramObjectHeader2) {
       3,
       4,
       5,
-      ObjectStatus::END_OF_GROUP,
-      Extensions(test::getTestExtensions(), {}));
-  writer_.writeDatagramObject(writeBuf, TrackAlias(1), obj, nullptr);
+      ObjectStatus::NORMAL,
+      Extensions(test::getTestExtensions(), {}),
+      11);
+  writer_.writeDatagramObject(
+      writeBuf, TrackAlias(1), obj, folly::IOBuf::copyBuffer("hello world"));
 
-  auto pobj = testUnderflowDatagramHelper(writeBuf, true, true, 0);
+  auto pobj = testUnderflowDatagramHelper(writeBuf, false, true, 11);
   EXPECT_EQ(pobj.id, 4);
-  EXPECT_EQ(pobj.status, ObjectStatus::END_OF_GROUP);
+  EXPECT_EQ(pobj.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(pobj.length, 11);
 }
 
 TEST_P(MoQFramerTest, testParseDatagramObjectHeader3) {
@@ -1976,6 +1977,205 @@ INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
     ::testing::Values(kVersionDraft14, kVersionDraft15));
+
+TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::END_OF_GROUP,
+      Extensions(test::getTestExtensions(), {}));
+
+  auto writeResult =
+      writer_.writeDatagramObject(writeBuf, TrackAlias(1), obj, nullptr);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto datagramType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(datagramType.has_value());
+
+  auto length = cursor.totalLength();
+  auto parseResult = parser_.parseDatagramObjectHeader(
+      cursor, DatagramType(datagramType->first), length);
+
+  if (GetParam() >= kVersionDraft15) {
+    EXPECT_TRUE(parseResult.hasError());
+    EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
+        << "Datagram with extensions and non-NORMAL status should return "
+           "PROTOCOL_VIOLATION in v15+";
+  } else {
+    EXPECT_TRUE(parseResult.hasValue())
+        << "Datagram with extensions and non-NORMAL status should succeed in "
+           "v14";
+  }
+}
+
+TEST_P(MoQFramerTest, SubgroupObjectWithExtensionsAndNonNormalStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::END_OF_TRACK,
+      Extensions(test::getTestExtensions(), {}));
+
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Present, true, false);
+  auto headerResult = writer_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+  EXPECT_TRUE(headerResult.hasValue());
+
+  auto objResult =
+      writer_.writeStreamObject(writeBuf, streamType, obj, nullptr);
+  EXPECT_TRUE(objResult.hasValue());
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(parsedStreamType.has_value());
+
+  auto sgOptions =
+      getSubgroupOptions(GetParam(), StreamType(parsedStreamType->first));
+  auto headerParseResult =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
+  EXPECT_TRUE(headerParseResult.hasValue());
+
+  auto objParseResult = parser_.parseSubgroupObjectHeader(
+      cursor,
+      cursor.totalLength(),
+      headerParseResult->value.objectHeader,
+      sgOptions);
+
+  if (GetParam() >= kVersionDraft15) {
+    EXPECT_TRUE(objParseResult.hasError());
+    EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
+        << "Subgroup object with extensions and non-NORMAL status should "
+           "return PROTOCOL_VIOLATION in v15+";
+  } else {
+    EXPECT_TRUE(objParseResult.hasValue())
+        << "Subgroup object with extensions and non-NORMAL status should "
+           "succeed in v14";
+  }
+}
+
+TEST_P(MoQFramerTest, FetchObjectWithExtensionsAndNonNormalStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  auto headerResult = writer_.writeFetchHeader(writeBuf, RequestID(1));
+  EXPECT_TRUE(headerResult.hasValue());
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::OBJECT_NOT_EXIST,
+      Extensions(test::getTestExtensions(), {}));
+
+  auto objResult = writer_.writeStreamObject(
+      writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+  EXPECT_TRUE(objResult.hasValue());
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(parsedStreamType.has_value());
+  EXPECT_EQ(
+      parsedStreamType->first, folly::to_underlying(StreamType::FETCH_HEADER));
+
+  auto fetchHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
+  EXPECT_TRUE(fetchHeaderResult.hasValue());
+
+  ObjectHeader headerTemplate;
+  auto objParseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+
+  if (GetParam() >= kVersionDraft15) {
+    EXPECT_TRUE(objParseResult.hasError());
+    EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
+        << "Fetch object with extensions and non-NORMAL status should return "
+           "PROTOCOL_VIOLATION in v15+";
+  } else {
+    EXPECT_TRUE(objParseResult.hasValue())
+        << "Fetch object with extensions and non-NORMAL status should succeed "
+           "in v14";
+  }
+}
+
+TEST_P(MoQFramerTest, DatagramWithExtensionsAndNormalStatusSucceeds) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::NORMAL,
+      Extensions(test::getTestExtensions(), {}),
+      7); // length
+
+  // Write the datagram with payload
+  auto writeResult = writer_.writeDatagramObject(
+      writeBuf, TrackAlias(1), obj, folly::IOBuf::copyBuffer("payload"));
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto datagramType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(datagramType.has_value());
+
+  auto length = cursor.totalLength();
+  auto parseResult = parser_.parseDatagramObjectHeader(
+      cursor, DatagramType(datagramType->first), length);
+
+  EXPECT_TRUE(parseResult.hasValue())
+      << "Datagram with extensions and NORMAL status should parse successfully";
+  EXPECT_EQ(parseResult->objectHeader.status, ObjectStatus::NORMAL);
+  EXPECT_FALSE(parseResult->objectHeader.extensions.empty());
+}
+
+TEST_P(MoQFramerTest, DatagramWithNonNormalStatusNoExtensionsSucceeds) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::END_OF_GROUP,
+      Extensions({}, {}));
+
+  auto writeResult =
+      writer_.writeDatagramObject(writeBuf, TrackAlias(1), obj, nullptr);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto datagramType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(datagramType.has_value());
+
+  auto length = cursor.totalLength();
+  auto parseResult = parser_.parseDatagramObjectHeader(
+      cursor, DatagramType(datagramType->first), length);
+
+  EXPECT_TRUE(parseResult.hasValue())
+      << "Datagram with non-NORMAL status but no extensions should parse "
+         "successfully";
+  EXPECT_EQ(parseResult->objectHeader.status, ObjectStatus::END_OF_GROUP);
+  EXPECT_TRUE(parseResult->objectHeader.extensions.empty());
+}
 
 // ALPN Version Negotiation Tests (version >= 15)
 TEST(MoQFramerTest, ParseClientSetupWithAlpnVersion15NoVersionArray) {

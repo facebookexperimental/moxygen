@@ -219,12 +219,7 @@ TEST_P(MoQCodecTest, AllObject) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_,
-          testing::_))
+          testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(2);
   objectStreamCodec_.onIngress(std::move(allMsgs), true);
 }
@@ -320,8 +315,7 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
           3,
           4,
           folly::Optional<uint8_t>(5),
-          ObjectStatus::OBJECT_NOT_EXIST,
-          _));
+          ObjectStatus::OBJECT_NOT_EXIST));
   EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
   // extra coverage of underflow in header
   objectStreamCodec_.onIngress(writeBuf.split(3), false);
@@ -419,7 +413,7 @@ TEST_P(MoQCodecTest, Fetch) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          3, 3, 0, folly::Optional<uint8_t>(5), ObjectStatus::END_OF_TRACK, _));
+          3, 3, 0, folly::Optional<uint8_t>(5), ObjectStatus::END_OF_TRACK));
   // object after terminal status
   EXPECT_CALL(
       objectStreamCodecCallback_,
@@ -631,12 +625,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2,
-          3,
-          4,
-          folly::Optional<uint8_t>(5),
-          ObjectStatus::OBJECT_NOT_EXIST,
-          testing::_))
+          2, 3, 4, folly::Optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
       .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
 
   // Second object should NOT be parsed

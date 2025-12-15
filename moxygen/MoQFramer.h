@@ -1537,6 +1537,9 @@ class MoQFrameParser {
       size_t& length,
       ObjectHeader& objectHeader) const noexcept;
 
+  bool isValidStatusForExtensions(
+      const ObjectHeader& objectHeader) const noexcept;
+
   folly::Expected<folly::Unit, ErrorCode> parseTrackRequestParams(
       folly::io::Cursor& cursor,
       size_t& length,

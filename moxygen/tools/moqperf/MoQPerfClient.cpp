@@ -36,7 +36,6 @@ MoQPerfClientFetchConsumer::objectNotExists(
     uint64_t groupID,
     uint64_t subgroupID,
     uint64_t objectID,
-    Extensions extensions,
     bool finFetch) {
   return folly::Unit();
 }
@@ -45,7 +44,6 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQPerfClientFetchConsumer::groupNotExists(
     uint64_t groupID,
     uint64_t subgroupID,
-    Extensions extensions,
     bool finFetch) {
   return folly::Unit();
 }
@@ -74,7 +72,6 @@ MoQPerfClientFetchConsumer::endOfGroup(
     uint64_t groupID,
     uint64_t subgroupID,
     uint64_t objectID,
-    Extensions extensions,
     bool finFetch) {
   return folly::Unit();
 }
@@ -83,8 +80,7 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQPerfClientFetchConsumer::endOfTrackAndGroup(
     uint64_t groupID,
     uint64_t subgroupID,
-    uint64_t objectID,
-    Extensions extensions) {
+    uint64_t objectID) {
   return folly::Unit();
 }
 

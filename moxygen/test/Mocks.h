@@ -77,12 +77,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(
       MoQCodec::ParseResult,
       onObjectStatus,
-      (uint64_t,
-       uint64_t,
-       uint64_t,
-       folly::Optional<uint8_t>,
-       ObjectStatus,
-       Extensions));
+      (uint64_t, uint64_t, uint64_t, folly::Optional<uint8_t>, ObjectStatus));
   MOCK_METHOD(MoQCodec::ParseResult, onObjectPayload, (Payload, bool));
   MOCK_METHOD(void, onEndOfStream, ());
 };
@@ -116,10 +111,7 @@ class MockTrackConsumer : public TrackConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       groupNotExists,
-      (uint64_t groupID,
-       uint64_t subgroupID,
-       Priority priority,
-       Extensions ext),
+      (uint64_t groupID, uint64_t subgroupID, Priority priority),
       (override));
 
   MOCK_METHOD(
@@ -146,7 +138,7 @@ class MockFetchConsumer : public FetchConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       objectNotExists,
-      (uint64_t, uint64_t, uint64_t, Extensions, bool),
+      (uint64_t, uint64_t, uint64_t, bool),
       (override));
 
   MOCK_METHOD(void, checkpoint, (), (override));
@@ -166,19 +158,19 @@ class MockFetchConsumer : public FetchConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       groupNotExists,
-      (uint64_t groupID, uint64_t subgroupID, Extensions ext, bool finFetch),
+      (uint64_t groupID, uint64_t subgroupID, bool finFetch),
       (override));
 
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       endOfGroup,
-      (uint64_t, uint64_t, uint64_t, Extensions, bool),
+      (uint64_t, uint64_t, uint64_t, bool),
       (override));
 
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       endOfTrackAndGroup,
-      (uint64_t, uint64_t, uint64_t, Extensions),
+      (uint64_t, uint64_t, uint64_t),
       (override));
 
   MOCK_METHOD(
@@ -206,7 +198,7 @@ class MockSubgroupConsumer : public SubgroupConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       objectNotExists,
-      (uint64_t, Extensions, bool),
+      (uint64_t, bool),
       (override));
   MOCK_METHOD(void, checkpoint, (), (override));
   MOCK_METHOD(
@@ -222,12 +214,12 @@ class MockSubgroupConsumer : public SubgroupConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       endOfGroup,
-      (uint64_t, Extensions),
+      (uint64_t),
       (override));
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       endOfTrackAndGroup,
-      (uint64_t, Extensions),
+      (uint64_t),
       (override));
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),

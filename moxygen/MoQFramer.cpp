@@ -872,6 +872,9 @@ MoQFrameParser::parseDatagramObjectHeader(
     objectHeader.status = ObjectStatus::NORMAL;
     objectHeader.length = length;
   }
+  if (!isValidStatusForExtensions(objectHeader)) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   return DatagramObjectHeader(
       TrackAlias(trackAlias->first), std::move(objectHeader));
 }
@@ -1005,6 +1008,9 @@ MoQFrameParser::parseFetchObjectHeaderLegacy(
         << "parseFetchObjectHeaderLegacy: error in parseObjectStatusAndLength: "
         << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
+  }
+  if (!isValidStatusForExtensions(objectHeader)) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
   length = remainingLength;
@@ -1162,6 +1168,9 @@ MoQFrameParser::parseFetchObjectDraft15(
         << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
   }
+  if (!isValidStatusForExtensions(objectHeader)) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
 
   // Update context for next object
   previousFetchGroup_ = objectHeader.group;
@@ -1205,6 +1214,18 @@ MoQFrameParser::parseObjectStatusAndLength(
   }
 
   return folly::unit;
+}
+
+bool MoQFrameParser::isValidStatusForExtensions(
+    const ObjectHeader& objectHeader) const noexcept {
+  if (version_.has_value() && *version_ >= kVersionDraft15 &&
+      objectHeader.status != ObjectStatus::NORMAL &&
+      !objectHeader.extensions.empty()) {
+    XLOG(ERR) << "Extensions present on non-NORMAL status object: status="
+              << folly::to_underlying(objectHeader.status);
+    return false;
+  }
+  return true;
 }
 
 folly::Expected<MoQFrameParser::ParseResultAndLength<ObjectHeader>, ErrorCode>
@@ -1283,6 +1304,9 @@ MoQFrameParser::parseSubgroupObjectHeader(
         << "parseSubgroupObjectHeader: error in parseObjectStatusAndLength: "
         << folly::to_underlying(res.error());
     return folly::makeUnexpected(res.error());
+  }
+  if (!isValidStatusForExtensions(objectHeader)) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return ParseResultAndLength<ObjectHeader>{objectHeader, startLength - length};
 }

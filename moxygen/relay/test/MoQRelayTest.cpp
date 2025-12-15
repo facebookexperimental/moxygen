@@ -315,10 +315,10 @@ class MoQRelayTest : public ::testing::Test {
     ON_CALL(*sg, endOfSubgroup())
         .WillByDefault(
             Return(folly::makeExpected<MoQPublishError>(folly::unit)));
-    ON_CALL(*sg, endOfGroup(_, _))
+    ON_CALL(*sg, endOfGroup(_))
         .WillByDefault(
             Return(folly::makeExpected<MoQPublishError>(folly::unit)));
-    ON_CALL(*sg, endOfTrackAndGroup(_, _))
+    ON_CALL(*sg, endOfTrackAndGroup(_))
         .WillByDefault(
             Return(folly::makeExpected<MoQPublishError>(folly::unit)));
     return sg;

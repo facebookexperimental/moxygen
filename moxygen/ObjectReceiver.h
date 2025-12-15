@@ -84,11 +84,10 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
       uint64_t objectID,
-      Extensions ext,
       bool /*finSubgroup*/) override {
     header_.id = objectID;
     header_.status = ObjectStatus::OBJECT_NOT_EXIST;
-    header_.extensions = std::move(ext);
+    header_.extensions = noExtensions();
     callback_->onObjectStatus(trackAlias_, header_);
     return folly::unit;
   }
@@ -128,21 +127,19 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t endOfGroupObjectID,
-      Extensions ext) override {
+      uint64_t endOfGroupObjectID) override {
     header_.id = endOfGroupObjectID;
     header_.status = ObjectStatus::END_OF_GROUP;
-    header_.extensions = std::move(ext);
+    header_.extensions = noExtensions();
     callback_->onObjectStatus(trackAlias_, header_);
     return folly::unit;
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t endOfTrackObjectID,
-      Extensions ext) override {
+      uint64_t endOfTrackObjectID) override {
     header_.id = endOfTrackObjectID;
     header_.status = ObjectStatus::END_OF_TRACK;
-    header_.extensions = std::move(ext);
+    header_.extensions = noExtensions();
     callback_->onObjectStatus(trackAlias_, header_);
     return folly::unit;
   }
@@ -239,11 +236,8 @@ class ObjectReceiver : public TrackConsumer,
     return folly::unit;
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t groupID,
-      uint64_t subgroup,
-      Priority pri,
-      Extensions ext) override {
+  folly::Expected<folly::Unit, MoQPublishError>
+  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
     callback_->onObjectStatus(
         trackAlias_,
         ObjectHeader(
@@ -252,7 +246,7 @@ class ObjectReceiver : public TrackConsumer,
             0,
             pri,
             ObjectStatus::END_OF_GROUP,
-            std::move(ext)));
+            noExtensions()));
     return folly::unit;
   }
 
@@ -287,20 +281,16 @@ class ObjectReceiver : public TrackConsumer,
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
-      Extensions extensions,
       bool finFetch) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
-    return fetchPublisher_->objectNotExists(
-        objectID, std::move(extensions), finFetch);
+    return fetchPublisher_->objectNotExists(objectID, finFetch);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
       uint64_t groupID,
       uint64_t subgroupID,
-      Extensions extensions,
       bool /*finFetch*/) override {
-    return groupNotExists(
-        groupID, subgroupID, Priority(0), std::move(extensions));
+    return groupNotExists(groupID, subgroupID, Priority(0));
   }
 
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
@@ -325,19 +315,17 @@ class ObjectReceiver : public TrackConsumer,
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
-      Extensions extensions,
       bool /*finFetch*/) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
-    return fetchPublisher_->endOfGroup(objectID, std::move(extensions));
+    return fetchPublisher_->endOfGroup(objectID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
       uint64_t groupID,
       uint64_t subgroupID,
-      uint64_t objectID,
-      Extensions extensions) override {
+      uint64_t objectID) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
-    return fetchPublisher_->endOfTrackAndGroup(objectID, std::move(extensions));
+    return fetchPublisher_->endOfTrackAndGroup(objectID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {

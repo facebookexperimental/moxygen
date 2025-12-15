@@ -121,14 +121,10 @@ folly::Expected<folly::Unit, MoQPublishError> publishObject(
       return folly::unit;
     case ObjectStatus::END_OF_GROUP:
       return consumer->endOfGroup(
-          current.group,
-          object.subgroup,
-          current.object,
-          object.extensions,
-          lastObject);
+          current.group, object.subgroup, current.object, lastObject);
     case ObjectStatus::END_OF_TRACK:
       return consumer->endOfTrackAndGroup(
-          current.group, object.subgroup, current.object, object.extensions);
+          current.group, object.subgroup, current.object);
   }
   return folly::makeUnexpected(
       MoQPublishError{MoQPublishError::API_ERROR, "Unknown status"});
@@ -293,14 +289,15 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     return consumer_->object(objID, std::move(payload), std::move(ext), finSub);
   }
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  objectNotExists(uint64_t objID, Extensions ext, bool finSub) override {
+  folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
+      uint64_t objID,
+      bool finSub) override {
     auto res = cacheTrack_.updateLargest({group_, objID});
     if (!res) {
       return res;
     }
     cacheGroup_.cacheMissingStatus(objID, ObjectStatus::OBJECT_NOT_EXIST);
-    return consumer_->objectNotExists(objID, std::move(ext), finSub);
+    return consumer_->objectNotExists(objID, finSub);
   }
 
   void checkpoint() override {
@@ -348,8 +345,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t endOfGroupObjectID,
-      Extensions extensions) override {
+      uint64_t endOfGroupObjectID) override {
     auto res = cacheTrack_.updateLargest({group_, endOfGroupObjectID});
     if (!res) {
       return res;
@@ -358,18 +354,17 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         subgroup_,
         endOfGroupObjectID,
         ObjectStatus::END_OF_GROUP,
-        extensions,
+        noExtensions(),
         nullptr,
         true);
     if (cacheRes.hasError()) {
       return cacheRes;
     }
-    return consumer_->endOfGroup(endOfGroupObjectID, std::move(extensions));
+    return consumer_->endOfGroup(endOfGroupObjectID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t endOfTrackObjectID,
-      Extensions extensions) override {
+      uint64_t endOfTrackObjectID) override {
     auto res = cacheTrack_.updateLargest({group_, endOfTrackObjectID}, true);
     if (!res) {
       return res;
@@ -378,14 +373,13 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         subgroup_,
         endOfTrackObjectID,
         ObjectStatus::END_OF_TRACK,
-        extensions,
+        noExtensions(),
         nullptr,
         true);
     if (cacheRes.hasError()) {
       return cacheRes;
     }
-    return consumer_->endOfTrackAndGroup(
-        endOfTrackObjectID, std::move(extensions));
+    return consumer_->endOfTrackAndGroup(endOfTrackObjectID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override {
@@ -494,19 +488,15 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     return consumer_->datagram(header, std::move(payload));
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t groupID,
-      uint64_t subgroup,
-      Priority pri,
-      Extensions extensions) override {
+  folly::Expected<folly::Unit, MoQPublishError>
+  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
     auto res = track_.updateLargest({groupID, 0});
     if (!res) {
       return res;
     }
     track_.getOrCreateGroup(groupID).cacheMissingStatus(
         0, ObjectStatus::GROUP_NOT_EXIST);
-    return consumer_->groupNotExists(
-        groupID, subgroup, pri, std::move(extensions));
+    return consumer_->groupNotExists(groupID, subgroup, pri);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
@@ -639,10 +629,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       uint64_t gID,
       uint64_t sgID,
       uint64_t objID,
-      Extensions ext,
       bool fin) override {
     constexpr auto kNotExist = ObjectStatus::OBJECT_NOT_EXIST;
-    auto res = cacheImpl(gID, sgID, objID, kNotExist, ext, nullptr, true, fin);
+    auto res = cacheImpl(
+        gID, sgID, objID, kNotExist, noExtensions(), nullptr, true, fin);
     if (!res) {
       return res;
     }
@@ -653,13 +643,11 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     return folly::unit;
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t gID,
-      uint64_t sgID,
-      Extensions ext,
-      bool fin) override {
+  folly::Expected<folly::Unit, MoQPublishError>
+  groupNotExists(uint64_t gID, uint64_t sgID, bool fin) override {
     constexpr auto kNotExist = ObjectStatus::GROUP_NOT_EXIST;
-    auto res = cacheImpl(gID, sgID, 0, kNotExist, ext, nullptr, true, fin);
+    auto res =
+        cacheImpl(gID, sgID, 0, kNotExist, noExtensions(), nullptr, true, fin);
     if (!res) {
       return res;
     }
@@ -717,34 +705,26 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     return consumer_->objectPayload(std::move(payload), finFetch && proxyFin_);
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t gID,
-      uint64_t sgID,
-      uint64_t objID,
-      Extensions ext,
-      bool fin) override {
+  folly::Expected<folly::Unit, MoQPublishError>
+  endOfGroup(uint64_t gID, uint64_t sgID, uint64_t objID, bool fin) override {
     constexpr auto kEndOfGroup = ObjectStatus::END_OF_GROUP;
-    auto res =
-        cacheImpl(gID, sgID, objID, kEndOfGroup, ext, nullptr, true, fin);
+    auto res = cacheImpl(
+        gID, sgID, objID, kEndOfGroup, noExtensions(), nullptr, true, fin);
     if (!res) {
       return res;
     }
-    return consumer_->endOfGroup(
-        gID, sgID, objID, std::move(ext), fin && proxyFin_);
+    return consumer_->endOfGroup(gID, sgID, objID, fin && proxyFin_);
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t gID,
-      uint64_t sgID,
-      uint64_t objID,
-      Extensions ext) override {
+  folly::Expected<folly::Unit, MoQPublishError>
+  endOfTrackAndGroup(uint64_t gID, uint64_t sgID, uint64_t objID) override {
     constexpr auto kEndOfTrack = ObjectStatus::END_OF_TRACK;
-    auto res =
-        cacheImpl(gID, sgID, objID, kEndOfTrack, ext, nullptr, true, true);
+    auto res = cacheImpl(
+        gID, sgID, objID, kEndOfTrack, noExtensions(), nullptr, true, true);
     if (!res) {
       return res;
     }
-    return consumer_->endOfTrackAndGroup(gID, sgID, objID, std::move(ext));
+    return consumer_->endOfTrackAndGroup(gID, sgID, objID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {

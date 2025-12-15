@@ -348,8 +348,7 @@ TEST_F(
       // Set expectations for beginObject
       if (objectId % 2 == 0) {
         if (objectId == params_.lastObjectInTrack) {
-          EXPECT_CALL(
-              *mockSubgroupConsumerZero, endOfGroup(objectId, testing::_))
+          EXPECT_CALL(*mockSubgroupConsumerZero, endOfGroup(objectId))
               .WillOnce(
                   ::testing::Return(
                       folly::Expected<folly::Unit, moxygen::MoQPublishError>(
@@ -741,7 +740,7 @@ TEST_F(
       } else {
         EXPECT_CALL(
             *mockConsumer,
-            endOfGroup(groupId, subGroupId, objectId, testing::_, testing::_))
+            endOfGroup(groupId, subGroupId, objectId, testing::_))
             .WillOnce(
                 testing::Return(
                     folly::Expected<folly::Unit, moxygen::MoQPublishError>(

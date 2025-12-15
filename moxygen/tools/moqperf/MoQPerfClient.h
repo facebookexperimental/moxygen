@@ -34,8 +34,7 @@ class MoQPerfClientSubgroupConsumer : public SubgroupConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
       uint64_t /* objectID */,
-      Extensions /* extensions */,
-      bool /* finSubgroup */) override {
+      bool /* finSubgroup */ = false) override {
     return folly::Unit();
   }
 
@@ -56,14 +55,12 @@ class MoQPerfClientSubgroupConsumer : public SubgroupConsumer {
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t /* endOfGroupObjectID */,
-      Extensions /* extensions */) override {
+      uint64_t /* endOfGroupObjectID */) override {
     return folly::Unit();
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t /* endOfTrackObjectID */,
-      Extensions /* extensions */) override {
+      uint64_t /* endOfTrackObjectID */) override {
     return folly::Unit();
   }
 
@@ -115,8 +112,7 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
   folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
       uint64_t /* groupID */,
       uint64_t /* subgroup */,
-      Priority /* pri */,
-      Extensions /* extensions */) override {
+      Priority /* pri */) override {
     return folly::Unit();
   }
 
@@ -151,13 +147,11 @@ class MoQPerfClientFetchConsumer : public FetchConsumer {
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
-      Extensions extensions = noExtensions(),
       bool finFetch = false) override;
 
   virtual folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
       uint64_t groupID,
       uint64_t subgroupID,
-      Extensions extensions = noExtensions(),
       bool finFetch = false) override;
 
   virtual void checkpoint() override;
@@ -178,14 +172,12 @@ class MoQPerfClientFetchConsumer : public FetchConsumer {
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
-      Extensions extensions = noExtensions(),
       bool finFetch = false) override;
 
   virtual folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
       uint64_t groupID,
       uint64_t subgroupID,
-      uint64_t objectID,
-      Extensions extensions = noExtensions()) override;
+      uint64_t objectID) override;
 
   virtual folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override;
 

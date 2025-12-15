@@ -122,7 +122,7 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
           sgp1->object(0, moxygen::test::makeBuf(10));
           sgp1->objectNotExists(1);
           sgp1->object(2, moxygen::test::makeBuf(11));
-          sgp1->endOfGroup(3, noExtensions());
+          sgp1->endOfGroup(3);
           pub->groupNotExists(1, 0, 0);
           auto sgp2 = pub->beginSubgroup(2, 0, 0).value();
           sgp2->object(0, moxygen::test::makeBuf(10));
@@ -135,16 +135,16 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
       .WillOnce(testing::Return(sg1));
   EXPECT_CALL(*sg1, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, objectNotExists(1, _, _))
+  EXPECT_CALL(*sg1, objectNotExists(1, _))
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*sg1, object(2, _, _, false))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, endOfGroup(3, _)).WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, endOfGroup(3)).WillOnce(testing::Return(folly::unit));
 
   auto sg2 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(1, 0, 0))
       .WillOnce(testing::Return(sg2));
-  EXPECT_CALL(*subscribeCallback_, groupNotExists(1, 0, 0, _))
+  EXPECT_CALL(*subscribeCallback_, groupNotExists(1, 0, 0))
       .WillOnce(testing::Return(folly::unit));
 
   auto sg3 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -153,7 +153,7 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
   EXPECT_CALL(*sg3, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
   folly::coro::Baton endOfTrackAndGroupBaton;
-  EXPECT_CALL(*sg3, endOfTrackAndGroup(2, _)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg3, endOfTrackAndGroup(2)).WillOnce(testing::Invoke([&]() {
     endOfTrackAndGroupBaton.post();
     return folly::unit;
   }));
@@ -700,7 +700,7 @@ CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
       .WillOnce(testing::Return(sg1));
   EXPECT_CALL(*sg1, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1)).WillOnce(testing::Invoke([&]() {
     endOfTrackReceived.post();
     return folly::unit;
   }));
@@ -744,7 +744,7 @@ CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
       .WillOnce(testing::Return(sg1));
   EXPECT_CALL(*sg1, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1)).WillOnce(testing::Invoke([&]() {
     endOfTrackReceived.post();
     return folly::unit;
   }));
@@ -784,9 +784,9 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
   // Object status with no explicit priority should use publisher priority
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kDefaultPriority))
       .WillOnce(testing::Return(sg1));
-  EXPECT_CALL(*sg1, objectNotExists(0, _, _))
+  EXPECT_CALL(*sg1, objectNotExists(0, _))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1)).WillOnce(testing::Invoke([&]() {
     endOfTrackReceived.post();
     return folly::unit;
   }));
@@ -826,7 +826,7 @@ CO_TEST_P_X(V15PlusTests, PublisherPriorityDefaultValue) {
       .WillOnce(testing::Return(sg1));
   EXPECT_CALL(*sg1, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, endOfTrackAndGroup(1, _)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(1)).WillOnce(testing::Invoke([&]() {
     endOfTrackReceived.post();
     return folly::unit;
   }));

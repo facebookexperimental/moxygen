@@ -36,13 +36,9 @@ class TrackConsumerFilter : public TrackConsumer {
     return downstream_->datagram(header, std::move(payload));
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t groupID,
-      uint64_t subgroup,
-      Priority pri,
-      Extensions extensions) override {
-    return downstream_->groupNotExists(
-        groupID, subgroup, pri, std::move(extensions));
+  folly::Expected<folly::Unit, MoQPublishError>
+  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
+    return downstream_->groupNotExists(groupID, subgroup, pri);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(

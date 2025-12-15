@@ -297,7 +297,7 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
       obj.id,
       obj.priority,
       ObjectStatus::END_OF_TRACK,
-      Extensions(getTestExtensions(), {}));
+      Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, objWithExts2, nullptr);
   return writeBuf.move();
@@ -347,7 +347,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
       obj.id,
       obj.priority,
       ObjectStatus::END_OF_GROUP,
-      Extensions(getTestExtensions(), {}));
+      Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, objWithExts4, nullptr);
   return writeBuf.move();

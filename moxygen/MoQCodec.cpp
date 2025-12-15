@@ -334,8 +334,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
                 curObjectHeader_.subgroup,
                 curObjectHeader_.id,
                 curObjectHeader_.priority,
-                curObjectHeader_.status,
-                std::move(curObjectHeader_.extensions));
+                curObjectHeader_.status);
             if (result == ParseResult::BLOCKED) {
               XLOG(ERR)
                   << "onObjectStatus returned BLOCKED, converting to ERROR";
