@@ -98,7 +98,7 @@ MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
     uint64_t numberOfSupportedVersions,
     std::vector<uint64_t> supportedVersions,
     uint64_t numberOfParameters,
-    std::vector<MOQTParameter> params) {
+    std::vector<MOQTSetupParameter> params) {
   MOQTClientSetupMessage client;
   client.numberOfSupportedVersions = numberOfSupportedVersions;
   client.supportedVersions = std::move(supportedVersions);
@@ -110,7 +110,7 @@ MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
 MOQTServerSetupMessage MLogger::createServerSetupControlMessage(
     uint64_t selectedVersion,
     uint64_t number_of_parameters,
-    std::vector<MOQTParameter> params) {
+    std::vector<MOQTSetupParameter> params) {
   MOQTServerSetupMessage server;
   server.selectedVersion = selectedVersion;
   server.numberOfParameters = number_of_parameters;
@@ -189,12 +189,15 @@ void MLogger::logClientSetup(
   std::vector<uint64_t> versions = setup.supportedVersions;
 
   // Add Params to params vector
-  std::vector<MOQTParameter> params =
-      convertSetupParamsToMoQTParams(setup.params);
+  std::vector<MOQTSetupParameter> params =
+      convertSetupParamsToMoQTSetupParams(setup.params);
 
-  std::unique_ptr<MOQTBaseControlMessage> msg =
-      std::make_unique<MOQTClientSetupMessage>(createClientSetupControlMessage(
-          versions.size(), versions, params.size(), params));
+  auto msg = std::make_unique<MOQTClientSetupMessage>();
+  msg->numberOfSupportedVersions = versions.size();
+  msg->supportedVersions = std::move(versions);
+  msg->numberOfParameters = params.size();
+  msg->setupParameters = std::move(params);
+
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(msg));
 }
@@ -203,11 +206,14 @@ void MLogger::logServerSetup(
     const ServerSetup& setup,
     ControlMessageType controlType) {
   // Add Params to params vector
-  std::vector<MOQTParameter> params =
-      convertSetupParamsToMoQTParams(setup.params);
-  std::unique_ptr<MOQTBaseControlMessage> msg =
-      std::make_unique<MOQTServerSetupMessage>(createServerSetupControlMessage(
-          setup.selectedVersion, params.size(), params));
+  std::vector<MOQTSetupParameter> params =
+      convertSetupParamsToMoQTSetupParams(setup.params);
+
+  auto msg = std::make_unique<MOQTServerSetupMessage>();
+  msg->selectedVersion = setup.selectedVersion;
+  msg->numberOfParameters = params.size();
+  msg->setupParameters = std::move(params);
+
   logControlMessage(
       controlType, kFirstBidiStreamId, folly::none, std::move(msg));
 }
@@ -764,6 +770,68 @@ std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
     moqParams.push_back(p);
   }
   return moqParams;
+}
+
+std::vector<MOQTSetupParameter> MLogger::convertSetupParamsToMoQTSetupParams(
+    const SetupParameters& params) {
+  std::vector<MOQTSetupParameter> moqSetupParams;
+
+  for (const auto& param : params) {
+    switch (param.key) {
+      case folly::to_underlying(SetupKey::PATH): {
+        MOQTPathSetupParameter p;
+        p.value = param.asString;
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(SetupKey::MAX_REQUEST_ID): {
+        MOQTMaxRequestIdSetupParameter p;
+        p.value = param.asUint64;
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE): {
+        MOQTMaxAuthTokenCacheSizeSetupParameter p;
+        p.value = param.asUint64;
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(SetupKey::AUTHORITY): {
+        MOQTAuthoritySetupParameter p;
+        p.value = param.asString;
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION): {
+        MOQTImplementationSetupParameter p;
+        p.value = param.asString;
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN): {
+        // AUTHORIZATION_TOKEN is more complex, using unknown for now
+        // TODO: properly parse authorization token
+        MOQTUnknownSetupParameter p;
+        p.nameBytes = param.key;
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+      default: {
+        MOQTUnknownSetupParameter p;
+        p.nameBytes = param.key;
+        // Check if string value is initialized (odd keys are strings per MoQ
+        // spec)
+        if (param.key % 2) {
+          p.valueBytes = folly::IOBuf::copyBuffer(param.asString);
+        } else {
+          p.value = param.asUint64;
+        }
+        moqSetupParams.emplace_back(std::move(p));
+        break;
+      }
+    }
+  }
+  return moqSetupParams;
 }
 
 std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
