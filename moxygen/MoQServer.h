@@ -10,6 +10,7 @@
 #include <moxygen/mlog/MLogger.h>
 
 #include <folly/init/Init.h>
+#include <folly/io/async/EventBaseLocal.h>
 #include <folly/io/async/EventBaseManager.h>
 
 #include <utility>
@@ -112,6 +113,8 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   folly::coro::Task<void> handleClientSession(
       std::shared_ptr<MoQSession> clientSession);
 
+  std::shared_ptr<MoQExecutor> getOrCreateExecutor(folly::EventBase* evb);
+
   class Handler : public proxygen::HTTPTransactionHandler {
    public:
     explicit Handler(MoQServer& server) : server_(server) {}
@@ -181,5 +184,6 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
   std::shared_ptr<MLogger> logger_;
+  folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
 };
 } // namespace moxygen

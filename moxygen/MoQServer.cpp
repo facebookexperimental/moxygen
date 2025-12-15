@@ -114,8 +114,7 @@ void MoQServer::createMoQQuicSession(
   std::shared_ptr<proxygen::WebTransport> wt(std::move(quicWebTransport));
   auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
                  ->getBackingEventBase();
-  auto moqSession =
-      createSession(std::move(wt), std::make_unique<MoQFollyExecutorImpl>(evb));
+  auto moqSession = createSession(std::move(wt), getOrCreateExecutor(evb));
 
   // Configure session based on negotiated ALPN
   if (alpn) {
@@ -351,8 +350,7 @@ void MoQServer::Handler::onHeadersComplete(
   auto evb = folly::EventBaseManager::get()->getEventBase();
   clientSession_ = server_.createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
-
-      std::make_unique<MoQFollyExecutorImpl>(evb));
+      server_.getOrCreateExecutor(evb));
 
   // Configure session based on negotiated WebTransport protocol
   if (negotiatedProtocol) {
@@ -375,6 +373,12 @@ void MoQServer::setQuicStatsFactory(
   if (hqServer_) {
     hqServer_->setStatsFactory(std::move(factory));
   }
+}
+
+std::shared_ptr<MoQExecutor> MoQServer::getOrCreateExecutor(
+    folly::EventBase* evb) {
+  return executorLocal_.try_emplace_with(
+      *evb, [evb] { return std::make_shared<MoQFollyExecutorImpl>(evb); });
 }
 
 std::shared_ptr<MoQSession> MoQServer::createSession(
