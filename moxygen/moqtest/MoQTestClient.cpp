@@ -284,8 +284,8 @@ void MoQTestClient::onEndOfStream() {
 void MoQTestClient::onError(ResetStreamErrorCode) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onError";
 }
-void MoQTestClient::onSubscribeDone(const SubscribeDone& done) {
-  XLOG(DBG1) << "MoQTest DEBUGGING: onSubscribeDone";
+void MoQTestClient::onAllDataReceived() {
+  XLOG(DBG1) << "MoQTest DEBUGGING: onAllDataReceived";
   // Ensure subHandle_ is reset at the end of this function, even if an early
   // return occurs
   auto subHandleResetGuard = folly::makeGuard([this] { subHandle_.reset(); });

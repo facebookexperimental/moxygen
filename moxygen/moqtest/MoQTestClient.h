@@ -98,8 +98,10 @@ class MoQTestClient {
       client_.onError(code);
     }
 
-    void onSubscribeDone(SubscribeDone done) override {
-      client_.onSubscribeDone(std::move(done));
+    void onSubscribeDone(SubscribeDone /* done */) override {}
+
+    void onAllDataReceived() override {
+      client_.onAllDataReceived();
     }
 
    private:
@@ -116,7 +118,7 @@ class MoQTestClient {
       const ObjectHeader& objHeader);
   void onEndOfStream();
   void onError(ResetStreamErrorCode);
-  void onSubscribeDone(const SubscribeDone& done);
+  void onAllDataReceived();
 
   ObjectReceiverCallback objectReceiverCallback_{*this};
 

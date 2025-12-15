@@ -64,13 +64,19 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.subgroup = subgroupID;
   }
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  object(uint64_t objectID, Payload payload, Extensions ext, bool) override {
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t objectID,
+      Payload payload,
+      Extensions ext,
+      bool finSubgroup) override {
     header_.id = objectID;
     header_.status = ObjectStatus::NORMAL;
     header_.extensions = std::move(ext);
     auto fcState =
         callback_->onObject(trackAlias_, header_, std::move(payload));
+    if (finSubgroup) {
+      notifyParentFinished();
+    }
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
       if (streamType_ == StreamType::FETCH_HEADER) {
         return folly::makeUnexpected(
@@ -132,6 +138,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.status = ObjectStatus::END_OF_GROUP;
     header_.extensions = noExtensions();
     callback_->onObjectStatus(trackAlias_, header_);
+    notifyParentFinished();
     return folly::unit;
   }
 
@@ -141,6 +148,7 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
     header_.status = ObjectStatus::END_OF_TRACK;
     header_.extensions = noExtensions();
     callback_->onObjectStatus(trackAlias_, header_);
+    notifyParentFinished();
     return folly::unit;
   }
 
