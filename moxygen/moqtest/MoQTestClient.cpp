@@ -568,15 +568,12 @@ AdjustedExpectedResult MoQTestClient::adjustExpected(
   switch (params_.forwardingPreference) {
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
       return adjustExpectedForOneSubgroupPerGroup(params);
-      break;
     }
     case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
       return adjustExpectedForOneSubgroupPerObject(params);
-      break;
     }
     case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
       return adjustExpectedForTwoSubgroupsPerGroup(header, params);
-      break;
     }
     case (ForwardingPreference::DATAGRAM): {
       if (receivingType_ == ReceivingType::FETCH) {
@@ -585,7 +582,6 @@ AdjustedExpectedResult MoQTestClient::adjustExpected(
         return AdjustedExpectedResult::ERROR_RECEIVING_DATA;
       }
       return adjustExpectedForDatagram(params);
-      break;
     }
     default: {
       break;
