@@ -767,12 +767,7 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2,
-          3,
-          4,
-          folly::Optional<uint8_t>(5),
-          ObjectStatus::OBJECT_NOT_EXIST,
-          testing::_))
+          2, 3, 4, folly::Optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
 
   // Expect onObjectBegin for the normal object (this would crash without the
