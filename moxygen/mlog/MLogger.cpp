@@ -732,46 +732,6 @@ void MLogger::logPublishError(
       controlType, kFirstBidiStreamId, folly::none, std::move(baseMsg));
 }
 
-std::vector<MOQTParameter> MLogger::convertSetupParamsToMoQTParams(
-    const SetupParameters& params) {
-  // Add Params to params vector
-  std::vector<MOQTParameter> moqParams;
-
-  for (const auto& param : params) {
-    MOQTParameter p;
-    switch (param.key) {
-      case folly::to_underlying(SetupKey::PATH):
-        p.name = "path";
-        p.type = MOQTParameterType::STRING;
-        p.stringValue = param.asString;
-        break;
-      case folly::to_underlying(SetupKey::MAX_REQUEST_ID):
-        p.name = "max_request_id";
-        p.type = MOQTParameterType::INT;
-        p.intValue = param.asUint64;
-        break;
-      case folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE):
-        p.name = "max_auth_token_cache_size";
-        p.type = MOQTParameterType::INT;
-        p.intValue = param.asUint64;
-        break;
-      default:
-        p.name = "unknown";
-        // Check if string value is initialized
-        if (param.key % 2) {
-          p.type = MOQTParameterType::STRING;
-          p.stringValue = param.asString;
-        } else {
-          p.type = MOQTParameterType::INT;
-          p.stringValue = param.asUint64;
-        }
-        break;
-    }
-    moqParams.push_back(p);
-  }
-  return moqParams;
-}
-
 std::vector<MOQTSetupParameter> MLogger::convertSetupParamsToMoQTSetupParams(
     const SetupParameters& params) {
   std::vector<MOQTSetupParameter> moqSetupParams;
@@ -837,16 +797,40 @@ std::vector<MOQTSetupParameter> MLogger::convertSetupParamsToMoQTSetupParams(
 std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
     const TrackRequestParameters& params) {
   std::vector<MOQTParameter> moqParams;
+
   for (const auto& param : params) {
-    MOQTParameter p;
-    p.name = "unknown"; // No TrackParamKeys (like SetupKey) so default to
-                        // unknown for now
-    if (param.key % 2) {
-      p.type = MOQTParameterType::STRING;
-      p.stringValue = param.asString;
-    } else {
-      p.type = MOQTParameterType::INT;
-      p.intValue = param.asUint64;
+    switch (param.key) {
+      case folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN): {
+        MOQTAuthorizationTokenParameter p;
+        p.aliasType = param.asUint64;
+        moqParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT): {
+        MOQTDeliveryTimeoutParameter p;
+        p.value = param.asUint64;
+        moqParams.emplace_back(std::move(p));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION): {
+        MOQTMaxCacheDurationParameter p;
+        p.value = param.asUint64;
+        moqParams.emplace_back(std::move(p));
+        break;
+      }
+      default: {
+        MOQTUnknownParameter p;
+        p.nameBytes = param.key;
+        // Check if string value is initialized (odd keys are strings per MoQ
+        // spec)
+        if (param.key % 2) {
+          p.valueBytes = folly::IOBuf::copyBuffer(param.asString);
+        } else {
+          p.value = param.asUint64;
+        }
+        moqParams.emplace_back(std::move(p));
+        break;
+      }
     }
   }
   return moqParams;

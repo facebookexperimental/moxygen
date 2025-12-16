@@ -220,8 +220,6 @@ class MLogger {
   std::vector<MOQTByteString> convertTrackNamespaceToByteStringFormat(
       const std::vector<std::string>& ns,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
-  std::vector<MOQTParameter> convertSetupParamsToMoQTParams(
-      const SetupParameters& params);
   std::vector<MOQTSetupParameter> convertSetupParamsToMoQTSetupParams(
       const SetupParameters& params);
   bool isHexstring(const std::string& s);

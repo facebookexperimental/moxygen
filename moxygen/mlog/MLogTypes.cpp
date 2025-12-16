@@ -70,19 +70,60 @@ folly::dynamic MOQTServerSetupMessage::toDynamic() const {
   return serverSetupObj;
 }
 
-folly::dynamic MOQTParameter::toDynamic() const {
+// Parameter toDynamic implementations
+folly::dynamic MOQTAuthorizationTokenParameter::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = name;
-
-  if (type == MOQTParameterType::INT) {
-    obj["value"] = std::to_string(intValue);
-  } else if (type == MOQTParameterType::STRING) {
-    obj["value"] = stringValue;
-  } else {
-    obj["value"] = "Invalid Data Type For MOQTParameter";
+  obj["alias_type"] = aliasType;
+  if (tokenAlias.hasValue()) {
+    obj["token_alias"] = tokenAlias.value();
   }
-
+  if (tokenType.hasValue()) {
+    obj["token_type"] = tokenType.value();
+  }
+  if (tokenValue) {
+    obj["token_value"] = std::string(
+        reinterpret_cast<const char*>(tokenValue->data()),
+        tokenValue->length());
+  }
   return obj;
+}
+
+folly::dynamic MOQTDeliveryTimeoutParameter::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["value"] = value;
+  return obj;
+}
+
+folly::dynamic MOQTMaxCacheDurationParameter::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["value"] = value;
+  return obj;
+}
+
+folly::dynamic MOQTUnknownParameter::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["name_bytes"] = nameBytes;
+  if (length.hasValue()) {
+    obj["length"] = length.value();
+  }
+  if (value.hasValue()) {
+    obj["value"] = value.value();
+  }
+  if (valueBytes) {
+    obj["value_bytes"] = std::string(
+        reinterpret_cast<const char*>(valueBytes->data()),
+        valueBytes->length());
+  }
+  return obj;
+}
+
+folly::dynamic parameterToDynamic(const MOQTParameter& param) {
+  return std::visit(
+      [](const auto& p) -> folly::dynamic { return p.toDynamic(); }, param);
 }
 
 // Setup Parameter toDynamic implementations
@@ -207,12 +248,14 @@ folly::dynamic MOQTSubscribe::toDynamic() const {
   }
   obj["number_of_parameters"] = numberOfParameters;
 
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(subscribeParameters.size());
-  for (auto& param : subscribeParameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (!subscribeParameters.empty()) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(subscribeParameters.size());
+    for (const auto& param : subscribeParameters) {
+      paramObjects.push_back(parameterToDynamic(param));
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["parameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
@@ -227,11 +270,11 @@ folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
   obj["forward"] = forward;
   obj["number_of_parameters"] = numberOfParameters;
 
-  if (numberOfParameters > 0) {
+  if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
     paramObjects.reserve(parameters.size());
-    for (auto& param : parameters) {
-      paramObjects.push_back(param.toDynamic());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
   }
@@ -289,8 +332,8 @@ folly::dynamic MOQTFetch::toDynamic() const {
   if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
     paramObjects.reserve(parameters.size());
-    for (auto& param : parameters) {
-      paramObjects.push_back(param.toDynamic());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
   }
@@ -360,11 +403,11 @@ folly::dynamic MOQTTrackStatus::toDynamic() const {
     obj["end_group"] = endGroup.value();
   }
   obj["number_of_parameters"] = numberOfParameters;
-  if (numberOfParameters > 0) {
+  if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
     paramObjects.reserve(parameters.size());
-    for (auto& param : parameters) {
-      paramObjects.push_back(param.toDynamic());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
   }
@@ -379,12 +422,14 @@ folly::dynamic MOQTSubscribeAnnounces::toDynamic() const {
   obj["track_namespace_prefix"] = folly::dynamic::array(
       trackNamespacePrefixStr.begin(), trackNamespacePrefixStr.end());
   obj["number_of_parameters"] = numberOfParameters;
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(parameters.size());
-  for (auto& param : parameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["parameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
@@ -419,12 +464,14 @@ folly::dynamic MOQTSubscribeOk::toDynamic() const {
     obj["largest_location"] = largestLocation->toDynamic();
   }
   obj["number_of_parameters"] = numberOfParameters;
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(parameters.size());
-  for (auto& param : parameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["parameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
@@ -451,11 +498,11 @@ folly::dynamic MOQTFetchOk::toDynamic() const {
   obj["end_location"] = endLocation.toDynamic();
   obj["number_of_parameters"] = numberOfParameters;
 
-  if (numberOfParameters > 0) {
+  if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
     paramObjects.reserve(parameters.size());
-    for (auto& param : parameters) {
-      paramObjects.push_back(param.toDynamic());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
   }
@@ -513,12 +560,14 @@ folly::dynamic MOQTAnnounce::toDynamic() const {
   obj["track_namespace"] =
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
   obj["number_of_parameters"] = numberOfParameters;
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(parameters.size());
-  for (auto& param : parameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["parameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
@@ -543,11 +592,11 @@ folly::dynamic MOQTTrackStatusOk::toDynamic() const {
     obj["largest_location"] = largestLocation->toDynamic();
   }
   obj["number_of_parameters"] = numberOfParameters;
-  if (numberOfParameters > 0) {
+  if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
     paramObjects.reserve(parameters.size());
-    for (auto& param : parameters) {
-      paramObjects.push_back(param.toDynamic());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
   }
@@ -941,12 +990,14 @@ folly::dynamic MOQTPublish::toDynamic() const {
   }
   obj["forward"] = forward;
   obj["number_of_parameters"] = numberOfParameters;
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(parameters.size());
-  for (auto& param : parameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["parameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
@@ -965,12 +1016,14 @@ folly::dynamic MOQTPublishOk::toDynamic() const {
     obj["end_group"] = endGroup.value();
   }
   obj["number_of_parameters"] = numberOfParameters;
-  std::vector<folly::dynamic> paramObjects;
-  paramObjects.reserve(parameters.size());
-  for (auto& param : parameters) {
-    paramObjects.push_back(param.toDynamic());
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> paramObjects;
+    paramObjects.reserve(parameters.size());
+    for (const auto& param : parameters) {
+      paramObjects.push_back(parameterToDynamic(param));
+    }
+    obj["parameters"] = folly::dynamic::array(paramObjects);
   }
-  obj["parameters"] = folly::dynamic::array(paramObjects);
   return obj;
 }
 
