@@ -2626,12 +2626,53 @@ folly::Expected<SubscribeAnnounces, ErrorCode>
 MoQFrameParser::parseSubscribeAnnounces(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  auto res = parseAnnounce(cursor, length);
+  SubscribeAnnounces subscribeAnnounces;
+
+  // Parse Request ID
+  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!requestID) {
+    XLOG(DBG4) << "parseSubscribeAnnounces: UNDERFLOW on requestID";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= requestID->second;
+  subscribeAnnounces.requestID = requestID->first;
+
+  // Parse Track Namespace Prefix
+  auto res = parseFixedTuple(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
-  return SubscribeAnnounces(
-      {res->requestID, std::move(res->trackNamespace), std::move(res->params)});
+  subscribeAnnounces.trackNamespacePrefix =
+      TrackNamespace(std::move(res.value()));
+
+  // Parse Parameters
+  auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!numParams) {
+    XLOG(DBG4) << "parseSubscribeAnnounces: UNDERFLOW on numParams";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
+  auto res2 = parseTrackRequestParams(
+      cursor,
+      length,
+      numParams->first,
+      subscribeAnnounces.params,
+      requestSpecificParams);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // Draft 15+: Extract forward field from request-specific parameters
+  // Default is true; only set to false if FORWARD param is present with value 0
+  if (getDraftMajorVersion(*version_) >= 15) {
+    handleForwardParam(subscribeAnnounces.forward, requestSpecificParams);
+  }
+
+  return subscribeAnnounces;
 }
 
 folly::Expected<SubscribeAnnouncesOk, ErrorCode>
@@ -4547,7 +4588,19 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
   writeVarint(writeBuf, subscribeAnnounces.requestID.value, size, error);
   writeTrackNamespace(
       writeBuf, subscribeAnnounces.trackNamespacePrefix, size, error);
-  writeTrackRequestParams(writeBuf, subscribeAnnounces.params, {}, size, error);
+
+  // Draft 15+: Write Forward field as a parameter (only if forward == 0,
+  // since 1 is the default)
+  std::vector<Parameter> requestSpecificParams;
+  if (getDraftMajorVersion(*version_) >= 15 && !subscribeAnnounces.forward) {
+    Parameter forwardParam;
+    forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
+    forwardParam.asUint64 = 0;
+    requestSpecificParams.push_back(forwardParam);
+  }
+
+  writeTrackRequestParams(
+      writeBuf, subscribeAnnounces.params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

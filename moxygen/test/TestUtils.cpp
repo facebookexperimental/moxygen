@@ -210,6 +210,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       SubscribeAnnounces(
           {2,
            TrackNamespace({"hello"}),
+           true, // forward
            {getTestAuthParam(moqFrameWriter, "binky")}}));
   res = moqFrameWriter.writeSubscribeAnnouncesOk(
       writeBuf, SubscribeAnnouncesOk({2, {}}));

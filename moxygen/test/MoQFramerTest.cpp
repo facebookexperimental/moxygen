@@ -3141,6 +3141,40 @@ TEST_P(MoQFramerV15PlusTest, ParseFetchObjectHeaderCursorUnderflow) {
   EXPECT_EQ(parseResult.error(), ErrorCode::PARSE_UNDERFLOW);
 }
 
+// Test SubscribeAnnounces with forward = false
+TEST_P(MoQFramerV15PlusTest, SubscribeAnnouncesForwardFalse) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeAnnounces subscribeAnnounces;
+  subscribeAnnounces.requestID = RequestID(42);
+  subscribeAnnounces.trackNamespacePrefix = TrackNamespace({"ns", "prefix"});
+  subscribeAnnounces.forward = false;
+  subscribeAnnounces.params = {};
+
+  auto writeResult =
+      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+
+  auto parseResult =
+      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  // Verify all fields match
+  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(
+      parseResult->trackNamespacePrefix,
+      subscribeAnnounces.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->forward, subscribeAnnounces.forward);
+  EXPECT_EQ(parseResult->forward, false);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV15PlusTest,
     MoQFramerV15PlusTest,

@@ -108,8 +108,9 @@ class MoQRelay : public Publisher,
 
     // Maps a track name to a the session performing the PUBLISH
     folly::F14FastMap<std::string, std::shared_ptr<MoQSession>> publishes;
-    // Sessions with a SUBSCRIBE_ANNOUNCES here
-    folly::F14FastSet<std::shared_ptr<MoQSession>> sessions;
+    // Sessions with a SUBSCRIBE_ANNOUNCES here, with their forward preference
+    // Key: session, Value: forward (true = forward data, false = don't forward)
+    folly::F14FastMap<std::shared_ptr<MoQSession>, bool> sessions;
     // All active ANNOUNCEs for this node (includes prefix sessions)
     folly::
         F14FastMap<std::shared_ptr<MoQSession>, std::shared_ptr<AnnounceHandle>>
@@ -137,7 +138,8 @@ class MoQRelay : public Publisher,
       const TrackNamespace& ns,
       bool createMissingNodes = false,
       MatchType matchType = MatchType::Exact,
-      std::vector<std::shared_ptr<MoQSession>>* sessions = nullptr);
+      std::vector<std::pair<std::shared_ptr<MoQSession>, bool>>* sessions =
+          nullptr);
 
   struct RelaySubscription {
     RelaySubscription(
@@ -164,7 +166,8 @@ class MoQRelay : public Publisher,
   folly::coro::Task<void> publishToSession(
       std::shared_ptr<MoQSession> session,
       std::shared_ptr<MoQForwarder> forwarder,
-      PublishRequest pub);
+      PublishRequest pub,
+      bool forward);
 
   folly::coro::Task<void> doSubscribeUpdate(
       std::shared_ptr<Publisher::SubscriptionHandle> handle,

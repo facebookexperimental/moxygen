@@ -238,7 +238,10 @@ class MoQTextClient : public Subscriber,
 
       if (FLAGS_publish) {
         SubscribeAnnounces subAnn{
-            sub.requestID, sub.fullTrackName.trackNamespace, sub.params};
+            sub.requestID,
+            sub.fullTrackName.trackNamespace,
+            true /* forward */,
+            sub.params};
         co_await subscribeAnnounces(subAnn);
 
         if (FLAGS_unsubscribe) {

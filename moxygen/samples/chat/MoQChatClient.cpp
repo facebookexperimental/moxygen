@@ -80,6 +80,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     auto sa = co_await moqClient_.getSession()->subscribeAnnounces(
         {RequestID(0),
          TrackNamespace(chatPrefix()),
+         true, // forward
          {getAuthParam(negotiatedVersion, username_)}});
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";

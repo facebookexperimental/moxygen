@@ -39,13 +39,15 @@ std::shared_ptr<MoQRelay::AnnounceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
     MatchType matchType,
-    std::vector<std::shared_ptr<MoQSession>>* sessions) {
+    std::vector<std::pair<std::shared_ptr<MoQSession>, bool>>* sessions) {
   std::shared_ptr<AnnounceNode> nodePtr(
       std::shared_ptr<void>(), &announceRoot_);
   for (auto i = 0ul; i < ns.size(); i++) {
     if (sessions) {
-      sessions->insert(
-          sessions->end(), nodePtr->sessions.begin(), nodePtr->sessions.end());
+      // Extract session pointers with their forward preferences from the map
+      for (const auto& [session, forward] : nodePtr->sessions) {
+        sessions->emplace_back(session, forward);
+      }
     }
     auto& name = ns[i];
     auto it = nodePtr->children.find(name);
@@ -79,7 +81,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
         AnnounceError{
             ann.requestID, AnnounceErrorCode::UNINTERESTED, "bad namespace"});
   }
-  std::vector<std::shared_ptr<MoQSession>> sessions;
+  std::vector<std::pair<std::shared_ptr<MoQSession>, bool>> sessions;
   auto nodePtr = findNamespaceNode(
       ann.trackNamespace,
       /*createMissingNodes=*/true,
@@ -128,7 +130,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   if (wasEmpty && nodePtr->parent_) {
     nodePtr->parent_->incrementActiveChildren();
   }
-  for (auto& outSession : sessions) {
+  for (auto& [outSession, forward] : sessions) {
     if (outSession != session) {
       auto exec = outSession->getExecutor();
       co_withExecutor(exec, announceToSession(outSession, ann, nodePtr))
@@ -304,14 +306,16 @@ Subscriber::PublishResult MoQRelay::publish(
 
   // Find All Nodes that SubscribeAnnounced to this namespace (including prefix
   // ns)
-  std::vector<std::shared_ptr<MoQSession>> sessions = {};
+  std::vector<std::pair<std::shared_ptr<MoQSession>, bool>> sessions = {};
   auto nodePtr = findNamespaceNode(
       pub.fullTrackName.trackNamespace,
       /*createMissingNodes=*/true,
       MatchType::Exact,
       &sessions);
-  sessions.insert(
-      sessions.end(), nodePtr->sessions.begin(), nodePtr->sessions.end());
+  // Extract session pointers with their forward preferences from the map
+  for (const auto& [sessionPtr, forward] : nodePtr->sessions) {
+    sessions.emplace_back(sessionPtr, forward);
+  }
 
   auto session = MoQSession::getRequestSession();
   bool wasEmpty = !nodePtr->hasLocalSessions();
@@ -363,11 +367,12 @@ Subscriber::PublishResult MoQRelay::publish(
   rsub.isPublish = true;
 
   uint64_t nSubscribers = 0;
-  for (auto& outSession : sessions) {
+  for (auto& [outSession, forward] : sessions) {
     if (outSession != session) {
       nSubscribers++;
       auto exec = outSession->getExecutor();
-      co_withExecutor(exec, publishToSession(outSession, forwarder, pub))
+      co_withExecutor(
+          exec, publishToSession(outSession, forwarder, pub, forward))
           .start();
     }
   }
@@ -395,8 +400,9 @@ Subscriber::PublishResult MoQRelay::publish(
 folly::coro::Task<void> MoQRelay::publishToSession(
     std::shared_ptr<MoQSession> session,
     std::shared_ptr<MoQForwarder> forwarder,
-    PublishRequest pub) {
-  pub.forward = false;
+    PublishRequest pub,
+    bool forward) {
+  pub.forward = forward;
   auto subscriber = forwarder->addSubscriber(session, pub);
   if (!subscriber) {
     XLOG(ERR) << "Subscribe failed: addSubscriber returned null for "
@@ -520,7 +526,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
 
   // Check if this is the first session subscriber for this node
   bool wasEmpty = !nodePtr->hasLocalSessions();
-  nodePtr->sessions.emplace(session);
+  nodePtr->sessions.emplace(session, subNs.forward);
 
   // If this is the first content added to this node, notify parent
   if (wasEmpty && nodePtr->hasLocalSessions() && nodePtr->parent_) {
@@ -560,15 +566,17 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
       }
       auto& forwarder = subscriptionIt->second.forwarder;
       if (forwarder->empty()) {
+        // Use forward value from this namespace subscription
         co_withExecutor(
             exec,
-            doSubscribeUpdate(subscriptionIt->second.handle, /*forward=*/true))
+            doSubscribeUpdate(subscriptionIt->second.handle, subNs.forward))
             .start();
       }
       pub.groupOrder = forwarder->groupOrder();
       pub.largest = forwarder->largest();
       if (publishSession != session) {
-        co_withExecutor(exec, publishToSession(session, forwarder, pub))
+        co_withExecutor(
+            exec, publishToSession(session, forwarder, pub, subNs.forward))
             .start();
       }
     }

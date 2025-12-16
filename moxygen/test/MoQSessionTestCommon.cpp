@@ -95,7 +95,8 @@ TrackStatus getTrackStatus() {
 }
 
 moxygen::SubscribeAnnounces getSubscribeAnnounces() {
-  return SubscribeAnnounces{RequestID(0), TrackNamespace{{"foo"}}, {}};
+  return SubscribeAnnounces{
+      RequestID(0), TrackNamespace{{"foo"}}, true /* forward */, {}};
 }
 
 moxygen::Announce getAnnounce() {
