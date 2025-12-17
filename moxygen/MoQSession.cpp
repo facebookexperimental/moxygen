@@ -9,6 +9,7 @@
 #include <folly/coro/FutureUtil.h>
 #include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
+#include <quic/priority/HTTPPriorityQueue.h>
 #include <moxygen/events/MoQDeliveryTimeoutManager.h>
 
 #include <folly/logging/xlog.h>
@@ -19,19 +20,34 @@ namespace {
 using namespace moxygen;
 constexpr uint64_t kMaxSendTokenCacheSize(1024);
 
-constexpr uint32_t IdMask = 0x1FFFFF;
+// Bit allocations for 32-bit order: sub=5, pub=8, group=14, subgroup=5
+constexpr uint32_t kSubPriBits = 5;
+constexpr uint32_t kPubPriBits = 8;
+constexpr uint32_t kGroupBits = 14;
+constexpr uint32_t kSubgroupBits = 5;
+
+constexpr uint32_t kSubPriMask = (1 << kSubPriBits) - 1;     // 0x1F
+constexpr uint32_t kPubPriMask = (1 << kPubPriBits) - 1;     // 0xFF
+constexpr uint32_t kGroupMask = (1 << kGroupBits) - 1;       // 0x3FFF
+constexpr uint32_t kSubgroupMask = (1 << kSubgroupBits) - 1; // 0x1F
+
 uint32_t groupPriorityBits(GroupOrder groupOrder, uint64_t group) {
   // If the group order is oldest first, we want to give lower group
   // ids a higher precedence. Otherwise, if it is newest first, we want
   // to give higher group ids a higher precedence.
-  uint32_t truncGroup = static_cast<uint32_t>(group) & IdMask;
+  uint32_t truncGroup = static_cast<uint32_t>(group) & kGroupMask;
   return groupOrder == GroupOrder::OldestFirst ? truncGroup
-                                               : (IdMask - truncGroup);
+                                               : (kGroupMask - truncGroup);
 }
 
 uint32_t subgroupPriorityBits(uint32_t subgroupID) {
-  return static_cast<uint32_t>(subgroupID) & IdMask;
+  return static_cast<uint32_t>(subgroupID) & kSubgroupMask;
 }
+
+struct StreamPriority {
+  uint8_t urgency;
+  uint32_t order;
+};
 
 /*
  * The spec mentions that scheduling should go as per
@@ -45,19 +61,27 @@ uint32_t subgroupPriorityBits(uint32_t subgroupID) {
  * priority so that we respect the aforementioned precedence order when we are
  * sending objects.
  */
-uint64_t getStreamPriority(
+StreamPriority getStreamPriority(
     uint64_t groupID,
     uint64_t subgroupID,
     uint8_t subPri,
     uint8_t pubPri,
     GroupOrder pubGroupOrder) {
-  // 6 reserved bits | 58 bit order
-  // 6 reserved | 8 sub pri | 8 pub pri | 21 group order | 21 obj order
+  // 32-bit order: 5 sub pri | 8 pub pri | 14 group order | 5 subgroup
+  // Urgency: 3 MSB of subPri
+  uint8_t urgency = subPri >> 5;
+  uint32_t subPriBits = subPri & kSubPriMask;
+  uint32_t pubPriBits = pubPri & kPubPriMask;
   uint32_t groupBits = groupPriorityBits(pubGroupOrder, groupID);
   uint32_t subgroupBits = subgroupPriorityBits(subgroupID);
-  return (
-      (uint64_t(subPri) << 50) | (uint64_t(pubPri) << 42) | (groupBits << 21) |
-      subgroupBits);
+  uint32_t order = (subPriBits << (kPubPriBits + kGroupBits + kSubgroupBits)) |
+      (pubPriBits << (kGroupBits + kSubgroupBits)) |
+      (groupBits << kSubgroupBits) | subgroupBits;
+  // Never use urgency=0, order=0 except for control stream
+  if (urgency == 0 && order == 0) {
+    order = 1;
+  }
+  return {urgency, order};
 }
 
 // Helper function to validate priority from application is set.
@@ -951,11 +975,10 @@ StreamPublisherImpl::ensureWriteHandle() {
              << " tp=" << this;
   // publisher group order is not known here, but it shouldn't matter
   // Currently sets group=0 for FETCH priority bits
+  auto pri = getStreamPriority(
+      0, 0, publisher_->subPriority(), 0, GroupOrder::OldestFirst);
   stream.value()->setPriority(
-      1,
-      getStreamPriority(
-          0, 0, publisher_->subPriority(), 0, GroupOrder::OldestFirst),
-      false);
+      quic::HTTPPriorityQueue::Priority(pri.urgency, false, pri.order));
   setWriteHandle(*stream);
   return folly::unit;
 }
@@ -1392,11 +1415,10 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
   session_->onSubscriptionStreamOpened();
+  auto pri = getStreamPriority(
+      groupID, subgroupID, subPriority_, pubPriority, groupOrder_);
   stream.value()->setPriority(
-      1,
-      getStreamPriority(
-          groupID, subgroupID, subPriority_, pubPriority, groupOrder_),
-      false);
+      quic::HTTPPriorityQueue::Priority(pri.urgency, false, pri.order));
 
   // Get effective timeout to pass to StreamPublisherImpl
   auto effectiveTimeout = deliveryTimeoutManager_.getEffectiveTimeout();
@@ -2113,7 +2135,8 @@ void MoQSession::start() {
       return;
     }
     auto controlStream = cs.value();
-    controlStream.writeHandle->setPriority(0, 0, false);
+    controlStream.writeHandle->setPriority(
+        quic::HTTPPriorityQueue::Priority(0, false, 0));
 
     if (logger_) {
       logger_->logStreamTypeSet(
@@ -4828,7 +4851,7 @@ void MoQSession::onNewBidiStream(
           bh.readHandle->getID(), MOQTStreamType::CONTROL, Owner::REMOTE);
     }
 
-    bh.writeHandle->setPriority(0, 0, false);
+    bh.writeHandle->setPriority(quic::HTTPPriorityQueue::Priority(0, false, 0));
     co_withExecutor(
         exec_.get(),
         co_withCancellation(
