@@ -59,12 +59,24 @@ class MoQTestServer : public moxygen::Publisher,
  public:
   MoQTestServer(const std::string& cert = "", const std::string& key = "");
 
+  // Server-level logger methods
+  void setLogger(std::shared_ptr<MLogger> logger) {
+    logger_ = std::move(logger);
+  }
+
+  std::shared_ptr<MLogger> getLogger() const {
+    return logger_;
+  }
+
   //  Override onNewSession to set publisher handler to be this object
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
-    if (getLogger()) {
-      clientSession->setLogger(getLogger());
+    // Use server-level logger if set, otherwise try factory
+    if (logger_) {
+      clientSession->setLogger(logger_);
+    } else if (auto logger = createLogger()) {
+      clientSession->setLogger(std::move(logger));
     }
   }
 
@@ -139,6 +151,9 @@ class MoQTestServer : public moxygen::Publisher,
   std::shared_ptr<MoQRelaySession> relaySession_;
   std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
+
+  // Server-level logger
+  std::shared_ptr<MLogger> logger_;
 };
 
 } // namespace moxygen

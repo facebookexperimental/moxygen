@@ -7,7 +7,7 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
-#include <moxygen/mlog/MLogger.h>
+#include <moxygen/mlog/MLoggerFactory.h>
 
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBaseLocal.h>
@@ -48,8 +48,7 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     return hqServer_->getWorkerEvbs();
   }
 
-  void setLogger(std::shared_ptr<MLogger> logger);
-  std::shared_ptr<MLogger> getLogger() const;
+  void setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory);
 
   // QUIC stats factory setter
   void setQuicStatsFactory(
@@ -103,6 +102,9 @@ class MoQServer : public MoQSession::ServerSetupCallback {
 
   // Register ALPN handlers for direct QUIC connections (internal use)
   void registerAlpnHandler(const std::vector<std::string>& alpns);
+
+  // Create a logger from the factory if one is set
+  std::shared_ptr<MLogger> createLogger() const;
 
  private:
   // AUTHORITY parameter validation methods
@@ -183,7 +185,9 @@ class MoQServer : public MoQSession::ServerSetupCallback {
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   std::string endpoint_;
-  std::shared_ptr<MLogger> logger_;
+  std::shared_ptr<MLoggerFactory> mLoggerFactory_;
   folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
+
+  friend class Handler;
 };
 } // namespace moxygen

@@ -11,6 +11,7 @@
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/MoQWebTransportClient.h>
+#include <moxygen/mlog/FileMLoggerFactory.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
@@ -130,8 +131,8 @@ class MoQDateServer : public MoQServer,
                                    MoQRelaySession::createRelaySessionFactory(),
                                    verifier)));
 
-    if (getLogger()) {
-      relayClient_->setLogger(getLogger());
+    if (auto logger = createLogger()) {
+      relayClient_->setLogger(logger);
     }
 
     // Default to experimental protocols, override to legacy if flag set
@@ -162,8 +163,11 @@ class MoQDateServer : public MoQServer,
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(shared_from_this());
-    if (getLogger()) {
-      clientSession->setLogger(getLogger());
+  }
+
+  void shutdownRelayClient() {
+    if (relayClient_) {
+      relayClient_->shutdown();
     }
   }
 
@@ -644,10 +648,9 @@ int main(int argc, char* argv[]) {
   }
 
   if (!FLAGS_mlog_path.empty()) {
-    auto logger =
-        std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::SERVER);
-    logger->setPath(FLAGS_mlog_path);
-    server->setLogger(logger);
+    auto factory = std::make_shared<moxygen::FileMLoggerFactory>(
+        FLAGS_mlog_path, moxygen::VantagePoint::SERVER);
+    server->setMLoggerFactory(factory);
   }
 
   folly::SocketAddress addr("::", FLAGS_port);
@@ -656,17 +659,12 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  SigHandler handler(&evb, [&server, &evb](int) {
-    if (server->getLogger()) {
-      server->getLogger()->outputLogsToFile();
-    }
+  SigHandler handler(&evb, [&evb, server](int) {
+    server->shutdownRelayClient();
     evb.terminateLoopSoon();
   });
 
   evb.loopForever();
 
-  if (server->getLogger()) {
-    server->getLogger()->outputLogsToFile();
-  }
   return 0;
 }

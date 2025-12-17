@@ -376,6 +376,7 @@ class MoQSession : public Subscriber,
       RequestID requestID);
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
+  std::shared_ptr<MLogger> getLogger() const;
   RequestID peekNextRequestID() const {
     return nextRequestID_;
   }

@@ -112,6 +112,11 @@ class MoQRelayClient {
       }
     }
     announceHandles_.clear();
+    // Flush mLogs before closing the session, since closeSession() does not
+    // trigger onSessionEnd callback (where logs would normally be flushed)
+    if (moqClient_ && moqClient_->logger_) {
+      moqClient_->logger_->outputLogsToFile();
+    }
     if (moqClient_ && moqClient_->moqSession_) {
       // Break strong references held by the session to the Publisher/Subscriber
       moqClient_->moqSession_->setPublishHandler(nullptr);

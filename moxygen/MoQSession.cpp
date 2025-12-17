@@ -2074,6 +2074,9 @@ MoQSession::MoQSession(
 
 MoQSession::~MoQSession() {
   cleanup();
+  if (logger_) {
+    logger_->outputLogsToFile();
+  }
   XLOG(DBG1) << __func__ << " sess=" << this;
 }
 
@@ -2164,6 +2167,10 @@ void MoQSession::start() {
 
 void MoQSession::setLogger(const std::shared_ptr<MLogger>& logger) {
   logger_ = logger;
+}
+
+std::shared_ptr<MLogger> MoQSession::getLogger() const {
+  return logger_;
 }
 
 void MoQSession::drain() {

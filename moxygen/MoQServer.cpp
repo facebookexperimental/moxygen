@@ -115,6 +115,10 @@ void MoQServer::createMoQQuicSession(
   auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
                  ->getBackingEventBase();
   auto moqSession = createSession(std::move(wt), getOrCreateExecutor(evb));
+  if (mLoggerFactory_) {
+    auto logger = createLogger();
+    moqSession->setLogger(logger);
+  }
 
   // Configure session based on negotiated ALPN
   if (alpn) {
@@ -283,8 +287,8 @@ folly::Try<ServerSetup> MoQServer::onClientSetup(
   };
 
   // Log Server Setup
-  if (logger_) {
-    logger_->logServerSetup(serverSetup);
+  if (auto logger = session->getLogger()) {
+    logger->logServerSetup(serverSetup);
   }
 
   return folly::Try<ServerSetup>(serverSetup);
@@ -351,6 +355,10 @@ void MoQServer::Handler::onHeadersComplete(
   clientSession_ = server_.createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
       server_.getOrCreateExecutor(evb));
+  if (server_.mLoggerFactory_) {
+    auto logger = server_.createLogger();
+    clientSession_->setLogger(logger);
+  }
 
   // Configure session based on negotiated WebTransport protocol
   if (negotiatedProtocol) {
@@ -360,12 +368,15 @@ void MoQServer::Handler::onHeadersComplete(
   co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();
 }
 
-void MoQServer::setLogger(std::shared_ptr<MLogger> logger) {
-  logger_ = std::move(logger);
+void MoQServer::setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory) {
+  mLoggerFactory_ = std::move(factory);
 }
 
-std::shared_ptr<MLogger> MoQServer::getLogger() const {
-  return logger_;
+std::shared_ptr<MLogger> MoQServer::createLogger() const {
+  if (mLoggerFactory_) {
+    return mLoggerFactory_->createMLogger();
+  }
+  return nullptr;
 }
 
 void MoQServer::setQuicStatsFactory(
@@ -384,10 +395,11 @@ std::shared_ptr<MoQExecutor> MoQServer::getOrCreateExecutor(
 std::shared_ptr<MoQSession> MoQServer::createSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     std::shared_ptr<MoQExecutor> executor) {
-  return std::make_shared<MoQSession>(
+  auto session = std::make_shared<MoQSession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(std::move(wt)),
       *this,
       std::move(executor));
+  return session;
 }
 
 } // namespace moxygen
