@@ -127,7 +127,8 @@ enum class ResetStreamErrorCode : uint32_t {
   INTERNAL_ERROR = 0,
   DELIVERY_TIMEOUT = 1,
   SESSION_CLOSED = 2,
-  CANCELLED = 3, // received UNSUBSCRIBE / FETCH_CANCEL / STOP_SENDING
+  CANCELLED = 3,        // received UNSUBSCRIBE / FETCH_CANCEL / STOP_SENDING
+  MALFORMED_TRACK = 12, // track violated protocol ordering constraints
 };
 
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;

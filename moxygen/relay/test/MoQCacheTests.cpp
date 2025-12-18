@@ -784,7 +784,7 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
 
   result = writeback->beginSubgroup(4, 0, 0).value()->endOfTrackAndGroup(0);
   EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
 
   // Payload size changed
   result = writeback->objectStream(ObjectHeader(5, 0, 0, 0, 20), makeBuf(20));
@@ -794,13 +794,13 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
   // Beyond End of track
   result = writeback->objectStream(ObjectHeader(7, 0, 0, 0, 20), makeBuf(20));
   EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
 
   // End of track not largest
   result = writeback->objectStream(
       ObjectHeader(5, 0, 1, 0, ObjectStatus::END_OF_TRACK), makeBuf(20));
   EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error().code, MoQPublishError::API_ERROR);
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
 
   // Test the rest of the writeback APIs while we're here
   result = writeback->beginSubgroup(5, 0, 0).value()->endOfSubgroup();

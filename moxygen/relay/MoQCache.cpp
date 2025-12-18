@@ -230,7 +230,7 @@ MoQCache::CacheTrack::updateLargest(AbsoluteLocation current, bool eot) {
     if (endOfTrack) {
       XLOG(ERR) << "Malformed track, end of track set, but new largest object";
       return folly::makeUnexpected(
-          MoQPublishError(MoQPublishError::API_ERROR, "Malformed track"));
+          MoQPublishError(MoQPublishError::MALFORMED_TRACK, "Malformed track"));
     } else {
       endOfTrack = eot;
     }
@@ -239,7 +239,7 @@ MoQCache::CacheTrack::updateLargest(AbsoluteLocation current, bool eot) {
     // End of track is not the largest
     XLOG(ERR) << "Malformed track, eot is not the largest object";
     return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "Malformed track"));
+        MoQPublishError(MoQPublishError::MALFORMED_TRACK, "Malformed track"));
   }
   return folly::unit;
 }
@@ -1006,7 +1006,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         }
       } else {
         XLOG(ERR) << "Consumer error=" << res.error().msg;
-        consumer->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+        auto resetCode = res.error().code == MoQPublishError::MALFORMED_TRACK
+            ? ResetStreamErrorCode::MALFORMED_TRACK
+            : ResetStreamErrorCode::INTERNAL_ERROR;
+        consumer->reset(resetCode);
         co_return folly::makeUnexpected(
             FetchError{
                 fetch.requestID,
