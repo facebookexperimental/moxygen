@@ -6,6 +6,7 @@
  *
  */
 
+#include "moxygen/mlog/FileMLoggerFactory.h"
 #include "moxygen/moqtest/MoQTestServer.h"
 
 namespace moxygen {
@@ -51,14 +52,12 @@ int main(int argc, char** argv) {
   }
 
   if (FLAGS_log) {
-    auto logger =
-        std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::SERVER);
-    logger->setPath(FLAGS_mlog_path);
-    server->setLogger(logger);
+    auto factory = std::make_shared<moxygen::FileMLoggerFactory>(
+        FLAGS_mlog_path, moxygen::VantagePoint::SERVER);
+    server->setMLoggerFactory(factory);
     std::cout << "Type Anything To Exit Server...";
     std::string line;
     std::getline(std::cin, line);
-    server->getLogger()->outputLogsToFile();
     return 0;
   } else {
     folly::EventBase evb;
