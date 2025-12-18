@@ -10,6 +10,9 @@ In the following figure you can see an overview of the relay architecture
 TODO
 Fig2: Relay architecture overview
 
+
+See also [ARCHITECTURE.md](https://github.com/facebookexperimental/moxygen/blob/main/ARCHITECTURE.md)
+
 ## Installation
 
 - Set environment variables
