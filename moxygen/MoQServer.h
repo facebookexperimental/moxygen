@@ -24,11 +24,16 @@ const std::string kDefaultFilePath =
 
 class MoQServer : public MoQSession::ServerSetupCallback {
  public:
-  MoQServer(std::string cert, std::string key, std::string endpoint);
+  MoQServer(
+      std::string cert,
+      std::string key,
+      std::string endpoint,
+      folly::Optional<quic::TransportSettings> transportSettings = folly::none);
 
   MoQServer(
       std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
-      std::string endpoint);
+      std::string endpoint,
+      folly::Optional<quic::TransportSettings> transportSettings = folly::none);
 
   void start(
       const folly::SocketAddress& addr,

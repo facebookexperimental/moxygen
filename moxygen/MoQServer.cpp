@@ -18,7 +18,11 @@ using namespace proxygen;
 
 namespace moxygen {
 
-MoQServer::MoQServer(std::string cert, std::string key, std::string endpoint)
+MoQServer::MoQServer(
+    std::string cert,
+    std::string key,
+    std::string endpoint,
+    folly::Optional<quic::TransportSettings> transportSettings)
     : MoQServer(
           quic::samples::createFizzServerContext(
               []() {
@@ -30,26 +34,42 @@ MoQServer::MoQServer(std::string cert, std::string key, std::string endpoint)
               fizz::server::ClientAuthMode::Optional,
               cert,
               key),
-          std::move(endpoint)) {}
+          std::move(endpoint),
+          std::move(transportSettings)) {}
 
 MoQServer::MoQServer(
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
-    std::string endpoint)
+    std::string endpoint,
+    folly::Optional<quic::TransportSettings> transportSettings)
     : fizzContext_(std::move(fizzContext)), endpoint_(std::move(endpoint)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
-  params_.transportSettings.defaultCongestionController =
-      quic::CongestionControlType::Copa;
-  params_.transportSettings.copaDeltaParam = 0.05;
-  params_.transportSettings.pacingEnabled = true;
-  params_.transportSettings.experimentalPacer = true;
-  params_.transportSettings.maxCwndInMss = quic::kLargeMaxCwndInMss;
-  params_.transportSettings.batchingMode =
-      quic::QuicBatchingMode::BATCHING_MODE_GSO;
-  params_.transportSettings.maxBatchSize = 48;
-  params_.transportSettings.dataPathType = quic::DataPathType::ContinuousMemory;
-  params_.transportSettings.maxServerRecvPacketsPerLoop = 10;
-  params_.transportSettings.writeConnectionDataPacketsLimit = 48;
+  if (transportSettings) {
+    params_.transportSettings = *transportSettings;
+  } else {
+    // Sensible default values
+    params_.transportSettings.defaultCongestionController =
+        quic::CongestionControlType::Copa;
+    params_.transportSettings.copaDeltaParam = 0.05;
+    params_.transportSettings.pacingEnabled = true;
+    params_.transportSettings.experimentalPacer = true;
+    params_.transportSettings.maxCwndInMss = quic::kLargeMaxCwndInMss;
+    params_.transportSettings.batchingMode =
+        quic::QuicBatchingMode::BATCHING_MODE_GSO;
+    params_.transportSettings.maxBatchSize = 48;
+    params_.transportSettings.dataPathType =
+        quic::DataPathType::ContinuousMemory;
+    params_.transportSettings.maxServerRecvPacketsPerLoop = 10;
+    params_.transportSettings.writeConnectionDataPacketsLimit = 48;
+    params_.transportSettings.advertisedInitialConnectionFlowControlWindow =
+        1024 * 1024;
+    params_.transportSettings
+        .advertisedInitialBidiLocalStreamFlowControlWindow = 1024 * 1024;
+    params_.transportSettings
+        .advertisedInitialBidiRemoteStreamFlowControlWindow = 1024 * 1024;
+    params_.transportSettings.advertisedInitialUniStreamFlowControlWindow =
+        1024 * 1024;
+  }
 
   factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
