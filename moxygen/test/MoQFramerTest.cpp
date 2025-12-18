@@ -3147,7 +3147,8 @@ TEST_P(MoQFramerV15PlusTest, SubscribeAnnouncesForwardFalse) {
 
   SubscribeAnnounces subscribeAnnounces;
   subscribeAnnounces.requestID = RequestID(42);
-  subscribeAnnounces.trackNamespacePrefix = TrackNamespace({"ns", "prefix"});
+  subscribeAnnounces.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"ns", "prefix"});
   subscribeAnnounces.forward = false;
   subscribeAnnounces.params = {};
 
