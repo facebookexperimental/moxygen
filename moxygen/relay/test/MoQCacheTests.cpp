@@ -105,6 +105,17 @@ class MoQCacheTest : public ::testing::Test {
                 folly::makeUnexpected(err))));
   }
 
+  void expectUpstreamFetch(const FetchOk& ok) {
+    EXPECT_CALL(*upstream_, fetch(_, _))
+        .WillOnce([ok, this](const auto&, auto consumer) {
+          upstreamFetchConsumer_ = std::move(consumer);
+          upstreamFetchConsumer_->endOfFetch();
+          upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(ok);
+          return folly::coro::makeTask<Publisher::FetchResult>(
+              upstreamFetchHandle_);
+        });
+  }
+
   void populateCacheRange(
       AbsoluteLocation start,
       AbsoluteLocation end,
@@ -979,50 +990,80 @@ CO_TEST_F(MoQCacheTest, TestPopulateCacheWithBeginSubgroupAndFetch) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
 }
 
-CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsError) {
-  // Insert one object in the cache
-  populateCacheRange({0, 0}, {0, 1});
+CO_TEST_F(MoQCacheTest, TestPartialCacheMissBeginningNoObjectsUpstream) {
+  populateCacheRange({0, 6}, {0, 9});
 
-  // Expect upstream fetch to return FetchError::NO_OBJECTS
-  expectUpstreamFetch(FetchError{0, FetchErrorCode::NO_OBJECTS, "no objects"});
+  // Expect upstream fetch for the cache miss portion, returns empty stream
+  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {0, 6}, {}};
+  expectUpstreamFetch(upstreamFetchOk);
 
-  // Perform the fetch
+  // Expect consumer to receive objects 6, 7, 8 from cache
+  expectFetchObjects({0, 6}, {0, 9}, false);
+
+  // Perform the first fetch
   auto res =
-      co_await cache_.fetch(getFetch({0, 1}, {0, 2}), consumer_, upstream_);
-  EXPECT_TRUE(res.hasError());
-  EXPECT_EQ(res.error().errorCode, FetchErrorCode::NO_OBJECTS);
+      co_await cache_.fetch(getFetch({0, 0}, {0, 9}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 9}));
+
+  // Second fetch: fetch only {0,0} to {0,5} - no upstream call, no objects
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res2 =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 5}), consumer_, upstream_);
+  EXPECT_TRUE(res2.hasValue());
+  EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
 }
 
 CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsTail) {
-  // Insert one object in the cache
-  populateCacheRange({0, 0}, {0, 1});
+  // Cache has objects 0-9 in group 0
+  populateCacheRange({0, 0}, {0, 10});
 
-  // Expect upstream fetch to return FetchError::NO_OBJECTS
-  expectUpstreamFetch(FetchError{0, FetchErrorCode::NO_OBJECTS, "no objects"});
+  // Expect upstream fetch for the cache miss portion, returns empty stream
+  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {2, 5}, {}};
+  expectUpstreamFetch(upstreamFetchOk);
 
-  expectFetchObjects({0, 0}, {0, 1}, true);
-  // Perform the fetch
+  // Expect consumer to receive objects 0-9 from cache, then endOfFetch
+  expectFetchObjects({0, 0}, {0, 10}, true);
+
+  // Perform the first fetch
   auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+      co_await cache_.fetch(getFetch({0, 0}, {2, 5}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
-  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 5}));
+
+  // Second fetch: fetch only the tail {1,0} to {2,5} - all NOT_EXIST
+  // No upstream call, no objects served
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res2 =
+      co_await cache_.fetch(getFetch({1, 0}, {2, 5}), consumer_, upstream_);
+  EXPECT_TRUE(res2.hasValue());
+  EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{2, 5}));
 }
 
-CO_TEST_F(MoQCacheTest, TestFetchWithCacheGapAndUpstreamNoObjects) {
-  // Populate the cache with a gap {0,0}, {0,2}
-  populateCacheRange({0, 0}, {0, 3}, 10, 2);
+CO_TEST_F(MoQCacheTest, TestFullCacheMissNoObjectsUpstream) {
+  // No objects in cache - full cache miss
+  // Upstream returns FetchOk with empty stream (no objects exist)
+  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {0, 5}, {}};
+  expectUpstreamFetch(upstreamFetchOk);
 
-  // Expect upstream fetch to return FetchError::NO_OBJECTS for the gap
-  expectUpstreamFetch(FetchError{0, FetchErrorCode::NO_OBJECTS, "no objects"});
+  // Consumer should receive endOfFetch (empty stream)
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
 
-  // Expect the consumer to receive the objects from the cache
-  expectFetchObjects({0, 0}, {0, 3}, false, 10, 2);
-
-  // Perform the fetch
+  // Perform the fetch - should return FetchOk (not error)
   auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 3}), consumer_, upstream_);
+      co_await cache_.fetch(getFetch({0, 0}, {0, 5}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
-  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 3}));
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
+
+  // Second fetch: same range should be served from cache (all NOT_EXIST)
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res2 =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 5}), consumer_, upstream_);
+  EXPECT_TRUE(res2.hasValue());
+  EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
 }
 
 // Unit tests for cache hits, cache miss, and partial hits/misses spanning

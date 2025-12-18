@@ -281,10 +281,17 @@ class StreamPublisherImpl
     }
     return endOfTrackAndGroup(objectID);
   }
+
   folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
     if (!writeHandle_) {
-      return folly::makeUnexpected(
-          MoQPublishError(MoQPublishError::CANCELLED, "Fetch cancelled"));
+      if (streamComplete_) {
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::CANCELLED, "Fetch cancelled"));
+      }
+      auto res = ensureWriteHandle();
+      if (!res) {
+        return res;
+      }
     }
     return endOfSubgroup();
   }

@@ -985,8 +985,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
             track,
             consumer,
             upstream);
-        if (res.hasError() &&
-            res.error().errorCode != FetchErrorCode::NO_OBJECTS) {
+        if (res.hasError()) {
           co_return folly::makeUnexpected(res.error());
         } // else success but only returns FetchOk on lastObject
       }
@@ -1039,16 +1038,6 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
           consumer,
           upstream);
       if (res.hasError()) {
-        if (servedOneObject &&
-            res.error().errorCode == FetchErrorCode::NO_OBJECTS) {
-          consumer->endOfFetch();
-          co_return std::make_shared<FetchHandle>(FetchOk(
-              {fetch.requestID,
-               fetch.groupOrder,
-               false, // standalone->end can't be the end of track
-               standalone->end,
-               {}}));
-        }
         co_return folly::makeUnexpected(res.error());
       }
     }
@@ -1092,8 +1081,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
            standalone->end,
            {}}));
     } else {
-      co_return folly::makeUnexpected(
-          FetchError{fetch.requestID, FetchErrorCode::NO_OBJECTS, ""});
+      consumer->endOfFetch();
+      co_return std::make_shared<FetchHandle>(FetchOk(
+          {fetch.requestID, fetch.groupOrder, false, standalone->end, {}}));
     }
   }
   co_return nullptr;
@@ -1151,10 +1141,6 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
           fetch.groupOrder),
       writeback);
   if (res.hasError()) {
-    if (res.error().errorCode == FetchErrorCode::NO_OBJECTS) {
-      writeback->noObjects();
-      co_return folly::makeUnexpected(res.error());
-    }
     XLOG(ERR) << "upstream fetch failed err=" << res.error().reasonPhrase;
     consumer->reset(ResetStreamErrorCode::CANCELLED);
     co_return folly::makeUnexpected(

@@ -113,9 +113,6 @@ enum class RequestErrorCode : uint32_t {
   TRACK_NOT_EXIST = 4,
   INVALID_RANGE = 5,
 
-  // Fetch-specific codes
-  NO_OBJECTS = 6,
-
   // SubscribeAnnounces-specific codes
   NAMESPACE_PREFIX_UNKNOWN = 4, // Same value as TRACK_NOT_EXIST
 
