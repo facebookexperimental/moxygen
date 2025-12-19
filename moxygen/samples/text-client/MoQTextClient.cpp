@@ -461,7 +461,7 @@ int main(int argc, char* argv[]) {
     textClient->stop();
     textClient->moqClient_.shutdown();
     if (textClient->logger_) {
-      textClient->logger_->outputLogsToFile();
+      textClient->logger_->outputLogs();
     }
   });
 
@@ -489,7 +489,7 @@ int main(int argc, char* argv[]) {
       .thenTry([&handler, &textClient](const auto&) {
         handler.unreg();
         if (textClient->logger_) {
-          textClient->logger_->outputLogsToFile();
+          textClient->logger_->outputLogs();
         }
       });
   eventBase.loop();

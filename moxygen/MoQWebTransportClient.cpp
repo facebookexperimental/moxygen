@@ -7,6 +7,7 @@
 #include <moxygen/MoQWebTransportClient.h>
 
 #include <proxygen/lib/http/HQConnector.h>
+#include <proxygen/lib/http/session/QuicProtocolInfo.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <moxygen/MoQFramer.h>
 
@@ -116,6 +117,18 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
       transaction_timeout,
       verifier_,
       transportSettings);
+
+  if (logger_) {
+    auto quicInfo = session->getQuicInfo();
+    if (quicInfo) {
+      if (quicInfo->clientConnectionId) {
+        logger_->setSrcCid(*quicInfo->clientConnectionId);
+      }
+      if (quicInfo->serverConnectionId) {
+        logger_->setDcid(*quicInfo->serverConnectionId);
+      }
+    }
+  }
 
   // Establish WebTransport session
   auto txn = session->newTransaction(&httpHandler_);

@@ -41,6 +41,15 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       alpn,
       transportSettings);
 
+  if (logger_) {
+    if (auto scid = quicClient->getClientConnectionId()) {
+      logger_->setSrcCid(*scid);
+    }
+    if (auto dcid = quicClient->getServerConnectionId()) {
+      logger_->setDcid(*dcid);
+    }
+  }
+
   // Detect negotiated ALPN before wrapping the socket
   auto stdAlpn = quicClient->getAppProtocol();
   if (stdAlpn) {
@@ -135,7 +144,7 @@ ClientSetup MoQClientBase::getClientSetup(
 
 void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) noexcept {
   if (logger_) {
-    logger_->outputLogsToFile();
+    logger_->outputLogs();
   }
   if (moqSession_) {
     moqSession_->onSessionEnd(err);

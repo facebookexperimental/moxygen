@@ -2082,7 +2082,7 @@ MoQSession::MoQSession(
 MoQSession::~MoQSession() {
   cleanup();
   if (logger_) {
-    logger_->outputLogsToFile();
+    logger_->outputLogs();
   }
   XLOG(DBG1) << __func__ << " sess=" << this;
 }
@@ -5023,6 +5023,10 @@ void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
     versionBaton->signal();
   }
   subgroupsWaitingForVersion_.clear();
+
+  if (logger_) {
+    logger_->setNegotiatedMoQVersion(negotiatedVersion);
+  }
 }
 
 /*static*/

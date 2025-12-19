@@ -16,6 +16,22 @@ void MLogger::setPath(const std::string& path) {
   path_ = path;
 }
 
+void MLogger::setDcid(const quic::ConnectionId& dcid) {
+  dcid_ = dcid;
+}
+
+void MLogger::setSrcCid(const quic::ConnectionId& srcCid) {
+  srcCid_ = srcCid;
+}
+
+void MLogger::setNegotiatedMoQVersion(uint64_t version) {
+  negotiatedMoQVersion_ = version;
+}
+
+void MLogger::setExperiments(const std::vector<std::string>& experiments) {
+  experiments_ = experiments;
+}
+
 void MLogger::addControlMessageCreatedLog(MOQTControlMessageCreated req) {
   auto log = eventCreator_.createControlMessageCreatedEvent(
       vantagePoint_, std::move(req));
@@ -1128,12 +1144,11 @@ void MLogger::logControlMessage(
   }
 }
 
-void MLogger::outputLogsToFile() {
+void MLogger::outputLogs() {
   std::ofstream fileObj(path_);
   for (const auto& log : logs_) {
     auto obj = formatLog(log);
     std::string jsonLog = folly::toPrettyJson(obj);
-    LOG(INFO) << jsonLog;
     fileObj << jsonLog << std::endl;
   }
   fileObj.close();

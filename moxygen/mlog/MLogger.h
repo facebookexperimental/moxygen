@@ -10,6 +10,7 @@
 
 #include "folly/json/dynamic.h"
 #include "folly/json/json.h"
+#include "quic/codec/QuicConnectionId.h"
 #include "moxygen/MoQFramer.h"
 #include "moxygen/mlog/MLogEvents.h"
 #include "moxygen/mlog/MLogTypes.h"
@@ -24,6 +25,7 @@ const std::string kDefaultLoggerFilePath = "./mlog.txt";
 class MLogger {
  public:
   explicit MLogger(VantagePoint vantagePoint) : vantagePoint_(vantagePoint) {}
+  virtual ~MLogger() = default;
 
   MOQTClientSetupMessage createClientSetupControlMessage(
       uint64_t numberOfSupportedVersions,
@@ -49,7 +51,8 @@ class MLogger {
   void addFetchObjectCreatedLog(MOQTFetchObjectCreated req);
   void addFetchObjectParsedLog(MOQTFetchObjectParsed req);
 
-  void outputLogsToFile();
+  // Virtual method - subclasses can override to emit logs to their backend
+  virtual void outputLogs();
 
   void logClientSetup(
       const ClientSetup& setup,
@@ -204,14 +207,29 @@ class MLogger {
 
   void setPath(const std::string& path);
 
- private:
+  // Setter APIs for connection metadata (used by ScubaMLogger)
+  void setDcid(const quic::ConnectionId& dcid);
+  void setSrcCid(const quic::ConnectionId& srcCid);
+  void setNegotiatedMoQVersion(uint64_t version);
+  void setExperiments(const std::vector<std::string>& experiments);
+
+ protected:
+  // Core members accessible to subclasses
   VantagePoint vantagePoint_;
   std::vector<MLogEvent> logs_;
   std::string path_ = kDefaultLoggerFilePath;
   MLogEventCreator eventCreator_ = MLogEventCreator();
 
-  // Log Formatting
+  // Connection metadata (populated via setters, consumed by ScubaMLogger)
+  folly::Optional<quic::ConnectionId> dcid_;
+  folly::Optional<quic::ConnectionId> srcCid_;
+  folly::Optional<uint64_t> negotiatedMoQVersion_;
+  std::vector<std::string> experiments_;
+
+  // Log Formatting (protected for subclass access)
   folly::dynamic formatLog(const MLogEvent& log);
+
+ private:
   MOQTByteString convertTrackNameToByteStringFormat(
       const std::string& t,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE);
