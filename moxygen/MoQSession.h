@@ -792,5 +792,6 @@ class MoQSession : public Subscriber,
   // Cached transport info to avoid expensive getTransportInfo calls
   mutable quic::TransportInfo cachedTransportInfo_;
   mutable std::chrono::steady_clock::time_point lastTransportInfoUpdate_{};
+  bool closed_{false};
 };
 } // namespace moxygen

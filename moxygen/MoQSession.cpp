@@ -2205,6 +2205,10 @@ void MoQSession::checkForCloseOnDrain() {
 
 void MoQSession::close(SessionCloseErrorCode error) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (closed_) {
+    return;
+  }
+  closed_ = true;
   if (closeCallback_) {
     XLOG(DBG1) << "Calling close callback";
     closeCallback_->onMoQSessionClosed();
