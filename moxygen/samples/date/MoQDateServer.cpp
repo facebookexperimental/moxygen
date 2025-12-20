@@ -257,7 +257,6 @@ class MoQDateServer : public MoQServer,
     // Transform PubReq to SubReq
     SubscribeRequest subReq = {
         .requestID = req.requestID,
-        .trackAlias = req.trackAlias,
         .fullTrackName = req.fullTrackName,
         .groupOrder = req.groupOrder,
         .forward = req.forward,
@@ -301,7 +300,7 @@ class MoQDateServer : public MoQServer,
       // start may be in the past, it will get adjusted forward to largest
     }
 
-    auto alias = subReq.trackAlias.value_or(TrackAlias(subReq.requestID.value));
+    auto alias = TrackAlias(subReq.requestID.value);
     consumer->setTrackAlias(alias);
     auto session = MoQSession::getRequestSession();
     if (!loopRunning_) {

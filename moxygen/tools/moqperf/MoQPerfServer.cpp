@@ -22,8 +22,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> callback) {
   auto session = MoQSession::getRequestSession();
-  auto alias = subscribeRequest.trackAlias.value_or(
-      TrackAlias(subscribeRequest.requestID.value));
+  auto alias = TrackAlias(subscribeRequest.requestID.value);
   callback->setTrackAlias(alias);
   co_withExecutor(session->getExecutor(), writeLoop(callback, subscribeRequest))
       .start();

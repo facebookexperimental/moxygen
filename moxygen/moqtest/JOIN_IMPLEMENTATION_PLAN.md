@@ -112,7 +112,6 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
   SubscribeRequest sub;
   sub.requestID = kDefaultRequestId;
   sub.fullTrackName = {trackNamespace.value(), kDefaultTrackName};
-  sub.trackAlias = kDefaultTrackAlias;
   sub.groupOrder = kDefaultGroupOrder;
   sub.locType = LocationType::AbsoluteStart;  // Start at joiningStart
   sub.startGroup = joiningStart;

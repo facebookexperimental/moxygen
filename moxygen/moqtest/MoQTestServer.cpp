@@ -69,7 +69,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   }
 
   // Start a Co-routine to send objects back according to spec
-  auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
+  auto alias = TrackAlias(sub.requestID.value);
   callback->setTrackAlias(alias);
   // Declare cancellation source
   folly::CancellationSource cancelSource;
@@ -341,7 +341,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
     SubscribeRequest sub,
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
-  auto alias = sub.trackAlias.value_or(TrackAlias(sub.requestID.value));
+  auto alias = TrackAlias(sub.requestID.value);
   callback->setTrackAlias(alias);
   auto token = co_await folly::coro::co_current_cancellation_token;
   // Iterate through Objects

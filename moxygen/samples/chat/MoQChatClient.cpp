@@ -151,8 +151,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
             "Duplicate subscribe for track"});
   }
   chatRequestID_.emplace(subscribeReq.requestID);
-  chatTrackAlias_.emplace(subscribeReq.trackAlias.value_or(
-      TrackAlias(subscribeReq.requestID.value)));
+  chatTrackAlias_.emplace(TrackAlias(subscribeReq.requestID.value));
   folly::Optional<AbsoluteLocation> largest;
   if (nextGroup_ > 0) {
     largest.emplace(nextGroup_ - 1, 0);

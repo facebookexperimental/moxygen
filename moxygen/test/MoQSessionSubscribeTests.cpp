@@ -845,8 +845,7 @@ using V14PlusTests = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     V14PlusTests,
     V14PlusTests,
-    testing::Values(
-        VersionParams{{kVersionDraft12, kVersionDraft14}, kVersionDraft14}));
+    testing::Values(VersionParams{{kVersionDraft14}, kVersionDraft14}));
 CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;

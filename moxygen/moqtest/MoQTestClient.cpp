@@ -23,7 +23,6 @@ const std::string kDefaultTrackName = "test";
 const GroupOrder kDefaultGroupOrder = GroupOrder::OldestFirst;
 const LocationType kDefaultLocationType = LocationType::NextGroupStart;
 const uint64_t kDefaultEndGroup = 10;
-const TrackAlias kDefaultTrackAlias = TrackAlias(0);
 
 MoQTestClient::MoQTestClient(
     folly::EventBase* evb,
@@ -126,7 +125,6 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   ftn.trackName = kDefaultTrackName;
 
   sub.fullTrackName = ftn;
-  sub.trackAlias = kDefaultTrackAlias;
   sub.groupOrder = kDefaultGroupOrder;
   sub.locType = kDefaultLocationType;
   sub.endGroup = kDefaultEndGroup;

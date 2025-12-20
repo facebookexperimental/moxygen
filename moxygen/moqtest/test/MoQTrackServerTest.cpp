@@ -16,7 +16,6 @@
 namespace {
 
 const std::string kDefaultTrackName = "test";
-const moxygen::TrackAlias kDefaultTrackAlias = moxygen::TrackAlias(0);
 
 class MoQTrackServerTest : public testing::Test {
  public:
@@ -75,7 +74,6 @@ TEST_F(
   track_.trackNamespace[0] = "invalid";
   req.requestID = 0;
   req.fullTrackName.trackNamespace = track_;
-  req.trackAlias = kDefaultTrackAlias;
 
   // Call the subscribe method
   auto task = server_->subscribe(req, nullptr);
@@ -408,7 +406,6 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
 
   moxygen::SubscribeRequest sub;
   sub.requestID = 0;
-  sub.trackAlias = kDefaultTrackAlias;
   sub.groupOrder = moxygen::GroupOrder(0x1);
   sub.fullTrackName.trackNamespace = track_;
   params_.testIntegerExtension = -1;
@@ -418,7 +415,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
 
   // Expect setTrackAlias call
-  EXPECT_CALL(*mockConsumer, setTrackAlias(*sub.trackAlias))
+  EXPECT_CALL(
+      *mockConsumer, setTrackAlias(moxygen::TrackAlias(sub.requestID.value)))
       .WillOnce(
           testing::Return(
               folly::Expected<folly::Unit, moxygen::MoQPublishError>(

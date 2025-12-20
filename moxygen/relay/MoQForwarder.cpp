@@ -108,8 +108,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
     return nullptr;
   }
   auto sessionPtr = session.get();
-  auto trackAlias =
-      subReq.trackAlias.value_or(trackAlias_.value_or(subReq.requestID.value));
+  auto trackAlias = trackAlias_.value_or(subReq.requestID.value);
   XCHECK(consumer);
   consumer->setTrackAlias(trackAlias);
   auto subscriber = std::make_shared<MoQForwarder::Subscriber>(

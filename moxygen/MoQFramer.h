@@ -580,8 +580,7 @@ folly::Optional<std::string> getAlpnFromVersion(uint64_t version);
 std::vector<std::string> getDefaultMoqtProtocols(
     bool includeExperimental = false);
 
-constexpr std::array<uint64_t, 3> kSupportedVersions{
-    kVersionDraft12,
+constexpr std::array<uint64_t, 2> kSupportedVersions{
     kVersionDraft14,
     kVersionDraft15};
 
@@ -990,7 +989,6 @@ struct SubscribeRequest {
       TrackRequestParameters params = {}) {
     return SubscribeRequest{
         RequestID(), // Default constructed RequestID
-        folly::none, // Default constructed TrackAlias (folly::none)
         fullTrackName,
         priority,
         groupOrder,
@@ -1002,11 +1000,10 @@ struct SubscribeRequest {
   }
 
   RequestID requestID;
-  folly::Optional<TrackAlias> trackAlias; // < v12
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
-  bool forward{true}; // Only used in draft-12 and above
+  bool forward{true};
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   uint64_t endGroup;
@@ -1027,7 +1024,7 @@ struct SubscribeUpdate {
 
 struct SubscribeOk {
   RequestID requestID;
-  TrackAlias trackAlias; // >= v12
+  TrackAlias trackAlias;
   std::chrono::milliseconds expires;
   GroupOrder groupOrder;
   // context exists is inferred from presence of largest
@@ -1095,7 +1092,7 @@ using TrackStatus = SubscribeRequest;
 // which are not present in SubscribeOk, so we cannot alias directly yet.
 struct TrackStatusOk {
   RequestID requestID;
-  TrackAlias trackAlias; // >= v12
+  TrackAlias trackAlias;
   std::chrono::milliseconds expires{};
   GroupOrder groupOrder{};
   // context exists is inferred from presence of largest

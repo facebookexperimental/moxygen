@@ -168,7 +168,7 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
 
   // Client sends setup with version < 15 (no ALPN negotiation happened)
   ClientSetup clientSetup;
-  clientSetup.supportedVersions.push_back(kVersionDraft12);
+  clientSetup.supportedVersions.push_back(kVersionDraft14);
   clientSetup.params = {};
 
   folly::coro::co_withExecutor(

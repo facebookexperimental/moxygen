@@ -2276,7 +2276,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
          getMoQTImplementationString()}));
   }
 
-  uint64_t setupSerializationVersion = kVersionDraft12;
+  uint64_t setupSerializationVersion = kVersionDraft14;
   if (negotiatedVersion_) {
     setupSerializationVersion = *negotiatedVersion_;
   }
@@ -2412,14 +2412,6 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
       return;
     }
 
-    // Check if selected version is < 12 and handle appropriately
-    if (majorVersion < 12) {
-      XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
-                << " (major=" << majorVersion
-                << ") is not supported. Minimum version is 12. sess=" << this;
-      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-      return;
-    }
     initializeNegotiatedVersion(serverSetup->selectedVersion);
   }
 
@@ -3103,7 +3095,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       this,
       subscribeRequest.fullTrackName,
       subscribeRequest.requestID,
-      subscribeRequest.trackAlias,
+      folly::none,
       subscribeRequest.priority,
       subscribeRequest.groupOrder,
       *negotiatedVersion_,
@@ -4360,7 +4352,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   RequestID reqID = getNextRequestID();
   sub.requestID = reqID;
   TrackAlias trackAlias = reqID.value;
-  sub.trackAlias = trackAlias;
   aliasifyAuthTokens(sub.params);
 
   auto wres = moqFrameWriter_.writeSubscribeRequest(controlWriteBuf_, sub);

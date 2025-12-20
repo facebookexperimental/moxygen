@@ -69,7 +69,6 @@ Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
 SubscribeRequest getSubscribe(const FullTrackName& ftn) {
   return SubscribeRequest{
       RequestID(0),
-      TrackAlias(0),
       ftn,
       0,
       GroupOrder::OldestFirst,
@@ -468,13 +467,6 @@ ClientSetup MoQSessionTest::getClientSetup(uint64_t initialMaxRequestID) {
               initialMaxRequestID},
           SetupParameter{
               folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16}}};
-  if (std::find(
-          setup.supportedVersions.begin(),
-          setup.supportedVersions.end(),
-          kVersionDraft12) != setup.supportedVersions.end()) {
-    setup.params.insertParam(getAuthParam(
-        kVersionDraft12, "auth_token_value", 0, AuthToken::Register));
-  }
   return setup;
 }
 

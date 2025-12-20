@@ -83,7 +83,6 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       folly::none,
       0,
       getTestTrackRequestParameters(moqFrameWriter));
-  req.trackAlias = TrackAlias(0); // required for draft-11 and below
   res = moqFrameWriter.writeSubscribeRequest(writeBuf, req);
   res = moqFrameWriter.writeSubscribeUpdate(
       writeBuf,

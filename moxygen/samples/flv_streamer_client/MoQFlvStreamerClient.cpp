@@ -183,8 +183,7 @@ class MoQFlvStreamerClient
               "Only location LargestObject mode supported"});
     }
     // Track not available
-    auto alias = subscribeReq.trackAlias.value_or(
-        TrackAlias(subscribeReq.requestID.value));
+    auto alias = TrackAlias(subscribeReq.requestID.value);
     consumer->setTrackAlias(alias);
     auto consumerPtr = consumer.get();
     if (subscribeReq.fullTrackName == fullVideoTrackName_) {

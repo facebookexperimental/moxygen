@@ -1150,7 +1150,6 @@ static size_t writeSubscribeRequestWithAuthToken(
     const std::string& tokenValue) {
   SubscribeRequest req{
       RequestID(0),
-      TrackAlias(1),
       FullTrackName({TrackNamespace({"test"}), "track"}),
       kDefaultPriority,
       GroupOrder::OldestFirst,
@@ -1680,10 +1679,6 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
 }
 
 TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
-  auto alpnDraft12 = getAlpnFromVersion(kVersionDraft12);
-  ASSERT_TRUE(alpnDraft12.hasValue());
-  EXPECT_EQ(*alpnDraft12, "moq-00");
-
   auto alpnDraft14 = getAlpnFromVersion(kVersionDraft14);
   ASSERT_TRUE(alpnDraft14.hasValue());
   EXPECT_EQ(*alpnDraft14, "moq-00");

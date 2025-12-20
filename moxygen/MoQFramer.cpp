@@ -495,8 +495,6 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
     ParamsType paramsType) {
   Parameter p;
   p.key = key;
-  // Formatted Auth Tokens from v11
-  // Auth in setup from v12
   const auto authKey =
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
   const auto subscriptionFilterKey =
@@ -639,7 +637,7 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
   ClientSetup clientSetup;
-  uint64_t serializationVersion = kVersionDraft12;
+  uint64_t serializationVersion = kVersionDraft14;
 
   // Only parse version array when version is not initialized, i.e. alpn did not
   // happen, or when version is initialized but is < 15 (in tests)
@@ -3097,7 +3095,6 @@ void writeSize(
     bool& error,
     uint64_t versionIn) {
   if (size > ((1 << 16) - 1)) {
-    // Size check for versions >= 12
     LOG(ERROR) << "Control message size exceeds max sz=" << size;
     error = true;
     return;
@@ -3185,7 +3182,7 @@ WriteResult writeClientSetup(
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   if (getDraftMajorVersion(version) < 15) {
-    // Check that all supported versions are >= 12
+    // Check that all versions are supported
     for (auto ver : clientSetup.supportedVersions) {
       XCHECK(isSupportedVersion(ver))
           << "Version " << ver << " is not supported. Supported versions are: "
@@ -4931,7 +4928,7 @@ bool isValidSubgroupType(uint64_t version, uint64_t streamType) {
 bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
   auto majorVersion = getDraftMajorVersion(version);
   if (majorVersion < 15) {
-    // v12-14: types 0x00-0x07 (payload) and 0x20-0x21 (status)
+    // v14: types 0x00-0x07 (payload) and 0x20-0x21 (status)
     return (
         datagramType <= folly::to_underlying(
                             DatagramType::OBJECT_DATAGRAM_EXT_EOG_ID_ZERO) ||
