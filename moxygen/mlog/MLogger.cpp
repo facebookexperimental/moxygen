@@ -23,6 +23,14 @@ void MLogger::setSrcCid(const quic::ConnectionId& srcCid) {
   srcCid_ = srcCid;
 }
 
+void MLogger::setPeerAddress(const folly::SocketAddress& peerAddress) {
+  peerAddress_ = peerAddress;
+}
+
+void MLogger::setLocalAddress(const folly::SocketAddress& localAddress) {
+  localAddress_ = localAddress;
+}
+
 void MLogger::setNegotiatedMoQVersion(uint64_t version) {
   negotiatedMoQVersion_ = version;
 }

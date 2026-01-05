@@ -48,6 +48,8 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
     if (auto dcid = quicClient->getServerConnectionId()) {
       logger_->setDcid(*dcid);
     }
+    logger_->setLocalAddress(quicClient->getLocalAddress());
+    logger_->setPeerAddress(quicClient->getPeerAddress());
   }
 
   // Detect negotiated ALPN before wrapping the socket

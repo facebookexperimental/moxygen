@@ -128,6 +128,8 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
         logger_->setDcid(*quicInfo->serverConnectionId);
       }
     }
+    logger_->setLocalAddress(session->getLocalAddress());
+    logger_->setPeerAddress(session->getPeerAddress());
   }
 
   // Establish WebTransport session

@@ -127,9 +127,11 @@ void MoQServer::createMoQQuicSession(
     XLOG(DBG1) << "Server: Negotiated ALPN: " << *alpn;
   }
 
-  // Capture connection IDs before moving the socket
+  // Capture connection IDs and addresses before moving the socket
   auto clientCid = quicSocket->getClientConnectionId();
   auto serverCid = quicSocket->getServerConnectionId();
+  auto peerAddress = quicSocket->getPeerAddress();
+  auto localAddress = quicSocket->getLocalAddress();
 
   auto qevb = quicSocket->getEventBase();
   auto quicWebTransport =
@@ -141,13 +143,15 @@ void MoQServer::createMoQQuicSession(
   auto moqSession = createSession(std::move(wt), getOrCreateExecutor(evb));
   if (mLoggerFactory_) {
     auto logger = createLogger();
-    // Set QUIC connection IDs on the logger
+    // Set QUIC connection IDs and addresses on the logger
     if (clientCid) {
       logger->setDcid(*clientCid);
     }
     if (serverCid) {
       logger->setSrcCid(*serverCid);
     }
+    logger->setPeerAddress(peerAddress);
+    logger->setLocalAddress(localAddress);
     moqSession->setLogger(logger);
   }
 
@@ -388,7 +392,8 @@ void MoQServer::Handler::onHeadersComplete(
       server_.getOrCreateExecutor(evb));
   if (server_.mLoggerFactory_) {
     auto logger = server_.createLogger();
-    // Set QUIC connection IDs on the logger from the underlying transaction
+    // Set QUIC connection IDs and addresses on the logger from the underlying
+    // transaction
     auto& transport = txn_->getTransport();
     if (transport.getSessionType() ==
         proxygen::HTTPTransaction::Transport::Type::QUIC) {
@@ -401,6 +406,8 @@ void MoQServer::Handler::onHeadersComplete(
         if (auto serverCid = quicSocket->getServerConnectionId()) {
           logger->setSrcCid(*serverCid);
         }
+        logger->setPeerAddress(quicSocket->getPeerAddress());
+        logger->setLocalAddress(quicSocket->getLocalAddress());
       }
     }
     clientSession_->setLogger(logger);

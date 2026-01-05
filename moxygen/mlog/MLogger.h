@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "folly/SocketAddress.h"
 #include "folly/json/dynamic.h"
 #include "folly/json/json.h"
 #include "quic/codec/QuicConnectionId.h"
@@ -213,6 +214,8 @@ class MLogger {
   // Setter APIs for connection metadata (used by ScubaMLogger)
   void setDcid(const quic::ConnectionId& dcid);
   void setSrcCid(const quic::ConnectionId& srcCid);
+  void setPeerAddress(const folly::SocketAddress& peerAddress);
+  void setLocalAddress(const folly::SocketAddress& localAddress);
   void setNegotiatedMoQVersion(uint64_t version);
   void setExperiments(const std::vector<std::string>& experiments);
 
@@ -226,6 +229,8 @@ class MLogger {
   // Connection metadata (populated via setters, consumed by ScubaMLogger)
   folly::Optional<quic::ConnectionId> dcid_;
   folly::Optional<quic::ConnectionId> srcCid_;
+  folly::Optional<folly::SocketAddress> peerAddress_;
+  folly::Optional<folly::SocketAddress> localAddress_;
   folly::Optional<uint64_t> negotiatedMoQVersion_;
   std::vector<std::string> experiments_;
 
