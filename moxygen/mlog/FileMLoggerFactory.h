@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <moxygen/mlog/FileMLogger.h>
 #include <string>
 #include "moxygen/mlog/MLoggerFactory.h"
 
@@ -20,7 +21,7 @@ class FileMLoggerFactory : public MLoggerFactory {
       : path_(path), vantagePoint_(vantagePoint) {}
 
   std::shared_ptr<MLogger> createMLogger() override {
-    auto logger = std::make_shared<MLogger>(vantagePoint_);
+    auto logger = std::make_shared<FileMLogger>(vantagePoint_);
     logger->setPath(path_);
     return logger;
   }

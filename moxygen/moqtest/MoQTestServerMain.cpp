@@ -6,6 +6,7 @@
  *
  */
 
+#include "moxygen/mlog/FileMLogger.h"
 #include "moxygen/mlog/FileMLoggerFactory.h"
 #include "moxygen/moqtest/MoQTestServer.h"
 

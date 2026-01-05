@@ -9,6 +9,7 @@ add_library(mlogger
     MLogger.cpp
     MLogEvents.cpp
     MLogTypes.cpp
+    FileMLogger.cpp
 )
 
 target_include_directories(

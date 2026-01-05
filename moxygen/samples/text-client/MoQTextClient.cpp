@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <moxygen/MoQWebTransportClient.h>
 #include <moxygen/ObjectReceiver.h>
+#include <moxygen/mlog/FileMLogger.h>
 #include <moxygen/mlog/MLogger.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
@@ -410,7 +411,7 @@ int main(int argc, char* argv[]) {
   proxygen::URL url(FLAGS_connect_url);
   std::shared_ptr<MLogger> logger;
   if (!FLAGS_mlog_path.empty()) {
-    logger = std::make_shared<MLogger>(VantagePoint::CLIENT);
+    logger = std::make_shared<FileMLogger>(VantagePoint::CLIENT);
     logger->setPath(FLAGS_mlog_path);
   }
   if (!url.isValid() || !url.hasHost()) {

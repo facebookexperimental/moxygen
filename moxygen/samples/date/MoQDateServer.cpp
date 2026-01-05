@@ -11,6 +11,7 @@
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/MoQWebTransportClient.h>
+#include <moxygen/mlog/FileMLogger.h>
 #include <moxygen/mlog/FileMLoggerFactory.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>

@@ -7,7 +7,6 @@
  */
 
 #include "moxygen/mlog/MLogger.h"
-#include <fstream>
 #include <utility>
 
 namespace moxygen {
@@ -1142,16 +1141,6 @@ void MLogger::logControlMessage(
       break;
     }
   }
-}
-
-void MLogger::outputLogs() {
-  std::ofstream fileObj(path_);
-  for (const auto& log : logs_) {
-    auto obj = formatLog(log);
-    std::string jsonLog = folly::toPrettyJson(obj);
-    fileObj << jsonLog << std::endl;
-  }
-  fileObj.close();
 }
 
 } // namespace moxygen

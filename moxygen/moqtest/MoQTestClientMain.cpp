@@ -9,6 +9,7 @@
 #include <folly/coro/BlockingWait.h>
 #include "folly/init/Init.h"
 #include "folly/io/async/ScopedEventBaseThread.h"
+#include "moxygen/mlog/FileMLogger.h"
 #include "moxygen/moqtest/MoQTestClient.h"
 
 namespace moxygen {
@@ -111,7 +112,8 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<moxygen::MLogger> logger;
   if (FLAGS_log) {
-    logger = std::make_shared<moxygen::MLogger>(moxygen::VantagePoint::CLIENT);
+    logger =
+        std::make_shared<moxygen::FileMLogger>(moxygen::VantagePoint::CLIENT);
     logger->setPath(FLAGS_mlog_path);
     client->setLogger(logger);
   }

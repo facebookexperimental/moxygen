@@ -21,7 +21,9 @@ namespace moxygen {
 const uint64_t kFirstBidiStreamId = 0;
 const std::string kDefaultLoggerFilePath = "./mlog.txt";
 
-// Main Logger Class -> results in json output in mlog.txt file
+// Abstract base class for MoQ logging.
+// Subclasses implement outputLogs() to emit logs to a specific backend
+// (e.g., FileMLogger for file output, ScubaMLogger for Scuba).
 class MLogger {
  public:
   explicit MLogger(VantagePoint vantagePoint) : vantagePoint_(vantagePoint) {}
@@ -51,8 +53,9 @@ class MLogger {
   void addFetchObjectCreatedLog(MOQTFetchObjectCreated req);
   void addFetchObjectParsedLog(MOQTFetchObjectParsed req);
 
-  // Virtual method - subclasses can override to emit logs to their backend
-  virtual void outputLogs();
+  // Pure virtual method - subclasses must implement to emit logs to their
+  // backend
+  virtual void outputLogs() = 0;
 
   void logClientSetup(
       const ClientSetup& setup,
