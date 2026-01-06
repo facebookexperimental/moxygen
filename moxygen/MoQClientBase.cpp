@@ -9,6 +9,8 @@
 #include <quic/client/QuicClientTransport.h>
 #include <moxygen/MoQClientBase.h>
 
+#include <utility>
+
 namespace moxygen {
 /*static*/
 bool MoQClientBase::shouldSendAuthorityParam(
@@ -148,15 +150,20 @@ void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) noexcept {
   if (logger_) {
     logger_->outputLogs();
   }
-  if (moqSession_) {
-    moqSession_->onSessionEnd(err);
-    XLOG(DBG1) << "resetting moqSession_";
-    moqSession_.reset();
-  }
+
+  // Clear handler FIRST to prevent further callbacks
   if (quicWebTransport_) {
     quicWebTransport_->setHandler(nullptr);
-    XLOG(DBG1) << "resetting quicWebTransport_";
-    quicWebTransport_.reset();
+  }
+
+  // Take ownership and clear members before calling into session.
+  // If 'this' is destroyed during session->onSessionEnd(),
+  // we only touch local stack variables after that.
+  auto session = std::exchange(moqSession_, nullptr);
+  auto wt = std::exchange(quicWebTransport_, nullptr);
+
+  if (session) {
+    session->onSessionEnd(err);
   }
 }
 

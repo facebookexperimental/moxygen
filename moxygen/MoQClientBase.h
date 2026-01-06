@@ -54,6 +54,9 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       moqSession_->close(SessionCloseErrorCode::NO_ERROR);
       moqSession_.reset();
     }
+    if (quicWebTransport_) {
+      quicWebTransport_->setHandler(nullptr);
+    }
   }
 
   std::shared_ptr<MoQExecutor> getEventBase() {
