@@ -6,9 +6,11 @@
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
+#include <moxygen/MoQClient.h>
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/MoQWebTransportClient.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/mlog/FileMLogger.h>
 #include <moxygen/mlog/FileMLoggerFactory.h>
 #include <moxygen/relay/MoQForwarder.h>
@@ -37,7 +39,8 @@ DEFINE_string(ns, "moq-date", "Namespace for date track");
 DEFINE_bool(
     use_legacy_setup,
     false,
-    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
+    "If true, use only moq-00 ALPN (legacy). If false, use latest "
+    "draft ALPN with fallback to legacy");
 DEFINE_int32(delivery_timeout, 0, "the delivery timeout in ms for server");
 DEFINE_bool(
     insecure,
@@ -75,100 +78,87 @@ class DateSubscriptionHandle : public Publisher::SubscriptionHandle {
   }
 };
 
-class MoQDateServer : public MoQServer,
-                      public Publisher,
-                      public std::enable_shared_from_this<MoQDateServer> {
+// DatePublisher - Publisher logic with no server dependencies
+class DatePublisher : public Publisher {
  public:
   enum class Mode { STREAM_PER_GROUP, STREAM_PER_OBJECT, DATAGRAM };
 
-  // Constructor for the secure version, where we pass in the certificate and
-  // the key.
-  MoQDateServer(Mode mode, const std::string& cert, const std::string& key)
-      : MoQServer(cert, key, "/moq-date"),
-        forwarder_(dateTrackName()),
-        mode_(mode) {}
+  explicit DatePublisher(
+      Mode mode,
+      std::string ns = "moq-date",
+      int deliveryTimeout = 0)
+      : mode_(mode),
+        ns_(std::move(ns)),
+        deliveryTimeout_(deliveryTimeout),
+        forwarder_(dateTrackName()) {}
 
-  // Constructor for the insecure version
-  explicit MoQDateServer(Mode mode)
-      : MoQServer(
-            quic::samples::createFizzServerContextWithInsecureDefault(
-                []() {
-                  std::vector<std::string> alpns = {"h3"};
-                  auto moqt = getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
-                  alpns.insert(alpns.end(), moqt.begin(), moqt.end());
-                  return alpns;
-                }(),
-                fizz::server::ClientAuthMode::None,
-                "" /* cert */,
-                "" /* key */),
-            "/moq-date"),
-        forwarder_(dateTrackName()),
-        mode_(mode) {}
+  folly::coro::Task<PublishRequest> callPublish(
+      MoQRelayClient* relayClient,
+      TrackNamespace ns,
+      uint64_t requestId,
+      std::shared_ptr<MoQExecutor> executor) {
+    // Form PublishRequest
+    PublishRequest req{
+        requestId,
+        FullTrackName{ns, "date"},
+        TrackAlias(requestId),
+        GroupOrder::Default,
+        folly::none,
+        true,
+        {}};
 
-  bool startRelayClient() {
-    proxygen::URL url(FLAGS_relay_url);
-    if (!url.isValid() || !url.hasHost()) {
-      XLOG(ERR) << "Invalid url: " << FLAGS_relay_url;
-      return false;
+    XLOG(INFO) << "PublishRequest track ns=" << req.fullTrackName.trackNamespace
+               << " name=" << req.fullTrackName.trackName
+               << " requestID=" << req.requestID
+               << " track alias=" << req.trackAlias;
+
+    // Use relayClient to publish to relayServer
+    auto session = relayClient->getSession();
+
+    // Create a default handle
+    auto handle = std::make_shared<DateSubscriptionHandle>();
+
+    auto publishResponse = session->publish(req, handle);
+    if (!publishResponse.hasValue()) {
+      XLOG(ERR) << "Publish error: " << publishResponse.error().reasonPhrase;
+      co_return req;
     }
-    auto evb = getWorkerEvbs()[0];
-    if (!moqEvb_) {
-      moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(evb);
-    }
-    auto verifier = FLAGS_insecure
-        ? std::make_shared<
-              moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>()
-        : nullptr;
-    relayClient_ = std::make_unique<MoQRelayClient>((
-        FLAGS_quic_transport ? std::make_unique<MoQClient>(
-                                   moqEvb_,
-                                   url,
-                                   MoQRelaySession::createRelaySessionFactory(),
-                                   verifier)
-                             : std::make_unique<MoQWebTransportClient>(
-                                   moqEvb_,
-                                   url,
-                                   MoQRelaySession::createRelaySessionFactory(),
-                                   verifier)));
-
-    if (auto logger = createLogger()) {
-      relayClient_->setLogger(logger);
+    auto consumer = publishResponse.value().consumer;
+    // Begin a subgroup on consumer
+    auto subConsumer = consumer->beginSubgroup(0, 0, 128);
+    if (subConsumer.hasError()) {
+      XLOG(ERR) << "Subgroup error: " << subConsumer.error().what();
+      co_return req;
     }
 
-    // Default to experimental protocols, override to legacy if flag set
-    std::vector<std::string> alpns =
-        getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+    // Transform PubReq to SubReq
+    SubscribeRequest subReq = {
+        .requestID = req.requestID,
+        .fullTrackName = req.fullTrackName,
+        .groupOrder = req.groupOrder,
+        .forward = req.forward,
+        .locType = LocationType::LargestObject};
 
-    folly::coro::blockingWait(
-        relayClient_
-            ->setup(
-                /*publisher=*/shared_from_this(),
-                /*subscriber=*/nullptr,
-                std::chrono::milliseconds(FLAGS_relay_connect_timeout),
-                std::chrono::seconds(FLAGS_relay_transaction_timeout),
-                quic::TransportSettings(),
-                alpns)
-            .scheduleOn(evb)
-            .start());
-    relayClient_
-        ->run(
-            /*publisher=*/shared_from_this(), {TrackNamespace(FLAGS_ns, "/")})
-        .scheduleOn(moqEvb_.get())
-        .start();
-    if (FLAGS_publish) {
-      callPublish(TrackNamespace(FLAGS_ns, "/"), 0).scheduleOn(evb).start();
+    // Add as a subscriber to forwarder
+    forwarder_.addSubscriber(session, subReq, consumer);
+
+    if (!loopRunning_) {
+      loopRunning_ = true;
+      publishDateLoop(subConsumer.value()).scheduleOn(executor.get()).start();
     }
-    return true;
+
+    co_return req;
   }
 
-  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
-    clientSession->setPublishHandler(shared_from_this());
+  void stopPublishLoop() {
+    loopCancelSource_.requestCancellation();
   }
 
-  void shutdownRelayClient() {
-    if (relayClient_) {
-      relayClient_->shutdown();
-    }
+  void removeSubscriber(
+      std::shared_ptr<MoQSession> session,
+      folly::Optional<SubscribeDone> subDone,
+      const std::string& reason) {
+    forwarder_.removeSubscriber(std::move(session), std::move(subDone), reason);
   }
 
   std::pair<uint64_t, uint64_t> now() {
@@ -201,78 +191,16 @@ class MoQDateServer : public MoQServer,
               TrackStatusErrorCode::TRACK_NOT_EXIST,
               "The requested track does not exist"});
     }
-    // TODO: add other trackSTatus codes
-    // TODO: unify this with subscribe. You can get the same information both
-    // ways
-    // TODO: This doesn't actually give back the correct status, its just so
-    // that it builds
     auto largest = updateLargest();
     co_return TrackStatusOk{
         trackStatus.requestID,
         0,
         std::chrono::milliseconds(0),
-        GroupOrder::OldestFirst, // Use OldestFirst instead of Default for
-                                 // Draft-14 compatibility
+        GroupOrder::OldestFirst,
         largest,
+        {},
+        trackStatus.fullTrackName,
         {}};
-  }
-
-  folly::coro::Task<PublishRequest> callPublish(
-      TrackNamespace ns,
-      uint64_t requestId) {
-    // Form PublishRequest
-    PublishRequest req{
-        requestId,
-        FullTrackName{ns, "date"},
-        TrackAlias(requestId),
-        GroupOrder::Default,
-        folly::none,
-        true,
-        {}};
-
-    XLOG(INFO) << "PublishRequest track ns=" << req.fullTrackName.trackName
-               << " name=" << req.fullTrackName.trackName
-               << " requestID=" << req.requestID
-               << " track alias=" << req.trackAlias;
-
-    // Use relayClient_ to publish to relayServer
-    auto session = relayClient_->getSession();
-
-    // Create a default handle
-    auto handle = std::make_shared<DateSubscriptionHandle>();
-
-    auto publishResponse = session->publish(req, handle);
-    if (!publishResponse.hasValue()) {
-      XLOG(ERR) << "Publish error: " << publishResponse.error().reasonPhrase;
-      co_return req;
-    }
-    auto consumer = publishResponse.value().consumer;
-    // Begin a subgroup on consumer
-    auto subConsumer = consumer->beginSubgroup(0, 0, 128);
-    if (subConsumer.hasError()) {
-      XLOG(ERR) << "Subgroup error: " << subConsumer.error().what();
-      co_return req;
-    }
-
-    // Transform PubReq to SubReq
-    SubscribeRequest subReq = {
-        .requestID = req.requestID,
-        .fullTrackName = req.fullTrackName,
-        .groupOrder = req.groupOrder,
-        .forward = req.forward,
-        .locType = LocationType::LargestObject};
-
-    // Add as a subscriber to forwarder
-    forwarder_.addSubscriber(session, subReq, consumer);
-
-    if (!loopRunning_) {
-      loopRunning_ = true;
-      publishDateLoop(subConsumer.value())
-          .scheduleOn(session->getExecutor())
-          .start();
-    }
-
-    co_return req;
   }
 
   folly::coro::Task<SubscribeResult> subscribe(
@@ -297,7 +225,6 @@ class MoQDateServer : public MoQServer,
               subReq.requestID,
               SubscribeErrorCode::INVALID_RANGE,
               "Range in the past, use FETCH"});
-      // start may be in the past, it will get adjusted forward to largest
     }
 
     auto alias = TrackAlias(subReq.requestID.value);
@@ -308,7 +235,7 @@ class MoQDateServer : public MoQServer,
       co_withExecutor(session->getExecutor(), publishDateLoop()).start();
     }
 
-    forwarder_.setDeliveryTimeout(FLAGS_delivery_timeout);
+    forwarder_.setDeliveryTimeout(deliveryTimeout_);
     auto subscriber = forwarder_.addSubscriber(
         std::move(session), subReq, std::move(consumer));
     co_return subscriber;
@@ -390,11 +317,8 @@ class MoQDateServer : public MoQServer,
   void goaway(Goaway goaway) override {
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
     auto session = MoQSession::getRequestSession();
-    if (relayClient_ && relayClient_->getSession() == session) {
-      // TODO: relay is going away
-    } else {
-      forwarder_.removeSubscriber(session, folly::none, "unsubscribe");
-    }
+    // TODO: relay is going away
+    forwarder_.removeSubscriber(session, folly::none, "goaway");
   }
 
   Payload minutePayload(uint64_t group) {
@@ -488,7 +412,8 @@ class MoQDateServer : public MoQServer,
     if (subConsumer) {
       subgroupPublisher = subConsumer;
     }
-    while (!cancelToken.isCancellationRequested()) {
+    while (!cancelToken.isCancellationRequested() &&
+           !loopCancelSource_.isCancellationRequested()) {
       auto [minute, second] = now();
       if (forwarder_.empty()) {
         forwarder_.setLargest(nowLocation());
@@ -587,60 +512,190 @@ class MoQDateServer : public MoQServer,
     }
   }
 
+ private:
+  FullTrackName dateTrackName() const {
+    return FullTrackName({TrackNamespace({ns_}), "date"});
+  }
+
+  Mode mode_{Mode::STREAM_PER_GROUP};
+  std::string ns_;
+  int deliveryTimeout_;
+  MoQForwarder forwarder_;
+  bool loopRunning_{false};
+  folly::CancellationSource loopCancelSource_;
+};
+
+// MoQDateServer - Wrapper for MoQServer to manage DatePublisher
+class MoQDateServer : public MoQServer {
+ public:
+  MoQDateServer(
+      const std::string& cert,
+      const std::string& key,
+      const std::string& endpoint,
+      std::shared_ptr<DatePublisher> publisher)
+      : MoQServer(cert, key, endpoint), publisher_(std::move(publisher)) {}
+
+  MoQDateServer(
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+      const std::string& endpoint,
+      std::shared_ptr<DatePublisher> publisher)
+      : MoQServer(std::move(fizzContext), endpoint),
+        publisher_(std::move(publisher)) {}
+
+  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
+    clientSession->setPublishHandler(publisher_);
+  }
+
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << __func__;
-    forwarder_.removeSubscriber(session, folly::none, "terminateClientSession");
+    publisher_->removeSubscriber(
+        std::move(session), folly::none, "terminateClientSession");
   }
 
  private:
-  static FullTrackName dateTrackName() {
-    return FullTrackName({TrackNamespace({"moq-date"}), "date"});
-  }
-  MoQForwarder forwarder_;
-  std::unique_ptr<MoQRelayClient> relayClient_;
-  Mode mode_{Mode::STREAM_PER_GROUP};
-  bool loopRunning_{false};
-  std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
+  std::shared_ptr<DatePublisher> publisher_;
 };
 
+std::unique_ptr<MoQRelayClient> createRelayClient(
+    folly::EventBase* workerEvb,
+    std::shared_ptr<DatePublisher> publisher,
+    std::shared_ptr<MLoggerFactory> loggerFactory) {
+  proxygen::URL url(FLAGS_relay_url);
+  if (!url.isValid() || !url.hasHost()) {
+    XLOG(ERR) << "Invalid url: " << FLAGS_relay_url;
+    return nullptr;
+  }
+
+  auto moqEvb = std::make_shared<MoQFollyExecutorImpl>(workerEvb);
+
+  auto verifier = FLAGS_insecure
+      ? std::make_shared<
+            moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>()
+      : nullptr;
+
+  auto relayClient = std::make_unique<MoQRelayClient>(
+      (FLAGS_quic_transport ? std::make_unique<MoQClient>(
+                                  moqEvb,
+                                  url,
+                                  MoQRelaySession::createRelaySessionFactory(),
+                                  verifier)
+                            : std::make_unique<MoQWebTransportClient>(
+                                  moqEvb,
+                                  url,
+                                  MoQRelaySession::createRelaySessionFactory(),
+                                  verifier)));
+
+  if (loggerFactory) {
+    relayClient->setLogger(loggerFactory->createMLogger());
+  }
+
+  std::vector<std::string> alpns =
+      getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+
+  folly::coro::blockingWait(
+      relayClient
+          ->setup(
+              /*publisher=*/publisher,
+              /*subscriber=*/nullptr,
+              std::chrono::milliseconds(FLAGS_relay_connect_timeout),
+              std::chrono::seconds(FLAGS_relay_transaction_timeout),
+              quic::TransportSettings(),
+              alpns)
+          .scheduleOn(workerEvb)
+          .start());
+
+  relayClient->run(/*publisher=*/publisher, {TrackNamespace(FLAGS_ns, "/")})
+      .scheduleOn(moqEvb.get())
+      .start();
+
+  if (FLAGS_publish) {
+    publisher
+        ->callPublish(
+            relayClient.get(), TrackNamespace(FLAGS_ns, "/"), 0, moqEvb)
+        .scheduleOn(workerEvb)
+        .start();
+  }
+
+  return relayClient;
+}
+
 } // namespace
+
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
-  folly::EventBase evb;
-  MoQDateServer::Mode mode;
+
+  // Parse mode
+  DatePublisher::Mode mode;
   if (FLAGS_mode == "spg") {
-    mode = MoQDateServer::Mode::STREAM_PER_GROUP;
+    mode = DatePublisher::Mode::STREAM_PER_GROUP;
   } else if (FLAGS_mode == "spo") {
-    mode = MoQDateServer::Mode::STREAM_PER_OBJECT;
+    mode = DatePublisher::Mode::STREAM_PER_OBJECT;
   } else if (FLAGS_mode == "datagram") {
-    mode = MoQDateServer::Mode::DATAGRAM;
+    mode = DatePublisher::Mode::DATAGRAM;
   } else {
     XLOG(ERR) << "Invalid mode: " << FLAGS_mode;
     return 1;
   }
-  std::shared_ptr<MoQDateServer> server = nullptr;
-  if (FLAGS_insecure) {
-    server = std::make_shared<MoQDateServer>(mode);
-  } else {
-    server = std::make_shared<MoQDateServer>(mode, FLAGS_cert, FLAGS_key);
+
+  // Create publisher
+  auto publisher =
+      std::make_shared<DatePublisher>(mode, FLAGS_ns, FLAGS_delivery_timeout);
+
+  // Create logger factory if mlog path is specified
+  std::shared_ptr<moxygen::FileMLoggerFactory> loggerFactory;
+  if (!FLAGS_mlog_path.empty()) {
+    loggerFactory = std::make_shared<moxygen::FileMLoggerFactory>(
+        FLAGS_mlog_path, moxygen::VantagePoint::SERVER);
   }
 
-  if (!FLAGS_mlog_path.empty()) {
-    auto factory = std::make_shared<moxygen::FileMLoggerFactory>(
-        FLAGS_mlog_path, moxygen::VantagePoint::SERVER);
-    server->setMLoggerFactory(factory);
+  folly::EventBase evb;
+  std::shared_ptr<MoQDateServer> server;
+
+  if (FLAGS_insecure) {
+    server = std::make_shared<MoQDateServer>(
+        quic::samples::createFizzServerContextWithInsecureDefault(
+            []() {
+              std::vector<std::string> alpns = {"h3"};
+              auto moqt = getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+              alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+              return alpns;
+            }(),
+            fizz::server::ClientAuthMode::None,
+            "" /* cert */,
+            "" /* key */),
+        "/moq-date",
+        publisher);
+  } else {
+    server = std::make_shared<MoQDateServer>(
+        FLAGS_cert, FLAGS_key, "/moq-date", publisher);
+  }
+
+  if (loggerFactory) {
+    server->setMLoggerFactory(loggerFactory);
   }
 
   folly::SocketAddress addr("::", FLAGS_port);
   server->start(addr);
-  if (!FLAGS_relay_url.empty() && !server->startRelayClient()) {
-    return 1;
+  server->waitUntilInitialized();
+
+  // Create relay client if relay URL is specified
+  std::unique_ptr<MoQRelayClient> relayClient;
+  if (!FLAGS_relay_url.empty()) {
+    relayClient =
+        createRelayClient(server->getWorkerEvbs()[0], publisher, loggerFactory);
+    if (!relayClient) {
+      return 1;
+    }
   }
 
-  moxygen::SignalHandler handler(&evb, [server](int) {
-    server->shutdownRelayClient();
-    server->stop();
-  });
+  moxygen::SignalHandler handler(
+      &evb, [&publisher, &server, &relayClient](int) {
+        publisher->stopPublishLoop();
+        if (relayClient) {
+          relayClient->shutdown();
+        }
+        server->stop();
+      });
 
   evb.loopForever();
 
