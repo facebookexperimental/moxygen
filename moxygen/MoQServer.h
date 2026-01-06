@@ -7,7 +7,7 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
-#include <moxygen/mlog/MLoggerFactory.h>
+#include <moxygen/MoQServerBase.h>
 
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBaseLocal.h>
@@ -22,7 +22,7 @@ namespace moxygen {
 const std::string kDefaultFilePath =
     "ti/experimental/moxygen/moqtest/mlog_server.txt";
 
-class MoQServer : public MoQSession::ServerSetupCallback {
+class MoQServer : public MoQServerBase {
  public:
   MoQServer(
       std::string cert,
@@ -35,40 +35,29 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       std::string endpoint,
       folly::Optional<quic::TransportSettings> transportSettings = folly::none);
 
+  void start(const folly::SocketAddress& addr) override {
+    start(addr, {});
+  }
+
   void start(
       const folly::SocketAddress& addr,
-      std::vector<folly::EventBase*> evbs = {});
+      std::vector<folly::EventBase*> evbs);
 
   MoQServer(const MoQServer&) = delete;
   MoQServer(MoQServer&&) = delete;
   MoQServer& operator=(const MoQServer&) = delete;
   MoQServer& operator=(MoQServer&&) = delete;
-  virtual ~MoQServer() = default;
-
-  virtual void onNewSession(std::shared_ptr<MoQSession> clientSession) = 0;
-  virtual void terminateClientSession(std::shared_ptr<MoQSession> /*session*/) {
-  }
+  ~MoQServer() override = default;
 
   std::vector<folly::EventBase*> getWorkerEvbs() const noexcept {
     return hqServer_->getWorkerEvbs();
   }
 
-  void setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory);
-
   // QUIC stats factory setter
   void setQuicStatsFactory(
       std::unique_ptr<quic::QuicTransportStatsCallbackFactory> factory);
 
-  void stop();
-
-  folly::Try<ServerSetup> onClientSetup(
-      ClientSetup clientSetup,
-      const std::shared_ptr<MoQSession>& session) override;
-
-  folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-      const ClientSetup& clientSetup,
-      uint64_t negotiatedVersion,
-      std::shared_ptr<MoQSession> session) override;
+  void stop() override;
 
   // Takeover runtime wrapper methods - forward to underlying QuicServer
   // Takeover part 1: Methods called on the old instance.
@@ -101,24 +90,11 @@ class MoQServer : public MoQSession::ServerSetupCallback {
       std::shared_ptr<const fizz::server::FizzServerContext> ctx);
 
  protected:
-  virtual std::shared_ptr<MoQSession> createSession(
-      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      std::shared_ptr<MoQExecutor> executor);
-
   // Register ALPN handlers for direct QUIC connections (internal use)
   void registerAlpnHandler(const std::vector<std::string>& alpns);
 
-  // Create a logger from the factory if one is set
-  std::shared_ptr<MLogger> createLogger() const;
-
  private:
-  // AUTHORITY parameter validation methods
-  // Not called for HTTP inside proxygen, we leave it to applications.
-  bool isValidAuthorityFormat(const std::string& authority);
-  bool isSupportedAuthority(const std::string& authority);
-
-  folly::coro::Task<void> handleClientSession(
-      std::shared_ptr<MoQSession> clientSession);
+  void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
 
   std::shared_ptr<MoQExecutor> getOrCreateExecutor(folly::EventBase* evb);
 
@@ -177,20 +153,12 @@ class MoQServer : public MoQSession::ServerSetupCallback {
     std::shared_ptr<MoQSession> clientSession_;
   };
 
-  [[nodiscard]] const std::string& getEndpoint() const {
-    return endpoint_;
-  }
-
-  void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
-
   std::string cert_;
   std::string key_;
   quic::samples::HQServerParams params_;
   std::shared_ptr<const fizz::server::FizzServerContext> fizzContext_;
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
-  std::string endpoint_;
-  std::shared_ptr<MLoggerFactory> mLoggerFactory_;
   folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
 
   friend class Handler;

@@ -84,6 +84,7 @@ target_link_libraries(
 )
 
 add_library(moxygenserver
+    MoQServerBase.cpp
     MoQServer.cpp)
 
 target_include_directories(
