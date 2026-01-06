@@ -6,8 +6,6 @@
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
-#include <folly/io/async/AsyncSignalHandler.h>
-#include <signal.h>
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/MoQWebTransportClient.h>
@@ -16,6 +14,7 @@
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
+#include <moxygen/util/SignalHandler.h>
 #include <iomanip>
 
 using namespace quic::samples;
@@ -604,27 +603,6 @@ class MoQDateServer : public MoQServer,
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 
-class SigHandler : public folly::AsyncSignalHandler {
- public:
-  explicit SigHandler(folly::EventBase* evb, std::function<void(int)> fn)
-      : folly::AsyncSignalHandler(evb), fn_(std::move(fn)) {
-    registerSignalHandler(SIGTERM);
-    registerSignalHandler(SIGINT);
-  }
-  void signalReceived(int signum) noexcept override {
-    fn_(signum);
-    unreg();
-  }
-
-  void unreg() {
-    unregisterSignalHandler(SIGTERM);
-    unregisterSignalHandler(SIGINT);
-  }
-
- private:
-  std::function<void(int)> fn_;
-};
-
 } // namespace
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
@@ -659,9 +637,9 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  SigHandler handler(&evb, [&evb, server](int) {
+  moxygen::SignalHandler handler(&evb, [server](int) {
     server->shutdownRelayClient();
-    evb.terminateLoopSoon();
+    server->stop();
   });
 
   evb.loopForever();
