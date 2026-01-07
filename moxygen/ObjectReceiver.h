@@ -26,8 +26,12 @@ class ObjectReceiverCallback {
   virtual void onEndOfStream() = 0;
   virtual void onError(ResetStreamErrorCode) = 0;
   virtual void onSubscribeDone(SubscribeDone done) = 0;
+  // For SUBSCRIBEs:
   // Called when SUBSCRIBE_DONE has arrived AND all outstanding subgroup
-  // streams have closed. Only fires for subscriptions, not fetches.
+  // streams have closed.
+  //
+  // For FETCHes:
+  // Called when the FETCH subgroup is closed.
   virtual void onAllDataReceived() {}
 };
 
@@ -337,7 +341,9 @@ class ObjectReceiver : public TrackConsumer,
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
-    return fetchPublisher_->endOfSubgroup();
+    auto endOfSubgroupResult = fetchPublisher_->endOfSubgroup();
+    callback_->onAllDataReceived();
+    return endOfSubgroupResult;
   }
 
   void reset(ResetStreamErrorCode error) override {
