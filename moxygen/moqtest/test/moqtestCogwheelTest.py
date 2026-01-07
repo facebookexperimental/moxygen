@@ -39,6 +39,36 @@ class MoQClientParams:
     request_type: str = "subscribe"  # subscribe or fetch
 
 
+def get_conformance_default_params() -> MoQClientParams:
+    """
+    Return params matching conformance_test.sh defaults.
+    """
+
+    params = MoQClientParams()
+
+    params.forwardingPreference = 0
+    params.start_group = 0
+    params.start_object = 0
+    params.last_group = (1 << 62) - 1
+    params.objects_per_group = 10
+    params.size_of_object_zero = 1024
+    params.size_of_object_greater_than_zero = 100
+    params.object_frequency = 50
+    params.group_increment = 1
+    params.object_increment = 1
+    params.send_end_of_group_markers = False
+    params.test_integer_extension = -1
+    params.test_variable_extension = -1
+    params.publisher_delivery_timeout = 0
+    params.request_type = "subscribe"
+
+    params.last_object = params.objects_per_group + int(
+        params.send_end_of_group_markers
+    )
+
+    return params
+
+
 class MoqtestCogwheelTest(CogwheelTest):
     moqtest_server_tier: str = ""
     success_message = "MoQTest verification result: SUCCESS!"
@@ -201,6 +231,134 @@ class MoqtestCogwheelTest(CogwheelTest):
 
         error_lines = self.get_client_output(MoQClientParams())
         check = self.check_lines(error_lines, "test_client_server_connection")
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_basic_subscribe_with_default_parameters(self) -> None:
+        """Equivalent of conformance_test.sh "Basic subscribe with default parameters"."""
+
+        params = get_conformance_default_params()
+        params.forwardingPreference = 0
+        params.last_group = 2
+        params.objects_per_group = 5
+        params.last_object = 5
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(
+            error_lines, "test_basic_subscribe_with_default_parameters"
+        )
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_one_subgroup_per_object_forwarding(self) -> None:
+        """Equivalent of conformance_test.sh "ONE_SUBGROUP_PER_OBJECT forwarding"."""
+
+        params = get_conformance_default_params()
+        params.forwardingPreference = 1
+        params.last_group = 2
+        params.objects_per_group = 5
+        params.last_object = 5
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(error_lines, "test_one_subgroup_per_object_forwarding")
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_two_subgroups_per_group_forwarding(self) -> None:
+        """Equivalent of conformance_test.sh "TWO_SUBGROUPS_PER_GROUP forwarding"."""
+
+        params = get_conformance_default_params()
+        params.forwardingPreference = 2
+        params.last_group = 2
+        params.objects_per_group = 6
+        params.last_object = 6
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(error_lines, "test_two_subgroups_per_group_forwarding")
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_datagram_forwarding_with_small_objects(self) -> None:
+        """Equivalent of conformance_test.sh "DATAGRAM forwarding with small objects"."""
+
+        params = get_conformance_default_params()
+        params.forwardingPreference = 3
+        params.last_group = 2
+        params.objects_per_group = 5
+        params.size_of_object_zero = 100
+        params.size_of_object_greater_than_zero = 50
+        params.last_object = 5
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(
+            error_lines, "test_datagram_forwarding_with_small_objects"
+        )
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_fetch_with_one_subgroup_per_group(self) -> None:
+        """Equivalent of conformance_test.sh "FETCH with ONE_SUBGROUP_PER_GROUP"."""
+
+        params = get_conformance_default_params()
+        params.request_type = "fetch"
+        params.forwardingPreference = 0
+        params.last_group = 2
+        params.objects_per_group = 3
+        params.last_object = 3
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(error_lines, "test_fetch_with_one_subgroup_per_group")
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_fetch_with_one_subgroup_per_object(self) -> None:
+        """Equivalent of conformance_test.sh "FETCH with ONE_SUBGROUP_PER_OBJECT"."""
+
+        params = get_conformance_default_params()
+        params.request_type = "fetch"
+        params.forwardingPreference = 1
+        params.last_group = 1
+        params.objects_per_group = 4
+        params.last_object = 4
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(error_lines, "test_fetch_with_one_subgroup_per_object")
+
+        self.assertTrue(check)
+        self.cleanup()
+        return None
+
+    @cogwheel_test
+    def test_fetch_with_two_subgroups_per_group(self) -> None:
+        """Equivalent of conformance_test.sh "FETCH with TWO_SUBGROUPS_PER_GROUP"."""
+
+        params = get_conformance_default_params()
+        params.request_type = "fetch"
+        params.forwardingPreference = 2
+        params.last_group = 1
+        params.objects_per_group = 6
+        params.last_object = 6
+
+        error_lines = self.get_client_output(params)
+        check = self.check_lines(error_lines, "test_fetch_with_two_subgroups_per_group")
 
         self.assertTrue(check)
         self.cleanup()
