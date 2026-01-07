@@ -228,16 +228,12 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
       fetchHandle_->fetchCancel();
     }
     moqClient_->moqSession_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return ObjectReceiverCallback::FlowControlState::BLOCKED;
+    return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
   }
 
   // Adjust the expected data (If Still recieving data, leave unblocked)
-  auto result = adjustExpected(params_, &objHeader);
-  if (result == AdjustedExpectedResult::STILL_RECEIVING_DATA) {
-    return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
-  } else {
-    return ObjectReceiverCallback::FlowControlState::BLOCKED;
-  }
+  adjustExpected(params_, &objHeader);
+  return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
 }
 
 void MoQTestClient::onObjectStatus(
