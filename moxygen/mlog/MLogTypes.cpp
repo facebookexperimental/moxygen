@@ -82,9 +82,7 @@ folly::dynamic MOQTAuthorizationTokenParameter::toDynamic() const {
     obj["token_type"] = tokenType.value();
   }
   if (tokenValue) {
-    obj["token_value"] = std::string(
-        reinterpret_cast<const char*>(tokenValue->data()),
-        tokenValue->length());
+    obj["token_value"] = tokenValue->to<std::string>();
   }
   return obj;
 }
@@ -114,9 +112,7 @@ folly::dynamic MOQTUnknownParameter::toDynamic() const {
     obj["value"] = value.value();
   }
   if (valueBytes) {
-    obj["value_bytes"] = std::string(
-        reinterpret_cast<const char*>(valueBytes->data()),
-        valueBytes->length());
+    obj["value_bytes"] = valueBytes->to<std::string>();
   }
   return obj;
 }
@@ -162,9 +158,7 @@ folly::dynamic MOQTAuthorizationTokenSetupParameter::toDynamic() const {
     obj["token_type"] = tokenType.value();
   }
   if (tokenValue) {
-    obj["token_value"] = std::string(
-        reinterpret_cast<const char*>(tokenValue->data()),
-        tokenValue->length());
+    obj["token_value"] = tokenValue->to<std::string>();
   }
   return obj;
 }
@@ -208,9 +202,7 @@ folly::dynamic MOQTUnknownSetupParameter::toDynamic() const {
     obj["value"] = value.value();
   }
   if (valueBytes) {
-    obj["value_bytes"] = std::string(
-        reinterpret_cast<const char*>(valueBytes->data()),
-        valueBytes->length());
+    obj["value_bytes"] = valueBytes->to<std::string>();
   }
   return obj;
 }
@@ -646,9 +638,7 @@ std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
   switch (trackNamespace[0].type) {
     case MOQTByteStringType::VALUE_BYTES: {
       for (auto& t : trackNamespace) {
-        track.emplace_back(
-            reinterpret_cast<const char*>(t.valueBytes->data()),
-            t.valueBytes->length());
+        track.emplace_back(t.valueBytes->to<std::string>());
       }
       break;
     }
@@ -670,9 +660,7 @@ std::string MOQTBaseControlMessage::parseTrackName(
   std::string name;
   switch (trackName.type) {
     case MOQTByteStringType::VALUE_BYTES: {
-      name = std::string(
-          reinterpret_cast<const char*>(trackName.valueBytes->data()),
-          trackName.valueBytes->length());
+      name = trackName.valueBytes->to<std::string>();
       break;
     }
     case MOQTByteStringType::STRING_VALUE: {
@@ -693,10 +681,7 @@ folly::dynamic MOQTGoaway::toDynamic() const {
   }
 
   if (newSessionUri && !newSessionUri->empty()) {
-    std::string uri(
-        reinterpret_cast<const char*>(newSessionUri->data()),
-        newSessionUri->length());
-    obj["new_session_uri"] = uri;
+    obj["new_session_uri"] = newSessionUri->to<std::string>();
   } else {
     obj["new_session_uri"] = "";
   }
@@ -724,8 +709,7 @@ folly::dynamic MOQTExtensionHeader::toDynamic() const {
     obj["headerLength"] = std::to_string(headerLength.value());
   }
   if (payload) {
-    obj["payload"] = std::string(
-        reinterpret_cast<const char*>(payload->data()), payload->length());
+    obj["payload"] = payload->to<std::string>();
   }
   return obj;
 }
@@ -759,9 +743,7 @@ folly::dynamic MOQTObjectDatagramCreated::toDynamic() const {
   }
 
   if (objectPayload) {
-    obj["object_payload"] = std::string(
-        reinterpret_cast<const char*>(objectPayload->data()),
-        objectPayload->length());
+    obj["object_payload"] = objectPayload->to<std::string>();
   }
 
   obj["end_of_group"] = endOfGroup;
@@ -798,9 +780,7 @@ folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
   }
 
   if (objectPayload) {
-    obj["object_payload"] = std::string(
-        reinterpret_cast<const char*>(objectPayload->data()),
-        objectPayload->length());
+    obj["object_payload"] = objectPayload->to<std::string>();
   }
 
   obj["end_of_group"] = endOfGroup;
@@ -866,9 +846,7 @@ folly::dynamic MOQTSubgroupObjectCreated::toDynamic() const {
     obj["objectStatus"] = std::to_string(objectStatus.value());
   }
   if (objectPayload) {
-    obj["objectPayload"] = std::string(
-        reinterpret_cast<const char*>(objectPayload->data()),
-        objectPayload->length());
+    obj["objectPayload"] = objectPayload->to<std::string>();
   }
   return obj;
 }
@@ -897,9 +875,7 @@ folly::dynamic MOQTSubgroupObjectParsed::toDynamic() const {
     obj["objectStatus"] = std::to_string(objectStatus.value());
   }
   if (objectPayload) {
-    obj["objectPayload"] = std::string(
-        reinterpret_cast<const char*>(objectPayload->data()),
-        objectPayload->length());
+    obj["objectPayload"] = objectPayload->to<std::string>();
   }
   return obj;
 }
@@ -939,9 +915,7 @@ folly::dynamic MOQTFetchObjectCreated::toDynamic() const {
     obj["objectStatus"] = std::to_string(objectStatus.value());
   }
   if (objectPayload) {
-    obj["objectPayload"] = std::string(
-        reinterpret_cast<const char*>(objectPayload->data()),
-        objectPayload->length());
+    obj["objectPayload"] = objectPayload->to<std::string>();
   }
   return obj;
 }
@@ -967,9 +941,7 @@ folly::dynamic MOQTFetchObjectParsed::toDynamic() const {
     obj["objectStatus"] = std::to_string(objectStatus.value());
   }
   if (objectPayload) {
-    obj["objectPayload"] = std::string(
-        reinterpret_cast<const char*>(objectPayload->data()),
-        objectPayload->length());
+    obj["objectPayload"] = objectPayload->to<std::string>();
   }
   return obj;
 }
