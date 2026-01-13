@@ -59,6 +59,7 @@ bool isValidGroupOrderParam(uint64_t value) {
     case folly::to_underlying(moxygen::GroupOrder::NewestFirst):
       return true;
     default:
+      XLOG(ERR) << "Invalid group order value=" << value;
       return false;
   }
   return true;
