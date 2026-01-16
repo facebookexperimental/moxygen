@@ -92,6 +92,54 @@ bool isIntParamValid(uint64_t version, uint64_t key, uint64_t value) {
   return true;
 }
 
+std::vector<moxygen::Parameter> sortParamsByKey(
+    std::vector<moxygen::Parameter> params) {
+  std::sort(
+      params.begin(),
+      params.end(),
+      [](const moxygen::Parameter& a, const moxygen::Parameter& b) {
+        return a.key < b.key;
+      });
+  return params;
+}
+
+std::vector<moxygen::Parameter> mergeAndSortParams(
+    const std::vector<moxygen::Parameter>& requestSpecificParams,
+    const moxygen::Parameters& params) {
+  std::vector<moxygen::Parameter> allParams;
+  allParams.reserve(requestSpecificParams.size() + params.size());
+
+  for (const auto& param : requestSpecificParams) {
+    allParams.push_back(param);
+  }
+  for (const auto& param : params) {
+    allParams.push_back(param);
+  }
+
+  return sortParamsByKey(std::move(allParams));
+}
+
+std::vector<moxygen::Extension> sortExtensionsByType(
+    std::vector<moxygen::Extension> extensions) {
+  std::sort(
+      extensions.begin(),
+      extensions.end(),
+      [](const moxygen::Extension& a, const moxygen::Extension& b) {
+        return a.type < b.type;
+      });
+  return extensions;
+}
+
+// Helper for delta decoding with overflow check.
+folly::Expected<uint64_t, moxygen::ErrorCode> decodeDelta(
+    uint64_t previous,
+    uint64_t delta) {
+  if (delta > std::numeric_limits<uint64_t>::max() - previous) {
+    return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return previous + delta;
+}
+
 } // namespace
 
 namespace moxygen {
@@ -215,16 +263,17 @@ folly::Optional<std::string> getAlpnFromVersion(uint64_t version) {
   if (draftNum < 15) {
     return std::string(kAlpnMoqtLegacy);
   }
-
-  // We just have one alpn for now, but in the future we might want to return a
-  // vector
-  return std::string(kAlpnMoqtDraft15Latest);
+  if (draftNum == 15) {
+    return std::string(kAlpnMoqtDraft15Latest);
+  }
+  return std::string(kAlpnMoqtDraft16Latest);
 }
 
 std::vector<std::string> getDefaultMoqtProtocols(bool includeExperimental) {
   std::vector<std::string> protocols;
   if (includeExperimental) {
     protocols.emplace_back(kAlpnMoqtDraft15Latest);
+    protocols.emplace_back(kAlpnMoqtDraft16Latest);
   }
   protocols.emplace_back(kAlpnMoqtLegacy);
   return protocols;
@@ -570,28 +619,42 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     std::vector<Parameter>& requestSpecificParams,
     MoQTokenCache& tokenCache,
     ParamsType paramsType) {
+  uint64_t previousKey = 0;
+
   for (auto i = 0u; i < numParams; i++) {
-    auto key = quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!key) {
+    auto keyOrDelta = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!keyOrDelta) {
       XLOG(DBG4) << "parseParams: UNDERFLOW on key";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    length -= key->second;
+    length -= keyOrDelta->second;
+
+    // For v16+: decode delta to get absolute key
+    // For v15-: use absolute key directly
+    uint64_t key;
+    if (getDraftMajorVersion(version) >= 16) {
+      auto decoded = decodeDelta(previousKey, keyOrDelta->first);
+      if (decoded.hasError()) {
+        return folly::makeUnexpected(decoded.error());
+      }
+      key = decoded.value();
+      previousKey = key;
+    } else {
+      key = keyOrDelta->first;
+    }
+
     folly::Expected<folly::Optional<Parameter>, ErrorCode> res;
 
     if ((paramsType == ParamsType::Request &&
-         key->first ==
-             folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) ||
-        ((key->first & 0x01) == 0 &&
+         key == folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) ||
+        ((key & 0x01) == 0 &&
          (paramsType != ParamsType::Request ||
-          key->first !=
+          key !=
               folly::to_underlying(
                   TrackRequestParamKey::AUTHORIZATION_TOKEN)))) {
-      res = parseIntParam(cursor, length, version, key->first);
+      res = parseIntParam(cursor, length, version, key);
     } else if (
-        // Parse the largestObject param
-        key->first ==
-        folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT)) {
+        key == folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT)) {
       if (getDraftMajorVersion(version) < 15) {
         XLOG(ERR) << "Invalid parameter LARGEST_OBJECT for version " << version;
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -602,28 +665,27 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
         XLOG(DBG4) << "parseParams: returning error from parseAbsoluteLocation";
         return folly::makeUnexpected(largestLocation.error());
       }
-      res = Parameter(key->first, largestLocation.value());
+      res = Parameter(key, largestLocation.value());
     } else {
       res = parseVariableParam(
-          cursor, length, version, key->first, tokenCache, paramsType);
+          cursor, length, version, key, tokenCache, paramsType);
     }
     if (!res) {
       XLOG(DBG4)
           << "parseParams: returning error from parseVariableParam/parseIntParam"
-          << " at param index=" << i << ", key=" << key->first
+          << " at param index=" << i << ", key=" << key
           << ", version=" << version << ", length=" << length;
       return folly::makeUnexpected(res.error());
     }
     if (*res) {
-      TrackRequestParamKey trackRequestParamKey =
-          (TrackRequestParamKey)key->first;
+      TrackRequestParamKey trackRequestParamKey = (TrackRequestParamKey)key;
       if (getDraftMajorVersion(version) >= 15 &&
           isRequestSpecificParam(trackRequestParamKey)) {
         requestSpecificParams.push_back(std::move(*res.value()));
       } else {
         params.insertParam(std::move(*res.value()));
       }
-    } // else the param was not an error but shouldn't be added to the set
+    }
   }
   if (length > 0) {
     XLOG(ERR) << "Invalid key-value length";
@@ -1280,7 +1342,11 @@ MoQFrameParser::parseSubgroupObjectHeader(
     // Delta encoded object ID
     uint64_t objectIDDelta = id->first;
     if (previousObjectID_.has_value()) {
-      objectHeader.id = previousObjectID_.value() + objectIDDelta + 1;
+      auto decoded = decodeDelta(previousObjectID_.value(), objectIDDelta + 1);
+      if (decoded.hasError()) {
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      objectHeader.id = decoded.value();
     } else {
       objectHeader.id = objectIDDelta;
     }
@@ -2821,6 +2887,11 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensionKvPairs(
     ObjectHeader& objectHeader,
     size_t extensionBlockLength,
     bool allowImmutable) const noexcept {
+  // Reset previous extension type for delta decoding
+  if (getDraftMajorVersion(*version_) >= 16) {
+    previousExtensionType_ = 0;
+  }
+
   while (extensionBlockLength > 0) {
     // This won't infinite loop because we're parsing out at least a
     // QuicInteger each time.
@@ -2848,16 +2919,27 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
   }
   length -= type->second;
 
+  // Delta decode type for v16+
+  uint64_t actualType = type->first;
+  if (getDraftMajorVersion(*version_) >= 16) {
+    auto decoded = decodeDelta(previousExtensionType_, type->first);
+    if (decoded.hasError()) {
+      return folly::makeUnexpected(decoded.error());
+    }
+    actualType = decoded.value();
+    previousExtensionType_ = actualType;
+  }
+
   // We can't have an immutable extension nested within another
   // immutable extension.
   if (!allowImmutable && getDraftMajorVersion(*version_) >= 14 &&
-      type->first == kImmutableExtensionType) {
+      actualType == kImmutableExtensionType) {
     XLOG(ERR) << "Immutable extension encountered when not allowed";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
   Extension ext;
-  ext.type = type->first;
+  ext.type = actualType;
 
   // Check if this extension is an immutable extensions container (type 0xB) in
   // draft >= 14
@@ -3198,19 +3280,29 @@ WriteResult writeClientSetup(
         << "Skipped writing versions to wire for alpn ClientSetup message";
   }
 
-  // Count the number of params
-  size_t paramCount = 0;
+  // Collect params that should be included
+  std::vector<Parameter> filteredParams;
   for (const auto& param : clientSetup.params) {
     if (includeSetupParam(version, SetupKey(param.key))) {
-      ++paramCount;
+      filteredParams.push_back(param);
     }
   }
-  writeVarint(writeBuf, paramCount, size, error);
-  for (auto& param : clientSetup.params) {
-    if (!includeSetupParam(version, SetupKey(param.key))) {
-      continue;
+
+  // Sort params by key for delta encoding (v16+)
+  if (getDraftMajorVersion(version) >= 16) {
+    filteredParams = sortParamsByKey(std::move(filteredParams));
+  }
+
+  writeVarint(writeBuf, filteredParams.size(), size, error);
+
+  uint64_t previousKey = 0;
+  for (const auto& param : filteredParams) {
+    auto keyToWrite = param.key;
+    if (getDraftMajorVersion(version) >= 16) {
+      keyToWrite = param.key - previousKey;
+      previousKey = param.key;
     }
-    writeVarint(writeBuf, param.key, size, error);
+    writeVarint(writeBuf, keyToWrite, size, error);
     if ((param.key & 0x01) == 0) {
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
@@ -3246,19 +3338,29 @@ WriteResult writeServerSetup(
         << "Skipped writing version to wire for alpn ClientSetup message";
   }
 
-  // Count the number of params
-  size_t paramCount = 0;
+  // Collect params that should be included
+  std::vector<Parameter> filteredParams;
   for (const auto& param : serverSetup.params) {
     if (includeSetupParam(serverSetup.selectedVersion, SetupKey(param.key))) {
-      ++paramCount;
+      filteredParams.push_back(param);
     }
   }
-  writeVarint(writeBuf, paramCount, size, error);
-  for (auto& param : serverSetup.params) {
-    if (!includeSetupParam(serverSetup.selectedVersion, SetupKey(param.key))) {
-      continue;
+
+  // Sort params by key for delta encoding (v16+)
+  if (getDraftMajorVersion(version) >= 16) {
+    filteredParams = sortParamsByKey(std::move(filteredParams));
+  }
+
+  writeVarint(writeBuf, filteredParams.size(), size, error);
+
+  uint64_t previousKey = 0;
+  for (const auto& param : filteredParams) {
+    auto keyToWrite = param.key;
+    if (getDraftMajorVersion(version) >= 16) {
+      keyToWrite = param.key - previousKey;
+      previousKey = param.key;
     }
-    writeVarint(writeBuf, param.key, size, error);
+    writeVarint(writeBuf, keyToWrite, size, error);
     if ((param.key & 0x01) == 0) {
       writeVarint(writeBuf, param.asUint64, size, error);
     } else {
@@ -3362,8 +3464,23 @@ void MoQFrameWriter::writeKeyValuePairs(
     const std::vector<Extension>& extensions,
     size_t& size,
     bool& error) const noexcept {
-  for (const auto& ext : extensions) {
-    writeVarint(writeBuf, ext.type, size, error);
+  // Sort extensions by type for v16+ delta encoding
+  std::vector<Extension> sortedExtensions;
+  const std::vector<Extension>* extensionsToWrite = &extensions;
+  if (getDraftMajorVersion(*version_) >= 16) {
+    sortedExtensions = sortExtensionsByType(extensions);
+    extensionsToWrite = &sortedExtensions;
+  }
+
+  uint64_t previousType = 0;
+  for (const auto& ext : *extensionsToWrite) {
+    // Delta encode type for v16+
+    uint64_t typeToWrite = ext.type;
+    if (getDraftMajorVersion(*version_) >= 16) {
+      typeToWrite = ext.type - previousType;
+      previousType = ext.type;
+    }
+    writeVarint(writeBuf, typeToWrite, size, error);
     if (error) {
       return;
     }
@@ -3523,60 +3640,68 @@ void MoQFrameWriter::writeTrackRequestParams(
   writeVarint(
       writeBuf, params.size() + requestSpecificParams.size(), size, error);
 
+  if (getDraftMajorVersion(*version_) >= 16) {
+    // v16+: Merge, sort, and delta encode
+    auto allParams = mergeAndSortParams(requestSpecificParams, params);
+
+    uint64_t previousKey = 0;
+    for (const auto& param : allParams) {
+      writeVarint(writeBuf, param.key - previousKey, size, error);
+      previousKey = param.key;
+      writeParamValue(writeBuf, param, size, error);
+    }
+  } else {
+    // v15 and below, no delta encoding
+    // Write request-specific params (draft 15 only)
+    if (getDraftMajorVersion(*version_) >= 15) {
+      for (const auto& param : requestSpecificParams) {
+        writeVarint(writeBuf, param.key, size, error);
+        writeParamValue(writeBuf, param, size, error);
+      }
+    }
+
+    // Write regular params
+    for (const auto& param : params) {
+      writeVarint(writeBuf, param.key, size, error);
+      writeParamValue(writeBuf, param, size, error);
+    }
+  }
+}
+
+void MoQFrameWriter::writeParamValue(
+    folly::IOBufQueue& writeBuf,
+    const Parameter& param,
+    size_t& size,
+    bool& error) const noexcept {
   const auto subscriptionFilterKey =
       folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
-
   const auto largestObjectKey =
       folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT);
-
   const auto expiresKey = folly::to_underlying(TrackRequestParamKey::EXPIRES);
-
   const auto groupOrderKey =
       folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
 
-  // Write request-specific params
-  if (getDraftMajorVersion(*version_) >= 15) {
-    for (auto& param : requestSpecificParams) {
-      writeVarint(writeBuf, param.key, size, error);
-
-      if (param.key == subscriptionFilterKey) {
-        writeSubscriptionFilter(
-            writeBuf, param.asSubscriptionFilter, size, error);
-      } else if (param.key == largestObjectKey) {
-        writeVarint(writeBuf, param.largestObject->group, size, error);
-        writeVarint(writeBuf, param.largestObject->object, size, error);
-      } else if (param.key == expiresKey) {
-        writeVarint(writeBuf, param.asUint64, size, error);
-      } else if (param.key == groupOrderKey) {
-        writeVarint(writeBuf, param.asUint64, size, error);
-      } else if ((param.key & 0x01) == 0) {
-        writeVarint(writeBuf, param.asUint64, size, error);
-      } else {
-        writeFixedString(writeBuf, param.asString, size, error);
-      }
-    }
-  }
-
-  // Write regular params
-  for (auto& param : params) {
-    writeVarint(writeBuf, param.key, size, error);
-
-    switch (static_cast<TrackRequestParamKey>(param.key)) {
-      case TrackRequestParamKey::AUTHORIZATION_TOKEN:
-        writeFixedString(writeBuf, param.asString, size, error);
-        break;
-      case TrackRequestParamKey::DELIVERY_TIMEOUT:
-      case TrackRequestParamKey::MAX_CACHE_DURATION:
-        writeVarint(writeBuf, param.asUint64, size, error);
-        break;
-      default:
-        if ((param.key & 0x01) == 0) {
-          writeVarint(writeBuf, param.asUint64, size, error);
-        } else {
-          writeFixedString(writeBuf, param.asString, size, error);
-        }
-        break;
-    }
+  if (param.key == subscriptionFilterKey) {
+    writeSubscriptionFilter(writeBuf, param.asSubscriptionFilter, size, error);
+  } else if (param.key == largestObjectKey) {
+    writeVarint(writeBuf, param.largestObject->group, size, error);
+    writeVarint(writeBuf, param.largestObject->object, size, error);
+  } else if (param.key == expiresKey || param.key == groupOrderKey) {
+    writeVarint(writeBuf, param.asUint64, size, error);
+  } else if (
+      param.key ==
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN)) {
+    writeFixedString(writeBuf, param.asString, size, error);
+  } else if (
+      param.key ==
+          folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT) ||
+      param.key ==
+          folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION)) {
+    writeVarint(writeBuf, param.asUint64, size, error);
+  } else if ((param.key & 0x01) == 0) {
+    writeVarint(writeBuf, param.asUint64, size, error);
+  } else {
+    writeFixedString(writeBuf, param.asString, size, error);
   }
 }
 

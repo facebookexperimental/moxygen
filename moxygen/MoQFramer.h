@@ -551,6 +551,7 @@ constexpr uint64_t kVersionDraft12 = 0xff00000C;
 constexpr uint64_t kVersionDraft13 = 0xff00000D;
 constexpr uint64_t kVersionDraft14 = 0xff00000E;
 constexpr uint64_t kVersionDraft15 = 0xff00000F;
+constexpr uint64_t kVersionDraft16 = 0xff000010;
 
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
 
@@ -563,6 +564,10 @@ constexpr std::string_view kAlpnMoqtDraft15Meta03 = "moqt-15-meta-03";
 constexpr std::string_view kAlpnMoqtDraft15Meta04 = "moqt-15-meta-04";
 constexpr std::string_view kAlpnMoqtDraft15Meta05 = "moqt-15-meta-05";
 constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta05;
+
+// ALPN constants for draft 16 version negotiations
+constexpr std::string_view kAlpnMoqtDraft16Meta00 = "moqt-16-meta-00";
+constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major
@@ -580,9 +585,10 @@ folly::Optional<std::string> getAlpnFromVersion(uint64_t version);
 std::vector<std::string> getDefaultMoqtProtocols(
     bool includeExperimental = false);
 
-constexpr std::array<uint64_t, 2> kSupportedVersions{
+constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft14,
-    kVersionDraft15};
+    kVersionDraft15,
+    kVersionDraft16};
 
 bool isSupportedVersion(uint64_t version);
 
@@ -1620,6 +1626,8 @@ class MoQFrameParser {
   mutable folly::Optional<uint64_t> previousFetchGroup_;
   mutable folly::Optional<uint64_t> previousFetchSubgroup_;
   mutable folly::Optional<uint8_t> previousFetchPriority_;
+  // Context for extension delta decoding (draft-16+)
+  mutable uint64_t previousExtensionType_ = 0;
 };
 
 //// Egress ////
@@ -1821,6 +1829,12 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const TrackRequestParameters& params,
       const std::vector<Parameter>& requestSpecificParams,
+      size_t& size,
+      bool& error) const noexcept;
+
+  void writeParamValue(
+      folly::IOBufQueue& writeBuf,
+      const Parameter& param,
       size_t& size,
       bool& error) const noexcept;
 

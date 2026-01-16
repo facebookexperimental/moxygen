@@ -1058,15 +1058,30 @@ TEST_P(MoQFramerTest, ParseTrackStatus) {
   EXPECT_EQ(parseResult->fullTrackName.trackNamespace[0], "hello");
   EXPECT_EQ(parseResult->fullTrackName.trackName, "world");
   EXPECT_EQ(parseResult->params.size(), 2);
-  EXPECT_EQ(
-      parseResult->params.at(0).key,
-      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
-  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
-  EXPECT_EQ(
-      parseResult->params.at(1).key,
-      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-  EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
+
+  // For v16+, params are sorted by key, so DELIVERY_TIMEOUT (2) comes before
+  // AUTHORIZATION_TOKEN (3)
+  if (getDraftMajorVersion(GetParam()) >= 16) {
+    EXPECT_EQ(
+        parseResult->params.at(0).key,
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+    EXPECT_EQ(parseResult->params.at(0).asUint64, 999);
+    EXPECT_EQ(
+        parseResult->params.at(1).key,
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+    EXPECT_EQ(parseResult->params.at(1).asAuthToken.tokenType, 0);
+    EXPECT_EQ(parseResult->params.at(1).asAuthToken.tokenValue, "stampolli");
+  } else {
+    EXPECT_EQ(
+        parseResult->params.at(0).key,
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+    EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
+    EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
+    EXPECT_EQ(
+        parseResult->params.at(1).key,
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+    EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
+  }
 }
 
 TEST_P(MoQFramerTest, ParseTrackStatusOk) {
@@ -1110,15 +1125,30 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
   EXPECT_EQ(parseResult->params.size(), 2);
-  EXPECT_EQ(
-      parseResult->params.at(0).key,
-      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
-  EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
-  EXPECT_EQ(
-      parseResult->params.at(1).key,
-      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-  EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
+
+  // For v16+, params are sorted by key, so DELIVERY_TIMEOUT (2) comes before
+  // AUTHORIZATION_TOKEN (3)
+  if (getDraftMajorVersion(GetParam()) >= 16) {
+    EXPECT_EQ(
+        parseResult->params.at(0).key,
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+    EXPECT_EQ(parseResult->params.at(0).asUint64, 999);
+    EXPECT_EQ(
+        parseResult->params.at(1).key,
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+    EXPECT_EQ(parseResult->params.at(1).asAuthToken.tokenType, 0);
+    EXPECT_EQ(parseResult->params.at(1).asAuthToken.tokenValue, "stampolli");
+  } else {
+    EXPECT_EQ(
+        parseResult->params.at(0).key,
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+    EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
+    EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
+    EXPECT_EQ(
+        parseResult->params.at(1).key,
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
+    EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
+  }
 }
 
 static std::string encodeToken(
@@ -1320,12 +1350,20 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
      */
     auto frameHeader = writeBufs[j].split(3);
     // Version 15+ don't have the filter within the request, but in the
-    // parameters
+    // parameters. Version 16+ also uses delta encoding for param keys and
+    // sorts parameters by key, so AUTH_TOKEN (key=3) comes BEFORE
+    // SUBSCRIPTION_FILTER (key=0x21=33), shortening the offset.
+    const uint32_t kDraft16PreambleLength = 15;
     const uint32_t kDraft15PreambleLength = 13;
     const uint32_t kDraft14PreambleLength = 19;
-    uint32_t frontLength = (getDraftMajorVersion(GetParam()) >= 15)
-        ? kDraft15PreambleLength
-        : kDraft14PreambleLength;
+    uint32_t frontLength;
+    if (getDraftMajorVersion(GetParam()) >= 16) {
+      frontLength = kDraft16PreambleLength;
+    } else if (getDraftMajorVersion(GetParam()) >= 15) {
+      frontLength = kDraft15PreambleLength;
+    } else {
+      frontLength = kDraft14PreambleLength;
+    }
     auto front = writeBufs[j].split(frontLength);
     auto origTokenLengthBytes = tokenLengths[j] > 64 ? 2 : 1;
     auto tokenLengthBuf = writeBufs[j].split(origTokenLengthBytes);
@@ -1665,6 +1703,10 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
   ASSERT_TRUE(draft15Meta02.hasValue());
   EXPECT_EQ(*draft15Meta02, 0xff00000f);
 
+  auto draft16Meta = getVersionFromAlpn("moqt-16-meta-00");
+  ASSERT_TRUE(draft16Meta.hasValue());
+  EXPECT_EQ(*draft16Meta, 0xff000010);
+
   auto invalidAlpn1 = getVersionFromAlpn("h3");
   EXPECT_FALSE(invalidAlpn1.hasValue());
 
@@ -1686,6 +1728,10 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
   auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
   ASSERT_TRUE(alpnDraft15.hasValue());
   EXPECT_EQ(*alpnDraft15, kAlpnMoqtDraft15Latest);
+
+  auto alpnDraft16 = getAlpnFromVersion(kVersionDraft16);
+  ASSERT_TRUE(alpnDraft16.hasValue());
+  EXPECT_EQ(*alpnDraft16, kAlpnMoqtDraft16Latest);
 }
 
 // Test class for immutable extensions feature (draft 14+)
