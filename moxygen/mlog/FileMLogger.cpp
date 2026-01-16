@@ -8,7 +8,6 @@
 
 #include "moxygen/mlog/FileMLogger.h"
 #include <folly/json/json.h>
-#include <folly/logging/xlog.h>
 #include <fstream>
 
 namespace moxygen {
