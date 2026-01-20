@@ -975,6 +975,26 @@ TEST(MoQFramerTest, ParseServerSetupNoOfParamsUnderflow) {
   EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
 }
 
+TEST(MoQFramerTest, ParsePublishOkOrderUnderflow) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  writeVarint(writeBuf, 1, size, error); // requestID = 1
+  writeBuf.append("\x01", 1);            // forwardFlag = 1 (true)
+  writeBuf.append("\x80", 1);            // subscriberPriority = 128
+                                         // omit order byte to trigger underflow
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft14);
+  auto result = parser.parsePublishOk(cursor, buffer->computeChainDataLength());
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
 TEST_P(MoQFramerTest, All) {
   auto allMsgs = moxygen::test::writeAllMessages(writer_, GetParam());
   allMsgs->coalesce();

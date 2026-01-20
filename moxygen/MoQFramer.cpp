@@ -2030,6 +2030,10 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
   }
 
   if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 1) {
+      XLOG(DBG4) << "parsePublishOk: UNDERFLOW on order";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
     auto order = cursor.readBE<uint8_t>();
     length--;
     if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
