@@ -2709,6 +2709,18 @@ MoQFrameParser::parseSubscribeAnnounces(
   subscribeAnnounces.trackNamespacePrefix =
       TrackNamespace(std::move(res.value()));
 
+  // Draft 16+: Parse Subscribe Options field
+  if (getDraftMajorVersion(*version_) >= 16) {
+    auto options = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!options) {
+      XLOG(DBG4) << "parseSubscribeAnnounces: UNDERFLOW on options";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= options->second;
+    subscribeAnnounces.options =
+        static_cast<SubscribeAnnouncesOptions>(options->first);
+  }
+
   // Parse Parameters
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -2828,6 +2840,53 @@ MoQFrameParser::parseUnsubscribeAnnounces(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return unsubscribeAnnounces;
+}
+
+folly::Expected<Namespace, ErrorCode> MoQFrameParser::parseNamespace(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
+  CHECK(version_) << "Need to have version_ set in order to parse NAMESPACE";
+  CHECK_GE(getDraftMajorVersion(*version_), 16)
+      << "NAMESPACE message doesn't exist for version 15 and below, this function "
+      << "shouldn't be called";
+  Namespace ns;
+
+  // Parse Track Namespace Suffix
+  auto res = parseFixedTuple(cursor, length);
+  if (!res) {
+    XLOG(DBG4) << "parseNamespace: error parsing track namespace suffix";
+    return folly::makeUnexpected(res.error());
+  }
+  ns.trackNamespaceSuffix = TrackNamespace(std::move(res.value()));
+
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return ns;
+}
+
+folly::Expected<NamespaceDone, ErrorCode> MoQFrameParser::parseNamespaceDone(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
+  CHECK(version_)
+      << "Need to have version_ set in order to parse NAMESPACE_DONE";
+  CHECK_GE(getDraftMajorVersion(*version_), 16)
+      << "NAMESPACE_DONE message doesn't exist for version 15 and below, this function "
+      << "shouldn't be called";
+  NamespaceDone namespaceDone;
+
+  // Parse Track Namespace Suffix
+  auto res = parseFixedTuple(cursor, length);
+  if (!res) {
+    XLOG(DBG4) << "parseNamespaceDone: error parsing track namespace suffix";
+    return folly::makeUnexpected(res.error());
+  }
+  namespaceDone.trackNamespaceSuffix = TrackNamespace(std::move(res.value()));
+
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return namespaceDone;
 }
 
 folly::Expected<FullTrackName, ErrorCode> MoQFrameParser::parseFullTrackName(
@@ -4711,6 +4770,15 @@ WriteResult MoQFrameWriter::writeSubscribeAnnounces(
   writeTrackNamespace(
       writeBuf, subscribeAnnounces.trackNamespacePrefix, size, error);
 
+  // Draft 16+: Write Subscribe Options field
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeVarint(
+        writeBuf,
+        folly::to_underlying(subscribeAnnounces.options),
+        size,
+        error);
+  }
+
   // Draft 15+: Write Forward field as a parameter (only if forward == 0,
   // since 1 is the default)
   std::vector<Parameter> requestSpecificParams;
@@ -4759,6 +4827,44 @@ WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
         error);
   }
 
+  writeSize(sizePtr, size, error, *version_);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writeNamespace(
+    folly::IOBufQueue& writeBuf,
+    const Namespace& ns) const noexcept {
+  CHECK(version_.hasValue()) << "Version needs to be set to write namespace";
+  CHECK_GE(getDraftMajorVersion(*version_), 16)
+      << "NAMESPACE message doesn't exist for version 15 and below, this function "
+      << "shouldn't be called";
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::NAMESPACE, error);
+  writeTrackNamespace(writeBuf, ns.trackNamespaceSuffix, size, error);
+  writeSize(sizePtr, size, error, *version_);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writeNamespaceDone(
+    folly::IOBufQueue& writeBuf,
+    const NamespaceDone& namespaceDone) const noexcept {
+  CHECK(version_.hasValue())
+      << "Version needs to be set to write namespace done";
+  CHECK_GE(getDraftMajorVersion(*version_), 16)
+      << "NAMESPACE_DONE message doesn't exist for version 15 and below, this function "
+      << "shouldn't be called";
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::NAMESPACE_DONE, error);
+  writeTrackNamespace(
+      writeBuf, namespaceDone.trackNamespaceSuffix, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

@@ -3220,4 +3220,207 @@ TEST_P(MoQFramerV15PlusTest, SubscribeAnnouncesForwardFalse) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV15PlusTest,
     MoQFramerV15PlusTest,
-    ::testing::Values(kVersionDraft15));
+    ::testing::Values(kVersionDraft15, kVersionDraft16));
+
+// Test class for v16+ specific features
+class MoQFramerV16PlusTest : public ::testing::TestWithParam<uint64_t> {
+ public:
+  void SetUp() override {
+    parser_.initializeVersion(GetParam());
+    writer_.initializeVersion(GetParam());
+  }
+
+ protected:
+  MoQFrameParser parser_;
+  MoQFrameWriter writer_;
+
+  size_t frameLength(folly::io::Cursor& cursor, bool checkAdvance = true) {
+    if (!cursor.canAdvance(2)) {
+      throw std::runtime_error("Cannot read frame length");
+    }
+    size_t res = cursor.readBE<uint16_t>();
+    if (checkAdvance && !cursor.canAdvance(res)) {
+      throw std::runtime_error("Frame length exceeds available data");
+    }
+    return res;
+  }
+};
+
+// Test Namespace message roundtrip
+TEST_P(MoQFramerV16PlusTest, NamespaceRoundtrip) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  Namespace ns;
+  ns.trackNamespaceSuffix =
+      TrackNamespace(std::vector<std::string>{"suffix", "part"});
+
+  auto writeResult = writer_.writeNamespace(writeBuf, ns);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::NAMESPACE));
+
+  auto parseResult = parser_.parseNamespace(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->trackNamespaceSuffix, ns.trackNamespaceSuffix);
+}
+
+// Test Namespace message with empty suffix
+TEST_P(MoQFramerV16PlusTest, NamespaceEmptySuffix) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  Namespace ns;
+  ns.trackNamespaceSuffix = TrackNamespace(std::vector<std::string>{});
+
+  auto writeResult = writer_.writeNamespace(writeBuf, ns);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::NAMESPACE));
+
+  auto parseResult = parser_.parseNamespace(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->trackNamespaceSuffix, ns.trackNamespaceSuffix);
+}
+
+// Test NamespaceDone message roundtrip
+TEST_P(MoQFramerV16PlusTest, NamespaceDoneRoundtrip) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  NamespaceDone namespaceDone;
+  namespaceDone.trackNamespaceSuffix =
+      TrackNamespace(std::vector<std::string>{"done", "suffix"});
+
+  auto writeResult = writer_.writeNamespaceDone(writeBuf, namespaceDone);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::NAMESPACE_DONE));
+
+  auto parseResult = parser_.parseNamespaceDone(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(
+      parseResult->trackNamespaceSuffix, namespaceDone.trackNamespaceSuffix);
+}
+
+// Test SubscribeAnnounces with Subscribe Options (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithOptions) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeAnnounces subscribeAnnounces;
+  subscribeAnnounces.requestID = RequestID(100);
+  subscribeAnnounces.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"test", "namespace"});
+  subscribeAnnounces.options = SubscribeAnnouncesOptions::NAMESPACE;
+  subscribeAnnounces.forward = true;
+  subscribeAnnounces.params = {};
+
+  auto writeResult =
+      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+
+  auto parseResult =
+      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(
+      parseResult->trackNamespacePrefix,
+      subscribeAnnounces.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->options, SubscribeAnnouncesOptions::NAMESPACE);
+  EXPECT_EQ(parseResult->forward, subscribeAnnounces.forward);
+}
+
+// Test SubscribeAnnounces with BOTH option (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithBothOption) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeAnnounces subscribeAnnounces;
+  subscribeAnnounces.requestID = RequestID(200);
+  subscribeAnnounces.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"both", "test"});
+  subscribeAnnounces.options = SubscribeAnnouncesOptions::BOTH;
+  subscribeAnnounces.forward = false;
+  subscribeAnnounces.params = {};
+
+  auto writeResult =
+      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+
+  auto parseResult =
+      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(
+      parseResult->trackNamespacePrefix,
+      subscribeAnnounces.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->options, SubscribeAnnouncesOptions::BOTH);
+  EXPECT_EQ(parseResult->forward, false);
+}
+
+// Test SubscribeAnnounces with PUBLISH option (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithPublishOption) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeAnnounces subscribeAnnounces;
+  subscribeAnnounces.requestID = RequestID(300);
+  subscribeAnnounces.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"publish", "only"});
+  subscribeAnnounces.options = SubscribeAnnouncesOptions::PUBLISH;
+  subscribeAnnounces.forward = true;
+  subscribeAnnounces.params = {};
+
+  auto writeResult =
+      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+
+  auto parseResult =
+      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(
+      parseResult->trackNamespacePrefix,
+      subscribeAnnounces.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->options, SubscribeAnnouncesOptions::PUBLISH);
+  EXPECT_EQ(parseResult->forward, true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQFramerV16PlusTest,
+    MoQFramerV16PlusTest,
+    ::testing::Values(kVersionDraft16));

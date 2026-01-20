@@ -142,13 +142,15 @@ enum class FrameType : uint64_t {
   ANNOUNCE = 0x6,
   ANNOUNCE_OK = 0x7,
   REQUEST_OK = 0x7,
-  ANNOUNCE_ERROR = 0x8,
+  ANNOUNCE_ERROR = 0x8, // Draft 15 and below
+  NAMESPACE = 0x8,      // Draft 16 and above
   UNANNOUNCE = 9,
   UNSUBSCRIBE = 0xA,
   SUBSCRIBE_DONE = 0xB,
   ANNOUNCE_CANCEL = 0xC,
   TRACK_STATUS = 0xD,
-  TRACK_STATUS_OK = 0xE,
+  TRACK_STATUS_OK = 0xE, // Draft 15 and below
+  NAMESPACE_DONE = 0xE,  // Draft 16 and above
   TRACK_STATUS_ERROR = 0xF,
   GOAWAY = 0x10,
   SUBSCRIBE_ANNOUNCES = 0x11,
@@ -1214,12 +1216,28 @@ struct FetchOk {
 };
 
 // FetchError is now an alias for RequestError - see below
+enum SubscribeAnnouncesOptions {
+  PUBLISH = 0,
+  NAMESPACE = 1,
+  BOTH = 2,
+};
 
 struct SubscribeAnnounces {
   RequestID requestID;
   TrackNamespace trackNamespacePrefix;
   bool forward{true}; // Only used in draft-15 and above
   TrackRequestParameters params;
+  SubscribeAnnouncesOptions options; // Only used in draft-16 and above
+};
+
+// Only used in draft-16 and above
+struct NamespaceDone {
+  TrackNamespace trackNamespaceSuffix;
+};
+
+// Only used in draft-16 and above
+struct Namespace {
+  TrackNamespace trackNamespaceSuffix;
 };
 
 // SubscribeAnnouncesError is now an alias for RequestError - see below
@@ -1490,6 +1508,15 @@ class MoQFrameParser {
       FrameType frameType) const noexcept;
 
   folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
+  // v16+ messages for SUBSCRIBE_NAMESPACE response stream
+  folly::Expected<Namespace, ErrorCode> parseNamespace(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
+  folly::Expected<NamespaceDone, ErrorCode> parseNamespaceDone(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -1768,6 +1795,14 @@ class MoQFrameWriter {
   WriteResult writeUnsubscribeAnnounces(
       folly::IOBufQueue& writeBuf,
       const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept;
+
+  // v16+ messages for SUBSCRIBE_NAMESPACE response stream
+  WriteResult writeNamespace(folly::IOBufQueue& writeBuf, const Namespace& ns)
+      const noexcept;
+
+  WriteResult writeNamespaceDone(
+      folly::IOBufQueue& writeBuf,
+      const NamespaceDone& namespaceDone) const noexcept;
 
   WriteResult writeFetch(folly::IOBufQueue& writeBuf, const Fetch& fetch)
       const noexcept;
