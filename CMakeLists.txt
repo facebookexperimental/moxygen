@@ -51,6 +51,7 @@ find_package(folly REQUIRED)
 find_package(wangle REQUIRED)
 find_package(mvfst REQUIRED)
 find_package(proxygen REQUIRED)
+find_package(Glog REQUIRED)
 find_package(gflags REQUIRED)
 find_package(Zstd REQUIRED)
 
