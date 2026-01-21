@@ -138,6 +138,11 @@ class MoQTestClient {
   uint64_t expectedSubgroup_{};
   std::array<uint64_t, 2> subgroupToExpectedObjId_{};
 
+  // Scoreboard of expected (group, objectId) pairs
+  // When receiving: if present, erase; if absent, it's a duplicate
+  // At end: success == scoreboard.empty() (or within drop limit for datagrams)
+  std::set<std::pair<uint64_t, uint64_t>> expectedObjects_;
+
   // Holds if current request expects end of group markers
   bool expectEndOfGroup_{};
 
@@ -163,8 +168,7 @@ class MoQTestClient {
       const ObjectHeader* header);
   AdjustedExpectedResult adjustExpectedForOneSubgroupPerGroup(
       MoQTestParameters& params);
-  AdjustedExpectedResult adjustExpectedForOneSubgroupPerObject(
-      MoQTestParameters& params);
+  AdjustedExpectedResult adjustExpectedForOneSubgroupPerObject();
   AdjustedExpectedResult adjustExpectedForTwoSubgroupsPerGroup(
       const ObjectHeader* header,
       MoQTestParameters& params);

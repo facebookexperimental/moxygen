@@ -263,6 +263,14 @@ void MoQTestClient::onObjectStatus(
     return;
   }
 
+  // Remove the end-of-group marker from the scoreboard
+  // End-of-group markers don't go through validateSubscribedData(), so we need
+  // to erase them here to avoid false "objects still expected" errors
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
+    auto key = std::make_pair(header.group, header.id);
+    expectedObjects_.erase(key);
+  }
+
   // Adjust the expected data
   if (adjustExpected(params_, &objHeader) ==
       AdjustedExpectedResult::RECEIVED_ALL_DATA) {
@@ -285,9 +293,25 @@ void MoQTestClient::onAllDataReceived() {
   auto subHandleResetGuard = folly::makeGuard([this] { subHandle_.reset(); });
 
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
+    // For datagrams, some drops are allowed based on datagramDropPercentage
+    uint64_t totalExpected = (((params_.lastGroupInTrack - params_.startGroup) /
+                               params_.groupIncrement) +
+                              1) *
+        (((params_.lastObjectInTrack - params_.startObject) /
+          params_.objectIncrement) +
+         1);
+    // Allow configured percentage of drops, with minimum of 1
+    uint64_t dropsAllowed = std::max(
+        uint64_t{1}, totalExpected * params_.datagramDropPercentage / 100);
     if (datagramObjects_ == 0) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Recieved";
+      subHandle_->unsubscribe();
+      return;
+    } else if (expectedObjects_.size() > dropsAllowed) {
+      XLOG(ERR)
+          << "MoQTest verification result: FAILURE! reason: Datagram had too many drops: "
+          << expectedObjects_.size() << " missing, allowed " << dropsAllowed;
       subHandle_->unsubscribe();
       return;
     } else {
@@ -296,11 +320,15 @@ void MoQTestClient::onAllDataReceived() {
       return;
     }
   }
-  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
-      adjustExpected(params_, nullptr) ==
-          AdjustedExpectedResult::STILL_RECEIVING_DATA) {
+
+  // For non-datagram: success == scoreboard.empty()
+  if (!expectedObjects_.empty()) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: SubscribeDone recieved while objects are still expected";
+        << "MoQTest verification result: FAILURE! reason: SubscribeDone recieved while "
+        << expectedObjects_.size() << " objects are still expected";
+    for (const auto& [group, objId] : expectedObjects_) {
+      XLOG(ERR) << "  Missing object: group=" << group << " id=" << objId;
+    }
     subHandle_->unsubscribe();
     return;
   }
@@ -319,12 +347,32 @@ bool MoQTestClient::validateSubscribedData(
   XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
              << " end of group markers=" << params_.sendEndOfGroupMarkers
              << " expected end of group markers=" << expectEndOfGroup_;
-  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
-      header.group != expectedGroup_) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Group Mismatch: Actual="
-        << header.group << "  Expected=" << expectedGroup_;
-    return false;
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
+    if (params_.forwardingPreference ==
+        ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
+      // Allow out-of-order groups, just validate range
+      if (header.group < params_.startGroup ||
+          header.group > params_.lastGroupInTrack) {
+        XLOG(ERR)
+            << "MoQTest verification result: FAILURE! reason: Group out of range: "
+            << header.group << " not in [" << params_.startGroup << ", "
+            << params_.lastGroupInTrack << "]";
+        return false;
+      }
+      // Validate group increment
+      if ((header.group - params_.startGroup) % params_.groupIncrement != 0) {
+        XLOG(ERR)
+            << "MoQTest verification result: FAILURE! reason: Group not on increment boundary: "
+            << header.group << " with startGroup=" << params_.startGroup
+            << " and groupIncrement=" << params_.groupIncrement;
+        return false;
+      }
+    } else if (header.group != expectedGroup_) {
+      XLOG(ERR)
+          << "MoQTest verification result: FAILURE! reason: Group Mismatch: Actual="
+          << header.group << "  Expected=" << expectedGroup_;
+      return false;
+    }
   }
 
   if (params_.forwardingPreference ==
@@ -361,6 +409,43 @@ bool MoQTestClient::validateSubscribedData(
                        ? "0 or 1"
                        : "N/A"));
     return false;
+  }
+
+  // Validate ONE_SUBGROUP_PER_OBJECT constraints
+  if (params_.forwardingPreference ==
+      ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
+    // Subgroup must equal object ID
+    if (header.subgroup != header.id) {
+      XLOG(ERR)
+          << "MoQTest verification result: FAILURE! reason: SubGroup must equal "
+          << "Object ID for ONE_SUBGROUP_PER_OBJECT: subgroup="
+          << header.subgroup << " id=" << header.id;
+      return false;
+    }
+    // Object ID must be in valid range
+    if (header.id < params_.startObject ||
+        header.id > params_.lastObjectInTrack) {
+      XLOG(ERR)
+          << "MoQTest verification result: FAILURE! reason: Object ID out of range: "
+          << header.id << " not in [" << params_.startObject << ", "
+          << params_.lastObjectInTrack << "]";
+      return false;
+    }
+  }
+
+  // Scoreboard-based duplicate detection for non-DATAGRAM forwarding
+  // preferences
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
+    auto key = std::make_pair(header.group, header.id);
+    auto it = expectedObjects_.find(key);
+    if (it == expectedObjects_.end()) {
+      XLOG(ERR)
+          << "MoQTest verification result: FAILURE! reason: Duplicate or unexpected object: "
+          << "group=" << header.group << " id=" << header.id;
+      return false;
+    }
+    // Erase from scoreboard - object received successfully
+    expectedObjects_.erase(it);
   }
 
   if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
@@ -423,20 +508,10 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
   return AdjustedExpectedResult::STILL_RECEIVING_DATA;
 }
 
-AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject(
-    MoQTestParameters& params) {
-  // Adjust Expected Group, ObjectId and Subgroup
-  if (expectedGroup_ < params.lastGroupInTrack &&
-      subgroupToExpectedObjId_[0] == params.lastObjectInTrack) {
-    // Increment Group, Reset ObjectId and Subgroup
-    expectedGroup_ += params.groupIncrement;
-    subgroupToExpectedObjId_[0] = params.startObject;
-    expectedSubgroup_ = 0;
-  } else if (subgroupToExpectedObjId_[0] < params.lastObjectInTrack) {
-    // Increment ObjectId and Subgroup
-    subgroupToExpectedObjId_[0] += params.objectIncrement;
-    expectedSubgroup_ += params.objectIncrement;
-  } else {
+AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject() {
+  // With scoreboard approach, we check if all expected objects have been
+  // received
+  if (expectedObjects_.empty()) {
     return AdjustedExpectedResult::RECEIVED_ALL_DATA;
   }
   return AdjustedExpectedResult::STILL_RECEIVING_DATA;
@@ -552,6 +627,16 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
   expectedSubgroup_ = 0;
   expectEndOfGroup_ = params.sendEndOfGroupMarkers;
 
+  // Initialize scoreboard with all expected (group, objectId) pairs
+  expectedObjects_.clear();
+  for (uint64_t group = params.startGroup; group <= params.lastGroupInTrack;
+       group += params.groupIncrement) {
+    for (uint64_t obj = params.startObject; obj <= params.lastObjectInTrack;
+         obj += params.objectIncrement) {
+      expectedObjects_.insert({group, obj});
+    }
+  }
+
   // Only relevant for Datagram Forwarding Preference
   datagramObjects_ = 0;
 }
@@ -564,7 +649,7 @@ AdjustedExpectedResult MoQTestClient::adjustExpected(
       return adjustExpectedForOneSubgroupPerGroup(params);
     }
     case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
-      return adjustExpectedForOneSubgroupPerObject(params);
+      return adjustExpectedForOneSubgroupPerObject();
     }
     case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
       return adjustExpectedForTwoSubgroupsPerGroup(header, params);
@@ -621,6 +706,18 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
         << params_.lastObjectInTrack;
     return false;
   }
+
+  // Check for duplicates - if not in scoreboard, we already received this
+  // object
+  auto key = std::make_pair(header.group, header.id);
+  auto it = expectedObjects_.find(key);
+  if (it == expectedObjects_.end()) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! reason: Duplicate datagram object: "
+        << "group=" << header.group << " id=" << header.id;
+    return false;
+  }
+  expectedObjects_.erase(it);
 
   return true;
 }

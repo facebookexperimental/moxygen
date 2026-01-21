@@ -26,6 +26,7 @@ const uint64_t kDefaultLastGroupInTrack = (1ULL << 62) - 1;
 const uint64_t kDefaultStart = 0;
 const uint64_t kDefaultIncrement = 1;
 const uint64_t kDefaultPublisherDeliveryTimeout = 0;
+const uint64_t kDefaultDatagramDropPercentage = 1; // Allow up to 1% drops
 
 struct MoQTestParameters {
   ForwardingPreference forwardingPreference =
@@ -48,6 +49,10 @@ struct MoQTestParameters {
       kDefaultPublisherDeliveryTimeout; // Tuple Field 15
   uint64_t deliveryTimeout =
       0; // Tuple Field 16 - Delivery timeout in milliseconds (0 = disabled)
+
+  // Client-side parameter (not part of track namespace)
+  uint64_t datagramDropPercentage =
+      kDefaultDatagramDropPercentage; // Allowed datagram drop percentage
 
   uint64_t lastObjectInTrack = this->objectsPerGroup +
       this->sendEndOfGroupMarkers; // Tuple Field 5 (Out of Order to Ensure

@@ -73,6 +73,10 @@ DEFINE_bool(
     quic_transport,
     false,
     "Use QUIC transport instead of WebTransport");
+DEFINE_uint64(
+    datagram_drops_allowed_percentage,
+    moxygen::kDefaultDatagramDropPercentage,
+    "Allowed datagram drop percentage for DATAGRAM forwarding (default 1%)");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
@@ -100,6 +104,8 @@ int main(int argc, char** argv) {
   defaultMoqParams.testVariableExtension = FLAGS_test_variable_extension;
   defaultMoqParams.publisherDeliveryTimeout = FLAGS_publisher_delivery_timeout;
   defaultMoqParams.deliveryTimeout = FLAGS_delivery_timeout;
+  defaultMoqParams.datagramDropPercentage =
+      FLAGS_datagram_drops_allowed_percentage;
   defaultMoqParams.lastObjectInTrack =
       FLAGS_last_object_in_track == moxygen::kLocationMax.object
       ? FLAGS_object_increment *
