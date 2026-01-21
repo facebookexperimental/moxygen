@@ -691,7 +691,7 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
   }
 
   // Object Id Must be Properly incremented
-  if (header.id % params_.objectIncrement != 0) {
+  if (((header.id - params_.startObject) % params_.objectIncrement) != 0) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Datagram Object Id Mismatch: Actual="
         << header.id << "Expected Increment of " << params_.objectIncrement;
