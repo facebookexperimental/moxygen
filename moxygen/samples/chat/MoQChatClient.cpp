@@ -29,6 +29,77 @@ DEFINE_bool(
 
 namespace moxygen {
 
+namespace {
+// Helper functions to avoid aggregate initialization in coroutines (GCC bug)
+Announce makeAnnounce(
+    RequestID reqId,
+    TrackNamespace ns,
+    TrackRequestParameters params = {}) {
+  Announce a;
+  a.requestID = reqId;
+  a.trackNamespace = std::move(ns);
+  a.params = std::move(params);
+  return a;
+}
+
+SubscribeAnnounces makeSubscribeAnnounces(
+    RequestID reqId,
+    TrackNamespace prefix,
+    bool forward,
+    TrackRequestParameters params) {
+  SubscribeAnnounces sa;
+  sa.requestID = reqId;
+  sa.trackNamespacePrefix = std::move(prefix);
+  sa.forward = forward;
+  sa.params = std::move(params);
+  return sa;
+}
+
+AnnounceError
+makeAnnounceError(RequestID reqId, AnnounceErrorCode code, std::string reason) {
+  AnnounceError e;
+  e.requestID = reqId;
+  e.errorCode = code;
+  e.reasonPhrase = std::move(reason);
+  return e;
+}
+
+AnnounceOk makeAnnounceOk(RequestID reqId, TrackRequestParameters params = {}) {
+  AnnounceOk ok;
+  ok.requestID = reqId;
+  ok.params = std::move(params);
+  return ok;
+}
+
+SubscribeError makeSubscribeError(
+    RequestID reqId,
+    SubscribeErrorCode code,
+    std::string reason) {
+  SubscribeError e;
+  e.requestID = reqId;
+  e.errorCode = code;
+  e.reasonPhrase = std::move(reason);
+  return e;
+}
+
+SubscribeOk makeSubscribeOk(
+    RequestID reqId,
+    TrackAlias alias,
+    std::chrono::milliseconds expires,
+    GroupOrder groupOrder,
+    folly::Optional<AbsoluteLocation> largest,
+    TrackRequestParameters params = {}) {
+  SubscribeOk ok;
+  ok.requestID = reqId;
+  ok.trackAlias = alias;
+  ok.expires = expires;
+  ok.groupOrder = groupOrder;
+  ok.largest = std::move(largest);
+  ok.params = std::move(params);
+  return ok;
+}
+} // namespace
+
 MoQChatClient::MoQChatClient(
     folly::EventBase* evb,
     proxygen::URL url,
@@ -68,7 +139,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         alpns);
     // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.getSession()->announce(
-        {RequestID(0), participantTrackName(username_), {}});
+        makeAnnounce(RequestID(0), participantTrackName(username_)));
     if (announceRes.hasError()) {
       XLOG(ERR) << "Announce failed err=" << announceRes.error().reasonPhrase;
       co_return;
@@ -77,11 +148,14 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     uint64_t negotiatedVersion =
         *(moqClient_.getSession()->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the largest group
+    TrackRequestParameters saParams;
+    saParams.insertParam(getAuthParam(negotiatedVersion, username_));
     auto sa = co_await moqClient_.getSession()->subscribeAnnounces(
-        {RequestID(0),
-         TrackNamespace(chatPrefix()),
-         true, // forward
-         {getAuthParam(negotiatedVersion, username_)}});
+        makeSubscribeAnnounces(
+            RequestID(0),
+            TrackNamespace(chatPrefix()),
+            true, // forward
+            std::move(saParams)));
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
@@ -105,23 +179,21 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
   auto trackNamespaceCopy = announce.trackNamespace;
   if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
     if (announce.trackNamespace.size() != 5) {
-      co_return folly::makeUnexpected(
-          AnnounceError{
-              announce.requestID,
-              AnnounceErrorCode::UNINTERESTED,
-              "Invalid chat announce"});
+      co_return folly::makeUnexpected(makeAnnounceError(
+          announce.requestID,
+          AnnounceErrorCode::UNINTERESTED,
+          "Invalid chat announce"));
     }
     co_withExecutor(
         moqClient_.getSession()->getExecutor(),
         subscribeToUser(std::move(announce.trackNamespace)))
         .start();
   } else {
-    co_return folly::makeUnexpected(
-        AnnounceError{
-            announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
+    co_return folly::makeUnexpected(makeAnnounceError(
+        announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"));
   }
   co_return std::make_shared<AnnounceHandle>(
-      AnnounceOk{announce.requestID, {}},
+      makeAnnounceOk(announce.requestID),
       shared_from_this(),
       std::move(trackNamespaceCopy));
 }
@@ -137,18 +209,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   XLOG(INFO) << "SubscribeRequest";
   if (subscribeReq.fullTrackName.trackNamespace !=
       participantTrackName(username_)) {
-    co_return folly::makeUnexpected(
-        SubscribeError{
-            subscribeReq.requestID,
-            SubscribeErrorCode::TRACK_NOT_EXIST,
-            "no such track"});
+    co_return folly::makeUnexpected(makeSubscribeError(
+        subscribeReq.requestID,
+        SubscribeErrorCode::TRACK_NOT_EXIST,
+        "no such track"));
   }
   if (publisher_) {
-    co_return folly::makeUnexpected(
-        SubscribeError{
-            subscribeReq.requestID,
-            SubscribeErrorCode::INTERNAL_ERROR,
-            "Duplicate subscribe for track"});
+    co_return folly::makeUnexpected(makeSubscribeError(
+        subscribeReq.requestID,
+        SubscribeErrorCode::INTERNAL_ERROR,
+        "Duplicate subscribe for track"));
   }
   chatRequestID_.emplace(subscribeReq.requestID);
   chatTrackAlias_.emplace(TrackAlias(subscribeReq.requestID.value));
@@ -157,14 +227,13 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
     largest.emplace(nextGroup_ - 1, 0);
   }
   publisher_ = std::move(consumer);
-  setSubscribeOk(
-      {subscribeReq.requestID,
-       *chatTrackAlias_,
-       std::chrono::milliseconds(0),
-       MoQSession::resolveGroupOrder(
-           GroupOrder::OldestFirst, subscribeReq.groupOrder),
-       largest,
-       {}});
+  setSubscribeOk(makeSubscribeOk(
+      subscribeReq.requestID,
+      *chatTrackAlias_,
+      std::chrono::milliseconds(0),
+      MoQSession::resolveGroupOrder(
+          GroupOrder::OldestFirst, subscribeReq.groupOrder),
+      largest));
   co_return shared_from_this();
 }
 
@@ -274,7 +343,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   if (!userTrackPtr) {
     // no tracks for this device
     userTrackPtr =
-        &userTracks.emplace_back(UserTrack({deviceId, timestamp, 0}));
+        &userTracks.emplace_back(UserTrack::make(deviceId, timestamp, 0));
   }
   // now subscribe and update timestamp.
   class ChatObjectHandler : public ObjectReceiverCallback {
