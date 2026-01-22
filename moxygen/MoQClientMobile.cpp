@@ -78,6 +78,10 @@ MoQClientMobile::connectQuic(
     const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
   auto sock = std::make_unique<quic::LibevQuicAsyncUDPSocket>(moqlibevEvb_);
+  // Set UDP socket buffer sizes to 1 MB
+  constexpr int kUdpBufferSize = 1024 * 1024; // 1 MB
+  sock->setRcvBuf(kUdpBufferSize);
+  sock->setSndBuf(kUdpBufferSize);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns(alpns);
   auto quicClient = quic::QuicClientTransport::newClient(

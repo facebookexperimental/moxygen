@@ -86,6 +86,10 @@ QuicConnector::connectQuic(
     const quic::TransportSettings& transportSettings) {
   auto qEvb = std::make_shared<quic::FollyQuicEventBase>(eventBase);
   auto sock = std::make_unique<quic::FollyQuicAsyncUDPSocket>(qEvb);
+  // Set UDP socket buffer sizes to 1 MB
+  constexpr int kUdpBufferSize = 1024 * 1024; // 1 MB
+  sock->setRcvBuf(kUdpBufferSize);
+  sock->setSndBuf(kUdpBufferSize);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns(alpns);
   auto quicClient = quic::QuicClientTransport::newClient(
