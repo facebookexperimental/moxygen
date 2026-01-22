@@ -36,18 +36,28 @@ MoQRelaySession::createRelaySessionFactory() {
 class MoQRelaySession::SubscriberAnnounceCallback
     : public Subscriber::AnnounceCallback {
  public:
-  SubscriberAnnounceCallback(MoQRelaySession& session, const TrackNamespace& ns)
-      : session_(session), trackNamespace_(ns) {}
+  SubscriberAnnounceCallback(
+      MoQRelaySession& session,
+      const TrackNamespace& ns,
+      RequestID requestID)
+      : session_(session), trackNamespace_(ns), requestID_(requestID) {}
 
   void announceCancel(AnnounceErrorCode errorCode, std::string reasonPhrase)
       override {
-    session_.announceCancel(
-        {trackNamespace_, errorCode, std::move(reasonPhrase)});
+    AnnounceCancel annCan;
+    annCan.requestID = requestID_;
+    if (getDraftMajorVersion(*session_.getNegotiatedVersion()) < 16) {
+      annCan.trackNamespace = trackNamespace_;
+    }
+    annCan.errorCode = errorCode;
+    annCan.reasonPhrase = std::move(reasonPhrase);
+    session_.announceCancel(annCan);
   }
 
  private:
   MoQRelaySession& session_;
   TrackNamespace trackNamespace_;
+  RequestID requestID_;
 };
 
 class MoQRelaySession::PublisherAnnounceHandle
@@ -70,7 +80,13 @@ class MoQRelaySession::PublisherAnnounceHandle
 
   void unannounce() override {
     if (session_) {
-      session_->unannounce({trackNamespace_});
+      Unannounce unann;
+      if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 16) {
+        unann.requestID = announceOk().requestID;
+      } else {
+        unann.trackNamespace = trackNamespace_;
+      }
+      session_->unannounce(unann);
       session_.reset();
     }
   }
@@ -230,7 +246,7 @@ class MoQRelaySession::MoQRelayPendingRequestState
 };
 
 void MoQRelaySession::cleanup() {
-  // Clean up announcement-specific state first
+  // Clean up announce maps (single source of truth)
   for (auto& ann : publisherAnnounces_) {
     if (ann.second) {
       ann.second->announceCancel(
@@ -238,26 +254,22 @@ void MoQRelaySession::cleanup() {
     }
   }
   publisherAnnounces_.clear();
+  legacyPublisherAnnounceNsToReqId_.clear();
 
   for (auto& ann : subscriberAnnounces_) {
-    ann.second->unannounce(); // AnnounceHandle has unannounce() method
+    ann.second->unannounce();
   }
   subscriberAnnounces_.clear();
+  legacySubscriberAnnounceNsToReqId_.clear();
 
-  // Clean up subscribeAnnounces handles for both maps
-  for (auto& subAnn : reqIdToSubscribeAnnounces_) {
+  // Clean up subscribeAnnounces handles
+  for (auto& subAnn : subscribeAnnounces_) {
     if (subAnn.second) {
       subAnn.second->unsubscribeAnnounces();
     }
   }
-  reqIdToSubscribeAnnounces_.clear();
-
-  for (auto& subAnn : trackNsTosubscribeAnnounces_) {
-    if (subAnn.second) {
-      subAnn.second->unsubscribeAnnounces();
-    }
-  }
-  trackNsTosubscribeAnnounces_.clear();
+  subscribeAnnounces_.clear();
+  legacySubscribeAnnouncesNsToReqId_.clear();
 
   // Call parent cleanup to handle base class cleanup
   MoQSession::cleanup();
@@ -374,8 +386,6 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
 }
 
 void MoQRelaySession::onAnnounceCancel(AnnounceCancel announceCancel) {
-  XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
-             << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceCancel);
 
   if (logger_) {
@@ -385,30 +395,111 @@ void MoQRelaySession::onAnnounceCancel(AnnounceCancel announceCancel) {
         ControlMessageType::PARSED);
   }
 
-  auto it = publisherAnnounces_.find(announceCancel.trackNamespace);
-  if (it == publisherAnnounces_.end()) {
-    XLOG(ERR) << "Invalid announce cancel ns=" << announceCancel.trackNamespace;
+  std::shared_ptr<Subscriber::AnnounceCallback> cb;
+
+  RequestID reqId;
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
+    CHECK(announceCancel.requestID.hasValue());
+    XLOG(DBG1) << __func__ << " requestID=" << *announceCancel.requestID
+               << " sess=" << this;
+    reqId = *announceCancel.requestID;
   } else {
-    auto& cb = it->second;
-    if (cb) {
-      cb->announceCancel(
-          announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
+    // Legacy: translate NS -> RequestID
+    XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
+               << " sess=" << this;
+    auto nsIt =
+        legacyPublisherAnnounceNsToReqId_.find(announceCancel.trackNamespace);
+    if (nsIt == legacyPublisherAnnounceNsToReqId_.end()) {
+      XLOG(ERR) << "Invalid announce cancel ns="
+                << announceCancel.trackNamespace;
+      return;
     }
-    publisherAnnounces_.erase(it);
+    reqId = nsIt->second;
+    legacyPublisherAnnounceNsToReqId_.erase(nsIt);
+  }
+
+  auto it = publisherAnnounces_.find(reqId);
+  if (it == publisherAnnounces_.end()) {
+    XLOG(ERR) << "Invalid announce cancel requestID=" << reqId;
+    return;
+  }
+  cb = std::move(it->second);
+  publisherAnnounces_.erase(it);
+
+  // Common action
+  if (cb) {
+    cb->announceCancel(
+        announceCancel.errorCode, std::move(announceCancel.reasonPhrase));
   }
 }
 
 void MoQRelaySession::unannounce(const Unannounce& unann) {
-  XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnannounce);
 
   if (logger_) {
     logger_->logUnannounce(unann);
   }
 
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnannounce);
-  auto it = publisherAnnounces_.find(unann.trackNamespace);
-  if (it == publisherAnnounces_.end()) {
-    // Not established but could be pending
+  // Lambda helper to fail a pending announce and erase it
+  auto failPendingAnnounce = [this](auto pendingIt, RequestID reqId) {
+    if (auto* announcePtr = MoQRelayPendingRequestState::tryGetAnnounce(
+            pendingIt->second.get())) {
+      announcePtr->promise.setValue(
+          folly::makeUnexpected(AnnounceError(
+              {reqId,
+               AnnounceErrorCode::INTERNAL_ERROR,
+               "Unannounce before AnnounceOK"})));
+    }
+    pendingRequests_.erase(pendingIt);
+  };
+
+  // Lambda helper to write the unannounce frame
+  auto writeUnannounceToWire = [this, &unann]() {
+    auto res = moqFrameWriter_.writeUnannounce(controlWriteBuf_, unann);
+    if (!res) {
+      XLOG(ERR) << "writeUnannounce failed sess=" << this;
+    }
+    controlWriteEvent_.signal();
+  };
+
+  bool found = false;
+  std::optional<RequestID> reqId;
+
+  // Try resolve requestID
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
+    CHECK(unann.requestID.hasValue());
+    XLOG(DBG1) << __func__ << " requestID=" << *unann.requestID
+               << " sess=" << this;
+    reqId = *unann.requestID;
+  } else {
+    XLOG(DBG1) << __func__ << " ns=" << unann.trackNamespace
+               << " sess=" << this;
+    // Legacy: translate NS -> RequestID
+    auto nsIt = legacyPublisherAnnounceNsToReqId_.find(unann.trackNamespace);
+    if (nsIt != legacyPublisherAnnounceNsToReqId_.end()) {
+      reqId = nsIt->second;
+      legacyPublisherAnnounceNsToReqId_.erase(nsIt);
+    }
+    // If not found, reqId remains nullopt - will search pending by namespace
+  }
+
+  // Find and remove announce
+  if (reqId.has_value()) {
+    auto it = publisherAnnounces_.find(*reqId);
+    if (it != publisherAnnounces_.end()) {
+      publisherAnnounces_.erase(it);
+      found = true;
+    } else {
+      // Check pending requests by RequestID
+      auto pendingIt = pendingRequests_.find(*reqId);
+      if (pendingIt != pendingRequests_.end()) {
+        failPendingAnnounce(pendingIt, *reqId);
+        found = true;
+      }
+    }
+  } else {
+    // Legacy: search pending by namespace
+    // TODO: This is a scan. Optimize
     auto pendingIt = std::find_if(
         pendingRequests_.begin(),
         pendingRequests_.end(),
@@ -419,27 +510,17 @@ void MoQRelaySession::unannounce(const Unannounce& unann) {
           }
           return false;
         });
-
     if (pendingIt != pendingRequests_.end()) {
-      if (auto* announcePtr = MoQRelayPendingRequestState::tryGetAnnounce(
-              pendingIt->second.get())) {
-        announcePtr->promise.setValue(
-            folly::makeUnexpected(AnnounceError(
-                {pendingIt->first,
-                 AnnounceErrorCode::INTERNAL_ERROR,
-                 "Unannounce before AnnounceOK"})));
-      }
-      pendingRequests_.erase(pendingIt);
-    } else {
-      XLOG(ERR) << "Unannounce (cancelled?) ns=" << unann.trackNamespace;
-      return;
+      failPendingAnnounce(pendingIt, pendingIt->first);
+      found = true;
     }
   }
-  auto res = moqFrameWriter_.writeUnannounce(controlWriteBuf_, unann);
-  if (!res) {
-    XLOG(ERR) << "writeUnannounce failed sess=" << this;
+
+  if (found) {
+    writeUnannounceToWire();
+  } else {
+    XLOG(ERR) << "Unannounce for unknown announce, sess=" << this;
   }
-  controlWriteEvent_.signal();
 }
 
 // Announce subscriber methods
@@ -471,7 +552,7 @@ folly::coro::Task<void> MoQRelaySession::handleAnnounce(Announce announce) {
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto annCb = std::make_shared<SubscriberAnnounceCallback>(
-      *this, announce.trackNamespace);
+      *this, announce.trackNamespace, announce.requestID);
   auto announceResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       subscribeHandler_->announce(announce, std::move(annCb))));
@@ -496,8 +577,12 @@ folly::coro::Task<void> MoQRelaySession::handleAnnounce(Announce announce) {
     auto handle = std::move(announceResult->value());
     auto announceOkMsg = handle->announceOk();
     announceOk(announceOkMsg);
-    // TODO: what about UNANNOUNCE before ANNOUNCE_OK
-    subscriberAnnounces_[announce.trackNamespace] = std::move(handle);
+    subscriberAnnounces_[announce.requestID] = std::move(handle);
+    if (getDraftMajorVersion(*getNegotiatedVersion()) < 16) {
+      // Legacy: also store NS->RequestID mapping for lookups
+      legacySubscriberAnnounceNsToReqId_[announce.trackNamespace] =
+          announce.requestID;
+    }
   }
 }
 
@@ -524,7 +609,10 @@ void MoQRelaySession::announceCancel(const AnnounceCancel& annCan) {
     XLOG(ERR) << "writeAnnounceCancel failed sess=" << this;
   }
   controlWriteEvent_.signal();
-  subscriberAnnounces_.erase(annCan.trackNamespace);
+
+  if (annCan.requestID.hasValue()) {
+    subscriberAnnounces_.erase(*annCan.requestID);
+  }
   retireRequestID(/*signalWriteLoop=*/false);
 
   if (logger_) {
@@ -533,7 +621,6 @@ void MoQRelaySession::announceCancel(const AnnounceCancel& annCan) {
 }
 
 void MoQRelaySession::onUnannounce(Unannounce unAnn) {
-  XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnannounce);
 
   if (logger_) {
@@ -541,14 +628,40 @@ void MoQRelaySession::onUnannounce(Unannounce unAnn) {
         unAnn, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
   }
 
-  auto annIt = subscriberAnnounces_.find(unAnn.trackNamespace);
-  if (annIt == subscriberAnnounces_.end()) {
-    XLOG(ERR) << "Unannounce for bad namespace ns=" << unAnn.trackNamespace;
+  // Version-specific lookup, common action
+  std::shared_ptr<Subscriber::AnnounceHandle> handle;
+
+  RequestID reqId;
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
+    CHECK(unAnn.requestID.hasValue());
+    XLOG(DBG1) << __func__ << " requestID=" << *unAnn.requestID
+               << " sess=" << this;
+    reqId = *unAnn.requestID;
   } else {
-    annIt->second->unannounce();
-    subscriberAnnounces_.erase(annIt);
-    retireRequestID(/*signalWriteLoop=*/true);
+    // Legacy: translate NS -> RequestID
+    XLOG(DBG1) << __func__ << " ns=" << unAnn.trackNamespace
+               << " sess=" << this;
+    auto nsIt = legacySubscriberAnnounceNsToReqId_.find(unAnn.trackNamespace);
+    if (nsIt == legacySubscriberAnnounceNsToReqId_.end()) {
+      XLOG(ERR) << "Unannounce for unknown namespace ns="
+                << unAnn.trackNamespace;
+      return;
+    }
+    reqId = nsIt->second;
+    legacySubscriberAnnounceNsToReqId_.erase(nsIt);
   }
+
+  auto it = subscriberAnnounces_.find(reqId);
+  if (it == subscriberAnnounces_.end()) {
+    XLOG(ERR) << "Unannounce for unknown requestID=" << reqId;
+    return;
+  }
+  handle = std::move(it->second);
+  subscriberAnnounces_.erase(it);
+
+  // Common action
+  handle->unannounce();
+  retireRequestID(/*signalWriteLoop=*/true);
 }
 
 // SubscribeAnnounces subscriber methods
@@ -673,13 +786,12 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeAnnounces(
     auto subAnnOk = handle->subscribeAnnouncesOk();
     subscribeAnnouncesOk(subAnnOk);
 
-    if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-      // v15 and + only: Store Request ID lookup
-      reqIdToSubscribeAnnounces_[subAnn.requestID] = std::move(handle);
-    } else {
-      // Remove when we drop <v15 support
-      trackNsTosubscribeAnnounces_[subAnn.trackNamespacePrefix] =
-          std::move(handle);
+    // Store by RequestID (primary key)
+    subscribeAnnounces_[subAnn.requestID] = std::move(handle);
+    if (getDraftMajorVersion(*getNegotiatedVersion()) < 15) {
+      // Legacy: also store NS->RequestID mapping for lookups
+      legacySubscribeAnnouncesNsToReqId_[subAnn.trackNamespacePrefix] =
+          subAnn.requestID;
     }
   }
 }
@@ -724,13 +836,6 @@ void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
     }
     requestID = unsub.requestID.value();
     XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
-
-    auto saIt = reqIdToSubscribeAnnounces_.find(requestID);
-    if (saIt == reqIdToSubscribeAnnounces_.end()) {
-      XLOG(ERR) << "Invalid unsub announce requestID=" << requestID;
-      return;
-    }
-    handle = saIt->second;
   } else {
     // <v15: Two-step lookup via namespace
     if (!unsub.trackNamespacePrefix.hasValue()) {
@@ -741,23 +846,27 @@ void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
     ns = unsub.trackNamespacePrefix.value();
     XLOG(DBG1) << __func__ << " prefix=" << ns << " sess=" << this;
 
-    auto nsIt = trackNsTosubscribeAnnounces_.find(ns);
-    if (nsIt == trackNsTosubscribeAnnounces_.end()) {
+    auto nsIt = legacySubscribeAnnouncesNsToReqId_.find(ns);
+    if (nsIt == legacySubscribeAnnouncesNsToReqId_.end()) {
       XLOG(ERR) << "Invalid unsub announce nsp=" << ns;
       return;
     }
-    handle = nsIt->second;
+    requestID = nsIt->second;
+    legacySubscribeAnnouncesNsToReqId_.erase(nsIt);
   }
+
+  auto saIt = subscribeAnnounces_.find(requestID);
+  if (saIt == subscribeAnnounces_.end()) {
+    XLOG(ERR) << "Invalid unsub announce requestID=" << requestID;
+    return;
+  }
+  handle = saIt->second;
 
   // Process unsubscribe
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   handle->unsubscribeAnnounces();
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    reqIdToSubscribeAnnounces_.erase(requestID);
-  } else {
-    trackNsTosubscribeAnnounces_.erase(ns);
-  }
+  subscribeAnnounces_.erase(requestID);
 
   retireRequestID(/*signalWriteLoop=*/true);
 }
@@ -782,8 +891,12 @@ void MoQRelaySession::handleAnnounceOkFromRequestOk(
     return;
   }
 
-  publisherAnnounces_[announcePtr->trackNamespace] =
-      std::move(announcePtr->callback);
+  publisherAnnounces_[requestOk.requestID] = std::move(announcePtr->callback);
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 16) {
+    // Legacy: also store NS->RequestID mapping for lookups
+    legacyPublisherAnnounceNsToReqId_[announcePtr->trackNamespace] =
+        requestOk.requestID;
+  }
   announcePtr->promise.setValue(requestOk);
 }
 

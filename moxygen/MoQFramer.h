@@ -1085,11 +1085,13 @@ struct Announce {
 // AnnounceError is now an alias for RequestError - see below
 
 struct Unannounce {
-  TrackNamespace trackNamespace;
+  TrackNamespace trackNamespace;        // Used in v15 and below
+  folly::Optional<RequestID> requestID; // Used in v16+
 };
 
 struct AnnounceCancel {
-  TrackNamespace trackNamespace;
+  TrackNamespace trackNamespace;        // Used in v15 and below
+  folly::Optional<RequestID> requestID; // Used in v16+
   RequestErrorCode errorCode;
   std::string reasonPhrase;
 };

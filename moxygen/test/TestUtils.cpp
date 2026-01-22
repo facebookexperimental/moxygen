@@ -171,17 +171,22 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       AnnounceError(
           {RequestID(1), AnnounceErrorCode::INTERNAL_ERROR, "server error"}),
       FrameType::ANNOUNCE_ERROR);
-  res = moqFrameWriter.writeAnnounceCancel(
-      writeBuf,
-      AnnounceCancel(
-          {TrackNamespace({"hello"}),
-           AnnounceErrorCode::INTERNAL_ERROR,
-           "internal error"}));
-  res = moqFrameWriter.writeUnannounce(
-      writeBuf,
-      Unannounce({
-          TrackNamespace({"hello"}),
-      }));
+  AnnounceCancel announceCancel;
+  if (getDraftMajorVersion(version) >= 16) {
+    announceCancel.requestID = RequestID(1);
+  } else {
+    announceCancel.trackNamespace = TrackNamespace({"hello"});
+  }
+  announceCancel.errorCode = AnnounceErrorCode::INTERNAL_ERROR;
+  announceCancel.reasonPhrase = "internal error";
+  res = moqFrameWriter.writeAnnounceCancel(writeBuf, announceCancel);
+  Unannounce unannounce;
+  if (getDraftMajorVersion(version) >= 16) {
+    unannounce.requestID = RequestID(1);
+  } else {
+    unannounce.trackNamespace = TrackNamespace({"hello"});
+  }
+  res = moqFrameWriter.writeUnannounce(writeBuf, unannounce);
   TrackStatus trackStatus;
   trackStatus.requestID = 3;
   trackStatus.fullTrackName =

@@ -3444,3 +3444,36 @@ INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,
     ::testing::Values(kVersionDraft16));
+
+// Death tests for v16+ Unannounce/AnnounceCancel without requestID
+TEST(MoQFramerV16DeathTest, UnannounceWithoutRequestIDDies) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft16);
+
+  // Create Unannounce without requestID set (only trackNamespace)
+  Unannounce unannounce;
+  unannounce.trackNamespace = TrackNamespace({"hello"});
+  // Note: requestID is not set
+
+  EXPECT_DEATH(
+      writer.writeUnannounce(writeBuf, unannounce),
+      "RequestID required for v16\\+ Unannounce");
+}
+
+TEST(MoQFramerV16DeathTest, AnnounceCancelWithoutRequestIDDies) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft16);
+
+  // Create AnnounceCancel without requestID set (only trackNamespace)
+  AnnounceCancel announceCancel;
+  announceCancel.trackNamespace = TrackNamespace({"hello"});
+  announceCancel.errorCode = AnnounceErrorCode::INTERNAL_ERROR;
+  announceCancel.reasonPhrase = "internal error";
+  // Note: requestID is not set
+
+  EXPECT_DEATH(
+      writer.writeAnnounceCancel(writeBuf, announceCancel),
+      "RequestID required for v16\\+ AnnounceCancel");
+}

@@ -85,34 +85,35 @@ class MoQRelaySession : public MoQSession {
     std::shared_ptr<AnnounceCallback> callback;
   };
 
-  // Announcement state management (restored from base class)
+  // Announcement state management
+  // Primary maps keyed by RequestID
   folly::F14FastMap<
-      TrackNamespace,
+      RequestID,
       std::shared_ptr<Subscriber::AnnounceHandle>,
-      TrackNamespace::hash>
+      RequestID::hash>
       subscriberAnnounces_;
   folly::F14FastMap<
-      TrackNamespace,
+      RequestID,
       std::shared_ptr<Subscriber::AnnounceCallback>,
-      TrackNamespace::hash>
+      RequestID::hash>
       publisherAnnounces_;
-
-  // SUBSCRIBE_ANNOUNCES tracking
-  // RequestID → SubscribeAnnouncesHandle (v15 and +)
   folly::F14FastMap<
       RequestID,
       std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
       RequestID::hash>
-      reqIdToSubscribeAnnounces_;
+      subscribeAnnounces_;
 
-  // trackNamespace → SubscribeAnnouncesHandle (v15-)
-  // This is for backward compatibility. We can remove this once we
-  // drop support for v15-
-  folly::F14FastMap<
-      TrackNamespace,
-      std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
-      TrackNamespace::hash>
-      trackNsTosubscribeAnnounces_;
+  // Legacy TrackNamespace → RequestID translation maps.
+  // Remove these once we drop support for the respective legacy versions.
+  // legacyPublisherAnnounceNsToReqId_: v15- (publisher side)
+  // legacySubscriberAnnounceNsToReqId_: v15- (subscriber side)
+  // legacySubscribeAnnouncesNsToReqId_: v14- (subscribe announces)
+  folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
+      legacyPublisherAnnounceNsToReqId_;
+  folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
+      legacySubscriberAnnounceNsToReqId_;
+  folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
+      legacySubscribeAnnouncesNsToReqId_;
 
   // Extended PendingRequestState for announcement support
   class MoQRelayPendingRequestState;

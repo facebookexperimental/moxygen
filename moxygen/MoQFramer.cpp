@@ -2273,11 +2273,25 @@ folly::Expected<Unannounce, ErrorCode> MoQFrameParser::parseUnannounce(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   Unannounce unannounce;
-  auto res = parseFixedTuple(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    // v16+: Parse Request ID
+    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parseUnannounce: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    unannounce.requestID = RequestID(requestID->first);
+  } else {
+    // v15 and below: Parse TrackNamespace
+    auto res = parseFixedTuple(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    unannounce.trackNamespace = TrackNamespace(std::move(res.value()));
   }
-  unannounce.trackNamespace = TrackNamespace(std::move(res.value()));
+
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -2288,11 +2302,24 @@ folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   AnnounceCancel announceCancel;
-  auto res = parseFixedTuple(cursor, length);
-  if (!res) {
-    return folly::makeUnexpected(res.error());
+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    // v16+: Parse Request ID
+    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parseAnnounceCancel: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    announceCancel.requestID = RequestID(requestID->first);
+  } else {
+    // v15 and below: Parse TrackNamespace
+    auto res = parseFixedTuple(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    announceCancel.trackNamespace = TrackNamespace(std::move(res.value()));
   }
-  announceCancel.trackNamespace = TrackNamespace(std::move(res.value()));
 
   auto errorCode = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!errorCode) {
@@ -4637,7 +4664,17 @@ WriteResult MoQFrameWriter::writeUnannounce(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNANNOUNCE, error);
-  writeTrackNamespace(writeBuf, unannounce.trackNamespace, size, error);
+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    // v16+: Write Request ID
+    CHECK(unannounce.requestID.hasValue())
+        << "RequestID required for v16+ Unannounce";
+    writeVarint(writeBuf, unannounce.requestID->value, size, error);
+  } else {
+    // v15 and below: Write TrackNamespace
+    writeTrackNamespace(writeBuf, unannounce.trackNamespace, size, error);
+  }
+
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -4653,7 +4690,17 @@ WriteResult MoQFrameWriter::writeAnnounceCancel(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE_CANCEL, error);
-  writeTrackNamespace(writeBuf, announceCancel.trackNamespace, size, error);
+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    // v16+: Write Request ID
+    CHECK(announceCancel.requestID.hasValue())
+        << "RequestID required for v16+ AnnounceCancel";
+    writeVarint(writeBuf, announceCancel.requestID->value, size, error);
+  } else {
+    // v15 and below: Write TrackNamespace
+    writeTrackNamespace(writeBuf, announceCancel.trackNamespace, size, error);
+  }
+
   writeVarint(
       writeBuf, folly::to_underlying(announceCancel.errorCode), size, error);
   writeFixedString(writeBuf, announceCancel.reasonPhrase, size, error);
