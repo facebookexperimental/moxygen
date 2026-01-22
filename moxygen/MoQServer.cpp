@@ -71,6 +71,11 @@ MoQServer::MoQServer(
         1024 * 1024;
   }
 
+  // UDP socket buffer sizes
+  constexpr size_t kUdpBufferSize = 1024 * 1024; // 1 MB
+  params_.udpSendBufferSize = kUdpBufferSize;
+  params_.udpRecvBufferSize = kUdpBufferSize;
+
   factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
 
