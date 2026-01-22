@@ -505,23 +505,13 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
 folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
 MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
   // Validation:
-  // - Start location can only increase (never decrease)
+  // - Start location can be updated
   // - End location can increase or decrease
   // - For bounded subscriptions (endGroup > 0), end must be >= start
   // - Forward state is optional and only updated if explicitly provided
 
   // Only update start if provided
   if (subscribeUpdate.start.hasValue()) {
-    // Validate start Location must not decrease
-    if (*subscribeUpdate.start < range.start) {
-      XLOG(ERR) << "Invalid subscribeUpdate: start Location decreased from "
-                << range.start << " to " << *subscribeUpdate.start;
-      session->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-      co_return folly::makeUnexpected(SubscribeUpdateError(
-          subscribeUpdate.requestID,
-          RequestErrorCode::INVALID_RANGE,
-          "Start Location decreased"));
-    }
     range.start = *subscribeUpdate.start;
   }
 

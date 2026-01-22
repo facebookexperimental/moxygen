@@ -9,6 +9,7 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
+#include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelay.h>
 #include <moxygen/test/MockMoQSession.h>
 #include <moxygen/test/Mocks.h>
@@ -1338,6 +1339,63 @@ TEST_F(MoQRelayTest, PartialSubscriberFailureDoesNotCancelData) {
   for (auto& s : subscribers) {
     removeSession(s);
   }
+}
+
+// Test: SubscribeUpdate can decrease start location
+// Per spec, start location can be decreased. The subscriber should use FETCH
+// to retrieve objects between the new start and the current largest location.
+TEST_F(MoQRelayTest, SubscribeUpdateStartLocationCanDecrease) {
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+
+  // Setup: Publish track
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Subscribe with initial start location
+  auto consumer = createMockConsumer();
+  SubscribeRequest sub;
+  sub.fullTrackName = kTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.locType = LocationType::AbsoluteStart;
+  sub.start = AbsoluteLocation{10, 0};
+  sub.endGroup = 0; // Open-ended
+
+  std::shared_ptr<SubscriptionHandle> handle{nullptr};
+  withSessionContext(subscriberSession, [&]() {
+    auto task = relay_->subscribe(std::move(sub), consumer);
+    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+    ASSERT_TRUE(res.hasValue());
+    handle = *res;
+  });
+
+  // Cast to MoQForwarder::Subscriber to access range
+  auto* subscriber = dynamic_cast<MoQForwarder::Subscriber*>(handle.get());
+  ASSERT_NE(subscriber, nullptr);
+
+  // Verify initial start location
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{10, 0}));
+
+  // Send SubscribeUpdate with decreased start location
+  SubscribeUpdate subscribeUpdate{
+      RequestID(2),           // requestID for the update
+      sub.requestID,          // subscriptionRequestID
+      AbsoluteLocation{5, 0}, // Start decreased from {10, 0} to {5, 0}
+      0,                      // endGroup (open-ended)
+      kDefaultPriority,
+      true, // forward
+      {}};
+
+  auto updateRes =
+      folly::coro::blockingWait(subscriber->subscribeUpdate(subscribeUpdate));
+  EXPECT_TRUE(updateRes.hasValue())
+      << "SubscribeUpdate with decreased start should succeed";
+
+  // Verify start location was updated
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{5, 0}))
+      << "Start location should be updated to {5, 0}";
+
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
 }
 
 } // namespace moxygen::test
