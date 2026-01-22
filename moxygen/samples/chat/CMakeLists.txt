@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# MoQChatClient
+# Chat
 add_executable(
   moqchatclient
   MoQChatClient.cpp
@@ -24,9 +24,10 @@ target_compile_options(
 )
 target_link_libraries(
   moqchatclient PUBLIC
-  Folly::folly
-  moxygenclient
-  moqrelaysession
+  moxygen_events_moq_folly_executor_impl
+  moxygen_moqclient
+  moxygen_relay_moq_relay_client
+  Folly::folly_init_init
 )
 
 install(
