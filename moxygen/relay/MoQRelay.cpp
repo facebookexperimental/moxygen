@@ -232,6 +232,15 @@ void MoQRelay::unannounce(const TrackNamespace& trackNamespace, AnnounceNode*) {
   // Track if node had local content before modification
   bool hadLocalContent = nodePtr->hasLocalSessions();
 
+  auto session = MoQSession::getRequestSession();
+
+  // Only allow unannounce if there is an owner and the caller is that owner
+  if (nodePtr->sourceSession == nullptr || nodePtr->sourceSession != session) {
+    XLOG(DBG1) << "Ignoring unannounce for ns=" << trackNamespace
+               << " (no owner or non-owner session)";
+    return;
+  }
+
   nodePtr->sourceSession = nullptr;
   nodePtr->announceCallback.reset();
   for (auto& announcement : nodePtr->announcements) {

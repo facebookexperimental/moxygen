@@ -246,6 +246,13 @@ class MoQRelaySession::MoQRelayPendingRequestState
 };
 
 void MoQRelaySession::cleanup() {
+  // Set up request context so unannounce() can identify this session.
+  // This is needed because cleanup() is called directly (not from a message
+  // handler) and MoQRelay::unannounce() uses getRequestSession() to verify
+  // ownership.
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+
   // Clean up announce maps (single source of truth)
   for (auto& ann : publisherAnnounces_) {
     if (ann.second) {
@@ -622,6 +629,12 @@ void MoQRelaySession::announceCancel(const AnnounceCancel& annCan) {
 
 void MoQRelaySession::onUnannounce(Unannounce unAnn) {
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnannounce);
+
+  // Set up request context so unannounce() can identify this session.
+  // This is needed because MoQRelay::unannounce() uses getRequestSession()
+  // to verify ownership.
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
 
   if (logger_) {
     logger_->logUnannounce(

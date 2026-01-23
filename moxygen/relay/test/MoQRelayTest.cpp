@@ -626,6 +626,45 @@ TEST_F(MoQRelayTest, DoubleUnannounce) {
   removeSession(publisher2);
 }
 
+// Test: Ownership check in unannounce prevents non-owner from clearing state
+// When a session calls unannounce but is not the owner of the namespace,
+// the unannounce should be ignored and the real owner should remain.
+TEST_F(MoQRelayTest, StaleUnannounceDoesNotAffectNewOwner) {
+  auto publisher1 = createMockSession();
+  auto publisher2 = createMockSession();
+
+  // Publisher1 announces test/A/B
+  TrackNamespace nsAB{{"test", "A", "B"}};
+  auto handle1 = doAnnounce(publisher1, nsAB, /*addToState=*/false);
+
+  // Publisher2 announces a child namespace test/A/B/C
+  TrackNamespace nsABC{{"test", "A", "B", "C"}};
+  doAnnounce(publisher2, nsABC);
+
+  // Publisher2 tries to unannounce Publisher1's namespace test/A/B using
+  // Publisher1's handle but with Publisher2's session context - should be
+  // ignored because publisher2 is not the owner of test/A/B
+  withSessionContext(publisher2, [&]() { handle1->unannounce(); });
+
+  // Verify publisher1 is STILL the owner by checking findAnnounceSessions
+  // returns publisher1 for the namespace. If the ownership check didn't work,
+  // sourceSession would be null and findAnnounceSessions would return empty.
+  auto sessions = relay_->findAnnounceSessions(nsAB);
+  EXPECT_EQ(sessions.size(), 1)
+      << "Ownership check failed: findAnnounceSessions returned wrong count";
+  if (!sessions.empty()) {
+    EXPECT_EQ(sessions[0], publisher1)
+        << "Ownership check failed: wrong session returned";
+  }
+
+  // Publisher1 should still be able to properly unannounce its own namespace
+  withSessionContext(publisher1, [&]() { handle1->unannounce(); });
+
+  // Clean up - should not crash
+  removeSession(publisher1);
+  removeSession(publisher2);
+}
+
 // Test: Pruning with multiple children at same level
 // Scenario: test/A has children B, C, D. Only B has content.
 // Remove B should prune B but keep A, C, D structure intact
