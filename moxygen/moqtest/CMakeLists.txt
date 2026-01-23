@@ -97,4 +97,37 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
+
+# moqperf_test_client
+add_executable(
+  moqperf_test_client
+  MoQPerfTestClient.cpp
+  MoQPerfTestClientMain.cpp
+)
+set_target_properties(
+  moqperf_test_client
+  PROPERTIES
+    BUILD_RPATH ${DEPS_LIBRARIES_DIR}
+    INSTALL_RPATH ${DEPS_LIBRARIES_DIR}
+)
+target_include_directories(
+  moqperf_test_client PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+target_compile_options(
+  moqperf_test_client PRIVATE
+  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+target_link_libraries(
+  moqperf_test_client PUBLIC
+  moqtest_utils
+  moxygenwtclient
+)
+
+install(
+    TARGETS moqperf_test_client
+    EXPORT moxygen-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+)
+
 #add_subdirectory(test)
