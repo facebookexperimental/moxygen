@@ -444,9 +444,17 @@ class Parameters {
   using const_iterator = std::vector<Parameter>::const_iterator;
 
   Parameters() = default;
+  explicit Parameters(FrameType frameType) : frameType_(frameType) {}
 
   /* implicit */ Parameters(std::initializer_list<Parameter> params)
       : params_(params) {}
+
+  FrameType getFrameType() const {
+    return frameType_;
+  }
+
+  // Validates if a parameter is allowed for frameType_
+  bool isParamAllowed(TrackRequestParamKey key) const;
 
   const Parameter& getParam(size_t position) const {
     return params_.at(position);
@@ -517,6 +525,7 @@ class Parameters {
   }
 
  private:
+  FrameType frameType_{};
   std::vector<Parameter> params_;
 };
 

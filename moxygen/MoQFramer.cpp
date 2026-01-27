@@ -5,6 +5,8 @@
  */
 
 #include "moxygen/MoQFramer.h"
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
 
@@ -143,6 +145,36 @@ folly::Expected<uint64_t, moxygen::ErrorCode> decodeDelta(
 } // namespace
 
 namespace moxygen {
+
+// Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
+const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
+    kParamAllowlist = {
+        {TrackRequestParamKey::DELIVERY_TIMEOUT, {}},
+        {TrackRequestParamKey::AUTHORIZATION_TOKEN, {}},
+        {TrackRequestParamKey::MAX_CACHE_DURATION, {}},
+        {TrackRequestParamKey::PUBLISHER_PRIORITY, {}},
+        {TrackRequestParamKey::SUBSCRIBER_PRIORITY, {}},
+        {TrackRequestParamKey::SUBSCRIPTION_FILTER, {}},
+        {TrackRequestParamKey::EXPIRES, {}},
+        {TrackRequestParamKey::GROUP_ORDER, {}},
+        {TrackRequestParamKey::LARGEST_OBJECT, {}},
+        {TrackRequestParamKey::FORWARD, {}},
+};
+
+bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
+  auto it = kParamAllowlist.find(key);
+  if (it == kParamAllowlist.end()) {
+    return false;
+  }
+
+  const auto& allowedFrameTypes = it->second;
+  if (allowedFrameTypes.empty()) {
+    // Empty set means allowed for all frame types
+    return true;
+  }
+
+  return allowedFrameTypes.contains(frameType_);
+}
 
 // Forward declarations for iOS.
 enum class ParamsType { ClientSetup, ServerSetup, Request };
