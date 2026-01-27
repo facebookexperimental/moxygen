@@ -28,8 +28,7 @@ folly::coro::Task<void> MoQRelay::doSubscribeUpdate(
        kLocationMin,
        kLocationMax.group,
        kDefaultPriority,
-       /*forward=*/forward,
-       {}});
+       /*forward=*/forward});
   if (updateRes.hasError()) {
     XLOG(ERR) << "subscribeUpdate failed: " << updateRes.error().reasonPhrase;
   }
@@ -124,7 +123,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQRelay::announce(
   nodePtr->sourceSession = std::move(session);
   nodePtr->announceCallback = std::move(callback);
   nodePtr->trackNamespace_ = ann.trackNamespace;
-  nodePtr->setAnnounceOk({ann.requestID, {}});
+  nodePtr->setAnnounceOk({ann.requestID});
 
   // If this is the first content added to this node, notify parent
   if (wasEmpty && nodePtr->parent_) {
@@ -402,8 +401,7 @@ Subscriber::PublishResult MoQRelay::publish(
           pub.groupOrder,
           LocationType::AbsoluteRange,
           kLocationMin,
-          kLocationMax.group,
-          {}})};
+          kLocationMax.group})};
 }
 
 folly::coro::Task<void> MoQRelay::publishToSession(
@@ -552,8 +550,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
       // TODO: Auth/params
       co_withExecutor(
-          exec,
-          announceToSession(session, {subNs.requestID, prefix, {}}, nodePtr))
+          exec, announceToSession(session, {subNs.requestID, prefix}, nodePtr))
           .start();
     }
     PublishRequest pub{
@@ -562,8 +559,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
         TrackAlias(0), // filled in by library
         GroupOrder::Default,
         folly::none,
-        /*forward=*/false,
-        {}};
+        /*forward=*/false};
     for (auto& publishEntry : nodePtr->publishes) {
       auto& publishSession = publishEntry.second;
       pub.fullTrackName.trackName = publishEntry.first;
@@ -598,7 +594,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
   co_return std::make_shared<AnnouncesSubscription>(
       shared_from_this(),
       std::move(session),
-      SubscribeAnnouncesOk{subNs.requestID, {}},
+      SubscribeAnnouncesOk{subNs.requestID},
       subNs.trackNamespacePrefix);
 }
 

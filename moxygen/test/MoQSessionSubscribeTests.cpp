@@ -154,8 +154,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
       AbsoluteLocation{0, 0},
       10,
       kDefaultPriority + 1,
-      true,
-      {}};
+      true};
 
   // Set expectations for stats callbacks for all versions
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
@@ -263,8 +262,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
       AbsoluteLocation{0, 0},
       10,
       kDefaultPriority,
-      false,
-      {}};
+      false};
 
   // Set expectations for stats callbacks for all versions
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
@@ -904,8 +902,7 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
       AbsoluteLocation{0, 0},
       10,
       kDefaultPriority + 1,
-      true,
-      {}};
+      true};
 
   // Set expectations for stats callbacks for all versions
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());

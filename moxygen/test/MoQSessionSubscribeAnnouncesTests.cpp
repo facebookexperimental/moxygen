@@ -23,7 +23,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeAnnounces) {
                   -> folly::coro::Task<Publisher::SubscribeAnnouncesResult> {
                 mockSubscribeAnnouncesHandle =
                     std::make_shared<MockSubscribeAnnouncesHandle>(
-                        SubscribeAnnouncesOk({RequestID(0), {}}));
+                        SubscribeAnnouncesOk({RequestID(0)}));
                 co_return mockSubscribeAnnouncesHandle;
               }));
 

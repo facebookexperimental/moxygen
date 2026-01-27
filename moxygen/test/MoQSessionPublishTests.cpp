@@ -32,7 +32,6 @@ CO_TEST_P_X(MoQSessionTest, DuplicatePublishRequestID) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to respond with PUBLISH_OK
@@ -85,7 +84,6 @@ CO_TEST_P_X(MoQSessionTest, PublishDiagnostic) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Simple diagnostic mock with logging
@@ -139,7 +137,6 @@ CO_TEST_P_X(MoQSessionTest, PublishTimeout) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to respond with timeout error
@@ -180,7 +177,6 @@ CO_TEST_P_X(MoQSessionTest, PublishBasicSuccess) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Test the success path
@@ -220,7 +216,6 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to respond with subscriber filtering preferences
@@ -250,7 +245,6 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
                                                  // filter
                     AbsoluteLocation{50, 25},    // specific start location
                     folly::make_optional(uint64_t(200)), // endGroup
-                    {}                                   // params
                 };
 
                 // Create the reply task that returns the PublishOk
@@ -300,7 +294,6 @@ CO_TEST_P_X(MoQSessionTest, PublishConnectionDropCleanup) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to simulate connection drop via error response
@@ -349,7 +342,6 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   std::shared_ptr<SubscriptionHandle> capturedHandle;
@@ -412,51 +404,6 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, PublishWithDeliveryTimeout) {
-  co_await setupMoQSessionForPublish(initialMaxRequestID_);
-
-  PublishRequest pub{
-      RequestID(0),
-      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
-      TrackAlias(100),
-      GroupOrder::Default,
-      AbsoluteLocation{0, 100}, // largest
-      true,                     // forward
-      {}                        // params - will add delivery timeout
-  };
-
-  // Add delivery timeout parameter (5000ms)
-  pub.params.insertParam(Parameter(
-      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000));
-
-  // Setup server to verify params and respond with PUBLISH_OK
-  EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce(
-          testing::Invoke(
-              [](const PublishRequest& actualPub,
-                 std::shared_ptr<SubscriptionHandle>)
-                  -> Subscriber::PublishResult {
-                // Verify delivery timeout parameter was received
-                EXPECT_EQ(actualPub.params.size(), 1);
-                EXPECT_EQ(
-                    actualPub.params.at(0).key,
-                    folly::to_underlying(
-                        TrackRequestParamKey::DELIVERY_TIMEOUT));
-                EXPECT_EQ(actualPub.params.at(0).asUint64, 5000);
-
-                return makePublishOkResult(actualPub);
-              }));
-
-  auto handle = makePublishHandle();
-
-  auto result = clientSession_->publish(std::move(pub), handle);
-  EXPECT_TRUE(result.hasValue());
-
-  auto replyResult = co_await std::move(result->reply);
-  EXPECT_TRUE(replyResult.hasValue());
-
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
 CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
   try {
     co_await setupMoQSessionForPublish(initialMaxRequestID_);
@@ -468,7 +415,6 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
         GroupOrder::Default,
         AbsoluteLocation{0, 100}, // largest
         true,                     // forward
-        {}                        // params
     };
     std::shared_ptr<SubscriptionHandle> capturedHandle;
     folly::coro::Baton subscribeUpdateProcessed;
@@ -504,9 +450,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
         AbsoluteLocation{0, 0},
         10,
         kDefaultPriority + 1,
-        true,
-        {} // params - will add delivery timeout
-    };
+        true};
 
     // Add delivery timeout parameter (7000ms)
     subscribeUpdate.params.insertParam(Parameter(
@@ -539,7 +483,6 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
         GroupOrder::Default,
         AbsoluteLocation{0, 100}, // largest
         true,                     // forward
-        {}                        // params
     };
     std::shared_ptr<SubscriptionHandle> capturedHandle;
     folly::coro::Baton subscribeUpdateProcessed;
@@ -575,8 +518,7 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
         AbsoluteLocation{0, 0},
         10,
         kDefaultPriority + 1,
-        true,
-        {}};
+        true};
 
     // Set expectations for stats callbacks for all versions
     EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
@@ -604,7 +546,6 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   std::shared_ptr<SubscriptionHandle> capturedHandle;
@@ -651,8 +592,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
                               GroupOrder::Default,
                               LocationType::LargestObject,
                               folly::none,
-                              folly::none,
-                              {}};
+                              folly::none};
                         })};
               }));
 
@@ -686,7 +626,7 @@ CO_TEST_P_X(MoQSessionTest, InboundPublish_NoSubscriber_PublishError) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}};                      // params
+  };
 
   auto handle = makePublishHandle();
   auto result = clientSession_->publish(std::move(pub), handle);
@@ -708,7 +648,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}};                      // params
+  };
 
   EXPECT_CALL(*serverSubscriber, publish(_, _))
       .WillOnce(
@@ -735,8 +675,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
                     GroupOrder::Default,
                     LocationType::LargestObject,
                     folly::none,
-                    folly::none,
-                    {}};
+                    folly::none};
                 auto replyTask = folly::coro::makeTask<
                     folly::Expected<PublishOk, PublishError>>(std::move(bogus));
                 return Subscriber::PublishConsumerAndReplyTask{
@@ -769,7 +708,6 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to respond with PUBLISH_OK containing delivery timeout param
@@ -797,7 +735,6 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                     LocationType::LargestObject,
                     folly::none,                       // start
                     folly::make_optional(uint64_t(0)), // endGroup
-                    {} // params - will add delivery timeout
                 };
 
                 // Add delivery timeout parameter (3000ms)
@@ -843,7 +780,6 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithoutDeliveryTimeout) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to respond with PUBLISH_OK without delivery timeout param
@@ -879,7 +815,6 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
       GroupOrder::Default,
       AbsoluteLocation{0, 100}, // largest
       true,                     // forward
-      {}                        // params
   };
 
   // Setup server to respond with PUBLISH_OK containing zero delivery timeout
@@ -905,8 +840,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
                     GroupOrder::Default,
                     LocationType::LargestObject,
                     folly::none,
-                    folly::make_optional(uint64_t(0)),
-                    {}};
+                    folly::make_optional(uint64_t(0))};
 
                 // Add zero delivery timeout parameter
                 publishOk.params.insertParam(
@@ -946,8 +880,7 @@ CO_TEST_P_X(MoQSessionTest, PublishConsumerObjectStreamAfterSessionClose) {
       TrackAlias(100),
       GroupOrder::Default,
       AbsoluteLocation{0, 100},
-      true,
-      {}};
+      true};
 
   // Setup server to respond with PUBLISH_OK and provide a consumer
   std::shared_ptr<MockTrackConsumer> mockConsumer =

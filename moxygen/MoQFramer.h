@@ -443,11 +443,7 @@ class Parameters {
  public:
   using const_iterator = std::vector<Parameter>::const_iterator;
 
-  Parameters() = default;
   explicit Parameters(FrameType frameType) : frameType_(frameType) {}
-
-  /* implicit */ Parameters(std::initializer_list<Parameter> params)
-      : params_(params) {}
 
   FrameType getFrameType() const {
     return frameType_;
@@ -464,17 +460,34 @@ class Parameters {
     return params_.at(position);
   }
 
-  void insertParam(Parameter&& param) {
+  folly::Expected<folly::Unit, ErrorCode> insertParam(Parameter&& param) {
+    auto key = static_cast<TrackRequestParamKey>(param.key);
+    if (!isParamAllowed(key)) {
+      return folly::makeUnexpected(ErrorCode::INVALID_REQUEST_ID);
+    }
     params_.emplace_back(std::move(param));
+    return folly::unit;
   }
 
-  void insertParam(const Parameter& param) {
+  folly::Expected<folly::Unit, ErrorCode> insertParam(const Parameter& param) {
+    auto key = static_cast<TrackRequestParamKey>(param.key);
+    if (!isParamAllowed(key)) {
+      return folly::makeUnexpected(ErrorCode::INVALID_REQUEST_ID);
+    }
     params_.emplace_back(param);
+    return folly::unit;
   }
 
-  void insertParam(size_t position, Parameter&& param) {
+  folly::Expected<folly::Unit, ErrorCode> insertParam(
+      size_t position,
+      Parameter&& param) {
+    auto key = static_cast<TrackRequestParamKey>(param.key);
+    if (!isParamAllowed(key)) {
+      return folly::makeUnexpected(ErrorCode::INVALID_REQUEST_ID);
+    }
     CHECK_LE(position, params_.size());
     params_.insert(params_.begin() + position, std::move(param));
+    return folly::unit;
   }
 
   void eraseParam(size_t position) {
@@ -628,12 +641,12 @@ void writeVarint(
 
 struct ClientSetup {
   std::vector<uint64_t> supportedVersions;
-  SetupParameters params;
+  SetupParameters params{FrameType::CLIENT_SETUP};
 };
 
 struct ServerSetup {
   uint64_t selectedVersion;
-  SetupParameters params;
+  SetupParameters params{FrameType::SERVER_SETUP};
 };
 
 enum class ObjectStatus : uint64_t {
@@ -1003,8 +1016,8 @@ struct SubscribeRequest {
       LocationType locType = LocationType::LargestGroup,
       folly::Optional<AbsoluteLocation> start = folly::none,
       uint64_t endGroup = 0,
-      TrackRequestParameters params = {}) {
-    return SubscribeRequest{
+      const std::vector<Parameter>& inputParams = {}) {
+    SubscribeRequest req = SubscribeRequest{
         RequestID(), // Default constructed RequestID
         fullTrackName,
         priority,
@@ -1013,7 +1026,16 @@ struct SubscribeRequest {
         locType,
         std::move(start),
         endGroup,
-        std::move(params)};
+        TrackRequestParameters{FrameType::SUBSCRIBE}};
+
+    for (const auto& param : inputParams) {
+      auto result = req.params.insertParam(param);
+      if (result.hasError()) {
+        XLOG(ERR) << "SubscribeRequest::make: param not allowed, key="
+                  << param.key;
+      }
+    }
+    return req;
   }
 
   RequestID requestID;
@@ -1175,13 +1197,19 @@ struct Fetch {
       AbsoluteLocation e,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
-      TrackRequestParameters pa = {})
+      const std::vector<Parameter>& pa = {})
       : requestID(su),
         fullTrackName(std::move(ftn)),
         priority(p),
         groupOrder(g),
-        params(std::move(pa)),
-        args(StandaloneFetch(st, e)) {}
+        args(StandaloneFetch(st, e)) {
+    for (const auto& param : pa) {
+      auto result = params.insertParam(param);
+      if (result.hasError()) {
+        XLOG(ERR) << "Fetch: param not allowed, key=" << param.key;
+      }
+    }
+  }
 
   // Used for absolute or relative joining fetches
   Fetch(
@@ -1191,16 +1219,22 @@ struct Fetch {
       FetchType fetchType,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
-      TrackRequestParameters pa = {})
+      const std::vector<Parameter>& pa = {})
       : requestID(su),
         priority(p),
         groupOrder(g),
-        params(std::move(pa)),
         args(JoiningFetch(jsid, joiningStart, fetchType)) {
     CHECK(
         fetchType == FetchType::RELATIVE_JOINING ||
         fetchType == FetchType::ABSOLUTE_JOINING);
+    for (const auto& param : pa) {
+      auto result = params.insertParam(param);
+      if (result.hasError()) {
+        XLOG(ERR) << "Fetch: param not allowed, key=" << param.key;
+      }
+    }
   }
+
   RequestID requestID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};

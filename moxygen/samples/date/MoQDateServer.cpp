@@ -105,7 +105,7 @@ class DatePublisher : public Publisher {
         GroupOrder::Default,
         folly::none,
         true,
-        {}};
+    };
 
     XLOG(INFO) << "PublishRequest track ns=" << req.fullTrackName.trackNamespace
                << " name=" << req.fullTrackName.trackName
@@ -193,14 +193,12 @@ class DatePublisher : public Publisher {
     }
     auto largest = updateLargest();
     co_return TrackStatusOk{
-        trackStatus.requestID,
-        0,
-        std::chrono::milliseconds(0),
-        GroupOrder::OldestFirst,
-        largest,
-        {},
-        trackStatus.fullTrackName,
-        {}};
+        .requestID = trackStatus.requestID,
+        .expires = std::chrono::milliseconds(0),
+        .groupOrder = GroupOrder::OldestFirst,
+        .largest = largest,
+        .fullTrackName = trackStatus.fullTrackName,
+        .statusCode = TrackStatusCode(0)};
   }
 
   folly::coro::Task<SubscribeResult> subscribe(
@@ -303,8 +301,7 @@ class DatePublisher : public Publisher {
         MoQSession::resolveGroupOrder(
             GroupOrder::OldestFirst, fetch.groupOrder),
         0, // not end of track
-        largest,
-        {}});
+        largest});
     co_withExecutor(
         clientSession->getExecutor(),
         folly::coro::co_withCancellation(

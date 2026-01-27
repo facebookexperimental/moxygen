@@ -1165,8 +1165,7 @@ TEST_F(MoQRelayTest, SubscribeAnnouncesDoesntAddDrainingPublish) {
                                       /*groupOrder=*/GroupOrder::OldestFirst,
                                       /*locType=*/LocationType::LargestObject,
                                       /*start=*/folly::none,
-                                      /*endGroup=*/folly::none,
-                                      /*params=*/{}};
+                                      /*endGroup=*/folly::none};
                 }()});
       });
 
@@ -1421,8 +1420,7 @@ TEST_F(MoQRelayTest, SubscribeUpdateStartLocationCanDecrease) {
       AbsoluteLocation{5, 0}, // Start decreased from {10, 0} to {5, 0}
       0,                      // endGroup (open-ended)
       kDefaultPriority,
-      true, // forward
-      {}};
+      true}; // forward
 
   auto updateRes =
       folly::coro::blockingWait(subscriber->subscribeUpdate(subscribeUpdate));

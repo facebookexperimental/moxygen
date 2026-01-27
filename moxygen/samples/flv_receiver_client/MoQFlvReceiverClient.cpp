@@ -414,14 +414,15 @@ class MoQFlvReceiverClient
       uint64_t negotiatedVersion =
           *(moqClient_->moqSession_->getNegotiatedVersion());
 
-      TrackRequestParameters params{
-          getAuthParam(negotiatedVersion, FLAGS_auth)};
+      std::vector<Parameter> params;
+      params.push_back(getAuthParam(negotiatedVersion, FLAGS_auth));
       if (FLAGS_delivery_timeout > 0) {
-        params.insertParam(
-            {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-             FLAGS_delivery_timeout});
+        params.emplace_back(
+            folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+            FLAGS_delivery_timeout);
       }
 
+      auto paramsForVideo = params;
       auto subAudio = SubscribeRequest::make(
           moxygen::FullTrackName(
               {{TrackNamespace(
@@ -445,7 +446,7 @@ class MoQFlvReceiverClient
           LocationType::LargestObject,
           folly::none,
           0,
-          params);
+          paramsForVideo);
 
       // Subscribe to audio
       subRxHandlerAudio_ = std::make_shared<ObjectReceiver>(
@@ -508,7 +509,7 @@ class MoQFlvReceiverClient
     // receiver client doesn't expect server or relay to announce anything, but
     // announce OK anyways
     return folly::coro::makeTask<AnnounceResult>(
-        std::make_shared<AnnounceHandle>(AnnounceOk{announce.requestID, {}}));
+        std::make_shared<AnnounceHandle>(AnnounceOk{announce.requestID}));
   }
 
   void goaway(Goaway goaway) override {

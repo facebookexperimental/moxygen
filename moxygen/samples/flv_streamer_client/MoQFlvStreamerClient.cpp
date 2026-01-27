@@ -201,7 +201,7 @@ class MoQFlvStreamerClient
     }
 
     // Build response parameters
-    TrackRequestParameters params;
+    TrackRequestParameters params{FrameType::SUBSCRIBE_OK};
     if (FLAGS_delivery_timeout > 0) {
       params.insertParam(
           {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
@@ -423,7 +423,7 @@ int main(int argc, char* argv[]) {
       &eventBase, [&streamerClient](int) mutable { streamerClient->stop(); });
 
   co_withExecutor(
-      &eventBase, streamerClient->run({RequestID(0), {std::move(ns)}, {}}))
+      &eventBase, streamerClient->run({RequestID(0), {std::move(ns)}}))
       .start()
       .via(&eventBase)
       .thenTry([&handler](auto) { handler.unreg(); });

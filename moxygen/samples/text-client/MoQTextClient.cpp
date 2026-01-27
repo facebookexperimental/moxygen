@@ -364,7 +364,7 @@ class MoQTextClient : public Subscriber,
     // text client doesn't expect server or relay to announce anything,
     // but announce OK anyways
     return folly::coro::makeTask<AnnounceResult>(
-        std::make_shared<AnnounceHandle>(AnnounceOk{announce.requestID, {}}));
+        std::make_shared<AnnounceHandle>(AnnounceOk{announce.requestID}));
   }
 
   void goaway(Goaway goaway) override {
@@ -467,11 +467,11 @@ int main(int argc, char* argv[]) {
   });
 
   auto subParams = flags2params();
-  TrackRequestParameters params;
+  std::vector<Parameter> params{};
   if (FLAGS_delivery_timeout > 0) {
-    params.insertParam(
-        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         FLAGS_delivery_timeout});
+    params.emplace_back(
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+        FLAGS_delivery_timeout);
   }
   co_withExecutor(
       &eventBase,
@@ -484,7 +484,7 @@ int main(int argc, char* argv[]) {
               subParams.locType,
               subParams.start,
               subParams.endGroup,
-              std::move(params))))
+              params)))
       .start()
       .via(&eventBase)
       .thenTry([&handler, &textClient](const auto&) {

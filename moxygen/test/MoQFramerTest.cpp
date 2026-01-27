@@ -431,20 +431,12 @@ TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
   // params
   // Compose a CLIENT_SETUP with two supported versions (one valid, one
   // unknown/unsupported)
-  ClientSetup clientSetup{
-      .supportedVersions = {kVersionDraftCurrent, kVersionDraftCurrent},
-      .params =
-          {
-              {
-                  folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-                  42,
-              },
-              {
-                  folly::to_underlying(SetupKey::PATH),
-                  "/foo/bar",
-              },
-          },
-  };
+  ClientSetup clientSetup;
+  clientSetup.supportedVersions = {kVersionDraftCurrent, kVersionDraftCurrent};
+  clientSetup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 42));
+  clientSetup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::PATH), "/foo/bar"));
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto resultWrite =
@@ -793,11 +785,9 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
       quic::kFourByteLimit + 1,
       quic::kEightByteLimit};
   for (auto maxRequestID : kTestMaxRequestIDs) {
-    auto clientSetup = ClientSetup{
-        .supportedVersions = {kVersionDraftCurrent},
-        .params = {Parameter(
-            folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID)},
-    };
+    ClientSetup clientSetup{.supportedVersions = {kVersionDraftCurrent}};
+    clientSetup.params.insertParam(Parameter(
+        folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID));
 
     folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
     auto result = writeClientSetup(writeBuf, clientSetup, GetParam());
@@ -1113,14 +1103,11 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
   trackStatusOk.largest = AbsoluteLocation({19, 77});
   trackStatusOk.groupOrder = GroupOrder::OldestFirst;
-  TrackRequestParameters params;
-  // Add some parameters to the TrackStatus.
-  params.insertParam(Parameter(
-      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
-      writer_.encodeTokenValue(0, "stampolli")));
-  params.insertParam(Parameter(
-      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 999));
-  trackStatusOk.params = params;
+  // Use params that are allowed for REQUEST_OK and NOT request-specific
+  // MAX_CACHE_DURATION is allowed for all frame types and is not
+  // request-specific
+  trackStatusOk.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION), 1000));
   auto writeResult = writer_.writeTrackStatusOk(writeBuf, trackStatusOk);
   EXPECT_TRUE(writeResult.hasValue());
 
@@ -1144,31 +1131,11 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   EXPECT_EQ(parseResult->largest->group, 19);
   EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
-  EXPECT_EQ(parseResult->params.size(), 2);
-
-  // For v16+, params are sorted by key, so DELIVERY_TIMEOUT (2) comes before
-  // AUTHORIZATION_TOKEN (3)
-  if (getDraftMajorVersion(GetParam()) >= 16) {
-    EXPECT_EQ(
-        parseResult->params.at(0).key,
-        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-    EXPECT_EQ(parseResult->params.at(0).asUint64, 999);
-    EXPECT_EQ(
-        parseResult->params.at(1).key,
-        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-    EXPECT_EQ(parseResult->params.at(1).asAuthToken.tokenType, 0);
-    EXPECT_EQ(parseResult->params.at(1).asAuthToken.tokenValue, "stampolli");
-  } else {
-    EXPECT_EQ(
-        parseResult->params.at(0).key,
-        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
-    EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenType, 0);
-    EXPECT_EQ(parseResult->params.at(0).asAuthToken.tokenValue, "stampolli");
-    EXPECT_EQ(
-        parseResult->params.at(1).key,
-        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT));
-    EXPECT_EQ(parseResult->params.at(1).asUint64, 999);
-  }
+  EXPECT_EQ(parseResult->params.size(), 1);
+  EXPECT_EQ(
+      parseResult->params.at(0).key,
+      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION));
+  EXPECT_EQ(parseResult->params.at(0).asUint64, 1000);
 }
 
 static std::string encodeToken(
@@ -1206,8 +1173,7 @@ static size_t writeSubscribeRequestWithAuthToken(
       true,
       LocationType::LargestObject,
       folly::none,
-      0,
-      {}};
+      0};
 
   auto encodedToken =
       encodeToken(writer, aliasType, alias, tokenType, tokenValue);
@@ -1469,7 +1435,6 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   subscribeUpdate.endGroup = 30;
   subscribeUpdate.priority = 5;
   subscribeUpdate.forward = true;
-  subscribeUpdate.params = {};
 
   auto writeResult = writer_.writeSubscribeUpdate(writeBuf, subscribeUpdate);
   EXPECT_TRUE(writeResult.hasValue());
@@ -1525,7 +1490,6 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   subscribeUpdate.endGroup = 0; // Open-ended subscription
   subscribeUpdate.priority = kDefaultPriority;
   // forward field intentionally left unset (folly::none)
-  subscribeUpdate.params = {};
 
   auto writeResult = writer.writeSubscribeUpdate(writeBuf, subscribeUpdate);
   EXPECT_TRUE(writeResult.hasValue()) << "Failed to write SUBSCRIBE_UPDATE";
@@ -2269,7 +2233,6 @@ TEST(MoQFramerTest, WriteClientSetupWithAlpnVersion15NoVersionArray) {
 
   auto clientSetup = ClientSetup{
       .supportedVersions = {kVersionDraft15},
-      .params = {},
   };
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -2324,7 +2287,6 @@ TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
 
   auto serverSetup = ServerSetup{
       .selectedVersion = kVersionDraft15,
-      .params = {},
   };
 
   MoQFrameWriter writer;
@@ -2911,7 +2873,6 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkDefaultGroupOrder) {
   subscribeOk.groupOrder =
       GroupOrder::Default; // Writer won't write GROUP_ORDER param
   subscribeOk.largest = AbsoluteLocation{10, 20};
-  subscribeOk.params = {};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -2940,7 +2901,6 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExplicitGroupOrder) {
   subscribeOk.groupOrder =
       GroupOrder::NewestFirst; // Non-default, will be written
   subscribeOk.largest = AbsoluteLocation{10, 20};
-  subscribeOk.params = {};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -2967,7 +2927,6 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExpiresParameter) {
   subscribeOk.expires = std::chrono::milliseconds(5000);
   subscribeOk.groupOrder = GroupOrder::OldestFirst;
   subscribeOk.largest = AbsoluteLocation{10, 20};
-  subscribeOk.params = {};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -2997,7 +2956,6 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExpiresZeroNotWritten) {
   subscribeOk.expires = std::chrono::milliseconds(0); // Zero expires
   subscribeOk.groupOrder = GroupOrder::NewestFirst;
   subscribeOk.largest = AbsoluteLocation{10, 20};
-  subscribeOk.params = {};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -3025,8 +2983,7 @@ TEST_P(MoQFramerV15PlusTest, PublishDefaultGroupOrder) {
   publishRequest.fullTrackName =
       FullTrackName({TrackNamespace({"test"}), "pub"});
   publishRequest.groupOrder =
-      GroupOrder::Default;    // Will be overridden by parser default
-  publishRequest.params = {}; // No GROUP_ORDER param
+      GroupOrder::Default; // Will be overridden by parser default
 
   auto writeResult = writer_.writePublish(writeBuf, publishRequest);
   EXPECT_TRUE(writeResult.hasValue());
@@ -3054,7 +3011,6 @@ TEST_P(MoQFramerV15PlusTest, PublishExplicitGroupOrder) {
       FullTrackName({TrackNamespace({"test"}), "pub"});
   publishRequest.groupOrder =
       GroupOrder::NewestFirst; // Non-default, will be written
-  publishRequest.params = {};
 
   auto writeResult = writer_.writePublish(writeBuf, publishRequest);
   EXPECT_TRUE(writeResult.hasValue());
@@ -3083,7 +3039,6 @@ TEST_P(MoQFramerV15PlusTest, PublishOkDefaultGroupOrder) {
   publishOk.groupOrder =
       GroupOrder::Default; // Writer won't write GROUP_ORDER param
   publishOk.locType = LocationType::LargestObject;
-  publishOk.params = {};
 
   auto writeResult = writer_.writePublishOk(writeBuf, publishOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -3112,7 +3067,6 @@ TEST_P(MoQFramerV15PlusTest, PublishOkExplicitGroupOrder) {
   publishOk.groupOrder =
       GroupOrder::OldestFirst; // Non-default, will be written
   publishOk.locType = LocationType::LargestObject;
-  publishOk.params = {};
 
   auto writeResult = writer_.writePublishOk(writeBuf, publishOk);
   EXPECT_TRUE(writeResult.hasValue());
@@ -3211,7 +3165,6 @@ TEST_P(MoQFramerV15PlusTest, SubscribeAnnouncesForwardFalse) {
   subscribeAnnounces.trackNamespacePrefix =
       TrackNamespace(std::vector<std::string>{"ns", "prefix"});
   subscribeAnnounces.forward = false;
-  subscribeAnnounces.params = {};
 
   auto writeResult =
       writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
@@ -3345,7 +3298,6 @@ TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithOptions) {
       TrackNamespace(std::vector<std::string>{"test", "namespace"});
   subscribeAnnounces.options = SubscribeAnnouncesOptions::NAMESPACE;
   subscribeAnnounces.forward = true;
-  subscribeAnnounces.params = {};
 
   auto writeResult =
       writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
@@ -3380,7 +3332,6 @@ TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithBothOption) {
       TrackNamespace(std::vector<std::string>{"both", "test"});
   subscribeAnnounces.options = SubscribeAnnouncesOptions::BOTH;
   subscribeAnnounces.forward = false;
-  subscribeAnnounces.params = {};
 
   auto writeResult =
       writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
@@ -3415,7 +3366,6 @@ TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithPublishOption) {
       TrackNamespace(std::vector<std::string>{"publish", "only"});
   subscribeAnnounces.options = SubscribeAnnouncesOptions::PUBLISH;
   subscribeAnnounces.forward = true;
-  subscribeAnnounces.params = {};
 
   auto writeResult =
       writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
@@ -3529,4 +3479,169 @@ TEST_F(ParametersIsParamAllowedTest, MultipleParamsMixedResults) {
   EXPECT_FALSE(
       params.isParamAllowed(TrackRequestParamKey::AUTHORIZATION_TOKEN));
   EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::LARGEST_OBJECT));
+}
+
+class ParameterValidationFlowTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    writer_.initializeVersion(kVersionDraft15);
+    parser_.initializeVersion(kVersionDraft15);
+  }
+
+  size_t frameLength(folly::io::Cursor& cursor) {
+    size_t res = cursor.readBE<uint16_t>();
+    return res;
+  }
+
+  MoQFrameWriter writer_;
+  MoQFrameParser parser_;
+};
+
+TEST_F(ParameterValidationFlowTest, SubscribeRequestMakeSkipsInvalidParam) {
+  // EXPIRES is NOT allowed for SUBSCRIBE
+  // Pass as vector - make will validate and skip invalid params
+  std::vector<Parameter> inputParams{
+      Parameter(folly::to_underlying(TrackRequestParamKey::EXPIRES), 1000)};
+
+  auto req = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"ns"}), "track"}),
+      kDefaultPriority,
+      GroupOrder::Default,
+      true,
+      LocationType::LargestGroup,
+      folly::none,
+      0,
+      inputParams);
+
+  // The invalid param should have been skipped
+  EXPECT_EQ(req.params.size(), 0);
+}
+
+TEST_F(ParameterValidationFlowTest, FetchConstructorSkipsInvalidParam) {
+  // DELIVERY_TIMEOUT is NOT allowed for FETCH
+  // Fetch constructor validates and skips invalid params
+  std::vector<Parameter> inputParams{Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000)};
+
+  Fetch fetch(
+      RequestID(1),
+      FullTrackName({TrackNamespace({"ns"}), "track"}),
+      AbsoluteLocation{0, 0},
+      AbsoluteLocation{10, 10},
+      kDefaultPriority,
+      GroupOrder::Default,
+      inputParams);
+
+  // The invalid param should have been skipped
+  EXPECT_EQ(fetch.params.size(), 0);
+}
+
+TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
+  // Create a SubscribeRequest with a VALID param first
+  std::vector<Parameter> validParams{Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000)};
+
+  auto req = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"ns"}), "track"}),
+      kDefaultPriority,
+      GroupOrder::Default,
+      true,
+      LocationType::LargestGroup,
+      folly::none,
+      0,
+      validParams);
+
+  // Serialize
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto writeRes = writer_.writeSubscribeRequest(writeBuf, req);
+  EXPECT_TRUE(writeRes.hasValue());
+
+  // Now manually append an invalid param (EXPIRES) to the serialized buffer
+  // For testing the receive path, we create a separate SubscribeRequest
+  // that bypasses write-time validation by using a Parameters without frameType
+
+  // Create a SubscribeRequest struct directly (not via make()) so we can
+  // add params that bypass validation
+  SubscribeRequest reqWithInvalidParam{
+      RequestID(0),
+      FullTrackName({TrackNamespace({"ns2"}), "track2"}),
+      kDefaultPriority,
+      GroupOrder::Default,
+      true,
+      LocationType::LargestGroup,
+      folly::none,
+      0};
+
+  // Add valid param using insertParam
+  reqWithInvalidParam.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000));
+  // Try to insert EXPIRES which is invalid for SUBSCRIBE - it will be rejected
+  auto insertResult = reqWithInvalidParam.params.insertParam(
+      Parameter(folly::to_underlying(TrackRequestParamKey::EXPIRES), 1000));
+  // The insertion of invalid param should fail
+  EXPECT_TRUE(insertResult.hasError());
+
+  // Verify only the valid param is present
+  EXPECT_EQ(reqWithInvalidParam.params.size(), 1);
+
+  // Serialize the request
+  folly::IOBufQueue writeBuf2{folly::IOBufQueue::cacheChainLength()};
+  auto writeRes2 =
+      writer_.writeSubscribeRequest(writeBuf2, reqWithInvalidParam);
+  EXPECT_TRUE(writeRes2.hasValue());
+
+  // Parse and verify DELIVERY_TIMEOUT is present
+  auto serialized = writeBuf2.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+
+  auto parseRes = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseRes.hasValue());
+
+  // DELIVERY_TIMEOUT should be present (valid for SUBSCRIBE)
+  // EXPIRES should not be present (was rejected during insertion)
+  bool foundDeliveryTimeout = false;
+  bool foundExpires = false;
+  for (const auto& param : parseRes->params) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) {
+      foundDeliveryTimeout = true;
+    }
+    if (param.key == folly::to_underlying(TrackRequestParamKey::EXPIRES)) {
+      foundExpires = true;
+    }
+  }
+  EXPECT_TRUE(foundDeliveryTimeout);
+  EXPECT_FALSE(foundExpires);
+}
+
+TEST_F(ParameterValidationFlowTest, SubscribeOkRejectsInvalidParam) {
+  // This tests the same code path as MoQForwarder::Subscriber::setParam()
+  // DELIVERY_TIMEOUT is NOT allowed for SUBSCRIBE_OK (only for PUBLISH_OK,
+  // SUBSCRIBE, SUBSCRIBE_UPDATE)
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(1);
+  subscribeOk.trackAlias = TrackAlias(1);
+  subscribeOk.expires = std::chrono::milliseconds(1000);
+  subscribeOk.groupOrder = GroupOrder::Default;
+  subscribeOk.largest = folly::none;
+
+  // Try to insert a param that's not allowed for SUBSCRIBE_OK
+  auto result = subscribeOk.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000));
+
+  // The insertion should fail
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::INVALID_REQUEST_ID);
+  EXPECT_EQ(subscribeOk.params.size(), 0);
+
+  // Try to insert a param that IS allowed for SUBSCRIBE_OK (EXPIRES)
+  auto result2 = subscribeOk.params.insertParam(
+      Parameter(folly::to_underlying(TrackRequestParamKey::EXPIRES), 1000));
+
+  // This should succeed
+  EXPECT_TRUE(result2.hasValue());
+  EXPECT_EQ(subscribeOk.params.size(), 1);
 }

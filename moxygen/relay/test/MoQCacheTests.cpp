@@ -90,7 +90,7 @@ class MoQCacheTest : public ::testing::Test {
           upstreamFetchConsumer_ = std::move(consumer);
           promise.setValue(upstreamFetchConsumer_);
           upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(
-              FetchOk{0, order, endOfTrack, largest, {}});
+              FetchOk{0, order, endOfTrack, largest});
           return folly::coro::makeTask<Publisher::FetchResult>(
               upstreamFetchHandle_);
         })
@@ -994,7 +994,7 @@ CO_TEST_F(MoQCacheTest, TestPartialCacheMissBeginningNoObjectsUpstream) {
   populateCacheRange({0, 6}, {0, 9});
 
   // Expect upstream fetch for the cache miss portion, returns empty stream
-  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {0, 6}, {}};
+  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {0, 6}};
   expectUpstreamFetch(upstreamFetchOk);
 
   // Expect consumer to receive objects 6, 7, 8 from cache
@@ -1020,7 +1020,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsTail) {
   populateCacheRange({0, 0}, {0, 10});
 
   // Expect upstream fetch for the cache miss portion, returns empty stream
-  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {2, 5}, {}};
+  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {2, 5}};
   expectUpstreamFetch(upstreamFetchOk);
 
   // Expect consumer to receive objects 0-9 from cache, then endOfFetch
@@ -1045,7 +1045,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsTail) {
 CO_TEST_F(MoQCacheTest, TestFullCacheMissNoObjectsUpstream) {
   // No objects in cache - full cache miss
   // Upstream returns FetchOk with empty stream (no objects exist)
-  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {0, 5}, {}};
+  auto upstreamFetchOk = FetchOk{0, GroupOrder::OldestFirst, false, {0, 5}};
   expectUpstreamFetch(upstreamFetchOk);
 
   // Consumer should receive endOfFetch (empty stream)

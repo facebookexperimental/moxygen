@@ -24,8 +24,7 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
       fetch.requestID,
       GroupOrder::OldestFirst,
       /*endOfTrack=*/0,
-      location,
-      {}});
+      location});
 }
 
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
@@ -37,28 +36,27 @@ std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     paramBuilder.add(
         TrackRequestParamKey::PUBLISHER_PRIORITY, publisherPriority.value());
   }
-  return std::make_shared<MockSubscriptionHandle>(SubscribeOk{
-      sub.requestID,
-      TrackAlias(sub.requestID.value),
-      std::chrono::milliseconds(0),
-      GroupOrder::OldestFirst,
-      largest,
-      paramBuilder.build()});
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = sub.requestID;
+  subscribeOk.trackAlias = TrackAlias(sub.requestID.value);
+  subscribeOk.expires = std::chrono::milliseconds(0);
+  subscribeOk.groupOrder = GroupOrder::OldestFirst;
+  subscribeOk.largest = largest;
+  for (const auto& param : paramBuilder.build()) {
+    subscribeOk.params.insertParam(param);
+  }
+  return std::make_shared<MockSubscriptionHandle>(std::move(subscribeOk));
 }
 
 TrackStatusOk makeTrackStatusOkResult(
     const TrackStatus& req,
     const folly::Optional<AbsoluteLocation>& largest) {
   return TrackStatusOk{
-      req.requestID,
-      TrackAlias(req.requestID.value),
-      std::chrono::milliseconds(0),
-      GroupOrder::OldestFirst,
-      largest,
-      {},
-      {}, // fullTrackName
-      {}  // statusCode
-  };
+      .requestID = req.requestID,
+      .trackAlias = TrackAlias(req.requestID.value),
+      .expires = std::chrono::milliseconds(0),
+      .groupOrder = GroupOrder::OldestFirst,
+      .largest = largest};
 }
 
 Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end) {
@@ -75,8 +73,7 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       true,
       LocationType::LargestObject,
       folly::none,
-      0,
-      {}};
+      0};
 }
 
 SubscribeDone getTrackEndedSubscribeDone(RequestID id) {
@@ -89,17 +86,16 @@ TrackStatus getTrackStatus() {
       .fullTrackName = kTestTrackName,
       .groupOrder = GroupOrder::Default,
       .locType = LocationType::LargestObject,
-      .endGroup = 0,
-      .params = {}};
+      .endGroup = 0};
 }
 
 moxygen::SubscribeAnnounces getSubscribeAnnounces() {
   return SubscribeAnnounces{
-      RequestID(0), TrackNamespace{{"foo"}}, true /* forward */, {}};
+      RequestID(0), TrackNamespace{{"foo"}}, true /* forward */};
 }
 
 moxygen::Announce getAnnounce() {
-  return Announce{RequestID(0), TrackNamespace{{"foo"}}, {}};
+  return Announce{RequestID(0), TrackNamespace{{"foo"}}};
 }
 
 std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {
@@ -109,7 +105,6 @@ std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {
       std::chrono::milliseconds(0), // expires
       GroupOrder::Default,          // groupOrder
       folly::none,                  // largest
-      {}                            // params
   });
 }
 
@@ -128,7 +123,7 @@ void expectSubscribeUpdate(
 
 // ParamBuilder implementation
 ParamBuilder& ParamBuilder::add(TrackRequestParamKey key, uint64_t value) {
-  params_.insertParam(Parameter{folly::to_underlying(key), value});
+  params_.emplace_back(folly::to_underlying(key), value);
   return *this;
 }
 
@@ -136,17 +131,16 @@ ParamBuilder& ParamBuilder::add(
     TrackRequestParamKey key,
     const std::string& value) {
   if (key == TrackRequestParamKey::AUTHORIZATION_TOKEN) {
-    params_.insertParam(
-        Parameter{
-            folly::to_underlying(key),
-            AuthToken{0, value, AuthToken::DontRegister}});
+    params_.emplace_back(
+        folly::to_underlying(key),
+        AuthToken{0, value, AuthToken::DontRegister});
   } else {
-    params_.insertParam(Parameter{folly::to_underlying(key), value});
+    params_.emplace_back(folly::to_underlying(key), value);
   }
   return *this;
 }
 
-TrackRequestParameters ParamBuilder::build() {
+std::vector<Parameter> ParamBuilder::build() {
   return std::move(params_);
 }
 
@@ -260,14 +254,18 @@ folly::Try<ServerSetup> MoQSessionTest::onClientSetup(
     return folly::makeTryWith(
         []() -> ServerSetup { throw std::runtime_error("failed"); });
   }
-  return folly::Try<ServerSetup>(ServerSetup{
-      .selectedVersion = getServerSelectedVersion(),
-      .params = {
-          SetupParameter{
-              folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-              initialMaxRequestID_},
-          SetupParameter{
-              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16}}});
+  return folly::Try<ServerSetup>([&]() {
+    ServerSetup ss;
+    ss.selectedVersion = getServerSelectedVersion();
+    ss.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+            initialMaxRequestID_});
+    ss.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    return ss;
+  }());
 }
 
 folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
@@ -458,15 +456,16 @@ void MoQSessionTest::expectSubscribeDone(MoQControlCodec::Direction recipient) {
 }
 
 ClientSetup MoQSessionTest::getClientSetup(uint64_t initialMaxRequestID) {
-  ClientSetup setup{
-      .supportedVersions = getClientSupportedVersions(),
-      .params = {
-          SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo"},
-          SetupParameter{
-              folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-              initialMaxRequestID},
-          SetupParameter{
-              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16}}};
+  ClientSetup setup;
+  setup.supportedVersions = getClientSupportedVersions();
+  setup.params.insertParam(
+      SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo"});
+  setup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID), initialMaxRequestID});
+  setup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
   return setup;
 }
 

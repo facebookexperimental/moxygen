@@ -43,8 +43,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
       AbsoluteLocation{5, 3}, // Start decreased - should fail
       20,
       kDefaultPriority,
-      true,
-      {}};
+      true};
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
@@ -61,7 +60,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  subscribeUpdate.subscriptionRequestID, {}, {}}));
+                  .requestID = subscribeUpdate.subscriptionRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->subscribeDone(
@@ -99,8 +98,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
       AbsoluteLocation{5, 10},
       3, // endGroup < start.group - should fail
       kDefaultPriority,
-      true,
-      {}};
+      true};
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
@@ -119,7 +117,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  subscribeUpdate.subscriptionRequestID, {}, {}}));
+                  .requestID = subscribeUpdate.subscriptionRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->subscribeDone(
@@ -146,7 +144,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
                 std::chrono::milliseconds(0),
                 GroupOrder::OldestFirst,
                 AbsoluteLocation{15, 20}, // largest object
-                {}});
+            });
         co_return mockSubscriptionHandle;
       });
 
@@ -164,8 +162,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
       AbsoluteLocation{20, 10}, // Start advanced (20, 10 > 10, 5)
       100,                      // endGroup increased
       kDefaultPriority + 1,
-      true,
-      {}};
+      true};
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
@@ -195,7 +192,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  subscribeUpdate.subscriptionRequestID, {}, {}}));
+                  .requestID = subscribeUpdate.subscriptionRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->subscribeDone(
@@ -243,7 +240,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
       initialEndGroup,  // Keep endGroup the same
       kDefaultPriority, // Change only priority
       initialForward,   // Keep forward the same
-      {}};
+  };
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
@@ -269,7 +266,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  subscribeUpdate.subscriptionRequestID, {}, {}}));
+                  .requestID = subscribeUpdate.subscriptionRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->subscribeDone(

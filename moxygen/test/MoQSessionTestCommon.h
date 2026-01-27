@@ -59,7 +59,7 @@ inline Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
 }
 
 inline Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
-  return std::make_shared<MockAnnounceHandle>(AnnounceOk({ann.requestID, {}}));
+  return std::make_shared<MockAnnounceHandle>(AnnounceOk({ann.requestID}));
 }
 
 inline Subscriber::PublishResult makePublishOkResult(
@@ -84,7 +84,6 @@ inline Subscriber::PublishResult makePublishOkResult(
       LocationType::LargestObject,
       folly::none,                       // start
       folly::make_optional(uint64_t(0)), // endGroup
-      {}                                 // params
   };
 
   // Create the reply task that returns the PublishOk
@@ -116,7 +115,7 @@ void expectSubscribeUpdate(
     std::shared_ptr<MockSubscriptionHandle> mockHandle,
     folly::coro::Baton& baton);
 
-// Helper class to build a vector of TrackRequestParameter for tests
+// Helper class to build a vector of Parameter for tests
 class ParamBuilder {
  public:
   ParamBuilder() = default;
@@ -127,10 +126,10 @@ class ParamBuilder {
   // Add a string parameter (for AUTHORIZATION_TOKEN)
   ParamBuilder& add(TrackRequestParamKey key, const std::string& value);
 
-  TrackRequestParameters build();
+  std::vector<Parameter> build();
 
  private:
-  TrackRequestParameters params_;
+  std::vector<Parameter> params_;
 };
 
 struct VersionParams {

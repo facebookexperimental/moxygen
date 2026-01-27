@@ -136,7 +136,6 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
       // Server tries to select version >= 15 without ALPN negotiation
       ServerSetup serverSetup;
       serverSetup.selectedVersion = 0xff00000f;
-      serverSetup.params = {};
       return folly::Try<ServerSetup>(serverSetup);
     }
 
@@ -169,7 +168,6 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
   // Client sends setup with version < 15 (no ALPN negotiation happened)
   ClientSetup clientSetup;
   clientSetup.supportedVersions.push_back(kVersionDraft14);
-  clientSetup.params = {};
 
   folly::coro::co_withExecutor(
       moqExecutor.get(), clientSession->setup(clientSetup))

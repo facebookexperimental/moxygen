@@ -443,15 +443,16 @@ TEST_P(MoQCodecTest, ClientGetsClientSetup) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
   // client gets client setup
-  writeClientSetup(
-      writeBuf,
-      ClientSetup(
-          {{GetParam()},
-           {
-               Parameter(folly::to_underlying(SetupKey::PATH), "/foo"),
-               Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100),
-           }}),
-      GetParam());
+  auto setupFrame = [version = GetParam()]() {
+    ClientSetup setup;
+    setup.supportedVersions = {version};
+    setup.params.insertParam(
+        Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+    setup.params.insertParam(
+        Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100));
+    return setup;
+  }();
+  writeClientSetup(writeBuf, setupFrame, GetParam());
 
   EXPECT_CALL(clientControlCodecCallback_, onConnectionError(testing::_));
   clientControlCodec_.onIngress(writeBuf.move(), false);
@@ -474,14 +475,13 @@ TEST_P(MoQCodecTest, CodecGetsNonSetupFirst) {
 TEST_P(MoQCodecTest, TwoSetups) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
-  writeServerSetup(
-      writeBuf,
-      ServerSetup(
-          {GetParam(),
-           {
-               {folly::to_underlying(SetupKey::PATH), "/foo"},
-           }}),
-      GetParam());
+  auto setupFrame = [version = GetParam()]() {
+    ServerSetup setup{.selectedVersion = version};
+    setup.params.insertParam(
+        Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+    return setup;
+  }();
+  writeServerSetup(writeBuf, setupFrame, GetParam());
   auto serverSetup = writeBuf.front()->clone();
   // This is legal, to setup next test
   EXPECT_CALL(clientControlCodecCallback_, onServerSetup(testing::_));
@@ -494,14 +494,13 @@ TEST_P(MoQCodecTest, TwoSetups) {
 TEST_P(MoQCodecTest, ServerGetsServerSetup) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
-  writeServerSetup(
-      writeBuf,
-      ServerSetup(
-          {GetParam(),
-           {
-               {folly::to_underlying(SetupKey::PATH), "/foo"},
-           }}),
-      GetParam());
+  auto setupFrame = [version = GetParam()]() {
+    ServerSetup setup{.selectedVersion = version};
+    setup.params.insertParam(
+        Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+    return setup;
+  }();
+  writeServerSetup(writeBuf, setupFrame, GetParam());
   auto serverSetup = writeBuf.front()->clone();
   // Server gets server setup = error
   EXPECT_CALL(serverControlCodecCallback_, onConnectionError(testing::_));

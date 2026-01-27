@@ -199,7 +199,7 @@ class MoQSession : public Subscriber,
       uint64_t joiningStart,
       uint8_t fetchPri,
       GroupOrder fetchOrder,
-      TrackRequestParameters fetchParams,
+      std::vector<Parameter> fetchParams,
       std::shared_ptr<FetchConsumer> fetchCallback,
       FetchType fetchType);
 

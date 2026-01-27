@@ -118,8 +118,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
           trackAlias,
           std::chrono::milliseconds(0),
           MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
-          largest_,
-          {}},
+          largest_},
       std::move(session),
       subReq.requestID,
       toSubscribeRange(subReq, largest_),
@@ -152,8 +151,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
           pub.trackAlias,
           std::chrono::milliseconds(0),
           pub.groupOrder,
-          largest_,
-          {}},
+          largest_},
       std::move(session),
       pub.requestID,
       SubscribeRange{{0, 0}, kLocationMax},
@@ -499,7 +497,11 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
       return;
     }
   }
-  subscribeOk_->params.insertParam(param);
+  auto result = subscribeOk_->params.insertParam(param);
+  if (result.hasError()) {
+    XLOG(ERR) << "setParam: param not allowed for SubscribeOk, key="
+              << param.key;
+  }
 }
 
 folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
@@ -544,7 +546,7 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
     forwarder.removeForwardingSubscriber();
   }
 
-  co_return SubscribeUpdateOk{subscribeUpdate.requestID, {}, {}};
+  co_return SubscribeUpdateOk{.requestID = subscribeUpdate.requestID};
 }
 
 void MoQForwarder::Subscriber::unsubscribe() {

@@ -38,8 +38,7 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
         alias,
         std::chrono::milliseconds(0),
         GroupOrder::OldestFirst,
-        folly::none,
-        {}};
+        folly::none};
     setSubscribeOk(std::move(ok));
   }
   void unsubscribe() override {}

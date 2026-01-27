@@ -68,7 +68,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         alpns);
     // the announce and subscribe announces should be in parallel
     auto announceRes = co_await moqClient_.getSession()->announce(
-        {RequestID(0), participantTrackName(username_), {}});
+        {RequestID(0), participantTrackName(username_)});
     if (announceRes.hasError()) {
       XLOG(ERR) << "Announce failed err=" << announceRes.error().reasonPhrase;
       co_return;
@@ -77,11 +77,13 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     uint64_t negotiatedVersion =
         *(moqClient_.getSession()->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the largest group
-    auto sa = co_await moqClient_.getSession()->subscribeAnnounces(
-        {RequestID(0),
-         TrackNamespace(chatPrefix()),
-         true, // forward
-         {getAuthParam(negotiatedVersion, username_)}});
+    SubscribeAnnounces subAnn{
+        .requestID = RequestID(0),
+        .trackNamespacePrefix = TrackNamespace(chatPrefix()),
+        .forward = true,
+    };
+    subAnn.params.insertParam(getAuthParam(negotiatedVersion, username_));
+    auto sa = co_await moqClient_.getSession()->subscribeAnnounces(subAnn);
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeAnnounces success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
@@ -121,7 +123,7 @@ folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
             announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
   }
   co_return std::make_shared<AnnounceHandle>(
-      AnnounceOk{announce.requestID, {}},
+      AnnounceOk{announce.requestID},
       shared_from_this(),
       std::move(trackNamespaceCopy));
 }
@@ -163,8 +165,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
        std::chrono::milliseconds(0),
        MoQSession::resolveGroupOrder(
            GroupOrder::OldestFirst, subscribeReq.groupOrder),
-       largest,
-       {}});
+       largest});
   co_return shared_from_this();
 }
 

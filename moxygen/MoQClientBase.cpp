@@ -114,15 +114,12 @@ ClientSetup MoQClientBase::getClientSetup(
   const uint32_t kMaxAuthTokenCacheSize = 1024;
 
   const auto& legacyVersions = getSupportedLegacyVersions();
-  ClientSetup clientSetup{
-      legacyVersions,
-      SetupParameters{
-          Parameter(
-              folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-              kDefaultMaxRequestID),
-          Parameter(
-              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-              kMaxAuthTokenCacheSize)}};
+  ClientSetup clientSetup{.supportedVersions = legacyVersions};
+  clientSetup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MAX_REQUEST_ID), kDefaultMaxRequestID));
+  clientSetup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+      kMaxAuthTokenCacheSize));
 
   if (path) {
     clientSetup.params.insertParam(

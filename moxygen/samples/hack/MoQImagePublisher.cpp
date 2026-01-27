@@ -34,14 +34,13 @@ namespace moxygen {
 class LocalSubscriptionHandle : public SubscriptionHandle {
  public:
   explicit LocalSubscriptionHandle(RequestID rid, TrackAlias alias) {
-    SubscribeOk ok{
-        rid,
-        alias,
-        std::chrono::milliseconds(0),
-        GroupOrder::OldestFirst,
-        folly::none,
-        {}};
-    setSubscribeOk(std::move(ok));
+    setSubscribeOk(
+        SubscribeOk{
+            rid,
+            alias,
+            std::chrono::milliseconds(0),
+            GroupOrder::OldestFirst,
+            folly::none});
   }
   void unsubscribe() override {}
   folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>

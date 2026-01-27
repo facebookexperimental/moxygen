@@ -41,7 +41,7 @@ CO_TEST_P_X(MoQSessionTest, Unannounce) {
               [&mockAnnounceHandle](auto ann, auto /* announceCallback */)
                   -> folly::coro::Task<Subscriber::AnnounceResult> {
                 mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
-                    AnnounceOk({ann.requestID, {}}));
+                    AnnounceOk({ann.requestID}));
                 Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
                 co_return announceResult;
               }));
@@ -71,7 +71,7 @@ CO_TEST_P_X(MoQSessionTest, AnnounceCancel) {
                   -> folly::coro::Task<Subscriber::AnnounceResult> {
                 announceCallback = announceCallbackIn;
                 mockAnnounceHandle = std::make_shared<MockAnnounceHandle>(
-                    AnnounceOk({ann.requestID, {}}));
+                    AnnounceOk({ann.requestID}));
                 Subscriber::AnnounceResult announceResult(mockAnnounceHandle);
                 co_return announceResult;
               }));

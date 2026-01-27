@@ -1170,8 +1170,10 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
               folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
               subscriptionHandle_->subscribeOk().largest.value());
         }
-        session_->subscribeUpdateOk(
-            RequestOk{updateRequestID, {}, std::move(requestSpecificParams)});
+        RequestOk requestOk{
+            .requestID = updateRequestID,
+            .requestSpecificParams = std::move(requestSpecificParams)};
+        session_->subscribeUpdateOk(requestOk);
       }
     }
   }
@@ -3532,7 +3534,7 @@ class MoQSession::ReceiverSubscriptionHandle
 
       // Version < 15: Return a constructed response. SubscribeUpdate is fire
       // and forget
-      co_return SubscribeUpdateOk{subscribeUpdate.requestID, {}, {}};
+      co_return SubscribeUpdateOk{.requestID = subscribeUpdate.requestID};
     }
   }
 
@@ -4811,7 +4813,7 @@ folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
     uint64_t joiningStart,
     uint8_t fetchPri,
     GroupOrder fetchOrder,
-    TrackRequestParameters fetchParams,
+    std::vector<Parameter> fetchParams,
     std::shared_ptr<FetchConsumer> fetchCallback,
     FetchType fetchType) {
   Fetch fetchReq(
@@ -4821,7 +4823,7 @@ folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
       fetchType,
       fetchPri,
       fetchOrder,
-      std::move(fetchParams));
+      fetchParams);
   fetchReq.fullTrackName = sub.fullTrackName;
   auto [subscribeResult, fetchResult] = co_await folly::coro::collectAll(
       subscribe(std::move(sub), std::move(subscribeCallback)),

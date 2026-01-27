@@ -214,7 +214,20 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
         {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
 };
 
+// Frame types that allow all parameters (no validation)
+const folly::F14FastSet<FrameType> kAllowAllParamsFrameTypes = {
+    FrameType::CLIENT_SETUP,
+    FrameType::SERVER_SETUP,
+    FrameType::LEGACY_CLIENT_SETUP,
+    FrameType::LEGACY_SERVER_SETUP,
+};
+
 bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
+  // Setup frame types allow all parameters
+  if (kAllowAllParamsFrameTypes.contains(frameType_)) {
+    return true;
+  }
+
   auto it = kParamAllowlist.find(key);
   if (it == kParamAllowlist.end()) {
     return false;
@@ -768,7 +781,12 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
           isRequestSpecificParam(trackRequestParamKey)) {
         requestSpecificParams.push_back(std::move(*res.value()));
       } else {
-        params.insertParam(std::move(*res.value()));
+        auto insertResult = params.insertParam(std::move(*res.value()));
+        if (insertResult.hasError()) {
+          // Per spec: invalid params in received messages should be ignored
+          XLOG(WARN) << "parseParams: ignoring param not allowed for frame type"
+                     << " at param index=" << i << ", key=" << key;
+        }
       }
     }
   }

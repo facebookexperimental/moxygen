@@ -31,8 +31,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
       alias,
       std::chrono::milliseconds(0) /* never expires */,
       subscribeRequest.groupOrder,
-      folly::none,
-      {}};
+      folly::none};
   return folly::coro::makeTask<SubscribeResult>(
       std::make_shared<PerfSubscriptionHandle>(ok, &cancellationSource_));
 }
@@ -51,8 +50,7 @@ folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
       fetchRequest.requestID,
       GroupOrder(fetchRequest.groupOrder),
       0,
-      AbsoluteLocation{0, 0},
-      {}};
+      AbsoluteLocation{0, 0}};
   requestId_ = fetchRequest.requestID;
   return folly::coro::makeTask<FetchResult>(
       std::make_shared<PerfFetchHandle>(ok, &cancellationSource_));
