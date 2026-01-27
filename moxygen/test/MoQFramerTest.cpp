@@ -3477,3 +3477,56 @@ TEST(MoQFramerV16DeathTest, AnnounceCancelWithoutRequestIDDies) {
       writer.writeAnnounceCancel(writeBuf, announceCancel),
       "RequestID required for v16\\+ AnnounceCancel");
 }
+
+// Tests for Parameters::isParamAllowed()
+class ParametersIsParamAllowedTest : public ::testing::Test {};
+
+TEST_F(ParametersIsParamAllowedTest, ParamAllowedForFrameType) {
+  Parameters params(FrameType::SUBSCRIBE);
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::SUBSCRIBER_PRIORITY));
+}
+
+TEST_F(ParametersIsParamAllowedTest, ParamNotAllowedForFrameType) {
+  Parameters params(FrameType::FETCH);
+  EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
+  EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::EXPIRES));
+}
+
+TEST_F(ParametersIsParamAllowedTest, ParamAllowedForAllFrameTypes) {
+  // MAX_CACHE_DURATION and PUBLISHER_PRIORITY have empty sets = allowed for all
+  Parameters paramsAnnounce(FrameType::ANNOUNCE);
+  EXPECT_TRUE(
+      paramsAnnounce.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
+  EXPECT_TRUE(
+      paramsAnnounce.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
+
+  Parameters paramsFetch(FrameType::FETCH);
+  EXPECT_TRUE(
+      paramsFetch.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
+  EXPECT_TRUE(
+      paramsFetch.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
+}
+
+TEST_F(ParametersIsParamAllowedTest, UnknownParamKeyReturnsFalse) {
+  Parameters params(FrameType::SUBSCRIBE);
+  // Cast an unknown value to TrackRequestParamKey
+  auto unknownKey = static_cast<TrackRequestParamKey>(9999);
+  EXPECT_FALSE(params.isParamAllowed(unknownKey));
+}
+
+TEST_F(ParametersIsParamAllowedTest, MultipleParamsMixedResults) {
+  Parameters params(FrameType::PUBLISH_OK);
+  // Allowed for PUBLISH_OK
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::SUBSCRIBER_PRIORITY));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::SUBSCRIPTION_FILTER));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::EXPIRES));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::GROUP_ORDER));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::FORWARD));
+  // NOT allowed for PUBLISH_OK
+  EXPECT_FALSE(
+      params.isParamAllowed(TrackRequestParamKey::AUTHORIZATION_TOKEN));
+  EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::LARGEST_OBJECT));
+}

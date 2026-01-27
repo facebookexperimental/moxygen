@@ -146,19 +146,72 @@ folly::Expected<uint64_t, moxygen::ErrorCode> decodeDelta(
 
 namespace moxygen {
 
+// Frame type sets for parameter allowlist
+const folly::F14FastSet<FrameType> kAllowedFramesForAuthToken = {
+    FrameType::PUBLISH,
+    FrameType::SUBSCRIBE,
+    FrameType::SUBSCRIBE_UPDATE,
+    FrameType::SUBSCRIBE_ANNOUNCES,
+    FrameType::ANNOUNCE,
+    FrameType::TRACK_STATUS,
+    FrameType::FETCH};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeout = {
+    FrameType::PUBLISH_OK,
+    FrameType::SUBSCRIBE,
+    FrameType::SUBSCRIBE_UPDATE};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForSubscriberPriority = {
+    FrameType::SUBSCRIBE,
+    FrameType::FETCH,
+    FrameType::SUBSCRIBE_UPDATE,
+    FrameType::PUBLISH_OK};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForSubscriptionFilter = {
+    FrameType::SUBSCRIBE,
+    FrameType::PUBLISH_OK,
+    FrameType::SUBSCRIBE_UPDATE};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForExpires = {
+    FrameType::SUBSCRIBE_OK,
+    FrameType::PUBLISH,
+    FrameType::PUBLISH_OK,
+    FrameType::REQUEST_OK};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForGroupOrder = {
+    FrameType::SUBSCRIBE,
+    FrameType::PUBLISH_OK,
+    FrameType::FETCH};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForLargestObject = {
+    FrameType::SUBSCRIBE_OK,
+    FrameType::PUBLISH,
+    FrameType::REQUEST_OK};
+
+const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
+    FrameType::SUBSCRIBE,
+    FrameType::SUBSCRIBE_UPDATE,
+    FrameType::PUBLISH,
+    FrameType::PUBLISH_OK,
+    FrameType::SUBSCRIBE_ANNOUNCES};
+
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
+// Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
     kParamAllowlist = {
-        {TrackRequestParamKey::DELIVERY_TIMEOUT, {}},
-        {TrackRequestParamKey::AUTHORIZATION_TOKEN, {}},
+        {TrackRequestParamKey::AUTHORIZATION_TOKEN, kAllowedFramesForAuthToken},
+        {TrackRequestParamKey::DELIVERY_TIMEOUT,
+         kAllowedFramesForDeliveryTimeout},
         {TrackRequestParamKey::MAX_CACHE_DURATION, {}},
         {TrackRequestParamKey::PUBLISHER_PRIORITY, {}},
-        {TrackRequestParamKey::SUBSCRIBER_PRIORITY, {}},
-        {TrackRequestParamKey::SUBSCRIPTION_FILTER, {}},
-        {TrackRequestParamKey::EXPIRES, {}},
-        {TrackRequestParamKey::GROUP_ORDER, {}},
-        {TrackRequestParamKey::LARGEST_OBJECT, {}},
-        {TrackRequestParamKey::FORWARD, {}},
+        {TrackRequestParamKey::SUBSCRIBER_PRIORITY,
+         kAllowedFramesForSubscriberPriority},
+        {TrackRequestParamKey::SUBSCRIPTION_FILTER,
+         kAllowedFramesForSubscriptionFilter},
+        {TrackRequestParamKey::EXPIRES, kAllowedFramesForExpires},
+        {TrackRequestParamKey::GROUP_ORDER, kAllowedFramesForGroupOrder},
+        {TrackRequestParamKey::LARGEST_OBJECT, kAllowedFramesForLargestObject},
+        {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
 };
 
 bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
