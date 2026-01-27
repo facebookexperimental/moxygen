@@ -1024,7 +1024,7 @@ struct SubscribeRequest {
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   uint64_t endGroup;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::SUBSCRIBE};
 };
 
 struct SubscribeUpdate {
@@ -1036,7 +1036,7 @@ struct SubscribeUpdate {
   // Draft 15+: Optional forward field. When absent, existing forward state is
   // preserved. For earlier drafts, this is always set during parsing.
   folly::Optional<bool> forward;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::SUBSCRIBE_UPDATE};
 };
 
 struct SubscribeOk {
@@ -1046,10 +1046,10 @@ struct SubscribeOk {
   GroupOrder groupOrder;
   // context exists is inferred from presence of largest
   folly::Optional<AbsoluteLocation> largest;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::SUBSCRIBE_OK};
 };
 
-// SubscribeError is now an alias for RequestError - see below
+// SubscribeError is now an alias for RequestError
 
 struct Unsubscribe {
   RequestID requestID;
@@ -1069,7 +1069,7 @@ struct PublishRequest {
   GroupOrder groupOrder{GroupOrder::Default};
   folly::Optional<AbsoluteLocation> largest;
   bool forward{true};
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::PUBLISH};
 };
 
 struct PublishOk {
@@ -1080,15 +1080,15 @@ struct PublishOk {
   LocationType locType;
   folly::Optional<AbsoluteLocation> start;
   folly::Optional<uint64_t> endGroup;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::PUBLISH_OK};
 };
 
-// PublishError is now an alias for RequestError - see below
+// PublishError is now an alias for RequestError
 
 struct Announce {
   RequestID requestID;
   TrackNamespace trackNamespace;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::ANNOUNCE};
 };
 
 // AnnounceError is now an alias for RequestError - see below
@@ -1116,7 +1116,7 @@ struct TrackStatusOk {
   GroupOrder groupOrder{};
   // context exists is inferred from presence of largest
   folly::Optional<AbsoluteLocation> largest;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::REQUEST_OK};
   // < v14 parameters maintained for compatibility
   FullTrackName fullTrackName;
   TrackStatusCode statusCode{};
@@ -1205,7 +1205,7 @@ struct Fetch {
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::FETCH};
   std::variant<StandaloneFetch, JoiningFetch> args;
 };
 
@@ -1223,7 +1223,7 @@ struct FetchOk {
   GroupOrder groupOrder;
   uint8_t endOfTrack;
   AbsoluteLocation endLocation;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::FETCH_OK};
 };
 
 // FetchError is now an alias for RequestError - see below
@@ -1237,7 +1237,7 @@ struct SubscribeAnnounces {
   RequestID requestID;
   TrackNamespace trackNamespacePrefix;
   bool forward{true}; // Only used in draft-15 and above
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::SUBSCRIBE_ANNOUNCES};
   SubscribeAnnouncesOptions options; // Only used in draft-16 and above
 };
 
@@ -1261,7 +1261,7 @@ struct UnsubscribeAnnounces {
 
 struct RequestOk {
   RequestID requestID;
-  TrackRequestParameters params;
+  TrackRequestParameters params{FrameType::REQUEST_OK};
   std::vector<Parameter> requestSpecificParams;
 
   TrackStatusOk toTrackStatusOk() const;
