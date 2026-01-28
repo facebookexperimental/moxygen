@@ -109,7 +109,7 @@
   void GTEST_TEST_CLASS_NAME_(test_suite_name, test_name)::TestBody() {        \
     try {                                                                      \
       folly::coro::blockingWait(co_TestBody(), getExecutor());                 \
-    } catch (const std::exception& ex) {                                       \
+    } catch (const std::exception&) {                                          \
       folly::detail::gtestLogCurrentException(GTEST_LOG_(ERROR));              \
       throw;                                                                   \
     }                                                                          \
