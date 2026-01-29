@@ -3068,6 +3068,14 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
+  if (receivedGoaway_) {
+    XLOG(DBG1) << "Rejecting subscribe request, received GOAWAY sess=" << this;
+    subscribeError(
+        {subscribeRequest.requestID,
+         SubscribeErrorCode::GOING_AWAY,
+         "Session received GOAWAY"});
+    return;
+  }
 
   // TODO: The publisher should maintain some state like
   //   Subscribe ID -> Track Name, Locations [currently held in
@@ -3563,6 +3571,15 @@ void MoQSession::onPublish(PublishRequest publish) {
   if (closeSessionIfRequestIDInvalid(publish.requestID, false, true)) {
     return;
   }
+  if (receivedGoaway_) {
+    XLOG(DBG1) << "Rejecting publish request, received GOAWAY sess=" << this;
+    publishError(
+        PublishError{
+            publish.requestID,
+            PublishErrorCode::GOING_AWAY,
+            "Session received GOAWAY"});
+    return;
+  }
 
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << " No subscriber callback set";
@@ -3747,6 +3764,14 @@ void MoQSession::onFetch(Fetch fetch) {
   if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
+  if (receivedGoaway_) {
+    XLOG(DBG1) << "Rejecting fetch request, received GOAWAY sess=" << this;
+    fetchError(
+        {fetch.requestID,
+         FetchErrorCode::GOING_AWAY,
+         "Session received GOAWAY"});
+    return;
+  }
   if (standalone) {
     if (standalone->end <= standalone->start) {
       // If the end object is zero this indicates a fetch for the entire
@@ -3912,6 +3937,15 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
         ControlMessageType::PARSED);
   }
   if (closeSessionIfRequestIDInvalid(trackStatus.requestID, false, true)) {
+    return;
+  }
+  if (receivedGoaway_) {
+    XLOG(DBG1) << "Rejecting track status request, received GOAWAY sess="
+               << this;
+    trackStatusError(
+        {trackStatus.requestID,
+         TrackStatusErrorCode::GOING_AWAY,
+         "Session received GOAWAY"});
     return;
   }
   if (!publishHandler_) {
@@ -5154,6 +5188,15 @@ void MoQSession::aliasifyAuthTokens(
 void MoQSession::onAnnounce(Announce announce) {
   XLOG(DBG1) << __func__ << " ns=" << announce.trackNamespace
              << " - sending NOT_SUPPORTED error, sess=" << this;
+  if (receivedGoaway_) {
+    XLOG(DBG1) << "Rejecting announce request, received GOAWAY sess=" << this;
+    announceError(
+        AnnounceError{
+            announce.requestID,
+            AnnounceErrorCode::GOING_AWAY,
+            "Session received GOAWAY"});
+    return;
+  }
   announceError(
       AnnounceError{
           announce.requestID,
@@ -5230,6 +5273,16 @@ void MoQSession::onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) {
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeAnnounces.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
+  if (receivedGoaway_) {
+    XLOG(DBG1) << "Rejecting subscribe announces request, received GOAWAY sess="
+               << this;
+    subscribeAnnouncesError(
+        SubscribeAnnouncesError{
+            subscribeAnnounces.requestID,
+            SubscribeAnnouncesErrorCode::GOING_AWAY,
+            "Session received GOAWAY"});
+    return;
+  }
   subscribeAnnouncesError(
       SubscribeAnnouncesError{
           subscribeAnnounces.requestID,

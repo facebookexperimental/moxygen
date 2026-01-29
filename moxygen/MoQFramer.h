@@ -113,6 +113,9 @@ enum class RequestErrorCode : uint32_t {
   TRACK_NOT_EXIST = 4,
   INVALID_RANGE = 5,
 
+  // Note: Pending draft update
+  GOING_AWAY = 6,
+
   // SubscribeAnnounces-specific codes
   NAMESPACE_PREFIX_UNKNOWN = 4, // Same value as TRACK_NOT_EXIST
 
