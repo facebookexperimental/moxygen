@@ -1429,7 +1429,6 @@ MoQFrameParser::parseSubgroupObjectHeader(
     size_t length,
     const ObjectHeader& headerTemplate,
     const SubgroupOptions& options) const noexcept {
-  // TODO get rid of this
   auto startLength = length;
   ObjectHeader objectHeader = headerTemplate;
   auto id = quic::follyutils::decodeQuicInteger(cursor, length);

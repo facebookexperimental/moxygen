@@ -1785,6 +1785,9 @@ class MoQSession::SubscribeTrackReceiveState
       subErr.requestID = requestID_;
       subscribePromise_.setValue(folly::makeUnexpected(std::move(subErr)));
     } else if (callback_) {
+      // Clear pending to avoid false duplicate detection - we're already
+      // cleaning up this subscription
+      pendingSubscribeDone_.reset();
       processSubscribeDone(
           {requestID_,
            SubscribeDoneStatusCode::SESSION_CLOSED,
@@ -1818,8 +1821,8 @@ class MoQSession::SubscribeTrackReceiveState
       return;
     }
     if (pendingSubscribeDone_) {
-      // TODO: protocol violation
       XLOG(ERR) << "Duplicate SUBSCRIBE_DONE";
+      session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
       return;
     }
 
