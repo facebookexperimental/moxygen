@@ -52,6 +52,7 @@ MoQServer::MoQServer(
         quic::CongestionControlType::Copa;
     params_.transportSettings.copaDeltaParam = 0.05;
     params_.transportSettings.pacingEnabled = true;
+    params_.transportSettings.experimentalPacer = true;
     params_.transportSettings.maxCwndInMss = quic::kLargeMaxCwndInMss;
     params_.transportSettings.batchingMode =
         quic::QuicBatchingMode::BATCHING_MODE_GSO;
