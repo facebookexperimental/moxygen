@@ -12,7 +12,7 @@
 #include "folly/json/dynamic.h"
 #include "folly/json/json.h"
 #include "quic/codec/QuicConnectionId.h"
-#include "moxygen/MoQFramer.h"
+#include "moxygen/MoQTypes.h"
 #include "moxygen/mlog/MLogEvents.h"
 #include "moxygen/mlog/MLogTypes.h"
 

@@ -23,7 +23,7 @@ target_compile_options(
 target_link_libraries(
     mlogger PUBLIC
     Folly::folly
-    moxygen
+    mvfst::mvfst_codec_types
 )
 
 install(

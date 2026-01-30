@@ -21,6 +21,7 @@ target_link_libraries(
     moqmi PUBLIC
     Folly::folly
     mvfst::mvfst_codec_types
+    mvfst::mvfst_folly_utils
 )
 
 install(
