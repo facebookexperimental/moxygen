@@ -24,6 +24,8 @@ constexpr uint64_t kEightByteLimit = 0x3FFFFFFFFFFFFFFF;
 
 // Extension types
 const uint64_t kImmutableExtensionType = 0xB;
+const uint64_t kPriorGroupIdGapExtensionType = 0x3C;
+const uint64_t kPriorObjectIdGapExtensionType = 0x3E;
 
 //////// Types ////////
 
@@ -734,6 +736,23 @@ class Extensions {
 
   bool empty() const {
     return mutableExtensions.empty() && immutableExtensions.empty();
+  }
+
+  // Returns the integer value of the first extension with the given type
+  // from either mutable or immutable sections, or nullopt if not found.
+  // Only valid for even-typed extensions (which use intValue).
+  std::optional<uint64_t> getIntExtension(uint64_t type) const {
+    for (const auto& ext : mutableExtensions) {
+      if (ext.type == type) {
+        return ext.intValue;
+      }
+    }
+    for (const auto& ext : immutableExtensions) {
+      if (ext.type == type) {
+        return ext.intValue;
+      }
+    }
+    return std::nullopt;
   }
 
   // For backward compatibility and testing

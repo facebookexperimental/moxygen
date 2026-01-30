@@ -18,6 +18,25 @@ namespace moxygen::test {
 
 const FullTrackName kTestTrackName{TrackNamespace{{"foo"}}, "bar"};
 
+// Matcher for chain data length
+MATCHER_P(HasChainDataLengthOf, n, "") {
+  return arg->computeChainDataLength() == uint64_t(n);
+}
+
+// Helper to create extensions with Prior Object ID Gap
+Extensions makeObjectGapExtensions(uint64_t gap) {
+  Extensions ext;
+  ext.insertImmutableExtension(Extension{kPriorObjectIdGapExtensionType, gap});
+  return ext;
+}
+
+// Helper to create extensions with Prior Group ID Gap
+Extensions makeGroupGapExtensions(uint64_t gap) {
+  Extensions ext;
+  ext.insertImmutableExtension(Extension{kPriorGroupIdGapExtensionType, gap});
+  return ext;
+}
+
 Fetch getFetch(
     AbsoluteLocation start,
     AbsoluteLocation end,
@@ -34,8 +53,6 @@ class MoQCacheTest : public ::testing::Test {
     ON_CALL(*trackConsumer_, datagram(_, _)).WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, objectStream(_, _))
         .WillByDefault(Return(folly::unit));
-    ON_CALL(*trackConsumer_, groupNotExists(_, _, _))
-        .WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, subscribeDone(_))
         .WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, beginSubgroup(_, _, _))
@@ -46,8 +63,6 @@ class MoQCacheTest : public ::testing::Test {
   std::shared_ptr<MockSubgroupConsumer> makeSubgroupConsumer() {
     auto subgroupConsumer = std::make_shared<NiceMock<MockSubgroupConsumer>>();
     ON_CALL(*subgroupConsumer, object(_, _, _, _))
-        .WillByDefault(Return(folly::unit));
-    ON_CALL(*subgroupConsumer, objectNotExists(_, _))
         .WillByDefault(Return(folly::unit));
     ON_CALL(*subgroupConsumer, endOfSubgroup())
         .WillByDefault(Return(folly::unit));
@@ -725,16 +740,21 @@ CO_TEST_F(MoQCacheTest, TestFetchCancel) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
 CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExistObjectsAndGroups) {
-  // Test case for fetch populating OBJECT_NOT_EXIST and GROUP_NOT_EXIST
+  // Test case for fetch populating OBJECT_NOT_EXIST via Prior Object ID Gap
+  // extension, and GROUP_NOT_EXIST via Prior Group ID Gap extension
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
 
-  writeback->objectStream(
-      ObjectHeader(0, 0, 0, 0, ObjectStatus::OBJECT_NOT_EXIST), nullptr);
-  writeback->objectStream(
-      ObjectHeader(0, 0, 1, 0, ObjectStatus::END_OF_GROUP), nullptr);
+  // Send object 1 with Prior Object ID Gap = 1 to indicate object 0 doesn't
+  // exist
+  ObjectHeader header1(0, 0, 1, 0, ObjectStatus::END_OF_GROUP);
+  header1.extensions = makeObjectGapExtensions(1);
+  writeback->objectStream(header1, nullptr);
 
-  // Simulate GROUP_NOT_EXIST using groupNotExist method
-  writeback->groupNotExists(1, 0, 0);
+  // Send object 0 in group 2 with Prior Group ID Gap = 1 to indicate group 1
+  // doesn't exist. This also marks the end of track.
+  ObjectHeader header2(2, 0, 0, 0, ObjectStatus::END_OF_TRACK);
+  header2.extensions = makeGroupGapExtensions(1);
+  writeback->objectStream(header2, nullptr);
   writeback.reset();
 
   EXPECT_CALL(*consumer_, endOfGroup(0, 0, 1, false))
@@ -747,13 +767,13 @@ CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExistObjectsAndGroups) {
 }
 
 TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
-  // Populate the cache with OBJECT_NOT_EXIST for objects 0,0 1,0 2,0
+  // Populate the cache with OBJECT_NOT_EXIST for groups 0-4 (object 0 in each)
+  // using Prior Group ID Gap extension: send object in group 5 with gap=5.
+  // Group gaps are recorded as OBJECT_NOT_EXIST for object 0 in each group.
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
-  for (int i = 0; i < 5; ++i) {
-    writeback->objectStream(
-        ObjectHeader(i, 0, 0, 0, ObjectStatus::OBJECT_NOT_EXIST), nullptr);
-  }
-  writeback->objectStream(ObjectHeader(5, 0, 0, 0, 10), makeBuf(10));
+  ObjectHeader header5(5, 0, 0, 0, 10);
+  header5.extensions = makeGroupGapExtensions(5);
+  writeback->objectStream(header5, makeBuf(10));
 
   writeback->objectStream(
       ObjectHeader(6, 0, 0, 0, ObjectStatus::END_OF_TRACK), nullptr);
@@ -850,55 +870,71 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchPartialWriteAndReset) {
   serveCacheRangeFromUpstream({0, 0}, {0, 1});
 }
 
-CO_TEST_F(MoQCacheTest, TestUpstreamServesObjectNotExist) {
-  // Test case for upstream serving OBJECT_NOT_EXIST
+CO_TEST_F(MoQCacheTest, TestUpstreamServesObjectWithGap) {
+  // Test case for upstream serving an object with a gap before it.
+  // When fetching objects 1-3 and upstream serves object 2, the cache
+  // should automatically mark object 1 as not existing (implicit gap).
   populateCacheRange({0, 0}, {0, 1});
 
-  // Expect upstream fetch to be called with the specified range
-  expectUpstreamFetch({0, 1}, {0, 2}, 0, AbsoluteLocation{0, 1})
+  // Expect upstream fetch to be called starting from object 1
+  // Upstream sends object 2 (skipping object 1) - implicit gap handling
+  // marks object 1 as not existing
+  expectUpstreamFetch({0, 1}, {0, 3}, 0, AbsoluteLocation{0, 2})
       .via(co_await folly::coro::co_current_executor)
       .thenTry([this](auto) {
-        // Serve OBJECT_NOT_EXIST for the first object
-        upstreamFetchConsumer_->objectNotExists(0, 0, 1, true);
+        // Serve object 2 directly with a gap extension (which is technically
+        // redundant)
+        upstreamFetchConsumer_->object(
+            0, 0, 2, makeBuf(100), makeObjectGapExtensions(1), true);
       });
 
-  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, object(0, 0, 2, HasChainDataLengthOf(100), _, true))
+      .WillOnce(Return(folly::unit));
   // Perform the fetch
   auto res =
-      co_await cache_.fetch(getFetch({0, 1}, {0, 2}), consumer_, upstream_);
+      co_await cache_.fetch(getFetch({0, 1}, {0, 3}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
-  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 1}));
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
 }
 
-CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupNotExist) {
-  // Test case for upstream serving GROUP_NOT_EXIST
+CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupWithGap) {
+  // Test case for upstream serving an object in a group with gaps before it.
+  // When fetching from group 1 and upstream serves group 2, the cache
+  // should automatically mark group 1 as not existing (implicit gap).
   populateCacheRange({0, 0}, {0, 1});
-  // Expect upstream fetch to be called with the specified range
-  expectUpstreamFetch({1, 0}, {1, 1}, 0, AbsoluteLocation{1, 0})
+
+  // Expect upstream fetch to be called starting from group 1
+  // Upstream sends object in group 2 (skipping group 1) - implicit gap
+  // handling marks group 1 as not existing
+  expectUpstreamFetch({1, 0}, {2, 1}, 0, AbsoluteLocation{2, 0})
       .via(co_await folly::coro::co_current_executor)
       .thenTry([this](auto) {
-        // Serve GROUP_NOT_EXIST for the second group
-        upstreamFetchConsumer_->groupNotExists(1, 0, true);
+        // Serve object in group 2 - has a gap extension which is technically
+        // redundant
+        upstreamFetchConsumer_->object(
+            2, 0, 0, makeBuf(100), makeGroupGapExtensions(1), true);
       });
 
-  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, object(2, 0, 0, HasChainDataLengthOf(100), _, true))
+      .WillOnce(Return(folly::unit));
   // Perform the fetch
   auto res =
-      co_await cache_.fetch(getFetch({1, 0}, {1, 1}), consumer_, upstream_);
+      co_await cache_.fetch(getFetch({1, 0}, {2, 1}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
-  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 0}));
 }
 
-CO_TEST_F(MoQCacheTest, TestUpstreamServesEndOfTrackAndGroup) {
+CO_TEST_F(MoQCacheTest, TestUpstreamServesEndOfTrack) {
   // Test case for upstream serving END_OF_TRACK
 
   // Expect upstream fetch to be called with the specified range
   expectUpstreamFetch({0, 0}, {2, 1}, 0, AbsoluteLocation{2, 0})
       .via(co_await folly::coro::co_current_executor)
       .thenTry([this](auto) {
-        upstreamFetchConsumer_->objectNotExists(0, 0, 0);
+        // Include a checkpoint before endOfTrackAndGroup for coverage
+        // group 0 and 1 implicitly do not exist
         upstreamFetchConsumer_->checkpoint();
-        upstreamFetchConsumer_->groupNotExists(1, 0);
+        // Send endOfTrackAndGroup at group 2, object 0
         upstreamFetchConsumer_->endOfTrackAndGroup(2, 0, 0);
       });
 
@@ -975,15 +1011,14 @@ CO_TEST_F(MoQCacheTest, TestPopulateCacheWithBeginSubgroupAndFetch) {
   // Create a writeback for the test track
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
 
-  // Begin a subgroup and populate it with objects
+  // Use beginSubgroup to populate cache with objects 0 and 1, then END_OF_TRACK
   auto subgroupConsumer = writeback->beginSubgroup(0, 0, 0).value();
-  subgroupConsumer->object(0, makeBuf(100));
-  subgroupConsumer->objectNotExists(1);
+  subgroupConsumer->object(1, makeBuf(100), makeObjectGapExtensions(1));
   subgroupConsumer->endOfSubgroup();
   writeback.reset();
 
   // Verify that the objects were populated correctly
-  expectFetchObjects({0, 0}, {0, 1}, true);
+  expectFetchObjects({0, 1}, {0, 2}, false);
   auto res =
       co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
@@ -1435,6 +1470,200 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialMissTwoUpstreamFetchesTail) {
       co_await cache_.fetch(getFetch({0, 0}, {0, 9}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 9}));
+}
+
+// Tests for Prior Object/Group ID Gap extension error cases
+
+TEST_F(MoQCacheTest, TestPriorObjectIdGapLargerThanObjectId) {
+  // Test that Prior Object ID Gap larger than Object ID returns error
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object 2 with Prior Object ID Gap = 5 (larger than objectId 2)
+  ObjectHeader header(0, 0, 2, 0, 100);
+  header.extensions = makeObjectGapExtensions(5);
+  auto result = writeback->objectStream(header, makeBuf(100));
+
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorGroupIdGapLargerThanGroupId) {
+  // Test that Prior Group ID Gap larger than Group ID returns error
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object in group 2 with Prior Group ID Gap = 5 (larger than groupId 2)
+  ObjectHeader header(2, 0, 0, 0, 100);
+  header.extensions = makeGroupGapExtensions(5);
+  auto result = writeback->objectStream(header, makeBuf(100));
+
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorObjectIdGapCoversExistingObject) {
+  // Test that Prior Object ID Gap covering an existing object returns error
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // First, cache object 3
+  writeback->objectStream(ObjectHeader(0, 0, 3, 0, 100), makeBuf(100));
+
+  // Now send object 5 with Prior Object ID Gap = 3, which covers objects 2-4
+  // Object 3 already exists, so this should fail
+  ObjectHeader header(0, 0, 5, 0, 100);
+  header.extensions = makeObjectGapExtensions(3);
+  auto result = writeback->objectStream(header, makeBuf(100));
+
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorGroupIdGapCoversExistingGroup) {
+  // Test that Prior Group ID Gap covering an existing group returns error
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // First, cache an object in group 3
+  writeback->objectStream(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+
+  // Now send object in group 5 with Prior Group ID Gap = 3, covering groups 2-4
+  // Group 3 has an object, so this should fail
+  ObjectHeader header(5, 0, 0, 0, 100);
+  header.extensions = makeGroupGapExtensions(3);
+  auto result = writeback->objectStream(header, makeBuf(100));
+
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorObjectIdGapWithDatagram) {
+  // Test Prior Object ID Gap extension with datagram
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object 5 with Prior Object ID Gap = 3 (objects 2-4 don't exist)
+  ObjectHeader header(0, 0, 5, 0, 100);
+  header.extensions = makeObjectGapExtensions(3);
+  auto result = writeback->datagram(header, makeBuf(100));
+
+  EXPECT_TRUE(result.hasValue());
+}
+
+TEST_F(MoQCacheTest, TestPriorGroupIdGapWithDatagram) {
+  // Test Prior Group ID Gap extension with datagram
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object in group 5 with Prior Group ID Gap = 3 (groups 2-4 don't exist)
+  ObjectHeader header(5, 0, 0, 0, 100);
+  header.extensions = makeGroupGapExtensions(3);
+  auto result = writeback->datagram(header, makeBuf(100));
+
+  EXPECT_TRUE(result.hasValue());
+}
+
+TEST_F(MoQCacheTest, TestPriorGroupIdGapSameValueMultipleObjects) {
+  // Test that multiple objects in a group with the same Prior Group ID Gap
+  // value succeeds (redundant but valid)
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send first object in group 5 with Prior Group ID Gap = 2
+  ObjectHeader header1(5, 0, 0, 0, 100);
+  header1.extensions = makeGroupGapExtensions(2);
+  auto result1 = writeback->objectStream(header1, makeBuf(100));
+  EXPECT_TRUE(result1.hasValue());
+
+  // Send second object in same group with same gap value - should succeed
+  ObjectHeader header2(5, 0, 1, 0, 100);
+  header2.extensions = makeGroupGapExtensions(2);
+  auto result2 = writeback->objectStream(header2, makeBuf(100));
+  EXPECT_TRUE(result2.hasValue());
+}
+
+TEST_F(MoQCacheTest, TestPriorGroupIdGapDifferentValuesInGroup) {
+  // Test that objects in the same group with different Prior Group ID Gap
+  // values returns error
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send first object in group 5 with Prior Group ID Gap = 2
+  ObjectHeader header1(5, 0, 0, 0, 100);
+  header1.extensions = makeGroupGapExtensions(2);
+  auto result1 = writeback->objectStream(header1, makeBuf(100));
+  EXPECT_TRUE(result1.hasValue());
+
+  // Send second object in same group with different gap value - should fail
+  ObjectHeader header2(5, 0, 1, 0, 100);
+  header2.extensions = makeGroupGapExtensions(3);
+  auto result2 = writeback->objectStream(header2, makeBuf(100));
+  EXPECT_TRUE(result2.hasError());
+  EXPECT_EQ(result2.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorObjectIdGapOverlappingRanges) {
+  // Test that a Prior Object ID Gap covering an object that already has data
+  // returns an error
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object 5 with Prior Object ID Gap = 3 (objects 2-4 don't exist)
+  ObjectHeader header1(0, 0, 5, 0, 100);
+  header1.extensions = makeObjectGapExtensions(3);
+  auto result1 = writeback->objectStream(header1, makeBuf(100));
+  EXPECT_TRUE(result1.hasValue());
+
+  // Send object 6 with Prior Object ID Gap = 2 (objects 4-5 don't exist)
+  // Object 5 already has data, so this should fail
+  ObjectHeader header2(0, 0, 6, 0, 100);
+  header2.extensions = makeObjectGapExtensions(2);
+  auto result2 = writeback->objectStream(header2, makeBuf(100));
+  EXPECT_TRUE(result2.hasError());
+  EXPECT_EQ(result2.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorObjectIdGapOverlappingWithData) {
+  // Test that a gap covering an object with data fails, even if some
+  // objects in the gap are already OBJECT_NOT_EXIST
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object 5 with Prior Object ID Gap = 3 (objects 2-4 don't exist)
+  ObjectHeader header1(0, 0, 5, 0, 100);
+  header1.extensions = makeObjectGapExtensions(3);
+  auto result1 = writeback->datagram(header1, makeBuf(100));
+  EXPECT_TRUE(result1.hasValue());
+
+  // Send object 6 with Prior Object ID Gap = 2 (objects 4-5 don't exist)
+  // Object 4 is OBJECT_NOT_EXIST (would skip), but object 5 has data - should
+  // fail
+  ObjectHeader header2(0, 0, 6, 0, 100);
+  header2.extensions = makeObjectGapExtensions(2);
+  auto result2 = writeback->datagram(header2, makeBuf(100));
+  EXPECT_TRUE(result2.hasError());
+  EXPECT_EQ(result2.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+TEST_F(MoQCacheTest, TestPriorObjectIdGapOverlappingNotExistOnly) {
+  // Test that overlapping gaps only overlap on objects already marked as
+  // OBJECT_NOT_EXIST. When trying to send data for an object that was
+  // previously marked as NOT_EXIST, the current implementation rejects it.
+  //
+  // NOTE: There's an open issue in the MoQ spec about this behavior.
+  // For datagrams specifically, we may want to allow overwriting NOT_EXIST
+  // with actual data, because datagrams may arrive out-of-order (the object
+  // may have transitioned from not existing to existing). This would require
+  // implementation changes to cacheObject to check the delivery method.
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Send object 10 with Prior Object ID Gap = 2 (objects 8-9 don't exist)
+  ObjectHeader header1(0, 0, 10, 0, 100);
+  header1.extensions = makeObjectGapExtensions(2);
+  auto result1 = writeback->datagram(header1, makeBuf(100));
+  EXPECT_TRUE(result1.hasValue());
+
+  // Send object 9 with Prior Object ID Gap = 2 (objects 7-8 don't exist)
+  // Object 8 is already OBJECT_NOT_EXIST, gap handling should skip it.
+  // Object 9 was marked OBJECT_NOT_EXIST by the first gap. Currently,
+  // cacheObject rejects overwriting NOT_EXIST with data.
+  ObjectHeader header2(0, 0, 9, 0, 100);
+  header2.extensions = makeObjectGapExtensions(2);
+  auto result2 = writeback->datagram(header2, makeBuf(100));
+  // Currently fails - see open spec issue about out-of-order datagram delivery
+  EXPECT_TRUE(result2.hasError());
+  EXPECT_EQ(result2.error().code, MoQPublishError::API_ERROR);
 }
 
 } // namespace moxygen::test

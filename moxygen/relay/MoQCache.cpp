@@ -254,6 +254,104 @@ MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(uint64_t groupID) {
   return *it->second;
 }
 
+folly::Expected<folly::Unit, MoQPublishError>
+MoQCache::CacheTrack::processGapExtensions(
+    uint64_t groupID,
+    uint64_t objectID,
+    const Extensions& extensions) {
+  // Process Prior Group ID Gap extension (0x3C)
+  auto priorGroupGap =
+      extensions.getIntExtension(kPriorGroupIdGapExtensionType);
+  if (priorGroupGap) {
+    uint64_t gap = *priorGroupGap;
+
+    // Validate: gap must not be larger than groupID
+    if (gap > groupID) {
+      XLOG(ERR) << "Prior Group ID Gap " << gap << " is larger than Group ID "
+                << groupID;
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::MALFORMED_TRACK,
+          "Prior Group ID Gap larger than Group ID"));
+    }
+
+    // Check if we've already seen a Prior Group ID Gap for this group
+    auto& currentGroup = getOrCreateGroup(groupID);
+    if (currentGroup.seenPriorGroupIdGap) {
+      if (*currentGroup.seenPriorGroupIdGap != gap) {
+        XLOG(ERR) << "Prior Group ID Gap mismatch in group " << groupID
+                  << ": previously saw " << *currentGroup.seenPriorGroupIdGap
+                  << ", now got " << gap;
+        return folly::makeUnexpected(MoQPublishError(
+            MoQPublishError::MALFORMED_TRACK,
+            "Inconsistent Prior Group ID Gap values in group"));
+      }
+      // Same value, already processed - skip
+    } else {
+      // First time seeing Prior Group ID Gap for this group
+      currentGroup.seenPriorGroupIdGap = gap;
+
+      // Cache groups in the gap as GROUP_NOT_EXIST
+      // If groupID is G and gap is N, groups G-N to G-1 don't exist
+      for (uint64_t g = groupID - gap; g < groupID; ++g) {
+        auto& group = getOrCreateGroup(g);
+        // Allow if already marked as GROUP_NOT_EXIST (single object 0)
+        if (!group.objects.empty() &&
+            (group.objects.size() != 1 || group.objects.begin()->first != 0 ||
+             group.objects.begin()->second->status !=
+                 ObjectStatus::GROUP_NOT_EXIST)) {
+          XLOG(ERR) << "Prior Group ID Gap covers existing object in group "
+                    << g;
+          return folly::makeUnexpected(MoQPublishError(
+              MoQPublishError::MALFORMED_TRACK,
+              "Prior Group ID Gap covers existing object"));
+        }
+        group.cacheMissingStatus(0, ObjectStatus::GROUP_NOT_EXIST);
+      }
+    }
+  }
+
+  // Process Prior Object ID Gap extension (0x3E)
+  // Unlike Prior Group ID Gap, different values across objects in a group are
+  // valid (each object can independently indicate which prior objects don't
+  // exist). We allow redundant marking of already-not-existing objects.
+  auto priorObjectGap =
+      extensions.getIntExtension(kPriorObjectIdGapExtensionType);
+  if (priorObjectGap) {
+    uint64_t gap = *priorObjectGap;
+
+    // Validate: gap must not be larger than objectID
+    if (gap > objectID) {
+      XLOG(ERR) << "Prior Object ID Gap " << gap << " is larger than Object ID "
+                << objectID;
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::MALFORMED_TRACK,
+          "Prior Object ID Gap larger than Object ID"));
+    }
+
+    // Cache objects in the gap as OBJECT_NOT_EXIST
+    // If objectID is O and gap is N, objects O-N to O-1 don't exist
+    auto& group = getOrCreateGroup(groupID);
+    for (uint64_t o = objectID - gap; o < objectID; ++o) {
+      auto it = group.objects.find(o);
+      if (it != group.objects.end()) {
+        // Object already exists - only ok if it's already OBJECT_NOT_EXIST
+        if (it->second->status != ObjectStatus::OBJECT_NOT_EXIST) {
+          XLOG(ERR) << "Prior Object ID Gap covers existing object " << o
+                    << " in group " << groupID;
+          return folly::makeUnexpected(MoQPublishError(
+              MoQPublishError::MALFORMED_TRACK,
+              "Prior Object ID Gap covers existing object"));
+        }
+        // Already marked as not existing, skip
+        continue;
+      }
+      group.cacheMissingStatus(o, ObjectStatus::OBJECT_NOT_EXIST);
+    }
+  }
+
+  return folly::unit;
+}
+
 class MoQCache::SubgroupWriteback : public SubgroupConsumer {
  public:
   SubgroupWriteback(
@@ -287,6 +385,10 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         subgroup_, objID, ObjectStatus::NORMAL, ext, std::move(cPayload), true);
     if (cacheRes.hasError()) {
       return cacheRes;
+    }
+    auto gapRes = cacheTrack_.processGapExtensions(group_, objID, ext);
+    if (gapRes.hasError()) {
+      return gapRes;
     }
     return consumer_->object(objID, std::move(payload), std::move(ext), finSub);
   }
@@ -324,6 +426,11 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         false);
     if (cacheRes.hasError()) {
       return cacheRes;
+    }
+    auto gapRes =
+        cacheTrack_.processGapExtensions(group_, objectID, extensions);
+    if (gapRes.hasError()) {
+      return gapRes;
     }
     currentObject_ = objectID;
     currentLength_ = length;
@@ -465,6 +572,11 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     if (cacheRes.hasError()) {
       return cacheRes;
     }
+    auto gapRes =
+        track_.processGapExtensions(header.group, header.id, header.extensions);
+    if (gapRes.hasError()) {
+      return gapRes;
+    }
     return consumer_->objectStream(header, std::move(payload));
   }
 
@@ -486,6 +598,11 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
                             true);
     if (cacheRes.hasError()) {
       return cacheRes;
+    }
+    auto gapRes =
+        track_.processGapExtensions(header.group, header.id, header.extensions);
+    if (gapRes.hasError()) {
+      return gapRes;
     }
     return consumer_->datagram(header, std::move(payload));
   }
@@ -622,6 +739,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     if (!res) {
       return res;
     }
+    auto gapRes = fetchRangeIt_.track->processGapExtensions(gID, objID, ext);
+    if (gapRes.hasError()) {
+      return gapRes;
+    }
     XLOG(DBG1) << "forward object " << AbsoluteLocation(gID, objID);
     return consumer_->object(
         gID, sgID, objID, std::move(payload), std::move(ext), fin && proxyFin_);
@@ -677,6 +798,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
         gID, sgID, objID, kNormal, ext, std::move(payload), false, false);
     if (!res) {
       return res;
+    }
+    auto gapRes = fetchRangeIt_.track->processGapExtensions(gID, objID, ext);
+    if (gapRes.hasError()) {
+      return gapRes;
     }
     currentLength_ = len;
     if (initPayload) {
@@ -885,7 +1010,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     XLOG(DBG1) << "Live track or known past data, return FetchOK";
     AbsoluteLocation largestInFetch = standalone->end;
     bool isEndOfTrack = false;
-    if (standalone->end >= *track->largestGroupAndObject) {
+    if (standalone->end > *track->largestGroupAndObject) {
       standalone->end = *track->largestGroupAndObject;
       standalone->end.object++;
       largestInFetch = standalone->end;

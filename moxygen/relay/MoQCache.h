@@ -75,6 +75,9 @@ class MoQCache {
     folly::F14FastMap<uint64_t, std::unique_ptr<CacheEntry>> objects;
     uint64_t maxCachedObject{0};
     bool endOfGroup{false};
+    // Track seen Prior Group ID Gap value for validation
+    // (all objects in a group must have the same gap value)
+    std::optional<uint64_t> seenPriorGroupIdGap;
 
     folly::Expected<folly::Unit, MoQPublishError> cacheObject(
         uint64_t subgroup,
@@ -103,6 +106,13 @@ class MoQCache {
         AbsoluteLocation current,
         bool endOfTrack = false);
     CacheGroup& getOrCreateGroup(uint64_t groupID);
+
+    // Process Prior Group ID Gap and Prior Object ID Gap extensions
+    // and cache the missing groups/objects accordingly
+    folly::Expected<folly::Unit, MoQPublishError> processGapExtensions(
+        uint64_t groupID,
+        uint64_t objectID,
+        const Extensions& extensions);
   };
 
   // Group-order-aware iterator for traversing groups (objects within groups
