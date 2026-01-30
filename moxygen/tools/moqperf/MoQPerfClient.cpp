@@ -31,23 +31,6 @@ uint64_t MoQPerfClientFetchConsumer::getFetchDataSent() {
   return fetchDataSent_;
 }
 
-folly::Expected<folly::Unit, MoQPublishError>
-MoQPerfClientFetchConsumer::objectNotExists(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    uint64_t objectID,
-    bool finFetch) {
-  return folly::Unit();
-}
-
-folly::Expected<folly::Unit, MoQPublishError>
-MoQPerfClientFetchConsumer::groupNotExists(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    bool finFetch) {
-  return folly::Unit();
-}
-
 void MoQPerfClientFetchConsumer::checkpoint() {}
 
 folly::Expected<folly::Unit, MoQPublishError>

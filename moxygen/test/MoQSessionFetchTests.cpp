@@ -398,12 +398,6 @@ CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
                     .code,
                 MoQPublishError::API_ERROR);
             EXPECT_EQ(
-                fetchPub->objectNotExists(0, 0, 2).error().code,
-                MoQPublishError::API_ERROR);
-            EXPECT_EQ(
-                fetchPub->groupNotExists(0, 0).error().code,
-                MoQPublishError::API_ERROR);
-            EXPECT_EQ(
                 fetchPub->beginObject(0, 0, 0, 100, test::makeBuf(10))
                     .error()
                     .code,

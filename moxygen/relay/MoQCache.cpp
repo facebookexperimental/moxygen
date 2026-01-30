@@ -393,17 +393,6 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     return consumer_->object(objID, std::move(payload), std::move(ext), finSub);
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t objID,
-      bool finSub) override {
-    auto res = cacheTrack_.updateLargest({group_, objID});
-    if (!res) {
-      return res;
-    }
-    cacheGroup_.cacheMissingStatus(objID, ObjectStatus::OBJECT_NOT_EXIST);
-    return consumer_->objectNotExists(objID, finSub);
-  }
-
   void checkpoint() override {
     return consumer_->checkpoint();
   }
@@ -607,17 +596,6 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     return consumer_->datagram(header, std::move(payload));
   }
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override {
-    auto res = track_.updateLargest({groupID, 0});
-    if (!res) {
-      return res;
-    }
-    track_.getOrCreateGroup(groupID).cacheMissingStatus(
-        0, ObjectStatus::GROUP_NOT_EXIST);
-    return consumer_->groupNotExists(groupID, subgroup, pri);
-  }
-
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
       SubscribeDone subDone) override {
     return consumer_->subscribeDone(std::move(subDone));
@@ -746,39 +724,6 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     XLOG(DBG1) << "forward object " << AbsoluteLocation(gID, objID);
     return consumer_->object(
         gID, sgID, objID, std::move(payload), std::move(ext), fin && proxyFin_);
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t gID,
-      uint64_t sgID,
-      uint64_t objID,
-      bool fin) override {
-    constexpr auto kNotExist = ObjectStatus::OBJECT_NOT_EXIST;
-    auto res = cacheImpl(
-        gID, sgID, objID, kNotExist, noExtensions(), nullptr, true, fin);
-    if (!res) {
-      return res;
-    }
-    // this is implicit, no need to pass to consumer
-    if (fin && proxyFin_) {
-      return consumer_->endOfFetch();
-    }
-    return folly::unit;
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t gID, uint64_t sgID, bool fin) override {
-    constexpr auto kNotExist = ObjectStatus::GROUP_NOT_EXIST;
-    auto res =
-        cacheImpl(gID, sgID, 0, kNotExist, noExtensions(), nullptr, true, fin);
-    if (!res) {
-      return res;
-    }
-    // this is implicit, no need to pass to consumer
-    if (fin && proxyFin_) {
-      return consumer_->endOfFetch();
-    }
-    return folly::unit;
   }
 
   void checkpoint() override {

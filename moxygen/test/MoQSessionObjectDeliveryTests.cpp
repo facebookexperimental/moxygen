@@ -120,10 +120,8 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
         eventBase_.add([pub, sub] {
           auto sgp1 = pub->beginSubgroup(0, 0, 0).value();
           sgp1->object(0, moxygen::test::makeBuf(10));
-          sgp1->objectNotExists(1);
           sgp1->object(2, moxygen::test::makeBuf(11));
           sgp1->endOfGroup(3);
-          pub->groupNotExists(1, 0, 0);
           auto sgp2 = pub->beginSubgroup(2, 0, 0).value();
           sgp2->object(0, moxygen::test::makeBuf(10));
           sgp2->endOfTrackAndGroup(2);
@@ -135,17 +133,9 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
       .WillOnce(testing::Return(sg1));
   EXPECT_CALL(*sg1, object(0, _, _, false))
       .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, objectNotExists(1, _))
-      .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*sg1, object(2, _, _, false))
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*sg1, endOfGroup(3)).WillOnce(testing::Return(folly::unit));
-
-  auto sg2 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
-  EXPECT_CALL(*subscribeCallback_, beginSubgroup(1, 0, 0))
-      .WillOnce(testing::Return(sg2));
-  EXPECT_CALL(*subscribeCallback_, groupNotExists(1, 0, 0))
-      .WillOnce(testing::Return(folly::unit));
 
   auto sg3 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(2, 0, 0))
@@ -769,10 +759,9 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
           auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
         eventBase_.add([pub, sub] {
-          // Send objectNotExists with default priority
+          // Send endOfTrackAndGroup with default priority
           auto sgp = pub->beginSubgroup(0, 0, kDefaultPriority).value();
-          sgp->objectNotExists(0);
-          sgp->endOfTrackAndGroup(1);
+          sgp->endOfTrackAndGroup(0);
           pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
         });
         // Return SubscribeOk with PUBLISHER_PRIORITY parameter
@@ -784,9 +773,7 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
   // Object status with no explicit priority should use publisher priority
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kDefaultPriority))
       .WillOnce(testing::Return(sg1));
-  EXPECT_CALL(*sg1, objectNotExists(0, _))
-      .WillOnce(testing::Return(folly::unit));
-  EXPECT_CALL(*sg1, endOfTrackAndGroup(1)).WillOnce(testing::Invoke([&]() {
+  EXPECT_CALL(*sg1, endOfTrackAndGroup(0)).WillOnce(testing::Invoke([&]() {
     endOfTrackReceived.post();
     return folly::unit;
   }));

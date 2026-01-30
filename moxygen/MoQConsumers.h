@@ -71,11 +71,6 @@ class SubgroupConsumer {
       Extensions extensions = noExtensions(),
       bool finSubgroup = false) = 0;
 
-  // Deliver Object Status=ObjectNotExists as the given object.
-  virtual folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t objectID,
-      bool finSubgroup = false) = 0;
-
   // Advance the reliable offset of the subgroup stream to the
   // current offset.
   virtual void checkpoint() {}
@@ -169,12 +164,6 @@ class TrackConsumer {
       const ObjectHeader& header,
       Payload payload) = 0;
 
-  // Deliver Object Status=GroupNotExists for the specified group. If the
-  // consumer is writing, this consumes an entire transport stream. Can fail
-  // with MoQPublishError::BLOCKED when out of stream credit.
-  virtual folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) = 0;
-
   // Inform the consumer that the publisher will not open any new subgroups or
   // send any new datagrams for this track.
   virtual folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
@@ -226,19 +215,6 @@ class FetchConsumer {
       uint64_t objectID,
       Payload payload,
       Extensions extensions = noExtensions(),
-      bool finFetch = false) = 0;
-
-  // Deliver Object Status=ObjectNotExists for the given object.
-  virtual folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID,
-      bool finFetch = false) = 0;
-
-  // Deliver Object Status=GroupNotExists for the given group.
-  virtual folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t groupID,
-      uint64_t subgroupID,
       bool finFetch = false) = 0;
 
   // Advance the reliable offset of the fetch stream to the current offset.

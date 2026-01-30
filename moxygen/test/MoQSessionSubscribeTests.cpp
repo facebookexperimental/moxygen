@@ -180,8 +180,6 @@ CO_TEST_P_X(MoQSessionTest, SubscribeForwardingFalse) {
     EXPECT_TRUE(pubResult2.hasError());
     auto pubResult3 = pub->beginSubgroup(0, 0, 0);
     EXPECT_TRUE(pubResult3.hasError());
-    auto pubResult4 = pub->groupNotExists(0, 0, 0);
-    EXPECT_TRUE(pubResult4.hasError());
     pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });

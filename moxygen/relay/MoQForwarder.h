@@ -174,9 +174,6 @@ class MoQForwarder : public TrackConsumer {
       const ObjectHeader& header,
       Payload payload) override;
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
-
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
       Payload payload) override;
@@ -223,10 +220,6 @@ class MoQForwarder : public TrackConsumer {
         Payload payload,
         Extensions extensions,
         bool finSubgroup) override;
-
-    folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-        uint64_t objectID,
-        bool finSubgroup = false) override;
 
     folly::Expected<folly::Unit, MoQPublishError> beginObject(
         uint64_t objectID,

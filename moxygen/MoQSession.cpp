@@ -184,9 +184,6 @@ class StreamPublisherImpl
       Payload payload,
       Extensions extensions,
       bool finStream) override;
-  folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t objectID,
-      bool finStream) override;
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
       uint64_t objectId,
       uint64_t length,
@@ -217,30 +214,6 @@ class StreamPublisherImpl
     header_.status = ObjectStatus::NORMAL;
     return object(
         objectID, std::move(payload), std::move(extensions), finFetch);
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID,
-      bool finFetch) override {
-    if (!setGroupAndSubgroup(groupID, subgroupID)) {
-      return folly::makeUnexpected(
-          MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
-    }
-    return objectNotExists(objectID, finFetch);
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      bool finFetch) override {
-    if (!setGroupAndSubgroup(groupID, subgroupID)) {
-      return folly::makeUnexpected(
-          MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
-    }
-    return publishStatus(
-        0, ObjectStatus::GROUP_NOT_EXIST, noExtensions(), finFetch);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
@@ -767,17 +740,6 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
       objectID, length, std::move(payload), extensions, finStream);
 }
 
-folly::Expected<folly::Unit, MoQPublishError>
-StreamPublisherImpl::objectNotExists(uint64_t objectID, bool finStream) {
-  if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
-  }
-  return publishStatus(
-      objectID, ObjectStatus::OBJECT_NOT_EXIST, noExtensions(), finStream);
-}
-
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     uint64_t objectID,
     uint64_t length,
@@ -1261,9 +1223,6 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       const ObjectHeader& header,
       Payload payload) override;
 
-  folly::Expected<folly::Unit, MoQPublishError>
-  groupNotExists(uint64_t groupID, uint64_t subgroup, Priority pri) override;
-
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
       Payload payload) override;
@@ -1529,8 +1488,6 @@ MoQSession::TrackPublisherImpl::objectStream(
           extensions,
           /*finSubgroup=*/true);
     case ObjectStatus::OBJECT_NOT_EXIST:
-      return subgroup.value()->objectNotExists(
-          objHeader.id, /*finSubgroup=*/true);
     case ObjectStatus::GROUP_NOT_EXIST: {
       auto& subgroupPublisherImpl =
           static_cast<StreamPublisherImpl&>(*subgroup.value());
@@ -1547,27 +1504,6 @@ MoQSession::TrackPublisherImpl::objectStream(
   }
   return folly::makeUnexpected(
       MoQPublishError(MoQPublishError::WRITE_ERROR, "unreachable"));
-}
-
-folly::Expected<folly::Unit, MoQPublishError>
-MoQSession::TrackPublisherImpl::groupNotExists(
-    uint64_t groupID,
-    uint64_t subgroupID,
-    Priority priority) {
-  if (!forward_) {
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR,
-        "Cannot send status for subscriptions with forward flag set to false"));
-  }
-  return objectStream(
-      ObjectHeader(
-          groupID,
-          subgroupID,
-          0,
-          priority,
-          ObjectStatus::GROUP_NOT_EXIST,
-          noExtensions()),
-      nullptr);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -2747,31 +2683,16 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
     folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
-    // Use object priority if present, else fall back to publisher priority
-    uint8_t effectivePriority = priority.value_or(
-        subscribeState_ ? subscribeState_->getPublisherPriority()
-                        : kDefaultPriority);
     // Handle subscription/fetch consumers
     switch (status) {
       case ObjectStatus::NORMAL:
         break;
       case ObjectStatus::OBJECT_NOT_EXIST:
-        res = invokeCallback(
-            &SubgroupConsumer::objectNotExists,
-            &FetchConsumer::objectNotExists,
-            group,
-            subgroup,
-            objectID,
-            false);
+        // Object doesn't exist - no action needed, continue
         break;
       case ObjectStatus::GROUP_NOT_EXIST:
-        // groupNotExists is on the TrackConsumer not SubgroupConsumer
-        if (fetchState_) {
-          res = fetchState_->getFetchCallback()->groupNotExists(
-              group, subgroup, false);
-        } else {
-          res = subscribeState_->getSubscribeCallback()->groupNotExists(
-              group, subgroup, effectivePriority);
+        // Group doesn't exist - end subgroup for subscriptions
+        if (!fetchState_) {
           endOfSubgroup();
         }
         break;

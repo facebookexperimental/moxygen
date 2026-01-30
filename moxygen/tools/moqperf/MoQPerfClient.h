@@ -32,12 +32,6 @@ class MoQPerfClientSubgroupConsumer : public SubgroupConsumer {
     return folly::Unit();
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t /* objectID */,
-      bool /* finSubgroup */ = false) override {
-    return folly::Unit();
-  }
-
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
       uint64_t /* objectID */,
       uint64_t /* length */,
@@ -109,13 +103,6 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
     return folly::Unit();
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t /* groupID */,
-      uint64_t /* subgroup */,
-      Priority /* pri */) override {
-    return folly::Unit();
-  }
-
   folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
       SubscribeDone /* subDone */) override {
     return folly::Unit();
@@ -142,17 +129,6 @@ class MoQPerfClientFetchConsumer : public FetchConsumer {
   void incrementFetchDataSent(uint64_t amount);
 
   uint64_t getFetchDataSent();
-
-  virtual folly::Expected<folly::Unit, MoQPublishError> objectNotExists(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID,
-      bool finFetch = false) override;
-
-  virtual folly::Expected<folly::Unit, MoQPublishError> groupNotExists(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      bool finFetch = false) override;
 
   virtual void checkpoint() override;
 

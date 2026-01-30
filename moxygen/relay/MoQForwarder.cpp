@@ -395,22 +395,6 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::objectStream(
   });
 }
 
-folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::groupNotExists(
-    uint64_t groupID,
-    uint64_t subgroup,
-    Priority pri) {
-  updateLargest(groupID, 0);
-  return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (!checkRange(*sub) || !sub->checkShouldForward()) {
-      return;
-    }
-    sub->trackConsumer->groupNotExists(groupID, subgroup, pri)
-        .onError([this, sub](const auto& err) {
-          removeSubscriberOnError(*sub, err, "groupNotExists");
-        });
-  });
-}
-
 folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
     const ObjectHeader& header,
     Payload payload) {
@@ -622,34 +606,6 @@ MoQForwarder::SubgroupForwarder::object(
             });
         if (finSubgroup) {
           closeSubgroupForSubscriber(sub, "SubgroupForwarder::object");
-        }
-      });
-  if (finSubgroup) {
-    return removeSubgroupAndCheckEmpty();
-  }
-  // Data operation - propagate CANCELLED if no subscribers
-  return cleanupOnError(res);
-}
-
-folly::Expected<folly::Unit, MoQPublishError>
-MoQForwarder::SubgroupForwarder::objectNotExists(
-    uint64_t objectID,
-    bool finSubgroup) {
-  if (currentObjectLength_) {
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Still publishing previous object"));
-  }
-  forwarder_.updateLargest(identifier_.group, objectID);
-  auto res = forEachSubscriberSubgroup(
-      [&](const std::shared_ptr<Subscriber>& sub,
-          const std::shared_ptr<SubgroupConsumer>& subgroupConsumer) {
-        subgroupConsumer->objectNotExists(objectID, finSubgroup)
-            .onError([this, sub](const auto& err) {
-              forwarder_.removeSubscriberOnError(
-                  *sub, err, "SubgroupForwarder::objectNotExists");
-            });
-        if (finSubgroup) {
-          closeSubgroupForSubscriber(sub, "SubgroupForwarder::objectNotExists");
         }
       });
   if (finSubgroup) {
