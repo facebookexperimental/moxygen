@@ -6,6 +6,8 @@
 
 #include <moxygen/events/MoQDeliveryTimer.h>
 
+#include <folly/logging/xlog.h>
+
 namespace moxygen {
 
 MoQDeliveryTimer::~MoQDeliveryTimer() {

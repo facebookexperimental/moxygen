@@ -6,6 +6,7 @@
 
 #include "moxygen/MoQFramer.h"
 
+#include <folly/logging/xlog.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include "moxygen/test/TestUtils.h"

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <folly/logging/xlog.h>
 #include <quic/common/events/QuicTimer.h>
 #include <moxygen/MoQFramer.h>
 #include <moxygen/events/MoQExecutor.h>

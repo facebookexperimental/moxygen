@@ -10,6 +10,8 @@ add_library(moxygen
     MoQCodec.cpp
     MoQSession.cpp
     MoQTokenCache.cpp
+    MoQTypes.cpp
+    MoQVersions.cpp
     events/MoQDeliveryTimer.cpp
 )
 

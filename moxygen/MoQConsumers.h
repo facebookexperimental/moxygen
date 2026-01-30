@@ -9,7 +9,7 @@
 #pragma once
 
 #include <proxygen/lib/http/webtransport/WebTransport.h>
-#include <moxygen/MoQFramer.h>
+#include <moxygen/MoQTypes.h>
 
 namespace moxygen {
 

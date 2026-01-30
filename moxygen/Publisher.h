@@ -9,7 +9,7 @@
 #pragma once
 
 #include <folly/coro/Task.h>
-#include <moxygen/MoQFramer.h>
+#include <moxygen/MoQTypes.h>
 
 // MoQ Publisher interface
 //
