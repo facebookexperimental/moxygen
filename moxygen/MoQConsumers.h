@@ -9,6 +9,7 @@
 #pragma once
 
 #include <proxygen/lib/http/webtransport/WebTransport.h>
+#include <moxygen/MoQPublishError.h>
 #include <moxygen/MoQTypes.h>
 
 namespace moxygen {
@@ -45,39 +46,6 @@ class DeliveryCallback {
 // A subscriber will provide a consumer object to a producer (the session or
 // another producer) and that producer will invoke the methods as data becomes
 // available.
-
-struct MoQPublishError {
-  // Do not add additional codes unless you know what you are doing
-  enum Code {
-    API_ERROR = 1,        // Semantic error (APIs called out of order)
-    WRITE_ERROR = 2,      // The underlying write failed
-    CANCELLED = 3,        // The subgroup was/should be reset
-    TOO_FAR_BEHIND = 5,   // Subscriber exceeded buffer limit (subscribe only)
-    BLOCKED = 4,          // Consumer cannot accept more data (fetch only),
-                          //  or out of stream credit (subscribe and fetch)
-    MALFORMED_TRACK = 12, // Track violated protocol ordering constraints
-  };
-  // Do not add additional codes unless you know what you are doing
-
-  Code code;
-  std::string msg;
-
-  explicit MoQPublishError(Code inCode) : code(inCode) {}
-
-  MoQPublishError(Code inCode, std::string inMsg)
-      : code(inCode), msg(std::move(inMsg)) {}
-
-  std::string describe() const {
-    return folly::to<std::string>(
-        "error=", folly::to_underlying(code), " msg=", msg);
-  }
-
-  const char* what() const noexcept {
-    return msg.c_str();
-  }
-};
-
-enum class ObjectPublishStatus { IN_PROGRESS, DONE };
 
 // Interface for Publishing and Receiving objects on a subgroup
 class SubgroupConsumer {
