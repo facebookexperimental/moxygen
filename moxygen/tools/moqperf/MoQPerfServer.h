@@ -84,7 +84,7 @@ class MoQPerfServer : public moxygen::Publisher,
   // Note that we currently only support one subscription during the lifetime
   // of this server.
   folly::CancellationSource cancellationSource_;
-  folly::Optional<RequestID> requestId_;
+  std::optional<RequestID> requestId_;
 };
 
 } // namespace moxygen

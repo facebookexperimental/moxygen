@@ -22,7 +22,7 @@ MoQServer::MoQServer(
     std::string cert,
     std::string key,
     std::string endpoint,
-    folly::Optional<quic::TransportSettings> transportSettings)
+    std::optional<quic::TransportSettings> transportSettings)
     : MoQServer(
           quic::samples::createFizzServerContext(
               []() {
@@ -40,7 +40,7 @@ MoQServer::MoQServer(
 MoQServer::MoQServer(
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
     std::string endpoint,
-    folly::Optional<quic::TransportSettings> transportSettings)
+    std::optional<quic::TransportSettings> transportSettings)
     : MoQServerBase(std::move(endpoint)), fizzContext_(std::move(fizzContext)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
@@ -125,7 +125,7 @@ void MoQServer::createMoQQuicSession(
     std::shared_ptr<quic::QuicSocket> quicSocket) {
   // Detect negotiated ALPN before wrapping the socket
   auto stdAlpn = quicSocket->getAppProtocol();
-  folly::Optional<std::string> alpn;
+  std::optional<std::string> alpn;
   if (stdAlpn) {
     alpn = *stdAlpn;
     XLOG(DBG1) << "Server: Negotiated ALPN: " << *alpn;
@@ -251,7 +251,7 @@ void MoQServer::Handler::onHeadersComplete(
 
   // Use default MoQT protocols for WebTransport negotiation
   std::vector<std::string> supportedProtocols = getDefaultMoqtProtocols(false);
-  folly::Optional<std::string> negotiatedProtocol;
+  std::optional<std::string> negotiatedProtocol;
   if (auto wtAvailableProtocols =
           HTTPWebTransport::getWTAvailableProtocols(*req)) {
     if (auto wtProtocol = HTTPWebTransport::negotiateWTProtocol(

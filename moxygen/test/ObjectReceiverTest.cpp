@@ -18,12 +18,12 @@ class MockObjectReceiverCallback : public ObjectReceiverCallback {
   MOCK_METHOD(
       FlowControlState,
       onObject,
-      (folly::Optional<TrackAlias>, const ObjectHeader&, Payload),
+      (std::optional<TrackAlias>, const ObjectHeader&, Payload),
       (override));
   MOCK_METHOD(
       void,
       onObjectStatus,
-      (folly::Optional<TrackAlias>, const ObjectHeader&),
+      (std::optional<TrackAlias>, const ObjectHeader&),
       (override));
   MOCK_METHOD(void, onEndOfStream, (), (override));
   MOCK_METHOD(void, onError, (ResetStreamErrorCode), (override));

@@ -17,11 +17,11 @@ class ObjectReceiverCallback {
   virtual ~ObjectReceiverCallback() = default;
   enum class FlowControlState { BLOCKED, UNBLOCKED };
   virtual FlowControlState onObject(
-      folly::Optional<TrackAlias> trackAlias,
+      std::optional<TrackAlias> trackAlias,
       const ObjectHeader& objHeader,
       Payload payload) = 0;
   virtual void onObjectStatus(
-      folly::Optional<TrackAlias> trackAlias,
+      std::optional<TrackAlias> trackAlias,
       const ObjectHeader& objHeader) = 0;
   virtual void onEndOfStream() = 0;
   virtual void onError(ResetStreamErrorCode) = 0;
@@ -43,13 +43,13 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
   StreamType streamType_;
   ObjectHeader header_;
   folly::IOBufQueue payload_{folly::IOBufQueue::cacheChainLength()};
-  folly::Optional<TrackAlias> trackAlias_;
+  std::optional<TrackAlias> trackAlias_;
   bool finished_{false};
 
  public:
   explicit ObjectSubgroupReceiver(
       std::shared_ptr<ObjectReceiverCallback> callback,
-      folly::Optional<TrackAlias> trackAlias = folly::none,
+      std::optional<TrackAlias> trackAlias = std::nullopt,
       uint64_t groupID = 0,
       uint64_t subgroupID = 0,
       uint8_t priority = 0)
@@ -175,8 +175,8 @@ class ObjectReceiver : public TrackConsumer,
                        public FetchConsumer,
                        public std::enable_shared_from_this<ObjectReceiver> {
   std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
-  folly::Optional<ObjectSubgroupReceiver> fetchPublisher_;
-  folly::Optional<TrackAlias> trackAlias_;
+  std::optional<ObjectSubgroupReceiver> fetchPublisher_;
+  std::optional<TrackAlias> trackAlias_;
   // Tracking for onAllDataReceived callback (subscription mode only)
   size_t openSubgroups_{0};
   bool subscribeDoneDelivered_{false};

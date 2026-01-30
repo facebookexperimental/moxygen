@@ -203,10 +203,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
 
   // For v15+, we set the largest location in subscribeOk so the session
   // will include it in the response to SubscribeUpdate
-  const folly::Optional<AbsoluteLocation> expectedLargest =
+  const std::optional<AbsoluteLocation> expectedLargest =
       (getDraftMajorVersion(getServerSelectedVersion()) >= 15)
-      ? folly::Optional<AbsoluteLocation>(AbsoluteLocation{100, 200})
-      : folly::Optional<AbsoluteLocation>(AbsoluteLocation{0, 0});
+      ? std::optional<AbsoluteLocation>(AbsoluteLocation{100, 200})
+      : std::optional<AbsoluteLocation>(AbsoluteLocation{0, 0});
 
   expectSubscribeDone();
   expectSubscribe(
@@ -714,10 +714,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
   // Verify that the publisher's WebTransport received a stop sending on the
   // object stream
   auto waits = 0;
-  while (!serverWt_->writeHandles[2]->getWriteErr().hasValue() && waits++ < 6) {
+  while (!serverWt_->writeHandles[2]->getWriteErr().has_value() &&
+         waits++ < 6) {
     co_await folly::coro::sleep(std::chrono::seconds(1));
   }
-  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().hasValue());
+  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().has_value());
   EXPECT_EQ(serverWt_->writeHandles[2]->writeException()->error, 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -766,10 +767,11 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
   // object stream
   co_await streamBaton;
   auto waits = 0;
-  while (!serverWt_->writeHandles[2]->getWriteErr().hasValue() && waits++ < 6) {
+  while (!serverWt_->writeHandles[2]->getWriteErr().has_value() &&
+         waits++ < 6) {
     co_await folly::coro::sleep(std::chrono::milliseconds(250));
   }
-  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().hasValue());
+  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().has_value());
   EXPECT_EQ(serverWt_->writeHandles[2]->writeException()->error, 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

@@ -87,7 +87,7 @@ StreamPriority getStreamPriority(
 // Helper function to validate priority from application is set.
 // Applications must always provide a set priority value.
 folly::Expected<folly::Unit, MoQPublishError> validatePrioritySet(
-    const folly::Optional<uint8_t>& priority) {
+    const std::optional<uint8_t>& priority) {
   if (!priority.has_value()) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR,
@@ -97,13 +97,13 @@ folly::Expected<folly::Unit, MoQPublishError> validatePrioritySet(
 }
 
 // Helper function to elide priority for writing if it matches publisher
-// priority from the control plane. Returns folly::none if priority matches
+// priority from the control plane. Returns std::nullopt if priority matches
 // publisherPriority, otherwise returns the original priority.
-folly::Optional<uint8_t> elidePriorityForWrite(
+std::optional<uint8_t> elidePriorityForWrite(
     uint8_t priority,
-    const folly::Optional<uint8_t>& publisherPriority) {
+    const std::optional<uint8_t>& publisherPriority) {
   if (priority == publisherPriority) {
-    return folly::none;
+    return std::nullopt;
   }
   return priority;
 }
@@ -160,7 +160,7 @@ class StreamPublisherImpl
       std::shared_ptr<MoQSession::PublisherImpl> publisher,
       std::shared_ptr<MLogger> logger = nullptr,
       std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
-      folly::Optional<std::chrono::milliseconds> deliveryTimeout = folly::none);
+      std::optional<std::chrono::milliseconds> deliveryTimeout = std::nullopt);
 
   // Subscribe constructor
   StreamPublisherImpl(
@@ -169,12 +169,12 @@ class StreamPublisherImpl
       TrackAlias alias,
       uint64_t groupID,
       uint64_t subgroupID,
-      const folly::Optional<uint8_t>& sgPriority,
+      const std::optional<uint8_t>& sgPriority,
       SubgroupIDFormat format,
       bool includeExtensions,
       std::shared_ptr<MLogger> logger = nullptr,
       std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
-      folly::Optional<std::chrono::milliseconds> deliveryTimeout = folly::none);
+      std::optional<std::chrono::milliseconds> deliveryTimeout = std::nullopt);
 
   // SubgroupConsumer overrides
   // Note where the interface uses finSubgroup, this class uses finStream,
@@ -307,7 +307,7 @@ class StreamPublisherImpl
 
   void onByteEvent(quic::StreamId id, uint64_t offset) noexcept override {
     // Notify delivery callback for all objects delivered up to this offset
-    folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
+    std::optional<TrackAlias> maybeTrackAlias = std::nullopt;
     if (streamType_ != StreamType::FETCH_HEADER) {
       maybeTrackAlias = trackAlias_;
     }
@@ -339,7 +339,7 @@ class StreamPublisherImpl
     // delivery must be cancelled for all offsets higher than the cancelled
     // offset as well;
 
-    folly::Optional<TrackAlias> maybeTrackAlias = folly::none;
+    std::optional<TrackAlias> maybeTrackAlias = std::nullopt;
     if (streamType_ != StreamType::FETCH_HEADER) {
       maybeTrackAlias = trackAlias_;
     }
@@ -369,7 +369,7 @@ class StreamPublisherImpl
     forward_ = forwardIn;
   }
 
-  void setDeliveryTimeout(folly::Optional<std::chrono::milliseconds> timeout) {
+  void setDeliveryTimeout(std::optional<std::chrono::milliseconds> timeout) {
     if (timeout.has_value() && timeout->count() > 0) {
       if (deliveryTimer_) {
         XLOG(DBG6)
@@ -457,12 +457,12 @@ class StreamPublisherImpl
 
   std::shared_ptr<MoQSession::PublisherImpl> publisher_{nullptr};
   bool streamComplete_{false};
-  folly::Optional<folly::CancellationCallback> cancelCallback_;
+  std::optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   StreamType streamType_;
   TrackAlias trackAlias_{0}; // Store track alias separately from ObjectHeader
   ObjectHeader header_;
-  folly::Optional<uint64_t> currentLengthRemaining_;
+  std::optional<uint64_t> currentLengthRemaining_;
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
   MoQFrameWriter moqFrameWriter_;
 
@@ -481,7 +481,7 @@ StreamPublisherImpl::StreamPublisherImpl(
     std::shared_ptr<MoQSession::PublisherImpl> publisher,
     std::shared_ptr<MLogger> logger,
     std::shared_ptr<DeliveryCallback> deliveryCallback,
-    folly::Optional<std::chrono::milliseconds> deliveryTimeout)
+    std::optional<std::chrono::milliseconds> deliveryTimeout)
     : publisher_(publisher),
       streamType_(StreamType::FETCH_HEADER),
       header_(
@@ -523,12 +523,12 @@ StreamPublisherImpl::StreamPublisherImpl(
     TrackAlias alias,
     uint64_t groupID,
     uint64_t subgroupID,
-    const folly::Optional<uint8_t>& sgPriority,
+    const std::optional<uint8_t>& sgPriority,
     SubgroupIDFormat format,
     bool includeExtensions,
     std::shared_ptr<MLogger> logger,
     std::shared_ptr<DeliveryCallback> deliveryCallback,
-    folly::Optional<std::chrono::milliseconds> deliveryTimeout)
+    std::optional<std::chrono::milliseconds> deliveryTimeout)
     : StreamPublisherImpl(
           publisher,
           logger,
@@ -545,7 +545,7 @@ StreamPublisherImpl::StreamPublisherImpl(
       format,
       includeExtensions,
       endOfGroup,
-      sgPriority.hasValue());
+      sgPriority.has_value());
   trackAlias_ = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -641,7 +641,7 @@ StreamPublisherImpl::writeCurrentObject(
   // copy is gratuitous
   header_.extensions = extensions;
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
-  bool entireObjectWritten = (!currentLengthRemaining_.hasValue());
+  bool entireObjectWritten = (!currentLengthRemaining_.has_value());
   (void)moqFrameWriter_.writeStreamObject(
       writeBuf_, streamType_, header_, std::move(payload));
   return writeToStream(finStream, entireObjectWritten);
@@ -831,7 +831,7 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
     return validateObjectPublishRes;
   }
   writeBuf_.append(std::move(payload));
-  bool entireObjectWritten = (!currentLengthRemaining_.hasValue());
+  bool entireObjectWritten = (!currentLengthRemaining_.has_value());
   auto writeRes = writeToStream(finStream, entireObjectWritten);
   if (writeRes.hasValue()) {
     return validateObjectPublishRes.value();
@@ -884,7 +884,7 @@ StreamPublisherImpl::publishStatus(
     return validateRes;
   }
   header_.status = status;
-  header_.length = folly::none;
+  header_.length = std::nullopt;
   return writeCurrentObject(
       objectID,
       /*length=*/0,
@@ -1002,13 +1002,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       MoQSession* session,
       FullTrackName fullTrackName,
       RequestID requestID,
-      folly::Optional<TrackAlias> trackAlias,
+      std::optional<TrackAlias> trackAlias,
       Priority subPriority,
       GroupOrder groupOrder,
       uint64_t version,
       uint64_t bytesBufferedThreshold,
       bool forward,
-      folly::Optional<std::chrono::milliseconds> deliveryTimeout = folly::none)
+      std::optional<std::chrono::milliseconds> deliveryTimeout = std::nullopt)
       : PublisherImpl(
             session,
             std::move(fullTrackName),
@@ -1021,7 +1021,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         forward_(forward) {
     // Set callback for delivery timeout changes
     deliveryTimeoutManager_.setOnChangeCallback(
-        [this](folly::Optional<std::chrono::milliseconds> newTimeout) {
+        [this](std::optional<std::chrono::milliseconds> newTimeout) {
           onDeliveryTimeoutChanged(std::move(newTimeout));
         });
 
@@ -1131,7 +1131,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
     // Only update forward state if the parameter was explicitly provided
     // Otherwise, preserve existing forward state (per draft 15+)
-    if (subscribeUpdate.forward.hasValue()) {
+    if (subscribeUpdate.forward.has_value()) {
       setForward(*subscribeUpdate.forward);
     }
 
@@ -1279,7 +1279,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
  private:
   void onDeliveryTimeoutChanged(
-      folly::Optional<std::chrono::milliseconds> newTimeout);
+      std::optional<std::chrono::milliseconds> newTimeout);
 
   std::chrono::microseconds getCurrentRtt() const {
     return session_->getTransportInfo().srtt;
@@ -1287,8 +1287,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
-  folly::Optional<TrackAlias> trackAlias_;
-  folly::Optional<SubscribeDone> pendingSubscribeDone_;
+  std::optional<TrackAlias> trackAlias_;
+  std::optional<SubscribeDone> pendingSubscribeDone_;
   folly::F14FastMap<
       std::pair<uint64_t, uint64_t>,
       std::shared_ptr<StreamPublisherImpl>>
@@ -1658,7 +1658,7 @@ void MoQSession::TrackPublisherImpl::setDeliveryCallback(
 }
 
 void MoQSession::TrackPublisherImpl::onDeliveryTimeoutChanged(
-    folly::Optional<std::chrono::milliseconds> newTimeout) {
+    std::optional<std::chrono::milliseconds> newTimeout) {
   XLOG(DBG6)
       << "MoQSession::TrackPublisherImpl::onDeliveryTimeoutChanged: CALLBACK INVOKED"
       << " newTimeout="
@@ -1908,7 +1908,7 @@ class MoQSession::SubscribeTrackReceiveState
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<TrackConsumer> callback_;
   folly::coro::Promise<SubscribeResult> subscribePromise_;
-  folly::Optional<SubscribeDone> pendingSubscribeDone_;
+  std::optional<SubscribeDone> pendingSubscribeDone_;
   uint64_t streamCount_{0};
   uint64_t currentStreamId_{0};
 
@@ -1918,7 +1918,7 @@ class MoQSession::SubscribeTrackReceiveState
   // Publisher priority from SUBSCRIBE_OK or PUBLISH parameter
   // Stored as optional; if not set from SUBSCRIBE_OK, defaults to
   // kDefaultPriority
-  folly::Optional<uint8_t> publisherPriority_;
+  std::optional<uint8_t> publisherPriority_;
 
   // Raw pointer to session (safe because SubscribeTrackReceiveState is owned
   // by session in subTracks_)
@@ -2557,7 +2557,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
-      folly::Optional<uint8_t> priority,
+      std::optional<uint8_t> priority,
       const SubgroupOptions& options)>;
 
   using OnFetchFunc =
@@ -2585,12 +2585,12 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       TrackAlias alias,
       uint64_t group,
       uint64_t subgroup,
-      folly::Optional<uint8_t> priority,
+      std::optional<uint8_t> priority,
       const SubgroupOptions& options) override {
     trackAlias_ = alias; // Store for use in onObjectBegin logging
     XLOG(DBG1) << "onSubgroup: alias=" << trackAlias_ << " group=" << group
                << " subgroup=" << subgroup << " priority="
-               << (priority.hasValue() ? std::to_string(*priority) : "none");
+               << (priority.has_value() ? std::to_string(*priority) : "none");
 
     // Call lambda to get state
     auto subscribeState =
@@ -2741,7 +2741,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t group,
       uint64_t subgroup,
       uint64_t objectID,
-      folly::Optional<uint8_t> priority,
+      std::optional<uint8_t> priority,
       ObjectStatus status) override {
     if (isCancelled()) {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
@@ -2900,7 +2900,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     }
   });
 
-  if (!negotiatedVersion_.hasValue()) {
+  if (!negotiatedVersion_.has_value()) {
     auto versionBaton = std::make_shared<moxygen::TimedBaton>();
     subgroupsWaitingForVersion_.push_back(versionBaton);
     // Merged token for baton waits (session + readHandle)
@@ -2924,7 +2924,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   TrackAlias deferredAlias{std::numeric_limits<uint64_t>::max()};
   uint64_t deferredGroup = 0;
   uint64_t deferredSubgroup = 0;
-  folly::Optional<uint8_t> deferredPriority;
+  std::optional<uint8_t> deferredPriority;
   SubgroupOptions deferredOptions;
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto onSubgroupFunc = [this,
@@ -2938,7 +2938,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
                             TrackAlias alias,
                             uint64_t group,
                             uint64_t subgroup,
-                            const folly::Optional<uint8_t>& priority,
+                            const std::optional<uint8_t>& priority,
                             const SubgroupOptions& options)
       -> std::shared_ptr<SubscribeTrackReceiveState> {
     auto state = getSubscribeTrackReceiveState(alias);
@@ -3097,7 +3097,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   bool forward = subscribeRequest.forward;
 
   // Extract delivery timeout from subscribe request params
-  folly::Optional<std::chrono::milliseconds> deliveryTimeout;
+  std::optional<std::chrono::milliseconds> deliveryTimeout;
   auto timeoutValue =
       getDeliveryTimeoutIfPresent(subscribeRequest.params, *negotiatedVersion_);
   if (timeoutValue.has_value() && *timeoutValue > 0) {
@@ -3108,7 +3108,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       this,
       subscribeRequest.fullTrackName,
       subscribeRequest.requestID,
-      folly::none,
+      std::nullopt,
       subscribeRequest.priority,
       subscribeRequest.groupOrder,
       *negotiatedVersion_,
@@ -4243,7 +4243,7 @@ Subscriber::PublishResult MoQSession::publish(
   controlWriteEvent_.signal();
 
   // Extract delivery timeout from publish params
-  folly::Optional<std::chrono::milliseconds> deliveryTimeout;
+  std::optional<std::chrono::milliseconds> deliveryTimeout;
   auto timeoutValue =
       getDeliveryTimeoutIfPresent(pub.params, *negotiatedVersion_);
   if (timeoutValue.has_value() && *timeoutValue > 0) {
@@ -4998,7 +4998,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
     auto callback = state->getSubscribeCallback();
     if (callback) {
       // Populate priority from publisher priority if not set in object header
-      if (!objHeader.objectHeader.priority.hasValue()) {
+      if (!objHeader.objectHeader.priority.has_value()) {
         objHeader.objectHeader.priority = state->getPublisherPriority();
       }
       callback->datagram(objHeader.objectHeader, readBuf.move());
@@ -5070,14 +5070,14 @@ uint64_t MoQSession::getMaxRequestIDIfPresent(const SetupParameters& params) {
 }
 
 /*static*/
-folly::Optional<std::string> MoQSession::getMoQTImplementationIfPresent(
+std::optional<std::string> MoQSession::getMoQTImplementationIfPresent(
     const SetupParameters& params) {
   for (const auto& param : params) {
     if (param.key == folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION)) {
       return param.asString;
     }
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 /*static*/
@@ -5110,7 +5110,7 @@ uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
 }
 
 /*static*/
-folly::Optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
+std::optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
     const TrackRequestParameters& params,
     uint64_t version) {
   for (const auto& param : params) {
@@ -5119,12 +5119,12 @@ folly::Optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
       return param.asUint64;
     }
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 void MoQSession::aliasifyAuthTokens(
     Parameters& params,
-    const folly::Optional<uint64_t>& forceVersion) {
+    const std::optional<uint64_t>& forceVersion) {
   auto version = forceVersion ? forceVersion : getNegotiatedVersion();
   if (!version) {
     return;
@@ -5294,7 +5294,7 @@ void MoQSession::onUnsubscribeAnnounces(
     UnsubscribeAnnounces unsubscribeAnnounces) {
   // v15+: Use Request ID
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    if (!unsubscribeAnnounces.requestID.hasValue()) {
+    if (!unsubscribeAnnounces.requestID.has_value()) {
       XLOG(ERR) << __func__ << " sess=" << this
                 << " - missing requestID for v15+";
       return;
@@ -5306,7 +5306,7 @@ void MoQSession::onUnsubscribeAnnounces(
     // tracking is added For now, just log and update stats
   } else {
     // <v15: Use Track Namespace Prefix
-    if (!unsubscribeAnnounces.trackNamespacePrefix.hasValue()) {
+    if (!unsubscribeAnnounces.trackNamespacePrefix.has_value()) {
       XLOG(ERR) << __func__ << " sess=" << this
                 << " - missing trackNamespacePrefix for <v15";
       return;

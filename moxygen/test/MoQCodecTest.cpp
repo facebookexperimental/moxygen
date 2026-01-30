@@ -269,7 +269,7 @@ TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, true));
@@ -287,7 +287,7 @@ TEST_P(MoQCodecTest, ObjectStreamPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, _, true, false));
@@ -307,15 +307,11 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2,
-          3,
-          4,
-          folly::Optional<uint8_t>(5),
-          ObjectStatus::OBJECT_NOT_EXIST));
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST));
   EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
   // extra coverage of underflow in header
   objectStreamCodec_.onIngress(writeBuf.split(3), false);
@@ -413,7 +409,7 @@ TEST_P(MoQCodecTest, Fetch) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          3, 3, 0, folly::Optional<uint8_t>(5), ObjectStatus::END_OF_TRACK));
+          3, 3, 0, std::optional<uint8_t>(5), ObjectStatus::END_OF_TRACK));
   // object after terminal status
   EXPECT_CALL(
       objectStreamCodecCallback_,
@@ -523,7 +519,7 @@ TEST_P(MoQCodecTest, SubgroupHeaderWithEOF) {
   // Expect only onSubgroup and onEndOfStream
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
 
   // Deliver with FIN=true and no additional data
@@ -551,7 +547,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectBegin) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, true, false))
@@ -581,7 +577,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectPayload) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, testing::_, testing::_, false, false))
@@ -620,11 +616,11 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2, 3, 4, folly::Optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
       .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
 
   // Second object should NOT be parsed
@@ -651,7 +647,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnSubgroup) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_))
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_))
       .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
 
   // onObjectBegin should NOT be called
@@ -715,7 +711,7 @@ TEST_P(MoQCodecTest, CallbackReturnsContinue) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_))
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
   EXPECT_CALL(
       objectStreamCodecCallback_,
@@ -760,13 +756,13 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
 
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onSubgroup(TrackAlias(1), 2, 3, folly::Optional<uint8_t>(5), testing::_));
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
 
   // Expect onObjectStatus for the zero-length status object
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2, 3, 4, folly::Optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
 
   // Expect onObjectBegin for the normal object (this would crash without the

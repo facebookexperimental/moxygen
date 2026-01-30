@@ -103,7 +103,7 @@ class DatePublisher : public Publisher {
         FullTrackName{ns, "date"},
         TrackAlias(requestId),
         GroupOrder::Default,
-        folly::none,
+        std::nullopt,
         true,
     };
 
@@ -156,7 +156,7 @@ class DatePublisher : public Publisher {
 
   void removeSubscriber(
       std::shared_ptr<MoQSession> session,
-      folly::Optional<SubscribeDone> subDone,
+      std::optional<SubscribeDone> subDone,
       const std::string& reason) {
     forwarder_.removeSubscriber(std::move(session), std::move(subDone), reason);
   }
@@ -315,7 +315,7 @@ class DatePublisher : public Publisher {
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
     auto session = MoQSession::getRequestSession();
     // TODO: relay is going away
-    forwarder_.removeSubscriber(session, folly::none, "goaway");
+    forwarder_.removeSubscriber(session, std::nullopt, "goaway");
   }
 
   Payload minutePayload(uint64_t group) {
@@ -472,7 +472,7 @@ class DatePublisher : public Publisher {
         /*priorityIn=*/0,
         ObjectStatus::NORMAL,
         noExtensions(),
-        folly::none};
+        std::nullopt};
     if (second == 0) {
       forwarder_.objectStream(header, minutePayload(group));
     }
@@ -496,7 +496,7 @@ class DatePublisher : public Publisher {
         /*priorityIn=*/0, // priority
         ObjectStatus::NORMAL,
         noExtensions(),
-        folly::none};
+        std::nullopt};
     if (second == 0) {
       forwarder_.datagram(header, minutePayload(group));
     }
@@ -546,7 +546,7 @@ class MoQDateServer : public MoQServer {
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << __func__;
     publisher_->removeSubscriber(
-        std::move(session), folly::none, "terminateClientSession");
+        std::move(session), std::nullopt, "terminateClientSession");
   }
 
  private:

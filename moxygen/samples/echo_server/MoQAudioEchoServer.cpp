@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include <folly/Optional.h>
+#include <optional>
 
 #include <moxygen/MoQFramer.h>
 

@@ -929,7 +929,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
              << "," << standalone->end.object << "}";
   CHECK(standalone);
   auto token = co_await folly::coro::co_current_cancellation_token;
-  folly::Optional<AbsoluteLocation> fetchStart;
+  std::optional<AbsoluteLocation> fetchStart;
   bool servedOneObject = false;
   folly::CancellationCallback cancelCallback(token, [consumer] {
     XLOG(DBG1) << "Fetch cancelled";
@@ -1084,7 +1084,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   co_return nullptr;
 }
 
-folly::Optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
+std::optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
     CacheTrack& track,
     AbsoluteLocation current) {
   auto groupIt = track.groups.find(current.group);
@@ -1092,7 +1092,7 @@ folly::Optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
   if (groupIt == track.groups.end()) {
     // object not cached or incomplete, count as miss.
     XLOG(DBG1) << "group cache miss for {" << current.group << "}";
-    return folly::none;
+    return std::nullopt;
   }
 
   auto& group = groupIt->second;
@@ -1101,9 +1101,9 @@ folly::Optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
     // object not cached or incomplete, count as miss.
     XLOG(DBG1) << "object cache miss for {" << current.group << ","
                << current.object << "}";
-    return folly::none;
+    return std::nullopt;
   }
-  return folly::make_optional(objIt->second.get());
+  return std::make_optional(objIt->second.get());
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
@@ -1316,7 +1316,7 @@ asc), fetchStart group (for desc), or if EOG is known or not.
 For each group being traversed, FetchRangeIterator will iterate to the
 value returned by this functon before moving to the next group
 */
-folly::Optional<uint64_t> MoQCache::FetchRangeIterator::findGroupEndMaybe(
+std::optional<uint64_t> MoQCache::FetchRangeIterator::findGroupEndMaybe(
     uint64_t currGroup,
     uint64_t& cachedGroupId,
     std::shared_ptr<CacheGroup>& cachedGroupPtr) const {
@@ -1327,9 +1327,9 @@ folly::Optional<uint64_t> MoQCache::FetchRangeIterator::findGroupEndMaybe(
   // Special case: last group in iteration range
   if (isLastGroup) {
     if (isDescending && !isFirstGroup) {
-      return folly::make_optional(maxLocation.object - 1);
+      return std::make_optional(maxLocation.object - 1);
     }
-    return folly::make_optional(maxLocation.object);
+    return std::make_optional(maxLocation.object);
   }
 
   // Update cached group pointer if needed
@@ -1341,7 +1341,7 @@ folly::Optional<uint64_t> MoQCache::FetchRangeIterator::findGroupEndMaybe(
   }
 
   if (cachedGroupPtr == nullptr) {
-    return folly::none;
+    return std::nullopt;
   }
 
   // Extract group information
@@ -1363,18 +1363,18 @@ folly::Optional<uint64_t> MoQCache::FetchRangeIterator::findGroupEndMaybe(
   if (isFirstGroup) {
     if (isDescending) {
       // Descending: this is where iteration ends
-      return isEndKnown ? folly::make_optional(endIncludingMaxCached)
-                        : folly::make_optional(firstUncachedObject);
+      return isEndKnown ? std::make_optional(endIncludingMaxCached)
+                        : std::make_optional(firstUncachedObject);
     } else {
       // Ascending: this is the first group of iteration
-      return isEndKnown ? folly::make_optional(maxObjectInGroup)
-                        : folly::make_optional(endIncludingMaxCached);
+      return isEndKnown ? std::make_optional(maxObjectInGroup)
+                        : std::make_optional(endIncludingMaxCached);
     }
   }
 
   // Handle intermediate groups
-  return isEndKnown ? folly::make_optional(maxObjectInGroup)
-                    : folly::make_optional(endIncludingMaxCached);
+  return isEndKnown ? std::make_optional(maxObjectInGroup)
+                    : std::make_optional(endIncludingMaxCached);
 }
 
 AbsoluteLocation MoQCache::FetchRangeIterator::end() {

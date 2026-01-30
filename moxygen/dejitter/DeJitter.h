@@ -6,10 +6,10 @@
 
 #pragma once
 
-#include <folly/Optional.h>
 #include <folly/logging/xlog.h>
 #include <cstdint>
 #include <map>
+#include <optional>
 
 namespace moxygen::dejitter {
 
@@ -43,12 +43,12 @@ class DeJitter {
   }
 
   // Assuming pos in monotically increasing
-  inline std::tuple<folly::Optional<T>, typename DeJitter<T>::GapInfo>
+  inline std::tuple<std::optional<T>, typename DeJitter<T>::GapInfo>
   insertItem(uint64_t pos, uint64_t durationMs, T item) {
     // Arrived late
     if (lastSent_.has_value() && pos <= lastSent_.value()) {
       return std::make_tuple(
-          folly::none,
+          std::nullopt,
           GapInfo{DeJitter<T>::GapType::ARRIVED_LATE, lastSent_.value() - pos});
     }
 
@@ -58,11 +58,11 @@ class DeJitter {
     currentBufferSizeMs_ += durationMs;
     if (currentBufferSizeMs_ <= maxBufferSizeMs_) {
       return std::make_tuple(
-          folly::none, GapInfo{DeJitter<T>::GapType::FILLING_BUFFER, 0});
+          std::nullopt, GapInfo{DeJitter<T>::GapType::FILLING_BUFFER, 0});
     }
 
     // Check next item
-    folly::Optional<uint64_t> minVal;
+    std::optional<uint64_t> minVal;
     for (auto it = buffer_.begin(); it != buffer_.end(); it++) {
       if (!minVal.has_value() || it->first < minVal.value()) {
         minVal = it->first;
@@ -80,7 +80,7 @@ class DeJitter {
     if (!minVal.has_value()) {
       // Should never happen
       return std::make_tuple(
-          folly::none, GapInfo{DeJitter<T>::GapType::INTERNAL_ERROR, 0});
+          std::nullopt, GapInfo{DeJitter<T>::GapType::INTERNAL_ERROR, 0});
     }
 
     auto itemDur = std::move(buffer_[minVal.value()]);
@@ -106,7 +106,7 @@ class DeJitter {
   std::map<uint64_t, ItemAndDuration> buffer_;
   uint64_t maxBufferSizeMs_{0};
   uint64_t currentBufferSizeMs_{0};
-  folly::Optional<uint64_t> lastSent_;
+  std::optional<uint64_t> lastSent_;
 };
 
 } // namespace moxygen::dejitter

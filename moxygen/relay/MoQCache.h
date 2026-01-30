@@ -96,7 +96,7 @@ class MoQCache {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
     bool isLive{false};
     bool endOfTrack{false};
-    folly::Optional<AbsoluteLocation> largestGroupAndObject;
+    std::optional<AbsoluteLocation> largestGroupAndObject;
     FetchInProgressSet fetchInProgress;
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
@@ -135,7 +135,7 @@ class MoQCache {
     mutable std::shared_ptr<CacheGroup> cachedGroupPtr_{nullptr};
     mutable uint64_t cachedEndGroupId_{std::numeric_limits<uint64_t>::max()};
     mutable std::shared_ptr<CacheGroup> cachedEndGroupPtr_{nullptr};
-    folly::Optional<uint64_t> findGroupEndMaybe(
+    std::optional<uint64_t> findGroupEndMaybe(
         uint64_t groupId,
         uint64_t& cachedGroupId_,
         std::shared_ptr<CacheGroup>& cachedGroupPtr_) const;
@@ -147,7 +147,7 @@ class MoQCache {
       FullTrackName::hash>
       cache_;
 
-  folly::Optional<MoQCache::CacheEntry*> getCachedObjectMaybe(
+  std::optional<MoQCache::CacheEntry*> getCachedObjectMaybe(
       CacheTrack& track,
       AbsoluteLocation obj);
 

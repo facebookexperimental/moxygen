@@ -186,7 +186,7 @@ void SubscriberState::drain() {
 // SubscriberState::Callback implementation
 
 ObjectReceiverCallback::FlowControlState SubscriberState::Callback::onObject(
-    folly::Optional<TrackAlias> /* trackAlias */,
+    std::optional<TrackAlias> /* trackAlias */,
     const ObjectHeader& objHeader,
     Payload payload) {
   state_.objectsReceived_++;
@@ -202,7 +202,7 @@ ObjectReceiverCallback::FlowControlState SubscriberState::Callback::onObject(
 }
 
 void SubscriberState::Callback::onObjectStatus(
-    folly::Optional<TrackAlias> /* trackAlias */,
+    std::optional<TrackAlias> /* trackAlias */,
     const ObjectHeader& /* objHeader */) {
   // No-op for performance test
 }
@@ -463,7 +463,7 @@ void MoQPerfTestClient::updateLargestObjectSeen(
   }
 }
 
-folly::Optional<AbsoluteLocation> MoQPerfTestClient::getLargestObjectSeen()
+std::optional<AbsoluteLocation> MoQPerfTestClient::getLargestObjectSeen()
     const {
   return largestObjectSeen_;
 }

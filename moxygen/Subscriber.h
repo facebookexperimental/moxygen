@@ -64,7 +64,7 @@ class Subscriber {
       announceOk_ = std::move(ok);
     };
 
-    folly::Optional<AnnounceOk> announceOk_;
+    std::optional<AnnounceOk> announceOk_;
   };
 
   // A subscribe receives an AnnounceCallback in announce, which can be used

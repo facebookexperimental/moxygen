@@ -29,9 +29,9 @@ class MoQClient : public MoQClientBase {
     return quicWebTransport_->getConnectionFlowControl();
   }
 
-  [[nodiscard]] folly::Optional<quic::TransportInfo> getTransportInfo() const {
+  [[nodiscard]] std::optional<quic::TransportInfo> getTransportInfo() const {
     if (!quicWebTransport_) {
-      return folly::none;
+      return std::nullopt;
     }
     return quicWebTransport_->getTransportInfo();
   }

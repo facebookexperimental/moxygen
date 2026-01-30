@@ -22,14 +22,14 @@ class QueueCallback : public ObjectReceiverCallback {
   folly::coro::UnboundedQueue<folly::Expected<Object, folly::Unit>> queue;
 
   FlowControlState onObject(
-      folly::Optional<TrackAlias> /* trackAlias */,
+      std::optional<TrackAlias> /* trackAlias */,
       const ObjectHeader& objHeader,
       Payload payload) override {
     queue.enqueue(Object({objHeader, std::move(payload)}));
     return FlowControlState::UNBLOCKED;
   }
   void onObjectStatus(
-      folly::Optional<TrackAlias> /* trackAlias */,
+      std::optional<TrackAlias> /* trackAlias */,
       const ObjectHeader& hdr) override {
     queue.enqueue(Object({hdr, nullptr}));
   }

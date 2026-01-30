@@ -6,10 +6,10 @@
 
 #pragma once
 
-#include <folly/Optional.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <cstdint>
+#include <optional>
 #include <variant>
 
 namespace moxygen::flv {
@@ -94,7 +94,7 @@ class BitReader {
  private:
   std::unique_ptr<folly::IOBuf> data_;
   std::unique_ptr<folly::io::Cursor> cursor_;
-  folly::Optional<uint8_t> currentByte_{folly::none};
+  std::optional<uint8_t> currentByte_{std::nullopt};
   uint64_t bitOffset_{0};
 };
 

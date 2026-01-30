@@ -17,10 +17,10 @@ struct SubscribeRange {
 };
 
 inline SubscribeRange toSubscribeRange(
-    folly::Optional<AbsoluteLocation> start,
-    folly::Optional<AbsoluteLocation> end,
+    std::optional<AbsoluteLocation> start,
+    std::optional<AbsoluteLocation> end,
     LocationType locType,
-    folly::Optional<AbsoluteLocation> largest) {
+    std::optional<AbsoluteLocation> largest) {
   XLOG(DBG1) << "m=" << toString(locType)
              << (start ? folly::to<std::string>(
                              " g=", start->group, " o=", start->object)
@@ -63,8 +63,8 @@ inline SubscribeRange toSubscribeRange(
 
 inline SubscribeRange toSubscribeRange(
     const SubscribeRequest& sub,
-    folly::Optional<AbsoluteLocation> largest) {
-  folly::Optional<AbsoluteLocation> end;
+    std::optional<AbsoluteLocation> largest) {
+  std::optional<AbsoluteLocation> end;
   if (sub.endGroup > 0) {
     end = AbsoluteLocation({sub.endGroup, 0});
   }

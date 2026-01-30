@@ -77,7 +77,7 @@ class MoQTestClient {
     explicit ObjectReceiverCallback(MoQTestClient& client) : client_(client) {}
 
     FlowControlState onObject(
-        folly::Optional<TrackAlias> trackAlias,
+        std::optional<TrackAlias> trackAlias,
         const ObjectHeader& objHeader,
         Payload payload) override {
       return client_.onObject(
@@ -85,7 +85,7 @@ class MoQTestClient {
     }
 
     void onObjectStatus(
-        folly::Optional<TrackAlias> trackAlias,
+        std::optional<TrackAlias> trackAlias,
         const ObjectHeader& objHeader) override {
       client_.onObjectStatus(std::move(trackAlias), objHeader);
     }
@@ -110,11 +110,11 @@ class MoQTestClient {
 
   // Override Vritual Functions for now to return basic print statements
   ObjectReceiverCallback::FlowControlState onObject(
-      const folly::Optional<TrackAlias>& trackAlias,
+      const std::optional<TrackAlias>& trackAlias,
       const ObjectHeader& objHeader,
       Payload payload);
   void onObjectStatus(
-      const folly::Optional<TrackAlias>& trackAlias,
+      const std::optional<TrackAlias>& trackAlias,
       const ObjectHeader& objHeader);
   void onEndOfStream();
   void onError(ResetStreamErrorCode);

@@ -13,7 +13,7 @@ using namespace moxygen;
 namespace {
 SubscribeRequest getRequest(
     LocationType locType,
-    folly::Optional<AbsoluteLocation> start = folly::none,
+    std::optional<AbsoluteLocation> start = std::nullopt,
     uint64_t endGroup = 0) {
   return SubscribeRequest::make(
       FullTrackName(),

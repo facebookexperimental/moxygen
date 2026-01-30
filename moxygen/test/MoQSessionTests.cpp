@@ -192,7 +192,7 @@ CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
   // created stream.
   EXPECT_TRUE(clientWt_->readHandles.begin()->second->writeException());
   EXPECT_TRUE(
-      clientWt_->writeHandles.begin()->second->getWriteErr().hasValue());
+      clientWt_->writeHandles.begin()->second->getWriteErr().has_value());
   co_return;
 }
 CO_TEST_P_X(MoQSessionTest, Goaway) {

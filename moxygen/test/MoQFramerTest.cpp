@@ -1172,7 +1172,7 @@ static size_t writeSubscribeRequestWithAuthToken(
       GroupOrder::OldestFirst,
       true,
       LocationType::LargestObject,
-      folly::none,
+      std::nullopt,
       0};
 
   auto encodedToken =
@@ -1469,7 +1469,7 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   EXPECT_EQ(parseResult->start->object, 20);
   EXPECT_EQ(parseResult->endGroup, 30);
   EXPECT_EQ(parseResult->priority, 5);
-  EXPECT_TRUE(parseResult->forward.hasValue());
+  EXPECT_TRUE(parseResult->forward.has_value());
   EXPECT_EQ(*parseResult->forward, true);
 }
 
@@ -1489,7 +1489,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   subscribeUpdate.start = AbsoluteLocation{0, 0};
   subscribeUpdate.endGroup = 0; // Open-ended subscription
   subscribeUpdate.priority = kDefaultPriority;
-  // forward field intentionally left unset (folly::none)
+  // forward field intentionally left unset (std::nullopt)
 
   auto writeResult = writer.writeSubscribeUpdate(writeBuf, subscribeUpdate);
   EXPECT_TRUE(writeResult.hasValue()) << "Failed to write SUBSCRIBE_UPDATE";
@@ -1516,7 +1516,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   EXPECT_EQ(parseResult->endGroup, 0);
   EXPECT_EQ(parseResult->priority, kDefaultPriority);
   // Verify forward field is NOT set (preserves existing state per draft 15+)
-  EXPECT_FALSE(parseResult->forward.hasValue());
+  EXPECT_FALSE(parseResult->forward.has_value());
 }
 
 TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
@@ -1577,7 +1577,7 @@ TEST_P(MoQFramerTest, SubscribeRequestEncodeDecode) {
       /*groupOrder*/ GroupOrder::NewestFirst,
       /*forward*/ false,
       /*locType*/ LocationType::AbsoluteRange,
-      /*start*/ folly::make_optional(startLoc),
+      /*start*/ std::make_optional(startLoc),
       /*endGroup*/ 30,
       /*params*/ {});
 
@@ -1626,7 +1626,7 @@ TEST_P(MoQFramerTest, ParseSubscriptionFilterLargestGroup) {
       /*groupOrder*/ GroupOrder::Default,
       /*forward*/ true,
       /*locType*/ LocationType::LargestGroup,
-      /*start*/ folly::none,
+      /*start*/ std::nullopt,
       /*endGroup*/ 0,
       /*params*/ {});
 
@@ -1677,44 +1677,44 @@ TEST(MoQFramerTestUtils, IsLegacyAlpn) {
 
 TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
   auto legacyVersion = getVersionFromAlpn("moq-00");
-  EXPECT_FALSE(legacyVersion.hasValue());
+  EXPECT_FALSE(legacyVersion.has_value());
 
   auto draft15Meta = getVersionFromAlpn("moqt-15-meta-01");
-  ASSERT_TRUE(draft15Meta.hasValue());
+  ASSERT_TRUE(draft15Meta.has_value());
   EXPECT_EQ(*draft15Meta, 0xff00000f);
 
   auto draft15Meta02 = getVersionFromAlpn("moqt-15-meta-02");
-  ASSERT_TRUE(draft15Meta02.hasValue());
+  ASSERT_TRUE(draft15Meta02.has_value());
   EXPECT_EQ(*draft15Meta02, 0xff00000f);
 
   auto draft16Meta = getVersionFromAlpn("moqt-16-meta-00");
-  ASSERT_TRUE(draft16Meta.hasValue());
+  ASSERT_TRUE(draft16Meta.has_value());
   EXPECT_EQ(*draft16Meta, 0xff000010);
 
   auto invalidAlpn1 = getVersionFromAlpn("h3");
-  EXPECT_FALSE(invalidAlpn1.hasValue());
+  EXPECT_FALSE(invalidAlpn1.has_value());
 
   auto invalidAlpn2 = getVersionFromAlpn("moqt-");
-  EXPECT_FALSE(invalidAlpn2.hasValue());
+  EXPECT_FALSE(invalidAlpn2.has_value());
 
   auto invalidAlpn3 = getVersionFromAlpn("moqt-abc");
-  EXPECT_FALSE(invalidAlpn3.hasValue());
+  EXPECT_FALSE(invalidAlpn3.has_value());
 
   auto emptyAlpn = getVersionFromAlpn("");
-  EXPECT_FALSE(emptyAlpn.hasValue());
+  EXPECT_FALSE(emptyAlpn.has_value());
 }
 
 TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
   auto alpnDraft14 = getAlpnFromVersion(kVersionDraft14);
-  ASSERT_TRUE(alpnDraft14.hasValue());
+  ASSERT_TRUE(alpnDraft14.has_value());
   EXPECT_EQ(*alpnDraft14, "moq-00");
 
   auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
-  ASSERT_TRUE(alpnDraft15.hasValue());
+  ASSERT_TRUE(alpnDraft15.has_value());
   EXPECT_EQ(*alpnDraft15, kAlpnMoqtDraft15Latest);
 
   auto alpnDraft16 = getAlpnFromVersion(kVersionDraft16);
-  ASSERT_TRUE(alpnDraft16.hasValue());
+  ASSERT_TRUE(alpnDraft16.has_value());
   EXPECT_EQ(*alpnDraft16, kAlpnMoqtDraft16Latest);
 }
 
@@ -2456,7 +2456,7 @@ static auto parseAndCheckDatagram(
     uint64_t expectedTrackAlias,
     uint64_t expectedGroup,
     uint64_t expectedId,
-    folly::Optional<uint8_t> expectedPriority,
+    std::optional<uint8_t> expectedPriority,
     ObjectStatus expectedStatus,
     std::optional<uint64_t> expectedLength = std::nullopt) {
   folly::io::Cursor cursor(buf);
@@ -2501,7 +2501,7 @@ TEST(MoQFramerTest, DatagramWithoutPriority) {
       22,
       33,
       44,
-      folly::none,
+      std::nullopt,
       ObjectStatus::NORMAL,
       7);
 }
@@ -2592,7 +2592,7 @@ TEST(MoQFramerTest, StatusDatagramWithoutPriority) {
       22,
       33,
       55,
-      folly::none,
+      std::nullopt,
       ObjectStatus::END_OF_GROUP,
       0);
 }
@@ -2680,9 +2680,9 @@ TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
 // Helper for round-trip datagram test
 void testDatagramPriorityRoundTrip(
     uint64_t version,
-    folly::Optional<uint8_t> priority,
+    std::optional<uint8_t> priority,
     DatagramType expectedType,
-    folly::Optional<uint8_t> expectedPriority) {
+    std::optional<uint8_t> expectedPriority) {
   MoQFrameWriter writer;
   writer.initializeVersion(version);
   MoQFrameParser parser;
@@ -2715,9 +2715,9 @@ void testDatagramPriorityRoundTrip(
 TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripNone) {
   testDatagramPriorityRoundTrip(
       kVersionDraft15,
-      folly::none,
+      std::nullopt,
       DatagramType::OBJECT_DATAGRAM_NO_EXT_NO_PRI,
-      folly::none);
+      std::nullopt);
 }
 TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripValue) {
   testDatagramPriorityRoundTrip(
@@ -2727,9 +2727,9 @@ TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripValue) {
 // Helper for round-trip subgroup header test
 void testSubgroupPriorityRoundTrip(
     uint64_t version,
-    folly::Optional<uint8_t> priority,
+    std::optional<uint8_t> priority,
     StreamType expectedType,
-    folly::Optional<uint8_t> expectedPriority) {
+    std::optional<uint8_t> expectedPriority) {
   MoQFrameWriter writer;
   writer.initializeVersion(version);
   MoQFrameParser parser;
@@ -2760,13 +2760,13 @@ void testSubgroupPriorityRoundTrip(
   EXPECT_EQ(parseResult->value.objectHeader.priority, expectedPriority);
 }
 
-// Test round-trip write/read with folly::none priority in subgroup (v15)
+// Test round-trip write/read with std::nullopt priority in subgroup (v15)
 TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripNone) {
   testSubgroupPriorityRoundTrip(
       kVersionDraft15,
-      folly::none,
+      std::nullopt,
       StreamType::SUBGROUP_HEADER_SG_NO_PRI,
-      folly::none);
+      std::nullopt);
 }
 
 // Test round-trip write/read with explicit priority in subgroup (v15)
@@ -2811,7 +2811,7 @@ TEST_P(MoQFramerV15PlusTest, SubscribeRequestDefaultGroupOrder) {
                                           // param
       /*forward*/ true,
       /*locType*/ LocationType::LargestObject,
-      /*start*/ folly::none,
+      /*start*/ std::nullopt,
       /*endGroup*/ 0,
       /*params*/ {});
 
@@ -2842,7 +2842,7 @@ TEST_P(MoQFramerV15PlusTest, SubscribeRequestExplicitGroupOrder) {
                                               // it
       /*forward*/ true,
       /*locType*/ LocationType::LargestObject,
-      /*start*/ folly::none,
+      /*start*/ std::nullopt,
       /*endGroup*/ 0,
       /*params*/ {});
 
@@ -3509,7 +3509,7 @@ TEST_F(ParameterValidationFlowTest, SubscribeRequestMakeSkipsInvalidParam) {
       GroupOrder::Default,
       true,
       LocationType::LargestGroup,
-      folly::none,
+      std::nullopt,
       0,
       inputParams);
 
@@ -3547,7 +3547,7 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
       GroupOrder::Default,
       true,
       LocationType::LargestGroup,
-      folly::none,
+      std::nullopt,
       0,
       validParams);
 
@@ -3569,7 +3569,7 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
       GroupOrder::Default,
       true,
       LocationType::LargestGroup,
-      folly::none,
+      std::nullopt,
       0};
 
   // Add valid param using insertParam
@@ -3626,7 +3626,7 @@ TEST_F(ParameterValidationFlowTest, SubscribeOkRejectsInvalidParam) {
   subscribeOk.trackAlias = TrackAlias(1);
   subscribeOk.expires = std::chrono::milliseconds(1000);
   subscribeOk.groupOrder = GroupOrder::Default;
-  subscribeOk.largest = folly::none;
+  subscribeOk.largest = std::nullopt;
 
   // Try to insert a param that's not allowed for SUBSCRIBE_OK
   auto result = subscribeOk.params.insertParam(Parameter(

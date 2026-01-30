@@ -87,7 +87,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
       alias,
       std::chrono::milliseconds(kDefaultExpires),
       MoQSession::resolveGroupOrder(GroupOrder::OldestFirst, sub.groupOrder),
-      folly::none};
+      std::nullopt};
   co_return std::make_shared<MoQTestSubscriptionHandle>(
       subRes, std::move(cancelSource));
 }

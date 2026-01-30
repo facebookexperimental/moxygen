@@ -253,12 +253,12 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
     std::vector<Parameter>& requestSpecificParams,
     MoQTokenCache& tokenCache,
     ParamsType paramsType);
-folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
+folly::Expected<std::optional<AuthToken>, ErrorCode> parseToken(
     folly::io::Cursor& cursor,
     size_t length,
     MoQTokenCache& tokenCache,
     ParamsType paramsType) noexcept;
-folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
+folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
@@ -271,7 +271,7 @@ folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
 folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     folly::io::Cursor& cursor,
     size_t& length) noexcept;
-folly::Expected<folly::Optional<Parameter>, ErrorCode> parseIntParam(
+folly::Expected<std::optional<Parameter>, ErrorCode> parseIntParam(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
@@ -335,7 +335,7 @@ std::vector<uint64_t> getSupportedLegacyVersions() {
   return supportedLegacyVers;
 }
 
-folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
+std::optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
   // Parse "[moqt-{N} | moqt-{N}-meta-{NN}]" format (for draft 15+)
   if (alpn.startsWith("moqt-")) {
     auto draftStr = alpn.subpiece(5); // skip "moqt-"
@@ -351,10 +351,10 @@ folly::Optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
       return 0xff000000 | draftNum.value();
     }
   }
-  return folly::none;
+  return std::nullopt;
 }
 
-folly::Optional<std::string> getAlpnFromVersion(uint64_t version) {
+std::optional<std::string> getAlpnFromVersion(uint64_t version) {
   uint64_t draftNum = getDraftMajorVersion(version);
 
   // Drafts < 15 use legacy ALPN "moq-00"
@@ -429,12 +429,12 @@ folly::Expected<std::string, ErrorCode> parseFixedString(
   return res;
 }
 
-folly::Expected<folly::Optional<AuthToken>, ErrorCode> parseToken(
+folly::Expected<std::optional<AuthToken>, ErrorCode> parseToken(
     folly::io::Cursor& cursor,
     size_t length,
     MoQTokenCache& tokenCache,
     ParamsType paramsType) noexcept {
-  folly::Optional<AuthToken> token;
+  std::optional<AuthToken> token;
   token.emplace(); // plan for success
   auto aliasType = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!aliasType) {
@@ -633,7 +633,7 @@ folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
   return filter;
 }
 
-folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
+folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
@@ -664,7 +664,7 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
     length -= res->first;
     if (!tokenRes.value().has_value()) {
       // it was delete, don't export
-      return folly::none;
+      return std::nullopt;
     }
     p.asAuthToken = std::move(*tokenRes.value());
   } else if (
@@ -687,7 +687,7 @@ folly::Expected<folly::Optional<Parameter>, ErrorCode> parseVariableParam(
   return p;
 }
 
-folly::Expected<folly::Optional<Parameter>, ErrorCode> parseIntParam(
+folly::Expected<std::optional<Parameter>, ErrorCode> parseIntParam(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
@@ -741,7 +741,7 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
       key = keyOrDelta->first;
     }
 
-    folly::Expected<folly::Optional<Parameter>, ErrorCode> res;
+    folly::Expected<std::optional<Parameter>, ErrorCode> res;
 
     if ((paramsType == ParamsType::Request &&
          key == folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) ||
@@ -1001,8 +1001,8 @@ MoQFrameParser::parseDatagramObjectHeader(
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
-    // Leave priority as folly::none if not present
-    objectHeader.priority = folly::none;
+    // Leave priority as std::nullopt if not present
+    objectHeader.priority = std::nullopt;
   }
   if (datagramTypeHasExtensions(*version_, datagramType)) {
     auto ext = parseExtensions(cursor, length, objectHeader);
@@ -1049,7 +1049,7 @@ MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
     size_t length,
     const SubgroupOptions& options) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing subgroup header";
   auto startLength = length;
   SubgroupHeaderResult result;
@@ -1096,9 +1096,9 @@ MoQFrameParser::parseSubgroupHeader(
     objectHeader.priority = cursor.readBE<uint8_t>();
     length -= 1;
   } else {
-    // Leave priority as folly::none if not present
+    // Leave priority as std::nullopt if not present
     XCHECK_GE(getDraftMajorVersion(*version_), 15u);
-    objectHeader.priority = folly::none;
+    objectHeader.priority = std::nullopt;
   }
   if (parseObjectID) {
     auto tmpCursor = cursor; // we reparse the object ID later
@@ -1438,7 +1438,7 @@ MoQFrameParser::parseSubgroupObjectHeader(
   }
   length -= id->second;
   objectHeader.id = id->first;
-  XCHECK(version_.hasValue())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing subgroup object header";
   if (getDraftMajorVersion(*version_) >= 14) {
     // Delta encoded object ID
@@ -1483,7 +1483,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     size_t numParams,
     TrackRequestParameters& params,
     std::vector<Parameter>& requestSpecificParams) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing track request params";
   return parseParams(
       cursor,
@@ -1496,7 +1496,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       ParamsType::Request);
 }
 
-folly::Optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
+std::optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   for (const auto& param : requestSpecificParams) {
     if (param.key ==
@@ -1504,13 +1504,13 @@ folly::Optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
       return param.asSubscriptionFilter;
     }
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 folly::Expected<SubscribeRequest, ErrorCode>
 MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing a subscribe request";
   SubscribeRequest subscribeRequest;
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -1674,7 +1674,7 @@ void MoQFrameParser::handleRequestSpecificParams(
 folly::Expected<SubscribeUpdate, ErrorCode>
 MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing a subscribe update";
 
   SubscribeUpdate subscribeUpdate;
@@ -1735,7 +1735,7 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     // For draft >= 15, set default priority to 128
     // It will be overridden in handleRequestSpecificParams if present
     subscribeUpdate.priority = kDefaultPriority;
-    // For draft >= 15, forward field is left unset (folly::none) by default
+    // For draft >= 15, forward field is left unset (std::nullopt) by default
     // It will be set in handleRequestSpecificParams only if FORWARD param
     // present This allows existing forward state to be preserved when param is
     // absent
@@ -1948,7 +1948,7 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
   }
   subscribeDone.reasonPhrase = std::move(reas.value());
 
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing SUBSCRIBE_DONE";
   if (getDraftMajorVersion(*version_) <= 9) {
     if (length == 0) {
@@ -1973,7 +1973,7 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
 folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing a publish request";
   PublishRequest publish;
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -2030,7 +2030,7 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     }
     publish.largest = *location;
   } else {
-    publish.largest = folly::none;
+    publish.largest = std::nullopt;
   }
 
   if (getDraftMajorVersion(*version_) < 15) {
@@ -2094,7 +2094,7 @@ void MoQFrameParser::handleRequestSpecificParams(
 folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing a publish ok";
   PublishOk publishOk;
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -2182,7 +2182,7 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
       publishOk.endGroup = endGroup->first;
       length -= endGroup->second;
     } else {
-      publishOk.endGroup = folly::none;
+      publishOk.endGroup = std::nullopt;
     }
   }
 
@@ -2221,13 +2221,13 @@ void MoQFrameParser::handleRequestSpecificParams(
       if (filter->endGroup.has_value()) {
         publishOk.endGroup = filter->endGroup.value();
       } else {
-        publishOk.endGroup = folly::none;
+        publishOk.endGroup = std::nullopt;
       }
     } else {
       // Set defaults
       publishOk.locType = LocationType::AbsoluteStart;
       publishOk.start = AbsoluteLocation{0, 0};
-      publishOk.endGroup = folly::none;
+      publishOk.endGroup = std::nullopt;
     }
 
     // GROUP_ORDER
@@ -2249,7 +2249,7 @@ void MoQFrameParser::handleGroupOrderParam(
     GroupOrder defaultGroupOrder) const noexcept {
   auto maybeGroupOrder = getFirstIntParam(
       requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
-  if (maybeGroupOrder.hasValue()) {
+  if (maybeGroupOrder.has_value()) {
     groupOrderField = (GroupOrder)*maybeGroupOrder;
   } else {
     groupOrderField = defaultGroupOrder;
@@ -2261,7 +2261,7 @@ void MoQFrameParser::handleSubscriberPriorityParam(
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   auto maybePriority = getFirstIntParam(
       requestSpecificParams, TrackRequestParamKey::SUBSCRIBER_PRIORITY);
-  if (maybePriority.hasValue()) {
+  if (maybePriority.has_value()) {
     priorityField = (uint8_t)*maybePriority;
   }
 }
@@ -2271,7 +2271,7 @@ void MoQFrameParser::handleForwardParam(
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   auto maybeForward =
       getFirstIntParam(requestSpecificParams, TrackRequestParamKey::FORWARD);
-  if (maybeForward.hasValue()) {
+  if (maybeForward.has_value()) {
     forwardField = (*maybeForward == 1);
   }
 }
@@ -2279,11 +2279,11 @@ void MoQFrameParser::handleForwardParam(
 // Overload for Optional<bool> - used by SubscribeUpdate to allow
 // preserving existing forward state when parameter is absent
 void MoQFrameParser::handleForwardParam(
-    folly::Optional<bool>& forwardField,
+    std::optional<bool>& forwardField,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   auto maybeForward =
       getFirstIntParam(requestSpecificParams, TrackRequestParamKey::FORWARD);
-  if (maybeForward.hasValue()) {
+  if (maybeForward.has_value()) {
     forwardField = (*maybeForward == 1);
   }
 }
@@ -2445,7 +2445,8 @@ folly::Expected<AnnounceCancel, ErrorCode> MoQFrameParser::parseAnnounceCancel(
 folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.hasValue()) << "version_ needs to be set to parse TrackStatus";
+  CHECK(version_.has_value())
+      << "version_ needs to be set to parse TrackStatus";
 
   if (getDraftMajorVersion(*version_) >= 14) {
     return parseSubscribeRequest(cursor, length);
@@ -2457,7 +2458,7 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
   trackStatus.groupOrder = GroupOrder::Default;
   trackStatus.forward = true;
   trackStatus.locType = LocationType::LargestGroup;
-  trackStatus.start = folly::none;
+  trackStatus.start = std::nullopt;
   trackStatus.endGroup = 0;
 
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -2498,7 +2499,7 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
 folly::Expected<TrackStatusOk, ErrorCode> MoQFrameParser::parseTrackStatusOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "version_ needs to be set to parse TrackStatusOk";
 
   if (getDraftMajorVersion(*version_) >= 14) {
@@ -3044,7 +3045,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
     folly::io::Cursor& cursor,
     size_t& length,
     ObjectHeader& objectHeader) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "The version must be set before parsing extensions";
 
   // Parse the length of the extension block
@@ -3426,7 +3427,7 @@ std::string MoQFrameWriter::encodeRegisterToken(
 std::string MoQFrameWriter::encodeTokenValue(
     uint64_t tokenType,
     const std::string& tokenValue,
-    const folly::Optional<uint64_t>& forceVersion) const {
+    const std::optional<uint64_t>& forceVersion) const {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
@@ -3575,7 +3576,7 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
   size_t size = 0;
   bool error = false;
 
-  bool priorityPresent = objectHeader.priority.hasValue();
+  bool priorityPresent = objectHeader.priority.has_value();
   if (getDraftMajorVersion(version_.value()) < 15 && !priorityPresent) {
     XLOG(ERR) << "Priority must be set for Draft-14 and earlier versions";
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -3815,7 +3816,7 @@ TrackRequestParameter getAuthParam(
     uint64_t version,
     std::string token,
     uint64_t tokenType,
-    folly::Optional<uint64_t> registerToken) {
+    std::optional<uint64_t> registerToken) {
   return TrackRequestParameter(
       {folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
        {tokenType, std::move(token), std::move(registerToken)}});
@@ -3902,7 +3903,7 @@ void MoQFrameWriter::writeSubscriptionFilter(
     const SubscriptionFilter& filter,
     size_t& size,
     bool& error) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version must be set before writing subscription filter";
 
   // Write filter type
@@ -3915,7 +3916,7 @@ void MoQFrameWriter::writeSubscriptionFilter(
   // Write start location for AbsoluteStart and AbsoluteRange
   if (filter.filterType == LocationType::AbsoluteStart ||
       filter.filterType == LocationType::AbsoluteRange) {
-    if (filter.location.hasValue()) {
+    if (filter.location.has_value()) {
       writeVarint(writeBuf, filter.location->group, size, error);
       writeVarint(writeBuf, filter.location->object, size, error);
     } else {
@@ -3925,7 +3926,7 @@ void MoQFrameWriter::writeSubscriptionFilter(
 
   // Write end group for AbsoluteRange
   if (filter.filterType == LocationType::AbsoluteRange) {
-    if (filter.endGroup.hasValue()) {
+    if (filter.endGroup.has_value()) {
       writeVarint(writeBuf, *filter.endGroup, size, error);
     } else {
       error = true;
@@ -3944,11 +3945,11 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   bool hasExtensions = objectHeader.extensions.size() > 0;
 
   if (getDraftMajorVersion(version_.value()) < 15 &&
-      !objectHeader.priority.hasValue()) {
+      !objectHeader.priority.has_value()) {
     XLOG(ERR) << "Priority must be set for Draft-14 and earlier versions";
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
-  bool priorityPresent = objectHeader.priority.hasValue();
+  bool priorityPresent = objectHeader.priority.has_value();
 
   // Set this only if version >= 14. Else ObjId is always written on the wire
   bool isObjectIdZero =
@@ -4049,13 +4050,13 @@ void MoQFrameWriter::writeFetchObjectDraft15(
     flags |=
         folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO);
   } else if (
-      previousFetchSubgroup_.hasValue() &&
+      previousFetchSubgroup_.has_value() &&
       objectHeader.subgroup == previousFetchSubgroup_.value()) {
     // Mode 0x01: Same as prior
     flags |= folly::to_underlying(
         FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR);
   } else if (
-      previousFetchSubgroup_.hasValue() &&
+      previousFetchSubgroup_.has_value() &&
       objectHeader.subgroup == previousFetchSubgroup_.value() + 1) {
     // Mode 0x02: Prior + 1
     flags |= folly::to_underlying(
@@ -4067,21 +4068,21 @@ void MoQFrameWriter::writeFetchObjectDraft15(
   }
 
   // Bit 2 (0x04): Object ID present
-  if (!previousObjectID_.hasValue() ||
+  if (!previousObjectID_.has_value() ||
       objectHeader.id != previousObjectID_.value() + 1) {
     flags |=
         folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK);
   }
 
   // Bit 3 (0x08): Group ID present
-  if (!previousFetchGroup_.hasValue() ||
+  if (!previousFetchGroup_.has_value() ||
       objectHeader.group != previousFetchGroup_.value()) {
     flags |=
         folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK);
   }
 
   // Bit 4 (0x10): Priority present
-  if (!previousFetchPriority_.hasValue() ||
+  if (!previousFetchPriority_.has_value() ||
       objectHeader.priority != previousFetchPriority_.value()) {
     flags |=
         folly::to_underlying(FetchHeaderSerializationBits::PRIORITY_BITMASK);
@@ -4151,7 +4152,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
     StreamType streamType,
     const ObjectHeader& objectHeader,
     std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
-  XCHECK(version_.hasValue())
+  XCHECK(version_.has_value())
       << "The version must be set before writing stream object";
   size_t size = 0;
   bool error = false;
@@ -4218,7 +4219,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
 WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write subscribe request";
   size_t size = 0;
   bool error = false;
@@ -4265,8 +4266,8 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
         subscribeRequest.locType,
         subscribeRequest.start,
         subscribeRequest.locType == LocationType::AbsoluteRange
-            ? folly::Optional<uint64_t>(subscribeRequest.endGroup)
-            : folly::none);
+            ? std::optional<uint64_t>(subscribeRequest.endGroup)
+            : std::nullopt);
     requestSpecificParams.push_back(subscriptionFilterParam);
 
     if (subscribeRequest.priority != kDefaultPriority) {
@@ -4330,7 +4331,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
 WriteResult MoQFrameWriter::writeSubscribeUpdate(
     folly::IOBufQueue& writeBuf,
     const SubscribeUpdate& update) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write subscribe update";
   size_t size = 0;
   bool error = false;
@@ -4342,7 +4343,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
 
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
-    if (update.start.hasValue() || update.endGroup.hasValue()) {
+    if (update.start.has_value() || update.endGroup.has_value()) {
       Parameter subscriptionFilterParam;
       subscriptionFilterParam.key =
           folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
@@ -4350,12 +4351,12 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
       // that update.endGroup is the end group id + 1. If update.endGroup == 0,
       // that means that the subscription is open ended.
       LocationType locationType =
-          (!update.endGroup.hasValue() || *update.endGroup == 0)
+          (!update.endGroup.has_value() || *update.endGroup == 0)
           ? LocationType::AbsoluteStart
           : LocationType::AbsoluteRange;
 
-      folly::Optional<uint64_t> endGroup = folly::none;
-      if (update.endGroup.hasValue() && *update.endGroup > 0) {
+      std::optional<uint64_t> endGroup = std::nullopt;
+      if (update.endGroup.has_value() && *update.endGroup > 0) {
         endGroup = *update.endGroup - 1;
       }
 
@@ -4374,7 +4375,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
 
     // Only add FORWARD parameter if it's explicitly set (has value)
     // When absent, the receiver preserves existing forward state per draft 15+
-    if (update.forward.hasValue()) {
+    if (update.forward.has_value()) {
       Parameter forwardParam;
       forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
       forwardParam.asUint64 = *update.forward ? 1 : 0;
@@ -4382,8 +4383,9 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
     }
   } else {
     // For draft < 15, start and endGroup are mandatory
-    XCHECK(update.start.hasValue()) << "start is required for draft < 15";
-    XCHECK(update.endGroup.hasValue()) << "endGroup is required for draft < 15";
+    XCHECK(update.start.has_value()) << "start is required for draft < 15";
+    XCHECK(update.endGroup.has_value())
+        << "endGroup is required for draft < 15";
 
     writeVarint(writeBuf, update.start->group, size, error);
     writeVarint(writeBuf, update.start->object, size, error);
@@ -4409,7 +4411,8 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
 WriteResult MoQFrameWriter::writeSubscribeOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeOk& subscribeOk) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write subscribe ok";
+  CHECK(version_.has_value())
+      << "Version needs to be set to write subscribe ok";
   size_t size;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
@@ -4477,7 +4480,7 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
 WriteResult MoQFrameWriter::writeMaxRequestID(
     folly::IOBufQueue& writeBuf,
     const MaxRequestID& maxRequestID) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write max requestID";
   size_t size = 0;
   bool error = false;
@@ -4493,7 +4496,7 @@ WriteResult MoQFrameWriter::writeMaxRequestID(
 WriteResult MoQFrameWriter::writeRequestsBlocked(
     folly::IOBufQueue& writeBuf,
     const RequestsBlocked& subscribesBlocked) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write subscribes blocked";
   size_t size = 0;
   bool error = false;
@@ -4509,7 +4512,7 @@ WriteResult MoQFrameWriter::writeRequestsBlocked(
 WriteResult MoQFrameWriter::writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
     const Unsubscribe& unsubscribe) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write unsubscribe";
+  CHECK(version_.has_value()) << "Version needs to be set to write unsubscribe";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE, error);
@@ -4524,7 +4527,7 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
 WriteResult MoQFrameWriter::writeSubscribeDone(
     folly::IOBufQueue& writeBuf,
     const SubscribeDone& subscribeDone) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write subscribe done";
   size_t size = 0;
   bool error = false;
@@ -4547,7 +4550,7 @@ WriteResult MoQFrameWriter::writeSubscribeDone(
 WriteResult MoQFrameWriter::writePublish(
     folly::IOBufQueue& writeBuf,
     const PublishRequest& publish) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write publish";
+  CHECK(version_.has_value()) << "Version needs to be set to write publish";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH, error);
@@ -4563,11 +4566,11 @@ WriteResult MoQFrameWriter::writePublish(
     size += 1;
   }
 
-  uint8_t contentExists = publish.largest.hasValue() ? 1 : 0;
+  uint8_t contentExists = publish.largest.has_value() ? 1 : 0;
   writeBuf.append(&contentExists, 1);
   size += 1;
 
-  if (publish.largest.hasValue()) {
+  if (publish.largest.has_value()) {
     writeVarint(writeBuf, publish.largest->group, size, error);
     writeVarint(writeBuf, publish.largest->object, size, error);
   }
@@ -4608,7 +4611,7 @@ WriteResult MoQFrameWriter::writePublish(
 WriteResult MoQFrameWriter::writePublishOk(
     folly::IOBufQueue& writeBuf,
     const PublishOk& publishOk) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write publish ok";
+  CHECK(version_.has_value()) << "Version needs to be set to write publish ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_OK, error);
@@ -4636,7 +4639,7 @@ WriteResult MoQFrameWriter::writePublishOk(
         publishOk.locType,
         publishOk.start,
         publishOk.locType == LocationType::AbsoluteRange ? publishOk.endGroup
-                                                         : folly::none);
+                                                         : std::nullopt);
     requestSpecificParams.push_back(subscriptionFilterParam);
 
     if (publishOk.subscriberPriority != kDefaultPriority) {
@@ -4673,18 +4676,18 @@ WriteResult MoQFrameWriter::writePublishOk(
 
     switch (publishOk.locType) {
       case LocationType::AbsoluteStart: {
-        if (publishOk.start.hasValue()) {
+        if (publishOk.start.has_value()) {
           writeVarint(writeBuf, publishOk.start->group, size, error);
           writeVarint(writeBuf, publishOk.start->object, size, error);
         }
         break;
       }
       case LocationType::AbsoluteRange: {
-        if (publishOk.start.hasValue()) {
+        if (publishOk.start.has_value()) {
           writeVarint(writeBuf, publishOk.start->group, size, error);
           writeVarint(writeBuf, publishOk.start->object, size, error);
         }
-        if (publishOk.endGroup.hasValue()) {
+        if (publishOk.endGroup.has_value()) {
           writeVarint(writeBuf, publishOk.endGroup.value(), size, error);
         }
         break;
@@ -4707,7 +4710,7 @@ WriteResult MoQFrameWriter::writePublishOk(
 WriteResult MoQFrameWriter::writeAnnounce(
     folly::IOBufQueue& writeBuf,
     const Announce& announce) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write announce";
+  CHECK(version_.has_value()) << "Version needs to be set to write announce";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::ANNOUNCE, error);
@@ -4731,7 +4734,7 @@ WriteResult MoQFrameWriter::writeRequestOk(
     folly::IOBufQueue& writeBuf,
     const RequestOk& requestOk,
     FrameType frameType) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write request ok";
+  CHECK(version_.has_value()) << "Version needs to be set to write request ok";
   size_t size = 0;
   bool error = false;
   if (getDraftMajorVersion(*version_) > 14) {
@@ -4762,14 +4765,14 @@ WriteResult MoQFrameWriter::writeRequestOk(
 WriteResult MoQFrameWriter::writeUnannounce(
     folly::IOBufQueue& writeBuf,
     const Unannounce& unannounce) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write unannounce";
+  CHECK(version_.has_value()) << "Version needs to be set to write unannounce";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNANNOUNCE, error);
 
   if (getDraftMajorVersion(*version_) >= 16) {
     // v16+: Write Request ID
-    CHECK(unannounce.requestID.hasValue())
+    CHECK(unannounce.requestID.has_value())
         << "RequestID required for v16+ Unannounce";
     writeVarint(writeBuf, unannounce.requestID->value, size, error);
   } else {
@@ -4787,7 +4790,7 @@ WriteResult MoQFrameWriter::writeUnannounce(
 WriteResult MoQFrameWriter::writeAnnounceCancel(
     folly::IOBufQueue& writeBuf,
     const AnnounceCancel& announceCancel) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write announce cancel";
   size_t size = 0;
   bool error = false;
@@ -4795,7 +4798,7 @@ WriteResult MoQFrameWriter::writeAnnounceCancel(
 
   if (getDraftMajorVersion(*version_) >= 16) {
     // v16+: Write Request ID
-    CHECK(announceCancel.requestID.hasValue())
+    CHECK(announceCancel.requestID.has_value())
         << "RequestID required for v16+ AnnounceCancel";
     writeVarint(writeBuf, announceCancel.requestID->value, size, error);
   } else {
@@ -4816,7 +4819,7 @@ WriteResult MoQFrameWriter::writeAnnounceCancel(
 WriteResult MoQFrameWriter::writeTrackStatus(
     folly::IOBufQueue& writeBuf,
     const TrackStatus& trackStatus) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "version_ needs to be set to write TrackStatusRequest";
   size_t size = 0;
   bool error = false;
@@ -4843,7 +4846,8 @@ WriteResult MoQFrameWriter::writeTrackStatus(
 WriteResult MoQFrameWriter::writeTrackStatusOk(
     folly::IOBufQueue& writeBuf,
     const TrackStatusOk& trackStatusOk) const noexcept {
-  CHECK(version_.hasValue()) << "version_ needs to be set to write TrackStatus";
+  CHECK(version_.has_value())
+      << "version_ needs to be set to write TrackStatus";
 
   size_t size = 0;
   bool error = false;
@@ -4898,7 +4902,7 @@ WriteResult MoQFrameWriter::writeTrackStatusError(
 WriteResult MoQFrameWriter::writeGoaway(
     folly::IOBufQueue& writeBuf,
     const Goaway& goaway) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write Goaway";
+  CHECK(version_.has_value()) << "Version needs to be set to write Goaway";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
@@ -4913,7 +4917,7 @@ WriteResult MoQFrameWriter::writeGoaway(
 WriteResult MoQFrameWriter::writeSubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const SubscribeAnnounces& subscribeAnnounces) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write subscribe announces";
   size_t size = 0;
   bool error = false;
@@ -4961,7 +4965,7 @@ WriteResult MoQFrameWriter::writeSubscribeAnnouncesOk(
 WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
     folly::IOBufQueue& writeBuf,
     const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write unsubscribe announces";
   size_t size = 0;
   bool error = false;
@@ -4990,7 +4994,7 @@ WriteResult MoQFrameWriter::writeUnsubscribeAnnounces(
 WriteResult MoQFrameWriter::writeNamespace(
     folly::IOBufQueue& writeBuf,
     const Namespace& ns) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write namespace";
+  CHECK(version_.has_value()) << "Version needs to be set to write namespace";
   CHECK_GE(getDraftMajorVersion(*version_), 16)
       << "NAMESPACE message doesn't exist for version 15 and below, this function "
       << "shouldn't be called";
@@ -5008,7 +5012,7 @@ WriteResult MoQFrameWriter::writeNamespace(
 WriteResult MoQFrameWriter::writeNamespaceDone(
     folly::IOBufQueue& writeBuf,
     const NamespaceDone& namespaceDone) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write namespace done";
   CHECK_GE(getDraftMajorVersion(*version_), 16)
       << "NAMESPACE_DONE message doesn't exist for version 15 and below, this function "
@@ -5028,7 +5032,7 @@ WriteResult MoQFrameWriter::writeNamespaceDone(
 WriteResult MoQFrameWriter::writeFetch(
     folly::IOBufQueue& writeBuf,
     const Fetch& fetch) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write fetch";
+  CHECK(version_.has_value()) << "Version needs to be set to write fetch";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
@@ -5092,7 +5096,8 @@ WriteResult MoQFrameWriter::writeFetch(
 WriteResult MoQFrameWriter::writeFetchCancel(
     folly::IOBufQueue& writeBuf,
     const FetchCancel& fetchCancel) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write fetch cancel";
+  CHECK(version_.has_value())
+      << "Version needs to be set to write fetch cancel";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_CANCEL, error);
@@ -5107,7 +5112,7 @@ WriteResult MoQFrameWriter::writeFetchCancel(
 WriteResult MoQFrameWriter::writeFetchOk(
     folly::IOBufQueue& writeBuf,
     const FetchOk& fetchOk) const noexcept {
-  CHECK(version_.hasValue()) << "Version needs to be set to write fetch ok";
+  CHECK(version_.has_value()) << "Version needs to be set to write fetch ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
@@ -5132,7 +5137,7 @@ WriteResult MoQFrameWriter::writeRequestError(
     folly::IOBufQueue& writeBuf,
     const RequestError& requestError,
     FrameType frameType) const noexcept {
-  CHECK(version_.hasValue())
+  CHECK(version_.has_value())
       << "Version needs to be set to write request error";
   // XCHECK that frameType is one of the allowed types for this function
   XCHECK(
@@ -5268,12 +5273,12 @@ std::ostream& operator<<(std::ostream& os, RequestID id) {
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
   os << " group=" << header.group << " subgroup=" << header.subgroup
      << " id=" << header.id << " priority="
-     << (header.priority.hasValue()
+     << (header.priority.has_value()
              ? std::to_string(uint32_t(header.priority.value()))
              : "none")
      << " status=" << getObjectStatusString(header.status) << " length="
-     << (header.length.hasValue() ? std::to_string(header.length.value())
-                                  : "none");
+     << (header.length.has_value() ? std::to_string(header.length.value())
+                                   : "none");
   return os;
 }
 

@@ -60,7 +60,7 @@ class SubscriptionHandle {
   void setSubscribeOk(SubscribeOk subOk) {
     subscribeOk_ = std::move(subOk);
   }
-  folly::Optional<SubscribeOk> subscribeOk_;
+  std::optional<SubscribeOk> subscribeOk_;
 };
 
 // Represents a publisher on which the caller can invoke TRACK_STATUS_REQUEST,
@@ -115,7 +115,7 @@ class Publisher {
       fetchOk_ = std::move(fOk);
     }
 
-    folly::Optional<FetchOk> fetchOk_;
+    std::optional<FetchOk> fetchOk_;
   };
 
   // Send/respond to a FETCH
@@ -148,7 +148,7 @@ class Publisher {
       subscribeAnnouncesOk_ = std::move(ok);
     }
 
-    folly::Optional<SubscribeAnnouncesOk> subscribeAnnouncesOk_;
+    std::optional<SubscribeAnnouncesOk> subscribeAnnouncesOk_;
   };
 
   // Send/respond to SUBSCRIBE_ANNOUNCES

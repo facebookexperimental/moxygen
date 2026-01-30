@@ -154,7 +154,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   }
   chatRequestID_.emplace(subscribeReq.requestID);
   chatTrackAlias_.emplace(TrackAlias(subscribeReq.requestID.value));
-  folly::Optional<AbsoluteLocation> largest;
+  std::optional<AbsoluteLocation> largest;
   if (nextGroup_ > 0) {
     largest.emplace(nextGroup_ - 1, 0);
   }
@@ -284,7 +284,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
         : client_(client), username_(username) {}
     ~ChatObjectHandler() override = default;
     FlowControlState onObject(
-        folly::Optional<TrackAlias> /* trackAlias */,
+        std::optional<TrackAlias> /* trackAlias */,
         const ObjectHeader&,
         Payload payload) override {
       if (payload) {
@@ -295,7 +295,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
       return FlowControlState::UNBLOCKED;
     }
     void onObjectStatus(
-        folly::Optional<TrackAlias> /* trackAlias */,
+        std::optional<TrackAlias> /* trackAlias */,
         const ObjectHeader&) override {}
     void onEndOfStream() override {}
     void onError(ResetStreamErrorCode error) override {

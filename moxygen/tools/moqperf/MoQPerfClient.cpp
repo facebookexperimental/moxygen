@@ -138,7 +138,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
       /*groupOrder=*/GroupOrder::OldestFirst,
       /*forward=*/true,
       /*locType=*/LocationType::LargestObject,
-      /*start=*/folly::none,
+      /*start=*/std::nullopt,
       /*endGroup=*/0,
       /*params=*/{});
   auto subscribeResult = co_await moqClient_.moqSession_->subscribe(

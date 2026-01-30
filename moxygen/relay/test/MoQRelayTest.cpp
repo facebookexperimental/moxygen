@@ -67,7 +67,7 @@ class MoQRelayTest : public ::testing::Test {
   std::shared_ptr<MockMoQSession> createMockSession() {
     auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(folly::Optional<uint64_t>(kVersionDraftCurrent)));
+        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraftCurrent)));
     auto state = getOrCreateMockState(session);
     return session;
   }
@@ -1164,8 +1164,8 @@ TEST_F(MoQRelayTest, SubscribeAnnouncesDoesntAddDrainingPublish) {
                                       /*subscriberPriority=*/0,
                                       /*groupOrder=*/GroupOrder::OldestFirst,
                                       /*locType=*/LocationType::LargestObject,
-                                      /*start=*/folly::none,
-                                      /*endGroup=*/folly::none};
+                                      /*start=*/std::nullopt,
+                                      /*endGroup=*/std::nullopt};
                 }()});
       });
 

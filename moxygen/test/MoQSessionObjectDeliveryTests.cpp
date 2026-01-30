@@ -466,7 +466,7 @@ class MockDeliveryCallback : public DeliveryCallback {
   MOCK_METHOD(
       void,
       onDelivered,
-      (const folly::Optional<TrackAlias>&,
+      (const std::optional<TrackAlias>&,
        uint64_t groupId,
        uint64_t subgroupId,
        uint64_t objectId),
@@ -475,7 +475,7 @@ class MockDeliveryCallback : public DeliveryCallback {
   MOCK_METHOD(
       void,
       onDeliveryCancelled,
-      (const folly::Optional<TrackAlias>&,
+      (const std::optional<TrackAlias>&,
        uint64_t groupId,
        uint64_t subgroupId,
        uint64_t objectId),
@@ -690,7 +690,7 @@ CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
           pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
         });
         // Return SubscribeOk with PUBLISHER_PRIORITY parameter
-        co_return makeSubscribeOkResult(sub, folly::none, kPublisherPriority);
+        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -733,7 +733,7 @@ CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
         });
         // Return SubscribeOk with PUBLISHER_PRIORITY parameter
         constexpr uint8_t kPublisherPriority = 64;
-        co_return makeSubscribeOkResult(sub, folly::none, kPublisherPriority);
+        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -776,7 +776,7 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
           pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
         });
         // Return SubscribeOk with PUBLISHER_PRIORITY parameter
-        co_return makeSubscribeOkResult(sub, folly::none, kPublisherPriority);
+        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();

@@ -29,8 +29,8 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
 
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     const SubscribeRequest& sub,
-    const folly::Optional<AbsoluteLocation>& largest,
-    const folly::Optional<uint8_t>& publisherPriority) {
+    const std::optional<AbsoluteLocation>& largest,
+    const std::optional<uint8_t>& publisherPriority) {
   ParamBuilder paramBuilder;
   if (publisherPriority.has_value()) {
     paramBuilder.add(
@@ -50,7 +50,7 @@ std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
 
 TrackStatusOk makeTrackStatusOkResult(
     const TrackStatus& req,
-    const folly::Optional<AbsoluteLocation>& largest) {
+    const std::optional<AbsoluteLocation>& largest) {
   return TrackStatusOk{
       .requestID = req.requestID,
       .trackAlias = TrackAlias(req.requestID.value),
@@ -72,7 +72,7 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       GroupOrder::OldestFirst,
       true,
       LocationType::LargestObject,
-      folly::none,
+      std::nullopt,
       0};
 }
 
@@ -104,7 +104,7 @@ std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {
       TrackAlias(100),
       std::chrono::milliseconds(0), // expires
       GroupOrder::Default,          // groupOrder
-      folly::none,                  // largest
+      std::nullopt,                 // largest
   });
 }
 
@@ -210,7 +210,7 @@ void MoQSessionTest::SetUp() {
   // For Draft15+, initialize version via ALPN since it's required
   if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
     auto alpn = getAlpnFromVersion(getServerSelectedVersion());
-    if (alpn.hasValue()) {
+    if (alpn.has_value()) {
       clientSession_->validateAndSetVersionFromAlpn(alpn.value());
       serverSession_->validateAndSetVersionFromAlpn(alpn.value());
     }
@@ -341,7 +341,7 @@ folly::DrivableExecutor* MoQSessionTest::getExecutor() {
 void MoQSessionTest::expectFetch(
     const std::function<TaskFetchResult(Fetch, std::shared_ptr<FetchConsumer>)>&
         lambda,
-    folly::Optional<FetchErrorCode> error) {
+    std::optional<FetchErrorCode> error) {
   if (error) {
     EXPECT_CALL(*serverPublisherStatsCallback_, onFetchError(*error))
         .RetiresOnSaturation();
@@ -420,7 +420,7 @@ void MoQSessionTest::expectSubscribe(
         const SubscribeRequest&,
         std::shared_ptr<TrackConsumer>)>& lambda,
     MoQControlCodec::Direction direction,
-    const folly::Optional<SubscribeErrorCode>& error) {
+    const std::optional<SubscribeErrorCode>& error) {
   EXPECT_CALL(*getPublisher(direction), subscribe(_, _))
       .WillOnce(
           [this, lambda, error, direction](

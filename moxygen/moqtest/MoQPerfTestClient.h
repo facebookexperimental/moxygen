@@ -65,12 +65,12 @@ class SubscriberState {
     explicit Callback(SubscriberState& state) : state_(state) {}
 
     FlowControlState onObject(
-        folly::Optional<TrackAlias> trackAlias,
+        std::optional<TrackAlias> trackAlias,
         const ObjectHeader& objHeader,
         Payload payload) override;
 
     void onObjectStatus(
-        folly::Optional<TrackAlias> trackAlias,
+        std::optional<TrackAlias> trackAlias,
         const ObjectHeader& objHeader) override;
 
     void onEndOfStream() override;
@@ -129,7 +129,7 @@ class MoQPerfTestClient {
   void recordTrackRestart();
   void removeSubscriber(size_t id);
   void updateLargestObjectSeen(const AbsoluteLocation& location);
-  folly::Optional<AbsoluteLocation> getLargestObjectSeen() const;
+  std::optional<AbsoluteLocation> getLargestObjectSeen() const;
 
  private:
   // Add a new subscriber
@@ -156,7 +156,7 @@ class MoQPerfTestClient {
   uint32_t resetsInCurrentInterval_{0};
   uint32_t failuresInCurrentInterval_{0};
   bool trackRestarted_{false};
-  folly::Optional<AbsoluteLocation> largestObjectSeen_;
+  std::optional<AbsoluteLocation> largestObjectSeen_;
   std::chrono::steady_clock::time_point startTime_;
 
   // Atomic cross-thread state (accessed from aggregation thread in getResults)

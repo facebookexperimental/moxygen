@@ -31,7 +31,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
       alias,
       std::chrono::milliseconds(0) /* never expires */,
       subscribeRequest.groupOrder,
-      folly::none};
+      std::nullopt};
   return folly::coro::makeTask<SubscribeResult>(
       std::make_shared<PerfSubscriptionHandle>(ok, &cancellationSource_));
 }
@@ -39,7 +39,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
 folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
     Fetch fetchRequest,
     std::shared_ptr<FetchConsumer> callback) {
-  CHECK(!requestId_.hasValue()) << "Cannot get more than one fetch, as of now";
+  CHECK(!requestId_.has_value()) << "Cannot get more than one fetch, as of now";
   auto session = MoQSession::getRequestSession();
   co_withExecutor(
       session->getExecutor(),

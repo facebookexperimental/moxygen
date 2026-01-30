@@ -59,7 +59,7 @@ MoQCodec::ParseResult MoQControlCodec::onIngress(
             curFrameType_ == FrameType::LEGACY_CLIENT_SETUP ||
             curFrameType_ == FrameType::LEGACY_SERVER_SETUP) {
           parseFrameLengthAs16bit = false;
-        } else if (!moqFrameParser_.getVersion().hasValue()) {
+        } else if (!moqFrameParser_.getVersion().has_value()) {
           XLOG(DBG4)
               << "Received a non-setup frame before knowing the negotiated version";
           connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);

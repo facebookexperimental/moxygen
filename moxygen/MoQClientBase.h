@@ -95,10 +95,10 @@ class MoQClientBase : public proxygen::WebTransportHandler {
 
   folly::coro::Task<ServerSetup> completeSetupMoQSession(
       proxygen::WebTransport* wt,
-      const folly::Optional<std::string>& pathParam,
+      const std::optional<std::string>& pathParam,
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler);
-  ClientSetup getClientSetup(const folly::Optional<std::string>& path);
+  ClientSetup getClientSetup(const std::optional<std::string>& path);
 
   void onSessionEnd(folly::Optional<uint32_t>) noexcept override;
   void onSessionDrain() noexcept override;
@@ -112,7 +112,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   proxygen::URL url_;
   SessionFactory sessionFactory_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
-  folly::Optional<std::string> negotiatedProtocol_;
+  std::optional<std::string> negotiatedProtocol_;
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
 };
 

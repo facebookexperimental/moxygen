@@ -9,10 +9,10 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
-#include "folly/Optional.h"
 #include "folly/io/IOBuf.h"
 #include "folly/json/dynamic.h"
 
@@ -38,8 +38,8 @@ enum Owner { LOCAL, REMOTE };
 
 struct MOQTExtensionHeader {
   uint64_t headerType{0};
-  folly::Optional<uint64_t> headerValue;
-  folly::Optional<uint64_t> headerLength;
+  std::optional<uint64_t> headerValue;
+  std::optional<uint64_t> headerLength;
   std::unique_ptr<folly::IOBuf> payload;
 
   folly::dynamic toDynamic() const;
@@ -50,8 +50,8 @@ struct MOQTExtensionHeader {
 struct MOQTAuthorizationTokenParameter {
   std::string name = "authorization_token";
   uint64_t aliasType{0};
-  folly::Optional<uint64_t> tokenAlias;
-  folly::Optional<uint64_t> tokenType;
+  std::optional<uint64_t> tokenAlias;
+  std::optional<uint64_t> tokenType;
   std::unique_ptr<folly::IOBuf> tokenValue;
 
   folly::dynamic toDynamic() const;
@@ -74,8 +74,8 @@ struct MOQTMaxCacheDurationParameter {
 struct MOQTUnknownParameter {
   std::string name = "unknown";
   uint64_t nameBytes{0};
-  folly::Optional<uint64_t> length;
-  folly::Optional<uint64_t> value;
+  std::optional<uint64_t> length;
+  std::optional<uint64_t> value;
   std::unique_ptr<folly::IOBuf> valueBytes;
 
   folly::dynamic toDynamic() const;
@@ -103,8 +103,8 @@ struct MOQTAuthoritySetupParameter {
 struct MOQTAuthorizationTokenSetupParameter {
   std::string name = "authorization_token";
   MOQTAliasType aliasType;
-  folly::Optional<uint64_t> tokenAlias;
-  folly::Optional<uint64_t> tokenType;
+  std::optional<uint64_t> tokenAlias;
+  std::optional<uint64_t> tokenType;
   std::unique_ptr<folly::IOBuf> tokenValue;
 
   folly::dynamic toDynamic() const;
@@ -141,8 +141,8 @@ struct MOQTImplementationSetupParameter {
 struct MOQTUnknownSetupParameter {
   std::string name = "unknown";
   uint64_t nameBytes{0};
-  folly::Optional<uint64_t> length;
-  folly::Optional<uint64_t> value;
+  std::optional<uint64_t> length;
+  std::optional<uint64_t> value;
   std::unique_ptr<folly::IOBuf> valueBytes;
 
   folly::dynamic toDynamic() const;
@@ -222,7 +222,7 @@ class MOQTGoaway : public MOQTBaseControlMessage {
     type = "goaway";
   }
   folly::dynamic toDynamic() const override;
-  folly::Optional<uint64_t> length;
+  std::optional<uint64_t> length;
   std::unique_ptr<folly::IOBuf> newSessionUri;
 };
 
@@ -246,8 +246,8 @@ class MOQTSubscribe : public MOQTBaseControlMessage {
   uint8_t groupOrder{};
   uint8_t forward{};
   uint64_t filterType{};
-  folly::Optional<MOQTLocation> startLocation;
-  folly::Optional<uint64_t> endGroup;
+  std::optional<MOQTLocation> startLocation;
+  std::optional<uint64_t> endGroup;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> subscribeParameters;
 };
@@ -303,8 +303,8 @@ class MOQTFetch : public MOQTBaseControlMessage {
   uint8_t subscriberPriority{};
   uint8_t groupOrder{};
   std::string fetchType;
-  folly::Optional<MOQTStandaloneFetch> standaloneFetch;
-  folly::Optional<MOQTJoiningFetch> joiningFetch;
+  std::optional<MOQTStandaloneFetch> standaloneFetch;
+  std::optional<MOQTJoiningFetch> joiningFetch;
   std::vector<MOQTParameter> parameters;
 };
 
@@ -334,8 +334,8 @@ class MOQTAnnounceError : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTAnnounceCancel : public MOQTBaseControlMessage {
@@ -346,8 +346,8 @@ class MOQTAnnounceCancel : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTTrackStatus : public MOQTBaseControlMessage {
@@ -363,8 +363,8 @@ class MOQTTrackStatus : public MOQTBaseControlMessage {
   uint8_t groupOrder{};
   uint8_t forward{};
   uint64_t filterType{};
-  folly::Optional<MOQTLocation> startLocation;
-  folly::Optional<uint64_t> endGroup;
+  std::optional<MOQTLocation> startLocation;
+  std::optional<uint64_t> endGroup;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
 };
@@ -388,7 +388,7 @@ class MOQTUnsubscribeAnnounces : public MOQTBaseControlMessage {
   }
   folly::dynamic toDynamic() const override;
   // Keeping both to maintain compatibility between v15 and v15-
-  folly::Optional<uint64_t> requestID;
+  std::optional<uint64_t> requestID;
   std::vector<MOQTByteString> trackNamespace;
 };
 
@@ -403,7 +403,7 @@ class MOQTSubscribeOk : public MOQTBaseControlMessage {
   uint64_t expires{};
   uint8_t groupOrder{};
   uint8_t contentExists{};
-  folly::Optional<MOQTLocation> largestLocation;
+  std::optional<MOQTLocation> largestLocation;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
 };
@@ -416,8 +416,8 @@ class MOQTSubscribeError : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTFetchOk : public MOQTBaseControlMessage {
@@ -442,8 +442,8 @@ class MOQTFetchError : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTPublishDone : public MOQTBaseControlMessage {
@@ -455,8 +455,8 @@ class MOQTPublishDone : public MOQTBaseControlMessage {
   uint64_t requestId{0};
   uint64_t statusCode{};
   uint64_t streamCount{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTMaxRequestId : public MOQTBaseControlMessage {
@@ -509,7 +509,7 @@ class MOQTTrackStatusOk : public MOQTBaseControlMessage {
   uint64_t expires{};
   uint8_t groupOrder{};
   uint8_t contentExists{};
-  folly::Optional<MOQTLocation> largestLocation;
+  std::optional<MOQTLocation> largestLocation;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
 };
@@ -522,8 +522,8 @@ class MOQTTrackStatusError : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTSubscribeAnnouncesOk : public MOQTBaseControlMessage {
@@ -543,8 +543,8 @@ class MOQTSubscribeAnnouncesError : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 class MOQTPublish : public MOQTBaseControlMessage {
@@ -559,7 +559,7 @@ class MOQTPublish : public MOQTBaseControlMessage {
   uint64_t trackAlias{0};
   uint8_t groupOrder{};
   uint8_t contentExists{};
-  folly::Optional<MOQTLocation> largest;
+  std::optional<MOQTLocation> largest;
   uint8_t forward{};
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
@@ -576,8 +576,8 @@ class MOQTPublishOk : public MOQTBaseControlMessage {
   uint8_t subscriberPriority{};
   uint8_t groupOrder{};
   uint64_t filterType{};
-  folly::Optional<MOQTLocation> start;
-  folly::Optional<uint64_t> endGroup;
+  std::optional<MOQTLocation> start;
+  std::optional<uint64_t> endGroup;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
 };
@@ -590,14 +590,14 @@ class MOQTPublishError : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   uint64_t errorCode{};
-  folly::Optional<std::string> reason;
-  folly::Optional<std::string> reasonBytes;
+  std::optional<std::string> reason;
+  std::optional<std::string> reasonBytes;
 };
 
 // MOQTEvents Structs
 struct MOQTControlMessageCreated {
   uint64_t streamId{0};
-  folly::Optional<uint64_t> length;
+  std::optional<uint64_t> length;
   std::unique_ptr<MOQTBaseControlMessage> message;
   std::unique_ptr<folly::IOBuf> raw;
 
@@ -606,7 +606,7 @@ struct MOQTControlMessageCreated {
 
 struct MOQTControlMessageParsed {
   uint64_t streamId{0};
-  folly::Optional<uint64_t> length;
+  std::optional<uint64_t> length;
   std::unique_ptr<MOQTBaseControlMessage> message;
   std::unique_ptr<folly::IOBuf> raw;
 
@@ -614,7 +614,7 @@ struct MOQTControlMessageParsed {
 };
 
 struct MOQTStreamTypeSet {
-  folly::Optional<Owner> owner;
+  std::optional<Owner> owner;
   uint64_t streamId{0};
   MOQTStreamType streamType;
 
@@ -624,11 +624,11 @@ struct MOQTStreamTypeSet {
 struct MOQTObjectDatagramCreated {
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  folly::Optional<uint64_t> objectId;
+  std::optional<uint64_t> objectId;
   uint8_t publisherPriority{0};
-  folly::Optional<uint64_t> extensionHeadersLength;
+  std::optional<uint64_t> extensionHeadersLength;
   std::vector<MOQTExtensionHeader> extensionHeaders;
-  folly::Optional<uint64_t> objectStatus;
+  std::optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
   bool endOfGroup{false};
 
@@ -638,11 +638,11 @@ struct MOQTObjectDatagramCreated {
 struct MOQTObjectDatagramParsed {
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  folly::Optional<uint64_t> objectId;
+  std::optional<uint64_t> objectId;
   uint8_t publisherPriority{0};
-  folly::Optional<uint64_t> extensionHeadersLength;
+  std::optional<uint64_t> extensionHeadersLength;
   std::vector<MOQTExtensionHeader> extensionHeaders;
-  folly::Optional<uint64_t> objectStatus;
+  std::optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
   bool endOfGroup{false};
 
@@ -653,7 +653,7 @@ struct MOQTSubgroupHeaderCreated {
   uint64_t streamId{0};
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  folly::Optional<uint64_t> subgroupId;
+  std::optional<uint64_t> subgroupId;
   uint8_t publisherPriority{0};
   bool containsEndOfGroup{false};
   bool extensionsPresent{false};
@@ -665,7 +665,7 @@ struct MOQTSubgroupHeaderParsed {
   uint64_t streamId{0};
   uint64_t trackAlias{0};
   uint64_t groupId{0};
-  folly::Optional<uint64_t> subgroupId;
+  std::optional<uint64_t> subgroupId;
   uint8_t publisherPriority{0};
   bool containsEndOfGroup{false};
   bool extensionsPresent{false};
@@ -675,13 +675,13 @@ struct MOQTSubgroupHeaderParsed {
 
 struct MOQTSubgroupObjectCreated {
   uint64_t streamId{0};
-  folly::Optional<uint64_t> groupId;
-  folly::Optional<uint64_t> subgroupId;
+  std::optional<uint64_t> groupId;
+  std::optional<uint64_t> subgroupId;
   uint64_t objectId{0};
   uint64_t extensionHeadersLength{0};
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
-  folly::Optional<uint64_t> objectStatus;
+  std::optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
@@ -689,13 +689,13 @@ struct MOQTSubgroupObjectCreated {
 
 struct MOQTSubgroupObjectParsed {
   uint64_t streamId{0};
-  folly::Optional<uint64_t> groupId;
-  folly::Optional<uint64_t> subgroupId;
+  std::optional<uint64_t> groupId;
+  std::optional<uint64_t> subgroupId;
   uint64_t objectId{0};
   uint64_t extensionHeadersLength{0};
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
-  folly::Optional<uint64_t> objectStatus;
+  std::optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
@@ -724,7 +724,7 @@ struct MOQTFetchObjectCreated {
   uint64_t extensionHeadersLength{0};
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
-  folly::Optional<uint64_t> objectStatus;
+  std::optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
@@ -739,7 +739,7 @@ struct MOQTFetchObjectParsed {
   uint64_t extensionHeadersLength{0};
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
-  folly::Optional<uint64_t> objectStatus;
+  std::optional<uint64_t> objectStatus;
   std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;

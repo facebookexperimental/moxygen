@@ -84,7 +84,7 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
 
 MoQForwarder::MoQForwarder(
     FullTrackName ftn,
-    folly::Optional<AbsoluteLocation> largest)
+    std::optional<AbsoluteLocation> largest)
     : fullTrackName_(std::move(ftn)), largest_(std::move(largest)) {}
 
 void MoQForwarder::setDeliveryTimeout(uint64_t timeout) {
@@ -231,8 +231,8 @@ void MoQForwarder::drainSubscriber(
 
   // If no open subgroups, delegate to removeSubscriberIt for cleanup
   if (subscriber.subgroups.empty()) {
-    // Pass folly::none for subDone since we already forwarded it above
-    removeSubscriberIt(subIt, folly::none, callsite);
+    // Pass std::nullopt for subDone since we already forwarded it above
+    removeSubscriberIt(subIt, std::nullopt, callsite);
     return;
   }
 
@@ -244,7 +244,7 @@ void MoQForwarder::drainSubscriber(
 
 void MoQForwarder::removeSubscriber(
     const std::shared_ptr<MoQSession>& session,
-    folly::Optional<SubscribeDone> subDone,
+    std::optional<SubscribeDone> subDone,
     const std::string& callsite) {
   XLOG(DBG1) << __func__ << " from " << callsite
              << " session=" << session.get();
@@ -271,7 +271,7 @@ void MoQForwarder::checkAndFireOnEmpty() {
 
 void MoQForwarder::removeSubscriberIt(
     folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator subIt,
-    folly::Optional<SubscribeDone> subDone,
+    std::optional<SubscribeDone> subDone,
     const std::string& callsite) {
   auto& subscriber = *subIt->second;
   XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
@@ -513,12 +513,12 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
   // - Forward state is optional and only updated if explicitly provided
 
   // Only update start if provided
-  if (subscribeUpdate.start.hasValue()) {
+  if (subscribeUpdate.start.has_value()) {
     range.start = *subscribeUpdate.start;
   }
 
   // Only update end if provided
-  if (subscribeUpdate.endGroup.hasValue()) {
+  if (subscribeUpdate.endGroup.has_value()) {
     AbsoluteLocation newEnd{*subscribeUpdate.endGroup, 0};
 
     // Validate: for bounded end, the end must not be less than the start
@@ -536,7 +536,7 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
   auto wasForwarding = shouldForward;
   // Only update forward state if explicitly provided (per draft 15+)
-  if (subscribeUpdate.forward.hasValue()) {
+  if (subscribeUpdate.forward.has_value()) {
     shouldForward = *subscribeUpdate.forward;
   }
 
@@ -551,7 +551,7 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
 void MoQForwarder::Subscriber::unsubscribe() {
   XLOG(DBG4) << "unsubscribe sess=" << this;
-  forwarder.removeSubscriber(session, folly::none, "unsubscribe");
+  forwarder.removeSubscriber(session, std::nullopt, "unsubscribe");
 }
 
 bool MoQForwarder::Subscriber::checkShouldForward() {
@@ -578,7 +578,7 @@ void MoQForwarder::SubgroupForwarder::closeSubgroupForSubscriber(
   sub->subgroups.erase(identifier_);
   // If this subscriber is draining and this was the last subgroup, remove it
   if (sub->shouldRemove()) {
-    forwarder_.removeSubscriber(sub->session, folly::none, callsite);
+    forwarder_.removeSubscriber(sub->session, std::nullopt, callsite);
   }
 }
 

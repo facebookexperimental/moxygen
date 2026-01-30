@@ -36,10 +36,10 @@ TEST_F(MoQDeliveryTimeoutManagerTest, EffectiveTimeoutIsMinimum) {
 // Test 2: Verify callback is invoked when effective timeout changes
 TEST_F(MoQDeliveryTimeoutManagerTest, CallbackInvokedOnChange) {
   int callbackCount = 0;
-  folly::Optional<std::chrono::milliseconds> lastValue;
+  std::optional<std::chrono::milliseconds> lastValue;
 
   manager_.setOnChangeCallback(
-      [&](const folly::Optional<std::chrono::milliseconds>& newTimeout) {
+      [&](const std::optional<std::chrono::milliseconds>& newTimeout) {
         callbackCount++;
         lastValue = newTimeout;
       });
@@ -75,7 +75,7 @@ TEST_F(MoQDeliveryTimeoutManagerTest, CallbackNotInvokedWhenNoChange) {
   int callbackCount = 0;
 
   manager_.setOnChangeCallback(
-      [&](const folly::Optional<std::chrono::milliseconds>&) {
+      [&](const std::optional<std::chrono::milliseconds>&) {
         callbackCount++;
       });
 
@@ -95,10 +95,10 @@ TEST_F(MoQDeliveryTimeoutManagerTest, CallbackNotInvokedWhenNoChange) {
 // Test 4: Verify behavior when only one timeout source is set
 TEST_F(MoQDeliveryTimeoutManagerTest, SingleTimeoutSource) {
   int callbackCount = 0;
-  folly::Optional<std::chrono::milliseconds> lastValue;
+  std::optional<std::chrono::milliseconds> lastValue;
 
   manager_.setOnChangeCallback(
-      [&](const folly::Optional<std::chrono::milliseconds>& newTimeout) {
+      [&](const std::optional<std::chrono::milliseconds>& newTimeout) {
         callbackCount++;
         lastValue = newTimeout;
       });
@@ -119,7 +119,7 @@ TEST_F(MoQDeliveryTimeoutManagerTest, NoTimeoutSources) {
   int callbackCount = 0;
 
   manager_.setOnChangeCallback(
-      [&](const folly::Optional<std::chrono::milliseconds>&) {
+      [&](const std::optional<std::chrono::milliseconds>&) {
         callbackCount++;
       });
 

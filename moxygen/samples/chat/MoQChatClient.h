@@ -93,8 +93,8 @@ class MoQChatClient : public Publisher,
   std::string timestampString_;
   std::shared_ptr<MoQFollyExecutorImpl> executor_;
   MoQRelayClient moqClient_;
-  folly::Optional<RequestID> chatRequestID_;
-  folly::Optional<TrackAlias> chatTrackAlias_;
+  std::optional<RequestID> chatRequestID_;
+  std::optional<TrackAlias> chatTrackAlias_;
   std::shared_ptr<TrackConsumer> publisher_;
   uint64_t nextGroup_{0};
   struct UserTrack {

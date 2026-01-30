@@ -244,7 +244,7 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
                     LocationType::AbsoluteRange, // subscriber wants range
                                                  // filter
                     AbsoluteLocation{50, 25},    // specific start location
-                    folly::make_optional(uint64_t(200)), // endGroup
+                    std::make_optional(uint64_t(200)), // endGroup
                 };
 
                 // Create the reply task that returns the PublishOk
@@ -591,8 +591,8 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
                               128,
                               GroupOrder::Default,
                               LocationType::LargestObject,
-                              folly::none,
-                              folly::none};
+                              std::nullopt,
+                              std::nullopt};
                         })};
               }));
 
@@ -674,8 +674,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
                     128,
                     GroupOrder::Default,
                     LocationType::LargestObject,
-                    folly::none,
-                    folly::none};
+                    std::nullopt,
+                    std::nullopt};
                 auto replyTask = folly::coro::makeTask<
                     folly::Expected<PublishOk, PublishError>>(std::move(bogus));
                 return Subscriber::PublishConsumerAndReplyTask{
@@ -733,8 +733,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                     128,  // subscriber priority
                     GroupOrder::Default,
                     LocationType::LargestObject,
-                    folly::none,                       // start
-                    folly::make_optional(uint64_t(0)), // endGroup
+                    std::nullopt,                    // start
+                    std::make_optional(uint64_t(0)), // endGroup
                 };
 
                 // Add delivery timeout parameter (3000ms)
@@ -839,8 +839,8 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
                     128,
                     GroupOrder::Default,
                     LocationType::LargestObject,
-                    folly::none,
-                    folly::make_optional(uint64_t(0))};
+                    std::nullopt,
+                    std::make_optional(uint64_t(0))};
 
                 // Add zero delivery timeout parameter
                 publishOk.params.insertParam(

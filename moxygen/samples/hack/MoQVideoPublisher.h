@@ -120,8 +120,8 @@ class MoQVideoPublisher
   std::shared_ptr<SubgroupConsumer> audioSgPub_;
   uint64_t videoSeqId_{0};
   uint64_t audioSeqId_{0};
-  folly::Optional<uint64_t> lastVideoPts_;
-  folly::Optional<uint64_t> lastAudioPts_;
+  std::optional<uint64_t> lastVideoPts_;
+  std::optional<uint64_t> lastAudioPts_;
   std::unique_ptr<folly::IOBuf> savedMetadata_;
 
   // Relay run coordination: ensure we don't destroy on EB thread and we can

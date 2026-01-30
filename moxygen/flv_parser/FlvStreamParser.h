@@ -6,11 +6,11 @@
 
 #pragma once
 
-#include <folly/Optional.h>
 #include <folly/io/IOBuf.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/flv_parser/FlvCommon.h>
 #include <moxygen/moq_mi/MediaItem.h>
+#include <optional>
 
 namespace moxygen::flv {
 
@@ -34,8 +34,8 @@ class FlvStreamParser {
   uint64_t videoFrameId_;
   uint64_t audioFrameId_;
 
-  folly::Optional<uint64_t> lastVideoPts_;
-  folly::Optional<uint64_t> lastAudioPts_;
+  std::optional<uint64_t> lastVideoPts_;
+  std::optional<uint64_t> lastAudioPts_;
 };
 
 } // namespace moxygen::flv

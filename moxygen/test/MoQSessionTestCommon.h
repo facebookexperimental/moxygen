@@ -45,12 +45,12 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
 
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     const SubscribeRequest& sub,
-    const folly::Optional<AbsoluteLocation>& largest = folly::none,
-    const folly::Optional<uint8_t>& publisherPriority = folly::none);
+    const std::optional<AbsoluteLocation>& largest = std::nullopt,
+    const std::optional<uint8_t>& publisherPriority = std::nullopt);
 
 TrackStatusOk makeTrackStatusOkResult(
     const TrackStatus& req,
-    const folly::Optional<AbsoluteLocation>& largest = folly::none);
+    const std::optional<AbsoluteLocation>& largest = std::nullopt);
 
 inline Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
     const auto& subAnn) {
@@ -82,8 +82,8 @@ inline Subscriber::PublishResult makePublishOkResult(
       128,  // subscriber priority
       GroupOrder::Default,
       LocationType::LargestObject,
-      folly::none,                       // start
-      folly::make_optional(uint64_t(0)), // endGroup
+      std::nullopt,                    // start
+      std::make_optional(uint64_t(0)), // endGroup
   };
 
   // Create the reply task that returns the PublishOk
@@ -174,7 +174,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   void expectFetch(
       const std::function<
           TaskFetchResult(Fetch, std::shared_ptr<FetchConsumer>)>& lambda,
-      folly::Optional<FetchErrorCode> error = folly::none);
+      std::optional<FetchErrorCode> error = std::nullopt);
 
   void expectFetchSuccess();
 
@@ -200,7 +200,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
           const SubscribeRequest&,
           std::shared_ptr<TrackConsumer>)>& lambda,
       MoQControlCodec::Direction direction = MoQControlCodec::Direction::SERVER,
-      const folly::Optional<SubscribeErrorCode>& error = folly::none);
+      const std::optional<SubscribeErrorCode>& error = std::nullopt);
 
   void expectSubscribeDone(
       MoQControlCodec::Direction recipient =

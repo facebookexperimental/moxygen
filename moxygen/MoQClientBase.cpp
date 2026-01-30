@@ -80,7 +80,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
 
 folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
     proxygen::WebTransport* wt,
-    const folly::Optional<std::string>& pathParam,
+    const std::optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler) {
   //  Create MoQSession and Setup MoQSession parameters
@@ -106,7 +106,7 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
 }
 
 ClientSetup MoQClientBase::getClientSetup(
-    const folly::Optional<std::string>& path) {
+    const std::optional<std::string>& path) {
   // Setup MoQSession parameters
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.

@@ -51,7 +51,7 @@ class MoQCodec {
   uint64_t streamId_{std::numeric_limits<uint64_t>::max()};
   folly::IOBufQueue ingress_{folly::IOBufQueue::cacheChainLength()};
 
-  folly::Optional<ErrorCode> connError_;
+  std::optional<ErrorCode> connError_;
   ObjectHeader curObjectHeader_;
   MoQFrameParser moqFrameParser_;
 };
@@ -171,7 +171,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         TrackAlias alias,
         uint64_t group,
         uint64_t subgroup,
-        folly::Optional<uint8_t> priority,
+        std::optional<uint8_t> priority,
         const SubgroupOptions& options) = 0;
     virtual ParseResult onObjectBegin(
         uint64_t group,
@@ -186,7 +186,7 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t group,
         uint64_t subgroup,
         uint64_t objectID,
-        folly::Optional<uint8_t> priority,
+        std::optional<uint8_t> priority,
         ObjectStatus status) = 0;
     virtual ParseResult onObjectPayload(
         Payload payload,

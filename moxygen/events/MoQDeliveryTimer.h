@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <folly/Optional.h>
 #include <folly/container/F14Map.h>
 #include <quic/common/events/QuicTimer.h>
 #include <moxygen/MoQFramer.h>
@@ -14,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 
 // Forward declarations
 namespace moxygen {

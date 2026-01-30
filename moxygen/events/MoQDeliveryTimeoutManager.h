@@ -6,11 +6,11 @@
 
 #pragma once
 
-#include <folly/Optional.h>
 #include <folly/logging/xlog.h>
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <optional>
 
 namespace moxygen {
 
@@ -25,7 +25,7 @@ class MoQDeliveryTimeoutManager {
  public:
   // Callback type invoked when effective timeout changes
   using OnChangeCallback =
-      std::function<void(folly::Optional<std::chrono::milliseconds>)>;
+      std::function<void(std::optional<std::chrono::milliseconds>)>;
 
   MoQDeliveryTimeoutManager() = default;
 
@@ -55,7 +55,7 @@ class MoQDeliveryTimeoutManager {
   }
 
   // Get effective timeout as min of available sources
-  folly::Optional<std::chrono::milliseconds> getEffectiveTimeout() const {
+  std::optional<std::chrono::milliseconds> getEffectiveTimeout() const {
     if (upstreamTimeout_ && downstreamTimeout_) {
       return std::min(*upstreamTimeout_, *downstreamTimeout_);
     }
@@ -65,16 +65,16 @@ class MoQDeliveryTimeoutManager {
     if (downstreamTimeout_) {
       return downstreamTimeout_;
     }
-    return folly::none;
+    return std::nullopt;
   }
 
  private:
   // Individual timeout sources
-  folly::Optional<std::chrono::milliseconds> upstreamTimeout_;
-  folly::Optional<std::chrono::milliseconds> downstreamTimeout_;
+  std::optional<std::chrono::milliseconds> upstreamTimeout_;
+  std::optional<std::chrono::milliseconds> downstreamTimeout_;
 
   // Cached effective timeout for change detection
-  mutable folly::Optional<std::chrono::milliseconds> lastEffectiveTimeout_;
+  mutable std::optional<std::chrono::milliseconds> lastEffectiveTimeout_;
 
   // Callback invoked when effective timeout changes
   OnChangeCallback onChangeCallback_;

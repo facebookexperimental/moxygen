@@ -144,7 +144,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
   wt = wtTry.value();
 
   co_await completeSetupMoQSession(
-      wt, folly::none, std::move(publishHandler), std::move(subscribeHandler));
+      wt, std::nullopt, std::move(publishHandler), std::move(subscribeHandler));
 }
 
 void MoQWebTransportClient::HTTPHandler::onHeadersComplete(

@@ -20,7 +20,7 @@ class DeliveryCallback {
 
   // Called when an object has been delivered successfully
   virtual void onDelivered(
-      const folly::Optional<TrackAlias>& maybeTrackAlias,
+      const std::optional<TrackAlias>& maybeTrackAlias,
       uint64_t groupId,
       uint64_t subgroupId,
       uint64_t objectId) = 0;
@@ -28,7 +28,7 @@ class DeliveryCallback {
   // Called when we, for instance, reset the stream, and can't
   // guarantee delivery of the object.
   virtual void onDeliveryCancelled(
-      const folly::Optional<TrackAlias>& maybeTrackAlias,
+      const std::optional<TrackAlias>& maybeTrackAlias,
       uint64_t groupId,
       uint64_t subgroupId,
       uint64_t objectId) = 0;

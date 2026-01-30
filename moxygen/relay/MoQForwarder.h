@@ -19,7 +19,7 @@ class MoQForwarder : public TrackConsumer {
  public:
   explicit MoQForwarder(
       FullTrackName ftn,
-      folly::Optional<AbsoluteLocation> largest = folly::none);
+      std::optional<AbsoluteLocation> largest = std::nullopt);
 
   const FullTrackName& fullTrackName() const {
     return fullTrackName_;
@@ -41,7 +41,7 @@ class MoQForwarder : public TrackConsumer {
 
   void setLargest(AbsoluteLocation largest);
 
-  folly::Optional<AbsoluteLocation> largest() {
+  std::optional<AbsoluteLocation> largest() {
     return largest_;
   }
 
@@ -145,7 +145,7 @@ class MoQForwarder : public TrackConsumer {
   // from subscribers map
   void removeSubscriber(
       const std::shared_ptr<MoQSession>& session,
-      folly::Optional<SubscribeDone> subDone,
+      std::optional<SubscribeDone> subDone,
       const std::string& callsite);
 
   template <typename Fn>
@@ -185,7 +185,7 @@ class MoQForwarder : public TrackConsumer {
       SubscribeDone subDone) override;
 
   class SubgroupForwarder : public SubgroupConsumer {
-    folly::Optional<uint64_t> currentObjectLength_;
+    std::optional<uint64_t> currentObjectLength_;
     MoQForwarder& forwarder_;
     SubgroupIdentifier identifier_;
     Priority priority_;
@@ -268,11 +268,11 @@ class MoQForwarder : public TrackConsumer {
   void removeSubscriberIt(
       folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator
           subIt,
-      folly::Optional<SubscribeDone> subDone,
+      std::optional<SubscribeDone> subDone,
       const std::string& callsite);
 
   FullTrackName fullTrackName_;
-  folly::Optional<TrackAlias> trackAlias_;
+  std::optional<TrackAlias> trackAlias_;
   folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;
   folly::F14FastMap<
       SubgroupIdentifier,
@@ -280,7 +280,7 @@ class MoQForwarder : public TrackConsumer {
       SubgroupIdentifier::hash>
       subgroups_;
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
-  folly::Optional<AbsoluteLocation> largest_;
+  std::optional<AbsoluteLocation> largest_;
   // This should eventually be a vector of params that can be cascaded e2e
   std::chrono::milliseconds upstreamDeliveryTimeout_{};
   std::shared_ptr<Callback> callback_;

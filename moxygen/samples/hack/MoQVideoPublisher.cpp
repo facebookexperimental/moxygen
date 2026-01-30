@@ -166,7 +166,7 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
                    /*trackAlias=*/alias,
                    /*expires=*/std::chrono::milliseconds(0),
                    /*groupOrder=*/GroupOrder::OldestFirst,
-                   /*largest=*/folly::none};
+                   /*largest=*/std::nullopt};
     setSubscribeOk(std::move(ok));
   }
   void unsubscribe() override {}

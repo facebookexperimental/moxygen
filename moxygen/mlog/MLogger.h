@@ -163,7 +163,7 @@ class MLogger {
   void logStreamTypeSet(
       uint64_t streamId,
       MOQTStreamType type,
-      folly::Optional<Owner> owner);
+      std::optional<Owner> owner);
   void logObjectDatagramCreated(
       TrackAlias trackAlias,
       const ObjectHeader& header,
@@ -227,11 +227,11 @@ class MLogger {
   MLogEventCreator eventCreator_ = MLogEventCreator();
 
   // Connection metadata (populated via setters, consumed by ScubaMLogger)
-  folly::Optional<quic::ConnectionId> dcid_;
-  folly::Optional<quic::ConnectionId> srcCid_;
-  folly::Optional<folly::SocketAddress> peerAddress_;
-  folly::Optional<folly::SocketAddress> localAddress_;
-  folly::Optional<uint64_t> negotiatedMoQVersion_;
+  std::optional<quic::ConnectionId> dcid_;
+  std::optional<quic::ConnectionId> srcCid_;
+  std::optional<folly::SocketAddress> peerAddress_;
+  std::optional<folly::SocketAddress> localAddress_;
+  std::optional<uint64_t> negotiatedMoQVersion_;
   std::vector<std::string> experiments_;
 
   // Log Formatting (protected for subclass access)
@@ -252,7 +252,7 @@ class MLogger {
   void logControlMessage(
       ControlMessageType controlType,
       uint64_t streamId,
-      const folly::Optional<uint64_t>& length,
+      const std::optional<uint64_t>& length,
       std::unique_ptr<MOQTBaseControlMessage> message,
       std::unique_ptr<folly::IOBuf> raw = nullptr);
   std::vector<MOQTExtensionHeader> convertExtensionToMoQTExtensionHeaders(

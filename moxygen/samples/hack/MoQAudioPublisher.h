@@ -104,7 +104,7 @@ class MoQAudioPublisher
   folly::CancellationSource cancel_;
 
   uint64_t audioSeqId_{0};
-  folly::Optional<uint64_t> lastAudioPts_;
+  std::optional<uint64_t> lastAudioPts_;
 
   // Relay run coordination: ensure we don't destroy on EB thread and we can
   // wait for run() to finish on stop

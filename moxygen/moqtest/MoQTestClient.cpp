@@ -213,7 +213,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
 }
 
 ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
-    const folly::Optional<TrackAlias>& /* trackAlias */,
+    const std::optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader,
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
@@ -237,7 +237,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
 }
 
 void MoQTestClient::onObjectStatus(
-    const folly::Optional<TrackAlias>& /* trackAlias */,
+    const std::optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onObjectStatus";
 

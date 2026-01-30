@@ -56,7 +56,7 @@ class MockMoQSession : public MoQSession {
       (override));
 
   MOCK_METHOD(
-      folly::Optional<uint64_t>,
+      std::optional<uint64_t>,
       getNegotiatedVersion,
       (),
       (const, override));

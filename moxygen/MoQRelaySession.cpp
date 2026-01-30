@@ -406,7 +406,7 @@ void MoQRelaySession::onAnnounceCancel(AnnounceCancel announceCancel) {
 
   RequestID reqId;
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-    CHECK(announceCancel.requestID.hasValue());
+    CHECK(announceCancel.requestID.has_value());
     XLOG(DBG1) << __func__ << " requestID=" << *announceCancel.requestID
                << " sess=" << this;
     reqId = *announceCancel.requestID;
@@ -474,7 +474,7 @@ void MoQRelaySession::unannounce(const Unannounce& unann) {
 
   // Try resolve requestID
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-    CHECK(unann.requestID.hasValue());
+    CHECK(unann.requestID.has_value());
     XLOG(DBG1) << __func__ << " requestID=" << *unann.requestID
                << " sess=" << this;
     reqId = *unann.requestID;
@@ -617,7 +617,7 @@ void MoQRelaySession::announceCancel(const AnnounceCancel& annCan) {
   }
   controlWriteEvent_.signal();
 
-  if (annCan.requestID.hasValue()) {
+  if (annCan.requestID.has_value()) {
     subscriberAnnounces_.erase(*annCan.requestID);
   }
   retireRequestID(/*signalWriteLoop=*/false);
@@ -646,7 +646,7 @@ void MoQRelaySession::onUnannounce(Unannounce unAnn) {
 
   RequestID reqId;
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-    CHECK(unAnn.requestID.hasValue());
+    CHECK(unAnn.requestID.has_value());
     XLOG(DBG1) << __func__ << " requestID=" << *unAnn.requestID
                << " sess=" << this;
     reqId = *unAnn.requestID;
@@ -723,11 +723,11 @@ MoQRelaySession::subscribeAnnounces(SubscribeAnnounces sa) {
 void MoQRelaySession::unsubscribeAnnounces(
     const UnsubscribeAnnounces& unsubAnn) {
   // Log the appropriate field based on what's present
-  if (unsubAnn.trackNamespacePrefix.hasValue()) {
+  if (unsubAnn.trackNamespacePrefix.has_value()) {
     XLOG(DBG1) << __func__
                << " prefix=" << unsubAnn.trackNamespacePrefix.value()
                << " sess=" << this;
-  } else if (unsubAnn.requestID.hasValue()) {
+  } else if (unsubAnn.requestID.has_value()) {
     XLOG(DBG1) << __func__ << " requestID=" << unsubAnn.requestID.value()
                << " sess=" << this;
   }
@@ -843,7 +843,7 @@ void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
 
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
     // v15+: Direct lookup by Request ID
-    if (!unsub.requestID.hasValue()) {
+    if (!unsub.requestID.has_value()) {
       XLOG(ERR) << __func__ << " missing requestID for v15+, sess=" << this;
       return;
     }
@@ -851,7 +851,7 @@ void MoQRelaySession::onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) {
     XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
   } else {
     // <v15: Two-step lookup via namespace
-    if (!unsub.trackNamespacePrefix.hasValue()) {
+    if (!unsub.trackNamespacePrefix.has_value()) {
       XLOG(ERR) << __func__
                 << " missing trackNamespacePrefix for <v15, sess=" << this;
       return;

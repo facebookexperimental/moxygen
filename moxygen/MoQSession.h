@@ -13,7 +13,6 @@
 #include <chrono>
 
 #include <folly/MaybeManagedPtr.h>
-#include <folly/Optional.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Task.h>
@@ -23,6 +22,7 @@
 #include <moxygen/Subscriber.h>
 #include <moxygen/stats/MoQStats.h>
 #include <memory>
+#include <optional>
 #include "moxygen/mlog/MLogger.h"
 #include "moxygen/util/TimedBaton.h"
 
@@ -119,7 +119,7 @@ class MoQSession : public Subscriber,
       PublishRequest pub,
       std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
 
-  virtual folly::Optional<uint64_t> getNegotiatedVersion() const {
+  virtual std::optional<uint64_t> getNegotiatedVersion() const {
     return negotiatedVersion_;
   }
 
@@ -271,7 +271,7 @@ class MoQSession : public Subscriber,
       return groupOrder_;
     }
 
-    folly::Optional<uint8_t> getPublisherPriority() const {
+    std::optional<uint8_t> getPublisherPriority() const {
       return publisherPriority_;
     }
 
@@ -346,7 +346,7 @@ class MoQSession : public Subscriber,
     uint64_t version_;
     uint64_t bytesBuffered_{0};
     uint64_t bytesBufferedThreshold_{0};
-    folly::Optional<uint8_t> publisherPriority_;
+    std::optional<uint8_t> publisherPriority_;
   };
 
   void onNewUniStream(
@@ -383,7 +383,7 @@ class MoQSession : public Subscriber,
 
   // Making this public temporarily until we have param management in a single
   // place
-  static folly::Optional<uint64_t> getDeliveryTimeoutIfPresent(
+  static std::optional<uint64_t> getDeliveryTimeoutIfPresent(
       const TrackRequestParameters& params,
       uint64_t version);
 
@@ -476,7 +476,7 @@ class MoQSession : public Subscriber,
   static uint64_t getMaxRequestIDIfPresent(const SetupParameters& params);
   static uint64_t getMaxAuthTokenCacheSizeIfPresent(
       const SetupParameters& params);
-  static folly::Optional<std::string> getMoQTImplementationIfPresent(
+  static std::optional<std::string> getMoQTImplementationIfPresent(
       const SetupParameters& params);
   static bool shouldIncludeMoqtImplementationParam(
       const std::vector<uint64_t>& supportedVersions);
@@ -525,7 +525,7 @@ class MoQSession : public Subscriber,
   void deliverBufferedData(TrackAlias trackAlias);
   void aliasifyAuthTokens(
       Parameters& params,
-      const folly::Optional<uint64_t>& forceVersion = folly::none);
+      const std::optional<uint64_t>& forceVersion = std::nullopt);
   RequestID getNextRequestID();
   void setRequestSession() {
     folly::RequestContext::get()->setContextData(
@@ -785,7 +785,7 @@ class MoQSession : public Subscriber,
   MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
 
-  folly::Optional<uint64_t> negotiatedVersion_;
+  std::optional<uint64_t> negotiatedVersion_;
   MoQControlCodec controlCodec_;
   MoQTokenCache tokenCache_{1024};
 

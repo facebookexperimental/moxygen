@@ -40,7 +40,7 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
             alias,
             std::chrono::milliseconds(0),
             GroupOrder::OldestFirst,
-            folly::none});
+            std::nullopt});
   }
   void unsubscribe() override {}
   folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>

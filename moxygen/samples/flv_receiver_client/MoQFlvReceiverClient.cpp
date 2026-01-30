@@ -191,12 +191,12 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
         dejitterBufferSizeMs_(dejitterBufferSizeMs) {}
   ~TrackReceiverHandler() override = default;
   FlowControlState onObject(
-      folly::Optional<TrackAlias> /*trackAlias*/,
+      std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& objHeader,
       Payload payload) override {
     if (payload) {
       std::tuple<
-          folly::Optional<MoQMi::MoqMiItem>,
+          std::optional<MoQMi::MoqMiItem>,
           dejitter::DeJitter<MoQMi::MoqMiItem>::GapInfo>
           deJitterData;
 
@@ -276,7 +276,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
     return FlowControlState::UNBLOCKED;
   }
   void onObjectStatus(
-      folly::Optional<TrackAlias> /*trackAlias*/,
+      std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& objHeader) override {
     std::cout << trackMediaType_.toStr()
               << " ObjectStatus=" << uint32_t(objHeader.status) << std::endl;
@@ -317,7 +317,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
     }
   }
 
-  folly::Optional<uint64_t> getSeqId(
+  std::optional<uint64_t> getSeqId(
       const MoQMi::MoqMiItem& payloadDecodedData) const {
     if (payloadDecodedData.index() ==
         MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC) {
@@ -332,13 +332,13 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
                  payloadDecodedData)
           ->seqId;
     }
-    return folly::none;
+    return std::nullopt;
   }
 
-  folly::Optional<uint64_t> getDurationMs(
+  std::optional<uint64_t> getDurationMs(
       const MoQMi::MoqMiItem& payloadDecodedData) const {
-    folly::Optional<uint64_t> dur;
-    folly::Optional<uint64_t> timeScale;
+    std::optional<uint64_t> dur;
+    std::optional<uint64_t> timeScale;
 
     if (payloadDecodedData.index() ==
         MoQMi::MoqMIItemTypeIndex::MOQMI_ITEM_INDEX_VIDEO_H264_AVC) {
@@ -362,7 +362,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
               ->timescale;
     }
     if (!dur.has_value() || !timeScale.has_value()) {
-      return folly::none;
+      return std::nullopt;
     }
     return dur.value() * 1000 / timeScale.value();
   }
@@ -432,7 +432,7 @@ class MoQFlvReceiverClient
           GroupOrder::OldestFirst,
           true,
           LocationType::LargestObject,
-          folly::none,
+          std::nullopt,
           0,
           params);
       auto subVideo = SubscribeRequest::make(
@@ -444,7 +444,7 @@ class MoQFlvReceiverClient
           GroupOrder::OldestFirst,
           true,
           LocationType::LargestObject,
-          folly::none,
+          std::nullopt,
           0,
           paramsForVideo);
 

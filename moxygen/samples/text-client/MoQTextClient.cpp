@@ -66,7 +66,7 @@ using namespace moxygen;
 
 struct SubParams {
   LocationType locType;
-  folly::Optional<AbsoluteLocation> start;
+  std::optional<AbsoluteLocation> start;
   uint64_t endGroup;
 };
 
@@ -106,7 +106,7 @@ class TextHandler : public ObjectReceiverCallback {
   explicit TextHandler(bool fetch) : fetch_(fetch) {}
   ~TextHandler() override = default;
   FlowControlState onObject(
-      folly::Optional<TrackAlias> /*trackAlias*/,
+      std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& header,
       Payload payload) override {
     const auto& mutable_exts = header.extensions.getMutableExtensions();
@@ -130,7 +130,7 @@ class TextHandler : public ObjectReceiverCallback {
     return FlowControlState::UNBLOCKED;
   }
   void onObjectStatus(
-      folly::Optional<TrackAlias> /*trackAlias*/,
+      std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& objHeader) override {
     std::cout << "ObjectStatus=" << uint32_t(objHeader.status) << std::endl;
   }

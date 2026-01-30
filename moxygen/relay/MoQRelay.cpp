@@ -352,7 +352,7 @@ Subscriber::PublishResult MoQRelay::publish(
 
   // Create Forwarder for this publish
   auto forwarder =
-      std::make_shared<MoQForwarder>(pub.fullTrackName, folly::none);
+      std::make_shared<MoQForwarder>(pub.fullTrackName, std::nullopt);
 
   // Set Forwarder Params
   forwarder->setGroupOrder(pub.groupOrder);
@@ -442,7 +442,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   guard.dismiss();
   XLOG(DBG1) << "Publish OK sess=" << session.get();
   auto& pubOk = pubResult.value().value();
-  folly::Optional<AbsoluteLocation> end;
+  std::optional<AbsoluteLocation> end;
   if (pubOk.endGroup) {
     end = AbsoluteLocation{*pubOk.endGroup, 0};
   }
@@ -558,7 +558,7 @@ MoQRelay::subscribeAnnounces(SubscribeAnnounces subNs) {
         FullTrackName{prefix, ""},
         TrackAlias(0), // filled in by library
         GroupOrder::Default,
-        folly::none,
+        std::nullopt,
         /*forward=*/false};
     for (auto& publishEntry : nodePtr->publishes) {
       auto& publishSession = publishEntry.second;
@@ -695,7 +695,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     // subscribers that join with narrower filters
     subReq.locType = LocationType::LargestObject;
     auto forwarder =
-        std::make_shared<MoQForwarder>(subReq.fullTrackName, folly::none);
+        std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
     forwarder->setCallback(shared_from_this());
     auto emplaceRes = subscriptions_.emplace(
         std::piecewise_construct,
