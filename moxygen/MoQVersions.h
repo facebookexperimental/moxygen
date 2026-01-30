@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include <array>
 #include <optional>
 #include <string>
@@ -74,9 +73,9 @@ constexpr std::array<uint64_t, 3> kSupportedVersions{
 uint64_t getDraftMajorVersion(uint64_t version);
 
 // ALPN utility functions
-bool isLegacyAlpn(folly::StringPiece alpn);
+bool isLegacyAlpn(std::string_view alpn);
 std::vector<uint64_t> getSupportedLegacyVersions();
-std::optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn);
+std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn);
 std::optional<std::string> getAlpnFromVersion(uint64_t version);
 
 // Returns the default list of supported MoQT protocols

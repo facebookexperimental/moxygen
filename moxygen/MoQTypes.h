@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <folly/Range.h>
 #include <folly/String.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/IOBuf.h>

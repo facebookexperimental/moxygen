@@ -14,7 +14,7 @@ using namespace moxygen::flv;
 using namespace moxygen::test;
 
 namespace {
-const std::string kTestDir = getContainingDirectory(XLOG_FILENAME).str();
+const std::string kTestDir = getContainingDirectory(XLOG_FILENAME);
 const std::string kFlvOkTestFilePath = "resources/testOK1s.flv";
 } // namespace
 

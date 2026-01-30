@@ -34,7 +34,7 @@ bool isSupportedVersion(uint64_t version) {
       kSupportedVersions.end());
 }
 
-bool isLegacyAlpn(folly::StringPiece alpn) {
+bool isLegacyAlpn(std::string_view alpn) {
   return alpn == kAlpnMoqtLegacy;
 }
 
@@ -48,15 +48,15 @@ std::vector<uint64_t> getSupportedLegacyVersions() {
   return supportedLegacyVers;
 }
 
-std::optional<uint64_t> getVersionFromAlpn(folly::StringPiece alpn) {
+std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn) {
   // Parse "[moqt-{N} | moqt-{N}-meta-{NN}]" format (for draft 15+)
-  if (alpn.startsWith("moqt-")) {
-    auto draftStr = alpn.subpiece(5); // skip "moqt-"
+  if (alpn.starts_with("moqt-")) {
+    auto draftStr = alpn.substr(5); // skip "moqt-"
 
     // Extract just the draft number (first 1-2 digits before any hyphen or end)
     auto hyphenPos = draftStr.find('-');
     if (hyphenPos != std::string::npos) {
-      draftStr = draftStr.subpiece(0, hyphenPos);
+      draftStr = draftStr.substr(0, hyphenPos);
     }
 
     auto draftNum = folly::tryTo<uint64_t>(draftStr);
