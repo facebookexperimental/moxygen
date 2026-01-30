@@ -9,6 +9,8 @@
 #include <moxygen/relay/MoQCache.h>
 #include <moxygen/util/BidiIterator.h>
 
+#include <folly/logging/xlog.h>
+
 // TTL / MAX_CACHE_DURATION
 // Maxmimum cache size / per track? Number of groups
 // Fancy: handle streaming incomplete objects (forwarder?)

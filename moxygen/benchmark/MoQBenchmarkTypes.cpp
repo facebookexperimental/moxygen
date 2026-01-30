@@ -7,6 +7,8 @@
 
 #include <moxygen/benchmark/MoQBenchmarkTypes.h>
 
+#include <folly/Conv.h>
+
 namespace moxygen {
 
 const std::string kTrackName = "benchmark";

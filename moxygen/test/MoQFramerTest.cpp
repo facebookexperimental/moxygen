@@ -1152,7 +1152,7 @@ static std::string encodeToken(
       return writer.encodeRegisterToken(alias, tokenType, tokenValue);
     case AliasType::USE_ALIAS:
       return writer.encodeUseAlias(alias);
-    case AliasType::DELETE:
+    case AliasType::DELETE_ALIAS:
       return writer.encodeDeleteTokenAlias(alias);
     default:
       throw std::invalid_argument("Invalid alias type");
@@ -1202,7 +1202,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenTest) {
 
   // Delete alias=0
   writeSubscribeRequestWithAuthToken(
-      writeBuf, writer_, AliasType::DELETE, 0, 0, "");
+      writeBuf, writer_, AliasType::DELETE_ALIAS, 0, 0, "");
 
   // Use alias=1
   writeSubscribeRequestWithAuthToken(
@@ -1261,7 +1261,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenErrorCases) {
 
   // Attempt to delete an alias that doesn't exist (alias=3)
   writeSubscribeRequestWithAuthToken(
-      writeBufs[3], writer_, AliasType::DELETE, 3, 0, "");
+      writeBufs[3], writer_, AliasType::DELETE_ALIAS, 3, 0, "");
 
   // Register a token that exceeds the max token cache size
   writeSubscribeRequestWithAuthToken(
@@ -1326,7 +1326,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
   tokenLengths.push_back(len);
 
   len = writeSubscribeRequestWithAuthToken(
-      writeBufs[3], writer_, AliasType::DELETE, 0xff, 0, "");
+      writeBufs[3], writer_, AliasType::DELETE_ALIAS, 0xff, 0, "");
   tokenLengths.push_back(len);
 
   for (int j = 0; j < 4; ++j) {
@@ -2355,7 +2355,10 @@ TEST(MoQFramerTest, ClientSetupRejectsDelete) {
   folly::IOBufQueue tokenBuf{folly::IOBufQueue::cacheChainLength()};
   size_t tokenSize = 0;
   writeVarint(
-      tokenBuf, folly::to_underlying(AliasType::DELETE), tokenSize, error);
+      tokenBuf,
+      folly::to_underlying(AliasType::DELETE_ALIAS),
+      tokenSize,
+      error);
   writeVarint(tokenBuf, 42, tokenSize, error); // alias=42
 
   // Write token length

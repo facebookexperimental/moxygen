@@ -320,7 +320,7 @@ folly::Expected<std::optional<AuthToken>, ErrorCode> parseToken(
   length -= aliasType->second;
 
   switch (aliasTypeVal) {
-    case AliasType::DELETE:
+    case AliasType::DELETE_ALIAS:
     case AliasType::USE_ALIAS: {
       if (paramsType == ParamsType::ClientSetup) {
         XLOG(ERR) << "Can't delete/use-alias in client setup";
@@ -334,7 +334,7 @@ folly::Expected<std::optional<AuthToken>, ErrorCode> parseToken(
       length -= tokenAlias->second;
       token->alias = tokenAlias->first;
 
-      if (aliasTypeVal == AliasType::DELETE) {
+      if (aliasTypeVal == AliasType::DELETE_ALIAS) {
         auto deleteRes = tokenCache.deleteToken(*token->alias);
         if (!deleteRes) {
           XLOG(ERR) << "Unknown Auth Token Alias for delete, alias="
@@ -3273,7 +3273,8 @@ std::string MoQFrameWriter::encodeDeleteTokenAlias(uint64_t alias) const {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
-  writeVarint(writeBuf, folly::to_underlying(AliasType::DELETE), size, error);
+  writeVarint(
+      writeBuf, folly::to_underlying(AliasType::DELETE_ALIAS), size, error);
   writeVarint(writeBuf, alias, size, error);
   XCHECK(!error) << "Alias too large";
   return writeBuf.move()->moveToFbString().toStdString();

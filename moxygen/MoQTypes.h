@@ -6,13 +6,10 @@
 
 #pragma once
 
-#include <folly/String.h>
+#include <folly/Expected.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/IOBuf.h>
-#include <folly/logging/xlog.h>
-#include <quic/codec/QuicInteger.h>
 #include <algorithm>
-#include <array>
 #include <optional>
 #include <vector>
 
@@ -21,6 +18,9 @@ namespace moxygen {
 //////// Constants ////////
 const size_t kMaxNamespaceLength = 32;
 const uint8_t kDefaultPriority = 128;
+
+// From QUIC, until MOQ supports 64 bit varint
+constexpr uint64_t kEightByteLimit = 0x3FFFFFFFFFFFFFFF;
 
 // Extension types
 const uint64_t kImmutableExtensionType = 0xB;
@@ -266,7 +266,7 @@ enum class SetupKey : uint64_t {
 };
 
 enum class AliasType : uint8_t {
-  DELETE = 0x0,
+  DELETE_ALIAS = 0x0,
   REGISTER = 0x1,
   USE_ALIAS = 0x2,
   USE_VALUE = 0x3
@@ -326,15 +326,11 @@ struct AbsoluteLocation {
     return os;
   }
 
-  std::string describe() const {
-    return folly::to<std::string>("{", group, ",", object, "}");
-  }
+  std::string describe() const;
 };
 
 constexpr AbsoluteLocation kLocationMin;
-constexpr AbsoluteLocation kLocationMax{
-    quic::kEightByteLimit,
-    quic::kEightByteLimit};
+constexpr AbsoluteLocation kLocationMax{kEightByteLimit, kEightByteLimit};
 
 enum class LocationType : uint8_t {
   NextGroupStart = 1,
@@ -815,9 +811,7 @@ struct TrackNamespace {
   explicit TrackNamespace(std::vector<std::string> tns) {
     trackNamespace = std::move(tns);
   }
-  explicit TrackNamespace(std::string tns, std::string delimiter) {
-    folly::split(delimiter, tns, trackNamespace);
-  }
+  explicit TrackNamespace(std::string tns, std::string delimiter);
 
   bool operator==(const TrackNamespace& other) const {
     return trackNamespace == other.trackNamespace;
@@ -902,12 +896,7 @@ struct FullTrackName {
     os << ftn.describe();
     return os;
   }
-  std::string describe() const {
-    if (trackNamespace.empty()) {
-      return trackName;
-    }
-    return folly::to<std::string>(trackNamespace.describe(), '/', trackName);
-  }
+  std::string describe() const;
   struct hash {
     size_t operator()(const FullTrackName& ftn) const {
       return folly::hash::hash_combine(
@@ -931,27 +920,7 @@ struct SubscribeRequest {
       LocationType locType = LocationType::LargestGroup,
       std::optional<AbsoluteLocation> start = std::nullopt,
       uint64_t endGroup = 0,
-      const std::vector<Parameter>& inputParams = {}) {
-    SubscribeRequest req = SubscribeRequest{
-        RequestID(), // Default constructed RequestID
-        fullTrackName,
-        priority,
-        groupOrder,
-        forward,
-        locType,
-        std::move(start),
-        endGroup,
-        TrackRequestParameters{FrameType::SUBSCRIBE}};
-
-    for (const auto& param : inputParams) {
-      auto result = req.params.insertParam(param);
-      if (result.hasError()) {
-        XLOG(ERR) << "SubscribeRequest::make: param not allowed, key="
-                  << param.key;
-      }
-    }
-    return req;
-  }
+      const std::vector<Parameter>& inputParams = {});
 
   RequestID requestID;
   FullTrackName fullTrackName;
@@ -1112,19 +1081,7 @@ struct Fetch {
       AbsoluteLocation e,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
-      const std::vector<Parameter>& pa = {})
-      : requestID(su),
-        fullTrackName(std::move(ftn)),
-        priority(p),
-        groupOrder(g),
-        args(StandaloneFetch(st, e)) {
-    for (const auto& param : pa) {
-      auto result = params.insertParam(param);
-      if (result.hasError()) {
-        XLOG(ERR) << "Fetch: param not allowed, key=" << param.key;
-      }
-    }
-  }
+      const std::vector<Parameter>& pa = {});
 
   // Used for absolute or relative joining fetches
   Fetch(
@@ -1134,21 +1091,7 @@ struct Fetch {
       FetchType fetchType,
       uint8_t p = kDefaultPriority,
       GroupOrder g = GroupOrder::Default,
-      const std::vector<Parameter>& pa = {})
-      : requestID(su),
-        priority(p),
-        groupOrder(g),
-        args(JoiningFetch(jsid, joiningStart, fetchType)) {
-    CHECK(
-        fetchType == FetchType::RELATIVE_JOINING ||
-        fetchType == FetchType::ABSOLUTE_JOINING);
-    for (const auto& param : pa) {
-      auto result = params.insertParam(param);
-      if (result.hasError()) {
-        XLOG(ERR) << "Fetch: param not allowed, key=" << param.key;
-      }
-    }
-  }
+      const std::vector<Parameter>& pa = {});
 
   RequestID requestID;
   FullTrackName fullTrackName;

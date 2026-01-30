@@ -6,6 +6,8 @@
 
 #include <moxygen/MoQTypes.h>
 
+#include <folly/Conv.h>
+#include <folly/String.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/logging/xlog.h>
@@ -87,6 +89,21 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
 } // namespace
 
 namespace moxygen {
+
+std::string AbsoluteLocation::describe() const {
+  return folly::to<std::string>("{", group, ",", object, "}");
+}
+
+TrackNamespace::TrackNamespace(std::string tns, std::string delimiter) {
+  folly::split(delimiter, tns, trackNamespace);
+}
+
+std::string FullTrackName::describe() const {
+  if (trackNamespace.empty()) {
+    return trackName;
+  }
+  return folly::to<std::string>(trackNamespace.describe(), '/', trackName);
+}
 
 std::string toString(LocationType loctype) {
   switch (loctype) {
@@ -261,6 +278,80 @@ std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
   auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
   auto joining = std::get_if<JoiningFetch>(&fetch.args);
   return {standalone, joining};
+}
+
+SubscribeRequest SubscribeRequest::make(
+    const FullTrackName& fullTrackName,
+    uint8_t priority,
+    GroupOrder groupOrder,
+    bool forward,
+    LocationType locType,
+    std::optional<AbsoluteLocation> start,
+    uint64_t endGroup,
+    const std::vector<Parameter>& inputParams) {
+  SubscribeRequest req = SubscribeRequest{
+      RequestID(), // Default constructed RequestID
+      fullTrackName,
+      priority,
+      groupOrder,
+      forward,
+      locType,
+      std::move(start),
+      endGroup,
+      TrackRequestParameters{FrameType::SUBSCRIBE}};
+
+  for (const auto& param : inputParams) {
+    auto result = req.params.insertParam(param);
+    if (result.hasError()) {
+      XLOG(ERR) << "SubscribeRequest::make: param not allowed, key="
+                << param.key;
+    }
+  }
+  return req;
+}
+
+Fetch::Fetch(
+    RequestID su,
+    FullTrackName ftn,
+    AbsoluteLocation st,
+    AbsoluteLocation e,
+    uint8_t p,
+    GroupOrder g,
+    const std::vector<Parameter>& pa)
+    : requestID(su),
+      fullTrackName(std::move(ftn)),
+      priority(p),
+      groupOrder(g),
+      args(StandaloneFetch(st, e)) {
+  for (const auto& param : pa) {
+    auto result = params.insertParam(param);
+    if (result.hasError()) {
+      XLOG(ERR) << "Fetch: param not allowed, key=" << param.key;
+    }
+  }
+}
+
+Fetch::Fetch(
+    RequestID su,
+    RequestID jsid,
+    uint64_t joiningStart,
+    FetchType fetchType,
+    uint8_t p,
+    GroupOrder g,
+    const std::vector<Parameter>& pa)
+    : requestID(su),
+      priority(p),
+      groupOrder(g),
+      args(JoiningFetch(jsid, joiningStart, fetchType)) {
+  CHECK(
+      fetchType == FetchType::RELATIVE_JOINING ||
+      fetchType == FetchType::ABSOLUTE_JOINING);
+  for (const auto& param : pa) {
+    auto result = params.insertParam(param);
+    if (result.hasError()) {
+      XLOG(ERR) << "Fetch: param not allowed, key=" << param.key;
+    }
+  }
 }
 
 } // namespace moxygen
