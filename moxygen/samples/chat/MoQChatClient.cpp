@@ -66,30 +66,33 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         std::chrono::seconds(FLAGS_transaction_timeout),
         quic::TransportSettings(),
         alpns);
-    // the announce and subscribe announces should be in parallel
-    auto announceRes = co_await moqClient_.getSession()->announce(
-        {RequestID(0), participantTrackName(username_)});
-    if (announceRes.hasError()) {
-      XLOG(ERR) << "Announce failed err=" << announceRes.error().reasonPhrase;
+    // the publishNamespace and subscribe publishNamespaces should be in
+    // parallel
+    auto publishNamespaceRes =
+        co_await moqClient_.getSession()->publishNamespace(
+            {RequestID(0), participantTrackName(username_)});
+    if (publishNamespaceRes.hasError()) {
+      XLOG(ERR) << "PublishNamespace failed err="
+                << publishNamespaceRes.error().reasonPhrase;
       co_return;
     }
-    announceHandle_ = std::move(announceRes.value());
+    publishNamespaceHandle_ = std::move(publishNamespaceRes.value());
     uint64_t negotiatedVersion =
         *(moqClient_.getSession()->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the largest group
-    SubscribeAnnounces subAnn{
+    SubscribeNamespace subAnn{
         .requestID = RequestID(0),
         .trackNamespacePrefix = TrackNamespace(chatPrefix()),
         .forward = true,
     };
     subAnn.params.insertParam(getAuthParam(negotiatedVersion, username_));
-    auto sa = co_await moqClient_.getSession()->subscribeAnnounces(subAnn);
+    auto sa = co_await moqClient_.getSession()->subscribeNamespace(subAnn);
     if (sa.hasValue()) {
-      XLOG(INFO) << "subscribeAnnounces success";
+      XLOG(INFO) << "subscribeNamespace success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
-      subscribeAnnounceHandle_ = std::move(sa.value());
+      subscribeNamespaceHandle_ = std::move(sa.value());
     } else {
-      XLOG(INFO) << "SubscribeAnnounces reqID=" << sa.error().requestID.value
+      XLOG(INFO) << "SubscribeNamespace reqID=" << sa.error().requestID.value
                  << " code=" << folly::to_underlying(sa.error().errorCode)
                  << " reason=" << sa.error().reasonPhrase;
     }
@@ -100,37 +103,42 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   XLOG(INFO) << __func__ << " done";
 }
 
-folly::coro::Task<Subscriber::AnnounceResult> MoQChatClient::announce(
-    Announce announce,
-    std::shared_ptr<AnnounceCallback>) {
-  XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-  auto trackNamespaceCopy = announce.trackNamespace;
-  if (announce.trackNamespace.startsWith(TrackNamespace(chatPrefix()))) {
-    if (announce.trackNamespace.size() != 5) {
+folly::coro::Task<Subscriber::PublishNamespaceResult>
+MoQChatClient::publishNamespace(
+    PublishNamespace publishNamespace,
+    std::shared_ptr<PublishNamespaceCallback>) {
+  XLOG(INFO) << "PublishNamespace ns=" << publishNamespace.trackNamespace;
+  auto trackNamespaceCopy = publishNamespace.trackNamespace;
+  if (publishNamespace.trackNamespace.startsWith(
+          TrackNamespace(chatPrefix()))) {
+    if (publishNamespace.trackNamespace.size() != 5) {
       co_return folly::makeUnexpected(
-          AnnounceError{
-              announce.requestID,
-              AnnounceErrorCode::UNINTERESTED,
-              "Invalid chat announce"});
+          PublishNamespaceError{
+              publishNamespace.requestID,
+              PublishNamespaceErrorCode::UNINTERESTED,
+              "Invalid chat publishNamespace"});
     }
     co_withExecutor(
         moqClient_.getSession()->getExecutor(),
-        subscribeToUser(std::move(announce.trackNamespace)))
+        subscribeToUser(std::move(publishNamespace.trackNamespace)))
         .start();
   } else {
     co_return folly::makeUnexpected(
-        AnnounceError{
-            announce.requestID, AnnounceErrorCode::UNINTERESTED, "don't care"});
+        PublishNamespaceError{
+            publishNamespace.requestID,
+            PublishNamespaceErrorCode::UNINTERESTED,
+            "don't care"});
   }
-  co_return std::make_shared<AnnounceHandle>(
-      AnnounceOk{announce.requestID},
+  co_return std::make_shared<PublishNamespaceHandle>(
+      PublishNamespaceOk{
+          .requestID = publishNamespace.requestID, .requestSpecificParams = {}},
       shared_from_this(),
       std::move(trackNamespaceCopy));
 }
 
-void MoQChatClient::unannounce(const TrackNamespace&) {
-  // TODO: Upon receiving an UNANNOUNCE, a client SHOULD UNSUBSCRIBE from that
-  // matching track if it had previously subscribed.
+void MoQChatClient::publishNamespaceDone(const TrackNamespace&) {
+  // TODO: Upon receiving an PUBLISH_NAMESPACE_DONE, a client SHOULD UNSUBSCRIBE
+  // from that matching track if it had previously subscribed.
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
@@ -191,8 +199,8 @@ void MoQChatClient::publishLoop() {
     if (token.isCancellationRequested()) {
       XLOG(DBG1) << "Detected deleted moqSession, cleaning up";
       evb->add([this] {
-        announceHandle_.reset();
-        subscribeAnnounceHandle_.reset();
+        publishNamespaceHandle_.reset();
+        subscribeNamespaceHandle_.reset();
         publisher_.reset();
       });
       break;
@@ -200,8 +208,8 @@ void MoQChatClient::publishLoop() {
     evb->add([this, input] {
       if (input == "/leave") {
         XLOG(INFO) << "Leaving chat";
-        announceHandle_->unannounce();
-        subscribeAnnounceHandle_->unsubscribeAnnounces();
+        publishNamespaceHandle_->publishNamespaceDone();
+        subscribeNamespaceHandle_->unsubscribeNamespace();
         if (publisher_) {
           publisher_->objectStream(
               {nextGroup_++,
@@ -264,7 +272,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
         userTrackPtr = &userTrack;
         break;
       } else {
-        XLOG(INFO) << "Announce for old track, ignoring";
+        XLOG(INFO) << "PublishNamespace for old track, ignoring";
         co_return;
       }
     } else {

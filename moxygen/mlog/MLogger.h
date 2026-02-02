@@ -84,26 +84,26 @@ class MLogger {
   void logFetchCancel(
       const FetchCancel& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logAnnounceOk(
-      const AnnounceOk& req,
+  void logPublishNamespaceOk(
+      const PublishNamespaceOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logAnnounceError(
-      const AnnounceError& req,
+  void logPublishNamespaceError(
+      const PublishNamespaceError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logAnnounceCancel(
-      const AnnounceCancel& req,
+  void logPublishNamespaceCancel(
+      const PublishNamespaceCancel& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatus(
       const TrackStatus& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logSubscribeAnnounces(
-      const SubscribeAnnounces& req,
+  void logSubscribeNamespace(
+      const SubscribeNamespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logUnsubscribeAnnounces(
-      const UnsubscribeAnnounces& req,
+  void logUnsubscribeNamespace(
+      const UnsubscribeNamespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeOk(
@@ -127,12 +127,12 @@ class MLogger {
   void logRequestsBlocked(
       const uint64_t maximumRequestId,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logAnnounce(
-      const Announce& req,
+  void logPublishNamespace(
+      const PublishNamespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logUnannounce(
-      const Unannounce& req,
+  void logPublishNamespaceDone(
+      const PublishNamespaceDone& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatusOk(
@@ -143,11 +143,11 @@ class MLogger {
       const TrackStatusError& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logSubscribeAnnouncesOk(
-      const SubscribeAnnouncesOk& req,
+  void logSubscribeNamespaceOk(
+      const SubscribeNamespaceOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
-  void logSubscribeAnnouncesError(
-      const SubscribeAnnouncesError& req,
+  void logSubscribeNamespaceError(
+      const SubscribeNamespaceError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublish(
       const PublishRequest& req,

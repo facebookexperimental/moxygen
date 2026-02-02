@@ -174,38 +174,42 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       }),
       FrameType::PUBLISH_ERROR);
 
-  // Announce
-  Announce announce;
-  announce.requestID = 1;
-  announce.trackNamespace = TrackNamespace({"hello"});
-  addTestParams(announce.params, moqFrameWriter);
-  res = moqFrameWriter.writeAnnounce(writeBuf, announce);
+  // PublishNamespace
+  PublishNamespace publishNamespace;
+  publishNamespace.requestID = 1;
+  publishNamespace.trackNamespace = TrackNamespace({"hello"});
+  addTestParams(publishNamespace.params, moqFrameWriter);
+  res = moqFrameWriter.writePublishNamespace(writeBuf, publishNamespace);
 
-  // AnnounceOk
-  AnnounceOk announceOk;
-  announceOk.requestID = 1;
-  res = moqFrameWriter.writeAnnounceOk(writeBuf, announceOk);
+  // PublishNamespaceOk
+  PublishNamespaceOk publishNamespaceOk;
+  publishNamespaceOk.requestID = 1;
+  res = moqFrameWriter.writePublishNamespaceOk(writeBuf, publishNamespaceOk);
   res = moqFrameWriter.writeRequestError(
       writeBuf,
-      AnnounceError(
-          {RequestID(1), AnnounceErrorCode::INTERNAL_ERROR, "server error"}),
-      FrameType::ANNOUNCE_ERROR);
-  AnnounceCancel announceCancel;
+      PublishNamespaceError(
+          {RequestID(1),
+           PublishNamespaceErrorCode::INTERNAL_ERROR,
+           "server error"}),
+      FrameType::PUBLISH_NAMESPACE_ERROR);
+  PublishNamespaceCancel publishNamespaceCancel;
   if (getDraftMajorVersion(version) >= 16) {
-    announceCancel.requestID = RequestID(1);
+    publishNamespaceCancel.requestID = RequestID(1);
   } else {
-    announceCancel.trackNamespace = TrackNamespace({"hello"});
+    publishNamespaceCancel.trackNamespace = TrackNamespace({"hello"});
   }
-  announceCancel.errorCode = AnnounceErrorCode::INTERNAL_ERROR;
-  announceCancel.reasonPhrase = "internal error";
-  res = moqFrameWriter.writeAnnounceCancel(writeBuf, announceCancel);
-  Unannounce unannounce;
+  publishNamespaceCancel.errorCode = PublishNamespaceErrorCode::INTERNAL_ERROR;
+  publishNamespaceCancel.reasonPhrase = "internal error";
+  res = moqFrameWriter.writePublishNamespaceCancel(
+      writeBuf, publishNamespaceCancel);
+  PublishNamespaceDone publishNamespaceDone;
   if (getDraftMajorVersion(version) >= 16) {
-    unannounce.requestID = RequestID(1);
+    publishNamespaceDone.requestID = RequestID(1);
   } else {
-    unannounce.trackNamespace = TrackNamespace({"hello"});
+    publishNamespaceDone.trackNamespace = TrackNamespace({"hello"});
   }
-  res = moqFrameWriter.writeUnannounce(writeBuf, unannounce);
+  res =
+      moqFrameWriter.writePublishNamespaceDone(writeBuf, publishNamespaceDone);
 
   // TrackStatus
   TrackStatus trackStatus;
@@ -230,30 +234,30 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeTrackStatusOk(writeBuf, trackStatusOk);
   res = moqFrameWriter.writeGoaway(writeBuf, Goaway({"new uri"}));
 
-  // SubscribeAnnounces
-  SubscribeAnnounces subscribeAnnounces;
-  subscribeAnnounces.requestID = 2;
-  subscribeAnnounces.trackNamespacePrefix = TrackNamespace({"hello"});
-  subscribeAnnounces.forward = true;
-  subscribeAnnounces.params.insertParam(
+  // SubscribeNamespace
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = 2;
+  subscribeNamespace.trackNamespacePrefix = TrackNamespace({"hello"});
+  subscribeNamespace.forward = true;
+  subscribeNamespace.params.insertParam(
       getTestAuthParam(moqFrameWriter, "binky"));
-  res = moqFrameWriter.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+  res = moqFrameWriter.writeSubscribeNamespace(writeBuf, subscribeNamespace);
 
-  // SubscribeAnnouncesOk
-  SubscribeAnnouncesOk subscribeAnnouncesOk;
-  subscribeAnnouncesOk.requestID = 2;
+  // SubscribeNamespaceOk
+  SubscribeNamespaceOk subscribeNamespaceOk;
+  subscribeNamespaceOk.requestID = 2;
   res =
-      moqFrameWriter.writeSubscribeAnnouncesOk(writeBuf, subscribeAnnouncesOk);
+      moqFrameWriter.writeSubscribeNamespaceOk(writeBuf, subscribeNamespaceOk);
   res = moqFrameWriter.writeRequestError(
       writeBuf,
-      SubscribeAnnouncesError(
+      SubscribeNamespaceError(
           {RequestID(2),
-           SubscribeAnnouncesErrorCode::INTERNAL_ERROR,
+           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
            "server error"}),
-      FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
-  res = moqFrameWriter.writeUnsubscribeAnnounces(
+      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  res = moqFrameWriter.writeUnsubscribeNamespace(
       writeBuf,
-      UnsubscribeAnnounces({RequestID(2), TrackNamespace({"hello"})}));
+      UnsubscribeNamespace({RequestID(2), TrackNamespace({"hello"})}));
 
   // Fetch - using StandaloneFetch variant
   Fetch fetch;

@@ -65,15 +65,17 @@ class MoQRelayClient {
         co_return;
       }
       for (auto& ns : namespaces) {
-        Announce ann;
+        PublishNamespace ann;
         ann.trackNamespace = std::move(ns);
-        auto res = co_await moqClient_->moqSession_->announce(std::move(ann));
+        auto res =
+            co_await moqClient_->moqSession_->publishNamespace(std::move(ann));
         if (!res) {
-          XLOG(ERR) << "AnnounceError reqID=" << res.error().requestID.value
+          XLOG(ERR) << "PublishNamespaceError reqID="
+                    << res.error().requestID.value
                     << " code=" << folly::to_underlying(res.error().errorCode)
                     << " reason=" << res.error().reasonPhrase;
         } else {
-          announceHandles_.emplace_back(std::move(res.value()));
+          publishNamespaceHandles_.emplace_back(std::move(res.value()));
         }
       }
       if (isPublisher) {
@@ -82,13 +84,13 @@ class MoQRelayClient {
           if (!moqClient_->moqSession_) {
             break;
           }
-          Announce ann;
+          PublishNamespace ann;
           ann.trackNamespace.trackNamespace.emplace_back("ping");
-          auto handle = co_await moqClient_->moqSession_->announce(ann);
+          auto handle = co_await moqClient_->moqSession_->publishNamespace(ann);
           if (handle.hasError()) {
             break;
           }
-          handle.value()->unannounce();
+          handle.value()->publishNamespaceDone();
         }
       }
     } catch (const std::exception& ex) {
@@ -106,12 +108,12 @@ class MoQRelayClient {
   }
 
   void shutdown() {
-    for (auto& handle : announceHandles_) {
+    for (auto& handle : publishNamespaceHandles_) {
       if (handle) {
-        handle->unannounce();
+        handle->publishNamespaceDone();
       }
     }
-    announceHandles_.clear();
+    publishNamespaceHandles_.clear();
     // Flush mLogs before closing the session, since closeSession() does not
     // trigger onSessionEnd callback (where logs would normally be flushed)
     if (moqClient_ && moqClient_->logger_) {
@@ -129,7 +131,8 @@ class MoQRelayClient {
 
  private:
   std::unique_ptr<MoQClient> moqClient_;
-  std::vector<std::shared_ptr<Subscriber::AnnounceHandle>> announceHandles_;
+  std::vector<std::shared_ptr<Subscriber::PublishNamespaceHandle>>
+      publishNamespaceHandles_;
 };
 
 } // namespace moxygen

@@ -38,7 +38,7 @@ DEFINE_bool(forward, true, "Forward flag for subscriptions");
 DEFINE_bool(
     publish,
     false,
-    "If client will act as a receiver for publish call (don't call subscribe and call sub_announce)");
+    "If client will act as a receiver for publish call (don't call subscribe and call sub_publishNamespace)");
 DEFINE_bool(
     unsubscribe,
     false,
@@ -184,11 +184,11 @@ class MoQTextClient : public Subscriber,
     }
   }
 
-  folly::coro::Task<MoQSession::SubscribeAnnouncesResult> subscribeAnnounces(
-      SubscribeAnnounces subAnn) {
-    auto res = co_await moqClient_.getSession()->subscribeAnnounces(subAnn);
+  folly::coro::Task<MoQSession::SubscribeNamespaceResult> subscribeNamespace(
+      SubscribeNamespace subAnn) {
+    auto res = co_await moqClient_.getSession()->subscribeNamespace(subAnn);
     if (res.hasValue()) {
-      subAnnouncesHandle_ = res.value();
+      subscribeNamespaceHandle_ = res.value();
     }
     co_return res;
   }
@@ -238,12 +238,12 @@ class MoQTextClient : public Subscriber,
           alpns);
 
       if (FLAGS_publish) {
-        SubscribeAnnounces subAnn{
+        SubscribeNamespace subAnn{
             sub.requestID,
             sub.fullTrackName.trackNamespace,
             true /* forward */,
             sub.params};
-        co_await subscribeAnnounces(subAnn);
+        co_await subscribeNamespace(subAnn);
 
         if (FLAGS_unsubscribe) {
           co_await folly::coro::sleep(
@@ -357,14 +357,16 @@ class MoQTextClient : public Subscriber,
     XLOG(INFO) << __func__ << " done";
   }
 
-  folly::coro::Task<AnnounceResult> announce(
-      Announce announce,
-      std::shared_ptr<AnnounceCallback>) override {
-    XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-    // text client doesn't expect server or relay to announce anything,
-    // but announce OK anyways
-    return folly::coro::makeTask<AnnounceResult>(
-        std::make_shared<AnnounceHandle>(AnnounceOk{announce.requestID}));
+  folly::coro::Task<PublishNamespaceResult> publishNamespace(
+      PublishNamespace publishNamespace,
+      std::shared_ptr<PublishNamespaceCallback>) override {
+    XLOG(INFO) << "PublishNamespace ns=" << publishNamespace.trackNamespace;
+    // text client doesn't expect server or relay to publishNamespace anything,
+    // but publishNamespace OK anyways
+    return folly::coro::makeTask<PublishNamespaceResult>(
+        std::make_shared<PublishNamespaceHandle>(PublishNamespaceOk{
+            .requestID = publishNamespace.requestID,
+            .requestSpecificParams = {}}));
   }
 
   void goaway(Goaway goaway) override {
@@ -398,7 +400,8 @@ class MoQTextClient : public Subscriber,
           ObjectReceiver::SUBSCRIBE,
           subTextHandler_)};
   std::shared_ptr<ObjectReceiver> fetchTextReceiver_;
-  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subAnnouncesHandle_;
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle>
+      subscribeNamespaceHandle_;
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> subHandles_;
 };
 } // namespace

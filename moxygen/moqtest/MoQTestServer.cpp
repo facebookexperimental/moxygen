@@ -652,21 +652,22 @@ folly::coro::Task<void> MoQTestServer::doRelaySetup(
     co_return;
   }
 
-  // Send ANNOUNCE for the base namespace "moq-test-00"
-  Announce announce;
-  announce.trackNamespace = TrackNamespace("moq-test-00", "/");
+  // Send PUBLISH_NAMESPACE for the base namespace "moq-test-00"
+  PublishNamespace publishNamespace;
+  publishNamespace.trackNamespace = TrackNamespace("moq-test-00", "/");
 
-  auto announceResult = co_await relaySession_->announce(announce);
-  if (announceResult.hasError()) {
-    XLOG(ERR) << "Failed to announce namespace: "
-              << announceResult.error().reasonPhrase;
+  auto publishNamespaceResult =
+      co_await relaySession_->publishNamespace(publishNamespace);
+  if (publishNamespaceResult.hasError()) {
+    XLOG(ERR) << "Failed to publishNamespace namespace: "
+              << publishNamespaceResult.error().reasonPhrase;
     co_return;
   }
 
-  // Store announce handle to keep it alive
-  announceHandle_ = announceResult.value();
+  // Store publishNamespace handle to keep it alive
+  publishNamespaceHandle_ = publishNamespaceResult.value();
 
-  XLOG(INFO) << "Successfully announced namespace 'moq-test-00' to relay at "
+  XLOG(INFO) << "Successfully published namespace 'moq-test-00' to relay at "
              << relayUrl;
 
   // Pass session to onNewSession to treat it like any other client

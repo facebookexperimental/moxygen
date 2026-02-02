@@ -38,9 +38,9 @@ class MockMoQSession : public MoQSession {
   }
 
   MOCK_METHOD(
-      folly::coro::Task<AnnounceResult>,
-      announce,
-      (Announce, std::shared_ptr<Subscriber::AnnounceCallback>),
+      folly::coro::Task<PublishNamespaceResult>,
+      publishNamespace,
+      (PublishNamespace, std::shared_ptr<Subscriber::PublishNamespaceCallback>),
       (override));
 
   MOCK_METHOD(

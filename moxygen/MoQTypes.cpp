@@ -32,14 +32,14 @@ const char* getFrameTypeString(moxygen::FrameType type) {
       return "MAX_REQUEST_ID";
     case moxygen::FrameType::UNSUBSCRIBE:
       return "UNSUBSCRIBE";
-    case moxygen::FrameType::ANNOUNCE:
-      return "ANNOUNCE";
-    case moxygen::FrameType::ANNOUNCE_OK:
-      return "ANNOUNCE_OK";
-    case moxygen::FrameType::ANNOUNCE_ERROR:
-      return "ANNOUNCE_ERROR";
-    case moxygen::FrameType::UNANNOUNCE:
-      return "UNANNOUNCE";
+    case moxygen::FrameType::PUBLISH_NAMESPACE:
+      return "PUBLISH_NAMESPACE";
+    case moxygen::FrameType::PUBLISH_NAMESPACE_OK:
+      return "PUBLISH_NAMESPACE_OK";
+    case moxygen::FrameType::PUBLISH_NAMESPACE_ERROR:
+      return "PUBLISH_NAMESPACE_ERROR";
+    case moxygen::FrameType::PUBLISH_NAMESPACE_DONE:
+      return "PUBLISH_NAMESPACE_DONE";
     case moxygen::FrameType::GOAWAY:
       return "GOAWAY";
     default:
@@ -172,8 +172,8 @@ const folly::F14FastSet<FrameType> kAllowedFramesForAuthToken = {
     FrameType::PUBLISH,
     FrameType::SUBSCRIBE,
     FrameType::SUBSCRIBE_UPDATE,
-    FrameType::SUBSCRIBE_ANNOUNCES,
-    FrameType::ANNOUNCE,
+    FrameType::SUBSCRIBE_NAMESPACE,
+    FrameType::PUBLISH_NAMESPACE,
     FrameType::TRACK_STATUS,
     FrameType::FETCH};
 
@@ -214,7 +214,7 @@ const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
     FrameType::SUBSCRIBE_UPDATE,
     FrameType::PUBLISH,
     FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE_ANNOUNCES};
+    FrameType::SUBSCRIBE_NAMESPACE};
 
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types

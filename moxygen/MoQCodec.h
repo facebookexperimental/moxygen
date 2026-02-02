@@ -79,13 +79,15 @@ class MoQControlCodec : public MoQCodec {
     virtual void onFetch(Fetch fetch) = 0;
     virtual void onFetchCancel(FetchCancel fetchCancel) = 0;
     virtual void onFetchOk(FetchOk fetchOk) = 0;
-    virtual void onAnnounce(Announce announce) = 0;
-    virtual void onUnannounce(Unannounce unannounce) = 0;
-    virtual void onAnnounceCancel(AnnounceCancel announceCancel) = 0;
-    virtual void onSubscribeAnnounces(
-        SubscribeAnnounces subscribeAnnounces) = 0;
-    virtual void onUnsubscribeAnnounces(
-        UnsubscribeAnnounces unsubscribeAnnounces) = 0;
+    virtual void onPublishNamespace(PublishNamespace publishNamespace) = 0;
+    virtual void onPublishNamespaceDone(
+        PublishNamespaceDone publishNamespaceDone) = 0;
+    virtual void onPublishNamespaceCancel(
+        PublishNamespaceCancel publishNamespaceCancel) = 0;
+    virtual void onSubscribeNamespace(
+        SubscribeNamespace subscribeNamespace) = 0;
+    virtual void onUnsubscribeNamespace(
+        UnsubscribeNamespace unsubscribeNamespace) = 0;
     virtual void onTrackStatus(TrackStatus trackStatus) = 0;
     virtual void onTrackStatusOk(TrackStatusOk trackStatusOk) = 0;
     virtual void onTrackStatusError(TrackStatusError trackStatusError) = 0;
@@ -111,25 +113,25 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::SUBSCRIBE_OK:
       // case FrameType::SUBSCRIBE_ERROR:
       case FrameType::REQUEST_ERROR:
-      case FrameType::ANNOUNCE:
-      // case FrameType::ANNOUNCE_OK:
+      case FrameType::PUBLISH_NAMESPACE:
+      // case FrameType::PUBLISH_NAMESPACE_OK:
       case FrameType::REQUEST_OK:
-      case FrameType::ANNOUNCE_ERROR:
-      case FrameType::UNANNOUNCE:
+      case FrameType::PUBLISH_NAMESPACE_ERROR:
+      case FrameType::PUBLISH_NAMESPACE_DONE:
       case FrameType::UNSUBSCRIBE:
       case FrameType::SUBSCRIBE_DONE:
       case FrameType::PUBLISH:
       case FrameType::PUBLISH_OK:
       case FrameType::PUBLISH_ERROR:
-      case FrameType::ANNOUNCE_CANCEL:
+      case FrameType::PUBLISH_NAMESPACE_CANCEL:
       case FrameType::TRACK_STATUS:
       case FrameType::TRACK_STATUS_OK:
       case FrameType::TRACK_STATUS_ERROR:
       case FrameType::GOAWAY:
-      case FrameType::SUBSCRIBE_ANNOUNCES:
-      case FrameType::SUBSCRIBE_ANNOUNCES_OK:
-      case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
-      case FrameType::UNSUBSCRIBE_ANNOUNCES:
+      case FrameType::SUBSCRIBE_NAMESPACE:
+      case FrameType::SUBSCRIBE_NAMESPACE_OK:
+      case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
+      case FrameType::UNSUBSCRIBE_NAMESPACE:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
       case FrameType::LEGACY_CLIENT_SETUP:

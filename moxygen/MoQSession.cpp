@@ -128,11 +128,11 @@ void logRequestError(
     case FrameType::FETCH_ERROR:
       logger->logFetchError(error, msgType);
       break;
-    case FrameType::ANNOUNCE_ERROR:
-      logger->logAnnounceError(error);
+    case FrameType::PUBLISH_NAMESPACE_ERROR:
+      logger->logPublishNamespaceError(error);
       break;
-    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
-      logger->logSubscribeAnnouncesError(error);
+    case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
+      logger->logSubscribeNamespaceError(error);
       break;
     default:
       // Unknown or unsupported error type for logging
@@ -1981,8 +1981,8 @@ MoQSession::PendingRequestState::setError(
       }
       return folly::makeUnexpected(folly::unit);
     }
-    case FrameType::ANNOUNCE_ERROR:
-    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR: {
+    case FrameType::PUBLISH_NAMESPACE_ERROR:
+    case FrameType::SUBSCRIBE_NAMESPACE_ERROR: {
       // These types are handled by MoQRelaySession subclass
       return folly::makeUnexpected(folly::unit);
     }
@@ -3323,8 +3323,8 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
       }
       break;
     }
-    case FrameType::ANNOUNCE_ERROR:
-    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
+    case FrameType::PUBLISH_NAMESPACE_ERROR:
+    case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
       break;
     default:
       // Unknown or unsupported error type
@@ -3515,7 +3515,7 @@ void MoQSession::onPublish(PublishRequest publish) {
   auto publishHandle = std::make_shared<ReceiverSubscriptionHandle>(
       SubscribeOk{publish.requestID}, publish.trackAlias, shared_from_this());
 
-  // Use single coroutine pattern like working onAnnounce
+  // Use single coroutine pattern like working onPublishNamespace
   co_withExecutor(
       exec_.get(), handlePublish(std::move(publish), std::move(publishHandle)))
       .start();
@@ -5105,24 +5105,26 @@ void MoQSession::aliasifyAuthTokens(
   }
 }
 
-// Announcement callback methods - default implementations for simple clients
-void MoQSession::onAnnounce(Announce announce) {
-  XLOG(DBG1) << __func__ << " ns=" << announce.trackNamespace
+// PublishNamespace callback methods - default implementations for simple
+// clients
+void MoQSession::onPublishNamespace(PublishNamespace publishNamespace) {
+  XLOG(DBG1) << __func__ << " ns=" << publishNamespace.trackNamespace
              << " - sending NOT_SUPPORTED error, sess=" << this;
   if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting announce request, received GOAWAY sess=" << this;
-    announceError(
-        AnnounceError{
-            announce.requestID,
-            AnnounceErrorCode::GOING_AWAY,
+    XLOG(DBG1) << "Rejecting publishNamespace request, received GOAWAY sess="
+               << this;
+    publishNamespaceError(
+        PublishNamespaceError{
+            publishNamespace.requestID,
+            PublishNamespaceErrorCode::GOING_AWAY,
             "Session received GOAWAY"});
     return;
   }
-  announceError(
-      AnnounceError{
-          announce.requestID,
-          AnnounceErrorCode::NOT_SUPPORTED,
-          "Announce not supported by simple client"});
+  publishNamespaceError(
+      PublishNamespaceError{
+          publishNamespace.requestID,
+          PublishNamespaceErrorCode::NOT_SUPPORTED,
+          "PublishNamespace not supported by simple client"});
 }
 
 void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
@@ -5173,115 +5175,124 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   }
 }
 
-void MoQSession::onUnannounce(Unannounce unannounce) {
+void MoQSession::onPublishNamespaceDone(
+    PublishNamespaceDone publishNamespaceDone) {
   if (logger_) {
-    logger_->logUnannounce(
-        unannounce,
+    logger_->logPublishNamespaceDone(
+        publishNamespaceDone,
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
 
-  XLOG(DBG1) << "Received Unannounce on base session - ignoring, sess=" << this;
+  XLOG(DBG1)
+      << "Received PublishNamespaceDone on base session - ignoring, sess="
+      << this;
 }
 
-void MoQSession::onAnnounceCancel(AnnounceCancel announceCancel) {
-  XLOG(DBG1) << __func__ << " ns=" << announceCancel.trackNamespace
+void MoQSession::onPublishNamespaceCancel(
+    PublishNamespaceCancel publishNamespaceCancel) {
+  XLOG(DBG1) << __func__ << " ns=" << publishNamespaceCancel.trackNamespace
              << " - ignored by simple client, sess=" << this;
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onAnnounceCancel);
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onPublishNamespaceCancel);
 }
 
-void MoQSession::onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) {
+void MoQSession::onSubscribeNamespace(SubscribeNamespace subscribeNamespace) {
   XLOG(DBG1) << __func__
-             << " prefix=" << subscribeAnnounces.trackNamespacePrefix
+             << " prefix=" << subscribeNamespace.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
   if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting subscribe announces request, received GOAWAY sess="
+    XLOG(DBG1) << "Rejecting subscribeNamespace request, received GOAWAY sess="
                << this;
-    subscribeAnnouncesError(
-        SubscribeAnnouncesError{
-            subscribeAnnounces.requestID,
-            SubscribeAnnouncesErrorCode::GOING_AWAY,
+    subscribeNamespaceError(
+        SubscribeNamespaceError{
+            subscribeNamespace.requestID,
+            SubscribeNamespaceErrorCode::GOING_AWAY,
             "Session received GOAWAY"});
     return;
   }
-  subscribeAnnouncesError(
-      SubscribeAnnouncesError{
-          subscribeAnnounces.requestID,
-          SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
-          "SubscribeAnnounces not supported by simple client"});
+  subscribeNamespaceError(
+      SubscribeNamespaceError{
+          subscribeNamespace.requestID,
+          SubscribeNamespaceErrorCode::NOT_SUPPORTED,
+          "SubscribeNamespace not supported by simple client"});
 }
 
-void MoQSession::onUnsubscribeAnnounces(
-    UnsubscribeAnnounces unsubscribeAnnounces) {
+void MoQSession::onUnsubscribeNamespace(
+    UnsubscribeNamespace unsubscribeNamespace) {
   // v15+: Use Request ID
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    if (!unsubscribeAnnounces.requestID.has_value()) {
+    if (!unsubscribeNamespace.requestID.has_value()) {
       XLOG(ERR) << __func__ << " sess=" << this
                 << " - missing requestID for v15+";
       return;
     }
     XLOG(DBG1) << __func__
-               << " requestID=" << unsubscribeAnnounces.requestID.value()
+               << " requestID=" << unsubscribeNamespace.requestID.value()
                << " sess=" << this;
-    // TODO: Implement actual unsubscribe logic when SUBSCRIBE_ANNOUNCES
+    // TODO: Implement actual unsubscribe logic when SUBSCRIBE_NAMESPACE
     // tracking is added For now, just log and update stats
   } else {
     // <v15: Use Track Namespace Prefix
-    if (!unsubscribeAnnounces.trackNamespacePrefix.has_value()) {
+    if (!unsubscribeNamespace.trackNamespacePrefix.has_value()) {
       XLOG(ERR) << __func__ << " sess=" << this
                 << " - missing trackNamespacePrefix for <v15";
       return;
     }
     XLOG(DBG1) << __func__ << " prefix="
-               << unsubscribeAnnounces.trackNamespacePrefix.value()
+               << unsubscribeNamespace.trackNamespacePrefix.value()
                << " - ignored by simple client, sess=" << this;
   }
 
   if (logger_) {
-    logger_->logUnsubscribeAnnounces(
-        unsubscribeAnnounces,
+    logger_->logUnsubscribeNamespace(
+        unsubscribeNamespace,
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeAnnounces);
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeNamespace);
 }
 
-// Announcement response methods
-void MoQSession::announceError(const AnnounceError& announceError) {
-  XLOG(DBG1) << __func__ << " reqID=" << announceError.requestID.value
+// PublishNamespace response methods
+void MoQSession::publishNamespaceError(
+    const PublishNamespaceError& publishNamespaceError) {
+  XLOG(DBG1) << __func__ << " reqID=" << publishNamespaceError.requestID.value
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
-      subscriberStatsCallback_, onAnnounceError, announceError.errorCode);
+      subscriberStatsCallback_,
+      onPublishNamespaceError,
+      publishNamespaceError.errorCode);
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, announceError, FrameType::ANNOUNCE_ERROR);
+      controlWriteBuf_,
+      publishNamespaceError,
+      FrameType::PUBLISH_NAMESPACE_ERROR);
   if (!res) {
-    XLOG(ERR) << "writeAnnounceError failed sess=" << this;
+    XLOG(ERR) << "writePublishNamespaceError failed sess=" << this;
     return;
   }
   if (logger_) {
-    logger_->logAnnounceError(announceError);
+    logger_->logPublishNamespaceError(publishNamespaceError);
   }
   controlWriteEvent_.signal();
 }
 
-void MoQSession::subscribeAnnouncesError(
-    const SubscribeAnnouncesError& subscribeAnnouncesError) {
-  XLOG(DBG1) << __func__ << " reqID=" << subscribeAnnouncesError.requestID.value
+void MoQSession::subscribeNamespaceError(
+    const SubscribeNamespaceError& subscribeNamespaceError) {
+  XLOG(DBG1) << __func__ << " reqID=" << subscribeNamespaceError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_,
-      onSubscribeAnnouncesError,
-      subscribeAnnouncesError.errorCode);
+      onSubscribeNamespaceError,
+      subscribeNamespaceError.errorCode);
   auto res = moqFrameWriter_.writeRequestError(
       controlWriteBuf_,
-      subscribeAnnouncesError,
-      FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
+      subscribeNamespaceError,
+      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
   if (!res) {
-    XLOG(ERR) << "writeSubscribeAnnouncesError failed sess=" << this;
+    XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
     return;
   }
   if (logger_) {
-    logger_->logSubscribeAnnouncesError(subscribeAnnouncesError);
+    logger_->logSubscribeNamespaceError(subscribeNamespaceError);
   }
   controlWriteEvent_.signal();
 }

@@ -93,9 +93,9 @@ enum class TrackStatusCode : uint32_t {
 
 // FetchErrorCode is now an alias for RequestErrorCode - see below
 
-// SubscribeAnnouncesErrorCode is now an alias for RequestErrorCode - see below
+// SubscribeNamespaceErrorCode is now an alias for RequestErrorCode - see below
 
-// AnnounceErrorCode is now an alias for RequestErrorCode - see below
+// PublishNamespaceErrorCode is now an alias for RequestErrorCode - see below
 
 // PublishError is now an alias for RequestError - see below
 
@@ -112,10 +112,10 @@ enum class RequestErrorCode : uint32_t {
   // Note: Pending draft update
   GOING_AWAY = 6,
 
-  // SubscribeAnnounces-specific codes
+  // SubscribeNamespace-specific codes
   NAMESPACE_PREFIX_UNKNOWN = 4, // Same value as TRACK_NOT_EXIST
 
-  // Announce-specific codes
+  // PublishNamespace-specific codes
   UNINTERESTED = 4, // Same value as TRACK_NOT_EXIST
 
   // Special values
@@ -136,24 +136,24 @@ enum class FrameType : uint64_t {
   SUBSCRIBE_OK = 4,
   SUBSCRIBE_ERROR = 5,
   REQUEST_ERROR = 5,
-  ANNOUNCE = 0x6,
-  ANNOUNCE_OK = 0x7,
+  PUBLISH_NAMESPACE = 0x6,
+  PUBLISH_NAMESPACE_OK = 0x7,
   REQUEST_OK = 0x7,
-  ANNOUNCE_ERROR = 0x8, // Draft 15 and below
-  NAMESPACE = 0x8,      // Draft 16 and above
-  UNANNOUNCE = 9,
+  PUBLISH_NAMESPACE_ERROR = 0x8, // Draft 15 and below
+  NAMESPACE = 0x8,               // Draft 16 and above
+  PUBLISH_NAMESPACE_DONE = 9,
   UNSUBSCRIBE = 0xA,
   SUBSCRIBE_DONE = 0xB,
-  ANNOUNCE_CANCEL = 0xC,
+  PUBLISH_NAMESPACE_CANCEL = 0xC,
   TRACK_STATUS = 0xD,
   TRACK_STATUS_OK = 0xE, // Draft 15 and below
   NAMESPACE_DONE = 0xE,  // Draft 16 and above
   TRACK_STATUS_ERROR = 0xF,
   GOAWAY = 0x10,
-  SUBSCRIBE_ANNOUNCES = 0x11,
-  SUBSCRIBE_ANNOUNCES_OK = 0x12,
-  SUBSCRIBE_ANNOUNCES_ERROR = 0x13,
-  UNSUBSCRIBE_ANNOUNCES = 0x14,
+  SUBSCRIBE_NAMESPACE = 0x11,
+  SUBSCRIBE_NAMESPACE_OK = 0x12,
+  SUBSCRIBE_NAMESPACE_ERROR = 0x13,
+  UNSUBSCRIBE_NAMESPACE = 0x14,
   MAX_REQUEST_ID = 0x15,
   FETCH = 0x16,
   FETCH_CANCEL = 0x17,
@@ -1010,20 +1010,20 @@ struct PublishOk {
 
 // PublishError is now an alias for RequestError
 
-struct Announce {
+struct PublishNamespace {
   RequestID requestID;
   TrackNamespace trackNamespace;
-  TrackRequestParameters params{FrameType::ANNOUNCE};
+  TrackRequestParameters params{FrameType::PUBLISH_NAMESPACE};
 };
 
-// AnnounceError is now an alias for RequestError - see below
+// PublishNamespaceError is now an alias for RequestError - see below
 
-struct Unannounce {
+struct PublishNamespaceDone {
   TrackNamespace trackNamespace;      // Used in v15 and below
   std::optional<RequestID> requestID; // Used in v16+
 };
 
-struct AnnounceCancel {
+struct PublishNamespaceCancel {
   TrackNamespace trackNamespace;      // Used in v15 and below
   std::optional<RequestID> requestID; // Used in v16+
   RequestErrorCode errorCode;
@@ -1138,18 +1138,18 @@ struct FetchOk {
 };
 
 // FetchError is now an alias for RequestError - see below
-enum SubscribeAnnouncesOptions {
+enum SubscribeNamespaceOptions {
   PUBLISH = 0,
   NAMESPACE = 1,
   BOTH = 2,
 };
 
-struct SubscribeAnnounces {
+struct SubscribeNamespace {
   RequestID requestID;
   TrackNamespace trackNamespacePrefix;
   bool forward{true}; // Only used in draft-15 and above
-  TrackRequestParameters params{FrameType::SUBSCRIBE_ANNOUNCES};
-  SubscribeAnnouncesOptions options; // Only used in draft-16 and above
+  TrackRequestParameters params{FrameType::SUBSCRIBE_NAMESPACE};
+  SubscribeNamespaceOptions options; // Only used in draft-16 and above
 };
 
 // Only used in draft-16 and above
@@ -1162,9 +1162,9 @@ struct Namespace {
   TrackNamespace trackNamespaceSuffix;
 };
 
-// SubscribeAnnouncesError is now an alias for RequestError - see below
+// SubscribeNamespaceError is now an alias for RequestError - see below
 
-struct UnsubscribeAnnounces {
+struct UnsubscribeNamespace {
   // Keeping both to maintain compatibility between v15 and v15-
   std::optional<RequestID> requestID;
   std::optional<TrackNamespace> trackNamespacePrefix;
@@ -1179,8 +1179,8 @@ struct RequestOk {
   static RequestOk fromTrackStatusOk(const TrackStatusOk& trackStatusOk);
 };
 
-using SubscribeAnnouncesOk = RequestOk;
-using AnnounceOk = RequestOk;
+using SubscribeNamespaceOk = RequestOk;
+using PublishNamespaceOk = RequestOk;
 using SubscribeUpdateOk = RequestOk;
 
 // Consolidated request error structure
@@ -1193,8 +1193,8 @@ struct RequestError {
 // Type aliases for backward compatibility
 using SubscribeError = RequestError;
 using FetchError = RequestError;
-using SubscribeAnnouncesError = RequestError;
-using AnnounceError = RequestError;
+using SubscribeNamespaceError = RequestError;
+using PublishNamespaceError = RequestError;
 using PublishError = RequestError;
 using TrackStatusError = RequestError;
 using SubscribeUpdateError = RequestError;
@@ -1202,8 +1202,8 @@ using SubscribeUpdateError = RequestError;
 // Error code aliases
 using SubscribeErrorCode = RequestErrorCode;
 using FetchErrorCode = RequestErrorCode;
-using SubscribeAnnouncesErrorCode = RequestErrorCode;
-using AnnounceErrorCode = RequestErrorCode;
+using SubscribeNamespaceErrorCode = RequestErrorCode;
+using PublishNamespaceErrorCode = RequestErrorCode;
 using PublishErrorCode = RequestErrorCode;
 using TrackStatusErrorCode = RequestErrorCode;
 using SubscribeUpdateErrorCode = RequestErrorCode;

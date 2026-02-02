@@ -30,25 +30,25 @@
           "num_params": 0
         }],
         [1050, "transport", "moqt:control_message_parsed", {
-          "message_type": "SERVER_SETUP", 
+          "message_type": "SERVER_SETUP",
           "vantage_point": "server",
           "selected_version": 2,
           "num_params": 1
         }],
         [1100, "transport", "moqt:control_message_created", {
-          "message_type": "ANNOUNCE",
+          "message_type": "PUBLISH_NAMESPACE",
           "vantage_point": "client",
           "track_namespace": "conference/room123",
           "num_params": 2
         }],
         [1150, "transport", "moqt:control_message_parsed", {
-          "message_type": "ANNOUNCE_OK",
+          "message_type": "PUBLISH_NAMESPACE_OK",
           "vantage_point": "server",
           "track_namespace": "conference/room123"
         }],
         [1200, "transport", "moqt:control_message_created", {
           "message_type": "SUBSCRIBE",
-          "vantage_point": "client", 
+          "vantage_point": "client",
           "subscribe_id": 1,
           "track_alias": 100,
           "track_namespace": "conference/room123",
@@ -85,7 +85,7 @@
         }],
         [1355, "transport", "moqt:object_datagram_parsed", {
           "track_alias": 100,
-          "track_id": "video", 
+          "track_id": "video",
           "group_id": 0,
           "object_id": 0,
           "publisher_priority": 1,
@@ -236,7 +236,7 @@
         [1605, "transport", "moqt:fetch_header_parsed", {
           "subscribe_id": 3,
           "track_alias": 300,
-          "track_namespace": "conference/room123", 
+          "track_namespace": "conference/room123",
           "track_name": "metadata",
           "start_group": 0,
           "start_object": 0,

@@ -14,15 +14,17 @@
 namespace moxygen {
 
 /**
- * MoQRelaySession extends MoQSession with full announcement functionality.
+ * MoQRelaySession extends MoQSession with full publishNamespace
+ * functionality.
  *
- * This subclass provides real implementations of announce() and
- * subscribeAnnounces() methods, along with proper announcement state
- * management. It should be used in relay servers and any applications that need
- * to handle announcements.
+ * This subclass provides real implementations of publishNamespace() and
+ * subscribeNamespace() methods, along with proper publishNamespace
+ * state management. It should be used in relay servers and any applications
+ * that need to handle publishNamespaces.
  *
- * The base MoQSession returns NOT_SUPPORTED for announcement operations, making
- * it suitable for simple clients that only subscribe to tracks.
+ * The base MoQSession returns NOT_SUPPORTED for publishNamespace
+ * operations, making it suitable for simple clients that only subscribe to
+ * tracks.
  */
 class MoQRelaySession : public MoQSession {
  public:
@@ -38,84 +40,89 @@ class MoQRelaySession : public MoQSession {
   // Override cleanup method for proper inheritance pattern
   void cleanup() override;
 
-  // Override announcement methods with real implementations
-  folly::coro::Task<Subscriber::AnnounceResult> announce(
-      Announce ann,
-      std::shared_ptr<AnnounceCallback> announceCallback = nullptr) override;
+  // Override publishNamespace methods with real implementations
+  folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
+      PublishNamespace ann,
+      std::shared_ptr<PublishNamespaceCallback> publishNamespaceCallback =
+          nullptr) override;
 
-  folly::coro::Task<Publisher::SubscribeAnnouncesResult> subscribeAnnounces(
-      SubscribeAnnounces subAnn) override;
+  folly::coro::Task<Publisher::SubscribeNamespaceResult> subscribeNamespace(
+      SubscribeNamespace subAnn) override;
 
  private:
   // Forward declarations for inner classes
-  class SubscriberAnnounceCallback;
-  class PublisherAnnounceHandle;
-  class SubscribeAnnouncesHandle;
+  class SubscriberPublishNamespaceCallback;
+  class PublisherPublishNamespaceHandle;
+  class SubscribeNamespaceHandle;
 
-  // Internal announcement handling methods
-  folly::coro::Task<void> handleSubscribeAnnounces(SubscribeAnnounces sa);
-  void subscribeAnnouncesOk(const SubscribeAnnouncesOk& saOk);
-  void unsubscribeAnnounces(const UnsubscribeAnnounces& unsubAnn);
+  // Internal publishNamespace handling methods
+  folly::coro::Task<void> handleSubscribeNamespace(SubscribeNamespace sa);
+  void subscribeNamespaceOk(const SubscribeNamespaceOk& saOk);
+  void unsubscribeNamespace(const UnsubscribeNamespace& unsubAnn);
 
-  folly::coro::Task<void> handleAnnounce(Announce announce);
-  void announceOk(const AnnounceOk& annOk);
-  void announceCancel(const AnnounceCancel& annCan);
-  void unannounce(const Unannounce& unannounce);
+  folly::coro::Task<void> handlePublishNamespace(
+      PublishNamespace publishNamespace);
+  void publishNamespaceOk(const PublishNamespaceOk& annOk);
+  void publishNamespaceCancel(const PublishNamespaceCancel& annCan);
+  void publishNamespaceDone(const PublishNamespaceDone& publishNamespaceDone);
 
-  // Override all incoming announcement message handlers
-  void onAnnounce(Announce ann) override;
-  void onAnnounceCancel(AnnounceCancel announceCancel) override;
-  void onUnannounce(Unannounce unAnn) override;
-  void onSubscribeAnnounces(SubscribeAnnounces sa) override;
+  // Override all incoming publishNamespace message handlers
+  void onPublishNamespace(PublishNamespace ann) override;
+  void onPublishNamespaceCancel(
+      PublishNamespaceCancel publishNamespaceCancel) override;
+  void onPublishNamespaceDone(PublishNamespaceDone unAnn) override;
+  void onSubscribeNamespace(SubscribeNamespace sa) override;
   void onRequestOk(RequestOk ok, FrameType frameType) override;
-  void onUnsubscribeAnnounces(UnsubscribeAnnounces unsub) override;
+  void onUnsubscribeNamespace(UnsubscribeNamespace unsub) override;
 
   // Helper methods for handling RequestOk for different request types
-  void handleAnnounceOkFromRequestOk(
+  void handlePublishNamespaceOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
-  void handleSubscribeAnnouncesOkFromRequestOk(
+  void handleSubscribeNamespaceOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
 
-  // Announcement-specific types (moved from base class)
-  struct PendingAnnounce {
+  // PublishNamespace-specific types (moved from base class)
+  struct PendingPublishNamespace {
     TrackNamespace trackNamespace;
-    folly::coro::Promise<folly::Expected<AnnounceOk, AnnounceError>> promise;
-    std::shared_ptr<AnnounceCallback> callback;
+    folly::coro::Promise<
+        folly::Expected<PublishNamespaceOk, PublishNamespaceError>>
+        promise;
+    std::shared_ptr<PublishNamespaceCallback> callback;
   };
 
-  // Announcement state management
+  // PublishNamespace state management
   // Primary maps keyed by RequestID
   folly::F14FastMap<
       RequestID,
-      std::shared_ptr<Subscriber::AnnounceHandle>,
+      std::shared_ptr<Subscriber::PublishNamespaceHandle>,
       RequestID::hash>
-      subscriberAnnounces_;
+      publishNamespaceHanldes_;
   folly::F14FastMap<
       RequestID,
-      std::shared_ptr<Subscriber::AnnounceCallback>,
+      std::shared_ptr<Subscriber::PublishNamespaceCallback>,
       RequestID::hash>
-      publisherAnnounces_;
+      publishNamespaceCallbacks_;
   folly::F14FastMap<
       RequestID,
-      std::shared_ptr<Publisher::SubscribeAnnouncesHandle>,
+      std::shared_ptr<Publisher::SubscribeNamespaceHandle>,
       RequestID::hash>
-      subscribeAnnounces_;
+      subscribeNamespaceHandles_;
 
   // Legacy TrackNamespace → RequestID translation maps.
   // Remove these once we drop support for the respective legacy versions.
-  // legacyPublisherAnnounceNsToReqId_: v15- (publisher side)
-  // legacySubscriberAnnounceNsToReqId_: v15- (subscriber side)
-  // legacySubscribeAnnouncesNsToReqId_: v14- (subscribe announces)
+  // legacyPublisherPublishNamespaceNsToReqId_: v15- (publisher side)
+  // legacySubscriberPublishNamespaceNsToReqId_: v15- (subscriber side)
+  // legacySubscribeNamespaceNsToReqId_: v14- (subscribe namespace)
   folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
-      legacyPublisherAnnounceNsToReqId_;
+      legacyPublisherNamespaceToReqId_;
   folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
-      legacySubscriberAnnounceNsToReqId_;
+      legacySubscriberNamespaceToReqId_;
   folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
-      legacySubscribeAnnouncesNsToReqId_;
+      legacySubscribeNamespaceToReqId_;
 
-  // Extended PendingRequestState for announcement support
+  // Extended PendingRequestState for publishNamespace support
   class MoQRelayPendingRequestState;
 };
 

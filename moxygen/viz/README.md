@@ -14,7 +14,7 @@ This tool visualizes MoQ Transport sessions by parsing QLOG JSON files containin
 - **Time-based positioning**: Events positioned chronologically with precise timestamps
 
 ### Event Types Supported
-- **Control Messages**: SETUP, ANNOUNCE, SUBSCRIBE, UNSUBSCRIBE, etc.
+- **Control Messages**: SETUP, PUBLISH_NAMESPACE, SUBSCRIBE, UNSUBSCRIBE, etc.
 - **Object Datagrams**: Data object transfers with size information
 - **Subgroup Operations**: Subgroup headers and object transfers
 - **Fetch Operations**: Fetch requests and responses

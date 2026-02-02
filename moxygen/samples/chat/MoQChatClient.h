@@ -41,18 +41,18 @@ class MoQChatClient : public Publisher,
   }
   void unsubscribe() override;
 
-  class AnnounceHandle : public Subscriber::AnnounceHandle {
+  class PublishNamespaceHandle : public Subscriber::PublishNamespaceHandle {
    public:
-    AnnounceHandle(
-        AnnounceOk ok,
+    PublishNamespaceHandle(
+        PublishNamespaceOk ok,
         std::shared_ptr<MoQChatClient> client,
         TrackNamespace trackNamespace)
-        : Subscriber::AnnounceHandle(std::move(ok)),
+        : Subscriber::PublishNamespaceHandle(std::move(ok)),
           client_(std::move(client)),
           trackNamespace_(std::move(trackNamespace)) {}
 
-    void unannounce() override {
-      client_->unannounce(trackNamespace_);
+    void publishNamespaceDone() override {
+      client_->publishNamespaceDone(trackNamespace_);
       client_.reset();
     }
 
@@ -61,10 +61,10 @@ class MoQChatClient : public Publisher,
     TrackNamespace trackNamespace_;
   };
 
-  folly::coro::Task<Subscriber::AnnounceResult> announce(
-      Announce announce,
-      std::shared_ptr<AnnounceCallback>) override;
-  void unannounce(const TrackNamespace&);
+  folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
+      PublishNamespace publishNamespace,
+      std::shared_ptr<PublishNamespaceCallback>) override;
+  void publishNamespaceDone(const TrackNamespace&);
 
   void publishLoop();
   folly::coro::Task<void> subscribeToUser(TrackNamespace trackNamespace);
@@ -106,8 +106,9 @@ class MoQChatClient : public Publisher,
   std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>
       peerSetup_{folly::coro::makePromiseContract<ServerSetup>()};
-  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
-  std::shared_ptr<Publisher::SubscribeAnnouncesHandle> subscribeAnnounceHandle_;
+  std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle>
+      subscribeNamespaceHandle_;
 };
 
 } // namespace moxygen

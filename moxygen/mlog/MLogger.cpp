@@ -365,20 +365,20 @@ void MLogger::logFetchCancel(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logAnnounceOk(
-    const AnnounceOk& req,
+void MLogger::logPublishNamespaceOk(
+    const PublishNamespaceOk& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTAnnounceOk>();
+  auto baseMsg = std::make_unique<MOQTPublishNamespaceOk>();
   baseMsg->requestId = req.requestID.value;
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logAnnounceError(
-    const AnnounceError& req,
+void MLogger::logPublishNamespaceError(
+    const PublishNamespaceError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTAnnounceError>();
+  auto baseMsg = std::make_unique<MOQTPublishNamespaceError>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
@@ -392,11 +392,11 @@ void MLogger::logAnnounceError(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logAnnounceCancel(
-    const AnnounceCancel& req,
+void MLogger::logPublishNamespaceCancel(
+    const PublishNamespaceCancel& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTAnnounceCancel>();
+  auto baseMsg = std::make_unique<MOQTPublishNamespaceCancel>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
@@ -441,11 +441,11 @@ void MLogger::logTrackStatus(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeAnnounces(
-    const SubscribeAnnounces& req,
+void MLogger::logSubscribeNamespace(
+    const SubscribeNamespace& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeAnnounces>();
+  auto baseMsg = std::make_unique<MOQTSubscribeNamespace>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->trackNamespacePrefix = convertTrackNamespaceToByteStringFormat(
       req.trackNamespacePrefix.trackNamespace, type);
@@ -456,11 +456,11 @@ void MLogger::logSubscribeAnnounces(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logUnsubscribeAnnounces(
-    const UnsubscribeAnnounces& req,
+void MLogger::logUnsubscribeNamespace(
+    const UnsubscribeNamespace& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTUnsubscribeAnnounces>();
+  auto baseMsg = std::make_unique<MOQTUnsubscribeNamespace>();
   if (req.trackNamespacePrefix.has_value()) {
     baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
         req.trackNamespacePrefix.value().trackNamespace, type);
@@ -567,11 +567,11 @@ void MLogger::logPublishDone(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logUnannounce(
-    const Unannounce& req,
+void MLogger::logPublishNamespaceDone(
+    const PublishNamespaceDone& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTUnannounce>();
+  auto baseMsg = std::make_unique<MOQTPublishNamespaceDone>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
 
@@ -646,11 +646,11 @@ void MLogger::logRequestsBlocked(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logAnnounce(
-    const Announce& req,
+void MLogger::logPublishNamespace(
+    const PublishNamespace& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTAnnounce>();
+  auto baseMsg = std::make_unique<MOQTPublishNamespace>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
@@ -661,20 +661,20 @@ void MLogger::logAnnounce(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeAnnouncesOk(
-    const SubscribeAnnouncesOk& req,
+void MLogger::logSubscribeNamespaceOk(
+    const SubscribeNamespaceOk& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesOk>();
+  auto baseMsg = std::make_unique<MOQTSubscribeNamespaceOk>();
   baseMsg->requestId = req.requestID.value;
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
-void MLogger::logSubscribeAnnouncesError(
-    const SubscribeAnnouncesError& req,
+void MLogger::logSubscribeNamespaceError(
+    const SubscribeNamespaceError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeAnnouncesError>();
+  auto baseMsg = std::make_unique<MOQTSubscribeNamespaceError>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 

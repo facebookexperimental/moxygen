@@ -39,15 +39,24 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onFetch, (Fetch fetch));
   MOCK_METHOD(void, onFetchCancel, (FetchCancel fetchCancel));
   MOCK_METHOD(void, onFetchOk, (FetchOk fetchOk));
-  MOCK_METHOD(void, onAnnounce, (Announce announce));
-  MOCK_METHOD(void, onUnannounce, (Unannounce unannounce));
-  MOCK_METHOD(void, onAnnounceCancel, (AnnounceCancel announceCancel));
-  MOCK_METHOD(void, onSubscribeAnnounces, (SubscribeAnnounces announce));
+  MOCK_METHOD(void, onPublishNamespace, (PublishNamespace publishNamespace));
+  MOCK_METHOD(
+      void,
+      onPublishNamespaceDone,
+      (PublishNamespaceDone publishNamespaceDone));
+  MOCK_METHOD(
+      void,
+      onPublishNamespaceCancel,
+      (PublishNamespaceCancel publishNamespaceCancel));
+  MOCK_METHOD(
+      void,
+      onSubscribeNamespace,
+      (SubscribeNamespace publishNamespace));
 
   MOCK_METHOD(
       void,
-      onUnsubscribeAnnounces,
-      (UnsubscribeAnnounces unsubscribeAnnounces));
+      onUnsubscribeNamespace,
+      (UnsubscribeNamespace unsubscribeNamespace));
   MOCK_METHOD(void, onTrackStatus, (TrackStatus trackStatus));
   MOCK_METHOD(void, onTrackStatusOk, (TrackStatusOk trackStatusOk));
   MOCK_METHOD(void, onTrackStatusError, (TrackStatusError trackStatusError));
@@ -242,33 +251,34 @@ class MockFetchHandle : public Publisher::FetchHandle {
   MOCK_METHOD(void, fetchCancel, (), (override));
 };
 
-class MockSubscribeAnnouncesHandle
-    : public Publisher::SubscribeAnnouncesHandle {
+class MockSubscribeNamespaceHandle
+    : public Publisher::SubscribeNamespaceHandle {
  public:
-  MockSubscribeAnnouncesHandle() = default;
-  explicit MockSubscribeAnnouncesHandle(SubscribeAnnouncesOk ok)
-      : Publisher::SubscribeAnnouncesHandle(std::move(ok)) {}
+  MockSubscribeNamespaceHandle() = default;
+  explicit MockSubscribeNamespaceHandle(SubscribeNamespaceOk ok)
+      : Publisher::SubscribeNamespaceHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, unsubscribeAnnounces, (), (override));
+  MOCK_METHOD(void, unsubscribeNamespace, (), (override));
 };
 
-class MockAnnounceHandle : public Subscriber::AnnounceHandle {
+class MockPublishNamespaceHandle : public Subscriber::PublishNamespaceHandle {
  public:
-  MockAnnounceHandle() = default;
-  explicit MockAnnounceHandle(AnnounceOk ok)
-      : Subscriber::AnnounceHandle(std::move(ok)) {}
+  MockPublishNamespaceHandle() = default;
+  explicit MockPublishNamespaceHandle(PublishNamespaceOk ok)
+      : Subscriber::PublishNamespaceHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, unannounce, (), (override));
+  MOCK_METHOD(void, publishNamespaceDone, (), (override));
 };
 
-class MockAnnounceCallback : public Subscriber::AnnounceCallback {
+class MockPublishNamespaceCallback
+    : public Subscriber::PublishNamespaceCallback {
  public:
-  MockAnnounceCallback() : Subscriber::AnnounceCallback() {}
+  MockPublishNamespaceCallback() : Subscriber::PublishNamespaceCallback() {}
 
   MOCK_METHOD(
       void,
-      announceCancel,
-      (AnnounceErrorCode, std::string),
+      publishNamespaceCancel,
+      (PublishNamespaceErrorCode, std::string),
       (override));
 };
 
@@ -293,9 +303,9 @@ class MockPublisher : public Publisher {
       (override));
 
   MOCK_METHOD(
-      folly::coro::Task<SubscribeAnnouncesResult>,
-      subscribeAnnounces,
-      (SubscribeAnnounces),
+      folly::coro::Task<SubscribeNamespaceResult>,
+      subscribeNamespace,
+      (SubscribeNamespace),
       (override));
 
   MOCK_METHOD(void, goaway, (Goaway), (override));
@@ -310,9 +320,9 @@ class MockSubscriber : public Subscriber {
       (override));
 
   MOCK_METHOD(
-      folly::coro::Task<AnnounceResult>,
-      announce,
-      (Announce, std::shared_ptr<AnnounceCallback>),
+      folly::coro::Task<PublishNamespaceResult>,
+      publishNamespace,
+      (PublishNamespace, std::shared_ptr<PublishNamespaceCallback>),
       (override));
 };
 
@@ -330,23 +340,27 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onFetchError, (FetchErrorCode), (override));
 
-  MOCK_METHOD(void, onAnnounceSuccess, (), (override));
-
-  MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
-
-  MOCK_METHOD(void, onUnannounce, (), (override));
-
-  MOCK_METHOD(void, onAnnounceCancel, (), (override));
-
-  MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
+  MOCK_METHOD(void, onPublishNamespaceSuccess, (), (override));
 
   MOCK_METHOD(
       void,
-      onSubscribeAnnouncesError,
-      (SubscribeAnnouncesErrorCode),
+      onPublishNamespaceError,
+      (PublishNamespaceErrorCode),
       (override));
 
-  MOCK_METHOD(void, onUnsubscribeAnnounces, (), (override));
+  MOCK_METHOD(void, onPublishNamespaceDone, (), (override));
+
+  MOCK_METHOD(void, onPublishNamespaceCancel, (), (override));
+
+  MOCK_METHOD(void, onSubscribeNamespaceSuccess, (), (override));
+
+  MOCK_METHOD(
+      void,
+      onSubscribeNamespaceError,
+      (SubscribeNamespaceErrorCode),
+      (override));
+
+  MOCK_METHOD(void, onUnsubscribeNamespace, (), (override));
 
   MOCK_METHOD(void, onTrackStatus, (), (override));
 
@@ -358,7 +372,7 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onSubscriptionStreamClosed, (), (override));
 
-  MOCK_METHOD(void, recordAnnounceLatency, (uint64_t), (override));
+  MOCK_METHOD(void, recordPublishNamespaceLatency, (uint64_t), (override));
 
   MOCK_METHOD(void, recordPublishLatency, (uint64_t), (override));
 
@@ -381,23 +395,27 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
 
   MOCK_METHOD(void, onFetchError, (FetchErrorCode), (override));
 
-  MOCK_METHOD(void, onAnnounceSuccess, (), (override));
-
-  MOCK_METHOD(void, onAnnounceError, (AnnounceErrorCode), (override));
-
-  MOCK_METHOD(void, onUnannounce, (), (override));
-
-  MOCK_METHOD(void, onAnnounceCancel, (), (override));
-
-  MOCK_METHOD(void, onSubscribeAnnouncesSuccess, (), (override));
+  MOCK_METHOD(void, onPublishNamespaceSuccess, (), (override));
 
   MOCK_METHOD(
       void,
-      onSubscribeAnnouncesError,
-      (SubscribeAnnouncesErrorCode),
+      onPublishNamespaceError,
+      (PublishNamespaceErrorCode),
       (override));
 
-  MOCK_METHOD(void, onUnsubscribeAnnounces, (), (override));
+  MOCK_METHOD(void, onPublishNamespaceDone, (), (override));
+
+  MOCK_METHOD(void, onPublishNamespaceCancel, (), (override));
+
+  MOCK_METHOD(void, onSubscribeNamespaceSuccess, (), (override));
+
+  MOCK_METHOD(
+      void,
+      onSubscribeNamespaceError,
+      (SubscribeNamespaceErrorCode),
+      (override));
+
+  MOCK_METHOD(void, onUnsubscribeNamespace, (), (override));
 
   MOCK_METHOD(void, onTrackStatus, (), (override));
 

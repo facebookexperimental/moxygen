@@ -68,7 +68,7 @@ class MoQFlvStreamerClient
         fullVideoTrackName_(std::move(fvtn)),
         fullAudioTrackName_(std::move(fatn)) {}
 
-  folly::coro::Task<void> run(Announce ann) noexcept {
+  folly::coro::Task<void> run(PublishNamespace ann) noexcept {
     XLOG(INFO) << __func__;
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
@@ -84,14 +84,15 @@ class MoQFlvStreamerClient
           std::chrono::seconds(FLAGS_transaction_timeout),
           quic::TransportSettings(),
           alpns);
-      // Announce
-      auto annResp = co_await moqClient_.getSession()->announce(std::move(ann));
+      // PublishNamespace
+      auto annResp =
+          co_await moqClient_.getSession()->publishNamespace(std::move(ann));
       if (annResp.hasValue()) {
-        announceHandle_ = std::move(annResp.value());
+        publishNamespaceHandle_ = std::move(annResp.value());
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
       } else {
-        XLOG(INFO) << "Announce error reqID=" << annResp.error().requestID.value
-                   << " code="
+        XLOG(INFO) << "PublishNamespace error reqID="
+                   << annResp.error().requestID.value << " code="
                    << folly::to_underlying(annResp.error().errorCode)
                    << " reason=" << annResp.error().reasonPhrase;
       }
@@ -104,8 +105,8 @@ class MoQFlvStreamerClient
 
   void stop() {
     XLOG(INFO) << __func__;
-    if (announceHandle_) {
-      announceHandle_->unannounce();
+    if (publishNamespaceHandle_) {
+      publishNamespaceHandle_->publishNamespaceDone();
     }
     if (moqClient_.getSession()) {
       moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
@@ -311,7 +312,7 @@ class MoQFlvStreamerClient
   static constexpr uint8_t VIDEO_STREAM_PRIORITY = 200;
 
   MoQRelayClient moqClient_;
-  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
+  std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
   FullTrackName fullVideoTrackName_;
   FullTrackName fullAudioTrackName_;
 

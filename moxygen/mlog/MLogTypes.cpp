@@ -339,14 +339,14 @@ folly::dynamic MOQTFetchCancel::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTAnnounceOk::toDynamic() const {
+folly::dynamic MOQTPublishNamespaceOk::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
   return obj;
 }
 
-folly::dynamic MOQTAnnounceError::toDynamic() const {
+folly::dynamic MOQTPublishNamespaceError::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
@@ -360,7 +360,7 @@ folly::dynamic MOQTAnnounceError::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTAnnounceCancel::toDynamic() const {
+folly::dynamic MOQTPublishNamespaceCancel::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
@@ -406,7 +406,7 @@ folly::dynamic MOQTTrackStatus::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTSubscribeAnnounces::toDynamic() const {
+folly::dynamic MOQTSubscribeNamespace::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
@@ -425,7 +425,7 @@ folly::dynamic MOQTSubscribeAnnounces::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTUnsubscribeAnnounces::toDynamic() const {
+folly::dynamic MOQTUnsubscribeNamespace::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
 
@@ -544,7 +544,7 @@ folly::dynamic MOQTRequestsBlocked::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTAnnounce::toDynamic() const {
+folly::dynamic MOQTPublishNamespace::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
@@ -563,7 +563,7 @@ folly::dynamic MOQTAnnounce::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTUnannounce::toDynamic() const {
+folly::dynamic MOQTPublishNamespaceDone::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
@@ -609,14 +609,14 @@ folly::dynamic MOQTTrackStatusError::toDynamic() const {
   return obj;
 }
 
-folly::dynamic MOQTSubscribeAnnouncesOk::toDynamic() const {
+folly::dynamic MOQTSubscribeNamespaceOk::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
   return obj;
 }
 
-folly::dynamic MOQTSubscribeAnnouncesError::toDynamic() const {
+folly::dynamic MOQTSubscribeNamespaceError::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;

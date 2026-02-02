@@ -19,16 +19,16 @@
 //
 // The caller will invoke:
 //
-//   auto announceResult = co_await session->announce(...);
+//   auto publishNamespaceResult = co_await session->publishNamespace(...);
 //
-//   announceResult.value() can be used for unnanounce
+//   publishNamespaceResult.value() can be used for unnanounce
 //
 // And the remote peer will receive a callback
 //
-// folly::coro::Task<AnnounceResult> announce(...) {
-//   verify announce
-//   create AnnounceHandle
-//   Fill in announceOk
+// folly::coro::Task<PublishNamespaceResult> publishNamespace(...) {
+//   verify publishNamespace
+//   create PublishNamespaceHandle
+//   Fill in publishNamespaceOk
 //   Current session can be obtained from folly::RequestContext
 //   co_return handle;
 // }
@@ -38,55 +38,59 @@ namespace moxygen {
 class TrackConsumer;
 class SubscriptionHandle;
 
-// Represents a subscriber on which the caller can invoke ANNOUNCE
+// Represents a subscriber on which the caller can invoke PUBLISH_NAMESPACE
 class Subscriber {
  public:
   using SubscriptionHandle = moxygen::SubscriptionHandle;
   virtual ~Subscriber() = default;
 
-  // On successful ANNOUNCE, an AnnounceHandle is returned, which the caller
-  // can use to later UNANNOUNCE.
-  class AnnounceHandle {
+  // On successful PUBLISH_NAMESPACE, an PublishNamespaceHandle is returned,
+  // which the caller can use to later PUBLISH_NAMESPACE_DONE.
+  class PublishNamespaceHandle {
    public:
-    AnnounceHandle() = default;
-    explicit AnnounceHandle(AnnounceOk annOk) : announceOk_(std::move(annOk)) {}
-    virtual ~AnnounceHandle() = default;
-    // Providing a default implementation of unannounce, because it can be
-    // an uninteresting message
-    virtual void unannounce() {};
+    PublishNamespaceHandle() = default;
+    explicit PublishNamespaceHandle(PublishNamespaceOk annOk)
+        : publishNamespaceOk_(std::move(annOk)) {}
+    virtual ~PublishNamespaceHandle() = default;
+    // Providing a default implementation of publishNamespaceDone, because it
+    // can be an uninteresting message
+    virtual void publishNamespaceDone() {}
 
-    const AnnounceOk& announceOk() const {
-      return *announceOk_;
+    const PublishNamespaceOk& publishNamespaceOk() const {
+      return *publishNamespaceOk_;
     }
 
    protected:
-    void setAnnounceOk(AnnounceOk ok) {
-      announceOk_ = std::move(ok);
+    void setPublishNamespaceOk(PublishNamespaceOk ok) {
+      publishNamespaceOk_ = std::move(ok);
     };
 
-    std::optional<AnnounceOk> announceOk_;
+    std::optional<PublishNamespaceOk> publishNamespaceOk_;
   };
 
-  // A subscribe receives an AnnounceCallback in announce, which can be used
-  // to issue ANNOUNCE_CANCEL at some point after ANNOUNCE_Ok.
-  class AnnounceCallback {
+  // A subscribe receives an PublishNamespaceCallback in publishNamespace, which
+  // can be used to issue PUBLISH_NAMESPACE_CANCEL at some point after
+  // PUBLISH_NAMESPACE_Ok.
+  class PublishNamespaceCallback {
    public:
-    virtual ~AnnounceCallback() = default;
+    virtual ~PublishNamespaceCallback() = default;
 
-    virtual void announceCancel(
-        AnnounceErrorCode errorCode,
+    virtual void publishNamespaceCancel(
+        PublishNamespaceErrorCode errorCode,
         std::string reasonPhrase) = 0;
   };
 
-  // Send/respond to ANNOUNCE
-  using AnnounceResult =
-      folly::Expected<std::shared_ptr<AnnounceHandle>, AnnounceError>;
-  virtual folly::coro::Task<AnnounceResult> announce(
-      Announce ann,
-      std::shared_ptr<AnnounceCallback> = nullptr) {
-    return folly::coro::makeTask<AnnounceResult>(folly::makeUnexpected(
-        AnnounceError{
-            ann.requestID, AnnounceErrorCode::NOT_SUPPORTED, "unimplemented"}));
+  // Send/respond to PUBLISH_NAMESPACE
+  using PublishNamespaceResult = folly::
+      Expected<std::shared_ptr<PublishNamespaceHandle>, PublishNamespaceError>;
+  virtual folly::coro::Task<PublishNamespaceResult> publishNamespace(
+      PublishNamespace ann,
+      std::shared_ptr<PublishNamespaceCallback> = nullptr) {
+    return folly::coro::makeTask<PublishNamespaceResult>(folly::makeUnexpected(
+        PublishNamespaceError{
+            ann.requestID,
+            PublishNamespaceErrorCode::NOT_SUPPORTED,
+            "unimplemented"}));
   }
 
   // Result of a PUBLISH request containing consumer and async reply

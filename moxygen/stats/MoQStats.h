@@ -44,49 +44,51 @@ class MoQStatsCallback {
   virtual void onFetchError(FetchErrorCode errorCode) = 0;
 
   /*
-   * Publisher: Received an ANNOUNCE_OK from the subscriber
-   * Subscriber: Responded to an ANNOUNCE request with a ANNOUNCE_OK
+   * Publisher: Received an PUBLISH_NAMESPACE_OK from the subscriber
+   * Subscriber: Responded to an PUBLISH_NAMESPACE request with a
+   * PUBLISH_NAMESPACE_OK
    */
-  virtual void onAnnounceSuccess() = 0;
+  virtual void onPublishNamespaceSuccess() = 0;
 
   /*
-   * Publisher: Received an ANNOUNCE_ERROR from the subscriber
-   * Subscriber: Responded to an ANNOUNCE request with a ANNOUNCE_ERROR
+   * Publisher: Received an PUBLISH_NAMESPACE_ERROR from the subscriber
+   * Subscriber: Responded to an PUBLISH_NAMESPACE request with a
+   * PUBLISH_NAMESPACE_ERROR
    */
-  virtual void onAnnounceError(AnnounceErrorCode errorCode) = 0;
+  virtual void onPublishNamespaceError(PublishNamespaceErrorCode errorCode) = 0;
 
   /*
-   * Publisher: Sent an UNANNOUNCE
-   * Subscriber: Received an UNANNOUNCE
+   * Publisher: Sent an PUBLISH_NAMESPACE_DONE
+   * Subscriber: Received an PUBLISH_NAMESPACE_DONE
    */
-  virtual void onUnannounce() = 0;
+  virtual void onPublishNamespaceDone() = 0;
 
   /*
-   * Publisher: Received an ANNOUNCE_CANCEL
-   * Subscriber: Sent an ANNOUNCE_CANCEL
+   * Publisher: Received an PUBLISH_NAMESPACE_CANCEL
+   * Subscriber: Sent an PUBLISH_NAMESPACE_CANCEL
    */
-  virtual void onAnnounceCancel() = 0;
+  virtual void onPublishNamespaceCancel() = 0;
 
   /*
-   * Publisher: Responded to a SUBSCRIBE_ANNOUNCES request with a
-   *   SUBSCRIBE_ANNOUNCES_OK
-   * Subscriber: Received a SUBSCRIBE_ANNOUNCES_OK from the publisher
+   * Publisher: Responded to a SUBSCRIBE_NAMESPACE request with a
+   *   SUBSCRIBE_NAMESPACE_OK
+   * Subscriber: Received a SUBSCRIBE_NAMESPACE_OK from the publisher
    */
-  virtual void onSubscribeAnnouncesSuccess() = 0;
+  virtual void onSubscribeNamespaceSuccess() = 0;
 
   /*
-   * Publisher: Responded to a SUBSCRIBE_ANNOUNCES request with a
-   *   SUBSCRIBE_ANNOUNCES_ERROR
-   * Subscriber: Received a SUBSCRIBE_ANNOUNCES_ERROR from the publisher
+   * Publisher: Responded to a SUBSCRIBE_NAMESPACE request with a
+   *   SUBSCRIBE_NAMESPACE_ERROR
+   * Subscriber: Received a SUBSCRIBE_NAMESPACE_ERROR from the publisher
    */
-  virtual void onSubscribeAnnouncesError(
-      SubscribeAnnouncesErrorCode errorCode) = 0;
+  virtual void onSubscribeNamespaceError(
+      SubscribeNamespaceErrorCode errorCode) = 0;
 
   /*
-   * Publisher: Received an UNSUBSCRIBE_ANNOUNCES
-   * Subscriber: Sent an UNSUBSCRIBE_ANNOUNCES
+   * Publisher: Received an UNSUBSCRIBE_NAMESPACE
+   * Subscriber: Sent an UNSUBSCRIBE_NAMESPACE
    */
-  virtual void onUnsubscribeAnnounces() = 0;
+  virtual void onUnsubscribeNamespace() = 0;
 
   /*
    * Publisher: Responded to a TRACK_STATUS request
@@ -127,8 +129,8 @@ class MoQStatsCallback {
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {
  public:
-  // Record the time it takes from request to response for an ANNOUNCE
-  virtual void recordAnnounceLatency(uint64_t latencyMsec) = 0;
+  // Record the time it takes from request to response for an PUBLISH_NAMESPACE
+  virtual void recordPublishNamespaceLatency(uint64_t latencyMsec) = 0;
 
   // Record the time it takes from request to response for a PUBLISH
   virtual void recordPublishLatency(uint64_t latencyMsec) = 0;

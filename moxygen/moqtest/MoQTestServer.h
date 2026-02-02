@@ -138,7 +138,7 @@ class MoQTestServer : public moxygen::Publisher,
   // Relay client connection (if using relay mode)
   std::unique_ptr<MoQClient> relayClient_;
   std::shared_ptr<MoQRelaySession> relaySession_;
-  std::shared_ptr<Subscriber::AnnounceHandle> announceHandle_;
+  std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 

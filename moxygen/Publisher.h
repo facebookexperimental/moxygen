@@ -64,7 +64,7 @@ class SubscriptionHandle {
 };
 
 // Represents a publisher on which the caller can invoke TRACK_STATUS_REQUEST,
-// SUBSCRIBE, FETCH and SUBSCRIBE_ANNOUNCES.
+// SUBSCRIBE, FETCH and SUBSCRIBE_NAMESPACE.
 class Publisher {
  public:
   using SubscriptionHandle = moxygen::SubscriptionHandle;
@@ -128,40 +128,40 @@ class Publisher {
             fetch.requestID, FetchErrorCode::NOT_SUPPORTED, "unimplemented"}));
   }
 
-  // On successful SUBSCRIBE_ANNOUNCES, a SubscribeAnnouncesHandle is returned,
-  // which the caller can use to UNSUBSCRIBE_ANNOUNCES
-  class SubscribeAnnouncesHandle {
+  // On successful SUBSCRIBE_NAMESPACE, a SubscribeNamespaceHandle is returned,
+  // which the caller can use to UNSUBSCRIBE_NAMESPACE
+  class SubscribeNamespaceHandle {
    public:
-    SubscribeAnnouncesHandle() = default;
-    explicit SubscribeAnnouncesHandle(SubscribeAnnouncesOk ok)
-        : subscribeAnnouncesOk_(std::move(ok)) {}
-    virtual ~SubscribeAnnouncesHandle() = default;
+    SubscribeNamespaceHandle() = default;
+    explicit SubscribeNamespaceHandle(SubscribeNamespaceOk ok)
+        : subscribeNamespaceOk_(std::move(ok)) {}
+    virtual ~SubscribeNamespaceHandle() = default;
 
-    virtual void unsubscribeAnnounces() = 0;
+    virtual void unsubscribeNamespace() = 0;
 
-    const SubscribeAnnouncesOk& subscribeAnnouncesOk() const {
-      return *subscribeAnnouncesOk_;
+    const SubscribeNamespaceOk& subscribeNamespaceOk() const {
+      return *subscribeNamespaceOk_;
     }
 
    protected:
-    void setSubscribeAnnouncesOk(SubscribeAnnouncesOk ok) {
-      subscribeAnnouncesOk_ = std::move(ok);
+    void setSubscribeNamespaceOk(SubscribeNamespaceOk ok) {
+      subscribeNamespaceOk_ = std::move(ok);
     }
 
-    std::optional<SubscribeAnnouncesOk> subscribeAnnouncesOk_;
+    std::optional<SubscribeNamespaceOk> subscribeNamespaceOk_;
   };
 
-  // Send/respond to SUBSCRIBE_ANNOUNCES
-  using SubscribeAnnouncesResult = folly::Expected<
-      std::shared_ptr<SubscribeAnnouncesHandle>,
-      SubscribeAnnouncesError>;
-  virtual folly::coro::Task<SubscribeAnnouncesResult> subscribeAnnounces(
-      SubscribeAnnounces subAnn) {
-    return folly::coro::makeTask<SubscribeAnnouncesResult>(
+  // Send/respond to SUBSCRIBE_NAMESPACE
+  using SubscribeNamespaceResult = folly::Expected<
+      std::shared_ptr<SubscribeNamespaceHandle>,
+      SubscribeNamespaceError>;
+  virtual folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
+      SubscribeNamespace subAnn) {
+    return folly::coro::makeTask<SubscribeNamespaceResult>(
         folly::makeUnexpected(
-            SubscribeAnnouncesError{
+            SubscribeNamespaceError{
                 subAnn.requestID,
-                SubscribeAnnouncesErrorCode::NOT_SUPPORTED,
+                SubscribeNamespaceErrorCode::NOT_SUPPORTED,
                 "unimplemented"}));
   }
 

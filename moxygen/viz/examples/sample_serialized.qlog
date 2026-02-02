@@ -16,7 +16,7 @@
           "CONTROL_MESSAGE_PARSED",
           {
             "vantage_point": "client",
-            "message_type": "ANNOUNCE",
+            "message_type": "PUBLISH_NAMESPACE",
             "track_namespace": "alice",
             "track_id": "alice"
           }
@@ -27,7 +27,7 @@
           "CONTROL_MESSAGE_PARSED",
           {
             "vantage_point": "server",
-            "message_type": "ANNOUNCE_OK",
+            "message_type": "PUBLISH_NAMESPACE_OK",
             "track_namespace": "alice",
             "track_id": "alice"
           }
@@ -38,7 +38,7 @@
           "CONTROL_MESSAGE_PARSED",
           {
             "vantage_point": "server",
-            "message_type": "ANNOUNCE",
+            "message_type": "PUBLISH_NAMESPACE",
             "track_namespace": "bob",
             "track_id": "bob"
           }
@@ -49,7 +49,7 @@
           "CONTROL_MESSAGE_PARSED",
           {
             "vantage_point": "client",
-            "message_type": "ANNOUNCE_OK",
+            "message_type": "PUBLISH_NAMESPACE_OK",
             "track_namespace": "bob",
             "track_id": "bob"
           }

@@ -89,13 +89,13 @@ TrackStatus getTrackStatus() {
       .endGroup = 0};
 }
 
-moxygen::SubscribeAnnounces getSubscribeAnnounces() {
-  return SubscribeAnnounces{
+moxygen::SubscribeNamespace getSubscribeNamespace() {
+  return SubscribeNamespace{
       RequestID(0), TrackNamespace{{"foo"}}, true /* forward */};
 }
 
-moxygen::Announce getAnnounce() {
-  return Announce{RequestID(0), TrackNamespace{{"foo"}}};
+moxygen::PublishNamespace getPublishNamespace() {
+  return PublishNamespace{RequestID(0), TrackNamespace{{"foo"}}};
 }
 
 std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {

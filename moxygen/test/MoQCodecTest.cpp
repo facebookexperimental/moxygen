@@ -92,19 +92,20 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
-    EXPECT_CALL(callback, onAnnounce(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::ANNOUNCE_OK);
-    expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
-    EXPECT_CALL(callback, onUnannounce(testing::_));
+    EXPECT_CALL(callback, onPublishNamespace(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::PUBLISH_NAMESPACE_OK);
+    expectOnRequestError(
+        callback, GetParam(), FrameType::PUBLISH_NAMESPACE_ERROR);
+    EXPECT_CALL(callback, onPublishNamespaceDone(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
     expectOnTrackStatusOk(callback, GetParam());
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
-    EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_OK);
+    EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
     expectOnRequestError(
-        callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
-    EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
+        callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+    EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
@@ -144,21 +145,22 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
-    EXPECT_CALL(callback, onAnnounce(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::ANNOUNCE_OK);
+    EXPECT_CALL(callback, onPublishNamespace(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::PUBLISH_NAMESPACE_OK);
 
-    expectOnRequestError(callback, GetParam(), FrameType::ANNOUNCE_ERROR);
-    EXPECT_CALL(callback, onUnannounce(testing::_));
+    expectOnRequestError(
+        callback, GetParam(), FrameType::PUBLISH_NAMESPACE_ERROR);
+    EXPECT_CALL(callback, onPublishNamespaceDone(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
     expectOnTrackStatusOk(callback, GetParam());
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
-    EXPECT_CALL(callback, onSubscribeAnnounces(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_OK);
+    EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
+    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
 
     expectOnRequestError(
-        callback, GetParam(), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
-    EXPECT_CALL(callback, onUnsubscribeAnnounces(testing::_));
+        callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+    EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));

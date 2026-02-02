@@ -134,24 +134,24 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r8c);
 
     skip(cursor, 1);
-    auto r9 = parser_.parseAnnounce(cursor, frameLength(cursor));
+    auto r9 = parser_.parsePublishNamespace(cursor, frameLength(cursor));
     testUnderflowResult(r9);
 
     skip(cursor, 1);
-    auto r10 = parser_.parseAnnounceOk(cursor, frameLength(cursor));
+    auto r10 = parser_.parsePublishNamespaceOk(cursor, frameLength(cursor));
     testUnderflowResult(r10);
 
     skip(cursor, 1);
     auto r11 = parser_.parseRequestError(
-        cursor, frameLength(cursor), FrameType::ANNOUNCE_ERROR);
+        cursor, frameLength(cursor), FrameType::PUBLISH_NAMESPACE_ERROR);
     testUnderflowResult(r11);
 
     skip(cursor, 1);
-    auto r12 = parser_.parseAnnounceCancel(cursor, frameLength(cursor));
+    auto r12 = parser_.parsePublishNamespaceCancel(cursor, frameLength(cursor));
     testUnderflowResult(r12);
 
     skip(cursor, 1);
-    auto r13 = parser_.parseUnannounce(cursor, frameLength(cursor));
+    auto r13 = parser_.parsePublishNamespaceDone(cursor, frameLength(cursor));
     testUnderflowResult(r13);
 
     skip(cursor, 1);
@@ -173,20 +173,20 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r14);
 
     skip(cursor, 1);
-    auto r9a = parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+    auto r9a = parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
     testUnderflowResult(r9a);
 
     skip(cursor, 1);
-    auto r10a = parser_.parseSubscribeAnnouncesOk(cursor, frameLength(cursor));
+    auto r10a = parser_.parseSubscribeNamespaceOk(cursor, frameLength(cursor));
     testUnderflowResult(r10a);
 
     skip(cursor, 1);
     auto r11a = parser_.parseRequestError(
-        cursor, frameLength(cursor), FrameType::SUBSCRIBE_ANNOUNCES_ERROR);
+        cursor, frameLength(cursor), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
     testUnderflowResult(r11a);
 
     skip(cursor, 1);
-    auto r13a = parser_.parseUnsubscribeAnnounces(cursor, frameLength(cursor));
+    auto r13a = parser_.parseUnsubscribeNamespace(cursor, frameLength(cursor));
     testUnderflowResult(r13a);
 
     skip(cursor, 1);
@@ -3160,18 +3160,18 @@ TEST_P(MoQFramerV15PlusTest, ParseFetchObjectHeaderCursorUnderflow) {
   EXPECT_EQ(parseResult.error(), ErrorCode::PARSE_UNDERFLOW);
 }
 
-// Test SubscribeAnnounces with forward = false
-TEST_P(MoQFramerV15PlusTest, SubscribeAnnouncesForwardFalse) {
+// Test SubscribeNamespace with forward = false
+TEST_P(MoQFramerV15PlusTest, SubscribeNamespaceForwardFalse) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
-  SubscribeAnnounces subscribeAnnounces;
-  subscribeAnnounces.requestID = RequestID(42);
-  subscribeAnnounces.trackNamespacePrefix =
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = RequestID(42);
+  subscribeNamespace.trackNamespacePrefix =
       TrackNamespace(std::vector<std::string>{"ns", "prefix"});
-  subscribeAnnounces.forward = false;
+  subscribeNamespace.forward = false;
 
   auto writeResult =
-      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+      writer_.writeSubscribeNamespace(writeBuf, subscribeNamespace);
   EXPECT_TRUE(writeResult.hasValue());
 
   auto serialized = writeBuf.move();
@@ -3179,18 +3179,18 @@ TEST_P(MoQFramerV15PlusTest, SubscribeAnnouncesForwardFalse) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
-      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+      parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
   // Verify all fields match
-  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(parseResult->requestID, subscribeNamespace.requestID);
   EXPECT_EQ(
       parseResult->trackNamespacePrefix,
-      subscribeAnnounces.trackNamespacePrefix);
-  EXPECT_EQ(parseResult->forward, subscribeAnnounces.forward);
+      subscribeNamespace.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->forward, subscribeNamespace.forward);
   EXPECT_EQ(parseResult->forward, false);
 }
 
@@ -3292,19 +3292,19 @@ TEST_P(MoQFramerV16PlusTest, NamespaceDoneRoundtrip) {
       parseResult->trackNamespaceSuffix, namespaceDone.trackNamespaceSuffix);
 }
 
-// Test SubscribeAnnounces with Subscribe Options (v16+)
-TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithOptions) {
+// Test SubscribeNamespace with Subscribe Options (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithOptions) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
-  SubscribeAnnounces subscribeAnnounces;
-  subscribeAnnounces.requestID = RequestID(100);
-  subscribeAnnounces.trackNamespacePrefix =
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = RequestID(100);
+  subscribeNamespace.trackNamespacePrefix =
       TrackNamespace(std::vector<std::string>{"test", "namespace"});
-  subscribeAnnounces.options = SubscribeAnnouncesOptions::NAMESPACE;
-  subscribeAnnounces.forward = true;
+  subscribeNamespace.options = SubscribeNamespaceOptions::NAMESPACE;
+  subscribeNamespace.forward = true;
 
   auto writeResult =
-      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+      writer_.writeSubscribeNamespace(writeBuf, subscribeNamespace);
   EXPECT_TRUE(writeResult.hasValue());
 
   auto serialized = writeBuf.move();
@@ -3312,33 +3312,33 @@ TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithOptions) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
-      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+      parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
-  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(parseResult->requestID, subscribeNamespace.requestID);
   EXPECT_EQ(
       parseResult->trackNamespacePrefix,
-      subscribeAnnounces.trackNamespacePrefix);
-  EXPECT_EQ(parseResult->options, SubscribeAnnouncesOptions::NAMESPACE);
-  EXPECT_EQ(parseResult->forward, subscribeAnnounces.forward);
+      subscribeNamespace.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->options, SubscribeNamespaceOptions::NAMESPACE);
+  EXPECT_EQ(parseResult->forward, subscribeNamespace.forward);
 }
 
-// Test SubscribeAnnounces with BOTH option (v16+)
-TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithBothOption) {
+// Test SubscribeNamespace with BOTH option (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithBothOption) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
-  SubscribeAnnounces subscribeAnnounces;
-  subscribeAnnounces.requestID = RequestID(200);
-  subscribeAnnounces.trackNamespacePrefix =
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = RequestID(200);
+  subscribeNamespace.trackNamespacePrefix =
       TrackNamespace(std::vector<std::string>{"both", "test"});
-  subscribeAnnounces.options = SubscribeAnnouncesOptions::BOTH;
-  subscribeAnnounces.forward = false;
+  subscribeNamespace.options = SubscribeNamespaceOptions::BOTH;
+  subscribeNamespace.forward = false;
 
   auto writeResult =
-      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+      writer_.writeSubscribeNamespace(writeBuf, subscribeNamespace);
   EXPECT_TRUE(writeResult.hasValue());
 
   auto serialized = writeBuf.move();
@@ -3346,33 +3346,33 @@ TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithBothOption) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
-      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+      parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
-  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(parseResult->requestID, subscribeNamespace.requestID);
   EXPECT_EQ(
       parseResult->trackNamespacePrefix,
-      subscribeAnnounces.trackNamespacePrefix);
-  EXPECT_EQ(parseResult->options, SubscribeAnnouncesOptions::BOTH);
+      subscribeNamespace.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->options, SubscribeNamespaceOptions::BOTH);
   EXPECT_EQ(parseResult->forward, false);
 }
 
-// Test SubscribeAnnounces with PUBLISH option (v16+)
-TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithPublishOption) {
+// Test SubscribeNamespace with PUBLISH option (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithPublishOption) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
-  SubscribeAnnounces subscribeAnnounces;
-  subscribeAnnounces.requestID = RequestID(300);
-  subscribeAnnounces.trackNamespacePrefix =
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = RequestID(300);
+  subscribeNamespace.trackNamespacePrefix =
       TrackNamespace(std::vector<std::string>{"publish", "only"});
-  subscribeAnnounces.options = SubscribeAnnouncesOptions::PUBLISH;
-  subscribeAnnounces.forward = true;
+  subscribeNamespace.options = SubscribeNamespaceOptions::PUBLISH;
+  subscribeNamespace.forward = true;
 
   auto writeResult =
-      writer_.writeSubscribeAnnounces(writeBuf, subscribeAnnounces);
+      writer_.writeSubscribeNamespace(writeBuf, subscribeNamespace);
   EXPECT_TRUE(writeResult.hasValue());
 
   auto serialized = writeBuf.move();
@@ -3380,17 +3380,17 @@ TEST_P(MoQFramerV16PlusTest, SubscribeAnnouncesWithPublishOption) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_ANNOUNCES));
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
-      parser_.parseSubscribeAnnounces(cursor, frameLength(cursor));
+      parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
-  EXPECT_EQ(parseResult->requestID, subscribeAnnounces.requestID);
+  EXPECT_EQ(parseResult->requestID, subscribeNamespace.requestID);
   EXPECT_EQ(
       parseResult->trackNamespacePrefix,
-      subscribeAnnounces.trackNamespacePrefix);
-  EXPECT_EQ(parseResult->options, SubscribeAnnouncesOptions::PUBLISH);
+      subscribeNamespace.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->options, SubscribeNamespaceOptions::PUBLISH);
   EXPECT_EQ(parseResult->forward, true);
 }
 
@@ -3399,37 +3399,38 @@ INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     ::testing::Values(kVersionDraft16));
 
-// Death tests for v16+ Unannounce/AnnounceCancel without requestID
-TEST(MoQFramerV16DeathTest, UnannounceWithoutRequestIDDies) {
+// Death tests for v16+ PublishNamespaceDone/PublishNamespaceCancel without
+// requestID
+TEST(MoQFramerV16DeathTest, PublishNamespaceDoneWithoutRequestIDDies) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   MoQFrameWriter writer;
   writer.initializeVersion(kVersionDraft16);
 
-  // Create Unannounce without requestID set (only trackNamespace)
-  Unannounce unannounce;
-  unannounce.trackNamespace = TrackNamespace({"hello"});
+  // Create PublishNamespaceDone without requestID set (only trackNamespace)
+  PublishNamespaceDone publishNamespaceDone;
+  publishNamespaceDone.trackNamespace = TrackNamespace({"hello"});
   // Note: requestID is not set
 
   EXPECT_DEATH(
-      writer.writeUnannounce(writeBuf, unannounce),
-      "RequestID required for v16\\+ Unannounce");
+      writer.writePublishNamespaceDone(writeBuf, publishNamespaceDone),
+      "RequestID required for v16\\+ PublishNamespaceDone");
 }
 
-TEST(MoQFramerV16DeathTest, AnnounceCancelWithoutRequestIDDies) {
+TEST(MoQFramerV16DeathTest, PublishNamespaceCancelWithoutRequestIDDies) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   MoQFrameWriter writer;
   writer.initializeVersion(kVersionDraft16);
 
-  // Create AnnounceCancel without requestID set (only trackNamespace)
-  AnnounceCancel announceCancel;
-  announceCancel.trackNamespace = TrackNamespace({"hello"});
-  announceCancel.errorCode = AnnounceErrorCode::INTERNAL_ERROR;
-  announceCancel.reasonPhrase = "internal error";
+  // Create PublishNamespaceCancel without requestID set (only trackNamespace)
+  PublishNamespaceCancel publishNamespaceCancel;
+  publishNamespaceCancel.trackNamespace = TrackNamespace({"hello"});
+  publishNamespaceCancel.errorCode = PublishNamespaceErrorCode::INTERNAL_ERROR;
+  publishNamespaceCancel.reasonPhrase = "internal error";
   // Note: requestID is not set
 
   EXPECT_DEATH(
-      writer.writeAnnounceCancel(writeBuf, announceCancel),
-      "RequestID required for v16\\+ AnnounceCancel");
+      writer.writePublishNamespaceCancel(writeBuf, publishNamespaceCancel),
+      "RequestID required for v16\\+ PublishNamespaceCancel");
 }
 
 // Tests for Parameters::isParamAllowed()
@@ -3450,11 +3451,11 @@ TEST_F(ParametersIsParamAllowedTest, ParamNotAllowedForFrameType) {
 
 TEST_F(ParametersIsParamAllowedTest, ParamAllowedForAllFrameTypes) {
   // MAX_CACHE_DURATION and PUBLISHER_PRIORITY have empty sets = allowed for all
-  Parameters paramsAnnounce(FrameType::ANNOUNCE);
-  EXPECT_TRUE(
-      paramsAnnounce.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
-  EXPECT_TRUE(
-      paramsAnnounce.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
+  Parameters paramsPublishNamespace(FrameType::PUBLISH_NAMESPACE);
+  EXPECT_TRUE(paramsPublishNamespace.isParamAllowed(
+      TrackRequestParamKey::MAX_CACHE_DURATION));
+  EXPECT_TRUE(paramsPublishNamespace.isParamAllowed(
+      TrackRequestParamKey::PUBLISHER_PRIORITY));
 
   Parameters paramsFetch(FrameType::FETCH);
   EXPECT_TRUE(

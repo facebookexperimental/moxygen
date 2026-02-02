@@ -502,8 +502,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH_ERROR:
-    case FrameType::ANNOUNCE_ERROR:
-    case FrameType::SUBSCRIBE_ANNOUNCES_ERROR:
+    case FrameType::PUBLISH_NAMESPACE_ERROR:
+    case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
     case FrameType::PUBLISH_ERROR:
       if (getDraftMajorVersion(*moqFrameParser_.getVersion()) > 14) {
         XLOG(ERR) << "Old frame type=" << folly::to_underlying(curFrameType_);
@@ -622,24 +622,24 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::ANNOUNCE: {
-      auto res = moqFrameParser_.parseAnnounce(cursor, curFrameLength_);
+    case FrameType::PUBLISH_NAMESPACE: {
+      auto res = moqFrameParser_.parsePublishNamespace(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onAnnounce(std::move(res.value()));
+          callback_->onPublishNamespace(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::SUBSCRIBE_ANNOUNCES_OK:
+    case FrameType::SUBSCRIBE_NAMESPACE_OK:
       if (getDraftMajorVersion(*moqFrameParser_.getVersion()) > 14) {
         XLOG(ERR) << "Old frame type=" << folly::to_underlying(curFrameType_);
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
       }
       [[fallthrough]];
-    // case FrameType::ANNOUNCE_OK:
+    // case FrameType::PUBLISH_NAMESPACE_OK:
     case FrameType::REQUEST_OK: {
       auto res = moqFrameParser_.parseRequestOk(
           cursor, curFrameLength_, curFrameType_);
@@ -652,46 +652,48 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::UNANNOUNCE: {
-      auto res = moqFrameParser_.parseUnannounce(cursor, curFrameLength_);
-      if (res) {
-        if (callback_) {
-          callback_->onUnannounce(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
-    case FrameType::ANNOUNCE_CANCEL: {
-      auto res = moqFrameParser_.parseAnnounceCancel(cursor, curFrameLength_);
-      if (res) {
-        if (callback_) {
-          callback_->onAnnounceCancel(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
-    case FrameType::SUBSCRIBE_ANNOUNCES: {
+    case FrameType::PUBLISH_NAMESPACE_DONE: {
       auto res =
-          moqFrameParser_.parseSubscribeAnnounces(cursor, curFrameLength_);
+          moqFrameParser_.parsePublishNamespaceDone(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribeAnnounces(std::move(res.value()));
+          callback_->onPublishNamespaceDone(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());
       }
       break;
     }
-    case FrameType::UNSUBSCRIBE_ANNOUNCES: {
+    case FrameType::PUBLISH_NAMESPACE_CANCEL: {
       auto res =
-          moqFrameParser_.parseUnsubscribeAnnounces(cursor, curFrameLength_);
+          moqFrameParser_.parsePublishNamespaceCancel(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onUnsubscribeAnnounces(std::move(res.value()));
+          callback_->onPublishNamespaceCancel(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::SUBSCRIBE_NAMESPACE: {
+      auto res =
+          moqFrameParser_.parseSubscribeNamespace(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onSubscribeNamespace(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::UNSUBSCRIBE_NAMESPACE: {
+      auto res =
+          moqFrameParser_.parseUnsubscribeNamespace(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onUnsubscribeNamespace(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());

@@ -248,10 +248,10 @@ class MoQParser {
      * @returns {string} Event category
      */
     categorizeEvent(eventName, eventData) {
-        // Only real control messages (SETUP, SUBSCRIBE, ANNOUNCE, etc.) go in control columns
+        // Only real control messages (SETUP, SUBSCRIBE, PUBLISH_NAMESPACE, etc.) go in control columns
         if (eventName.includes('control_message')) {
             const msgType = eventData?.message_type || '';
-            if (msgType.match(/^(SETUP|SUBSCRIBE|ANNOUNCE|UNSUBSCRIBE|GOAWAY)/)) {
+            if (msgType.match(/^(SETUP|SUBSCRIBE|PUBLISH_NAMESPACE|UNSUBSCRIBE|GOAWAY)/)) {
                 return this.eventCategories.CONTROL;
             }
         }
@@ -484,15 +484,15 @@ class MoQParser {
         const events = [];
         let currentTime = now;
 
-        // === ANNOUNCE PHASE ===
-        // Client announces namespace=(meeting1, alice)
+        // === PUBLISH_NAMESPACE PHASE ===
+        // Client publishes namespace=(meeting1, alice)
         events.push([
             currentTime,
             'transport',
             this.eventTypes.CONTROL_MESSAGE_CREATED,
             {
                 vantage_point: 'client',
-                message_type: 'ANNOUNCE',
+                message_type: 'PUBLISH_NAMESPACE',
                 namespace: 'meeting1',
                 track_namespace: 'alice'
             }
@@ -505,21 +505,21 @@ class MoQParser {
             this.eventTypes.CONTROL_MESSAGE_PARSED,
             {
                 vantage_point: 'server',
-                message_type: 'ANNOUNCE_OK',
+                message_type: 'PUBLISH_NAMESPACE_OK',
                 namespace: 'meeting1',
                 track_namespace: 'alice'
             }
         ]);
         currentTime += 100;
 
-        // Server announces namespace=(meeting1, bob)
+        // Server publishes namespace=(meeting1, bob)
         events.push([
             currentTime,
             'transport',
             this.eventTypes.CONTROL_MESSAGE_CREATED,
             {
                 vantage_point: 'server',
-                message_type: 'ANNOUNCE',
+                message_type: 'PUBLISH_NAMESPACE',
                 namespace: 'meeting1',
                 track_namespace: 'bob'
             }
@@ -532,7 +532,7 @@ class MoQParser {
             this.eventTypes.CONTROL_MESSAGE_PARSED,
             {
                 vantage_point: 'client',
-                message_type: 'ANNOUNCE_OK',
+                message_type: 'PUBLISH_NAMESPACE_OK',
                 namespace: 'meeting1',
                 track_namespace: 'bob'
             }

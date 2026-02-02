@@ -179,11 +179,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<Announce, ErrorCode> parseAnnounce(
+  folly::Expected<PublishNamespace, ErrorCode> parsePublishNamespace(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<AnnounceOk, ErrorCode> parseAnnounceOk(
+  folly::Expected<PublishNamespaceOk, ErrorCode> parsePublishNamespaceOk(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -192,13 +192,13 @@ class MoQFrameParser {
       size_t length,
       FrameType frameType) const noexcept;
 
-  folly::Expected<Unannounce, ErrorCode> parseUnannounce(
+  folly::Expected<PublishNamespaceDone, ErrorCode> parsePublishNamespaceDone(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<AnnounceCancel, ErrorCode> parseAnnounceCancel(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
+  folly::Expected<PublishNamespaceCancel, ErrorCode>
+  parsePublishNamespaceCancel(folly::io::Cursor& cursor, size_t length)
+      const noexcept;
 
   folly::Expected<TrackStatus, ErrorCode> parseTrackStatus(
       folly::io::Cursor& cursor,
@@ -236,11 +236,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<SubscribeAnnounces, ErrorCode> parseSubscribeAnnounces(
+  folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespace(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<SubscribeAnnouncesOk, ErrorCode> parseSubscribeAnnouncesOk(
+  folly::Expected<SubscribeNamespaceOk, ErrorCode> parseSubscribeNamespaceOk(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -250,7 +250,7 @@ class MoQFrameParser {
       size_t length,
       FrameType frameType) const noexcept;
 
-  folly::Expected<UnsubscribeAnnounces, ErrorCode> parseUnsubscribeAnnounces(
+  folly::Expected<UnsubscribeNamespace, ErrorCode> parseUnsubscribeNamespace(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -491,26 +491,26 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const RequestsBlocked& subscribesBlocked) const noexcept;
 
-  WriteResult writeAnnounce(
+  WriteResult writePublishNamespace(
       folly::IOBufQueue& writeBuf,
-      const Announce& announce) const noexcept;
+      const PublishNamespace& publishNamespace) const noexcept;
 
-  WriteResult writeAnnounceOk(
+  WriteResult writePublishNamespaceOk(
       folly::IOBufQueue& writeBuf,
-      const AnnounceOk& announceOk) const noexcept;
+      const PublishNamespaceOk& publishNamespaceOk) const noexcept;
 
   WriteResult writeRequestOk(
       folly::IOBufQueue& writeBuf,
       const RequestOk& requestOk,
       FrameType frameType) const noexcept;
 
-  WriteResult writeUnannounce(
+  WriteResult writePublishNamespaceDone(
       folly::IOBufQueue& writeBuf,
-      const Unannounce& unannounce) const noexcept;
+      const PublishNamespaceDone& publishNamespaceDone) const noexcept;
 
-  WriteResult writeAnnounceCancel(
+  WriteResult writePublishNamespaceCancel(
       folly::IOBufQueue& writeBuf,
-      const AnnounceCancel& announceCancel) const noexcept;
+      const PublishNamespaceCancel& publishNamespaceCancel) const noexcept;
 
   WriteResult writeTrackStatus(
       folly::IOBufQueue& writeBuf,
@@ -527,17 +527,17 @@ class MoQFrameWriter {
   WriteResult writeGoaway(folly::IOBufQueue& writeBuf, const Goaway& goaway)
       const noexcept;
 
-  WriteResult writeSubscribeAnnounces(
+  WriteResult writeSubscribeNamespace(
       folly::IOBufQueue& writeBuf,
-      const SubscribeAnnounces& subscribeAnnounces) const noexcept;
+      const SubscribeNamespace& subscribeNamespace) const noexcept;
 
-  WriteResult writeSubscribeAnnouncesOk(
+  WriteResult writeSubscribeNamespaceOk(
       folly::IOBufQueue& writeBuf,
-      const SubscribeAnnouncesOk& subscribeAnnouncesOk) const noexcept;
+      const SubscribeNamespaceOk& subscribeNamespaceOk) const noexcept;
 
-  WriteResult writeUnsubscribeAnnounces(
+  WriteResult writeUnsubscribeNamespace(
       folly::IOBufQueue& writeBuf,
-      const UnsubscribeAnnounces& unsubscribeAnnounces) const noexcept;
+      const UnsubscribeNamespace& unsubscribeNamespace) const noexcept;
 
   // v16+ messages for SUBSCRIBE_NAMESPACE response stream
   WriteResult writeNamespace(folly::IOBufQueue& writeBuf, const Namespace& ns)

@@ -21,7 +21,7 @@ The `Publisher` interface represents a component that can respond to subscriptio
 
 - **`subscribe()`**: Handles incoming SUBSCRIBE requests, returns a `SubscriptionHandle` for managing the subscription lifecycle
 - **`fetch()`**: Handles FETCH requests for historical data, returns a `FetchHandle`
-- **`subscribeAnnounces()`**: Handles SUBSCRIBE_ANNOUNCES requests (relay-specific)
+- **`subscribeNamespace()`**: Handles SUBSCRIBE_NAMESPACE requests (relay-specific)
 - **`trackStatus()`**: Responds to TRACK_STATUS_REQUEST messages
 
 The `SubscriptionHandle` returned from `subscribe()` provides:
@@ -30,9 +30,9 @@ The `SubscriptionHandle` returned from `subscribe()` provides:
 
 #### Subscriber Interface (`Subscriber.h`)
 
-The `Subscriber` interface represents a component that can receive track namespace announcements and handle publish requests. Key methods include:
+The `Subscriber` interface represents a component that can receive track namespace publishes and handle publish requests. Key methods include:
 
-- **`announce()`**: Announces availability of a track namespace, returns an `AnnounceHandle`
+- **`publishNamespace()`**: Publishes availability of a track namespace, returns an `PublishNamespaceHandle`
 - **`publish()`**: Handles incoming PUBLISH requests from peers (synchronous API returning both consumer and async reply)
 
 The symmetric design means:
@@ -90,8 +90,8 @@ session->subscribe(...)    →     myPublisher.subscribe(...)
                            ←     returns SubscriptionHandle
 
 Publisher calls:                 Subscriber implements:
-session->announce(...)     →     mySubscriber.announce(...)
-                           ←     returns AnnounceHandle
+session->publishNamespace(...)  →  mySubscriber.publishNamespace(...)
+                                ←  returns PublishNamespaceHandle
 ```
 
 This symmetry allows components to be chained:
@@ -132,20 +132,20 @@ Each component in the chain:
 
 **Request Management:**
 
-- Tracks pending requests (subscribe, fetch, announce, etc.) by `RequestID`
+- Tracks pending requests (subscribe, fetch, etc.) by `RequestID`
 - Enforces request ID parity and limits
 - Handles graceful shutdown via `drain()` and `goaway()`
 
 ### MoQRelaySession
 
-`MoQRelaySession` extends `MoQSession` with full announcement functionality. While the base `MoQSession` returns `NOT_SUPPORTED` for announcement operations (suitable for simple clients), `MoQRelaySession` provides real implementations of:
+`MoQRelaySession` extends `MoQSession` with full namespace publishing functionality. While the base `MoQSession` returns `NOT_SUPPORTED` for namespace operations (suitable for simple clients), `MoQRelaySession` provides real implementations of:
 
-- **`announce()`**: Forward announcements to subscribers
-- **`subscribeAnnounces()`**: Subscribe to namespace prefixes
-- Announcement state management (namespace tracking, announce callbacks)
+- **`publishNamespace()`**: Forward namespace availability to subscribers
+- **`subscribeNamespace()`**: Subscribe to namespace prefixes
+- Namespace state management (namespace tracking, publish callbacks)
 
 **Use Cases:**
-- Relay servers that forward announcements between publishers and subscribers
+- Relay servers that forward namespace availability between publishers and subscribers
 - Applications that need to handle dynamic track discovery
 - Multi-hop delivery scenarios
 
@@ -187,18 +187,18 @@ For scenarios requiring direct QUIC transport without HTTP/3:
 
 ### MoQRelay
 
-`MoQRelay` is a relay implementation that routes subscriptions and announcements between sessions:
+`MoQRelay` is a relay implementation that routes subscriptions and publishes between sessions:
 
 **Architecture:**
 - Implements both `Publisher` and `Subscriber` interfaces
-- Maintains a namespace tree for tracking announcements
+- Maintains a namespace tree for tracking published namespaces
 - Routes subscribe requests to appropriate publisher sessions
 - Optionally integrates with `MoQCache` for object caching
 
-**Announcement Routing:**
-- `subscribeAnnounces()`: Clients subscribe to namespace prefixes
-- `announce()`: Publishers announce track namespaces
-- Relay maintains mappings and forwards announcements to interested subscribers
+**Namespace Routing:**
+- `subscribeNamespace()`: Clients subscribe to namespace prefixes
+- `publishNamespace()`: Publishers publish track namespace availability
+- Relay maintains mappings and forwards namespace availability to interested subscribers
 - Supports hierarchical namespaces with prefix matching
 
 **Subscription Routing:**
@@ -423,4 +423,4 @@ Supports multiple MOQT protocol versions:
 - Version negotiation during setup
 - `setVersion()` to configure supported versions
 - Protocol adapts behavior based on negotiated version
-- Some features (like request IDs for announcements) vary by version
+- Some features (like request IDs for publishes) vary by version

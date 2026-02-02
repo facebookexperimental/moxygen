@@ -457,13 +457,16 @@ class MoQSession : public Subscriber,
   void onGoaway(Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
 
-  // Announcement callback methods - default implementations for simple clients
-  void onAnnounce(Announce announce) override;
-  void onUnannounce(Unannounce unannounce) override;
-  void onAnnounceCancel(AnnounceCancel announceCancel) override;
-  void onSubscribeAnnounces(SubscribeAnnounces subscribeAnnounces) override;
-  void onUnsubscribeAnnounces(
-      UnsubscribeAnnounces unsubscribeAnnounces) override;
+  // PublishNamespace callback methods - default implementations for simple
+  // clients
+  void onPublishNamespace(PublishNamespace publishNamespace) override;
+  void onPublishNamespaceDone(
+      PublishNamespaceDone publishNamespaceDone) override;
+  void onPublishNamespaceCancel(
+      PublishNamespaceCancel publishNamespaceCancel) override;
+  void onSubscribeNamespace(SubscribeNamespace subscribeNamespace) override;
+  void onUnsubscribeNamespace(
+      UnsubscribeNamespace unsubscribeNamespace) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
   void checkForCloseOnDrain();
 
@@ -537,11 +540,12 @@ class MoQSession : public Subscriber,
   // Virtual cleanup method for proper inheritance pattern (moved from private)
   virtual void cleanup();
 
-  // Announcement response methods - available for responding to incoming
-  // announcements
-  void announceError(const AnnounceError& announceError);
-  void subscribeAnnouncesError(
-      const SubscribeAnnouncesError& subscribeAnnouncesError);
+  // PublishNamespace response methods - available for responding to
+  // incoming publishNamespaces
+  void publishNamespaceError(
+      const PublishNamespaceError& publishNamespaceError);
+  void subscribeNamespaceError(
+      const SubscribeNamespaceError& subscribeNamespaceError);
 
   // Core frame writer and stats callbacks needed by MoQRelaySession
   MoQFrameWriter moqFrameWriter_;
@@ -562,9 +566,9 @@ class MoQSession : public Subscriber,
       TRACK_STATUS,
       FETCH,
       SUBSCRIBE_UPDATE,
-      // Announcement types - only handled by MoQRelaySession subclass
-      ANNOUNCE,
-      SUBSCRIBE_ANNOUNCES
+      // PublishNamespace types - only handled by MoQRelaySession subclass
+      PUBLISH_NAMESPACE,
+      SUBSCRIBE_NAMESPACE
     };
 
     // Make polymorphic for subclassing - destructor implemented below
@@ -655,8 +659,8 @@ class MoQSession : public Subscriber,
         case Type::SUBSCRIBE_UPDATE:
           storage_.subscribeUpdate_.~Promise();
           break;
-        case Type::ANNOUNCE:
-        case Type::SUBSCRIBE_ANNOUNCES:
+        case Type::PUBLISH_NAMESPACE:
+        case Type::SUBSCRIBE_NAMESPACE:
           // These types are handled by MoQRelaySession subclass destructor
           break;
       }
@@ -680,11 +684,12 @@ class MoQSession : public Subscriber,
           return ok ? FrameType::FETCH_OK : FrameType::FETCH_ERROR;
         case Type::SUBSCRIBE_UPDATE:
           return ok ? FrameType::REQUEST_OK : FrameType::REQUEST_ERROR;
-        case Type::ANNOUNCE:
-          return ok ? FrameType::ANNOUNCE_OK : FrameType::ANNOUNCE_ERROR;
-        case Type::SUBSCRIBE_ANNOUNCES:
-          return ok ? FrameType::SUBSCRIBE_ANNOUNCES_OK
-                    : FrameType::SUBSCRIBE_ANNOUNCES_ERROR;
+        case Type::PUBLISH_NAMESPACE:
+          return ok ? FrameType::PUBLISH_NAMESPACE_OK
+                    : FrameType::PUBLISH_NAMESPACE_ERROR;
+        case Type::SUBSCRIBE_NAMESPACE:
+          return ok ? FrameType::SUBSCRIBE_NAMESPACE_OK
+                    : FrameType::SUBSCRIBE_NAMESPACE_ERROR;
       }
       folly::assume_unreachable();
     }

@@ -317,19 +317,19 @@ class MOQTFetchCancel : public MOQTBaseControlMessage {
   uint64_t requestId{0};
 };
 
-class MOQTAnnounceOk : public MOQTBaseControlMessage {
+class MOQTPublishNamespaceOk : public MOQTBaseControlMessage {
  public:
-  MOQTAnnounceOk() {
-    type = "announce_ok";
+  MOQTPublishNamespaceOk() {
+    type = "publishNamespace_ok";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
 };
 
-class MOQTAnnounceError : public MOQTBaseControlMessage {
+class MOQTPublishNamespaceError : public MOQTBaseControlMessage {
  public:
-  MOQTAnnounceError() {
-    type = "announce_error";
+  MOQTPublishNamespaceError() {
+    type = "publishNamespace_error";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
@@ -338,10 +338,10 @@ class MOQTAnnounceError : public MOQTBaseControlMessage {
   std::optional<std::string> reasonBytes;
 };
 
-class MOQTAnnounceCancel : public MOQTBaseControlMessage {
+class MOQTPublishNamespaceCancel : public MOQTBaseControlMessage {
  public:
-  MOQTAnnounceCancel() {
-    type = "announce_cancel";
+  MOQTPublishNamespaceCancel() {
+    type = "publishNamespace_cancel";
   }
   folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
@@ -369,10 +369,10 @@ class MOQTTrackStatus : public MOQTBaseControlMessage {
   std::vector<MOQTParameter> parameters;
 };
 
-class MOQTSubscribeAnnounces : public MOQTBaseControlMessage {
+class MOQTSubscribeNamespace : public MOQTBaseControlMessage {
  public:
-  MOQTSubscribeAnnounces() {
-    type = "subscribe_announces";
+  MOQTSubscribeNamespace() {
+    type = "subscribe_namespace";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
@@ -381,10 +381,10 @@ class MOQTSubscribeAnnounces : public MOQTBaseControlMessage {
   std::vector<MOQTParameter> parameters;
 };
 
-class MOQTUnsubscribeAnnounces : public MOQTBaseControlMessage {
+class MOQTUnsubscribeNamespace : public MOQTBaseControlMessage {
  public:
-  MOQTUnsubscribeAnnounces() {
-    type = "unsubscribe_announces";
+  MOQTUnsubscribeNamespace() {
+    type = "unsubscribe_namespace";
   }
   folly::dynamic toDynamic() const override;
   // Keeping both to maintain compatibility between v15 and v15-
@@ -477,10 +477,10 @@ class MOQTRequestsBlocked : public MOQTBaseControlMessage {
   uint64_t maximumRequestId{0};
 };
 
-class MOQTAnnounce : public MOQTBaseControlMessage {
+class MOQTPublishNamespace : public MOQTBaseControlMessage {
  public:
-  MOQTAnnounce() {
-    type = "announce";
+  MOQTPublishNamespace() {
+    type = "publishNamespace";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
@@ -489,10 +489,10 @@ class MOQTAnnounce : public MOQTBaseControlMessage {
   std::vector<MOQTParameter> parameters;
 };
 
-class MOQTUnannounce : public MOQTBaseControlMessage {
+class MOQTPublishNamespaceDone : public MOQTBaseControlMessage {
  public:
-  MOQTUnannounce() {
-    type = "unannounce";
+  MOQTPublishNamespaceDone() {
+    type = "publishNamespaceDone";
   }
   folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
@@ -526,19 +526,19 @@ class MOQTTrackStatusError : public MOQTBaseControlMessage {
   std::optional<std::string> reasonBytes;
 };
 
-class MOQTSubscribeAnnouncesOk : public MOQTBaseControlMessage {
+class MOQTSubscribeNamespaceOk : public MOQTBaseControlMessage {
  public:
-  MOQTSubscribeAnnouncesOk() {
-    type = "subscribe_announces_ok";
+  MOQTSubscribeNamespaceOk() {
+    type = "subscribe_namespace_ok";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
 };
 
-class MOQTSubscribeAnnouncesError : public MOQTBaseControlMessage {
+class MOQTSubscribeNamespaceError : public MOQTBaseControlMessage {
  public:
-  MOQTSubscribeAnnouncesError() {
-    type = "subscribe_announces_error";
+  MOQTSubscribeNamespaceError() {
+    type = "subscribe_namespace_error";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};

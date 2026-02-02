@@ -38,12 +38,12 @@ class MoQRelay : public Publisher,
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override;
 
-  folly::coro::Task<SubscribeAnnouncesResult> subscribeAnnounces(
-      SubscribeAnnounces subAnn) override;
+  folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
+      SubscribeNamespace subAnn) override;
 
-  folly::coro::Task<Subscriber::AnnounceResult> announce(
-      Announce ann,
-      std::shared_ptr<Subscriber::AnnounceCallback>) override;
+  folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
+      PublishNamespace ann,
+      std::shared_ptr<Subscriber::PublishNamespaceCallback>) override;
 
   PublishResult publish(
       PublishRequest pubReq,
@@ -53,12 +53,13 @@ class MoQRelay : public Publisher,
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
   }
 
-  std::shared_ptr<MoQSession> findAnnounceSession(const TrackNamespace& ns);
+  std::shared_ptr<MoQSession> findPublishNamespaceSession(
+      const TrackNamespace& ns);
 
   // Wrapper for compatibility - returns single session as vector
-  std::vector<std::shared_ptr<MoQSession>> findAnnounceSessions(
+  std::vector<std::shared_ptr<MoQSession>> findPublishNamespaceSessions(
       const TrackNamespace& ns) {
-    auto session = findAnnounceSession(ns);
+    auto session = findPublishNamespaceSession(ns);
     if (session) {
       return {session};
     }
@@ -73,27 +74,27 @@ class MoQRelay : public Publisher,
   PublishState findPublishState(const FullTrackName& ftn);
 
  private:
-  class AnnouncesSubscription;
+  class NamespaceSubscription;
   class TerminationFilter;
 
-  void unsubscribeAnnounces(
+  void unsubscribeNamespace(
       const TrackNamespace& prefix,
       std::shared_ptr<MoQSession> session);
 
   void onPublishDone(const FullTrackName& ftn);
 
-  struct AnnounceNode : public Subscriber::AnnounceHandle {
-    explicit AnnounceNode(MoQRelay& relay, AnnounceNode* parent = nullptr)
+  struct NamespaceNode : public Subscriber::PublishNamespaceHandle {
+    explicit NamespaceNode(MoQRelay& relay, NamespaceNode* parent = nullptr)
         : relay_(relay), parent_(parent) {}
 
-    void unannounce() override {
-      relay_.unannounce(trackNamespace_, this);
+    void publishNamespaceDone() override {
+      relay_.publishNamespaceDone(trackNamespace_, this);
     }
 
     // Helper to check if THIS node (excluding children) has content
     bool hasLocalSessions() const {
       return !publishes.empty() || !sessions.empty() ||
-          !announcements.empty() || sourceSession != nullptr;
+          !namespacesPublished.empty() || sourceSession != nullptr;
     }
 
     // Check if node should be kept (has content OR non-empty children)
@@ -101,29 +102,30 @@ class MoQRelay : public Publisher,
       return hasLocalSessions() || activeChildCount_ > 0;
     }
 
-    using Subscriber::AnnounceHandle::setAnnounceOk;
+    using Subscriber::PublishNamespaceHandle::setPublishNamespaceOk;
 
     TrackNamespace trackNamespace_;
-    folly::F14FastMap<std::string, std::shared_ptr<AnnounceNode>> children;
+    folly::F14FastMap<std::string, std::shared_ptr<NamespaceNode>> children;
 
     // Maps a track name to a the session performing the PUBLISH
     folly::F14FastMap<std::string, std::shared_ptr<MoQSession>> publishes;
-    // Sessions with a SUBSCRIBE_ANNOUNCES here, with their forward preference
+    // Sessions with a SUBSCRIBE_NAMESPACE here, with their forward preference
     // Key: session, Value: forward (true = forward data, false = don't forward)
     folly::F14FastMap<std::shared_ptr<MoQSession>, bool> sessions;
-    // All active ANNOUNCEs for this node (includes prefix sessions)
-    folly::
-        F14FastMap<std::shared_ptr<MoQSession>, std::shared_ptr<AnnounceHandle>>
-            announcements;
-    // The session that ANNOUNCEd this node
+    // All active PUBLISH_NAMESPACEs for this node (includes prefix sessions)
+    folly::F14FastMap<
+        std::shared_ptr<MoQSession>,
+        std::shared_ptr<PublishNamespaceHandle>>
+        namespacesPublished;
+    // The session that PUBLISH_NAMESPACEd this node
     std::shared_ptr<MoQSession> sourceSession;
-    std::shared_ptr<AnnounceCallback> announceCallback;
+    std::shared_ptr<PublishNamespaceCallback> publishNamespaceCallback;
 
     MoQRelay& relay_;
 
     // Pruning support: parent pointer and active child count
-    AnnounceNode* parent_{nullptr}; // back link (raw pointer, parent owns us)
-    size_t activeChildCount_{0};    // count of children with content
+    NamespaceNode* parent_{nullptr}; // back link (raw pointer, parent owns us)
+    size_t activeChildCount_{0};     // count of children with content
 
     friend class MoQRelay;
 
@@ -132,9 +134,9 @@ class MoQRelay : public Publisher,
     void tryPruneChild(const std::string& childKey);
   };
 
-  AnnounceNode announceRoot_{*this};
+  NamespaceNode publishNamespaceRoot_{*this};
   enum class MatchType { Exact, Prefix };
-  std::shared_ptr<AnnounceNode> findNamespaceNode(
+  std::shared_ptr<NamespaceNode> findNamespaceNode(
       const TrackNamespace& ns,
       bool createMissingNodes = false,
       MatchType matchType = MatchType::Exact,
@@ -158,10 +160,10 @@ class MoQRelay : public Publisher,
   void onEmpty(MoQForwarder* forwarder) override;
   void forwardChanged(MoQForwarder* forwarder) override;
 
-  folly::coro::Task<void> announceToSession(
+  folly::coro::Task<void> publishNamespaceToSession(
       std::shared_ptr<MoQSession> session,
-      Announce ann,
-      std::shared_ptr<AnnounceNode> nodePtr);
+      PublishNamespace ann,
+      std::shared_ptr<NamespaceNode> nodePtr);
 
   folly::coro::Task<void> publishToSession(
       std::shared_ptr<MoQSession> session,
@@ -173,7 +175,9 @@ class MoQRelay : public Publisher,
       std::shared_ptr<Publisher::SubscriptionHandle> handle,
       bool forward);
 
-  void unannounce(const TrackNamespace& trackNamespace, AnnounceNode* node);
+  void publishNamespaceDone(
+      const TrackNamespace& trackNamespace,
+      NamespaceNode* node);
 
   TrackNamespace allowedNamespacePrefix_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>

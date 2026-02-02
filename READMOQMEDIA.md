@@ -85,7 +85,7 @@ Note: fontfile location can change depending on OS
 ```
 $MOXYGEN_BUILD_PATH/moxygen/samples/flv_streamer_client/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
-This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (default value) to the relay
+This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will publish the namespace `flvstreamer` (default value) to the relay
 
 ### Save stream to a file
 
@@ -157,7 +157,7 @@ Note: fontfile location can change depending on OS
 ```
 $MOXYGEN_BUILD_PATH/moxygen/samples/flv_streamer_client/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
-This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will announce the namespace `flvstreamer` (default value) to the relay
+This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will publish the namespace `flvstreamer` (default value) to the relay
 
 - Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [this instructions](./README.md#local-test-with-web-media-client)
 

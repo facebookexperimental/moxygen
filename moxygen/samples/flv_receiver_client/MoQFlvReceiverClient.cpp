@@ -502,14 +502,16 @@ class MoQFlvReceiverClient
     XLOG(INFO) << __func__ << " done";
   }
 
-  folly::coro::Task<AnnounceResult> announce(
-      Announce announce,
-      std::shared_ptr<AnnounceCallback>) override {
-    XLOG(INFO) << "Announce ns=" << announce.trackNamespace;
-    // receiver client doesn't expect server or relay to announce anything, but
-    // announce OK anyways
-    return folly::coro::makeTask<AnnounceResult>(
-        std::make_shared<AnnounceHandle>(AnnounceOk{announce.requestID}));
+  folly::coro::Task<PublishNamespaceResult> publishNamespace(
+      PublishNamespace publishNamespace,
+      std::shared_ptr<PublishNamespaceCallback>) override {
+    XLOG(INFO) << "PublishNamespace ns=" << publishNamespace.trackNamespace;
+    // receiver client doesn't expect server or relay to publishNamespace
+    // anything, but publishNamespace OK anyways
+    return folly::coro::makeTask<PublishNamespaceResult>(
+        std::make_shared<PublishNamespaceHandle>(PublishNamespaceOk{
+            .requestID = publishNamespace.requestID,
+            .requestSpecificParams = {}}));
   }
 
   void goaway(Goaway goaway) override {

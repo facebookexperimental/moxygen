@@ -52,14 +52,16 @@ TrackStatusOk makeTrackStatusOkResult(
     const TrackStatus& req,
     const std::optional<AbsoluteLocation>& largest = std::nullopt);
 
-inline Publisher::SubscribeAnnouncesResult makeSubscribeAnnouncesOkResult(
+inline Publisher::SubscribeNamespaceResult makeSubscribeNamespaceOkResult(
     const auto& subAnn) {
-  return std::make_shared<MockSubscribeAnnouncesHandle>(
-      SubscribeAnnouncesOk({RequestID(0), subAnn.trackNamespacePrefix}));
+  return std::make_shared<MockSubscribeNamespaceHandle>(
+      SubscribeNamespaceOk({RequestID(0), subAnn.trackNamespacePrefix}));
 }
 
-inline Subscriber::AnnounceResult makeAnnounceOkResult(const auto& ann) {
-  return std::make_shared<MockAnnounceHandle>(AnnounceOk({ann.requestID}));
+inline Subscriber::PublishNamespaceResult makePublishNamespaceOkResult(
+    const auto& ann) {
+  return std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+      {.requestID = ann.requestID, .requestSpecificParams = {}}));
 }
 
 inline Subscriber::PublishResult makePublishOkResult(
@@ -104,9 +106,9 @@ SubscribeDone getTrackEndedSubscribeDone(RequestID id);
 
 TrackStatus getTrackStatus();
 
-moxygen::SubscribeAnnounces getSubscribeAnnounces();
+moxygen::SubscribeNamespace getSubscribeNamespace();
 
-moxygen::Announce getAnnounce();
+moxygen::PublishNamespace getPublishNamespace();
 
 std::shared_ptr<MockSubscriptionHandle> makePublishHandle();
 
