@@ -2244,7 +2244,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
       mergeToken,
       folly::coro::timeout(std::move(setupFuture), moqSettings_.setupTimeout)));
   if (mergeToken.isCancellationRequested()) {
-    co_yield folly::coro::co_error(folly::OperationCancelled());
+    co_yield folly::coro::co_stopped_may_throw;
   }
   if (serverSetup.hasException()) {
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
