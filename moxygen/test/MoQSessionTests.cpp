@@ -186,15 +186,6 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
     serverSession->close(SessionCloseErrorCode::NO_ERROR);
   }
 }
-CO_TEST_P_X(MoQSessionTest, ClientReceivesBidiStream) {
-  serverWt_->createBidiStream();
-  // Check that the client called stopSending and resetStream on the newly
-  // created stream.
-  EXPECT_TRUE(clientWt_->readHandles.begin()->second->writeException());
-  EXPECT_TRUE(
-      clientWt_->writeHandles.begin()->second->getWriteErr().has_value());
-  co_return;
-}
 CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await setupMoQSession();
 

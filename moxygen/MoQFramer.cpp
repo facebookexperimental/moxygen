@@ -5108,4 +5108,16 @@ bool isValidDatagramType(uint64_t version, uint64_t datagramType) {
   }
 }
 
+folly::Optional<FrameType> getFrameType(const folly::IOBufQueue& readBuf) {
+  if (readBuf.empty()) {
+    return folly::none;
+  }
+  folly::io::Cursor cursor(readBuf.front());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  if (!frameType) {
+    return folly::none;
+  }
+  return static_cast<FrameType>(frameType->first);
+}
+
 } // namespace moxygen

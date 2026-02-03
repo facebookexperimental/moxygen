@@ -2394,7 +2394,8 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
 }
 
 folly::coro::Task<void> MoQSession::controlReadLoop(
-    proxygen::WebTransport::StreamReadHandle* readHandle) {
+    proxygen::WebTransport::StreamReadHandle* readHandle,
+    std::unique_ptr<folly::IOBuf> initialData) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
@@ -2402,6 +2403,17 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   co_await folly::coro::co_safe_point;
   auto streamId = readHandle->getID();
   controlCodec_.setStreamId(streamId);
+
+  // Process any pre-buffered data first
+  if (initialData) {
+    try {
+      auto guard = shared_from_this();
+      controlCodec_.onIngress(std::move(initialData), false);
+    } catch (const std::exception& ex) {
+      XLOG(FATAL) << "exception thrown from onIngress ex="
+                  << folly::exceptionStr(ex);
+    }
+  }
 
   bool fin = false;
   auto token = co_await folly::coro::co_current_cancellation_token;
@@ -4809,6 +4821,24 @@ void MoQSession::onNewUniStream(
 void MoQSession::onNewBidiStream(
     proxygen::WebTransport::BidiStreamHandle bh) noexcept {
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  // In draft 16 and above, the version is negotiated through the ALPN, so we
+  // would know what it is by this point.
+  if (negotiatedVersion_ && getDraftMajorVersion(*negotiatedVersion_) >= 16) {
+    co_withExecutor(
+        exec_.get(),
+        co_withCancellation(
+            cancellationSource_.getToken(), bidiStreamDemuxer(std::move(bh))))
+        .start();
+    return;
+  }
+
+  handleClientSetup(bh);
+}
+
+void MoQSession::handleClientSetup(
+    proxygen::WebTransport::BidiStreamHandle bh,
+    std::unique_ptr<folly::IOBuf> initialData) noexcept {
   // TODO: prevent second control stream?
   if (dir_ == MoQControlCodec::Direction::CLIENT) {
     XLOG(ERR) << "Received bidi stream on client, kill it sess=" << this;
@@ -4824,7 +4854,8 @@ void MoQSession::onNewBidiStream(
     co_withExecutor(
         exec_.get(),
         co_withCancellation(
-            cancellationSource_.getToken(), controlReadLoop(bh.readHandle)))
+            cancellationSource_.getToken(),
+            controlReadLoop(bh.readHandle, std::move(initialData))))
         .start();
     auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
@@ -4833,6 +4864,41 @@ void MoQSession::onNewBidiStream(
         co_withCancellation(
             std::move(mergeToken), controlWriteLoop(bh.writeHandle)))
         .start();
+  }
+}
+
+folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
+    proxygen::WebTransport::BidiStreamHandle bh) noexcept {
+  co_await folly::coro::co_safe_point;
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  if (token.isCancellationRequested()) {
+    co_return;
+  }
+  auto readHandle = bh.readHandle;
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  folly::Optional<FrameType> frameType = folly::none;
+
+  folly::Try<proxygen::WebTransport::StreamData> streamData;
+  // Keep reading the data until we can parse the frame type. Use a do/while so
+  // we only issue one read per iteration and also ensure we append any final
+  // data chunk that arrives with a FIN.
+  do {
+    streamData =
+        co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
+    if (!streamData.hasValue()) {
+      break;
+    }
+    readBuf.append(std::move(streamData->data));
+    frameType = getFrameType(readBuf);
+  } while (!frameType.hasValue() && !streamData->fin);
+
+  if (frameType.hasValue()) {
+    if (*frameType == FrameType::CLIENT_SETUP) {
+      // Process the frame as a CLIENT_SETUP
+      handleClientSetup(bh, readBuf.move());
+    } else if (*frameType == FrameType::SUBSCRIBE_NAMESPACE) {
+      // TODO: Handle SUBSCRIBE_ANNOUNCES on bidirectional stream
+    }
   }
 }
 

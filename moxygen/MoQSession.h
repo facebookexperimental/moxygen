@@ -353,6 +353,15 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamReadHandle* rh) noexcept override;
   void onNewBidiStream(
       proxygen::WebTransport::BidiStreamHandle bh) noexcept override;
+
+  void handleClientSetup(
+      proxygen::WebTransport::BidiStreamHandle bh,
+      std::unique_ptr<folly::IOBuf> initialData = nullptr) noexcept;
+
+  // Used to tease apart the control stream from subscribe namespace streams.
+  // This is only called for draft >= 16.
+  folly::coro::Task<void> bidiStreamDemuxer(
+      proxygen::WebTransport::BidiStreamHandle bh) noexcept;
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
   void onSessionEnd(folly::Optional<uint32_t> err) noexcept override {
     XLOG(DBG1) << __func__ << "err="
@@ -393,7 +402,8 @@ class MoQSession : public Subscriber,
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
   folly::coro::Task<void> controlReadLoop(
-      proxygen::WebTransport::StreamReadHandle* readHandle);
+      proxygen::WebTransport::StreamReadHandle* readHandle,
+      std::unique_ptr<folly::IOBuf> initialData = nullptr);
 
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
