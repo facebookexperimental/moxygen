@@ -3394,6 +3394,37 @@ TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithPublishOption) {
   EXPECT_EQ(parseResult->forward, true);
 }
 
+// Test RequestError with retryInterval (v16+ only)
+TEST_P(MoQFramerV16PlusTest, RequestErrorWithRetryInterval) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  RequestError requestError;
+  requestError.requestID = RequestID(42);
+  requestError.errorCode = RequestErrorCode::INTERNAL_ERROR;
+  requestError.reasonPhrase = "temporary failure";
+  requestError.retryInterval =
+      std::chrono::milliseconds{5000}; // 5 seconds (minus one per spec)
+
+  auto writeResult = writer_.writeRequestError(
+      writeBuf, requestError, FrameType::REQUEST_ERROR);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_ERROR));
+
+  auto parseResult = parser_.parseRequestError(
+      cursor, frameLength(cursor), FrameType::REQUEST_ERROR);
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, requestError.requestID);
+  EXPECT_EQ(parseResult->errorCode, requestError.errorCode);
+  EXPECT_EQ(parseResult->retryInterval, requestError.retryInterval);
+  EXPECT_EQ(parseResult->reasonPhrase, requestError.reasonPhrase);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,

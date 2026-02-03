@@ -2812,6 +2812,18 @@ folly::Expected<RequestError, ErrorCode> MoQFrameParser::parseRequestError(
   length -= errorCode->second;
   requestError.errorCode = RequestErrorCode(errorCode->first);
 
+  // Parse retryInterval (version 16+)
+  if (getDraftMajorVersion(*version_) >= 16) {
+    auto retryInterval = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!retryInterval) {
+      XLOG(DBG4) << "parseRequestError: UNDERFLOW on retryInterval";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= retryInterval->second;
+    requestError.retryInterval =
+        std::chrono::milliseconds(retryInterval->first);
+  }
+
   // Parse reasonPhrase
   auto reasonPhrase = parseFixedString(cursor, length);
   if (!reasonPhrase) {
@@ -5055,6 +5067,14 @@ WriteResult MoQFrameWriter::writeRequestError(
   writeVarint(writeBuf, requestError.requestID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(requestError.errorCode), size, error);
+  // Write retryInterval for version 16+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeVarint(
+        writeBuf,
+        requestError.retryInterval ? requestError.retryInterval->count() : 0,
+        size,
+        error);
+  }
   writeFixedString(writeBuf, requestError.reasonPhrase, size, error);
 
   writeSize(sizePtr, size, error, *version_);

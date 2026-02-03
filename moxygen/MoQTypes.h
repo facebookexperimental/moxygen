@@ -1188,6 +1188,11 @@ struct RequestError {
   RequestID requestID;
   RequestErrorCode errorCode;
   std::string reasonPhrase;
+  // Retry Interval: The time (in milliseconds) before the request SHOULD be
+  // sent again, plus one.
+  // If the value is 0, the request SHOULD NOT be retried.
+  // A value of 1 indicates the request can be retried immediately.
+  std::optional<std::chrono::milliseconds> retryInterval = std::nullopt;
 };
 
 // Type aliases for backward compatibility
