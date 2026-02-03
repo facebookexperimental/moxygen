@@ -3495,11 +3495,12 @@ TEST_F(ParametersIsParamAllowedTest, ParamAllowedForAllFrameTypes) {
       paramsFetch.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
 }
 
-TEST_F(ParametersIsParamAllowedTest, UnknownParamKeyReturnsFalse) {
+// TODO: Should return false when we drop v15- support
+TEST_F(ParametersIsParamAllowedTest, UnknownParamKeyReturnsTrue) {
   Parameters params(FrameType::SUBSCRIBE);
   // Cast an unknown value to TrackRequestParamKey
   auto unknownKey = static_cast<TrackRequestParamKey>(9999);
-  EXPECT_FALSE(params.isParamAllowed(unknownKey));
+  EXPECT_TRUE(params.isParamAllowed(unknownKey));
 }
 
 TEST_F(ParametersIsParamAllowedTest, MultipleParamsMixedResults) {

@@ -251,7 +251,8 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
 
   auto it = kParamAllowlist.find(key);
   if (it == kParamAllowlist.end()) {
-    return false;
+    // TODO: Make this strict when we drop V15- support
+    return true;
   }
 
   const auto& allowedFrameTypes = it->second;
