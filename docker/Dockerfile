@@ -33,7 +33,7 @@
 #
 FROM ubuntu:latest
 
-# Install python3 (getdeps.py handles all other build dependencies)
+# Install python3 and sudo (getdeps.py install-system-deps requires sudo)
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -44,7 +44,11 @@ RUN apt-get update && apt-get install -y \
     m4 \
     doxygen \
     python3 \
-    && rm -rf /var/lib/apt/lists/*
+    python3-pip \
+    sudo
+
+# Allow pip to install packages system-wide (safe in Docker container)
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Set up working directory
 WORKDIR /app
@@ -53,7 +57,13 @@ WORKDIR /app
 COPY . .
 
 # Run the build script using getdeps.py (already running as root)
-RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages moxygen
+# First install system dependencies to reduce compilation
+RUN ./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen
+
+RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages --verbose moxygen 2>&1 || \
+    (echo "=== Build failed, showing logs ===" && \
+     find /tmp -name "*.log" -type f -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null; \
+     exit 1)
 RUN ./scripts/create-server-certs.sh
 
 # Set default environment variables
