@@ -76,8 +76,8 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       0};
 }
 
-SubscribeDone getTrackEndedSubscribeDone(RequestID id) {
-  return {id, SubscribeDoneStatusCode::TRACK_ENDED, 0, "end of track"};
+PublishDone getTrackEndedPublishDone(RequestID id) {
+  return {id, PublishDoneStatusCode::TRACK_ENDED, 0, "end of track"};
 }
 
 TrackStatus getTrackStatus() {
@@ -444,13 +444,13 @@ void MoQSessionTest::expectSubscribe(
       .RetiresOnSaturation();
 }
 
-void MoQSessionTest::expectSubscribeDone(MoQControlCodec::Direction recipient) {
+void MoQSessionTest::expectPublishDone(MoQControlCodec::Direction recipient) {
   EXPECT_CALL(
       *getPublisherStatsCallback(oppositeDirection(recipient)),
-      onSubscribeDone(_));
-  EXPECT_CALL(*getSubscriberStatsCallback(recipient), onSubscribeDone(_));
-  EXPECT_CALL(*subscribeCallback_, subscribeDone(_)).WillOnce([&] {
-    subscribeDone_.post();
+      onPublishDone(_));
+  EXPECT_CALL(*getSubscriberStatsCallback(recipient), onPublishDone(_));
+  EXPECT_CALL(*subscribeCallback_, publishDone(_)).WillOnce([&] {
+    publishDone_.post();
     return folly::unit;
   });
 }

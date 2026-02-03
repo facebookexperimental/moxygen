@@ -310,9 +310,9 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
       std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;
     }
 
-    void onSubscribeDone(SubscribeDone subDone) override {
-      XLOG(INFO) << "SubscribeDone: " << subDone.reasonPhrase;
-      client_.subscribeDone(std::move(subDone));
+    void onPublishDone(PublishDone pubDone) override {
+      XLOG(INFO) << "PublishDone: " << pubDone.reasonPhrase;
+      client_.publishDone(std::move(pubDone));
       baton.post();
     }
 
@@ -346,12 +346,12 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   co_await handler->baton;
 }
 
-void MoQChatClient::subscribeDone(SubscribeDone subDone) {
+void MoQChatClient::publishDone(PublishDone pubDone) {
   for (auto& userTracks : subscriptions_) {
     for (auto userTrackIt = userTracks.second.begin();
          userTrackIt != userTracks.second.end();
          ++userTrackIt) {
-      if (userTrackIt->requestID == subDone.requestID) {
+      if (userTrackIt->requestID == pubDone.requestID) {
         if (userTrackIt->subscription) {
           userTrackIt->subscription.reset();
         }

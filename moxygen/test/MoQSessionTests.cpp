@@ -316,35 +316,35 @@ TEST(MoQRelayClientTest, ShutdownClearsHandlersAndResetsSession) {
 class MoQSessionDeleteFromCallbackTest : public MoQSessionTest {};
 
 // Test that demonstrates UAF when application deletes session during
-// subscribeDone callback
-CO_TEST_P_X(MoQSessionDeleteFromCallbackTest, DeleteFromSubscribeDoneCallback) {
+// publishDone callback
+CO_TEST_P_X(MoQSessionDeleteFromCallbackTest, DeleteFromPublishDoneCallback) {
   std::weak_ptr<MoQSession> weakSession;
 
   // Setup the session first
   co_await setupMoQSession();
 
-  // Create a track consumer that we'll use to send subscribeDone
+  // Create a track consumer that we'll use to send publishDone
   std::shared_ptr<TrackConsumer> serverTrackConsumer;
 
   // Setup server publisher to accept subscription and store the TrackConsumer
   expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
     pub->setTrackAlias(TrackAlias(sub.requestID.value));
-    // Store the TrackConsumer so we can call subscribeDone on it later
+    // Store the TrackConsumer so we can call publishDone on it later
     serverTrackConsumer = pub;
     co_return makeSubscribeOkResult(sub);
   });
 
   // Subscribe to a track using our suicidal consumer
   weakSession = clientSession_;
-  // Create a mock TrackConsumer that deletes the session in subscribeDone
+  // Create a mock TrackConsumer that deletes the session in publishDone
   auto consumer = std::make_shared<testing::StrictMock<MockTrackConsumer>>();
   EXPECT_CALL(*consumer, setTrackAlias(testing::_))
       .WillOnce(testing::Return(folly::unit));
   // Subscribe to track - co_await ensures the mock lambda executes
   auto subResult = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), consumer);
-  EXPECT_CALL(*consumer, subscribeDone(testing::_))
-      .WillOnce([&](const SubscribeDone&) {
+  EXPECT_CALL(*consumer, publishDone(testing::_))
+      .WillOnce([&](const PublishDone&) {
         // Delete the session during the callback
         clientSession_.reset();
         subResult->reset();
@@ -358,18 +358,18 @@ CO_TEST_P_X(MoQSessionDeleteFromCallbackTest, DeleteFromSubscribeDoneCallback) {
   }
 
   // Now server sends SUBSCRIBE_DONE - this will trigger the chain:
-  // controlCodec_.onIngress() -> onSubscribeDone -> processSubscribeDone
-  // -> callback_->subscribeDone() -> delete session -> return to onIngress ->
+  // controlCodec_.onIngress() -> onPublishDone -> processPublishDone
+  // -> callback_->publishDone() -> delete session -> return to onIngress ->
   // UAF!
-  SubscribeDone subDone;
-  subDone.requestID = 1;
-  subDone.statusCode = SubscribeDoneStatusCode::SUBSCRIPTION_ENDED;
-  subDone.reasonPhrase = "test";
-  subDone.streamCount = 0; // No streams in flight
+  PublishDone pubDone;
+  pubDone.requestID = 1;
+  pubDone.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
+  pubDone.reasonPhrase = "test";
+  pubDone.streamCount = 0; // No streams in flight
 
   // This should trigger the UAF if the guard is not in place
   // serverTrackConsumer is the client's TrackConsumer on the server side
-  serverTrackConsumer->subscribeDone(subDone);
+  serverTrackConsumer->publishDone(pubDone);
 
   // Process just this one event - with the fix, session stays alive during
   // callback Without the fix, we'd have UAF here

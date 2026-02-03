@@ -138,7 +138,7 @@ class TextHandler : public ObjectReceiverCallback {
     std::cout << "Stream Error=" << folly::to_underlying(error) << std::endl;
   }
 
-  void onSubscribeDone(SubscribeDone) override {
+  void onPublishDone(PublishDone) override {
     CHECK(!fetch_);
     std::cout << __func__ << std::endl;
     baton.post();

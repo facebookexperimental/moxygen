@@ -106,7 +106,7 @@ class MoQStatsCallback {
    * Publisher: Sent a SUBSCRIBE_DONE
    * Subscriber: Received a SUBSCRIBE_DONE
    */
-  virtual void onSubscribeDone(SubscribeDoneStatusCode statusCode) = 0;
+  virtual void onPublishDone(PublishDoneStatusCode statusCode) = 0;
 
   /*
    * Publisher: Received a SUBSCRIBE_UPDATE

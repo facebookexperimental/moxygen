@@ -17,7 +17,7 @@ std::string kEndpointName = "/test";
 namespace moxygen {
 
 const int kDefaultExpires = 0;
-const std::string kDefaultSubscribeDoneReason = "Testing";
+const std::string kDefaultPublishDoneReason = "Testing";
 
 void MoQTestSubscriptionHandle::unsubscribe() {
   cancelSource_.requestCancellation();
@@ -137,13 +137,13 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   }
 
   // Inform Consumer that publisher is finished opening subgroups/datagrams
-  // Default SubscribeDone For Now
+  // Default PublishDone For Now
 
-  SubscribeDone done;
+  PublishDone done;
   done.requestID = sub.requestID;
-  done.statusCode = SubscribeDoneStatusCode::TRACK_ENDED;
-  done.reasonPhrase = kDefaultSubscribeDoneReason;
-  callback->subscribeDone(std::move(done));
+  done.statusCode = PublishDoneStatusCode::TRACK_ENDED;
+  done.reasonPhrase = kDefaultPublishDoneReason;
+  callback->publishDone(std::move(done));
 }
 
 folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
@@ -353,12 +353,12 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
          objectId <= params.lastObjectInTrack;
          objectId += params.objectIncrement) {
       if (token.isCancellationRequested()) {
-        // Instead of returning an error, callback->subscribeDone with error
-        SubscribeDone done;
+        // Instead of returning an error, callback->publishDone with error
+        PublishDone done;
         done.requestID = sub.requestID;
         done.reasonPhrase = "Datagram Subscription Cancelled";
-        done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
-        callback->subscribeDone(std::move(done));
+        done.statusCode = PublishDoneStatusCode::INTERNAL_ERROR;
+        callback->publishDone(std::move(done));
         co_return;
       }
       // Add Integer/Variable Extensions if needed
@@ -379,12 +379,12 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
 
       auto res = callback->datagram(header, std::move(objectPayload));
       if (res.hasError()) {
-        // If sending datagram fails, callback->subscribeDone with error
-        SubscribeDone done;
+        // If sending datagram fails, callback->publishDone with error
+        PublishDone done;
         done.requestID = sub.requestID;
         done.reasonPhrase = "Error Sending Datagram Objects";
-        done.statusCode = SubscribeDoneStatusCode::INTERNAL_ERROR;
-        callback->subscribeDone(std::move(done));
+        done.statusCode = PublishDoneStatusCode::INTERNAL_ERROR;
+        callback->publishDone(std::move(done));
         co_return;
       }
 

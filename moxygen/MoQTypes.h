@@ -70,7 +70,7 @@ using ErrorCode = SessionCloseErrorCode;
 
 // SubscribeErrorCode is now an alias for RequestErrorCode - see below
 
-enum class SubscribeDoneStatusCode : uint32_t {
+enum class PublishDoneStatusCode : uint32_t {
   INTERNAL_ERROR = 0x0,
   UNAUTHORIZED = 0x1,
   TRACK_ENDED = 0x2,
@@ -980,9 +980,9 @@ struct Unsubscribe {
   RequestID requestID;
 };
 
-struct SubscribeDone {
+struct PublishDone {
   RequestID requestID;
-  SubscribeDoneStatusCode statusCode;
+  PublishDoneStatusCode statusCode;
   uint64_t streamCount{0};
   std::string reasonPhrase;
 };

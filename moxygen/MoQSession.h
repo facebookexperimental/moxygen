@@ -284,7 +284,7 @@ class MoQSession : public Subscriber,
     }
 
     virtual void terminatePublish(
-        SubscribeDone subDone,
+        PublishDone pubDone,
         ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
 
     virtual void onStreamCreated() {}
@@ -427,7 +427,7 @@ class MoQSession : public Subscriber,
   void subscribeUpdateError(
       const SubscribeUpdateError& requestError,
       RequestID subscriptionRequestID);
-  void sendSubscribeDone(const SubscribeDone& subDone);
+  void sendPublishDone(const PublishDone& pubDone);
 
   folly::coro::Task<void> handleFetch(
       Fetch fetch,
@@ -455,7 +455,7 @@ class MoQSession : public Subscriber,
   void onUnsubscribe(Unsubscribe unsubscribe) override;
   void onPublish(PublishRequest publish) override;
   void onPublishOk(PublishOk publishOk) override;
-  void onSubscribeDone(SubscribeDone subscribeDone) override;
+  void onPublishDone(PublishDone publishDone) override;
   void onMaxRequestID(MaxRequestID maxSubId) override;
   void onRequestsBlocked(RequestsBlocked requestsBlocked) override;
   void onFetch(Fetch fetch) override;

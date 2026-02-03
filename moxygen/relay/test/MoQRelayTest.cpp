@@ -96,7 +96,7 @@ class MoQRelayTest : public ::testing::Test {
     ON_CALL(*consumer, setTrackAlias(_))
         .WillByDefault(
             Return(folly::makeExpected<MoQPublishError>(folly::unit)));
-    ON_CALL(*consumer, subscribeDone(_))
+    ON_CALL(*consumer, publishDone(_))
         .WillByDefault(
             Return(folly::makeExpected<MoQPublishError>(folly::unit)));
     return consumer;
@@ -172,12 +172,12 @@ class MoQRelayTest : public ::testing::Test {
 
     void cleanup() {
       // Simulate MoQSession::cleanup() for publish tracks
-      // This calls subscribeDone on all tracked consumers, which triggers
+      // This calls publishDone on all tracked consumers, which triggers
       // FilterConsumer callbacks that properly clean up relay state
       for (auto& consumer : publishConsumers) {
-        consumer->subscribeDone(
+        consumer->publishDone(
             {RequestID(0),
-             SubscribeDoneStatusCode::SESSION_CLOSED,
+             PublishDoneStatusCode::SESSION_CLOSED,
              0,
              "mock session cleanup"});
       }
@@ -494,9 +494,9 @@ TEST_F(MoQRelayTest, PruneOnPublishDoneBug) {
 
   // End the publish - onPublishDone gets called
   withSessionContext(publisher, [&]() {
-    consumer->subscribeDone(
+    consumer->publishDone(
         {RequestID(0),
-         SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+         PublishDoneStatusCode::SUBSCRIPTION_ENDED,
          0,
          "publisher done"});
   });
@@ -889,8 +889,8 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
 }
 
 // Test: Graceful session draining - comprehensive test of draining behavior
-// This test verifies that when a publisher calls subscribeDone, subscribers
-// are drained (receive subscribeDone) but their open subgroups are NOT reset.
+// This test verifies that when a publisher calls publishDone, subscribers
+// are drained (receive publishDone) but their open subgroups are NOT reset.
 // Draining subscribers should not receive new subgroups and are removed when
 // their last subgroup closes.
 TEST_F(MoQRelayTest, GracefulSessionDraining) {
@@ -939,11 +939,11 @@ TEST_F(MoQRelayTest, GracefulSessionDraining) {
   sgs[1] = publishConsumer->beginSubgroup(1, 0, 0).value();
   subscribeToTrack(subscribers[2], kTestTrackName, consumers[2], RequestID(3));
 
-  // Trigger draining by calling subscribeDone from publisher
-  // All subscribers should receive subscribeDone but subgroups should NOT reset
-  // Note: subscribeDone may be called multiple times (during drain and cleanup)
+  // Trigger draining by calling publishDone from publisher
+  // All subscribers should receive publishDone but subgroups should NOT reset
+  // Note: publishDone may be called multiple times (during drain and cleanup)
   for (auto& consumer : consumers) {
-    EXPECT_CALL(*consumer, subscribeDone(_))
+    EXPECT_CALL(*consumer, publishDone(_))
         .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   }
 
@@ -952,10 +952,10 @@ TEST_F(MoQRelayTest, GracefulSessionDraining) {
   EXPECT_CALL(*sub0_sgs[1], reset(_)).Times(0);
   EXPECT_CALL(*sub1_sg0, reset(_)).Times(0);
 
-  publishConsumer->subscribeDone(
-      SubscribeDone{
+  publishConsumer->publishDone(
+      PublishDone{
           RequestID(0),
-          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
           0,
           "publisher ended"});
 
@@ -1058,8 +1058,8 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
   }
 
   // Drain the subscriber - should mark it draining but not remove
-  // Note: subscribeDone may be called multiple times (during drain and cleanup)
-  EXPECT_CALL(*consumer, subscribeDone(_))
+  // Note: publishDone may be called multiple times (during drain and cleanup)
+  EXPECT_CALL(*consumer, publishDone(_))
       .Times(AtLeast(1))
       .WillRepeatedly(
           Return(folly::makeExpected<MoQPublishError>(folly::unit)));
@@ -1069,10 +1069,10 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
   EXPECT_CALL(*sgs[1], reset(_)).Times(0);
   EXPECT_CALL(*sgs[2], reset(_)).Times(0);
 
-  publishConsumer->subscribeDone(
-      SubscribeDone{
+  publishConsumer->publishDone(
+      PublishDone{
           RequestID(0),
-          SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
           0,
           "publisher ended"});
 
@@ -1093,7 +1093,7 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
 }
 
 // Test: Subscriber that ends subscription doesn't receive subsequent objects
-// Sequence: publish, sub1 subscribes, beginSubgroup, sub1 ends (subscribeDone),
+// Sequence: publish, sub1 subscribes, beginSubgroup, sub1 ends (publishDone),
 // sub2 subscribes, send object -> only goes to sub1
 TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
   auto publisherSession = createMockSession();
@@ -1131,16 +1131,16 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
   auto subgroup = *sgRes;
 
   // publisher ends subscription
-  EXPECT_CALL(*mockConsumer1, subscribeDone(testing::_));
+  EXPECT_CALL(*mockConsumer1, publishDone(testing::_));
   EXPECT_TRUE(publishConsumer
-                  ->subscribeDone(
+                  ->publishDone(
                       {RequestID(1),
-                       SubscribeDoneStatusCode::TRACK_ENDED,
+                       PublishDoneStatusCode::TRACK_ENDED,
                        0,
                        "track ended"})
                   .hasValue());
 
-  // Subscriber 2 joins after subscribeDone
+  // Subscriber 2 joins after publishDone
   subscribeToTrack(
       subscriber2,
       kTestTrackName,
@@ -1160,7 +1160,7 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
 
 // Test: SubscribeNamespace only receives publishes while active
 // Sequence: subscribeNamespace (sub1), publish (sub1 gets it),
-// beginSubgroup, subscribeDone, subscribeNamespace (sub2), new publish
+// beginSubgroup, publishDone, subscribeNamespace (sub2), new publish
 // (only sub2 gets it)
 TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
   auto publisherSession = createMockSession();
@@ -1212,11 +1212,11 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
   auto subgroup = *subgroupRes;
 
   // publisher ends subscription
-  EXPECT_CALL(*mockConsumer1, subscribeDone(testing::_));
+  EXPECT_CALL(*mockConsumer1, publishDone(testing::_));
   EXPECT_TRUE(pubConsumer
-                  ->subscribeDone(
+                  ->publishDone(
                       {RequestID(1),
-                       SubscribeDoneStatusCode::TRACK_ENDED,
+                       PublishDoneStatusCode::TRACK_ENDED,
                        0,
                        "track ended"})
                   .hasValue());

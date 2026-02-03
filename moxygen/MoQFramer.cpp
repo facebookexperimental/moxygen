@@ -1785,45 +1785,45 @@ folly::Expected<Unsubscribe, ErrorCode> MoQFrameParser::parseUnsubscribe(
   return unsubscribe;
 }
 
-folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
+folly::Expected<PublishDone, ErrorCode> MoQFrameParser::parsePublishDone(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  SubscribeDone subscribeDone;
+  PublishDone publishDone;
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!requestID) {
-    XLOG(DBG4) << "parseSubscribeDone: UNDERFLOW on requestID";
+    XLOG(DBG4) << "parsePublishDone: UNDERFLOW on requestID";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= requestID->second;
-  subscribeDone.requestID = requestID->first;
+  publishDone.requestID = requestID->first;
 
   auto statusCode = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!statusCode) {
-    XLOG(DBG4) << "parseSubscribeDone: UNDERFLOW on statusCode";
+    XLOG(DBG4) << "parsePublishDone: UNDERFLOW on statusCode";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= statusCode->second;
-  subscribeDone.statusCode = SubscribeDoneStatusCode(statusCode->first);
+  publishDone.statusCode = PublishDoneStatusCode(statusCode->first);
 
   auto streamCount = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!streamCount) {
-    XLOG(DBG4) << "parseSubscribeDone: UNDERFLOW on streamCount";
+    XLOG(DBG4) << "parsePublishDone: UNDERFLOW on streamCount";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= streamCount->second;
-  subscribeDone.streamCount = streamCount->first;
+  publishDone.streamCount = streamCount->first;
 
   auto reas = parseFixedString(cursor, length);
   if (!reas) {
     return folly::makeUnexpected(reas.error());
   }
-  subscribeDone.reasonPhrase = std::move(reas.value());
+  publishDone.reasonPhrase = std::move(reas.value());
 
   CHECK(version_.has_value())
       << "The version must be set before parsing SUBSCRIBE_DONE";
   if (getDraftMajorVersion(*version_) <= 9) {
     if (length == 0) {
-      XLOG(DBG4) << "parseSubscribeDone: UNDERFLOW on contentExists";
+      XLOG(DBG4) << "parsePublishDone: UNDERFLOW on contentExists";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     auto contentExists = cursor.readBE<uint8_t>();
@@ -1838,7 +1838,7 @@ folly::Expected<SubscribeDone, ErrorCode> MoQFrameParser::parseSubscribeDone(
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
-  return subscribeDone;
+  return publishDone;
 }
 
 folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
@@ -4418,19 +4418,19 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeSubscribeDone(
+WriteResult MoQFrameWriter::writePublishDone(
     folly::IOBufQueue& writeBuf,
-    const SubscribeDone& subscribeDone) const noexcept {
+    const PublishDone& publishDone) const noexcept {
   CHECK(version_.has_value())
       << "Version needs to be set to write subscribe done";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_DONE, error);
-  writeVarint(writeBuf, subscribeDone.requestID.value, size, error);
+  writeVarint(writeBuf, publishDone.requestID.value, size, error);
   writeVarint(
-      writeBuf, folly::to_underlying(subscribeDone.statusCode), size, error);
-  writeVarint(writeBuf, subscribeDone.streamCount, size, error);
-  writeFixedString(writeBuf, subscribeDone.reasonPhrase, size, error);
+      writeBuf, folly::to_underlying(publishDone.statusCode), size, error);
+  writeVarint(writeBuf, publishDone.streamCount, size, error);
+  writeFixedString(writeBuf, publishDone.reasonPhrase, size, error);
   if (getDraftMajorVersion(*version_) <= 9) {
     writeVarint(writeBuf, 0, size, error);
   }

@@ -135,10 +135,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       Unsubscribe({
           0,
       }));
-  res = moqFrameWriter.writeSubscribeDone(
+  res = moqFrameWriter.writePublishDone(
       writeBuf,
-      SubscribeDone(
-          {RequestID(0), SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 7, ""}));
+      PublishDone(
+          {RequestID(0), PublishDoneStatusCode::SUBSCRIPTION_ENDED, 7, ""}));
 
   // PublishRequest
   PublishRequest publishRequest;

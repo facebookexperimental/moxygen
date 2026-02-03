@@ -75,7 +75,7 @@ class SubscriberState {
 
     void onEndOfStream() override;
     void onError(ResetStreamErrorCode code) override;
-    void onSubscribeDone(SubscribeDone done) override;
+    void onPublishDone(PublishDone done) override;
     void onAllDataReceived() override;
 
    private:

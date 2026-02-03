@@ -88,7 +88,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
-    EXPECT_CALL(callback, onSubscribeDone(testing::_));
+    EXPECT_CALL(callback, onPublishDone(testing::_));
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
@@ -141,7 +141,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
-    EXPECT_CALL(callback, onSubscribeDone(testing::_));
+    EXPECT_CALL(callback, onPublishDone(testing::_));
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);

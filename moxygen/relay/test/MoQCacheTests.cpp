@@ -53,8 +53,7 @@ class MoQCacheTest : public ::testing::Test {
     ON_CALL(*trackConsumer_, datagram(_, _)).WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, objectStream(_, _))
         .WillByDefault(Return(folly::unit));
-    ON_CALL(*trackConsumer_, subscribeDone(_))
-        .WillByDefault(Return(folly::unit));
+    ON_CALL(*trackConsumer_, publishDone(_)).WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, beginSubgroup(_, _, _))
         .WillByDefault(Return(makeSubgroupConsumer()));
     cache_.clear();
@@ -829,8 +828,8 @@ TEST_F(MoQCacheTest, TestInvalidCacheUpdateFails) {
   writeback->beginSubgroup(6, 0, 0).value()->checkpoint();
   writeback->beginSubgroup(7, 0, 0).value()->reset(
       ResetStreamErrorCode::CANCELLED);
-  writeback->subscribeDone(
-      {RequestID(0), SubscribeDoneStatusCode::SUBSCRIPTION_ENDED, 0, ""});
+  writeback->publishDone(
+      {RequestID(0), PublishDoneStatusCode::SUBSCRIPTION_ENDED, 0, ""});
 
   writeback.reset();
 }

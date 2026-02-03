@@ -103,8 +103,8 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
     return folly::Unit();
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone /* subDone */) override {
+  folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone /* pubDone */) override {
     return folly::Unit();
   }
 

@@ -344,9 +344,9 @@ Subscriber::PublishResult MoQRelay::publish(
     XLOG(DBG1) << "New publisher for existing subscription";
     nodePtr->publishes.erase(pub.fullTrackName.trackName);
     it->second.handle->unsubscribe();
-    it->second.forwarder->subscribeDone(
+    it->second.forwarder->publishDone(
         {RequestID(0),
-         SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+         PublishDoneStatusCode::SUBSCRIPTION_ENDED,
          0, // filled in by session
          "upstream disconnect"});
     XLOG(DBG4) << "Erasing subscription to " << it->first;
@@ -396,7 +396,7 @@ Subscriber::PublishResult MoQRelay::publish(
   }
   forwarder->setCallback(shared_from_this());
 
-  // Wrap forwarder in filter to intercept subscribeDone
+  // Wrap forwarder in filter to intercept publishDone
   auto filterImpl = std::make_shared<TerminationFilter>(
       shared_from_this(), pub.fullTrackName, forwarder);
   std::shared_ptr<TrackConsumer> filter =
@@ -487,7 +487,7 @@ class MoQRelay::NamespaceSubscription
   TrackNamespace trackNamespacePrefix_;
 };
 
-// Filter TrackConsumer that intercepts subscribeDone to clean up relay state
+// Filter TrackConsumer that intercepts publishDone to clean up relay state
 class MoQRelay::TerminationFilter : public TrackConsumerFilter {
  public:
   TerminationFilter(
@@ -498,8 +498,8 @@ class MoQRelay::TerminationFilter : public TrackConsumerFilter {
         relay_(std::move(relay)),
         ftn_(std::move(ftn)) {}
 
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) override {
+  folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone pubDone) override {
     // Notify relay that publisher is done - this will:
     // 1. Remove from nodePtr->publishes
     // 2. Clear subscription.handle
@@ -507,7 +507,7 @@ class MoQRelay::TerminationFilter : public TrackConsumerFilter {
       relay_->onPublishDone(ftn_);
     }
     // Change the downstream code to something like "upstream ended"?
-    return TrackConsumerFilter::subscribeDone(std::move(subDone));
+    return TrackConsumerFilter::publishDone(std::move(pubDone));
   }
 
  private:

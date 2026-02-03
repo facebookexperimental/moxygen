@@ -98,7 +98,7 @@ class MoQTestClient {
       client_.onError(code);
     }
 
-    void onSubscribeDone(SubscribeDone /* done */) override {}
+    void onPublishDone(PublishDone /* done */) override {}
 
     void onAllDataReceived() override {
       client_.onAllDataReceived();

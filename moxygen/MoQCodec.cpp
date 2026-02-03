@@ -535,10 +535,10 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_DONE: {
-      auto res = moqFrameParser_.parseSubscribeDone(cursor, curFrameLength_);
+      auto res = moqFrameParser_.parsePublishDone(cursor, curFrameLength_);
       if (res) {
         if (callback_) {
-          callback_->onSubscribeDone(std::move(res.value()));
+          callback_->onPublishDone(std::move(res.value()));
         }
       } else {
         return folly::makeUnexpected(res.error());

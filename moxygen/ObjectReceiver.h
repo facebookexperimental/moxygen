@@ -26,7 +26,7 @@ class ObjectReceiverCallback {
       const ObjectHeader& objHeader) = 0;
   virtual void onEndOfStream() = 0;
   virtual void onError(ResetStreamErrorCode) = 0;
-  virtual void onSubscribeDone(SubscribeDone done) = 0;
+  virtual void onPublishDone(PublishDone done) = 0;
   // For SUBSCRIBEs:
   // Called when SUBSCRIBE_DONE has arrived AND all outstanding subgroup
   // streams have closed.
@@ -170,7 +170,7 @@ class ObjectReceiver : public TrackConsumer,
   std::optional<TrackAlias> trackAlias_;
   // Tracking for onAllDataReceived callback (subscription mode only)
   size_t openSubgroups_{0};
-  bool subscribeDoneDelivered_{false};
+  bool publishDoneDelivered_{false};
   bool allDataCallbackSent_{false};
 
  public:
@@ -212,8 +212,7 @@ class ObjectReceiver : public TrackConsumer,
   // 1. SUBSCRIBE_DONE has been received
   // 2. All subgroup streams have closed
   void maybeFireAllDataReceived() {
-    if (!allDataCallbackSent_ && subscribeDoneDelivered_ &&
-        openSubgroups_ == 0) {
+    if (!allDataCallbackSent_ && publishDoneDelivered_ && openSubgroups_ == 0) {
       allDataCallbackSent_ = true;
       callback_->onAllDataReceived();
     }
@@ -246,10 +245,10 @@ class ObjectReceiver : public TrackConsumer,
     return folly::unit;
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) override {
-    callback_->onSubscribeDone(std::move(subDone));
-    subscribeDoneDelivered_ = true;
+  folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone pubDone) override {
+    callback_->onPublishDone(std::move(pubDone));
+    publishDoneDelivered_ = true;
     maybeFireAllDataReceived();
     return folly::unit;
   }

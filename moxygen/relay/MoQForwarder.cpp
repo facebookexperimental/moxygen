@@ -212,7 +212,7 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
 
 void MoQForwarder::drainSubscriber(
     const std::shared_ptr<MoQSession>& session,
-    SubscribeDone subDone,
+    PublishDone pubDone,
     const std::string& callsite) {
   XLOG(DBG1) << __func__ << " from " << callsite
              << " session=" << session.get();
@@ -225,26 +225,26 @@ void MoQForwarder::drainSubscriber(
 
   auto& subscriber = *subIt->second;
 
-  // Forward the subscribeDone message WITHOUT resetting subgroups
-  subDone.requestID = subscriber.requestID;
-  subscriber.trackConsumer->subscribeDone(std::move(subDone));
+  // Forward the publishDone message WITHOUT resetting subgroups
+  pubDone.requestID = subscriber.requestID;
+  subscriber.trackConsumer->publishDone(std::move(pubDone));
 
   // If no open subgroups, delegate to removeSubscriberIt for cleanup
   if (subscriber.subgroups.empty()) {
-    // Pass std::nullopt for subDone since we already forwarded it above
+    // Pass std::nullopt for pubDone since we already forwarded it above
     removeSubscriberIt(subIt, std::nullopt, callsite);
     return;
   }
 
-  // Otherwise, mark receivedSubscribeDone and wait for subgroups to close
-  subscriber.receivedSubscribeDone_ = true;
+  // Otherwise, mark receivedPublishDone and wait for subgroups to close
+  subscriber.receivedPublishDone_ = true;
   XLOG(DBG1) << "Subscriber " << &subscriber << " is draining with "
              << subscriber.subgroups.size() << " open subgroups";
 }
 
 void MoQForwarder::removeSubscriber(
     const std::shared_ptr<MoQSession>& session,
-    std::optional<SubscribeDone> subDone,
+    std::optional<PublishDone> pubDone,
     const std::string& callsite) {
   XLOG(DBG1) << __func__ << " from " << callsite
              << " session=" << session.get();
@@ -254,7 +254,7 @@ void MoQForwarder::removeSubscriber(
                   << " sess=" << session;
     return;
   }
-  removeSubscriberIt(subIt, std::move(subDone), callsite);
+  removeSubscriberIt(subIt, std::move(pubDone), callsite);
 }
 
 void MoQForwarder::checkAndFireOnEmpty() {
@@ -271,16 +271,16 @@ void MoQForwarder::checkAndFireOnEmpty() {
 
 void MoQForwarder::removeSubscriberIt(
     folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator subIt,
-    std::optional<SubscribeDone> subDone,
+    std::optional<PublishDone> pubDone,
     const std::string& callsite) {
   auto& subscriber = *subIt->second;
   XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
   for (auto& subgroup : subscriber.subgroups) {
     subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
   }
-  if (subDone) {
-    subDone->requestID = subscriber.requestID;
-    subscriber.trackConsumer->subscribeDone(std::move(*subDone));
+  if (pubDone) {
+    pubDone->requestID = subscriber.requestID;
+    subscriber.trackConsumer->publishDone(std::move(*pubDone));
   }
 
   if (subscriber.shouldForward) {
@@ -309,14 +309,14 @@ bool MoQForwarder::checkRange(const Subscriber& sub) {
     // future
     return false;
   } else if (*largest_ > sub.range.end) {
-    // now past, send subscribeDone
+    // now past, send publishDone
     // TOOD: maybe this is too early for a relay.
     XLOG(DBG4) << "removeSubscriber from checkRange";
     removeSubscriber(
         sub.session,
-        SubscribeDone{
+        PublishDone{
             sub.requestID,
-            SubscribeDoneStatusCode::SUBSCRIPTION_ENDED,
+            PublishDoneStatusCode::SUBSCRIPTION_ENDED,
             0, // filled in by session
             ""},
         "checkRange");
@@ -333,9 +333,9 @@ void MoQForwarder::removeSubscriberOnError(
             << " err=" << err.what();
   removeSubscriber(
       sub.session,
-      SubscribeDone{
+      PublishDone{
           sub.requestID,
-          SubscribeDoneStatusCode::INTERNAL_ERROR,
+          PublishDoneStatusCode::INTERNAL_ERROR,
           0, // filled in by session
           err.what()},
       callsite);
@@ -410,19 +410,19 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
   });
 }
 
-folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::subscribeDone(
-    SubscribeDone subDone) {
-  XLOG(DBG1) << __func__ << " subDone reason=" << subDone.reasonPhrase;
+folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::publishDone(
+    PublishDone pubDone) {
+  XLOG(DBG1) << __func__ << " pubDone reason=" << pubDone.reasonPhrase;
   draining_ = true;
   forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     drainSubscriber(
         sub->session,
-        SubscribeDone{
+        PublishDone{
             sub->requestID,
-            subDone.statusCode,
+            pubDone.statusCode,
             0, // filled in by session
-            subDone.reasonPhrase},
-        "subscribeDone");
+            pubDone.reasonPhrase},
+        "publishDone");
   });
   // Cleanup/draining operation - succeed even with no subscribers
   return folly::unit;

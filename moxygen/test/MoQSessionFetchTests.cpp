@@ -49,7 +49,7 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->datagram(
         ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -70,7 +70,7 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
         EXPECT_EQ(header.length, 11);
         return folly::unit;
       });
-  expectSubscribeDone();
+  expectPublishDone();
   folly::coro::Baton fetchBaton;
   EXPECT_CALL(
       *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
@@ -89,7 +89,7 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
       FetchType::RELATIVE_JOINING);
   EXPECT_FALSE(res.subscribeResult.hasError());
   EXPECT_FALSE(res.fetchResult.hasError());
-  co_await subscribeDone_;
+  co_await publishDone_;
   co_await fetchBaton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -115,7 +115,7 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
           ObjectHeader(group, 0, 0, 0, 11),
           folly::IOBuf::copyBuffer("hello world"));
     }
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -139,7 +139,7 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
         EXPECT_EQ(header.length, 11);
         return folly::unit;
       });
-  expectSubscribeDone();
+  expectPublishDone();
   folly::coro::Baton fetchBaton;
   for (uint32_t group = 2; group < 6; group++) {
     EXPECT_CALL(
@@ -160,7 +160,7 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
       FetchType::ABSOLUTE_JOINING);
   EXPECT_FALSE(res.subscribeResult.hasError());
   EXPECT_FALSE(res.fetchResult.hasError());
-  co_await subscribeDone_;
+  co_await publishDone_;
   co_await fetchBaton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

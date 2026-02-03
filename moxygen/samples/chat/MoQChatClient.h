@@ -68,7 +68,7 @@ class MoQChatClient : public Publisher,
 
   void publishLoop();
   folly::coro::Task<void> subscribeToUser(TrackNamespace trackNamespace);
-  void subscribeDone(SubscribeDone subDone);
+  void publishDone(PublishDone pubDone);
 
   [[nodiscard]] std::vector<std::string> chatPrefix() const {
     return {"moq-chat", chatID_};

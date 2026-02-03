@@ -167,7 +167,7 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<SubscribeDone, ErrorCode> parseSubscribeDone(
+  folly::Expected<PublishDone, ErrorCode> parsePublishDone(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -467,9 +467,9 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const SubscribeOk& subscribeOk) const noexcept;
 
-  WriteResult writeSubscribeDone(
+  WriteResult writePublishDone(
       folly::IOBufQueue& writeBuf,
-      const SubscribeDone& subscribeDone) const noexcept;
+      const PublishDone& publishDone) const noexcept;
 
   WriteResult writeUnsubscribe(
       folly::IOBufQueue& writeBuf,

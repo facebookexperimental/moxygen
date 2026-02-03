@@ -231,7 +231,7 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
-                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                EXPECT_CALL(*mockConsumer, publishDone(_))
                     .WillOnce(testing::Return(folly::unit));
 
                 // Create the PublishOk directly instead of using a coroutine
@@ -565,7 +565,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
-                EXPECT_CALL(*trackConsumer, subscribeDone(_))
+                EXPECT_CALL(*trackConsumer, publishDone(_))
                     .WillOnce(testing::Return(folly::unit));
 
                 // Verify that data is not delivered until PUBLISH_OK is
@@ -662,7 +662,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
-                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                EXPECT_CALL(*mockConsumer, publishDone(_))
                     .WillOnce(testing::Return(folly::unit));
 
                 // Return a PublishOk with a mismatched requestID to simulate a
@@ -723,7 +723,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
-                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                EXPECT_CALL(*mockConsumer, publishDone(_))
                     .WillOnce(testing::Return(folly::unit));
 
                 // Create PublishOk with delivery timeout parameter
@@ -830,7 +830,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithZeroDeliveryTimeout) {
                         testing::Return(
                             folly::Expected<folly::Unit, MoQPublishError>(
                                 folly::unit)));
-                EXPECT_CALL(*mockConsumer, subscribeDone(_))
+                EXPECT_CALL(*mockConsumer, publishDone(_))
                     .WillOnce(testing::Return(folly::unit));
 
                 PublishOk publishOk{

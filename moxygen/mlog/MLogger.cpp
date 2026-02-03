@@ -550,7 +550,7 @@ void MLogger::logFetchError(
 }
 
 void MLogger::logPublishDone(
-    const SubscribeDone& req,
+    const PublishDone& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTPublishDone>();
   baseMsg->requestId = req.requestID.value;

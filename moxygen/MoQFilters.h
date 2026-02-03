@@ -36,9 +36,9 @@ class TrackConsumerFilter : public TrackConsumer {
     return downstream_->datagram(header, std::move(payload));
   }
 
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) override {
-    return downstream_->subscribeDone(std::move(subDone));
+  folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone pubDone) override {
+    return downstream_->publishDone(std::move(pubDone));
   }
 
   void setDeliveryCallback(

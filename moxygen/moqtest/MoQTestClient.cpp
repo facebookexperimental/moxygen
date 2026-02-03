@@ -324,7 +324,7 @@ void MoQTestClient::onAllDataReceived() {
   // For non-datagram: success == scoreboard.empty()
   if (!expectedObjects_.empty()) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: SubscribeDone recieved while "
+        << "MoQTest verification result: FAILURE! reason: PublishDone recieved while "
         << expectedObjects_.size() << " objects are still expected";
     for (const auto& [group, objId] : expectedObjects_) {
       XLOG(ERR) << "  Missing object: group=" << group << " id=" << objId;

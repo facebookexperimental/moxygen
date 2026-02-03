@@ -73,7 +73,7 @@ inline Subscriber::PublishResult makePublishOkResult(
           testing::Return(
               folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
   if (expectDone) {
-    EXPECT_CALL(*mockConsumer, subscribeDone(testing::_))
+    EXPECT_CALL(*mockConsumer, publishDone(testing::_))
         .WillOnce(testing::Return(folly::unit));
   }
 
@@ -102,7 +102,7 @@ Fetch getFetch(AbsoluteLocation start, AbsoluteLocation end);
 
 SubscribeRequest getSubscribe(const FullTrackName& ftn);
 
-SubscribeDone getTrackEndedSubscribeDone(RequestID id);
+PublishDone getTrackEndedPublishDone(RequestID id);
 
 TrackStatus getTrackStatus();
 
@@ -204,7 +204,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
       MoQControlCodec::Direction direction = MoQControlCodec::Direction::SERVER,
       const std::optional<SubscribeErrorCode>& error = std::nullopt);
 
-  void expectSubscribeDone(
+  void expectPublishDone(
       MoQControlCodec::Direction recipient =
           MoQControlCodec::Direction::CLIENT);
 
@@ -247,7 +247,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   TrackAlias nextAlias_{12345};
   std::shared_ptr<testing::StrictMock<MockFetchConsumer>> fetchCallback_;
   std::shared_ptr<testing::StrictMock<MockTrackConsumer>> subscribeCallback_;
-  folly::coro::Baton subscribeDone_;
+  folly::coro::Baton publishDone_;
   std::shared_ptr<MockSubscriberStats> clientSubscriberStatsCallback_;
   std::shared_ptr<MockPublisherStats> clientPublisherStatsCallback_;
   std::shared_ptr<MockSubscriberStats> serverSubscriberStatsCallback_;

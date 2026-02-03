@@ -218,9 +218,9 @@ void SubscriberState::Callback::onError(ResetStreamErrorCode code) {
   state_.testClient_.recordReset();
 }
 
-void SubscriberState::Callback::onSubscribeDone(SubscribeDone done) {
+void SubscriberState::Callback::onPublishDone(PublishDone done) {
   XLOG(DBG1) << "Subscriber " << state_.id_
-             << " received SubscribeDone - status: "
+             << " received PublishDone - status: "
              << static_cast<uint32_t>(done.statusCode)
              << ", reason: " << done.reasonPhrase;
 
@@ -228,14 +228,13 @@ void SubscriberState::Callback::onSubscribeDone(SubscribeDone done) {
   state_.subHandle_.reset();
 
   // Only signal completion if track ended naturally
-  if (done.statusCode == SubscribeDoneStatusCode::TRACK_ENDED) {
+  if (done.statusCode == PublishDoneStatusCode::TRACK_ENDED) {
     XLOG(DBG1) << "Subscriber " << state_.id_ << " - track ended naturally";
     state_.testClient_.completed();
   } else {
     // Other status codes (errors, going away, etc.) don't end the test
-    XLOG(DBG1)
-        << "Subscriber " << state_.id_
-        << " - SubscribeDone with non-TRACK_ENDED status, not ending test";
+    XLOG(DBG1) << "Subscriber " << state_.id_
+               << " - PublishDone with non-TRACK_ENDED status, not ending test";
   }
 }
 
@@ -361,7 +360,7 @@ folly::coro::Task<void> MoQPerfTestClient::run() {
     XLOG(INFO) << "Track restart detected - stopping subscriber additions, "
                << subscribers_.size() << " subscribers remaining";
   } else if (numCompleted_ > 0) {
-    XLOG(INFO) << "Track ended (SubscribeDone received) - test complete, "
+    XLOG(INFO) << "Track ended (PublishDone received) - test complete, "
                << subscribers_.size() << " subscribers remaining";
   } else if (std::chrono::steady_clock::now() >= hardDeadline) {
     XLOG(INFO) << "Hard deadline reached (duration + 5s) - forcing exit, "

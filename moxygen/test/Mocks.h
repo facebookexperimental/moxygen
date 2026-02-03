@@ -30,7 +30,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onSubscribeOk, (SubscribeOk subscribeOk));
   MOCK_METHOD(void, onRequestOk, (RequestOk reqOk, FrameType frameType));
   MOCK_METHOD(void, onRequestError, (RequestError error, FrameType frameType));
-  MOCK_METHOD(void, onSubscribeDone, (SubscribeDone subscribeDone));
+  MOCK_METHOD(void, onPublishDone, (PublishDone publishDone));
   MOCK_METHOD(void, onUnsubscribe, (Unsubscribe unsubscribe));
   MOCK_METHOD(void, onPublish, (PublishRequest publish));
   MOCK_METHOD(void, onPublishOk, (PublishOk publishOk));
@@ -125,8 +125,8 @@ class MockTrackConsumer : public TrackConsumer {
 
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
-      subscribeDone,
-      (SubscribeDone),
+      publishDone,
+      (PublishDone),
       (override));
 };
 
@@ -366,7 +366,7 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onUnsubscribe, (), (override));
 
-  MOCK_METHOD(void, onSubscribeDone, (SubscribeDoneStatusCode), (override));
+  MOCK_METHOD(void, onPublishDone, (PublishDoneStatusCode), (override));
 
   MOCK_METHOD(void, onSubscriptionStreamOpened, (), (override));
 
@@ -421,7 +421,7 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
 
   MOCK_METHOD(void, onUnsubscribe, (), (override));
 
-  MOCK_METHOD(void, onSubscribeDone, (SubscribeDoneStatusCode), (override));
+  MOCK_METHOD(void, onPublishDone, (PublishDoneStatusCode), (override));
 
   MOCK_METHOD(void, onSubscriptionStreamOpened, (), (override));
 

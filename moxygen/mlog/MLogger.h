@@ -119,7 +119,7 @@ class MLogger {
       const FetchError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishDone(
-      const SubscribeDone& req,
+      const PublishDone& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logMaxRequestId(
       const uint64_t requestId,

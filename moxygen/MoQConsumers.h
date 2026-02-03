@@ -166,8 +166,8 @@ class TrackConsumer {
 
   // Inform the consumer that the publisher will not open any new subgroups or
   // send any new datagrams for this track.
-  virtual folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) = 0;
+  virtual folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone pubDone) = 0;
 
   // Set a callback to be notified when objects are delivered.
   virtual void setDeliveryCallback(std::shared_ptr<DeliveryCallback> callback) {

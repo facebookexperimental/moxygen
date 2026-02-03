@@ -20,7 +20,7 @@ CO_TEST_P_X(MoQSessionTest, ServerInitiatedSubscribe) {
           auto sgp = pub->beginSubgroup(0, 0, 0).value();
           sgp->object(0, moxygen::test::makeBuf(10));
           sgp->object(1, moxygen::test::makeBuf(10), noExtensions(), true);
-          pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
         co_return makeSubscribeOkResult(sub);
       },
@@ -33,10 +33,10 @@ CO_TEST_P_X(MoQSessionTest, ServerInitiatedSubscribe) {
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*sg1, object(1, _, _, true))
       .WillOnce(testing::Return(folly::unit));
-  expectSubscribeDone(MoQControlCodec::Direction::SERVER);
+  expectPublishDone(MoQControlCodec::Direction::SERVER);
   auto res = co_await serverSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
-  co_await subscribeDone_;
+  co_await publishDone_;
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
@@ -53,7 +53,7 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
         SubscribeErrorCode::UNAUTHORIZED);
     expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
       eventBase_.add([pub, sub] {
-        pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID));
       });
       co_return makeSubscribeOkResult(sub);
     });
@@ -97,7 +97,7 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
   EXPECT_EQ(serverSession_->maxRequestID(), expectedSubId);
 
   // subscribe again but this time we get a DONE
-  EXPECT_CALL(*trackPublisher2, subscribeDone(_))
+  EXPECT_CALL(*trackPublisher2, publishDone(_))
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeSuccess());
   res = co_await clientSession_->subscribe(
@@ -107,8 +107,8 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
   EXPECT_EQ(serverSession_->maxRequestID(), expectedSubId);
 
   // subscribe three more times, last one should fail, the first two will get
-  // subscribeDone via the session closure
-  EXPECT_CALL(*trackPublisher3, subscribeDone(_))
+  // publishDone via the session closure
+  EXPECT_CALL(*trackPublisher3, publishDone(_))
       .WillOnce(testing::Return(folly::unit))
       .WillOnce(testing::Return(folly::unit));
 
@@ -129,7 +129,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
   folly::coro::Baton subscribeUpdateProcessed;
 
-  expectSubscribeDone();
+  expectPublishDone();
   expectSubscribe(
       [&mockSubscriptionHandle, &trackConsumer, &subscribeUpdateProcessed](
           auto sub, auto pub) -> TaskSubscribeResult {
@@ -165,9 +165,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
   // Wait for subscribe update to be processed
   co_await subscribeUpdateProcessed;
 
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, SubscribeForwardingFalse) {
@@ -180,16 +180,16 @@ CO_TEST_P_X(MoQSessionTest, SubscribeForwardingFalse) {
     EXPECT_TRUE(pubResult2.hasError());
     auto pubResult3 = pub->beginSubgroup(0, 0, 0);
     EXPECT_TRUE(pubResult3.hasError());
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
-  expectSubscribeDone();
+  expectPublishDone();
   auto subscribeRequest = getSubscribe(kTestTrackName);
   subscribeRequest.forward = false;
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
-  co_await subscribeDone_;
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
@@ -206,7 +206,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
       ? std::optional<AbsoluteLocation>(AbsoluteLocation{100, 200})
       : std::optional<AbsoluteLocation>(AbsoluteLocation{0, 0});
 
-  expectSubscribeDone();
+  expectPublishDone();
   expectSubscribe(
       [&subgroupConsumer,
        &trackConsumer,
@@ -297,12 +297,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   auto pubResult = subgroupConsumer->object(1, moxygen::test::makeBuf(10));
   EXPECT_TRUE(pubResult.hasError());
 
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
+CO_TEST_P_X(MoQSessionTest, PublishDoneStreamCount) {
   co_await setupMoQSession();
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
     eventBase_.add([this, pub, sub] {
@@ -319,7 +319,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
       auto sgp = pub->beginSubgroup(0, 1, 0).value();
       sgp->object(1, moxygen::test::makeBuf(10));
       sgp->object(2, moxygen::test::makeBuf(10), noExtensions(), true);
-      pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     });
     co_return makeSubscribeOkResult(sub);
   });
@@ -335,28 +335,28 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneStreamCount) {
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*sg2, object(2, _, _, true))
       .WillOnce(testing::Return(folly::unit));
-  expectSubscribeDone();
+  expectPublishDone();
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
-  co_await subscribeDone_;
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, SubscribeDoneFromSubscribe) {
+CO_TEST_P_X(MoQSessionTest, PublishDoneFromSubscribe) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub);
   });
-  expectSubscribeDone();
+  expectPublishDone();
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
-  co_await subscribeDone_;
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, SubscribeDoneAPIErrors) {
+CO_TEST_P_X(MoQSessionTest, PublishDoneAPIErrors) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     // All these APIs fail after SUBSCRIBE_DONE
     EXPECT_EQ(
         pub->beginSubgroup(1, 1, 1).error().code, MoQPublishError::API_ERROR);
@@ -368,17 +368,15 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneAPIErrors) {
             .code,
         MoQPublishError::API_ERROR);
     EXPECT_EQ(
-        pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID))
-            .error()
-            .code,
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID)).error().code,
         MoQPublishError::API_ERROR);
     co_return makeSubscribeOkResult(sub);
   });
 
-  expectSubscribeDone();
+  expectPublishDone();
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
-  co_await subscribeDone_;
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
@@ -391,11 +389,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
         folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN));
     EXPECT_EQ(sub.params.at(0).asAuthToken.tokenValue, "auth_token_value");
 
-    pub->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub);
   });
 
-  expectSubscribeDone();
+  expectPublishDone();
 
   SubscribeRequest subscribeRequest = getSubscribe(kTestTrackName);
   subscribeRequest.params.insertParam(Parameter(
@@ -406,7 +404,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeWithParams) {
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
-  co_await subscribeDone_;
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
@@ -558,10 +556,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKAfterSubgroup) {
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
   co_await objectDelivered;
-  expectSubscribeDone();
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  expectPublishDone();
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(
@@ -623,10 +621,10 @@ CO_TEST_P_X(
   EXPECT_EQ(payloadRes.error().code, MoQPublishError::CANCELLED);
 
   // The app should not get onSubgroup or object (enforced by StrictMock above)
-  expectSubscribeDone();
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  expectPublishDone();
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -669,10 +667,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKArrivesOneByteAtATime) {
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
 
-  expectSubscribeDone();
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  expectPublishDone();
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
@@ -776,7 +774,7 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
   // This don't get called by session
   clientSubscriberStatsCallback_->recordSubscribeLatency(0);
 }
-CO_TEST_P_X(MoQSessionTest, UnsubscribeWithinSubscribeDone) {
+CO_TEST_P_X(MoQSessionTest, UnsubscribeWithinPublishDone) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -796,19 +794,19 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeWithinSubscribeDone) {
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribe());
 
-  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Invoke([&](const auto&) {
-        subscribeDone_.post();
+        publishDone_.post();
         subscribeHandler->unsubscribe();
         return folly::unit;
       }));
 
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
+CO_TEST_P_X(MoQSessionTest, PublishDoneIgnoredAfterClose) {
   co_await setupMoQSession();
 
   // Set up a subscription
@@ -821,7 +819,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
         ObjectHeader(0, 0, 0, 0, 11), folly::IOBuf::copyBuffer("hello world"));
 
     handle = std::move(pub);
-    handle->subscribeDone(getTrackEndedSubscribeDone(reqID));
+    handle->publishDone(getTrackEndedPublishDone(reqID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
 
@@ -829,10 +827,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDoneIgnoredAfterClose) {
   EXPECT_CALL(*subscribeCallback_, datagram(_, _))
       .WillOnce(testing::Invoke([&](auto, auto) {
         clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-        handle->subscribeDone(getTrackEndedSubscribeDone(reqID));
+        handle->publishDone(getTrackEndedPublishDone(reqID));
         return folly::unit;
       }));
-  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Return(folly::unit));
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
@@ -850,7 +848,7 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
   folly::coro::Baton subscribeUpdateProcessed;
 
-  expectSubscribeDone();
+  expectPublishDone();
   expectSubscribe(
       [&mockSubscriptionHandle,
        &trackConsumer,
@@ -913,9 +911,9 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   // Wait for subscribe update to be processed
   co_await subscribeUpdateProcessed;
 
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDone_;
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, ServerClosesDuringSubscribeHandler) {
@@ -980,10 +978,10 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeImmediatelyAfterSubscribeReturns) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// When the SubscribeDone timeout handler fires, there may be no other
-// holders of the receive state. Unsubscribe from within subscribeDone
+// When the PublishDone timeout handler fires, there may be no other
+// holders of the receive state. Unsubscribe from within publishDone
 // handler will delete it.
-CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinSubscribeDoneHandler) {
+CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinPublishDoneHandler) {
   co_await setupMoQSession();
   MoQSettings moqSettings = clientSession_->getMoqSettings();
   moqSettings.publishDoneStreamCountTimeout = std::chrono::milliseconds(500);
@@ -998,7 +996,7 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinSubscribeDoneHandler) {
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
         serverWt_->writeHandles[2]->setImmediateDelivery(false);
         co_await folly::coro::co_reschedule_on_current_executor;
-        trackConsumer->subscribeDone(getTrackEndedSubscribeDone(sub.requestID));
+        trackConsumer->publishDone(getTrackEndedPublishDone(sub.requestID));
         co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
       });
 
@@ -1007,19 +1005,19 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinSubscribeDoneHandler) {
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   auto subscribeHandle = res.value();
 
-  // When subscribeDone is delivered, immediately call unsubscribe() from
+  // When publishDone is delivered, immediately call unsubscribe() from
   // handler
-  folly::coro::Baton subscribeDoneInvoked;
-  EXPECT_CALL(*subscribeCallback_, subscribeDone(_))
+  folly::coro::Baton publishDoneInvoked;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Invoke([&](const auto&) {
         subscribeHandle->unsubscribe();
-        subscribeDoneInvoked.post();
+        publishDoneInvoked.post();
         return folly::unit;
       }));
 
-  trackConsumer->subscribeDone(
-      getTrackEndedSubscribeDone(subscribeRequest.requestID));
-  co_await subscribeDoneInvoked;
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDoneInvoked;
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

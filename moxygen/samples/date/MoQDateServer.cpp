@@ -156,9 +156,9 @@ class DatePublisher : public Publisher {
 
   void removeSubscriber(
       std::shared_ptr<MoQSession> session,
-      std::optional<SubscribeDone> subDone,
+      std::optional<PublishDone> pubDone,
       const std::string& reason) {
-    forwarder_.removeSubscriber(std::move(session), std::move(subDone), reason);
+    forwarder_.removeSubscriber(std::move(session), std::move(pubDone), reason);
   }
 
   std::pair<uint64_t, uint64_t> now() {

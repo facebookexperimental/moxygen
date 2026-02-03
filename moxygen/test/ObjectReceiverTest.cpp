@@ -27,7 +27,7 @@ class MockObjectReceiverCallback : public ObjectReceiverCallback {
       (override));
   MOCK_METHOD(void, onEndOfStream, (), (override));
   MOCK_METHOD(void, onError, (ResetStreamErrorCode), (override));
-  MOCK_METHOD(void, onSubscribeDone, (SubscribeDone), (override));
+  MOCK_METHOD(void, onPublishDone, (PublishDone), (override));
   MOCK_METHOD(void, onAllDataReceived, (), (override));
 };
 
@@ -46,19 +46,19 @@ class ObjectReceiverTest : public Test {
   std::shared_ptr<MockObjectReceiverCallback> callback_;
 };
 
-TEST_F(ObjectReceiverTest, SubscribeDoneDelivery) {
+TEST_F(ObjectReceiverTest, PublishDoneDelivery) {
   auto receiver = std::make_shared<ObjectReceiver>(
       ObjectReceiver::Type::SUBSCRIBE, callback_);
 
-  SubscribeDone done;
+  PublishDone done;
   done.requestID = RequestID(1);
-  done.statusCode = SubscribeDoneStatusCode::SUBSCRIPTION_ENDED;
+  done.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
 
-  EXPECT_CALL(*callback_, onSubscribeDone(_)).Times(1);
+  EXPECT_CALL(*callback_, onPublishDone(_)).Times(1);
   // onAllDataReceived should be called since no subgroups are open
   EXPECT_CALL(*callback_, onAllDataReceived()).Times(1);
 
-  auto result = receiver->subscribeDone(std::move(done));
+  auto result = receiver->publishDone(std::move(done));
   EXPECT_TRUE(result.hasValue());
 }
 
@@ -74,17 +74,17 @@ TEST_F(ObjectReceiverTest, AllDataReceivedAfterSubgroupClose) {
   ASSERT_TRUE(subgroupResult.hasValue());
   auto subgroup = *subgroupResult;
 
-  // Deliver subscribeDone while subgroup is open
-  SubscribeDone done;
+  // Deliver publishDone while subgroup is open
+  PublishDone done;
   done.requestID = RequestID(1);
-  done.statusCode = SubscribeDoneStatusCode::SUBSCRIPTION_ENDED;
+  done.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
 
-  EXPECT_CALL(*callback_, onSubscribeDone(_)).Times(1);
+  EXPECT_CALL(*callback_, onPublishDone(_)).Times(1);
   // onAllDataReceived should NOT be called yet because subgroup is open
   EXPECT_CALL(*callback_, onAllDataReceived()).Times(0);
 
-  auto subDoneResult = receiver->subscribeDone(std::move(done));
-  EXPECT_TRUE(subDoneResult.hasValue());
+  auto pubDoneResult = receiver->publishDone(std::move(done));
+  EXPECT_TRUE(pubDoneResult.hasValue());
 
   // Now close the subgroup - onAllDataReceived should fire
   EXPECT_CALL(*callback_, onAllDataReceived()).Times(1);

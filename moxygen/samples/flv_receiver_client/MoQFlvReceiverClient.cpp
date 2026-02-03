@@ -287,7 +287,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
               << " Stream Error=" << folly::to_underlying(error) << std::endl;
     ;
   }
-  void onSubscribeDone(SubscribeDone) override {
+  void onPublishDone(PublishDone) override {
     baton.post();
   }
 

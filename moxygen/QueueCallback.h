@@ -39,7 +39,7 @@ class QueueCallback : public ObjectReceiverCallback {
   void onError(ResetStreamErrorCode) override {
     queue.enqueue(folly::makeUnexpected(folly::unit));
   }
-  void onSubscribeDone(SubscribeDone) override {
+  void onPublishDone(PublishDone) override {
     queue.enqueue(folly::makeUnexpected(folly::unit));
   }
 };

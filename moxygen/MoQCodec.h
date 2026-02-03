@@ -70,7 +70,7 @@ class MoQControlCodec : public MoQCodec {
     virtual void onSubscribeOk(SubscribeOk subscribeOk) = 0;
     virtual void onRequestOk(RequestOk ok, FrameType frameType) = 0;
     virtual void onRequestError(RequestError error, FrameType frameType) = 0;
-    virtual void onSubscribeDone(SubscribeDone subscribeDone) = 0;
+    virtual void onPublishDone(PublishDone publishDone) = 0;
     virtual void onUnsubscribe(Unsubscribe unsubscribe) = 0;
     virtual void onPublish(PublishRequest publish) = 0;
     virtual void onPublishOk(PublishOk publishOk) = 0;

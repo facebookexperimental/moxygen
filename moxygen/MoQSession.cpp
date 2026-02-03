@@ -1012,15 +1012,15 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       trackAlias_ = handle->subscribeOk().trackAlias;
     }
     subscriptionHandle_ = std::move(handle);
-    if (pendingSubscribeDone_) {
-      // If subscribeDone is called before publishHandler_->subscribe() returns,
+    if (pendingPublishDone_) {
+      // If publishDone is called before publishHandler_->subscribe() returns,
       // catch the DONE here and defer it until after we send subscribe OK.
-      auto subDone = std::move(*pendingSubscribeDone_);
-      subDone.streamCount = streamCount_;
-      pendingSubscribeDone_.reset();
+      auto pubDone = std::move(*pendingPublishDone_);
+      pubDone.streamCount = streamCount_;
+      pendingPublishDone_.reset();
       XCHECK(session_);
       subscriptionHandle_.reset();
-      session_->sendSubscribeDone(subDone);
+      session_->sendPublishDone(pubDone);
     }
   }
 
@@ -1182,16 +1182,16 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     subscriptionHandle_.reset();
   }
 
-  void terminatePublish(SubscribeDone subDone, ResetStreamErrorCode code)
+  void terminatePublish(PublishDone pubDone, ResetStreamErrorCode code)
       override {
     resetAllSubgroups(code);
     auto session = std::exchange(session_, nullptr);
     if (!subscriptionHandle_) {
       session->subscribeError(
-          {subDone.requestID, SubscribeErrorCode::INTERNAL_ERROR, "terminate"});
+          {pubDone.requestID, SubscribeErrorCode::INTERNAL_ERROR, "terminate"});
     } else {
       subscriptionHandle_.reset();
-      session->sendSubscribeDone(subDone);
+      session->sendPublishDone(pubDone);
     }
   }
 
@@ -1227,8 +1227,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       const ObjectHeader& header,
       Payload payload) override;
 
-  folly::Expected<folly::Unit, MoQPublishError> subscribeDone(
-      SubscribeDone subDone) override;
+  folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone pubDone) override;
 
   void setDeliveryCallback(std::shared_ptr<DeliveryCallback> callback) override;
 
@@ -1247,7 +1247,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
   std::optional<TrackAlias> trackAlias_;
-  std::optional<SubscribeDone> pendingSubscribeDone_;
+  std::optional<PublishDone> pendingPublishDone_;
   folly::F14FastMap<
       std::pair<uint64_t, uint64_t>,
       std::shared_ptr<StreamPublisherImpl>>
@@ -1306,7 +1306,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     }
   }
 
-  void terminatePublish(SubscribeDone, ResetStreamErrorCode error) override {
+  void terminatePublish(PublishDone, ResetStreamErrorCode error) override {
     reset(error);
   }
 
@@ -1367,9 +1367,9 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
 
   auto wt = getWebTransport();
   if (!wt || state_ != State::OPEN) {
-    XLOG(ERR) << "Trying to publish after subscribeDone";
+    XLOG(ERR) << "Trying to publish after publishDone";
     return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
+        MoQPublishError::API_ERROR, "Publish after publishDone"));
   }
   auto stream = wt->createUniStream();
   if (!stream) {
@@ -1418,7 +1418,7 @@ MoQSession::TrackPublisherImpl::awaitStreamCredit() {
   auto wt = getWebTransport();
   if (!wt || state_ != State::OPEN) {
     return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "awaitStreamCredit after subscribeDone"));
+        MoQPublishError::API_ERROR, "awaitStreamCredit after publishDone"));
   }
   return wt->awaitUniStreamCredit();
 }
@@ -1446,9 +1446,9 @@ void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
   // a timeout for the stream count discrepancy so that the peer doesn't
   // hang indefinitely waiting for the stream counts to equalize.
   terminatePublish(
-      SubscribeDone(
+      PublishDone(
           {requestID_,
-           SubscribeDoneStatusCode::TOO_FAR_BEHIND,
+           PublishDoneStatusCode::TOO_FAR_BEHIND,
            streamCount_,
            "peer is too far behind"}),
       ResetStreamErrorCode::INTERNAL_ERROR);
@@ -1526,9 +1526,9 @@ MoQSession::TrackPublisherImpl::datagram(
   }
   auto wt = getWebTransport();
   if (!wt || state_ != State::OPEN) {
-    XLOG(ERR) << "Trying to publish after subscribeDone";
+    XLOG(ERR) << "Trying to publish after publishDone";
     return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "Publish after subscribeDone"));
+        MoQPublishError::API_ERROR, "Publish after publishDone"));
   }
 
   if (logger_) {
@@ -1569,22 +1569,22 @@ MoQSession::TrackPublisherImpl::datagram(
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
-MoQSession::TrackPublisherImpl::subscribeDone(SubscribeDone subDone) {
+MoQSession::TrackPublisherImpl::publishDone(PublishDone pubDone) {
   if (state_ != State::OPEN || !session_) {
     return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::API_ERROR, "subscribeDone twice or after close"));
+        MoQPublishError::API_ERROR, "publishDone twice or after close"));
   }
   state_ = State::DONE;
-  subDone.requestID = requestID_;
+  pubDone.requestID = requestID_;
   if (!subscriptionHandle_) {
-    // subscribeDone called from inside the subscribe handler,
+    // publishDone called from inside the subscribe handler,
     // before subscribeOk.
-    pendingSubscribeDone_ = std::move(subDone);
+    pendingPublishDone_ = std::move(pubDone);
     return folly::unit;
   }
-  subDone.streamCount = streamCount_;
+  pubDone.streamCount = streamCount_;
   subscriptionHandle_.reset();
-  session_->sendSubscribeDone(subDone);
+  session_->sendPublishDone(pubDone);
   return folly::unit;
 }
 
@@ -1707,7 +1707,7 @@ class MoQSession::SubscribeTrackReceiveState
     // Cancel stream count timer if waiting for pending streams
     cancelStreamCountTimeout();
     // Clear pending subscribe done since we're unsubscribing
-    pendingSubscribeDone_.reset();
+    pendingPublishDone_.reset();
   }
 
   void processSubscribeOK(SubscribeOk subscribeOK) {
@@ -1723,10 +1723,10 @@ class MoQSession::SubscribeTrackReceiveState
     } else if (callback_) {
       // Clear pending to avoid false duplicate detection - we're already
       // cleaning up this subscription
-      pendingSubscribeDone_.reset();
-      processSubscribeDone(
+      pendingPublishDone_.reset();
+      processPublishDone(
           {requestID_,
-           SubscribeDoneStatusCode::SESSION_CLOSED,
+           PublishDoneStatusCode::SESSION_CLOSED,
            0, // forces immediately invoking the callback
            "closed locally"});
     } // else already unsubscribed or delivered done
@@ -1738,39 +1738,39 @@ class MoQSession::SubscribeTrackReceiveState
           currentStreamId_, MOQTStreamType::SUBGROUP_HEADER, Owner::REMOTE);
     }
     streamCount_++;
-    if (pendingSubscribeDone_ &&
-        streamCount_ >= pendingSubscribeDone_->streamCount) {
-      deliverSubscribeDoneAndRemove();
+    if (pendingPublishDone_ &&
+        streamCount_ >= pendingPublishDone_->streamCount) {
+      deliverPublishDoneAndRemove();
     }
   }
 
-  void processSubscribeDone(SubscribeDone subDone) {
+  void processPublishDone(PublishDone pubDone) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
     if (!callback_) {
       XLOG(DBG0)
-          << "processSubscribeDone: No callback (unsubscribed); removing state alias="
+          << "processPublishDone: No callback (unsubscribed); removing state alias="
           << alias_ << " requestID=" << requestID_;
-      // Unsubscribe raced with subscribeDone - just remove state
+      // Unsubscribe raced with publishDone - just remove state
       // TODO: I think alias_ will be wrong in SUBSCRIBE -> SUBSCRIBE_DONE
       // But that should be a different error.
       session_->removeSubscriptionState(alias_, requestID_);
       return;
     }
-    if (pendingSubscribeDone_) {
+    if (pendingPublishDone_) {
       XLOG(ERR) << "Duplicate SUBSCRIBE_DONE";
       session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
       return;
     }
 
-    pendingSubscribeDone_ = std::move(subDone);
-    if (pendingSubscribeDone_->streamCount > streamCount_) {
+    pendingPublishDone_ = std::move(pubDone);
+    if (pendingPublishDone_->streamCount > streamCount_) {
       // Still waiting for streams - schedule timeout
       XLOG(DBG0) << "Waiting for streams in flight, have=" << streamCount_
-                 << " need=" << pendingSubscribeDone_->streamCount
+                 << " need=" << pendingPublishDone_->streamCount
                  << " trackReceiveState=" << this;
       scheduleStreamCountTimeout();
     } else {
-      deliverSubscribeDoneAndRemove();
+      deliverPublishDoneAndRemove();
     }
   }
 
@@ -1788,25 +1788,25 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
  private:
-  void deliverSubscribeDoneAndRemove() {
+  void deliverPublishDoneAndRemove() {
     cancelStreamCountTimeout();
-    if (pendingSubscribeDone_) {
+    if (pendingPublishDone_) {
       if (callback_) {
         XLOG(DBG0)
-            << "deliverSubscribeDoneAndRemove: Delivering SUBSCRIBE_DONE to app; statusCode="
-            << folly::to_underlying(pendingSubscribeDone_->statusCode)
+            << "deliverPublishDoneAndRemove: Delivering SUBSCRIBE_DONE to app; statusCode="
+            << folly::to_underlying(pendingPublishDone_->statusCode)
             << " alias=" << alias_ << " requestID=" << requestID_;
         auto token = cancelSource_.getToken();
         auto cb = std::exchange(callback_, nullptr);
-        cb->subscribeDone(std::move(*pendingSubscribeDone_));
+        cb->publishDone(std::move(*pendingPublishDone_));
         if (token.isCancellationRequested()) {
           return;
         }
       }
-      pendingSubscribeDone_.reset();
+      pendingPublishDone_.reset();
     }
     XLOG(DBG4)
-        << "deliverSubscribeDoneAndRemove: Removing subscription state alias="
+        << "deliverPublishDoneAndRemove: Removing subscription state alias="
         << alias_ << " requestID=" << requestID_;
     session_->removeSubscriptionState(alias_, requestID_);
   }
@@ -1834,17 +1834,17 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
   void streamCountTimeoutExpired() {
-    XCHECK(pendingSubscribeDone_) << "Why is there no pendingSubscribeDone_";
+    XCHECK(pendingPublishDone_) << "Why is there no pendingPublishDone_";
     XLOG(DBG0) << "Delivering SUBSCRIBE_DONE after timeout, have="
                << streamCount_
-               << " expected=" << pendingSubscribeDone_->streamCount;
-    deliverSubscribeDoneAndRemove();
+               << " expected=" << pendingPublishDone_->streamCount;
+    deliverPublishDoneAndRemove();
   }
 
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<TrackConsumer> callback_;
   folly::coro::Promise<SubscribeResult> subscribePromise_;
-  std::optional<SubscribeDone> pendingSubscribeDone_;
+  std::optional<PublishDone> pendingPublishDone_;
   uint64_t streamCount_{0};
   uint64_t currentStreamId_{0};
 
@@ -2033,9 +2033,9 @@ void MoQSession::cleanup() {
   while (!pubTracks_.empty()) {
     auto pubTrack = pubTracks_.begin();
     pubTrack->second->terminatePublish(
-        SubscribeDone(
+        PublishDone(
             {pubTrack->first,
-             SubscribeDoneStatusCode::SESSION_CLOSED,
+             PublishDoneStatusCode::SESSION_CLOSED,
              0,
              "Session Closed"}),
         ResetStreamErrorCode::SESSION_CLOSED);
@@ -2044,14 +2044,14 @@ void MoQSession::cleanup() {
     auto sub = it->second;
     ++it;
     // For pending subscribe, delivers subscribeError
-    // For established subscriptions or pending publish, delivers subscribeDone
+    // For established subscriptions or pending publish, delivers publishDone
     // which can erase from subTracks_.
     sub->subscribeError({/*TrackReceiveState fills in subId*/ 0,
                          SubscribeErrorCode::INTERNAL_ERROR,
                          "session closed"});
   }
   subTracks_.clear();
-  // We parse a subscribeDone after cleanup
+  // We parse a publishDone after cleanup
   reqIdToTrackAlias_.clear();
   // TODO: there needs to be a way to queue an error in TrackReceiveState,
   // both from here, when close races the FETCH stream, and from readLoop
@@ -3237,7 +3237,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
     trackPublisher->unsubscribe();
     if (pubTracks_.erase(unsubscribe.requestID)) {
       retireRequestID(/*signalWriteLoop=*/true);
-    } // else, the caller invoked subscribeDone, which isn't needed but fine
+    } // else, the caller invoked publishDone, which isn't needed but fine
   }
 }
 
@@ -3600,22 +3600,22 @@ folly::coro::Task<void> MoQSession::handlePublish(
   publishError(publishErr);
 }
 
-void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
-  XLOG(DBG1) << "SubscribeDone id=" << subscribeDone.requestID
-             << " code=" << folly::to_underlying(subscribeDone.statusCode)
-             << " reason=" << subscribeDone.reasonPhrase;
+void MoQSession::onPublishDone(PublishDone publishDone) {
+  XLOG(DBG1) << "PublishDone id=" << publishDone.requestID
+             << " code=" << folly::to_underlying(publishDone.statusCode)
+             << " reason=" << publishDone.reasonPhrase;
 
   if (logger_) {
-    logger_->logPublishDone(subscribeDone, ControlMessageType::PARSED);
+    logger_->logPublishDone(publishDone, ControlMessageType::PARSED);
   }
   MOQ_SUBSCRIBER_STATS(
-      subscriberStatsCallback_, onSubscribeDone, subscribeDone.statusCode);
+      subscriberStatsCallback_, onPublishDone, publishDone.statusCode);
 
   // Handle regular subscription SUBSCRIBE_DONE
-  auto trackAliasIt = reqIdToTrackAlias_.find(subscribeDone.requestID);
+  auto trackAliasIt = reqIdToTrackAlias_.find(publishDone.requestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << subscribeDone.requestID
+    XLOG(ERR) << "No matching subscribe ID=" << publishDone.requestID
               << " sess=" << this;
     return;
   }
@@ -3624,13 +3624,13 @@ void MoQSession::onSubscribeDone(SubscribeDone subscribeDone) {
   auto trackReceiveStateIt = subTracks_.find(alias);
   if (trackReceiveStateIt != subTracks_.end()) {
     auto state = trackReceiveStateIt->second;
-    state->processSubscribeDone(std::move(subscribeDone));
-    // Note: State removal is handled by deliverSubscribeDoneAndRemove called
-    // from processSubscribeDone (when streams already arrived), onSubgroup
+    state->processPublishDone(std::move(publishDone));
+    // Note: State removal is handled by deliverPublishDoneAndRemove called
+    // from processPublishDone (when streams already arrived), onSubgroup
     // (when stream count reached), or timeout callback (when timeout expires)
   } else {
     XLOG(DFATAL) << "trackAliasIt but no trackReceiveStateIt for id="
-                 << subscribeDone.requestID << " sess=" << this;
+                 << publishDone.requestID << " sess=" << this;
   }
 }
 
@@ -4450,26 +4450,26 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   checkForCloseOnDrain();
 }
 
-void MoQSession::sendSubscribeDone(const SubscribeDone& subDone) {
+void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
-      publisherStatsCallback_, onSubscribeDone, subDone.statusCode);
-  auto it = pubTracks_.find(subDone.requestID);
+      publisherStatsCallback_, onPublishDone, pubDone.statusCode);
+  auto it = pubTracks_.find(pubDone.requestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "subscribeDone for invalid id=" << subDone.requestID
+    XLOG(ERR) << "publishDone for invalid id=" << pubDone.requestID
               << " sess=" << this;
     return;
   }
   pubTracks_.erase(it);
 
-  auto res = moqFrameWriter_.writeSubscribeDone(controlWriteBuf_, subDone);
+  auto res = moqFrameWriter_.writePublishDone(controlWriteBuf_, pubDone);
   if (!res) {
-    XLOG(ERR) << "writeSubscribeDone failed sess=" << this;
+    XLOG(ERR) << "writePublishDone failed sess=" << this;
     return;
   }
 
   if (logger_) {
-    logger_->logPublishDone(subDone);
+    logger_->logPublishDone(pubDone);
   }
   controlWriteEvent_.signal();
   retireRequestID(/*signalWriteLoop=*/false);
@@ -4510,12 +4510,12 @@ void MoQSession::subscribeUpdateError(
   // and clean up publisher state (regardless of REQUEST_ERROR write success)
   auto it = pubTracks_.find(subscriptionRequestID);
   if (it != pubTracks_.end()) {
-    SubscribeDone subDone{
+    PublishDone pubDone{
         subscriptionRequestID,
-        SubscribeDoneStatusCode::UPDATE_FAILED,
+        PublishDoneStatusCode::UPDATE_FAILED,
         static_cast<uint64_t>(requestError.errorCode),
         requestError.reasonPhrase};
-    it->second->terminatePublish(subDone, ResetStreamErrorCode::CANCELLED);
+    it->second->terminatePublish(pubDone, ResetStreamErrorCode::CANCELLED);
   } else {
     XLOG(ERR) << "subscribeUpdateError for invalid subscription id="
               << subscriptionRequestID << " sess=" << this;
