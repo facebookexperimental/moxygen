@@ -26,7 +26,6 @@ target_compile_options(
 target_link_libraries(
     moxygen PUBLIC
     Folly::folly
-    wangle::wangle
     proxygen::proxygen
     mvfst::mvfst_events
     mlogger

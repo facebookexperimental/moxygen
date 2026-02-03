@@ -38,7 +38,6 @@ target_compile_options(
 target_link_libraries(
   moqrelay PUBLIC
   Folly::folly
-  wangle::wangle
   proxygen::proxygen
   proxygen::proxygenhqserver
   moxygen
