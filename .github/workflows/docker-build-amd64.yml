@@ -28,7 +28,7 @@ jobs:
 
       - name: Build amd64 image
         run: |
-          docker build . -f docker/Dockerfile \
+          docker build --progress=plain . -f docker/Dockerfile \
             -t ghcr.io/${{ env.IMAGE_NAME }}:latest-amd64 \
             -t ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
 
