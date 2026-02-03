@@ -53,7 +53,14 @@ WORKDIR /app
 COPY . .
 
 # Run the build script using getdeps.py (already running as root)
-RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages moxygen
+# First install system dependencies to reduce compilation
+RUN ./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen
+
+# Limit parallelism to 2 jobs to avoid OOM on GitHub Actions runners (7GB RAM)
+RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages --num-jobs 2 --verbose moxygen 2>&1 || \
+    (echo "=== Build failed, showing logs ===" && \
+     find /tmp -name "*.log" -type f -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null; \
+     exit 1)
 RUN ./scripts/create-server-certs.sh
 
 # Set default environment variables
