@@ -45,8 +45,10 @@ RUN apt-get update && apt-get install -y \
     doxygen \
     python3 \
     python3-pip \
-    sudo \
-    && rm -rf /var/lib/apt/lists/*
+    sudo
+
+# Allow pip to install packages system-wide (safe in Docker container)                        
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 
 
 # Set up working directory
 WORKDIR /app
@@ -56,7 +58,7 @@ COPY . .
 
 # Run the build script using getdeps.py (already running as root)
 # First install system dependencies to reduce compilation
-RUN apt-get update && ./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen                                                                           
+RUN ./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen                                                                           
 
 # Limit parallelism to 2 jobs to avoid OOM on GitHub Actions runners (7GB RAM)
 RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages --num-jobs 2 --verbose moxygen 2>&1 || \
