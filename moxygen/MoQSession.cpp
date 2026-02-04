@@ -2393,6 +2393,51 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   controlWriteEvent_.signal();
 }
 
+class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
+ public:
+  MoQNamespacePublishHandle(
+      proxygen::WebTransport::StreamWriteHandle* writeHandle,
+      uint64_t negotiatedVersion)
+      : writeHandle_(writeHandle) {
+    moqFrameWriter_.initializeVersion(negotiatedVersion);
+  }
+
+  void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override {
+    Namespace ns;
+    ns.trackNamespaceSuffix = trackNamespaceSuffix;
+    auto writeResult = moqFrameWriter_.writeNamespace(writeBuf_, ns);
+    if (!writeResult) {
+      XLOG(ERR) << "writeNamespace failed";
+      return;
+    }
+    auto res = writeHandle_->writeStreamData(writeBuf_.move(), false, nullptr);
+    if (!res) {
+      XLOG(ERR) << "writeStreamData for NAMESPACE failed error="
+                << uint64_t(res.error());
+    }
+  }
+
+  void namespaceDoneMsg() override {
+    NamespaceDone namespaceDone;
+    auto writeResult =
+        moqFrameWriter_.writeNamespaceDone(writeBuf_, namespaceDone);
+    if (!writeResult) {
+      XLOG(ERR) << "writeNamespaceDone failed";
+      return;
+    }
+    auto res = writeHandle_->writeStreamData(writeBuf_.move(), true, nullptr);
+    if (!res) {
+      XLOG(ERR) << "writeStreamData for NAMESPACE_DONE failed error="
+                << uint64_t(res.error());
+    }
+  }
+
+ private:
+  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
+  MoQFrameWriter moqFrameWriter_;
+  folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
+};
+
 folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle,
     std::unique_ptr<folly::IOBuf> initialData) {
