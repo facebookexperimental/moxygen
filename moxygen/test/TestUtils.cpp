@@ -104,7 +104,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   // SubscribeUpdate
   SubscribeUpdate subscribeUpdate;
   subscribeUpdate.requestID = RequestID(0);
-  subscribeUpdate.subscriptionRequestID = RequestID(0);
+  subscribeUpdate.existingRequestID = RequestID(0);
   subscribeUpdate.start = AbsoluteLocation{1, 2};
   subscribeUpdate.endGroup = std::optional<uint64_t>(3);
   subscribeUpdate.priority = 255;

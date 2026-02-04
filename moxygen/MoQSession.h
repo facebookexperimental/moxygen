@@ -426,7 +426,7 @@ class MoQSession : public Subscriber,
   void subscribeUpdateOk(const RequestOk& requestOk);
   void subscribeUpdateError(
       const SubscribeUpdateError& requestError,
-      RequestID subscriptionRequestID);
+      RequestID existingRequestID);
   void sendPublishDone(const PublishDone& pubDone);
 
   folly::coro::Task<void> handleFetch(

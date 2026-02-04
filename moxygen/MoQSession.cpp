@@ -1073,7 +1073,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     session_->setRequestSession();
 
     auto updateRequestID = subscribeUpdate.requestID;
-    auto subscriptionRequestID = requestID_;
+    auto existingRequestID = requestID_;
 
     // Update delivery timeout if present
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
@@ -1082,13 +1082,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       XLOG(DBG6)
           << "MoQSession::TrackPublisherImpl::handleSubscribeUpdate: SETTING downstream timeout"
           << " timeout=" << *timeoutValue << "ms"
-          << " requestID=" << subscriptionRequestID;
+          << " requestID=" << existingRequestID;
       deliveryTimeoutManager_.setDownstreamTimeout(
           std::chrono::milliseconds(*timeoutValue));
     } else {
       XLOG(DBG6)
           << "MoQSession::TrackPublisherImpl::handleSubscribeUpdate: No delivery timeout in params or timeout=0"
-          << " requestID=" << subscriptionRequestID;
+          << " requestID=" << existingRequestID;
     }
 
     // Only update forward state if the parameter was explicitly provided
@@ -1112,17 +1112,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
                 updateRequestID,
                 RequestErrorCode::INTERNAL_ERROR,
                 updateResult.exception().what().toStdString()},
-            subscriptionRequestID);
+            existingRequestID);
         co_return;
       }
 
       if (updateResult->hasError()) {
         XLOG(ERR) << "subscribeUpdate failed: "
                   << updateResult->error().reasonPhrase
-                  << " requestID=" << subscriptionRequestID;
+                  << " requestID=" << existingRequestID;
         auto updateErr = std::move(updateResult->error());
         updateErr.requestID = updateRequestID; // In case app got it wrong
-        session_->subscribeUpdateError(updateErr, subscriptionRequestID);
+        session_->subscribeUpdateError(updateErr, existingRequestID);
       } else {
         // send REQUEST_OK with LARGEST_OBJECT if available
         // TODO: Do we relay the params we got from the app?
@@ -3199,10 +3199,10 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.requestID
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeUpdate);
-  auto subscriptionRequestID = subscribeUpdate.requestID;
+  auto existingRequestID = subscribeUpdate.requestID;
 
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
-    subscriptionRequestID = subscribeUpdate.subscriptionRequestID;
+    existingRequestID = subscribeUpdate.existingRequestID;
 
     // RequestID meaning has changed, check validity
     if (closeSessionIfRequestIDInvalid(
@@ -3220,22 +3220,21 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     logger_->logSubscribeUpdate(subscribeUpdate, ControlMessageType::PARSED);
   }
 
-  if (closeSessionIfRequestIDInvalid(
-          subscriptionRequestID, false, false, false)) {
+  if (closeSessionIfRequestIDInvalid(existingRequestID, false, false, false)) {
     return;
   }
-  auto it = pubTracks_.find(subscriptionRequestID);
+  auto it = pubTracks_.find(existingRequestID);
   if (it == pubTracks_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << subscriptionRequestID
+    XLOG(ERR) << "No matching subscribe ID=" << existingRequestID
               << " sess=" << this;
     return;
   }
 
   it->second->setSubPriority(subscribeUpdate.priority);
   // TODO: update priority of tracks in flight
-  auto pubTrackIt = pubTracks_.find(subscriptionRequestID);
+  auto pubTrackIt = pubTracks_.find(existingRequestID);
   if (pubTrackIt == pubTracks_.end()) {
-    XLOG(ERR) << "SubscribeUpdate track not found id=" << subscriptionRequestID
+    XLOG(ERR) << "SubscribeUpdate track not found id=" << existingRequestID
               << " sess=" << this;
     return;
   }
@@ -3243,7 +3242,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
       std::static_pointer_cast<TrackPublisherImpl>(pubTrackIt->second);
   if (!trackPublisher) {
     XLOG(ERR) << "SubscriptionRequestID in SubscribeUpdate is for a FETCH, id="
-              << subscriptionRequestID << " sess=" << this;
+              << existingRequestID << " sess=" << this;
   } else {
     trackPublisher->onSubscribeUpdate(std::move(subscribeUpdate));
   }
@@ -3494,7 +3493,7 @@ class MoQSession::ReceiverSubscriptionHandle
               "Session closed"});
     }
 
-    subscribeUpdate.subscriptionRequestID = subscribeOk_->requestID;
+    subscribeUpdate.existingRequestID = subscribeOk_->requestID;
     if (getDraftMajorVersion(*(session_->getNegotiatedVersion())) >= 14) {
       subscribeUpdate.requestID = session_->getNextRequestID();
     } else {
@@ -4536,10 +4535,9 @@ void MoQSession::subscribeUpdateOk(const RequestOk& requestOk) {
 
 void MoQSession::subscribeUpdateError(
     const SubscribeUpdateError& requestError,
-    RequestID subscriptionRequestID) {
+    RequestID existingRequestID) {
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
-             << " subscriptionReqID=" << subscriptionRequestID
-             << " sess=" << this;
+             << " existingReqID=" << existingRequestID << " sess=" << this;
 
   auto res = moqFrameWriter_.writeRequestError(
       controlWriteBuf_, requestError, FrameType::SUBSCRIBE_UPDATE);
@@ -4553,17 +4551,17 @@ void MoQSession::subscribeUpdateError(
 
   // Terminate subscription with SUBSCRIBE_DONE (UPDATE_FAILED)
   // and clean up publisher state (regardless of REQUEST_ERROR write success)
-  auto it = pubTracks_.find(subscriptionRequestID);
+  auto it = pubTracks_.find(existingRequestID);
   if (it != pubTracks_.end()) {
     PublishDone pubDone{
-        subscriptionRequestID,
+        existingRequestID,
         PublishDoneStatusCode::UPDATE_FAILED,
         static_cast<uint64_t>(requestError.errorCode),
         requestError.reasonPhrase};
     it->second->terminatePublish(pubDone, ResetStreamErrorCode::CANCELLED);
   } else {
     XLOG(ERR) << "subscribeUpdateError for invalid subscription id="
-              << subscriptionRequestID << " sess=" << this;
+              << existingRequestID << " sess=" << this;
   }
 }
 
@@ -4618,10 +4616,10 @@ void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
   }
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeUpdate);
-  auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.subscriptionRequestID);
+  auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.existingRequestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching request ID=" << subUpdate.subscriptionRequestID
+    XLOG(ERR) << "No matching request ID=" << subUpdate.existingRequestID
               << " sess=" << this;
     return;
   }

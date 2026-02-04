@@ -865,10 +865,10 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
               .WillOnce(
                   testing::Invoke([&sub, &subscribeUpdateProcessed](
                                       const auto& actualUpdate) {
-                    // Verify that subscriptionRequestID has original requestID
+                    // Verify that existingRequestID has original requestID
                     // value
                     EXPECT_EQ(
-                        actualUpdate.subscriptionRequestID.value,
+                        actualUpdate.existingRequestID.value,
                         sub.requestID.value);
                     // Verify that requestID has been assigned by session
                     EXPECT_EQ(

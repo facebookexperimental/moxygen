@@ -952,9 +952,9 @@ struct SubscribeRequest {
   TrackRequestParameters params{FrameType::SUBSCRIBE};
 };
 
-struct SubscribeUpdate {
+struct RequestUpdate {
   RequestID requestID;
-  RequestID subscriptionRequestID;
+  RequestID existingRequestID;
   std::optional<AbsoluteLocation> start;
   std::optional<uint64_t> endGroup;
   uint8_t priority{kDefaultPriority};
@@ -963,6 +963,9 @@ struct SubscribeUpdate {
   std::optional<bool> forward;
   TrackRequestParameters params{FrameType::SUBSCRIBE_UPDATE};
 };
+
+// Backward compatibility alias
+using SubscribeUpdate = RequestUpdate;
 
 struct SubscribeOk {
   RequestID requestID;

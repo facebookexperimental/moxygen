@@ -282,7 +282,7 @@ void MLogger::logSubscribeUpdate(
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
   baseMsg->requestId = req.requestID.value;
-  baseMsg->subscriptionRequestId = req.subscriptionRequestID.value;
+  baseMsg->subscriptionRequestId = req.existingRequestID.value;
   if (req.start.has_value()) {
     baseMsg->startLocation.group = req.start->group;
     baseMsg->startLocation.object = req.start->object;

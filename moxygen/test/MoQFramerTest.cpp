@@ -1431,7 +1431,7 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
 
   SubscribeUpdate subscribeUpdate;
   subscribeUpdate.requestID = RequestID(123);
-  subscribeUpdate.subscriptionRequestID = RequestID(456);
+  subscribeUpdate.existingRequestID = RequestID(456);
   subscribeUpdate.start = AbsoluteLocation{10, 20};
   subscribeUpdate.endGroup = 30;
   subscribeUpdate.priority = 5;
@@ -1451,18 +1451,18 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   EXPECT_TRUE(parseResult.hasValue());
 
   if (getDraftMajorVersion(GetParam()) >= 14) {
-    // Version >= 14: Both requestID and subscriptionRequestID are
+    // Version >= 14: Both requestID and existingRequestID are
     // written/parsed
     EXPECT_EQ(parseResult->requestID.value, 123);
-    EXPECT_EQ(parseResult->subscriptionRequestID.value, 456);
+    EXPECT_EQ(parseResult->existingRequestID.value, 456);
   } else {
-    // Version < 14: Only requestID is on wire, subscriptionRequestID not set by
+    // Version < 14: Only requestID is on wire, existingRequestID not set by
     // parser
     EXPECT_EQ(
         parseResult->requestID.value,
         123); // First field on wire goes to requestID
     EXPECT_EQ(
-        parseResult->subscriptionRequestID.value,
+        parseResult->existingRequestID.value,
         0); // Not set by parser for v<14
   }
 
@@ -1486,7 +1486,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
 
   SubscribeUpdate subscribeUpdate;
   subscribeUpdate.requestID = RequestID(123);
-  subscribeUpdate.subscriptionRequestID = RequestID(456);
+  subscribeUpdate.existingRequestID = RequestID(456);
   subscribeUpdate.start = AbsoluteLocation{0, 0};
   subscribeUpdate.endGroup = 0; // Open-ended subscription
   subscribeUpdate.priority = kDefaultPriority;
@@ -1511,7 +1511,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   EXPECT_TRUE(parseResult.hasValue()) << "Failed to parse SUBSCRIBE_UPDATE";
 
   EXPECT_EQ(parseResult->requestID.value, 123);
-  EXPECT_EQ(parseResult->subscriptionRequestID.value, 456);
+  EXPECT_EQ(parseResult->existingRequestID.value, 456);
   EXPECT_EQ(parseResult->start->group, 0);
   EXPECT_EQ(parseResult->start->object, 0);
   EXPECT_EQ(parseResult->endGroup, 0);

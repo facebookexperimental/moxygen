@@ -1558,14 +1558,14 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
   length -= requestID->second;
 
   if (getDraftMajorVersion(*version_) >= 14) {
-    auto subscriptionRequestID =
+    auto existingRequestID =
         quic::follyutils::decodeQuicInteger(cursor, length);
-    if (!subscriptionRequestID) {
-      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on subscriptionRequestID";
+    if (!existingRequestID) {
+      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on existingRequestID";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeUpdate.subscriptionRequestID = subscriptionRequestID->first;
-    length -= subscriptionRequestID->second;
+    subscribeUpdate.existingRequestID = existingRequestID->first;
+    length -= existingRequestID->second;
   }
 
   if (getDraftMajorVersion(*version_) < 15) {
@@ -4232,7 +4232,7 @@ WriteResult MoQFrameWriter::writeSubscribeUpdate(
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);
   writeVarint(writeBuf, update.requestID.value, size, error);
   if (getDraftMajorVersion(*version_) >= 14) {
-    writeVarint(writeBuf, update.subscriptionRequestID.value, size, error);
+    writeVarint(writeBuf, update.existingRequestID.value, size, error);
   }
 
   std::vector<Parameter> requestSpecificParams;

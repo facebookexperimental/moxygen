@@ -60,7 +60,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.subscriptionRequestID}));
+                  .requestID = subscribeUpdate.existingRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
@@ -117,7 +117,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.subscriptionRequestID}));
+                  .requestID = subscribeUpdate.existingRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
@@ -192,7 +192,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.subscriptionRequestID}));
+                  .requestID = subscribeUpdate.existingRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
@@ -266,7 +266,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
       .WillOnce(
           testing::Return(
               SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.subscriptionRequestID}));
+                  .requestID = subscribeUpdate.existingRequestID}));
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
