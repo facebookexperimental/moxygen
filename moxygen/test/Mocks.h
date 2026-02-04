@@ -305,7 +305,7 @@ class MockPublisher : public Publisher {
   MOCK_METHOD(
       folly::coro::Task<SubscribeNamespaceResult>,
       subscribeNamespace,
-      (SubscribeNamespace),
+      (SubscribeNamespace, std::shared_ptr<NamespacePublishHandle>),
       (override));
 
   MOCK_METHOD(void, goaway, (Goaway), (override));

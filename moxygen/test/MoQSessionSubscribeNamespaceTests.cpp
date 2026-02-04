@@ -16,10 +16,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   co_await setupMoQSession();
 
   std::shared_ptr<MockSubscribeNamespaceHandle> mockSubscribeNamespaceHandle;
-  EXPECT_CALL(*serverPublisher, subscribeNamespace(_))
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [&mockSubscribeNamespaceHandle](auto subAnn)
+              [&mockSubscribeNamespaceHandle](auto subAnn, auto handler)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 mockSubscribeNamespaceHandle =
                     std::make_shared<MockSubscribeNamespaceHandle>(
@@ -31,8 +31,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeNamespaceSuccess());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeNamespaceSuccess());
-  auto publishNamespaceResult =
-      co_await clientSession_->subscribeNamespace(getSubscribeNamespace());
+  auto publishNamespaceResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
   EXPECT_FALSE(publishNamespaceResult.hasError());
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribeNamespace());
@@ -45,10 +45,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
 CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   co_await setupMoQSession();
 
-  EXPECT_CALL(*serverPublisher, subscribeNamespace(_))
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto subAnn)
+              [](auto subAnn, auto handler)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 SubscribeNamespaceError subAnnError{
                     subAnn.requestID,
@@ -63,8 +63,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   EXPECT_CALL(
       *serverPublisherStatsCallback_,
       onSubscribeNamespaceError(SubscribeNamespaceErrorCode::NOT_SUPPORTED));
-  auto subAnnResult =
-      co_await clientSession_->subscribeNamespace(getSubscribeNamespace());
+  auto subAnnResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
   EXPECT_TRUE(subAnnResult.hasError());
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

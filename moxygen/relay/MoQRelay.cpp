@@ -527,7 +527,9 @@ std::shared_ptr<TrackConsumer> MoQRelay::getSubscribeWriteback(
 }
 
 folly::coro::Task<Publisher::SubscribeNamespaceResult>
-MoQRelay::subscribeNamespace(SubscribeNamespace subNs) {
+MoQRelay::subscribeNamespace(
+    SubscribeNamespace subNs,
+    std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
   // check auth
   if (subNs.trackNamespacePrefix.empty()) {

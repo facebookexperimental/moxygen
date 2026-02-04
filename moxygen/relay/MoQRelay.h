@@ -39,7 +39,8 @@ class MoQRelay : public Publisher,
       std::shared_ptr<FetchConsumer> consumer) override;
 
   folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
-      SubscribeNamespace subAnn) override;
+      SubscribeNamespace subAnn,
+      std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
       PublishNamespace ann,

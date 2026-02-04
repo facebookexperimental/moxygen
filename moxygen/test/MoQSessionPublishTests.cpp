@@ -15,8 +15,8 @@ using testing::_;
 CO_TEST_P_X(MoQSessionTest, NoPublishHandler) {
   co_await setupMoQSession();
   serverSession_->setPublishHandler(nullptr);
-  auto subAnnResult =
-      co_await clientSession_->subscribeNamespace(getSubscribeNamespace());
+  auto subAnnResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
   EXPECT_TRUE(subAnnResult.hasError());
   auto res = co_await clientSession_->trackStatus(getTrackStatus());
   EXPECT_TRUE(res.hasError());

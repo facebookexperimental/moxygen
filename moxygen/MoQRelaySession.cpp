@@ -697,9 +697,11 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone unAnn) {
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
-// SubscribeNamespace subscriber methods
+// SubscribeAnnounces subscriber methods
 folly::coro::Task<Publisher::SubscribeNamespaceResult>
-MoQRelaySession::subscribeNamespace(SubscribeNamespace sa) {
+MoQRelaySession::subscribeNamespace(
+    SubscribeNamespace sa,
+    std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   const auto& trackNamespace = sa.trackNamespacePrefix;
@@ -796,7 +798,7 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
   setRequestSession();
   auto subAnnResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
-      publishHandler_->subscribeNamespace(subAnn)));
+      publishHandler_->subscribeNamespace(subAnn, nullptr)));
   if (subAnnResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subAnnResult.exception().what().toStdString();

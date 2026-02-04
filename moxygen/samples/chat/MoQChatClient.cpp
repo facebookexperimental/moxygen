@@ -86,7 +86,8 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         .forward = true,
     };
     subAnn.params.insertParam(getAuthParam(negotiatedVersion, username_));
-    auto sa = co_await moqClient_.getSession()->subscribeNamespace(subAnn);
+    auto sa =
+        co_await moqClient_.getSession()->subscribeNamespace(subAnn, nullptr);
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeNamespace success";
       folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });

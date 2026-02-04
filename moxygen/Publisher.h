@@ -151,12 +151,23 @@ class Publisher {
     std::optional<SubscribeNamespaceOk> subscribeNamespaceOk_;
   };
 
+  class NamespacePublishHandle {
+   public:
+    virtual ~NamespacePublishHandle() = default;
+
+    virtual void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) = 0;
+
+    virtual void namespaceDoneMsg() = 0;
+  };
+
   // Send/respond to SUBSCRIBE_NAMESPACE
   using SubscribeNamespaceResult = folly::Expected<
       std::shared_ptr<SubscribeNamespaceHandle>,
       SubscribeNamespaceError>;
   virtual folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
-      SubscribeNamespace subAnn) {
+      SubscribeNamespace subAnn,
+      std::shared_ptr<NamespacePublishHandle>
+          namespacePublishHandle /* draft 16+ */) {
     return folly::coro::makeTask<SubscribeNamespaceResult>(
         folly::makeUnexpected(
             SubscribeNamespaceError{

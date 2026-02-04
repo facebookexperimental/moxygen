@@ -163,7 +163,8 @@ class MoQTextClientMobile
 
   folly::coro::Task<MoQSession::SubscribeNamespaceResult> subscribeNamespace(
       SubscribeNamespace subAnn) {
-    auto res = co_await moqClient_->moqSession_->subscribeNamespace(subAnn);
+    auto res =
+        co_await moqClient_->moqSession_->subscribeNamespace(subAnn, nullptr);
     if (res.hasValue()) {
       subscribeNamespaceHandle_ = res.value();
     }

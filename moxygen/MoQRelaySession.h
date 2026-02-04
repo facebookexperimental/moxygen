@@ -47,7 +47,8 @@ class MoQRelaySession : public MoQSession {
           nullptr) override;
 
   folly::coro::Task<Publisher::SubscribeNamespaceResult> subscribeNamespace(
-      SubscribeNamespace subAnn) override;
+      SubscribeNamespace subAnn,
+      std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
  private:
   // Forward declarations for inner classes

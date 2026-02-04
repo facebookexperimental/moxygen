@@ -293,7 +293,7 @@ class MoQRelayTest : public ::testing::Test {
     SubscribeNamespace subNs;
     subNs.trackNamespacePrefix = nsPrefix;
     return withSessionContext(session, [&]() {
-      auto task = relay_->subscribeNamespace(std::move(subNs));
+      auto task = relay_->subscribeNamespace(std::move(subNs), nullptr);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
