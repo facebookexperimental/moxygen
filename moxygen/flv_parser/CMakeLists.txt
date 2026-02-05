@@ -8,6 +8,7 @@
 add_library(flvparser
     FlvCommon.cpp
     FlvReader.cpp
+    FlvCoder.cpp
     FlvWriter.cpp
     FlvStreamParser.cpp
 )
