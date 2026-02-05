@@ -46,7 +46,7 @@ struct MoQSettings {
   std::chrono::milliseconds versionNegotiationTimeout{std::chrono::seconds(2)};
   // Timeout for waiting for unknown alias resolution
   std::chrono::milliseconds unknownAliasTimeout{std::chrono::seconds(2)};
-  // Timeout for waiting for in-flight streams when SUBSCRIBE_DONE is received
+  // Timeout for waiting for in-flight streams when PUBLISH_DONE is received
   std::chrono::milliseconds publishDoneStreamCountTimeout{
       std::chrono::seconds(2)};
 };

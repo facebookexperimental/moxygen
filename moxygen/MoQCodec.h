@@ -119,7 +119,7 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_NAMESPACE_ERROR:
       case FrameType::PUBLISH_NAMESPACE_DONE:
       case FrameType::UNSUBSCRIBE:
-      case FrameType::SUBSCRIBE_DONE:
+      case FrameType::PUBLISH_DONE:
       case FrameType::PUBLISH:
       case FrameType::PUBLISH_OK:
       case FrameType::PUBLISH_ERROR:

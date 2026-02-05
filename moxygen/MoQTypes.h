@@ -143,7 +143,7 @@ enum class FrameType : uint64_t {
   NAMESPACE = 0x8,               // Draft 16 and above
   PUBLISH_NAMESPACE_DONE = 9,
   UNSUBSCRIBE = 0xA,
-  SUBSCRIBE_DONE = 0xB,
+  PUBLISH_DONE = 0xB,
   PUBLISH_NAMESPACE_CANCEL = 0xC,
   TRACK_STATUS = 0xD,
   TRACK_STATUS_OK = 0xE, // Draft 15 and below

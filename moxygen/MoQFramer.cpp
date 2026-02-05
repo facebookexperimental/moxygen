@@ -1820,7 +1820,7 @@ folly::Expected<PublishDone, ErrorCode> MoQFrameParser::parsePublishDone(
   publishDone.reasonPhrase = std::move(reas.value());
 
   CHECK(version_.has_value())
-      << "The version must be set before parsing SUBSCRIBE_DONE";
+      << "The version must be set before parsing PUBLISH_DONE";
   if (getDraftMajorVersion(*version_) <= 9) {
     if (length == 0) {
       XLOG(DBG4) << "parsePublishDone: UNDERFLOW on contentExists";
@@ -4425,7 +4425,7 @@ WriteResult MoQFrameWriter::writePublishDone(
       << "Version needs to be set to write subscribe done";
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_DONE, error);
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_DONE, error);
   writeVarint(writeBuf, publishDone.requestID.value, size, error);
   writeVarint(
       writeBuf, folly::to_underlying(publishDone.statusCode), size, error);

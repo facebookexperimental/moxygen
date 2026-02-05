@@ -357,7 +357,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDoneAPIErrors) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     pub->publishDone(getTrackEndedPublishDone(sub.requestID));
-    // All these APIs fail after SUBSCRIBE_DONE
+    // All these APIs fail after PUBLISH_DONE
     EXPECT_EQ(
         pub->beginSubgroup(1, 1, 1).error().code, MoQPublishError::API_ERROR);
     EXPECT_EQ(

@@ -28,7 +28,7 @@ class ObjectReceiverCallback {
   virtual void onError(ResetStreamErrorCode) = 0;
   virtual void onPublishDone(PublishDone done) = 0;
   // For SUBSCRIBEs:
-  // Called when SUBSCRIBE_DONE has arrived AND all outstanding subgroup
+  // Called when PUBLISH_DONE has arrived AND all outstanding subgroup
   // streams have closed.
   //
   // For FETCHes:
@@ -209,7 +209,7 @@ class ObjectReceiver : public TrackConsumer,
   }
 
   // Fire onAllDataReceived callback once when both conditions are met:
-  // 1. SUBSCRIBE_DONE has been received
+  // 1. PUBLISH_DONE has been received
   // 2. All subgroup streams have closed
   void maybeFireAllDataReceived() {
     if (!allDataCallbackSent_ && publishDoneDelivered_ && openSubgroups_ == 0) {

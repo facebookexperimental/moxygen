@@ -357,7 +357,7 @@ CO_TEST_P_X(MoQSessionDeleteFromCallbackTest, DeleteFromPublishDoneCallback) {
     co_return; // Skip rest of test if setup failed
   }
 
-  // Now server sends SUBSCRIBE_DONE - this will trigger the chain:
+  // Now server sends PUBLISH_DONE - this will trigger the chain:
   // controlCodec_.onIngress() -> onPublishDone -> processPublishDone
   // -> callback_->publishDone() -> delete session -> return to onIngress ->
   // UAF!

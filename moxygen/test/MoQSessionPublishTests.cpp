@@ -349,7 +349,7 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
 
   // For this test, we'll use the simpler approach of immediate return
   // since the key behavior we're testing is that cancel() sends
-  // SUBSCRIBE_DONE and the sender side properly handles it
+  // PUBLISH_DONE and the sender side properly handles it
 
   // Mock to capture the PublishHandle and return a consumer
   EXPECT_CALL(*serverSubscriber, publish(_, _))
@@ -399,8 +399,8 @@ CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
 
   // The cancel test is complete - we verified:
   // 1. cancel() doesn't crash
-  // 2. cancel() sends SUBSCRIBE_DONE (evidenced by GMOCK warning)
-  // 3. Sender side receives SUBSCRIBE_DONE and completes publish with error
+  // 2. cancel() sends PUBLISH_DONE (evidenced by GMOCK warning)
+  // 3. Sender side receives PUBLISH_DONE and completes publish with error
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

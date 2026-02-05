@@ -534,7 +534,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::SUBSCRIBE_DONE: {
+    case FrameType::PUBLISH_DONE: {
       auto res = moqFrameParser_.parsePublishDone(cursor, curFrameLength_);
       if (res) {
         if (callback_) {

@@ -29,7 +29,7 @@ constexpr uint64_t kVersionDraft07_exp2 =
     0xff070002; // Draft 7 FETCH + removal of Subscribe ID on objects
 constexpr uint64_t kVersionDraft08 = 0xff000008;
 constexpr uint64_t kVersionDraft08_exp1 = 0xff080001; // Draft 8 no ROLE
-// SUBSCRIBE_DONE stream count
+// PUBLISH_DONE stream count
 constexpr uint64_t kVersionDraft08_exp2 = 0xff080002;
 constexpr uint64_t kVersionDraft08_exp3 = 0xff080003; // Draft 8 datagram status
 constexpr uint64_t kVersionDraft08_exp4 = 0xff080004; // Draft 8 END_OF_TRACK

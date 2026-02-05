@@ -1751,13 +1751,13 @@ class MoQSession::SubscribeTrackReceiveState
           << "processPublishDone: No callback (unsubscribed); removing state alias="
           << alias_ << " requestID=" << requestID_;
       // Unsubscribe raced with publishDone - just remove state
-      // TODO: I think alias_ will be wrong in SUBSCRIBE -> SUBSCRIBE_DONE
+      // TODO: I think alias_ will be wrong in SUBSCRIBE -> PUBLISH_DONE
       // But that should be a different error.
       session_->removeSubscriptionState(alias_, requestID_);
       return;
     }
     if (pendingPublishDone_) {
-      XLOG(ERR) << "Duplicate SUBSCRIBE_DONE";
+      XLOG(ERR) << "Duplicate PUBLISH_DONE";
       session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
       return;
     }
@@ -1793,7 +1793,7 @@ class MoQSession::SubscribeTrackReceiveState
     if (pendingPublishDone_) {
       if (callback_) {
         XLOG(DBG0)
-            << "deliverPublishDoneAndRemove: Delivering SUBSCRIBE_DONE to app; statusCode="
+            << "deliverPublishDoneAndRemove: Delivering PUBLISH_DONE to app; statusCode="
             << folly::to_underlying(pendingPublishDone_->statusCode)
             << " alias=" << alias_ << " requestID=" << requestID_;
         auto token = cancelSource_.getToken();
@@ -1835,8 +1835,7 @@ class MoQSession::SubscribeTrackReceiveState
 
   void streamCountTimeoutExpired() {
     XCHECK(pendingPublishDone_) << "Why is there no pendingPublishDone_";
-    XLOG(DBG0) << "Delivering SUBSCRIBE_DONE after timeout, have="
-               << streamCount_
+    XLOG(DBG0) << "Delivering PUBLISH_DONE after timeout, have=" << streamCount_
                << " expected=" << pendingPublishDone_->streamCount;
     deliverPublishDoneAndRemove();
   }
@@ -2598,7 +2597,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     session_->onSubscriptionStreamOpenedByPeer();
     auto callback = subscribeState_->getSubscribeCallback();
     if (!callback) {
-      // This cannot happen in a SUBSCRIBE_DONE flow, because
+      // This cannot happen in a PUBLISH_DONE flow, because
       // that also would have removed subscribeState.
       XLOG(DBG2) << "No callback for subgroup (unsubscribed)";
       return MoQCodec::ParseResult::ERROR_TERMINATE;
@@ -3655,7 +3654,7 @@ void MoQSession::onPublishDone(PublishDone publishDone) {
   MOQ_SUBSCRIBER_STATS(
       subscriberStatsCallback_, onPublishDone, publishDone.statusCode);
 
-  // Handle regular subscription SUBSCRIBE_DONE
+  // Handle regular subscription PUBLISH_DONE
   auto trackAliasIt = reqIdToTrackAlias_.find(publishDone.requestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
@@ -4549,7 +4548,7 @@ void MoQSession::subscribeUpdateError(
     controlWriteEvent_.signal();
   }
 
-  // Terminate subscription with SUBSCRIBE_DONE (UPDATE_FAILED)
+  // Terminate subscription with PUBLISH_DONE (UPDATE_FAILED)
   // and clean up publisher state (regardless of REQUEST_ERROR write success)
   auto it = pubTracks_.find(existingRequestID);
   if (it != pubTracks_.end()) {
