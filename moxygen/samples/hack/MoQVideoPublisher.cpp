@@ -246,7 +246,7 @@ bool MoQVideoPublisher::setup(
     std::weak_ptr<MoQVideoPublisher> selfWeak = shared_from_this();
     auto selfPub =
         shared_from_this(); // publish callbacks may need publisher reference
-    auto ns = videoForwarder_.fullTrackName().trackNamespace;
+    auto ns = videoForwarder_->fullTrackName().trackNamespace;
     co_withExecutor(
         evb,
         folly::coro::co_invoke(
@@ -276,7 +276,7 @@ bool MoQVideoPublisher::setup(
   // Initiate PUBLISH for audio track on the EventBase thread so server can
   // receive data without requiring a downstream SUBSCRIBE
   if (auto session = relayClient_->getSession()) {
-    auto ftn = audioForwarder_.fullTrackName();
+    auto ftn = audioForwarder_->fullTrackName();
     auto* evb = evbThread_->getEventBase();
     co_withExecutor(evb, initialAudioPublish(session, ftn)).start();
   } else {
@@ -350,18 +350,18 @@ folly::coro::Task<void> MoQVideoPublisher::initialAudioPublish(
 folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
-  if (sub.fullTrackName == videoForwarder_.fullTrackName()) {
-    co_return videoForwarder_.addSubscriber(
+  if (sub.fullTrackName == videoForwarder_->fullTrackName()) {
+    co_return videoForwarder_->addSubscriber(
         MoQSession::getRequestSession(), sub, std::move(callback));
   }
 
-  if (sub.fullTrackName == audioForwarder_.fullTrackName()) {
-    co_return audioForwarder_.addSubscriber(
+  if (sub.fullTrackName == audioForwarder_->fullTrackName()) {
+    co_return audioForwarder_->addSubscriber(
         MoQSession::getRequestSession(), sub, std::move(callback));
   }
 
-  if ((sub.fullTrackName != videoForwarder_.fullTrackName()) &&
-      (sub.fullTrackName != audioForwarder_.fullTrackName())) {
+  if ((sub.fullTrackName != videoForwarder_->fullTrackName()) &&
+      (sub.fullTrackName != audioForwarder_->fullTrackName())) {
     XLOG(ERR) << "Unknown track " << sub.fullTrackName;
     co_return folly::makeUnexpected(
         SubscribeError{
@@ -369,10 +369,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
             SubscribeErrorCode::TRACK_NOT_EXIST,
             "Unknown track"});
   }
-  if ((sub.fullTrackName == videoForwarder_.fullTrackName()) &&
-      !videoForwarder_.empty()) {
+  if ((sub.fullTrackName == videoForwarder_->fullTrackName()) &&
+      !videoForwarder_->empty()) {
     XLOG(ERR) << "Already subscribed to video track "
-              << videoForwarder_.fullTrackName();
+              << videoForwarder_->fullTrackName();
     co_return folly::makeUnexpected(
         SubscribeError{
             sub.requestID,
@@ -380,10 +380,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
             "Already subscribed"});
   }
 
-  if ((sub.fullTrackName == audioForwarder_.fullTrackName()) &&
-      !audioForwarder_.empty()) {
+  if ((sub.fullTrackName == audioForwarder_->fullTrackName()) &&
+      !audioForwarder_->empty()) {
     XLOG(ERR) << "Already subscribed to audio track "
-              << audioForwarder_.fullTrackName();
+              << audioForwarder_->fullTrackName();
     co_return folly::makeUnexpected(
         SubscribeError{
             sub.requestID,
@@ -424,8 +424,8 @@ void MoQVideoPublisher::publishFrameImpl(
     payload = savedMetadata_->clone();
     savedMetadata_ = payload->clone();
   }
-  if (videoForwarder_.empty()) {
-    XLOG(ERR) << "No subscriber for track " << videoForwarder_.fullTrackName();
+  if (videoForwarder_->empty()) {
+    XLOG(ERR) << "No subscriber for track " << videoForwarder_->fullTrackName();
     return;
   }
 
@@ -475,8 +475,8 @@ void MoQVideoPublisher::endPublish() {
   // before we continue shutdown on the EB thread.
   evbThread_->getEventBase()->runInEventBaseThreadAndWait([selfWeak] {
     if (auto self = selfWeak.lock()) {
-      if (!self->videoForwarder_.empty()) {
-        self->videoForwarder_.publishDone(
+      if (!self->videoForwarder_->empty()) {
+        self->videoForwarder_->publishDone(
             {0, PublishDoneStatusCode::TRACK_ENDED, 0, "end of track"});
       }
       self->audioPublishReady_ = false;
@@ -529,7 +529,7 @@ void MoQVideoPublisher::publishFrameToMoQ(std::unique_ptr<MediaItem> item) {
 
   if (!videoSgPub_) {
     // Open new subgroup
-    auto res = videoForwarder_.beginSubgroup(
+    auto res = videoForwarder_->beginSubgroup(
         largestVideo_.group, 0, VIDEO_STREAM_PRIORITY);
     if (!res) {
       XLOG(ERR) << "Error creating subgroup";

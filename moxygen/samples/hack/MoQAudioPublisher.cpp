@@ -127,7 +127,7 @@ bool MoQAudioPublisher::setup(
     relayStarted_.store(true, std::memory_order_relaxed);
     std::weak_ptr<MoQAudioPublisher> selfWeak = shared_from_this();
     auto selfPub = shared_from_this();
-    auto ns = audioForwarder_.fullTrackName().trackNamespace;
+    auto ns = audioForwarder_->fullTrackName().trackNamespace;
     co_withExecutor(
         evb,
         folly::coro::co_invoke(
@@ -156,7 +156,7 @@ bool MoQAudioPublisher::setup(
   }
 
   if (auto session = relayClient_->getSession()) {
-    auto ftn = audioForwarder_.fullTrackName();
+    auto ftn = audioForwarder_->fullTrackName();
     auto* evb = evbThread_->getEventBase();
     co_withExecutor(evb, initialAudioPublish(session, ftn)).start();
   } else {
@@ -221,8 +221,8 @@ folly::coro::Task<void> MoQAudioPublisher::initialAudioPublish(
 folly::coro::Task<Publisher::SubscribeResult> MoQAudioPublisher::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
-  if (sub.fullTrackName == audioForwarder_.fullTrackName()) {
-    co_return audioForwarder_.addSubscriber(
+  if (sub.fullTrackName == audioForwarder_->fullTrackName()) {
+    co_return audioForwarder_->addSubscriber(
         MoQSession::getRequestSession(), sub, std::move(callback));
   }
 

@@ -10,16 +10,20 @@
 #include "moxygen/MoQSession.h"
 
 #include <folly/container/F14Set.h>
+#include <folly/experimental/coro/Task.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/async/EventBase.h>
 
 namespace moxygen {
 
-class MoQForwarder : public TrackConsumer {
+class MoQForwarder : public TrackConsumer,
+                     public std::enable_shared_from_this<MoQForwarder> {
  public:
   explicit MoQForwarder(
       FullTrackName ftn,
-      std::optional<AbsoluteLocation> largest = std::nullopt);
+      folly::Executor* executor,
+      std::optional<AbsoluteLocation> largest = std::nullopt,
+      size_t maxSubscribersPerForwarder = 50);
 
   const FullTrackName& fullTrackName() const {
     return fullTrackName_;
@@ -33,13 +37,15 @@ class MoQForwarder : public TrackConsumer {
     groupOrder_ = order;
   }
 
+  void updateLargest(uint64_t group, uint64_t object = 0);
+
+  void setLargest(AbsoluteLocation largest);
+
   void setDeliveryTimeout(uint64_t timeout);
 
   std::chrono::milliseconds upstreamDeliveryTimeout() const {
     return upstreamDeliveryTimeout_;
   }
-
-  void setLargest(AbsoluteLocation largest);
 
   std::optional<AbsoluteLocation> largest() {
     return largest_;
@@ -66,7 +72,6 @@ class MoQForwarder : public TrackConsumer {
       return group == other.group && subgroup == other.subgroup;
     }
   };
-  class SubgroupForwarder;
   struct Subscriber : public Publisher::SubscriptionHandle {
     using SubgroupConsumerMap = folly::F14FastMap<
         SubgroupIdentifier,
@@ -74,7 +79,7 @@ class MoQForwarder : public TrackConsumer {
         SubgroupIdentifier::hash>;
 
     Subscriber(
-        MoQForwarder& f,
+        MoQForwarder* f,
         SubscribeOk ok,
         std::shared_ptr<MoQSession> s,
         RequestID sid,
@@ -86,7 +91,7 @@ class MoQForwarder : public TrackConsumer {
     // first subscriber if it was added before the upstream SubscribeOK.
     void setPublisherGroupOrder(GroupOrder pubGroupOrder);
 
-    void updateLargest(AbsoluteLocation largest);
+    void setSubscribeOkLargest(AbsoluteLocation largest);
 
     // Updates the params of the subscribeOk
     // updates existing param if key matches, otherwise adds new param
@@ -99,8 +104,10 @@ class MoQForwarder : public TrackConsumer {
 
     bool checkShouldForward();
 
-    // Returns true if this subscriber is draining and all subgroups are closed
-    bool shouldRemove() const {
+    // Subscriber can be removed when:
+    // 1. It's been marked as draining (publishDone sent)
+    // 2. All subgroups have been closed (no pending data)
+    bool shouldRemoveSubscriber() const {
       return receivedPublishDone_ && subgroups.empty();
     }
 
@@ -112,14 +119,12 @@ class MoQForwarder : public TrackConsumer {
     // publishing subgroups.  Having this state here makes it easy to remove
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
-    MoQForwarder& forwarder;
+    MoQForwarder* forwarder;
     bool shouldForward;
     bool receivedPublishDone_{false};
   };
 
-  [[nodiscard]] bool empty() const {
-    return subscribers_.empty();
-  }
+  [[nodiscard]] bool empty() const;
 
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
       std::shared_ptr<MoQSession> session,
@@ -130,35 +135,20 @@ class MoQForwarder : public TrackConsumer {
       std::shared_ptr<MoQSession> session,
       const PublishRequest& pub);
 
+  folly::coro::Task<std::shared_ptr<Subscriber>> addSubscriberAsync(
+      std::shared_ptr<MoQSession> session,
+      const SubscribeRequest& subReq,
+      std::shared_ptr<TrackConsumer> consumer,
+      folly::Executor* subscriberExecutor);
+
+  folly::coro::Task<std::shared_ptr<Subscriber>> addSubscriberAsync(
+      std::shared_ptr<MoQSession> session,
+      const PublishRequest& pub,
+      folly::Executor* subscriberExecutor);
+
   folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
       const std::shared_ptr<MoQSession>& session,
       const JoiningFetch& joining) const;
-
-  // Gracefully drains a subscriber - forwards publishDone but doesn't reset
-  // open subgroups. Calls removeSubscriber() if no subgroups are open.
-  void drainSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      PublishDone pubDone,
-      const std::string& callsite);
-
-  // Immediately removes a session - resets all open subgroups and removes
-  // from subscribers map
-  void removeSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      std::optional<PublishDone> pubDone,
-      const std::string& callsite);
-
-  template <typename Fn>
-  folly::Expected<folly::Unit, MoQPublishError> forEachSubscriber(Fn&& fn);
-
-  void updateLargest(uint64_t group, uint64_t object = 0);
-
-  bool checkRange(const Subscriber& sub);
-
-  void removeSubscriberOnError(
-      const Subscriber& sub,
-      const MoQPublishError& err,
-      const std::string& callsite /*for logging*/);
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
       TrackAlias alias) override;
@@ -181,7 +171,107 @@ class MoQForwarder : public TrackConsumer {
   folly::Expected<folly::Unit, MoQPublishError> publishDone(
       PublishDone pubDone) override;
 
-  class SubgroupForwarder : public SubgroupConsumer {
+  void addForwardingSubscriber();
+
+  void removeForwardingSubscriber();
+
+  uint64_t numForwardingSubscribers() const {
+    return forwardingSubscribersAtomic_->load(std::memory_order_relaxed);
+  }
+
+  uint64_t totalSubscribers() const {
+    return totalSubscribers_->load(std::memory_order_relaxed);
+  }
+
+  // Gracefully drains a subscriber - forwards publishDone but doesn't reset
+  // open subgroups. Calls removeSubscriber() if no subgroups are open.
+  void drainSubscriber(
+      const std::shared_ptr<MoQSession>& session,
+      PublishDone pubDone,
+      const std::string& callsite);
+
+  // Immediately removes a session - resets all open subgroups and removes
+  // from subscribers map
+  void removeSubscriber(
+      const std::shared_ptr<MoQSession>& session,
+      std::optional<PublishDone> pubDone,
+      const std::string& callsite);
+
+ private:
+  // Private constructor for creating child forwarders
+  MoQForwarder(MoQForwarder* parent, folly::Executor* executor);
+
+  std::shared_ptr<MoQForwarder> createChildForwarder(
+      folly::Executor* childExecutor);
+
+  folly::coro::Task<std::shared_ptr<Subscriber>> addSubscriberInternal(
+      std::shared_ptr<MoQSession> session,
+      SubscribeOk subscribeOk,
+      RequestID requestID,
+      SubscribeRange range,
+      std::shared_ptr<TrackConsumer> consumer,
+      folly::Executor* subscriberExecutor,
+      bool shouldForward);
+
+  bool hasCapacity() const {
+    return subscribers_.size() < maxSubscribersPerForwarder_;
+  }
+
+  bool allChildrenEmpty() const;
+
+  void onChildEmptied(MoQForwarder* child);
+
+  // Invokes callback on root's executor (or directly if already on root's
+  // executor)
+  void invokeCallback(std::function<void(Callback*, MoQForwarder*)> fn);
+
+  template <typename Fn>
+  folly::Expected<folly::Unit, MoQPublishError> forEachSubscriber(
+      Fn&& fn,
+      std::optional<AbsoluteLocation> location = std::nullopt);
+
+  bool checkRange(const Subscriber& sub);
+
+  void removeSubscriberOnError(
+      const Subscriber& sub,
+      const MoQPublishError& err,
+      const std::string& callsite /*for logging*/);
+
+  // Helper that checks if both subscribers_ and subgroups_ are empty and
+  // fires onEmpty callback if so
+  void checkAndFireOnEmpty();
+
+  // Helper that removes a subscriber given an iterator (avoids lookup)
+  void removeSubscriberIt(
+      folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator
+          subIt,
+      std::optional<PublishDone> pubDone,
+      const std::string& where);
+
+  // Thread-local executor cache support
+  struct ExecutorForwarderPair {
+    folly::Executor* executor;
+    MoQForwarder* forwarder; // First forwarder for this executor
+  };
+
+  // Static thread-local storage
+  static folly::ThreadLocal<std::vector<ExecutorForwarderPair>>
+      executorForwarderCache_;
+
+  // Helper to register this forwarder for its executor on current thread
+  void registerForCurrentThread();
+
+  // Helper to get the first forwarder for a given executor from thread-local
+  // cache
+  static MoQForwarder* currentForwarderForExecutor(folly::Executor* exec);
+
+  // Helper to find subscriber for a session, using executor-aware search
+  std::shared_ptr<Subscriber> findSubscriberForSession(
+      const std::shared_ptr<MoQSession>& session) const;
+
+  class SubgroupForwarder
+      : public SubgroupConsumer,
+        public std::enable_shared_from_this<SubgroupForwarder> {
     std::optional<uint64_t> currentObjectLength_;
     MoQForwarder& forwarder_;
     SubgroupIdentifier identifier_;
@@ -190,13 +280,15 @@ class MoQForwarder : public TrackConsumer {
     template <typename Fn>
     folly::Expected<folly::Unit, MoQPublishError> forEachSubscriberSubgroup(
         Fn&& fn,
+        std::optional<AbsoluteLocation> location = std::nullopt,
         bool makeNew = true,
         const std::string& callsite = "");
 
     // Helper to erase subgroup from subscriber and remove subscriber if
     // draining
-    void closeSubgroupForSubscriber(
+    static void closeSubgroupForSubscriber(
         const std::shared_ptr<Subscriber>& sub,
+        const SubgroupIdentifier& identifier,
         const std::string& callsite);
 
     // Removes this subgroup from the forwarder and checks if forwarder is empty
@@ -242,28 +334,7 @@ class MoQForwarder : public TrackConsumer {
         bool finSubgroup = false) override;
   };
 
-  void addForwardingSubscriber();
-
-  void removeForwardingSubscriber();
-
-  uint64_t numForwardingSubscribers() const {
-    return forwardingSubscribers_;
-  }
-
  private:
-  static Payload maybeClone(const Payload& payload);
-
-  // Helper that checks if both subscribers_ and subgroups_ are empty and
-  // fires onEmpty callback if so
-  void checkAndFireOnEmpty();
-
-  // Helper that removes a subscriber given an iterator (avoids lookup)
-  void removeSubscriberIt(
-      folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator
-          subIt,
-      std::optional<PublishDone> pubDone,
-      const std::string& callsite);
-
   FullTrackName fullTrackName_;
   std::optional<TrackAlias> trackAlias_;
   folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;
@@ -271,14 +342,35 @@ class MoQForwarder : public TrackConsumer {
       SubgroupIdentifier,
       std::shared_ptr<SubgroupForwarder>,
       SubgroupIdentifier::hash>
-      subgroups_;
+      subgroups_; // ROOT-ONLY: Subgroups only created on root
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
   std::optional<AbsoluteLocation> largest_;
   // This should eventually be a vector of params that can be cascaded e2e
   std::chrono::milliseconds upstreamDeliveryTimeout_{};
   std::shared_ptr<Callback> callback_;
-  uint64_t forwardingSubscribers_{0};
   bool draining_{false};
+
+  // Tree structure for scalable multi-executor support
+  size_t maxSubscribersPerForwarder_;
+  folly::Executor* executor_;
+  MoQForwarder* parent_{nullptr};
+  MoQForwarder* root_{nullptr};
+
+  // Child forwarders
+  // Root: map of executor -> child forwarder (multiple executors supported)
+  // Non-root: at most one child (overflow on same executor)
+  folly::F14FastMap<folly::Executor*, std::shared_ptr<MoQForwarder>>
+      nextForwarders_;
+
+  // Atomic counters (root owns storage, children point to root's)
+  std::atomic<uint64_t>* pendingOps_;
+  std::atomic<uint64_t>* totalSubscribers_;
+  std::atomic<uint64_t>* forwardingSubscribersAtomic_;
+
+  // Storage for root forwarder
+  std::atomic<uint64_t> pendingOpsStorage_{0};
+  std::atomic<uint64_t> totalSubscribersStorage_{0};
+  std::atomic<uint64_t> forwardingSubscribersStorage_{0};
 };
 
 } // namespace moxygen

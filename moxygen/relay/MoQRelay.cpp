@@ -361,8 +361,8 @@ Subscriber::PublishResult MoQRelay::publish(
   }
 
   // Create Forwarder for this publish
-  auto forwarder =
-      std::make_shared<MoQForwarder>(pub.fullTrackName, std::nullopt);
+  auto forwarder = std::make_shared<MoQForwarder>(
+      pub.fullTrackName, session->getExecutor(), pub.largest);
 
   // Set Forwarder Params
   forwarder->setGroupOrder(pub.groupOrder);
@@ -420,7 +420,8 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     PublishRequest pub,
     bool forward) {
   pub.forward = forward;
-  auto subscriber = forwarder->addSubscriber(session, pub);
+  auto subscriber = co_await forwarder->addSubscriberAsync(
+      session, pub, session->getExecutor());
   if (!subscriber) {
     XLOG(ERR) << "Subscribe failed: addSubscriber returned null for "
               << forwarder->fullTrackName() << " reqID=" << pub.requestID;
@@ -429,7 +430,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   XLOG(DBG4) << "added subscriber for ftn=" << pub.fullTrackName;
   auto guard = folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
   if (pub.largest) {
-    subscriber->updateLargest(*pub.largest);
+    subscriber->setSubscribeOkLargest(*pub.largest);
   }
   subscriber->setPublisherGroupOrder(pub.groupOrder);
 
@@ -708,8 +709,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     // We only subscribe upstream with LargestObject. This is to satisfy other
     // subscribers that join with narrower filters
     subReq.locType = LocationType::LargestObject;
-    auto forwarder =
-        std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
+    auto forwarder = std::make_shared<MoQForwarder>(
+        subReq.fullTrackName, upstreamSession->getExecutor(), std::nullopt);
     forwarder->setCallback(shared_from_this());
     auto emplaceRes = subscriptions_.emplace(
         std::piecewise_construct,
@@ -728,8 +729,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     });
     // Add subscriber first in case objects come before subscribe OK.
     auto sessionVersion = session->getNegotiatedVersion();
-    auto subscriber = forwarder->addSubscriber(
-        std::move(session), subReq, std::move(consumer));
+    auto subscriber = co_await forwarder->addSubscriberAsync(
+        session, subReq, std::move(consumer), session->getExecutor());
     if (!subscriber) {
       XLOG(ERR) << "addSubscriber returned null (draining?) for "
                 << subReq.fullTrackName << " reqID=" << subReq.requestID;
@@ -760,7 +761,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     auto largest = subRes.value()->subscribeOk().largest;
     if (largest) {
       forwarder->updateLargest(largest->group, largest->object);
-      subscriber->updateLargest(*largest);
+      subscriber->setSubscribeOkLargest(*largest);
     }
     auto pubGroupOrder = subRes.value()->subscribeOk().groupOrder;
     forwarder->setGroupOrder(pubGroupOrder);
@@ -811,8 +812,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     }
     bool forwarding =
         subscriptionIt->second.forwarder->numForwardingSubscribers() > 0;
-    auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
-        std::move(session), subReq, std::move(consumer));
+    auto subscriber =
+        co_await subscriptionIt->second.forwarder->addSubscriberAsync(
+            session, subReq, std::move(consumer), session->getExecutor());
     if (!subscriber) {
       XLOG(ERR) << "addSubscriber returned null (draining?) for "
                 << subReq.fullTrackName << " reqID=" << subReq.requestID;

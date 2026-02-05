@@ -51,6 +51,33 @@ class TestMoQExecutor : public MoQFollyExecutorImpl,
   folly::EventBase evb_;
 };
 
+// Executor wrapper that provides a different pointer address but delegates
+// to the underlying executor. This simulates multi-executor scenarios while
+// still allowing tests to drive a single event loop.
+// NOTE: This is NOT an MoQExecutor itself - it just wraps one and provides
+// access to its keepAlive() method. This avoids the complexity of managing
+// DefaultKeepAliveExecutor's internal state.
+class ExecutorWrapper {
+ public:
+  explicit ExecutorWrapper(std::shared_ptr<TestMoQExecutor> underlying)
+      : underlying_(std::move(underlying)) {}
+
+  MoQExecutor::KeepAlive keepAlive() {
+    return underlying_->keepAlive();
+  }
+
+  folly::EventBase* getBackingEventBase() {
+    return underlying_->getBackingEventBase();
+  }
+
+  std::shared_ptr<TestMoQExecutor> getUnderlying() {
+    return underlying_;
+  }
+
+ private:
+  std::shared_ptr<TestMoQExecutor> underlying_;
+};
+
 // Test fixture for MoQRelay tests
 // This provides a skeleton for testing MoQRelay functionality.
 // Full integration tests with real sessions will be added when implementing
@@ -61,6 +88,10 @@ class MoQRelayTest : public ::testing::Test {
     exec_ = std::make_shared<TestMoQExecutor>();
     relay_ = std::make_shared<MoQRelay>(/*enableCache=*/false);
     relay_->setAllowedNamespacePrefix(kAllowedPrefix);
+
+    // Create wrapped executor for publisher sessions to simulate different
+    // executors
+    publisherExec_ = std::make_shared<ExecutorWrapper>(exec_);
   }
 
   void TearDown() override {
@@ -69,18 +100,26 @@ class MoQRelayTest : public ::testing::Test {
     // their state, and calling unsubscribe() on already-cleaned objects
     // causes use-after-free
     mockSessions_.clear();
-
+    // Drive the executor to process keepAlive token releases from cleared
+    // sessions
+    if (exec_) {
+      exec_->drive();
+    }
+    XLOG(ERR) << "TearDown() called - destroying relay";
     relay_.reset();
-    // Drive the executor to release any pending KeepAlive tokens
+    // Drive again after relay destruction to release any remaining tokens
     if (exec_) {
       exec_->drive();
     }
   }
 
   // Helper to create a mock session
-  std::shared_ptr<MockMoQSession> createMockSession() {
+  // Set isPublisher=true to use wrapped executor (simulates different executor)
+  std::shared_ptr<MockMoQSession> createMockSession(bool isPublisher = false) {
+    auto keepAlive =
+        isPublisher ? publisherExec_->keepAlive() : exec_->keepAlive();
     auto session =
-        std::make_shared<NiceMock<MockMoQSession>>(exec_->keepAlive());
+        std::make_shared<NiceMock<MockMoQSession>>(std::move(keepAlive));
     ON_CALL(*session, getNegotiatedVersion())
         .WillByDefault(Return(std::optional<uint64_t>(kVersionDraftCurrent)));
     auto state = getOrCreateMockState(session);
@@ -186,6 +225,8 @@ class MoQRelayTest : public ::testing::Test {
         subscribeHandles;
 
     void cleanup() {
+      XLOG(ERR) << "MockSessionState::cleanup() called for session="
+                << session.get();
       // Simulate MoQSession::cleanup() for publish tracks
       // This calls publishDone on all tracked consumers, which triggers
       // FilterConsumer callbacks that properly clean up relay state
@@ -239,6 +280,7 @@ class MoQRelayTest : public ::testing::Test {
   }
 
   void cleanupMockSession(std::shared_ptr<MoQSession> session) {
+    XLOG(ERR) << "cleanupMockSession called for session=" << session.get();
     auto it = mockSessions_.find(session.get());
     if (it != mockSessions_.end()) {
       // Use withSessionContext to ensure session context is set during cleanup
@@ -345,6 +387,7 @@ class MoQRelayTest : public ::testing::Test {
   }
 
   std::shared_ptr<TestMoQExecutor> exec_;
+  std::shared_ptr<ExecutorWrapper> publisherExec_;
   std::shared_ptr<MoQRelay> relay_;
 };
 
@@ -371,7 +414,7 @@ TEST_F(MoQRelayTest, MockSessionCreation) {
 
 // Test: Publish a track through the relay
 TEST_F(MoQRelayTest, PublishSuccess) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
 
   // Publish the namespace
   doPublishNamespace(publisherSession, kTestNamespace);
@@ -821,7 +864,7 @@ TEST_F(MoQRelayTest, PublishKeepsNodeAliveAfterPublishNamespaceDone) {
 // sub2 joins, beginObject (->1,2), sub3 joins, objectPayload (->1,2),
 // endOfSubgroup (->1,2)
 TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   auto subscriber1 = createMockSession();
   auto subscriber2 = createMockSession();
   auto subscriber3 = createMockSession();
@@ -896,11 +939,12 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
       subgroup->objectPayload(folly::IOBuf::copyBuffer("more data"), false)
           .hasValue());
   EXPECT_TRUE(subgroup->endOfSubgroup().hasValue());
-
+  exec_->drive();
   removeSession(publisherSession);
   removeSession(subscriber1);
   removeSession(subscriber2);
   removeSession(subscriber3);
+  exec_->drive();
 }
 
 // Test: Graceful session draining - comprehensive test of draining behavior
@@ -909,7 +953,7 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
 // Draining subscribers should not receive new subgroups and are removed when
 // their last subgroup closes.
 TEST_F(MoQRelayTest, GracefulSessionDraining) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   std::array<std::shared_ptr<MoQSession>, 3> subscribers;
   for (auto& s : subscribers) {
     s = createMockSession();
@@ -985,13 +1029,14 @@ TEST_F(MoQRelayTest, GracefulSessionDraining) {
 
   // Close subgroup 1 -> subscriber1 removed (was its last subgroup)
   EXPECT_TRUE(sgs[1]->endOfSubgroup().hasValue());
-
+  exec_->drive();
   removeSession(publisherSession);
+  exec_->drive();
 }
 
 // Test: removeSession (via unsubscribe) immediately resets all open subgroups
 TEST_F(MoQRelayTest, RemoveSessionResetsOpenSubgroups) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   auto subscriber = createMockSession();
 
   // Setup: Publish track
@@ -1024,6 +1069,7 @@ TEST_F(MoQRelayTest, RemoveSessionResetsOpenSubgroups) {
     EXPECT_TRUE((*sg)->object(0, test::makeBuf(10)).hasValue());
     pubSgs[i] = *sg;
   }
+  exec_->drive();
 
   // Expect both subgroups to be reset when subscriber unsubscribes
   for (auto& sg : sgs) {
@@ -1037,13 +1083,15 @@ TEST_F(MoQRelayTest, RemoveSessionResetsOpenSubgroups) {
     // Ensure each published subgroup is properly closed after unsubscribe
     EXPECT_TRUE(pubSgs[i]->endOfSubgroup().hasValue());
   }
+  exec_->drive();
   removeSession(subscriber);
   removeSession(publisherSession);
+  exec_->drive();
 }
 
 // Test: Draining subscriber removed when subgroup closes with error
 TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   auto subscriber = createMockSession();
 
   // Setup: Publish track
@@ -1071,6 +1119,7 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
     pubSgs[i] = publishConsumer->beginSubgroup(i, 0, 0).value();
     EXPECT_TRUE((pubSgs[i])->beginObject(0, 10, 0).hasValue());
   }
+  exec_->drive();
 
   // Drain the subscriber - should mark it draining but not remove
   // Note: publishDone may be called multiple times (during drain and cleanup)
@@ -1103,15 +1152,17 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
   // Test 3: Send error on subgroup 2 -> subscriber IS removed (was last)
   EXPECT_CALL(*sgs[2], reset(ResetStreamErrorCode::INTERNAL_ERROR));
   pubSgs[2]->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+  exec_->drive();
 
   removeSession(publisherSession);
+  exec_->drive();
 }
 
 // Test: Subscriber that ends subscription doesn't receive subsequent objects
 // Sequence: publish, sub1 subscribes, beginSubgroup, sub1 ends (publishDone),
 // sub2 subscribes, send object -> only goes to sub1
 TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   auto subscriber1 = createMockSession();
   auto subscriber2 = createMockSession();
 
@@ -1167,10 +1218,12 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
   // Send object - should only go to subscriber 1 (sub2 is gone)
   EXPECT_TRUE(subgroup->beginObject(0, 4, 0).hasValue());
   subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
+  exec_->drive();
 
   removeSession(publisherSession);
   removeSession(subscriber1);
   removeSession(subscriber2);
+  exec_->drive();
 }
 
 // Test: SubscribeNamespace only receives publishes while active
@@ -1178,7 +1231,7 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
 // beginSubgroup, publishDone, subscribeNamespace (sub2), new publish
 // (only sub2 gets it)
 TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   auto subscriber1 = createMockSession();
   auto subscriber2 = createMockSession();
 
@@ -1245,12 +1298,12 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
   // Expect publish calls on both subscribers, just fail them.
   EXPECT_CALL(*subscriber1, publish(testing::_, testing::_))
       .WillOnce([](auto /*pubReq*/, auto /*subHandle*/) {
-        return folly::makeUnexpected(PublishError{});
+        return folly::makeUnexpected(PublishError{.reasonPhrase = "rejected"});
       });
 
   EXPECT_CALL(*subscriber2, publish(testing::_, testing::_))
       .WillOnce([](auto /*pubReq*/, auto /*subHandle*/) {
-        return folly::makeUnexpected(PublishError{});
+        return folly::makeUnexpected(PublishError{.reasonPhrase = "rejected"});
       });
 
   auto pubConsumer2 = doPublish(
@@ -1260,6 +1313,7 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
   removeSession(publisherSession);
   removeSession(subscriber1);
   removeSession(subscriber2);
+  exec_->drive();
 }
 
 // Test: Data operations return CANCELLED when all subscribers fail and are
@@ -1267,7 +1321,7 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
 // fin=false) causes all subscribers to error out, the operation correctly
 // detects that data went nowhere and returns CANCELLED.
 TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   std::array<std::shared_ptr<MoQSession>, 2> subscribers;
   std::array<std::shared_ptr<MockTrackConsumer>, 2> consumers;
   std::array<std::shared_ptr<MockSubgroupConsumer>, 2> sgs;
@@ -1279,12 +1333,15 @@ TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
     c = createMockConsumer();
   }
 
-  // Setup both subscribers to succeed on first payload, fail on second
+  // Setup both subscribers to succeed on first two payloads, fail on third
   for (size_t i = 0; i < 2; ++i) {
     EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _))
         .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], objectPayload(_, false))
+              .WillOnce(Return(
+                  folly::makeExpected<MoQPublishError>(
+                      ObjectPublishStatus::IN_PROGRESS)))
               .WillOnce(Return(
                   folly::makeExpected<MoQPublishError>(
                       ObjectPublishStatus::IN_PROGRESS)))
@@ -1315,6 +1372,13 @@ TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
   EXPECT_TRUE(res1.hasValue());
   EXPECT_EQ(*res1, ObjectPublishStatus::IN_PROGRESS);
 
+  auto res1a =
+      subgroup->objectPayload(folly::IOBuf::copyBuffer("data1a"), false);
+  EXPECT_TRUE(res1a.hasValue());
+  EXPECT_EQ(*res1a, ObjectPublishStatus::IN_PROGRESS);
+  exec_->drive();
+  exec_->drive();
+
   // Second objectPayload causes both subscribers to fail and get removed
   // This should return CANCELLED because all subscribers are gone
   auto res2 = subgroup->objectPayload(folly::IOBuf::copyBuffer("data2"), false);
@@ -1323,10 +1387,12 @@ TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
 
   // Clean up
   subgroup->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+  exec_->drive();
   removeSession(publisherSession);
   for (auto& s : subscribers) {
     removeSession(s);
   }
+  exec_->drive();
 }
 
 // Test: Partial subscriber failure does not cancel data operations.
@@ -1334,7 +1400,7 @@ TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
 // operation continues successfully and only returns CANCELLED when ALL
 // subscribers are gone.
 TEST_F(MoQRelayTest, PartialSubscriberFailureDoesNotCancelData) {
-  auto publisherSession = createMockSession();
+  auto publisherSession = createMockSession(true);
   std::array<std::shared_ptr<MoQSession>, 3> subscribers;
   std::array<std::shared_ptr<MockTrackConsumer>, 3> consumers;
   std::array<std::shared_ptr<MockSubgroupConsumer>, 3> sgs;
@@ -1409,10 +1475,12 @@ TEST_F(MoQRelayTest, PartialSubscriberFailureDoesNotCancelData) {
 
   // Clean up - reset the subgroup which resets remaining subscribers 1 and 2
   subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
+  exec_->drive();
   removeSession(publisherSession);
   for (auto& s : subscribers) {
     removeSession(s);
   }
+  exec_->drive();
 }
 
 // Test: SubscribeUpdate can decrease start location
