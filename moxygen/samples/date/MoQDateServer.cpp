@@ -87,10 +87,13 @@ class DatePublisher : public Publisher {
       Mode mode,
       std::string ns = "moq-date",
       int deliveryTimeout = 0)
-      : mode_(mode),
-        ns_(std::move(ns)),
-        deliveryTimeout_(deliveryTimeout),
-        forwarder_(dateTrackName()) {}
+      : mode_(mode), ns_(std::move(ns)), deliveryTimeout_(deliveryTimeout) {}
+
+  void ensureForwarder(folly::Executor* executor) {
+    if (!forwarder_) {
+      forwarder_ = std::make_unique<MoQForwarder>(dateTrackName(), executor);
+    }
+  }
 
   folly::coro::Task<PublishRequest> callPublish(
       MoQRelayClient* relayClient,
@@ -140,7 +143,8 @@ class DatePublisher : public Publisher {
         .locType = LocationType::LargestObject};
 
     // Add as a subscriber to forwarder
-    forwarder_.addSubscriber(session, subReq, consumer);
+    ensureForwarder(executor.get());
+    forwarder_->addSubscriber(session, subReq, consumer);
 
     if (!loopRunning_) {
       loopRunning_ = true;
@@ -158,7 +162,8 @@ class DatePublisher : public Publisher {
       std::shared_ptr<MoQSession> session,
       std::optional<PublishDone> pubDone,
       const std::string& reason) {
-    forwarder_.removeSubscriber(std::move(session), std::move(pubDone), reason);
+    forwarder_->removeSubscriber(
+        std::move(session), std::move(pubDone), reason);
   }
 
   std::pair<uint64_t, uint64_t> now() {
@@ -176,9 +181,9 @@ class DatePublisher : public Publisher {
 
   AbsoluteLocation updateLargest() {
     if (!loopRunning_) {
-      forwarder_.setLargest(nowLocation());
+      forwarder_->setLargest(nowLocation());
     }
-    return *forwarder_.largest();
+    return *forwarder_->largest();
   }
 
   folly::coro::Task<TrackStatusResult> trackStatus(
@@ -228,13 +233,14 @@ class DatePublisher : public Publisher {
     auto alias = TrackAlias(subReq.requestID.value);
     consumer->setTrackAlias(alias);
     auto session = MoQSession::getRequestSession();
+    ensureForwarder(session->getExecutor());
     if (!loopRunning_) {
       loopRunning_ = true;
       co_withExecutor(session->getExecutor(), publishDateLoop()).start();
     }
 
-    forwarder_.setDeliveryTimeout(deliveryTimeout_);
-    auto subscriber = forwarder_.addSubscriber(
+    forwarder_->setDeliveryTimeout(deliveryTimeout_);
+    auto subscriber = forwarder_->addSubscriber(
         std::move(session), subReq, std::move(consumer));
     co_return subscriber;
   }
@@ -266,7 +272,7 @@ class DatePublisher : public Publisher {
     auto [standalone, joining] = fetchType(fetch);
     StandaloneFetch sf;
     if (joining) {
-      auto res = forwarder_.resolveJoiningFetch(clientSession, *joining);
+      auto res = forwarder_->resolveJoiningFetch(clientSession, *joining);
       if (res.hasError()) {
         XLOG(ERR) << "Bad joining fetch id=" << fetch.requestID
                   << " err=" << res.error().reasonPhrase;
@@ -315,7 +321,7 @@ class DatePublisher : public Publisher {
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
     auto session = MoQSession::getRequestSession();
     // TODO: relay is going away
-    forwarder_.removeSubscriber(session, std::nullopt, "goaway");
+    forwarder_->removeSubscriber(session, std::nullopt, "goaway");
   }
 
   Payload minutePayload(uint64_t group) {
@@ -412,8 +418,8 @@ class DatePublisher : public Publisher {
     while (!cancelToken.isCancellationRequested() &&
            !loopCancelSource_.isCancellationRequested()) {
       auto [minute, second] = now();
-      if (forwarder_.empty()) {
-        forwarder_.setLargest(nowLocation());
+      if (forwarder_->empty()) {
+        forwarder_->setLargest(nowLocation());
         // Reset subgroupPublisher when crossing minute boundary
         // Otherwise we try to use the same subgroup publisher and publish does
         // not happen
@@ -446,7 +452,7 @@ class DatePublisher : public Publisher {
     uint64_t object = second;
     if (!subgroupPublisher) {
       subgroupPublisher =
-          forwarder_.beginSubgroup(group, subgroup, /*priority=*/0).value();
+          forwarder_->beginSubgroup(group, subgroup, /*priority=*/0).value();
     }
     if (object == 0) {
       subgroupPublisher->object(0, minutePayload(group), kExtensions, false);
@@ -474,16 +480,16 @@ class DatePublisher : public Publisher {
         noExtensions(),
         std::nullopt};
     if (second == 0) {
-      forwarder_.objectStream(header, minutePayload(group));
+      forwarder_->objectStream(header, minutePayload(group));
     }
     header.subgroup++;
     header.id++;
-    forwarder_.objectStream(header, secondPayload(header.id));
+    forwarder_->objectStream(header, secondPayload(header.id));
     if (header.id >= 60) {
       header.subgroup++;
       header.id++;
       header.status = ObjectStatus::END_OF_GROUP;
-      forwarder_.objectStream(header, nullptr);
+      forwarder_->objectStream(header, nullptr);
     }
   }
 
@@ -498,14 +504,14 @@ class DatePublisher : public Publisher {
         noExtensions(),
         std::nullopt};
     if (second == 0) {
-      forwarder_.datagram(header, minutePayload(group));
+      forwarder_->datagram(header, minutePayload(group));
     }
     header.id++;
-    forwarder_.datagram(header, secondPayload(header.id));
+    forwarder_->datagram(header, secondPayload(header.id));
     if (header.id >= 60) {
       header.id++;
       header.status = ObjectStatus::END_OF_GROUP;
-      forwarder_.datagram(header, nullptr);
+      forwarder_->datagram(header, nullptr);
     }
   }
 
@@ -517,7 +523,7 @@ class DatePublisher : public Publisher {
   Mode mode_{Mode::STREAM_PER_GROUP};
   std::string ns_;
   int deliveryTimeout_;
-  MoQForwarder forwarder_;
+  std::unique_ptr<MoQForwarder> forwarder_;
   bool loopRunning_{false};
   folly::CancellationSource loopCancelSource_;
 };

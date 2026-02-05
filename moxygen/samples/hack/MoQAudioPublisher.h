@@ -38,7 +38,10 @@ class MoQAudioPublisher
       : evbThread_(std::make_unique<folly::ScopedEventBaseThread>()),
         moqExecutor_(
             std::make_unique<MoQFollyExecutorImpl>(evbThread_->getEventBase())),
-        audioForwarder_(std::move(fullAudioTrackName)) {}
+        audioForwarder_(
+            std::make_unique<MoQForwarder>(
+                std::move(fullAudioTrackName),
+                evbThread_->getEventBase())) {}
 
   // Setup the relay client and MoQ session. Optionally install a Subscriber
   // so that the publisher session can also accept inbound PUBLISH (e.g., echo)
@@ -96,7 +99,7 @@ class MoQAudioPublisher
   std::unique_ptr<folly::ScopedEventBaseThread> evbThread_;
   std::unique_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQRelayClient> relayClient_;
-  MoQForwarder audioForwarder_;
+  std::unique_ptr<MoQForwarder> audioForwarder_;
   AbsoluteLocation largestAudio_{0, 0};
   std::shared_ptr<TrackConsumer> audioTrackPublisher_;
   bool audioPublishReady_{false};

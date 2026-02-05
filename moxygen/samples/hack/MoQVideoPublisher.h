@@ -40,8 +40,14 @@ class MoQVideoPublisher
       : evbThread_(std::make_unique<folly::ScopedEventBaseThread>()),
         moqExecutor_(
             std::make_unique<MoQFollyExecutorImpl>(evbThread_->getEventBase())),
-        videoForwarder_(std::move(fullVideoTrackName)),
-        audioForwarder_(std::move(fullAudioTrackName)) {}
+        videoForwarder_(
+            std::make_unique<MoQForwarder>(
+                std::move(fullVideoTrackName),
+                evbThread_->getEventBase())),
+        audioForwarder_(
+            std::make_unique<MoQForwarder>(
+                std::move(fullAudioTrackName),
+                evbThread_->getEventBase())) {}
 
   // Setup the relay client and MoQ session. Optionally install a Subscriber
   // so that the publisher session can also accept inbound PUBLISH (e.g., echo)
@@ -107,8 +113,8 @@ class MoQVideoPublisher
   std::unique_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQRelayClient> relayClient_;
   // uint64_t timescale_{30};
-  MoQForwarder videoForwarder_;
-  MoQForwarder audioForwarder_;
+  std::unique_ptr<MoQForwarder> videoForwarder_;
+  std::unique_ptr<MoQForwarder> audioForwarder_;
   AbsoluteLocation largestVideo_{0, 0};
   std::shared_ptr<TrackConsumer> audioTrackPublisher_;
   bool audioPublishReady_{false};
