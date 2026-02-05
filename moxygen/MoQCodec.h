@@ -66,7 +66,7 @@ class MoQControlCodec : public MoQCodec {
     virtual void onClientSetup(ClientSetup clientSetup) = 0;
     virtual void onServerSetup(ServerSetup serverSetup) = 0;
     virtual void onSubscribe(SubscribeRequest subscribeRequest) = 0;
-    virtual void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) = 0;
+    virtual void onRequestUpdate(RequestUpdate requestUpdate) = 0;
     virtual void onSubscribeOk(SubscribeOk subscribeOk) = 0;
     virtual void onRequestOk(RequestOk ok, FrameType frameType) = 0;
     virtual void onRequestError(RequestError error, FrameType frameType) = 0;

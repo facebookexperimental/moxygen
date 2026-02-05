@@ -84,7 +84,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     MoQControlCodec& codec = *codecPtr;
     auto& callback = *callbackPtr;
     EXPECT_CALL(callback, onSubscribe(testing::_));
-    EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
+    EXPECT_CALL(callback, onRequestUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
@@ -137,7 +137,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     MoQControlCodec& codec = *codecPtr;
     auto& callback = *callbackPtr;
     EXPECT_CALL(callback, onSubscribe(testing::_));
-    EXPECT_CALL(callback, onSubscribeUpdate(testing::_));
+    EXPECT_CALL(callback, onRequestUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));

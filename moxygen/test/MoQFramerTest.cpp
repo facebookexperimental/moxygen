@@ -90,7 +90,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     testUnderflowResult(r3);
 
     skip(cursor, 1);
-    auto r3a = parser_.parseSubscribeUpdate(cursor, frameLength(cursor));
+    auto r3a = parser_.parseRequestUpdate(cursor, frameLength(cursor));
     testUnderflowResult(r3a);
 
     skip(cursor, 1);
@@ -1447,7 +1447,7 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   EXPECT_EQ(
       frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_UPDATE));
 
-  auto parseResult = parser_.parseSubscribeUpdate(cursor, frameLength(cursor));
+  auto parseResult = parser_.parseRequestUpdate(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
   if (getDraftMajorVersion(GetParam()) >= 14) {
@@ -1507,7 +1507,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   size_t frameLength = cursor.readBE<uint16_t>();
 
   // Parse the SUBSCRIBE_UPDATE
-  auto parseResult = parser.parseSubscribeUpdate(cursor, frameLength);
+  auto parseResult = parser.parseRequestUpdate(cursor, frameLength);
   EXPECT_TRUE(parseResult.hasValue()) << "Failed to parse SUBSCRIBE_UPDATE";
 
   EXPECT_EQ(parseResult->requestID.value, 123);

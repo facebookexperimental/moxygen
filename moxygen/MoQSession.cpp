@@ -1033,17 +1033,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   void onTooManyBytesBuffered() override;
 
-  void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
+  void onRequestUpdate(RequestUpdate requestUpdate) {
     auto it = session_->pubTracks_.find(requestID_);
     if (!subscriptionHandle_ || it == session_->pubTracks_.end()) {
-      XLOG(ERR) << "Received SubscribeUpdate before sending SUBSCRIBE_OK id="
+      XLOG(ERR) << "Received RequestUpdate before sending SUBSCRIBE_OK id="
                 << requestID_ << " trackPub=" << this;
 
       // Only send error response for v15+
       if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
-        session_->subscribeUpdateError(
+        session_->requestUpdateError(
             SubscribeUpdateError{
-                subscribeUpdate.requestID,
+                requestUpdate.requestID,
                 static_cast<RequestErrorCode>(
                     folly::to_underlying(SubscribeErrorCode::INTERNAL_ERROR)),
                 "No subscription handle or track publisher"},
@@ -1060,54 +1060,53 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     co_withExecutor(
         session_->getExecutor(),
         folly::coro::co_invoke(
-            [trackPubImpl, update = std::move(subscribeUpdate)]() mutable
+            [trackPubImpl, update = std::move(requestUpdate)]() mutable
                 -> folly::coro::Task<void> {
-              co_await trackPubImpl->handleSubscribeUpdate(std::move(update));
+              co_await trackPubImpl->handleRequestUpdate(std::move(update));
             }))
         .start();
   }
 
-  folly::coro::Task<void> handleSubscribeUpdate(
-      SubscribeUpdate subscribeUpdate) {
+  folly::coro::Task<void> handleRequestUpdate(RequestUpdate requestUpdate) {
     folly::RequestContextScopeGuard guard;
     session_->setRequestSession();
 
-    auto updateRequestID = subscribeUpdate.requestID;
+    auto updateRequestID = requestUpdate.requestID;
     auto existingRequestID = requestID_;
 
     // Update delivery timeout if present
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
-        subscribeUpdate.params, *session_->getNegotiatedVersion());
+        requestUpdate.params, *session_->getNegotiatedVersion());
     if (timeoutValue.has_value() && *timeoutValue > 0) {
       XLOG(DBG6)
-          << "MoQSession::TrackPublisherImpl::handleSubscribeUpdate: SETTING downstream timeout"
+          << "MoQSession::TrackPublisherImpl::handleRequestUpdate: SETTING downstream timeout"
           << " timeout=" << *timeoutValue << "ms"
           << " requestID=" << existingRequestID;
       deliveryTimeoutManager_.setDownstreamTimeout(
           std::chrono::milliseconds(*timeoutValue));
     } else {
       XLOG(DBG6)
-          << "MoQSession::TrackPublisherImpl::handleSubscribeUpdate: No delivery timeout in params or timeout=0"
+          << "MoQSession::TrackPublisherImpl::handleRequestUpdate: No delivery timeout in params or timeout=0"
           << " requestID=" << existingRequestID;
     }
 
     // Only update forward state if the parameter was explicitly provided
     // Otherwise, preserve existing forward state (per draft 15+)
-    if (subscribeUpdate.forward.has_value()) {
-      setForward(*subscribeUpdate.forward);
+    if (requestUpdate.forward.has_value()) {
+      setForward(*requestUpdate.forward);
     }
 
     // Call application's async subscribeUpdate handler with cancellation
     auto updateResult = co_await co_awaitTry(co_withCancellation(
         session_->cancellationSource_.getToken(),
-        subscriptionHandle_->subscribeUpdate(std::move(subscribeUpdate))));
+        subscriptionHandle_->subscribeUpdate(std::move(requestUpdate))));
 
     // Only send responses for v15+
     if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
       if (updateResult.hasException()) {
-        XLOG(ERR) << "Exception in subscribeUpdate ex="
+        XLOG(ERR) << "Exception in requestUpdate ex="
                   << updateResult.exception().what().toStdString();
-        session_->subscribeUpdateError(
+        session_->requestUpdateError(
             SubscribeUpdateError{
                 updateRequestID,
                 RequestErrorCode::INTERNAL_ERROR,
@@ -1117,12 +1116,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       }
 
       if (updateResult->hasError()) {
-        XLOG(ERR) << "subscribeUpdate failed: "
+        XLOG(ERR) << "requestUpdate failed: "
                   << updateResult->error().reasonPhrase
                   << " requestID=" << existingRequestID;
         auto updateErr = std::move(updateResult->error());
         updateErr.requestID = updateRequestID; // In case app got it wrong
-        session_->subscribeUpdateError(updateErr, existingRequestID);
+        session_->requestUpdateError(updateErr, existingRequestID);
       } else {
         // send REQUEST_OK with LARGEST_OBJECT if available
         // TODO: Do we relay the params we got from the app?
@@ -1135,7 +1134,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         RequestOk requestOk{
             .requestID = updateRequestID,
             .requestSpecificParams = std::move(requestSpecificParams)};
-        session_->subscribeUpdateOk(requestOk);
+        session_->requestUpdateOk(requestOk);
       }
     }
   }
@@ -3194,18 +3193,17 @@ void MoQSession::setPublisherPriorityFromParams(
   }
 }
 
-void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
-  XLOG(DBG1) << __func__ << " id=" << subscribeUpdate.requestID
+void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
+  XLOG(DBG1) << __func__ << " id=" << requestUpdate.requestID
              << " sess=" << this;
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeUpdate);
-  auto existingRequestID = subscribeUpdate.requestID;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onRequestUpdate);
+  auto existingRequestID = requestUpdate.requestID;
 
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
-    existingRequestID = subscribeUpdate.existingRequestID;
+    existingRequestID = requestUpdate.existingRequestID;
 
     // RequestID meaning has changed, check validity
-    if (closeSessionIfRequestIDInvalid(
-            subscribeUpdate.requestID, false, true)) {
+    if (closeSessionIfRequestIDInvalid(requestUpdate.requestID, false, true)) {
       return;
     }
   }
@@ -3216,7 +3214,7 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
   }
 
   if (logger_) {
-    logger_->logSubscribeUpdate(subscribeUpdate, ControlMessageType::PARSED);
+    logger_->logSubscribeUpdate(requestUpdate, ControlMessageType::PARSED);
   }
 
   if (closeSessionIfRequestIDInvalid(existingRequestID, false, false, false)) {
@@ -3229,21 +3227,21 @@ void MoQSession::onSubscribeUpdate(SubscribeUpdate subscribeUpdate) {
     return;
   }
 
-  it->second->setSubPriority(subscribeUpdate.priority);
+  it->second->setSubPriority(requestUpdate.priority);
   // TODO: update priority of tracks in flight
   auto pubTrackIt = pubTracks_.find(existingRequestID);
   if (pubTrackIt == pubTracks_.end()) {
-    XLOG(ERR) << "SubscribeUpdate track not found id=" << existingRequestID
+    XLOG(ERR) << "RequestUpdate track not found id=" << existingRequestID
               << " sess=" << this;
     return;
   }
   auto trackPublisher =
       std::static_pointer_cast<TrackPublisherImpl>(pubTrackIt->second);
   if (!trackPublisher) {
-    XLOG(ERR) << "SubscriptionRequestID in SubscribeUpdate is for a FETCH, id="
+    XLOG(ERR) << "existingRequestID in RequestUpdate is for a FETCH, id="
               << existingRequestID << " sess=" << this;
   } else {
-    trackPublisher->onSubscribeUpdate(std::move(subscribeUpdate));
+    trackPublisher->onRequestUpdate(std::move(requestUpdate));
   }
 }
 
@@ -4518,30 +4516,30 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   retireRequestID(/*signalWriteLoop=*/false);
 }
 
-void MoQSession::subscribeUpdateOk(const RequestOk& requestOk) {
+void MoQSession::requestUpdateOk(const RequestOk& requestOk) {
   XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
              << " sess=" << this;
 
   auto res = moqFrameWriter_.writeRequestOk(
       controlWriteBuf_, requestOk, FrameType::REQUEST_OK);
   if (!res) {
-    XLOG(ERR) << "writeRequestOk for SUBSCRIBE_UPDATE failed sess=" << this;
+    XLOG(ERR) << "writeRequestOk for REQUEST_UPDATE failed sess=" << this;
     return;
   }
 
   controlWriteEvent_.signal();
 }
 
-void MoQSession::subscribeUpdateError(
+void MoQSession::requestUpdateError(
     const SubscribeUpdateError& requestError,
     RequestID existingRequestID) {
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
 
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, requestError, FrameType::SUBSCRIBE_UPDATE);
+      controlWriteBuf_, requestError, FrameType::REQUEST_UPDATE);
   if (!res) {
-    XLOG(ERR) << "writeRequestError for SUBSCRIBE_UPDATE failed sess=" << this;
+    XLOG(ERR) << "writeRequestError for REQUEST_UPDATE failed sess=" << this;
     // Proceed to cleanup state even if write failed
     // The write has errored out but this is still an update error
   } else {
@@ -4559,7 +4557,7 @@ void MoQSession::subscribeUpdateError(
         requestError.reasonPhrase};
     it->second->terminatePublish(pubDone, ResetStreamErrorCode::CANCELLED);
   } else {
-    XLOG(ERR) << "subscribeUpdateError for invalid subscription id="
+    XLOG(ERR) << "requestUpdateError for invalid subscription id="
               << existingRequestID << " sess=" << this;
   }
 }
@@ -4609,16 +4607,16 @@ void MoQSession::fetchComplete(RequestID requestID) {
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
-void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
+void MoQSession::requestUpdate(const RequestUpdate& reqUpdate) {
   if (logger_) {
-    logger_->logSubscribeUpdate(subUpdate);
+    logger_->logSubscribeUpdate(reqUpdate);
   }
   XLOG(DBG1) << __func__ << " sess=" << this;
-  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeUpdate);
-  auto trackAliasIt = reqIdToTrackAlias_.find(subUpdate.existingRequestID);
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onRequestUpdate);
+  auto trackAliasIt = reqIdToTrackAlias_.find(reqUpdate.existingRequestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
     // unknown
-    XLOG(ERR) << "No matching request ID=" << subUpdate.existingRequestID
+    XLOG(ERR) << "No matching request ID=" << reqUpdate.existingRequestID
               << " sess=" << this;
     return;
   }
@@ -4629,9 +4627,9 @@ void MoQSession::subscribeUpdate(const SubscribeUpdate& subUpdate) {
               << " sess=" << this;
     return;
   }
-  auto res = moqFrameWriter_.writeSubscribeUpdate(controlWriteBuf_, subUpdate);
+  auto res = moqFrameWriter_.writeRequestUpdate(controlWriteBuf_, reqUpdate);
   if (!res) {
-    XLOG(ERR) << "writeSubscribeUpdate failed sess=" << this;
+    XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
     return;
   }
   controlWriteEvent_.signal();

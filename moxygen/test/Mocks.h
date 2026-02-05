@@ -26,7 +26,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onClientSetup, (ClientSetup clientSetup));
   MOCK_METHOD(void, onServerSetup, (ServerSetup serverSetup));
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest subscribeRequest));
-  MOCK_METHOD(void, onSubscribeUpdate, (SubscribeUpdate subscribeUpdate));
+  MOCK_METHOD(void, onRequestUpdate, (RequestUpdate requestUpdate));
   MOCK_METHOD(void, onSubscribeOk, (SubscribeOk subscribeOk));
   MOCK_METHOD(void, onRequestOk, (RequestOk reqOk, FrameType frameType));
   MOCK_METHOD(void, onRequestError, (RequestError error, FrameType frameType));
@@ -334,7 +334,7 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onSubscribeError, (SubscribeErrorCode), (override));
 
-  MOCK_METHOD(void, onSubscribeUpdate, (), (override));
+  MOCK_METHOD(void, onRequestUpdate, (), (override));
 
   MOCK_METHOD(void, onFetchSuccess, (), (override));
 
@@ -389,7 +389,7 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
 
   MOCK_METHOD(void, onSubscribeError, (SubscribeErrorCode), (override));
 
-  MOCK_METHOD(void, onSubscribeUpdate, (), (override));
+  MOCK_METHOD(void, onRequestUpdate, (), (override));
 
   MOCK_METHOD(void, onFetchSuccess, (), (override));
 

@@ -45,8 +45,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
       kDefaultPriority,
       true};
 
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
   EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
@@ -100,8 +100,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
       kDefaultPriority,
       true};
 
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
   EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
@@ -164,8 +164,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
       kDefaultPriority + 1,
       true};
 
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
   EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
@@ -242,8 +242,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
       initialForward,   // Keep forward the same
   };
 
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
   EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked,

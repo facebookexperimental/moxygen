@@ -132,6 +132,7 @@ enum class ResetStreamErrorCode : uint32_t {
 
 enum class FrameType : uint64_t {
   SUBSCRIBE_UPDATE = 2,
+  REQUEST_UPDATE = 2,
   SUBSCRIBE = 3,
   SUBSCRIBE_OK = 4,
   SUBSCRIBE_ERROR = 5,

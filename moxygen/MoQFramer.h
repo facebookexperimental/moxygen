@@ -155,7 +155,7 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<SubscribeUpdate, ErrorCode> parseSubscribeUpdate(
+  folly::Expected<RequestUpdate, ErrorCode> parseRequestUpdate(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
@@ -356,7 +356,7 @@ class MoQFrameParser {
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   void handleRequestSpecificParams(
-      SubscribeUpdate& subscribeUpdate,
+      RequestUpdate& requestUpdate,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
   void handleRequestSpecificParams(
@@ -459,9 +459,16 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const SubscribeRequest& subscribeRequest) const noexcept;
 
+  WriteResult writeRequestUpdate(
+      folly::IOBufQueue& writeBuf,
+      const RequestUpdate& update) const noexcept;
+
+  // Backward compatibility forwarder
   WriteResult writeSubscribeUpdate(
       folly::IOBufQueue& writeBuf,
-      const SubscribeUpdate& update) const noexcept;
+      const SubscribeUpdate& update) const noexcept {
+    return writeRequestUpdate(writeBuf, update);
+  }
 
   WriteResult writeSubscribeOk(
       folly::IOBufQueue& writeBuf,

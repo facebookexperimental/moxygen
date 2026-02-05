@@ -422,11 +422,23 @@ class MoQSession : public Subscriber,
   void sendSubscribeOk(const SubscribeOk& subOk);
   void subscribeError(const SubscribeError& subErr);
   void unsubscribe(const Unsubscribe& unsubscribe);
-  void subscribeUpdate(const SubscribeUpdate& subUpdate);
-  void subscribeUpdateOk(const RequestOk& requestOk);
-  void subscribeUpdateError(
+  void requestUpdate(const RequestUpdate& reqUpdate);
+  void requestUpdateOk(const RequestOk& requestOk);
+  void requestUpdateError(
       const SubscribeUpdateError& requestError,
       RequestID existingRequestID);
+  // Backward compatibility forwarders
+  void subscribeUpdate(const SubscribeUpdate& subUpdate) {
+    requestUpdate(subUpdate);
+  }
+  void subscribeUpdateOk(const RequestOk& reqOk) {
+    requestUpdateOk(reqOk);
+  }
+  void subscribeUpdateError(
+      const SubscribeUpdateError& reqError,
+      RequestID existingReqID) {
+    requestUpdateError(reqError, existingReqID);
+  }
   void sendPublishDone(const PublishDone& pubDone);
 
   folly::coro::Task<void> handleFetch(
@@ -448,7 +460,7 @@ class MoQSession : public Subscriber,
   void onClientSetup(ClientSetup clientSetup) override;
   void onServerSetup(ServerSetup setup) override;
   void onSubscribe(SubscribeRequest subscribeRequest) override;
-  void onSubscribeUpdate(SubscribeUpdate subscribeUpdate) override;
+  void onRequestUpdate(RequestUpdate requestUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
   void onRequestOk(RequestOk requestOk, FrameType frameType) override;
   void onRequestError(RequestError requestError, FrameType frameType) override;

@@ -157,8 +157,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
       true};
 
   // Set expectations for stats callbacks for all versions
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
 
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
 
@@ -263,8 +263,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
       false};
 
   // Set expectations for stats callbacks for all versions
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
 
   auto updateResult =
       co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
@@ -903,8 +903,8 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
       true};
 
   // Set expectations for stats callbacks for all versions
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeUpdate());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
 
   co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
 

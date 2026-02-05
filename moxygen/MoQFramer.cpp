@@ -1542,29 +1542,29 @@ void MoQFrameParser::handleRequestSpecificParams(
   }
 }
 
-folly::Expected<SubscribeUpdate, ErrorCode>
-MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
-    const noexcept {
+folly::Expected<RequestUpdate, ErrorCode> MoQFrameParser::parseRequestUpdate(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
   CHECK(version_.has_value())
-      << "The version must be set before parsing a subscribe update";
+      << "The version must be set before parsing a request update";
 
-  SubscribeUpdate subscribeUpdate;
+  RequestUpdate requestUpdate;
   auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!requestID) {
-    XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on requestID";
+    XLOG(DBG4) << "parseRequestUpdate: UNDERFLOW on requestID";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-  subscribeUpdate.requestID = requestID->first;
+  requestUpdate.requestID = requestID->first;
   length -= requestID->second;
 
   if (getDraftMajorVersion(*version_) >= 14) {
     auto existingRequestID =
         quic::follyutils::decodeQuicInteger(cursor, length);
     if (!existingRequestID) {
-      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on existingRequestID";
+      XLOG(DBG4) << "parseRequestUpdate: UNDERFLOW on existingRequestID";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeUpdate.existingRequestID = existingRequestID->first;
+    requestUpdate.existingRequestID = existingRequestID->first;
     length -= existingRequestID->second;
   }
 
@@ -1573,39 +1573,39 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
     if (!start) {
       return folly::makeUnexpected(start.error());
     }
-    subscribeUpdate.start = start.value();
+    requestUpdate.start = start.value();
 
     auto endGroup = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!endGroup) {
-      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on endGroup";
+      XLOG(DBG4) << "parseRequestUpdate: UNDERFLOW on endGroup";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeUpdate.endGroup = endGroup->first;
+    requestUpdate.endGroup = endGroup->first;
     length -= endGroup->second;
   }
 
   if (getDraftMajorVersion(*version_) < 15) {
     if (length < 1) {
-      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on priority";
+      XLOG(DBG4) << "parseRequestUpdate: UNDERFLOW on priority";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeUpdate.priority = cursor.readBE<uint8_t>();
+    requestUpdate.priority = cursor.readBE<uint8_t>();
     length--;
 
     if (length < 1) {
-      XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on forwardFlag";
+      XLOG(DBG4) << "parseRequestUpdate: UNDERFLOW on forwardFlag";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     uint8_t forwardFlag = cursor.readBE<uint8_t>();
     if (forwardFlag > 1) {
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
-    subscribeUpdate.forward = (forwardFlag == 1);
+    requestUpdate.forward = (forwardFlag == 1);
     length--;
   } else {
     // For draft >= 15, set default priority to 128
     // It will be overridden in handleRequestSpecificParams if present
-    subscribeUpdate.priority = kDefaultPriority;
+    requestUpdate.priority = kDefaultPriority;
     // For draft >= 15, forward field is left unset (std::nullopt) by default
     // It will be set in handleRequestSpecificParams only if FORWARD param
     // present This allows existing forward state to be preserved when param is
@@ -1614,7 +1614,7 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
-    XLOG(DBG4) << "parseSubscribeUpdate: UNDERFLOW on numParams";
+    XLOG(DBG4) << "parseRequestUpdate: UNDERFLOW on numParams";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
@@ -1624,40 +1624,40 @@ MoQFrameParser::parseSubscribeUpdate(folly::io::Cursor& cursor, size_t length)
       cursor,
       length,
       numParams->first,
-      subscribeUpdate.params,
+      requestUpdate.params,
       requestSpecificParams);
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
-  handleRequestSpecificParams(subscribeUpdate, requestSpecificParams);
+  handleRequestSpecificParams(requestUpdate, requestSpecificParams);
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
-  return subscribeUpdate;
+  return requestUpdate;
 }
 
 void MoQFrameParser::handleRequestSpecificParams(
-    SubscribeUpdate& subscribeUpdate,
+    RequestUpdate& requestUpdate,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   if (getDraftMajorVersion(*version_) >= 15) {
     auto filter = extractSubscriptionFilter(requestSpecificParams);
     if (filter.has_value()) {
       if (filter->location.has_value()) {
-        subscribeUpdate.start = filter->location.value();
+        requestUpdate.start = filter->location.value();
       }
       if (filter->endGroup.has_value()) {
-        subscribeUpdate.endGroup = filter->endGroup.value() + 1;
+        requestUpdate.endGroup = filter->endGroup.value() + 1;
       } else if (filter->filterType == LocationType::AbsoluteStart) {
-        subscribeUpdate.endGroup = 0;
+        requestUpdate.endGroup = 0;
       }
     }
 
     // SUBSCRIBER_PRIORITY
     handleSubscriberPriorityParam(
-        subscribeUpdate.priority, requestSpecificParams);
+        requestUpdate.priority, requestSpecificParams);
 
     // FORWARD
-    handleForwardParam(subscribeUpdate.forward, requestSpecificParams);
+    handleForwardParam(requestUpdate.forward, requestSpecificParams);
   }
 }
 
@@ -4222,11 +4222,11 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
   return size;
 }
 
-WriteResult MoQFrameWriter::writeSubscribeUpdate(
+WriteResult MoQFrameWriter::writeRequestUpdate(
     folly::IOBufQueue& writeBuf,
-    const SubscribeUpdate& update) const noexcept {
+    const RequestUpdate& update) const noexcept {
   CHECK(version_.has_value())
-      << "Version needs to be set to write subscribe update";
+      << "Version needs to be set to write request update";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_UPDATE, error);

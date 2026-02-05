@@ -457,8 +457,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
         folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 7000));
 
     // Set expectations for stats callbacks for all versions
-    EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
-    EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
+    EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+    EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
 
     co_await capturedHandle->subscribeUpdate(subscribeUpdate);
 
@@ -521,8 +521,8 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
         true};
 
     // Set expectations for stats callbacks for all versions
-    EXPECT_CALL(*serverSubscriberStatsCallback_, onSubscribeUpdate());
-    EXPECT_CALL(*clientPublisherStatsCallback_, onSubscribeUpdate());
+    EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+    EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
 
     co_await capturedHandle->subscribeUpdate(subscribeUpdate);
 
