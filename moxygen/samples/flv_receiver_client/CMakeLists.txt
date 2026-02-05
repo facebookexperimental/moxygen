@@ -27,6 +27,7 @@ target_link_libraries(
   flvparser
   moqmi
   moxygenwtclient
+  moqmitoflv
 )
 
 install(
