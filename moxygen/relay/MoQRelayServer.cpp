@@ -58,7 +58,7 @@ class MoQRelayServer : public MoQServer {
  protected:
   std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      std::shared_ptr<MoQExecutor> executor) override {
+      MoQExecutor::KeepAlive executor) override {
     return std::make_shared<MoQRelaySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(std::move(wt)),
         *this,

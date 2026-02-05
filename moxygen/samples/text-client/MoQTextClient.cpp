@@ -160,7 +160,7 @@ class MoQTextClient : public Subscriber,
                       public std::enable_shared_from_this<MoQTextClient> {
  public:
   MoQTextClient(
-      std::shared_ptr<MoQFollyExecutorImpl> evb,
+      MoQExecutor::KeepAlive evb,
       proxygen::URL url,
       FullTrackName ftn,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
@@ -427,15 +427,15 @@ int main(int argc, char* argv[]) {
       << "Can specify at most one of jafetch or jrfetch or fetch";
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
-  std::shared_ptr<MoQFollyExecutorImpl> moqEvb =
-      std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  std::unique_ptr<MoQFollyExecutorImpl> moqEvb =
+      std::make_unique<MoQFollyExecutorImpl>(&eventBase);
   std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr;
   if (FLAGS_insecure) {
     verifier = std::make_shared<
         moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>();
   }
   auto textClient = std::make_shared<MoQTextClient>(
-      moqEvb,
+      moqEvb->keepAlive(),
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}),
       verifier,

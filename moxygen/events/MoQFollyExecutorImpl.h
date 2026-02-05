@@ -18,6 +18,17 @@ class MoQFollyExecutorImpl : public MoQExecutor,
   explicit MoQFollyExecutorImpl(folly::EventBase* evb)
       : quic::FollyQuicEventBase(evb) {}
 
+  ~MoQFollyExecutorImpl() override {
+    // Wait for all KeepAlive tokens to be released before destruction
+    joinKeepAlive();
+  }
+
+  // Not copyable or movable - destructor calls joinKeepAlive()
+  MoQFollyExecutorImpl(const MoQFollyExecutorImpl&) = delete;
+  MoQFollyExecutorImpl& operator=(const MoQFollyExecutorImpl&) = delete;
+  MoQFollyExecutorImpl(MoQFollyExecutorImpl&&) = delete;
+  MoQFollyExecutorImpl& operator=(MoQFollyExecutorImpl&&) = delete;
+
   void add(folly::Func func) override;
 
   // Timeout scheduling methods

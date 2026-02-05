@@ -99,12 +99,12 @@ class MoQSession : public Subscriber,
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      std::shared_ptr<MoQExecutor> exec);
+      MoQExecutor::KeepAlive exec);
 
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
-      std::shared_ptr<MoQExecutor> exec);
+      MoQExecutor::KeepAlive exec);
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
@@ -328,7 +328,7 @@ class MoQSession : public Subscriber,
       return nullptr;
     }
 
-    std::shared_ptr<MoQExecutor> getExecutor() const {
+    MoQExecutor::KeepAlive getExecutor() const {
       return session_ ? session_->exec_ : nullptr;
     }
 
@@ -518,7 +518,7 @@ class MoQSession : public Subscriber,
   // Core session state
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;
-  std::shared_ptr<MoQExecutor> exec_;
+  MoQExecutor::KeepAlive exec_;
   std::shared_ptr<MLogger> logger_ = nullptr;
 
   // Control channel state

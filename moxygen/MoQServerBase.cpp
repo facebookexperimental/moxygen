@@ -26,7 +26,7 @@ std::shared_ptr<MLogger> MoQServerBase::createLogger() const {
 
 std::shared_ptr<MoQSession> MoQServerBase::createSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-    std::shared_ptr<MoQExecutor> executor) {
+    MoQExecutor::KeepAlive executor) {
   return std::make_shared<MoQSession>(
       std::move(wt), *this, std::move(executor));
 }

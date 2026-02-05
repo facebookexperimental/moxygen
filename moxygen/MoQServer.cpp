@@ -313,10 +313,10 @@ void MoQServer::setQuicStatsFactory(
   }
 }
 
-std::shared_ptr<MoQExecutor> MoQServer::getOrCreateExecutor(
-    folly::EventBase* evb) {
-  return executorLocal_.try_emplace_with(
-      *evb, [evb] { return std::make_shared<MoQFollyExecutorImpl>(evb); });
+MoQExecutor::KeepAlive MoQServer::getOrCreateExecutor(folly::EventBase* evb) {
+  auto& execPtr = executorLocal_.try_emplace_with(
+      *evb, [evb] { return std::make_unique<MoQFollyExecutorImpl>(evb); });
+  return execPtr->keepAlive();
 }
 
 } // namespace moxygen

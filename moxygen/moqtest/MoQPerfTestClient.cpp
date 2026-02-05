@@ -35,7 +35,7 @@ constexpr const char* kTrackName = "test";
 SubscriberState::SubscriberState(
     MoQPerfTestClient& client,
     size_t id,
-    std::shared_ptr<MoQFollyExecutorImpl> executor,
+    MoQExecutor::KeepAlive executor,
     const proxygen::URL& url,
     bool useQuicTransport)
     : testClient_(client),
@@ -267,7 +267,7 @@ MoQPerfTestClient::MoQPerfTestClient(
       maxSubscribersPerSecond_(maxSubscribersPerSecond),
       maxSubscribers_(maxSubscribers),
       deliveryTimeoutMs_(deliveryTimeoutMs),
-      sharedExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)) {
+      sharedExecutor_(std::make_unique<MoQFollyExecutorImpl>(evb)) {
   // Initialize MoQ test parameters for moq-test scheme
   params_.forwardingPreference = ForwardingPreference::ONE_SUBGROUP_PER_GROUP;
   params_.objectsPerGroup = objectsPerGroup;
@@ -383,7 +383,7 @@ folly::coro::Task<void> MoQPerfTestClient::addSubscriber() {
 
   try {
     auto subscriber = std::make_unique<SubscriberState>(
-        *this, id, sharedExecutor_, url_, useQuicTransport_);
+        *this, id, sharedExecutor_->keepAlive(), url_, useQuicTransport_);
 
     // Connect the subscriber
     co_await subscriber->connect();

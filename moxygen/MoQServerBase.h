@@ -70,7 +70,7 @@ class MoQServerBase : public MoQSession::ServerSetupCallback {
  protected:
   virtual std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-      std::shared_ptr<MoQExecutor> executor);
+      MoQExecutor::KeepAlive executor);
 
   // Coroutine to handle client session lifecycle
   folly::coro::Task<void> handleClientSession(

@@ -122,7 +122,7 @@ class MoQTestClient {
 
   ObjectReceiverCallback objectReceiverCallback_{*this};
 
-  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
+  std::unique_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClient> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;

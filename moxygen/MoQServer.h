@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "moxygen/MoQSession.h"
+#include "moxygen/events/MoQFollyExecutorImpl.h"
 
 namespace moxygen {
 
@@ -96,7 +97,7 @@ class MoQServer : public MoQServerBase {
  private:
   void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
 
-  std::shared_ptr<MoQExecutor> getOrCreateExecutor(folly::EventBase* evb);
+  MoQExecutor::KeepAlive getOrCreateExecutor(folly::EventBase* evb);
 
   class Handler : public proxygen::HTTPTransactionHandler {
    public:
@@ -159,7 +160,7 @@ class MoQServer : public MoQServerBase {
   std::shared_ptr<const fizz::server::FizzServerContext> fizzContext_;
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
-  folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
+  folly::EventBaseLocal<std::unique_ptr<MoQFollyExecutorImpl>> executorLocal_;
 
   friend class Handler;
 };

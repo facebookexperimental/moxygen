@@ -188,7 +188,7 @@ class MoQPerfClient : public moxygen::Subscriber,
   void drain();
 
  private:
-  std::shared_ptr<moxygen::MoQFollyExecutorImpl> moqExecutor_;
+  std::unique_ptr<moxygen::MoQFollyExecutorImpl> moqExecutor_;
   moxygen::MoQClient moqClient_;
   std::chrono::milliseconds connectTimeout_;
   std::chrono::milliseconds transactionTimeout_;

@@ -31,7 +31,7 @@ using StreamResetCallback = std::function<void(ResetStreamErrorCode)>;
 class MoQDeliveryTimer {
  public:
   MoQDeliveryTimer(
-      std::shared_ptr<MoQExecutor> exec,
+      MoQExecutor::KeepAlive exec,
       std::chrono::milliseconds deliveryTimeout,
       StreamResetCallback streamResetCallback)
       : exec_(std::move(exec)),
@@ -70,7 +70,7 @@ class MoQDeliveryTimer {
    */
   std::chrono::milliseconds calculateTimeout(std::chrono::microseconds srtt);
 
-  std::shared_ptr<MoQExecutor> exec_;
+  MoQExecutor::KeepAlive exec_;
   StreamResetCallback streamResetCallback_;
   // (objectId -> timer)
   folly::F14FastMap<uint64_t, std::unique_ptr<ObjectTimerCallback>>

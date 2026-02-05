@@ -690,20 +690,20 @@ bool MoQTestServer::startRelayClient(
   // Get event base and create executor
   auto evb = getWorkerEvbs()[0];
   if (!moqEvb_) {
-    moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(evb);
+    moqEvb_ = std::make_unique<MoQFollyExecutorImpl>(evb);
   }
 
   // Create client connection with MoQRelaySession factory
   if (useQuicTransport) {
     relayClient_ = std::make_unique<MoQClient>(
-        moqEvb_,
+        moqEvb_->keepAlive(),
         url,
         MoQRelaySession::createRelaySessionFactory(),
         std::make_shared<
             test::InsecureVerifierDangerousDoNotUseInProduction>());
   } else {
     relayClient_ = std::make_unique<MoQWebTransportClient>(
-        moqEvb_,
+        moqEvb_->keepAlive(),
         url,
         MoQRelaySession::createRelaySessionFactory(),
         std::make_shared<

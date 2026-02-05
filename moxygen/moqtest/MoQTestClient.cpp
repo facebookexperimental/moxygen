@@ -28,16 +28,16 @@ MoQTestClient::MoQTestClient(
     folly::EventBase* evb,
     proxygen::URL url,
     bool useQuicTransport)
-    : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
+    : moqExecutor_(std::make_unique<MoQFollyExecutorImpl>(evb)),
       moqClient_(
           useQuicTransport
               ? std::make_unique<MoQClient>(
-                    moqExecutor_,
+                    moqExecutor_->keepAlive(),
                     std::move(url),
                     std::make_shared<
                         test::InsecureVerifierDangerousDoNotUseInProduction>())
               : std::make_unique<MoQWebTransportClient>(
-                    moqExecutor_,
+                    moqExecutor_->keepAlive(),
                     std::move(url),
                     std::make_shared<
                         test::

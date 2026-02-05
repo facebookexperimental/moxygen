@@ -1998,7 +1998,7 @@ using folly::coro::co_error;
 // Constructors
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-    std::shared_ptr<MoQExecutor> exec)
+    MoQExecutor::KeepAlive exec)
     : dir_(MoQControlCodec::Direction::CLIENT),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
@@ -2009,7 +2009,7 @@ MoQSession::MoQSession(
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     ServerSetupCallback& serverSetupCallback,
-    std::shared_ptr<MoQExecutor> exec)
+    MoQExecutor::KeepAlive exec)
     : dir_(MoQControlCodec::Direction::SERVER),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
