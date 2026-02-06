@@ -60,9 +60,12 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceDone) {
   auto publishNamespaceHandle = publishNamespaceResult.value();
   EXPECT_CALL(*clientPublisherStatsCallback_, onPublishNamespaceDone());
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone());
+
+  folly::coro::Baton barricade;
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+      .WillOnce(testing::Invoke([&barricade]() { barricade.post(); }));
   publishNamespaceHandle->publishNamespaceDone();
-  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancel) {

@@ -2468,7 +2468,8 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
                 << " id=" << streamId << " sess=" << this;
       break;
     }
-    if (streamData->data || streamData->fin) {
+    if (!token.isCancellationRequested() &&
+        (streamData->data || streamData->fin)) {
       try {
         auto guard = shared_from_this();
         controlCodec_.onIngress(std::move(streamData->data), streamData->fin);

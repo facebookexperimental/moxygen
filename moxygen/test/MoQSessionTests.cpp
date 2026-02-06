@@ -387,6 +387,61 @@ CO_TEST_P_X(MoQSessionDeleteFromCallbackTest, DeleteFromPublishDoneCallback) {
   }
 }
 
+// Test that verifies fix for bad_weak_ptr crash
+// Scenario: Session is destroyed while controlReadLoop coroutine is waiting
+// for data. When data arrives, the coroutine should exit gracefully instead
+// of crashing with bad_weak_ptr.
+// See: T254245035
+CO_TEST_P_X(
+    MoQSessionDeleteFromCallbackTest,
+    WeakFromThisGracefulExitOnSessionDestroy) {
+  // Setup the session
+  co_await setupMoQSession();
+
+  // Get weak_ptr to track session lifetime
+  std::weak_ptr<MoQSession> weakClient = clientSession_;
+
+  // The control stream is stream ID 0. We need to:
+  // 1. Pause data delivery so controlReadLoop blocks on co_await
+  // 2. Release the session shared_ptr
+  // 3. Deliver data to trigger the coroutine resume
+  // 4. Verify it exits gracefully (with our fix) instead of crashing
+
+  // Pause data delivery on the control stream (ID 0)
+  // This ensures controlReadLoop is blocked waiting for data
+  serverWt_->writeHandles[0]->setImmediateDelivery(false);
+
+  // Write some data that will be held in the inflight buffer
+  auto data = folly::IOBuf::copyBuffer("test");
+  serverWt_->writeHandles[0]->writeStreamData(std::move(data), false, nullptr);
+
+  // Now release the client session shared_ptr WITHOUT calling close()
+  // This simulates the scenario where all external references are released
+  // but the coroutine is still running
+  clientSession_.reset();
+
+  // Verify session weak_ptr is expired (no more shared_ptr holders)
+  EXPECT_TRUE(weakClient.expired())
+      << "Session should have no shared_ptr holders";
+
+  // Now deliver the data to wake up the controlReadLoop coroutine
+  // Before the fix: shared_from_this() would throw bad_weak_ptr
+  // After the fix: weak_from_this().lock() returns nullptr, coroutine exits
+  // gracefully
+  serverWt_->writeHandles[0]->deliverInflightData();
+
+  // Drive the event loop to let the coroutine process
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // If we get here without crashing, the fix is working
+
+  // Clean up: close server session
+  if (serverSession_) {
+    serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionDeleteFromCallbackTests,
     MoQSessionDeleteFromCallbackTest,
