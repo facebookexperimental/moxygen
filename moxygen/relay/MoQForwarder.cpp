@@ -351,7 +351,8 @@ folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
 MoQForwarder::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
-    Priority priority) {
+    Priority priority,
+    bool containsLastInGroup) {
   updateLargest(groupID, 0);
   auto subgroupForwarder =
       std::make_shared<SubgroupForwarder>(*this, groupID, subgroupID, priority);
@@ -360,8 +361,8 @@ MoQForwarder::beginSubgroup(
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
     }
-    auto sgRes =
-        sub->trackConsumer->beginSubgroup(groupID, subgroupID, priority);
+    auto sgRes = sub->trackConsumer->beginSubgroup(
+        groupID, subgroupID, priority, containsLastInGroup);
     if (sgRes.hasError()) {
       removeSubscriberOnError(*sub, sgRes.error(), "beginSubgroup");
     } else {
@@ -382,13 +383,14 @@ MoQForwarder::awaitStreamCredit() {
 
 folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::objectStream(
     const ObjectHeader& header,
-    Payload payload) {
+    Payload payload,
+    bool lastInGroup) {
   updateLargest(header.group, header.id);
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
     }
-    sub->trackConsumer->objectStream(header, maybeClone(payload))
+    sub->trackConsumer->objectStream(header, maybeClone(payload), lastInGroup)
         .onError([this, sub](const auto& err) {
           removeSubscriberOnError(*sub, err, "objectStream");
         });
@@ -397,13 +399,14 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::objectStream(
 
 folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
     const ObjectHeader& header,
-    Payload payload) {
+    Payload payload,
+    bool lastInGroup) {
   updateLargest(header.group, header.id);
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
     }
-    sub->trackConsumer->datagram(header, maybeClone(payload))
+    sub->trackConsumer->datagram(header, maybeClone(payload), lastInGroup)
         .onError([this, sub](const auto& err) {
           removeSubscriberOnError(*sub, err, "datagram");
         });

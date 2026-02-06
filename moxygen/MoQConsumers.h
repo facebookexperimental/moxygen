@@ -143,9 +143,14 @@ class TrackConsumer {
 
   // Begin delivering a new subgroup in the specified group.  If the consumer is
   // writing, this Can fail with MoQPublishError::BLOCKED when out of stream
-  // credit.
+  // credit.  containsLastInGroup indicates this subgroup contains the last
+  // object in the group.
   virtual folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority) = 0;
+  beginSubgroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      bool containsLastInGroup = false) = 0;
 
   // Wait for additional stream credit.
   virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
@@ -153,16 +158,20 @@ class TrackConsumer {
 
   // Deliver a single-object or object status subgroup.  header.length must
   // equal payload length, or be 0 for non-NORMAL status.  Can fail with
-  // MoQPublishError::BLOCKED when out of stream credit.
+  // MoQPublishError::BLOCKED when out of stream credit.  lastInGroup indicates
+  // the object is the last in the group.
   virtual folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
-      Payload payload) = 0;
+      Payload payload,
+      bool lastInGroup = false) = 0;
 
   // Deliver a datagram in this track.  This can be dropped by the sender or
-  // receiver if resources are low.
+  // receiver if resources are low.  lastInGroup indicates the object is the
+  // last in the group.
   virtual folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
-      Payload payload) = 0;
+      Payload payload,
+      bool lastInGroup = false) = 0;
 
   // Inform the consumer that the publisher will not open any new subgroups or
   // send any new datagrams for this track.

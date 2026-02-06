@@ -65,8 +65,8 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
         /*finFetch=*/true);
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
   });
-  EXPECT_CALL(*subscribeCallback_, datagram(_, _))
-      .WillOnce([&](const auto& header, auto) {
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
+      .WillOnce([&](const auto& header, auto, bool) {
         EXPECT_EQ(header.length, 11);
         return folly::unit;
       });
@@ -134,8 +134,8 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
     }
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
   });
-  EXPECT_CALL(*subscribeCallback_, datagram(_, _))
-      .WillRepeatedly([&](const auto& header, auto) {
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
+      .WillRepeatedly([&](const auto& header, auto, bool) {
         EXPECT_EQ(header.length, 11);
         return folly::unit;
       });

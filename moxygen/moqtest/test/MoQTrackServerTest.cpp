@@ -101,7 +101,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
     // Create a mock subgroup consumer
     auto mockSubgroupConsumer =
         std::make_shared<moxygen::MockSubgroupConsumer>();
-    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 0, testing::_))
+    EXPECT_CALL(
+        *mockConsumer, beginSubgroup(groupId, 0, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumer));
     for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
       // Find Object Size
@@ -152,7 +153,8 @@ TEST_F(
     // Create a mock subgroup consumer
     auto mockSubgroupConsumer =
         std::make_shared<moxygen::MockSubgroupConsumer>();
-    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 0, testing::_))
+    EXPECT_CALL(
+        *mockConsumer, beginSubgroup(groupId, 0, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumer));
     for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
       // Find Object Size
@@ -221,7 +223,9 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
       // Create a mock subgroup consumer
       auto mockSubgroupConsumer =
           std::make_shared<moxygen::MockSubgroupConsumer>();
-      EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, objectId, testing::_))
+      EXPECT_CALL(
+          *mockConsumer,
+          beginSubgroup(groupId, objectId, testing::_, testing::_))
           .WillOnce(testing::Return(mockSubgroupConsumer));
       EXPECT_CALL(
           *mockSubgroupConsumer, object(objectId, testing::_, testing::_, true))
@@ -260,9 +264,11 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
         std::make_shared<moxygen::MockSubgroupConsumer>();
     auto mockSubgroupConsumerZero =
         std::make_shared<moxygen::MockSubgroupConsumer>();
-    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 0, testing::_))
+    EXPECT_CALL(
+        *mockConsumer, beginSubgroup(groupId, 0, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumerZero));
-    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 1, testing::_))
+    EXPECT_CALL(
+        *mockConsumer, beginSubgroup(groupId, 1, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumerOne));
 
     for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
@@ -334,10 +340,12 @@ TEST_F(
         std::make_shared<moxygen::MockSubgroupConsumer>();
     auto mockSubgroupConsumerZero =
         std::make_shared<moxygen::MockSubgroupConsumer>();
-    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 0, testing::_))
+    EXPECT_CALL(
+        *mockConsumer, beginSubgroup(groupId, 0, testing::_, testing::_))
 
         .WillRepeatedly(testing::Return(mockSubgroupConsumerZero));
-    EXPECT_CALL(*mockConsumer, beginSubgroup(groupId, 1, testing::_))
+    EXPECT_CALL(
+        *mockConsumer, beginSubgroup(groupId, 1, testing::_, testing::_))
 
         .WillRepeatedly(testing::Return(mockSubgroupConsumerOne));
 
@@ -436,9 +444,10 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
 
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
-      EXPECT_CALL(*mockConsumer, datagram(expectedHeader, testing::_))
+      EXPECT_CALL(
+          *mockConsumer, datagram(expectedHeader, testing::_, testing::_))
           .WillOnce([expectedHeader, objectSize](
-                        const auto& header, auto objectPayload) {
+                        const auto& header, auto objectPayload, bool) {
             // Check Object Header
             EXPECT_EQ(expectedHeader.group, header.group);
             EXPECT_EQ(expectedHeader.id, header.id);

@@ -173,6 +173,7 @@ class StreamPublisherImpl
       const std::optional<uint8_t>& sgPriority,
       SubgroupIDFormat format,
       bool includeExtensions,
+      bool endOfGroup,
       std::shared_ptr<MLogger> logger = nullptr,
       std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
       std::optional<std::chrono::milliseconds> deliveryTimeout = std::nullopt);
@@ -500,6 +501,7 @@ StreamPublisherImpl::StreamPublisherImpl(
     const std::optional<uint8_t>& sgPriority,
     SubgroupIDFormat format,
     bool includeExtensions,
+    bool endOfGroup,
     std::shared_ptr<MLogger> logger,
     std::shared_ptr<DeliveryCallback> deliveryCallback,
     std::optional<std::chrono::milliseconds> deliveryTimeout)
@@ -513,7 +515,6 @@ StreamPublisherImpl::StreamPublisherImpl(
   // When sgPriority is none, the receiver will use the value from
   // PUBLISHER_PRIORITY, which defaults to 128 if not sent by the publisher when
   // establishing the subscription.
-  bool endOfGroup = false;
   streamType_ = getSubgroupStreamType(
       publisher->getVersion(),
       format,
@@ -1203,8 +1204,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   // TrackConsumer overrides
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
-      override;
+  beginSubgroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      bool containsLastInGroup = false) override;
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(
@@ -1212,18 +1216,21 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       uint64_t subgroupID,
       Priority priority,
       SubgroupIDFormat format,
-      bool includeExtensions);
+      bool includeExtensions,
+      bool containsLastInGroup);
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitStreamCredit() override;
 
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
-      Payload payload) override;
+      Payload payload,
+      bool lastInGroup = false) override;
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
-      Payload payload) override;
+      Payload payload,
+      bool lastInGroup = false) override;
 
   folly::Expected<folly::Unit, MoQPublishError> publishDone(
       PublishDone pubDone) override;
@@ -1341,9 +1348,15 @@ folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
 MoQSession::TrackPublisherImpl::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
-    Priority pubPriority) {
+    Priority pubPriority,
+    bool containsLastInGroup) {
   return beginSubgroup(
-      groupID, subgroupID, pubPriority, SubgroupIDFormat::Present, true);
+      groupID,
+      subgroupID,
+      pubPriority,
+      SubgroupIDFormat::Present,
+      true,
+      containsLastInGroup);
 }
 
 folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -1352,7 +1365,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     uint64_t subgroupID,
     Priority pubPriority,
     SubgroupIDFormat format,
-    bool includeExtensions) {
+    bool includeExtensions,
+    bool containsLastInGroup) {
   if (!trackAlias_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Must set track alias first"));
@@ -1401,6 +1415,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       elidedPriority,
       format,
       includeExtensions,
+      containsLastInGroup,
       logger_,
       deliveryCallback_,
       effectiveTimeout);
@@ -1455,7 +1470,8 @@ void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
 folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::objectStream(
     const ObjectHeader& objHeader,
-    Payload payload) {
+    Payload payload,
+    bool lastInGroup) {
   if (!trackAlias_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Must set track alias first"));
@@ -1473,7 +1489,8 @@ MoQSession::TrackPublisherImpl::objectStream(
       *objHeader.priority,
       objHeader.subgroup == objHeader.id ? SubgroupIDFormat::FirstObject
                                          : SubgroupIDFormat::Present,
-      !extensions.empty());
+      !extensions.empty(),
+      lastInGroup);
   if (subgroup.hasError()) {
     return folly::makeUnexpected(std::move(subgroup.error()));
   }
@@ -1507,7 +1524,8 @@ MoQSession::TrackPublisherImpl::objectStream(
 folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::datagram(
     const ObjectHeader& header,
-    Payload payload) {
+    Payload payload,
+    bool lastInGroup) {
   if (!trackAlias_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Must set track alias first"));
@@ -1556,7 +1574,8 @@ MoQSession::TrackPublisherImpl::datagram(
           header.status,
           header.extensions,
           headerLength),
-      std::move(payload));
+      std::move(payload),
+      lastInGroup);
   // TODO: set priority when WT has an API for that
   auto res = wt->sendDatagram(writeBuf.move());
   if (res.hasError()) {

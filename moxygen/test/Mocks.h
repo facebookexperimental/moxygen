@@ -102,7 +102,10 @@ class MockTrackConsumer : public TrackConsumer {
   MOCK_METHOD(
       (folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>),
       beginSubgroup,
-      (uint64_t groupID, uint64_t subgroupID, Priority priority),
+      (uint64_t groupID,
+       uint64_t subgroupID,
+       Priority priority,
+       bool containsLastInGroup),
       (override));
 
   MOCK_METHOD(
@@ -114,13 +117,13 @@ class MockTrackConsumer : public TrackConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       objectStream,
-      (const ObjectHeader& header, Payload payload),
+      (const ObjectHeader& header, Payload payload, bool lastInGroup),
       (override));
 
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       datagram,
-      (const ObjectHeader& header, Payload payload),
+      (const ObjectHeader& header, Payload payload, bool lastInGroup),
       (override));
 
   MOCK_METHOD(

@@ -14,9 +14,13 @@ class TrackConsumerFilter : public TrackConsumer {
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
-      override {
-    return downstream_->beginSubgroup(groupID, subgroupID, priority);
+  beginSubgroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      bool containsLastInGroup = false) override {
+    return downstream_->beginSubgroup(
+        groupID, subgroupID, priority, containsLastInGroup);
   }
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
@@ -26,14 +30,16 @@ class TrackConsumerFilter : public TrackConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
-      Payload payload) override {
-    return downstream_->objectStream(header, std::move(payload));
+      Payload payload,
+      bool lastInGroup = false) override {
+    return downstream_->objectStream(header, std::move(payload), lastInGroup);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
-      Payload payload) override {
-    return downstream_->datagram(header, std::move(payload));
+      Payload payload,
+      bool lastInGroup = false) override {
+    return downstream_->datagram(header, std::move(payload), lastInGroup);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> publishDone(

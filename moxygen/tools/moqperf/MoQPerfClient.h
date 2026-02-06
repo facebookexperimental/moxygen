@@ -79,7 +79,8 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
   beginSubgroup(
       uint64_t /* groupID */,
       uint64_t /* subgroupID */,
-      Priority /* priority */) override {
+      Priority /* priority */,
+      bool /* containsLastInGroup */ = false) override {
     return std::make_shared<MoQPerfClientSubgroupConsumer>(
         [this](uint64_t inc) { dataSent_ += inc; });
   }
@@ -91,14 +92,16 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& /* header */,
-      Payload payload) override {
+      Payload payload,
+      bool /* lastInGroup */ = false) override {
     dataSent_ += payload->computeChainDataLength();
     return folly::Unit();
   }
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& /* header */,
-      Payload payload) override {
+      Payload payload,
+      bool /* lastInGroup */ = false) override {
     dataSent_ += payload->computeChainDataLength();
     return folly::Unit();
   }

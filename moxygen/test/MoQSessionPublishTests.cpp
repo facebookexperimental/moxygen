@@ -570,7 +570,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
 
                 // Verify that data is not delivered until PUBLISH_OK is
                 // returned
-                EXPECT_CALL(*trackConsumer, datagram(_, _)).Times(0);
+                EXPECT_CALL(*trackConsumer, datagram(_, _, _)).Times(0);
 
                 // Delay PUBLISH_OK response
                 return Subscriber::PublishConsumerAndReplyTask{
@@ -583,7 +583,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
                           co_await folly::coro::sleep(
                               std::chrono::milliseconds(100));
                           // Now data should be delivered
-                          EXPECT_CALL(*trackConsumer, datagram(_, _))
+                          EXPECT_CALL(*trackConsumer, datagram(_, _, _))
                               .WillOnce(testing::Return(folly::unit));
                           co_return PublishOk{
                               actualPub.requestID,
@@ -923,7 +923,7 @@ CO_TEST_P_X(MoQSessionTest, PublishConsumerObjectStreamAfterSessionClose) {
 
   // After session is closed and destroyed, objectStream should return an error
   auto res = consumer->objectStream(
-      ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
+      ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10), false);
   EXPECT_TRUE(res.hasError());
   EXPECT_EQ(res.error().code, MoQPublishError::API_ERROR);
 }

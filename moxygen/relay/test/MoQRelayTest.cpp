@@ -845,8 +845,8 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
   };
 
   // Subscriber 1 and 2 should get beginSubgroup
-  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
         setupSubgroupConsumer(sg);
         return folly::
@@ -854,8 +854,8 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
                 sg);
       });
 
-  EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+  EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
         setupSubgroupConsumer(sg);
         return folly::
@@ -864,7 +864,7 @@ TEST_F(MoQRelayTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
       });
 
   // Subscriber 3 joins mid-object and should NOT get beginSubgroup
-  EXPECT_CALL(*mockConsumer3, beginSubgroup(_, _, _)).Times(0);
+  EXPECT_CALL(*mockConsumer3, beginSubgroup(_, _, _, _)).Times(0);
 
   // Setup: publish track
   auto publishConsumer = doPublish(publisherSession, kTestTrackName);
@@ -929,8 +929,8 @@ TEST_F(MoQRelayTest, GracefulSessionDraining) {
 
   // Subscriber1: will have 2 open subgroups (0, 1)
   for (uint64_t i = 0; i < 2; ++i) {
-    EXPECT_CALL(*consumers[0], beginSubgroup(i, 0, _))
-        .WillOnce([this, i, &sub0_sgs](uint64_t, uint64_t, uint8_t) {
+    EXPECT_CALL(*consumers[0], beginSubgroup(i, 0, _, _))
+        .WillOnce([this, i, &sub0_sgs](uint64_t, uint64_t, uint8_t, bool) {
           sub0_sgs[i] = createMockSubgroupConsumer();
           return folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -939,8 +939,8 @@ TEST_F(MoQRelayTest, GracefulSessionDraining) {
   }
 
   // Subscriber2: will have 1 open subgroup (1)
-  EXPECT_CALL(*consumers[1], beginSubgroup(1, 0, _))
-      .WillOnce([this, &sub1_sg0](uint64_t, uint64_t, uint8_t) {
+  EXPECT_CALL(*consumers[1], beginSubgroup(1, 0, _, _))
+      .WillOnce([this, &sub1_sg0](uint64_t, uint64_t, uint8_t, bool) {
         sub1_sg0 = createMockSubgroupConsumer();
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -1002,8 +1002,8 @@ TEST_F(MoQRelayTest, RemoveSessionResetsOpenSubgroups) {
   auto consumer = createMockConsumer();
 
   for (uint64_t i = 0; i < sgs.size(); ++i) {
-    EXPECT_CALL(*consumer, beginSubgroup(i, 0, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+    EXPECT_CALL(*consumer, beginSubgroup(i, 0, _, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], object(0, testing::_, testing::_, false))
               .WillOnce(testing::Return(folly::unit));
@@ -1054,8 +1054,8 @@ TEST_F(MoQRelayTest, DrainingSubscriberRemovedOnSubgroupError) {
   auto consumer = createMockConsumer();
 
   for (uint64_t i = 0; i < sgs.size(); ++i) {
-    EXPECT_CALL(*consumer, beginSubgroup(i, 0, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+    EXPECT_CALL(*consumer, beginSubgroup(i, 0, _, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
           sgs[i] = createMockSubgroupConsumer();
           return folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -1120,8 +1120,8 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
   auto mockConsumer2 = createMockConsumer();
 
   // Sub1 should get beginSubgroup
-  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
         EXPECT_CALL(*sg, beginObject(_, _, _, _)).WillOnce(Return(folly::unit));
         EXPECT_CALL(*sg, reset(_));
@@ -1131,7 +1131,7 @@ TEST_F(MoQRelayTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
       });
 
   // Sub2 should also get beginSubgroup
-  EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _)).Times(0);
+  EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _, _)).Times(0);
 
   // Publish track
   auto publishConsumer =
@@ -1205,8 +1205,8 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
                 }()});
       });
 
-  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t) {
+  EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _, _))
+      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
         EXPECT_CALL(*sg, endOfSubgroup())
             .WillOnce(testing::Return(folly::unit));
@@ -1281,8 +1281,8 @@ TEST_F(MoQRelayTest, DataOperationCancelledWhenAllSubscribersFail) {
 
   // Setup both subscribers to succeed on first payload, fail on second
   for (size_t i = 0; i < 2; ++i) {
-    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], objectPayload(_, false))
               .WillOnce(Return(
@@ -1347,8 +1347,8 @@ TEST_F(MoQRelayTest, PartialSubscriberFailureDoesNotCancelData) {
   }
 
   // Setup subscriber 0 - will fail on second objectPayload
-  EXPECT_CALL(*consumers[0], beginSubgroup(0, 0, _))
-      .WillOnce([this, &sgs](uint64_t, uint64_t, uint8_t) {
+  EXPECT_CALL(*consumers[0], beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sgs](uint64_t, uint64_t, uint8_t, bool) {
         sgs[0] = createMockSubgroupConsumer();
         EXPECT_CALL(*sgs[0], objectPayload(_, false))
             .WillOnce(Return(
@@ -1367,8 +1367,8 @@ TEST_F(MoQRelayTest, PartialSubscriberFailureDoesNotCancelData) {
   // Setup subscribers 1 and 2 - will succeed on objectPayload
   // They will get reset during cleanup when the test calls subgroup->reset()
   for (size_t i = 1; i < 3; ++i) {
-    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t) {
+    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _, _))
+        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], objectPayload(_, false))
               .WillRepeatedly(Return(

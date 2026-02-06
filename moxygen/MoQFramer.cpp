@@ -3886,7 +3886,8 @@ WriteResult MoQFrameWriter::writeDatagramObject(
     folly::IOBufQueue& writeBuf,
     TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
+    std::unique_ptr<folly::IOBuf> objectPayload,
+    bool endOfGroup) const noexcept {
   size_t size = 0;
   bool error = false;
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
@@ -3914,7 +3915,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
             *version_,
             true,
             hasExtensions,
-            false,
+            endOfGroup,
             isObjectIdZero,
             priorityPresent)),
         size,
@@ -3944,7 +3945,7 @@ WriteResult MoQFrameWriter::writeDatagramObject(
             *version_,
             false,
             hasExtensions,
-            false,
+            endOfGroup,
             isObjectIdZero,
             priorityPresent)),
         size,

@@ -522,8 +522,12 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
-      override {
+  beginSubgroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      bool /*containsLastInGroup*/ = false) override {
+    // TODO: Handle containsLastInGroup parameter when caching
     auto res = consumer_->beginSubgroup(groupID, subgroupID, priority);
     if (res.hasValue()) {
       return std::make_shared<SubgroupWriteback>(
@@ -544,7 +548,9 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
-      Payload payload) override {
+      Payload payload,
+      bool /*lastInGroup*/ = false) override {
+    // TODO: Handle lastInGroup parameter when caching
     auto res = track_.updateLargest(
         {header.group, header.id}, isEndOfTrack(header.status));
     if (!res) {
@@ -571,7 +577,9 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
-      Payload payload) override {
+      Payload payload,
+      bool /*lastInGroup*/ = false) override {
+    // TODO: Handle lastInGroup parameter when caching
     auto res = track_.updateLargest(
         {header.group, header.id}, isEndOfTrack(header.status));
     if (!res) {

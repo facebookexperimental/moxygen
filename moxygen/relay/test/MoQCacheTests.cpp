@@ -50,11 +50,12 @@ class MoQCacheTest : public ::testing::Test {
     // Code to set up test environment, if needed
     ON_CALL(*trackConsumer_, setTrackAlias(_))
         .WillByDefault(Return(folly::unit));
-    ON_CALL(*trackConsumer_, datagram(_, _)).WillByDefault(Return(folly::unit));
-    ON_CALL(*trackConsumer_, objectStream(_, _))
+    ON_CALL(*trackConsumer_, datagram(_, _, _))
+        .WillByDefault(Return(folly::unit));
+    ON_CALL(*trackConsumer_, objectStream(_, _, _))
         .WillByDefault(Return(folly::unit));
     ON_CALL(*trackConsumer_, publishDone(_)).WillByDefault(Return(folly::unit));
-    ON_CALL(*trackConsumer_, beginSubgroup(_, _, _))
+    ON_CALL(*trackConsumer_, beginSubgroup(_, _, _, _))
         .WillByDefault(Return(makeSubgroupConsumer()));
     cache_.clear();
   }

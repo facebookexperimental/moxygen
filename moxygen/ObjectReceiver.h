@@ -191,8 +191,11 @@ class ObjectReceiver : public TrackConsumer,
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
-  beginSubgroup(uint64_t groupID, uint64_t subgroupID, Priority priority)
-      override {
+  beginSubgroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      bool /*containsLastInGroup*/ = false) override {
     ++openSubgroups_;
     auto receiver = std::make_shared<ObjectSubgroupReceiver>(
         callback_, trackAlias_, groupID, subgroupID, priority);
@@ -225,7 +228,8 @@ class ObjectReceiver : public TrackConsumer,
 
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
       const ObjectHeader& header,
-      Payload payload) override {
+      Payload payload,
+      bool /*lastInGroup*/ = false) override {
     auto fcState = callback_->onObject(trackAlias_, header, std::move(payload));
     if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
       if (fetchPublisher_) {
@@ -240,7 +244,8 @@ class ObjectReceiver : public TrackConsumer,
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
       const ObjectHeader& header,
-      Payload payload) override {
+      Payload payload,
+      bool /*lastInGroup*/ = false) override {
     (void)callback_->onObject(trackAlias_, header, std::move(payload));
     return folly::unit;
   }

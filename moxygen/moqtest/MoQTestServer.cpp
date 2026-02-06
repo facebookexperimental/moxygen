@@ -377,7 +377,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       header.id = objectId;
       header.extensions = Extensions(extensions, {});
 
-      auto res = callback->datagram(header, std::move(objectPayload));
+      auto res = callback->datagram(header, std::move(objectPayload), false);
       if (res.hasError()) {
         // If sending datagram fails, callback->publishDone with error
         PublishDone done;

@@ -446,7 +446,8 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       TrackAlias trackAlias,
       const ObjectHeader& objectHeader,
-      std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
+      std::unique_ptr<folly::IOBuf> objectPayload,
+      bool endOfGroup = false) const noexcept;
 
   WriteResult writeStreamObject(
       folly::IOBufQueue& writeBuf,
