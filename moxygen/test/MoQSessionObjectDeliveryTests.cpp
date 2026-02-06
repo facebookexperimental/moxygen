@@ -187,6 +187,52 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, MixSubgroupsAndDatagrams) {
+  // Test that subgroups and datagrams can be mixed on the same track
+  co_await setupMoQSession();
+  expectSubscribe(
+      [this](auto sub, auto pub) -> TaskSubscribeResult {
+        eventBase_.add([pub, sub] {
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
+          sgp->object(0, moxygen::test::makeBuf(10));
+          sgp->object(1, moxygen::test::makeBuf(10), noExtensions(), true);
+
+          // Send a datagram after the subgroup
+          pub->datagram(
+              ObjectHeader(1, 0, 0, 0, 11),
+              folly::IOBuf::copyBuffer("hello world"));
+
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
+        co_return makeSubscribeOkResult(sub);
+      },
+      MoQControlCodec::Direction::CLIENT);
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, object(1, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
+      .WillOnce(
+          testing::Invoke(
+              [](const auto& header,
+                 auto,
+                 bool) -> folly::Expected<folly::Unit, MoQPublishError> {
+                EXPECT_EQ(header.group, 1);
+                EXPECT_EQ(header.length, 11);
+                return folly::unit;
+              }));
+
+  expectPublishDone(MoQControlCodec::Direction::SERVER);
+  auto res = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, DatagramBeforeSessionSetup) {
   clientSession_->start();
   EXPECT_FALSE(clientWt_->isSessionClosed());
