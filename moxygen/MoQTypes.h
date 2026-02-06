@@ -27,6 +27,13 @@ const uint64_t kImmutableExtensionType = 0xB;
 const uint64_t kPriorGroupIdGapExtensionType = 0x3C;
 const uint64_t kPriorObjectIdGapExtensionType = 0x3E;
 
+// Track Property Extension Types (Draft-16+)
+constexpr uint64_t kDeliveryTimeoutExtensionType = 0x02;
+constexpr uint64_t kMaxCacheDurationExtensionType = 0x04;
+constexpr uint64_t kPublisherPriorityExtensionType = 0x0E;
+constexpr uint64_t kPublisherGroupOrderExtensionType = 0x22;
+constexpr uint64_t kDynamicGroupsExtensionType = 0x30;
+
 //////// Types ////////
 
 using Payload = std::unique_ptr<folly::IOBuf>;

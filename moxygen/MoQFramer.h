@@ -389,6 +389,11 @@ class MoQFrameParser {
       std::optional<bool>& forwardField,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
+  // Version translation: convert track property params to extensions for < v16
+  void convertTrackPropertyParamsToExtensions(
+      const TrackRequestParameters& params,
+      Extensions& extensions) const noexcept;
+
   std::optional<uint64_t> version_;
   mutable MoQTokenCache tokenCache_;
   mutable std::optional<uint64_t> previousObjectID_;
@@ -652,6 +657,11 @@ class MoQFrameWriter {
       bool& error) const noexcept;
 
   void resetWriterFetchContext() const noexcept;
+
+  // Version translation: convert track property extensions to params for < v16
+  void convertTrackPropertyExtensionsToParams(
+      const Extensions& extensions,
+      TrackRequestParameters& params) const noexcept;
 
   std::optional<uint64_t> version_;
   mutable std::optional<uint64_t> previousObjectID_;

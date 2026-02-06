@@ -6,6 +6,7 @@
 
 #include "moxygen/relay/MoQRelay.h"
 #include "moxygen/MoQFilters.h"
+#include "moxygen/MoQTrackProperties.h"
 
 namespace {
 constexpr uint8_t kDefaultUpstreamPriority = 128;
@@ -367,11 +368,11 @@ Subscriber::PublishResult MoQRelay::publish(
   // Set Forwarder Params
   forwarder->setGroupOrder(pub.groupOrder);
 
-  // Extract delivery timeout from publish request params and store in forwarder
-  auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
-      pub.params, session->getNegotiatedVersion().value());
-  if (deliveryTimeout && *deliveryTimeout > 0) {
-    forwarder->setDeliveryTimeout(*deliveryTimeout);
+  // Extract delivery timeout from publish request extensions and store in
+  // forwarder
+  auto deliveryTimeout = getPublisherDeliveryTimeout(pub);
+  if (deliveryTimeout && deliveryTimeout->count() > 0) {
+    forwarder->setDeliveryTimeout(deliveryTimeout->count());
   }
 
   auto subRes = subscriptions_.emplace(
@@ -727,7 +728,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       }
     });
     // Add subscriber first in case objects come before subscribe OK.
-    auto sessionVersion = session->getNegotiatedVersion();
     auto subscriber = forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
     if (!subscriber) {
@@ -766,16 +766,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     forwarder->setGroupOrder(pubGroupOrder);
 
     // Store upstream delivery timeout in forwarder
-    auto deliveryTimeout = MoQSession::getDeliveryTimeoutIfPresent(
-        subRes.value()->subscribeOk().params, sessionVersion.value());
+    auto deliveryTimeout =
+        getPublisherDeliveryTimeout(subRes.value()->subscribeOk());
 
     // Add delivery timeout to downstream subscriber explicitly as this is the
     // first subscriber. Forwarder can add it to subsequent subscribers
-    if (deliveryTimeout && *deliveryTimeout > 0) {
-      forwarder->setDeliveryTimeout(*deliveryTimeout);
+    if (deliveryTimeout && deliveryTimeout->count() > 0) {
+      forwarder->setDeliveryTimeout(deliveryTimeout->count());
       subscriber->setParam(
           {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-           *deliveryTimeout});
+           static_cast<uint64_t>(deliveryTimeout->count())});
     }
 
     subscriber->setPublisherGroupOrder(pubGroupOrder);

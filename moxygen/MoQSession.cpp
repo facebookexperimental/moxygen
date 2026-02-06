@@ -10,6 +10,7 @@
 #include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
 #include <quic/priority/HTTPPriorityQueue.h>
+#include <moxygen/MoQTrackProperties.h>
 #include <moxygen/events/MoQDeliveryTimeoutManager.h>
 
 #include <folly/logging/xlog.h>
@@ -1154,11 +1155,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     }
     setTrackAlias(subscribeOk.trackAlias);
     setGroupOrder(subscribeOk.groupOrder);
-    auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
-        subscribeOk.params, *session_->getNegotiatedVersion());
-    if (timeoutValue.has_value() && *timeoutValue > 0) {
-      deliveryTimeoutManager_.setUpstreamTimeout(
-          std::chrono::milliseconds(*timeoutValue));
+    auto timeout = getPublisherDeliveryTimeout(subscribeOk);
+    if (timeout.has_value() && timeout->count() > 0) {
+      deliveryTimeoutManager_.setUpstreamTimeout(*timeout);
     }
   }
 
@@ -4217,13 +4216,8 @@ Subscriber::PublishResult MoQSession::publish(
   }
   controlWriteEvent_.signal();
 
-  // Extract delivery timeout from publish params
-  std::optional<std::chrono::milliseconds> deliveryTimeout;
-  auto timeoutValue =
-      getDeliveryTimeoutIfPresent(pub.params, *negotiatedVersion_);
-  if (timeoutValue.has_value() && *timeoutValue > 0) {
-    deliveryTimeout = std::chrono::milliseconds(*timeoutValue);
-  }
+  // Extract delivery timeout from publish extensions
+  auto deliveryTimeout = getPublisherDeliveryTimeout(pub);
 
   // Create TrackConsumer for the publisher to write data
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(

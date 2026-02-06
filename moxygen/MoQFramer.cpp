@@ -1759,6 +1759,13 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     // Override from parameters if present
     handleRequestSpecificParams(subscribeOk, requestSpecificParams);
   }
+
+  // For < v16: convert track property params to extensions for uniform access
+  if (getDraftMajorVersion(*version_) < 16) {
+    convertTrackPropertyParamsToExtensions(
+        subscribeOk.params, subscribeOk.extensions);
+  }
+
   return subscribeOk;
 }
 
@@ -1969,6 +1976,11 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     // this might be overridden in handleRequestSpecificParams.
     publish.groupOrder = GroupOrder::OldestFirst;
     handleRequestSpecificParams(publish, requestSpecificParams);
+  }
+
+  // For < v16: convert track property params to extensions for uniform access
+  if (getDraftMajorVersion(*version_) < 16) {
+    convertTrackPropertyParamsToExtensions(publish.params, publish.extensions);
   }
 
   return publish;
@@ -2733,6 +2745,11 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // For < v16: convert track property params to extensions for uniform access
+  if (getDraftMajorVersion(*version_) < 16) {
+    convertTrackPropertyParamsToExtensions(fetchOk.params, fetchOk.extensions);
   }
 
   return fetchOk;
@@ -4388,6 +4405,14 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     writeExtensions(writeBuf, subscribeOk.extensions, size, error);
   }
 
+  // Make a mutable copy of params for potential extension->param conversion
+  TrackRequestParameters params = subscribeOk.params;
+
+  // For < v16: convert track property extensions to params
+  if (getDraftMajorVersion(*version_) < 16) {
+    convertTrackPropertyExtensionsToParams(subscribeOk.extensions, params);
+  }
+
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
     // Add EXPIRES parameter (only if non-zero)
@@ -4408,8 +4433,7 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
       requestSpecificParams.push_back(groupOrderParam);
     }
   }
-  writeTrackRequestParams(
-      writeBuf, subscribeOk.params, requestSpecificParams, size, error);
+  writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
   return size;
 }
 
@@ -4540,8 +4564,15 @@ WriteResult MoQFrameWriter::writePublish(
     writeExtensions(writeBuf, publish.extensions, size, error);
   }
 
-  writeTrackRequestParams(
-      writeBuf, publish.params, requestSpecificParams, size, error);
+  // Make a mutable copy of params for potential extension->param conversion
+  TrackRequestParameters params = publish.params;
+
+  // For < v16: convert track property extensions to params
+  if (getDraftMajorVersion(*version_) < 16) {
+    convertTrackPropertyExtensionsToParams(publish.extensions, params);
+  }
+
+  writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -5083,7 +5114,15 @@ WriteResult MoQFrameWriter::writeFetchOk(
     writeExtensions(writeBuf, fetchOk.extensions, size, error);
   }
 
-  writeTrackRequestParams(writeBuf, fetchOk.params, {}, size, error);
+  // Make a mutable copy of params for potential extension->param conversion
+  TrackRequestParameters params = fetchOk.params;
+
+  // For < v16: convert track property extensions to params
+  if (getDraftMajorVersion(*version_) < 16) {
+    convertTrackPropertyExtensionsToParams(fetchOk.extensions, params);
+  }
+
+  writeTrackRequestParams(writeBuf, params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -5192,6 +5231,65 @@ folly::Optional<FrameType> getFrameType(const folly::IOBufQueue& readBuf) {
     return folly::none;
   }
   return static_cast<FrameType>(frameType->first);
+}
+
+// Version translation helpers for track property extensions <-> params
+// These are used when communicating with < v16 peers
+
+void MoQFrameWriter::convertTrackPropertyExtensionsToParams(
+    const Extensions& extensions,
+    TrackRequestParameters& params) const noexcept {
+  // Convert track property extensions to params for < v16 compatibility
+  // Properties: DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY,
+  //             GROUP_ORDER, DYNAMIC_GROUPS
+
+  auto checkAndAddIfPresent = [&params](uint64_t paramKey, auto val) {
+    if (val) {
+      params.insertParam(Parameter(paramKey, *val));
+    }
+  };
+
+  checkAndAddIfPresent(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+      extensions.getIntExtension(kDeliveryTimeoutExtensionType));
+
+  checkAndAddIfPresent(
+      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION),
+      extensions.getIntExtension(kMaxCacheDurationExtensionType));
+
+  checkAndAddIfPresent(
+      folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
+      extensions.getIntExtension(kPublisherPriorityExtensionType));
+
+  // Note: GROUP_ORDER and DYNAMIC_GROUPS are v16+ only extensions,
+  // they don't have param equivalents in older versions
+}
+
+void MoQFrameParser::convertTrackPropertyParamsToExtensions(
+    const TrackRequestParameters& params,
+    Extensions& extensions) const noexcept {
+  // Convert track property params to extensions for uniform access
+  // Properties: DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY
+
+  for (const auto& param : params) {
+    switch (param.key) {
+      case folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT):
+        extensions.insertMutableExtension(
+            Extension{kDeliveryTimeoutExtensionType, param.asUint64});
+        break;
+      case folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION):
+        extensions.insertMutableExtension(
+            Extension{kMaxCacheDurationExtensionType, param.asUint64});
+        break;
+      case folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY):
+        extensions.insertMutableExtension(
+            Extension{kPublisherPriorityExtensionType, param.asUint64});
+        break;
+      default:
+        // Other params are not track properties, skip
+        break;
+    }
+  }
 }
 
 } // namespace moxygen

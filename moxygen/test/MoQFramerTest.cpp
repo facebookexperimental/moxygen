@@ -9,6 +9,7 @@
 #include <folly/logging/xlog.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
+#include "moxygen/MoQTrackProperties.h"
 #include "moxygen/test/TestUtils.h"
 
 using namespace moxygen;
@@ -121,8 +122,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     skip(cursor, 1);
     auto r8a = parser_.parsePublish(cursor, frameLength(cursor));
     testUnderflowResult(r8a);
-    EXPECT_TRUE(getFirstIntParam(
-        r8a->params, TrackRequestParamKey::PUBLISHER_PRIORITY));
+    EXPECT_TRUE(getPublisherPriority(*r8a).has_value());
 
     skip(cursor, 1);
     auto r8b = parser_.parsePublishOk(cursor, frameLength(cursor));
