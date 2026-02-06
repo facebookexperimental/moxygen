@@ -54,7 +54,7 @@ class SubgroupConsumer {
 
   // SubgroupConsumer enforces API semantics.
   //
-  // It’s an error to deliver any object or status if the object ID isn’t
+  // It's an error to deliver any object or status if the object ID isn't
   // strictly larger than the last delivered one on this subgroup.
   //
   // When using beginObject/objectPayload to deliver a streaming object, the
@@ -63,6 +63,10 @@ class SubgroupConsumer {
   //
   // It's an error to begin delivering any object/status or close the
   // stream in the middle of a streaming object.
+  //
+  // If any method returns a MoQPublishError, the SubgroupConsumer is
+  // implicitly reset and no further API calls should be made on it.
+  // Calling reset() after an error is a no-op.
 
   // Deliver the next object on this subgroup.
   virtual folly::Expected<folly::Unit, MoQPublishError> object(

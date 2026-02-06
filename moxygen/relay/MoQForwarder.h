@@ -269,6 +269,16 @@ class MoQForwarder : public TrackConsumer {
       std::optional<PublishDone> pubDone,
       const std::string& callsite);
 
+  // Handles errors on a subgroup for a specific subscriber.
+  // Soft errors (CANCELLED - from STOP_SENDING or delivery timeout) tombstone
+  // the subgroup by setting it to nullptr, preventing reopening but keeping
+  // the subscription alive. Hard errors remove the entire subscription.
+  void handleSubgroupError(
+      Subscriber& sub,
+      const SubgroupIdentifier& subgroupId,
+      const MoQPublishError& err,
+      const std::string& callsite);
+
   FullTrackName fullTrackName_;
   std::optional<TrackAlias> trackAlias_;
   folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;

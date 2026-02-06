@@ -19,7 +19,7 @@ struct MoQPublishError {
   enum Code {
     API_ERROR = 1,        // Semantic error (APIs called out of order)
     WRITE_ERROR = 2,      // The underlying write failed
-    CANCELLED = 3,        // The subgroup was/should be reset
+    CANCELLED = 3,        // The subgroup was reset (implicitly by the error)
     TOO_FAR_BEHIND = 5,   // Subscriber exceeded buffer limit (subscribe only)
     BLOCKED = 4,          // Consumer cannot accept more data (fetch only),
                           //  or out of stream credit (subscribe and fetch)
