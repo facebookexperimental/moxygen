@@ -119,6 +119,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   subscribeOk.expires = std::chrono::milliseconds(0);
   subscribeOk.groupOrder = GroupOrder::OldestFirst;
   subscribeOk.largest = AbsoluteLocation{2, 5};
+  // Draft 16+: Add extensions
+  if (getDraftMajorVersion(version) >= 16) {
+    subscribeOk.extensions.insertMutableExtensions(getTestExtensions());
+  }
   subscribeOk.params.insertParam(Parameter(
       folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION), 3600000));
   res = moqFrameWriter.writeSubscribeOk(writeBuf, subscribeOk);
@@ -148,6 +152,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   publishRequest.groupOrder = GroupOrder::Default;
   publishRequest.largest = std::nullopt;
   publishRequest.forward = true;
+  // Draft 16+: Add extensions
+  if (getDraftMajorVersion(version) >= 16) {
+    publishRequest.extensions.insertMutableExtensions(getTestExtensions());
+  }
   addTestParams(publishRequest.params, moqFrameWriter);
   publishRequest.params.insertParam(Parameter(
       folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY), 100));
@@ -278,6 +286,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   fetchOk.groupOrder = GroupOrder::NewestFirst;
   fetchOk.endOfTrack = 1;
   fetchOk.endLocation = AbsoluteLocation({0, 0});
+  // Draft 16+: Add extensions
+  if (getDraftMajorVersion(version) >= 16) {
+    fetchOk.extensions.insertMutableExtensions(getTestExtensions());
+  }
   fetchOk.params.insertParam(Parameter(
       folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION), 1000));
   res = moqFrameWriter.writeFetchOk(writeBuf, fetchOk);

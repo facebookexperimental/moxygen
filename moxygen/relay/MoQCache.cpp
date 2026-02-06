@@ -1220,11 +1220,12 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
     if (!fetchHandle) {
       XLOG(DBG1) << "no fetchHandle and last object";
       fetchHandle = std::make_shared<FetchHandle>(FetchOk(
-          {fetch.requestID,
-           fetch.groupOrder,
-           res.value()->fetchOk().endOfTrack,
-           res.value()->fetchOk().endLocation,
-           res.value()->fetchOk().params}));
+          fetch.requestID,
+          fetch.groupOrder,
+          res.value()->fetchOk().endOfTrack,
+          res.value()->fetchOk().endLocation,
+          res.value()->fetchOk().extensions,
+          res.value()->fetchOk().params));
     }
     fetchHandle->setUpstreamFetchHandle(res.value());
     co_return fetchHandle;

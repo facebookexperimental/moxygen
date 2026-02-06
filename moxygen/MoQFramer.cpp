@@ -1717,6 +1717,19 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     }
     subscribeOk.largest = *res;
   }
+
+  // Draft 16+: Parse extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensions(cursor, length, tempHeader);
+    if (!ext) {
+      XLOG(DBG4) << "parseSubscribeOk: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    subscribeOk.extensions = std::move(tempHeader.extensions);
+  }
+
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
     XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on numParams";
@@ -1920,6 +1933,18 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     // For draft >= 15, set default forward to true
     // It will be overridden in handleRequestSpecificParams if present
     publish.forward = true;
+  }
+
+  // Draft 16+: Parse extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensions(cursor, length, tempHeader);
+    if (!ext) {
+      XLOG(DBG4) << "parsePublish: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    publish.extensions = std::move(tempHeader.extensions);
   }
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -2681,6 +2706,18 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
     return folly::makeUnexpected(res2.error());
   }
   fetchOk.endLocation = std::move(res2.value());
+
+  // Draft 16+: Parse extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensions(cursor, length, tempHeader);
+    if (!ext) {
+      XLOG(DBG4) << "parseFetchOk: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    fetchOk.extensions = std::move(tempHeader.extensions);
+  }
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
@@ -4346,6 +4383,11 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     writeVarint(writeBuf, subscribeOk.largest->object, size, error);
   }
 
+  // Draft 16+: Write extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeExtensions(writeBuf, subscribeOk.extensions, size, error);
+  }
+
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
     // Add EXPIRES parameter (only if non-zero)
@@ -4491,6 +4533,11 @@ WriteResult MoQFrameWriter::writePublish(
     uint8_t forwardFlag = publish.forward ? 1 : 0;
     writeBuf.append(&forwardFlag, 1);
     size += 1;
+  }
+
+  // Draft 16+: Write extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeExtensions(writeBuf, publish.extensions, size, error);
   }
 
   writeTrackRequestParams(
@@ -4772,6 +4819,7 @@ WriteResult MoQFrameWriter::writeTrackStatusOk(
              trackStatusOk.expires,
              trackStatusOk.groupOrder,
              trackStatusOk.largest,
+             Extensions{},
              trackStatusOk.params}));
     if (!res) {
       return res;
@@ -5029,6 +5077,12 @@ WriteResult MoQFrameWriter::writeFetchOk(
   size += 1;
   writeVarint(writeBuf, fetchOk.endLocation.group, size, error);
   writeVarint(writeBuf, fetchOk.endLocation.object, size, error);
+
+  // Draft 16+: Write extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeExtensions(writeBuf, fetchOk.extensions, size, error);
+  }
+
   writeTrackRequestParams(writeBuf, fetchOk.params, {}, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {

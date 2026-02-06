@@ -975,6 +975,7 @@ struct SubscribeOk {
   GroupOrder groupOrder;
   // context exists is inferred from presence of largest
   std::optional<AbsoluteLocation> largest;
+  Extensions extensions; // Draft 16+
   TrackRequestParameters params{FrameType::SUBSCRIBE_OK};
 };
 
@@ -998,6 +999,7 @@ struct PublishRequest {
   GroupOrder groupOrder{GroupOrder::Default};
   std::optional<AbsoluteLocation> largest;
   bool forward{true};
+  Extensions extensions; // Draft 16+
   TrackRequestParameters params{FrameType::PUBLISH};
 };
 
@@ -1138,6 +1140,7 @@ struct FetchOk {
   GroupOrder groupOrder;
   uint8_t endOfTrack;
   AbsoluteLocation endLocation;
+  Extensions extensions; // Draft 16+
   TrackRequestParameters params{FrameType::FETCH_OK};
 };
 
