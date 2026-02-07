@@ -3216,19 +3216,10 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
   XLOG(DBG1) << __func__ << " id=" << requestUpdate.requestID
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onRequestUpdate);
-  auto existingRequestID = requestUpdate.requestID;
+  auto existingRequestID = requestUpdate.existingRequestID;
+  auto requestID = requestUpdate.requestID;
 
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
-    existingRequestID = requestUpdate.existingRequestID;
-
-    // RequestID meaning has changed, check validity
-    if (closeSessionIfRequestIDInvalid(requestUpdate.requestID, false, true)) {
-      return;
-    }
-  }
-
-  if (!publishHandler_) {
-    XLOG(DBG1) << __func__ << "No publisher callback set";
+  if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
 
@@ -3239,28 +3230,85 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
   if (closeSessionIfRequestIDInvalid(existingRequestID, false, false, false)) {
     return;
   }
-  auto it = pubTracks_.find(existingRequestID);
-  if (it == pubTracks_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << existingRequestID
-              << " sess=" << this;
+
+  // Inline lookup - check pubTracks_ for SUBSCRIBE or FETCH
+  auto pubIt = pubTracks_.find(existingRequestID);
+  if (pubIt != pubTracks_.end()) {
+    if (auto trackPub =
+            std::dynamic_pointer_cast<TrackPublisherImpl>(pubIt->second)) {
+      handleSubscribeRequestUpdate(std::move(requestUpdate), trackPub);
+      return;
+    }
+    if (auto fetchPub =
+            std::dynamic_pointer_cast<FetchPublisherImpl>(pubIt->second)) {
+      handleFetchRequestUpdate(requestUpdate, fetchPub);
+      return;
+    }
+  }
+
+  // Check reqIdToTrackAlias_ for PUBLISH
+  auto publishIt = reqIdToTrackAlias_.find(existingRequestID);
+  if (publishIt != reqIdToTrackAlias_.end()) {
+    handlePublishRequestUpdate(
+        std::move(requestUpdate), existingRequestID, publishIt->second);
     return;
   }
 
-  it->second->setSubPriority(requestUpdate.priority);
-  // TODO: update priority of tracks in flight
-  auto pubTrackIt = pubTracks_.find(existingRequestID);
-  if (pubTrackIt == pubTracks_.end()) {
-    XLOG(ERR) << "RequestUpdate track not found id=" << existingRequestID
-              << " sess=" << this;
+  // Unknown request ID
+  XLOG(ERR) << "RequestUpdate for unknown request ID=" << existingRequestID
+            << " sess=" << this;
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    requestUpdateError(
+        SubscribeUpdateError{
+            requestID, RequestErrorCode::INTERNAL_ERROR, "Unknown request ID"},
+        existingRequestID);
+  }
+}
+
+void MoQSession::handleSubscribeRequestUpdate(
+    RequestUpdate requestUpdate,
+    std::shared_ptr<TrackPublisherImpl> trackPublisher) {
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << " No publisher callback set";
     return;
   }
-  auto trackPublisher =
-      std::static_pointer_cast<TrackPublisherImpl>(pubTrackIt->second);
-  if (!trackPublisher) {
-    XLOG(ERR) << "existingRequestID in RequestUpdate is for a FETCH, id="
-              << existingRequestID << " sess=" << this;
-  } else {
-    trackPublisher->onRequestUpdate(std::move(requestUpdate));
+
+  trackPublisher->setSubPriority(requestUpdate.priority);
+  trackPublisher->onRequestUpdate(std::move(requestUpdate));
+}
+
+void MoQSession::handleFetchRequestUpdate(
+    const RequestUpdate& requestUpdate,
+    const std::shared_ptr<FetchPublisherImpl>& fetchPublisher) {
+  XLOG(DBG1) << __func__ << " requestID=" << fetchPublisher->requestID()
+             << " sess=" << this;
+
+  // TODO: Implement full FETCH update handling (priority, auth_token)
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    requestUpdateError(
+        SubscribeUpdateError{
+            requestUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "FETCH REQUEST_UPDATE not yet implemented"},
+        fetchPublisher->requestID());
+  }
+}
+
+void MoQSession::handlePublishRequestUpdate(
+    const RequestUpdate& requestUpdate,
+    RequestID existingRequestID,
+    TrackAlias trackAlias) {
+  XLOG(DBG1) << __func__ << " existingRequestID=" << existingRequestID
+             << " trackAlias=" << trackAlias << " sess=" << this;
+
+  // TODO: Implement full PUBLISH update handling (forward, auth_token)
+  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+    requestUpdateError(
+        SubscribeUpdateError{
+            requestUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "PUBLISH REQUEST_UPDATE not yet implemented"},
+        existingRequestID);
   }
 }
 

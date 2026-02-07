@@ -56,6 +56,18 @@ class MoQRelaySession : public MoQSession {
   class PublisherPublishNamespaceHandle;
   class SubscribeNamespaceHandle;
 
+  // Override to handle ANNOUNCE and SUBSCRIBE_ANNOUNCES updates
+  void onRequestUpdate(RequestUpdate requestUpdate) override;
+
+  // REQUEST_UPDATE handlers for announcement types - take handles directly
+  void handlePublishNamespaceRequestUpdate(
+      const RequestUpdate& requestUpdate,
+      std::shared_ptr<Subscriber::PublishNamespaceHandle> announceHandle);
+  void handleSubscribeNamespaceRequestUpdate(
+      const RequestUpdate& requestUpdate,
+      std::shared_ptr<Publisher::SubscribeNamespaceHandle>
+          subscribeNamespaceHandle);
+
   // Internal publishNamespace handling methods
   folly::coro::Task<void> handleSubscribeNamespace(SubscribeNamespace sa);
   void subscribeNamespaceOk(const SubscribeNamespaceOk& saOk);
@@ -99,7 +111,7 @@ class MoQRelaySession : public MoQSession {
       RequestID,
       std::shared_ptr<Subscriber::PublishNamespaceHandle>,
       RequestID::hash>
-      publishNamespaceHanldes_;
+      publishNamespaceHandles_;
   folly::F14FastMap<
       RequestID,
       std::shared_ptr<Subscriber::PublishNamespaceCallback>,

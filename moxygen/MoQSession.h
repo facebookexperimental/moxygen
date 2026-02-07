@@ -424,9 +424,6 @@ class MoQSession : public Subscriber,
   void unsubscribe(const Unsubscribe& unsubscribe);
   void requestUpdate(const RequestUpdate& reqUpdate);
   void requestUpdateOk(const RequestOk& requestOk);
-  void requestUpdateError(
-      const SubscribeUpdateError& requestError,
-      RequestID existingRequestID);
   // Backward compatibility forwarders
   void subscribeUpdate(const SubscribeUpdate& subUpdate) {
     requestUpdate(subUpdate);
@@ -460,7 +457,6 @@ class MoQSession : public Subscriber,
   void onClientSetup(ClientSetup clientSetup) override;
   void onServerSetup(ServerSetup setup) override;
   void onSubscribe(SubscribeRequest subscribeRequest) override;
-  void onRequestUpdate(RequestUpdate requestUpdate) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
   void onRequestOk(RequestOk requestOk, FrameType frameType) override;
   void onRequestError(RequestError requestError, FrameType frameType) override;
@@ -568,6 +564,27 @@ class MoQSession : public Subscriber,
       const PublishNamespaceError& publishNamespaceError);
   void subscribeNamespaceError(
       const SubscribeNamespaceError& subscribeNamespaceError);
+
+  // REQUEST_UPDATE error response - available for subclass handlers
+  void requestUpdateError(
+      const SubscribeUpdateError& requestError,
+      RequestID existingRequestID);
+
+  // REQUEST_UPDATE handler (protected for subclass access)
+  void onRequestUpdate(RequestUpdate requestUpdate) override;
+
+  // Type-specific REQUEST_UPDATE handlers - take handles directly to avoid
+  // double lookup
+  virtual void handleSubscribeRequestUpdate(
+      RequestUpdate requestUpdate,
+      std::shared_ptr<TrackPublisherImpl> trackPublisher);
+  virtual void handleFetchRequestUpdate(
+      const RequestUpdate& requestUpdate,
+      const std::shared_ptr<FetchPublisherImpl>& fetchPublisher);
+  virtual void handlePublishRequestUpdate(
+      const RequestUpdate& requestUpdate,
+      RequestID existingRequestID,
+      TrackAlias trackAlias);
 
   // Core frame writer and stats callbacks needed by MoQRelaySession
   MoQFrameWriter moqFrameWriter_;
