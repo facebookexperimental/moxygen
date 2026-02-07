@@ -170,15 +170,15 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
   {
     testing::InSequence enforceOrder;
     EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
-        .WillOnce(testing::Invoke([&](const auto& header, auto, bool) {
+        .WillOnce([&](const auto& header, auto, bool) {
           EXPECT_EQ(header.length, 11);
           return folly::unit;
-        }));
+        });
     EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
-        .WillOnce(testing::Invoke([&](const auto& header, auto, bool) {
+        .WillOnce([&](const auto& header, auto, bool) {
           EXPECT_EQ(header.status, ObjectStatus::OBJECT_NOT_EXIST);
           return folly::unit;
-        }));
+        });
   }
   expectPublishDone();
   auto res = co_await clientSession_->subscribe(
@@ -218,14 +218,13 @@ CO_TEST_P_X(MoQSessionTest, MixSubgroupsAndDatagrams) {
 
   EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
       .WillOnce(
-          testing::Invoke(
-              [](const auto& header,
-                 auto,
-                 bool) -> folly::Expected<folly::Unit, MoQPublishError> {
-                EXPECT_EQ(header.group, 1);
-                EXPECT_EQ(header.length, 11);
-                return folly::unit;
-              }));
+          [](const auto& header,
+             auto,
+             bool) -> folly::Expected<folly::Unit, MoQPublishError> {
+            EXPECT_EQ(header.group, 1);
+            EXPECT_EQ(header.length, 11);
+            return folly::unit;
+          });
 
   expectPublishDone(MoQControlCodec::Direction::SERVER);
   auto res = co_await serverSession_->subscribe(

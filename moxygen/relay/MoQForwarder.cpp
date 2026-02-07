@@ -23,9 +23,9 @@ bool isSoftError(const MoQPublishError& err) {
     case MoQPublishError::BLOCKED:         // Shouldn't happen for subscribe
     case MoQPublishError::TOO_FAR_BEHIND:  // Will result in unsubscribe anyway
     case MoQPublishError::MALFORMED_TRACK: // Protocol violation
+    default:
       return false;
   }
-  return false;
 }
 } // namespace
 

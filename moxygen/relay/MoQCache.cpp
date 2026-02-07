@@ -973,7 +973,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
       largestInFetch.group--;
     }
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
-        fetch.requestID, fetch.groupOrder, isEndOfTrack, largestInFetch});
+        fetch.requestID, fetch.groupOrder, isEndOfTrack, largestInFetch, {}});
     co_withExecutor(
         co_await folly::coro::co_current_executor,
         folly::coro::co_withCancellation(
@@ -1132,7 +1132,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         bool isEndOfTrack = track->endOfTrack &&
             standalone->end >= *track->largestGroupAndObject;
         fetchHandle = std::make_shared<FetchHandle>(FetchOk{
-            fetch.requestID, fetch.groupOrder, isEndOfTrack, standalone->end});
+            fetch.requestID,
+            fetch.groupOrder,
+            isEndOfTrack,
+            standalone->end,
+            {}});
         fetchHandle->setUpstreamFetchHandle(res.value());
         co_return fetchHandle;
       }
@@ -1154,11 +1158,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
         standalone->end = *track->largestGroupAndObject;
       }
       co_return std::make_shared<FetchHandle>(FetchOk{
-          fetch.requestID, fetch.groupOrder, endOfTrack, standalone->end});
+          fetch.requestID, fetch.groupOrder, endOfTrack, standalone->end, {}});
     } else {
       consumer->endOfFetch();
-      co_return std::make_shared<FetchHandle>(
-          FetchOk{fetch.requestID, fetch.groupOrder, false, standalone->end});
+      co_return std::make_shared<FetchHandle>(FetchOk{
+          fetch.requestID, fetch.groupOrder, false, standalone->end, {}});
     }
   }
   co_return nullptr;

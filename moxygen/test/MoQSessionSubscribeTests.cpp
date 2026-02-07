@@ -240,10 +240,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
       std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
   folly::coro::Baton subgroupCreated;
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
-      .WillOnce(testing::Invoke([&](auto, auto, auto, auto) {
+      .WillOnce([&](auto, auto, auto, auto) {
         subgroupCreated.post();
         return mockSubgroupConsumer;
-      }));
+      });
   EXPECT_CALL(*mockSubgroupConsumer, object(0, _, _, _))
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*mockSubgroupConsumer, reset(_));
@@ -825,11 +825,11 @@ CO_TEST_P_X(MoQSessionTest, PublishDoneIgnoredAfterClose) {
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
   EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
-      .WillOnce(testing::Invoke([&](auto, auto, auto) {
+      .WillOnce([&](const auto&, auto, auto) {
         clientSession_->close(SessionCloseErrorCode::NO_ERROR);
         handle->publishDone(getTrackEndedPublishDone(reqID));
         return folly::unit;
-      }));
+      });
   EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Return(folly::unit));
   auto res =
