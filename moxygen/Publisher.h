@@ -44,13 +44,13 @@ class SubscriptionHandle {
   virtual ~SubscriptionHandle() = default;
 
   virtual void unsubscribe() = 0;
-  using SubscribeUpdateResult =
-      folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>;
-  // Updates subscription parameters (start/end locations, priority, forward).
+
+  using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+  // Updates request parameters (start/end locations, priority, forward).
   // This is a coroutine because it may do async work, such as forwarding the
   // update to the upstream publisher in a relay scenario.
-  virtual folly::coro::Task<SubscribeUpdateResult> subscribeUpdate(
-      SubscribeUpdate subUpdate) = 0;
+  virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) = 0;
 
   const SubscribeOk& subscribeOk() const {
     return *subscribeOk_;
@@ -106,6 +106,10 @@ class Publisher {
 
     virtual void fetchCancel() = 0;
 
+    using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+    virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+        RequestUpdate reqUpdate) = 0;
+
     const FetchOk& fetchOk() const {
       return *fetchOk_;
     }
@@ -138,6 +142,10 @@ class Publisher {
     virtual ~SubscribeNamespaceHandle() = default;
 
     virtual void unsubscribeNamespace() = 0;
+
+    using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+    virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+        RequestUpdate reqUpdate) = 0;
 
     const SubscribeNamespaceOk& subscribeNamespaceOk() const {
       return *subscribeNamespaceOk_;

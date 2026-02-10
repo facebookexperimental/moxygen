@@ -56,6 +56,16 @@ class Subscriber {
     // can be an uninteresting message
     virtual void publishNamespaceDone() {}
 
+    using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+    virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+        RequestUpdate reqUpdate) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              reqUpdate.requestID,
+              RequestErrorCode::NOT_SUPPORTED,
+              "unimplemented"});
+    }
+
     const PublishNamespaceOk& publishNamespaceOk() const {
       return *publishNamespaceOk_;
     }

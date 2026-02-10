@@ -212,6 +212,15 @@ class MoQCache::FetchHandle : public Publisher::FetchHandle {
     }
   }
 
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for cached FETCH"});
+  }
+
   folly::CancellationToken getToken() {
     return source_.getToken();
   }

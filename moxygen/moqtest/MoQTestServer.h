@@ -28,9 +28,9 @@ class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
         cancelSource_(std::move(cancellationSource)) {}
 
   virtual void unsubscribe() override;
-  virtual folly::coro::Task<
-      folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
-  subscribeUpdate(SubscribeUpdate update) override;
+  using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+  virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override;
 
  private:
   SubscribeOk subscribeOk_;
@@ -47,6 +47,9 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
         cancelSource_(std::move(cancellationSource)) {}
 
   virtual void fetchCancel() override;
+  using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+  virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override;
 
  private:
   FetchOk fetchOk_;

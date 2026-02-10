@@ -230,19 +230,19 @@ class MockSubscriptionHandle : public SubscriptionHandle {
 
   MOCK_METHOD(void, unsubscribe, (), (override));
 
-  // For async methods like subscribeUpdate, we can't use MOCK_METHOD directly
+  // For async methods like requestUpdate, we can't use MOCK_METHOD directly
   // Instead, provide a delegating implementation
-  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
-  subscribeUpdate(SubscribeUpdate update) override {
-    subscribeUpdateCalled(update);
-    co_return subscribeUpdateResult();
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    requestUpdateCalled(update);
+    co_return requestUpdateResult();
   }
 
   // Mock these instead
-  MOCK_METHOD(void, subscribeUpdateCalled, (SubscribeUpdate));
+  MOCK_METHOD(void, requestUpdateCalled, (RequestUpdate));
   MOCK_METHOD(
-      (folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>),
-      subscribeUpdateResult,
+      (folly::Expected<RequestOk, RequestError>),
+      requestUpdateResult,
       ());
 };
 
@@ -252,6 +252,17 @@ class MockFetchHandle : public Publisher::FetchHandle {
       : Publisher::FetchHandle(std::move(ok)) {}
 
   MOCK_METHOD(void, fetchCancel, (), (override));
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    requestUpdateCalled(update);
+    co_return requestUpdateResult();
+  }
+  MOCK_METHOD(void, requestUpdateCalled, (RequestUpdate));
+  MOCK_METHOD(
+      (folly::Expected<RequestOk, RequestError>),
+      requestUpdateResult,
+      ());
 };
 
 class MockSubscribeNamespaceHandle
@@ -262,6 +273,17 @@ class MockSubscribeNamespaceHandle
       : Publisher::SubscribeNamespaceHandle(std::move(ok)) {}
 
   MOCK_METHOD(void, unsubscribeNamespace, (), (override));
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    requestUpdateCalled(update);
+    co_return requestUpdateResult();
+  }
+  MOCK_METHOD(void, requestUpdateCalled, (RequestUpdate));
+  MOCK_METHOD(
+      (folly::Expected<RequestOk, RequestError>),
+      requestUpdateResult,
+      ());
 };
 
 class MockPublishNamespaceHandle : public Subscriber::PublishNamespaceHandle {
@@ -271,6 +293,17 @@ class MockPublishNamespaceHandle : public Subscriber::PublishNamespaceHandle {
       : Subscriber::PublishNamespaceHandle(std::move(ok)) {}
 
   MOCK_METHOD(void, publishNamespaceDone, (), (override));
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    requestUpdateCalled(update);
+    co_return requestUpdateResult();
+  }
+  MOCK_METHOD(void, requestUpdateCalled, (RequestUpdate));
+  MOCK_METHOD(
+      (folly::Expected<RequestOk, RequestError>),
+      requestUpdateResult,
+      ());
 };
 
 class MockPublishNamespaceCallback

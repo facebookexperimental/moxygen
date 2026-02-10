@@ -160,7 +160,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
 
-  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+  co_await subscribeHandler->requestUpdate(subscribeUpdate);
 
   // Wait for subscribe update to be processed
   co_await subscribeUpdateProcessed;
@@ -266,8 +266,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
 
-  auto updateResult =
-      co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+  auto updateResult = co_await subscribeHandler->requestUpdate(subscribeUpdate);
   EXPECT_TRUE(updateResult.hasValue());
 
   // For v15+, verify that the response contains the LARGEST_OBJECT parameter
@@ -861,7 +860,7 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
         // Set up mock expectations for subscribeUpdate for both versions
         // For v15+, also verify requestID assignments
         if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
-          EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
+          EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
               .WillOnce(
                   testing::Invoke([&sub, &subscribeUpdateProcessed](
                                       const auto& actualUpdate) {
@@ -876,11 +875,10 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
 
                     subscribeUpdateProcessed.post();
                   }));
-          EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateResult)
+          EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
               .WillOnce(
                   testing::Return(
-                      folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>(
-                          SubscribeUpdateOk{})));
+                      folly::Expected<RequestOk, RequestError>(RequestOk{})));
         } else {
           expectSubscribeUpdate(
               mockSubscriptionHandle, subscribeUpdateProcessed);
@@ -906,7 +904,7 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
 
-  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+  co_await subscribeHandler->requestUpdate(subscribeUpdate);
 
   // Wait for subscribe update to be processed
   co_await subscribeUpdateProcessed;

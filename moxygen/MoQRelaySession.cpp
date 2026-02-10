@@ -95,6 +95,15 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
     }
   }
 
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for PUBLISH_NAMESPACE"});
+  }
+
  private:
   TrackNamespace trackNamespace_;
   std::shared_ptr<MoQRelaySession> session_;
@@ -133,6 +142,15 @@ class MoQRelaySession::SubscribeNamespaceHandle
       session_->unsubscribeNamespace(msg);
       session_.reset();
     }
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for SUBSCRIBE_NAMESPACE"});
   }
 
  private:
@@ -314,39 +332,96 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
 }
 
 void MoQRelaySession::handlePublishNamespaceRequestUpdate(
-    const RequestUpdate& requestUpdate,
+    RequestUpdate requestUpdate,
     std::shared_ptr<Subscriber::PublishNamespaceHandle> announceHandle) {
   XLOG(DBG1) << __func__ << " requestID=" << requestUpdate.existingRequestID
              << " sess=" << this;
 
-  // TODO: Implement full ANNOUNCE update handling (forward, auth_token)
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    requestUpdateError(
-        SubscribeUpdateError{
-            requestUpdate.requestID,
-            RequestErrorCode::NOT_SUPPORTED,
-            "ANNOUNCE REQUEST_UPDATE not yet implemented"},
-        requestUpdate.existingRequestID);
-  }
+  auto existingRequestID = requestUpdate.existingRequestID;
+  auto updateRequestID = requestUpdate.requestID;
+
+  // Handle asynchronously with shared ownership to prevent use-after-free
+  co_withExecutor(
+      getExecutor(),
+      folly::coro::co_invoke(
+          [this,
+           announceHandle = std::move(announceHandle),
+           update = std::move(requestUpdate),
+           existingRequestID,
+           updateRequestID]() mutable -> folly::coro::Task<void> {
+            // Call the handle's requestUpdate
+            auto updateResult = co_await co_awaitTry(co_withCancellation(
+                cancellationSource_.getToken(),
+                announceHandle->requestUpdate(std::move(update))));
+
+            // Only send responses for v15+
+            if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+              if (updateResult.hasException()) {
+                XLOG(ERR) << "Exception in requestUpdate ex="
+                          << updateResult.exception().what();
+                requestUpdateError(
+                    RequestError{
+                        updateRequestID,
+                        RequestErrorCode::INTERNAL_ERROR,
+                        "Exception in requestUpdate"},
+                    existingRequestID);
+              } else if (updateResult->hasError()) {
+                auto updateErr = updateResult->error();
+                requestUpdateError(updateErr, existingRequestID);
+              } else {
+                RequestOk requestOk{.requestID = updateRequestID};
+                requestUpdateOk(requestOk);
+              }
+            }
+          }))
+      .start();
 }
 
 void MoQRelaySession::handleSubscribeNamespaceRequestUpdate(
-    const RequestUpdate& requestUpdate,
+    RequestUpdate requestUpdate,
     std::shared_ptr<Publisher::SubscribeNamespaceHandle>
-    /*subscribeNamespaceHandle*/) {
+        subscribeNamespaceHandle) {
   XLOG(DBG1) << __func__ << " requestID=" << requestUpdate.existingRequestID
              << " sess=" << this;
 
-  // TODO: Implement full SUBSCRIBE_ANNOUNCES update handling (forward,
-  // auth_token)
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    requestUpdateError(
-        SubscribeUpdateError{
-            requestUpdate.requestID,
-            RequestErrorCode::NOT_SUPPORTED,
-            "SUBSCRIBE_ANNOUNCES REQUEST_UPDATE not yet implemented"},
-        requestUpdate.existingRequestID);
-  }
+  auto existingRequestID = requestUpdate.existingRequestID;
+  auto updateRequestID = requestUpdate.requestID;
+
+  // Handle asynchronously with shared ownership to prevent use-after-free
+  co_withExecutor(
+      getExecutor(),
+      folly::coro::co_invoke(
+          [this,
+           subscribeNamespaceHandle = std::move(subscribeNamespaceHandle),
+           update = std::move(requestUpdate),
+           existingRequestID,
+           updateRequestID]() mutable -> folly::coro::Task<void> {
+            // Call the handle's requestUpdate
+            auto updateResult = co_await co_awaitTry(co_withCancellation(
+                cancellationSource_.getToken(),
+                subscribeNamespaceHandle->requestUpdate(std::move(update))));
+
+            // Only send responses for v15+
+            if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+              if (updateResult.hasException()) {
+                XLOG(ERR) << "Exception in requestUpdate ex="
+                          << updateResult.exception().what();
+                requestUpdateError(
+                    RequestError{
+                        updateRequestID,
+                        RequestErrorCode::INTERNAL_ERROR,
+                        "Exception in requestUpdate"},
+                    existingRequestID);
+              } else if (updateResult->hasError()) {
+                auto updateErr = updateResult->error();
+                requestUpdateError(updateErr, existingRequestID);
+              } else {
+                RequestOk requestOk{.requestID = updateRequestID};
+                requestUpdateOk(requestOk);
+              }
+            }
+          }))
+      .start();
 }
 
 // PublishNamespace publisher methods
@@ -442,7 +517,7 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
         case PendingRequestState::Type::SUBSCRIBE_NAMESPACE:
           handleSubscribeNamespaceOkFromRequestOk(requestOk, reqIt);
           break;
-        case PendingRequestState::Type::SUBSCRIBE_UPDATE:
+        case PendingRequestState::Type::REQUEST_UPDATE:
           // Use base class helper
           handleSubscribeUpdateOkFromRequestOk(requestOk, reqIt);
           shouldErasePendingRequest = false;

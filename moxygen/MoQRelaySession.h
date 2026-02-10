@@ -61,10 +61,10 @@ class MoQRelaySession : public MoQSession {
 
   // REQUEST_UPDATE handlers for announcement types - take handles directly
   void handlePublishNamespaceRequestUpdate(
-      const RequestUpdate& requestUpdate,
+      RequestUpdate requestUpdate,
       std::shared_ptr<Subscriber::PublishNamespaceHandle> announceHandle);
   void handleSubscribeNamespaceRequestUpdate(
-      const RequestUpdate& requestUpdate,
+      RequestUpdate requestUpdate,
       std::shared_ptr<Publisher::SubscribeNamespaceHandle>
           subscribeNamespaceHandle);
 

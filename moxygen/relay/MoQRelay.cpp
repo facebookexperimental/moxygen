@@ -23,7 +23,7 @@ namespace moxygen {
 folly::coro::Task<void> MoQRelay::doSubscribeUpdate(
     std::shared_ptr<Publisher::SubscriptionHandle> handle,
     bool forward) {
-  auto updateRes = co_await handle->subscribeUpdate(
+  auto updateRes = co_await handle->requestUpdate(
       {RequestID(0),
        handle->subscribeOk().requestID,
        kLocationMin,
@@ -31,7 +31,7 @@ folly::coro::Task<void> MoQRelay::doSubscribeUpdate(
        kDefaultPriority,
        /*forward=*/forward});
   if (updateRes.hasError()) {
-    XLOG(ERR) << "subscribeUpdate failed: " << updateRes.error().reasonPhrase;
+    XLOG(ERR) << "requestUpdate failed: " << updateRes.error().reasonPhrase;
   }
 }
 
@@ -480,6 +480,15 @@ class MoQRelay::NamespaceSubscription
       relay_->unsubscribeNamespace(trackNamespacePrefix_, std::move(session_));
       relay_.reset();
     }
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for relay SUBSCRIBE_NAMESPACE"});
   }
 
  private:

@@ -92,8 +92,8 @@ class MoQForwarder : public TrackConsumer {
     // updates existing param if key matches, otherwise adds new param
     void setParam(const TrackRequestParameter& param);
 
-    folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
-    subscribeUpdate(SubscribeUpdate subscribeUpdate) override;
+    folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+        RequestUpdate requestUpdate) override;
 
     void unsubscribe() override;
 

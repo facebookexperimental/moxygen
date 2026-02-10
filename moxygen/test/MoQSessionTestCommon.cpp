@@ -111,14 +111,13 @@ std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {
 void expectSubscribeUpdate(
     std::shared_ptr<MockSubscriptionHandle> mockHandle,
     folly::coro::Baton& baton) {
-  EXPECT_CALL(*mockHandle, subscribeUpdateCalled)
+  EXPECT_CALL(*mockHandle, requestUpdateCalled)
       .WillOnce(
-          testing::Invoke([&baton](const SubscribeUpdate&) { baton.post(); }));
-  EXPECT_CALL(*mockHandle, subscribeUpdateResult)
+          testing::Invoke([&baton](const RequestUpdate&) { baton.post(); }));
+  EXPECT_CALL(*mockHandle, requestUpdateResult)
       .WillOnce(
           testing::Return(
-              folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>(
-                  SubscribeUpdateOk{})));
+              folly::Expected<RequestOk, RequestError>(RequestOk{})));
 }
 
 // ParamBuilder implementation

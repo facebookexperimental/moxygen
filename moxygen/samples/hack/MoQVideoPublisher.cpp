@@ -170,13 +170,13 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
     setSubscribeOk(std::move(ok));
   }
   void unsubscribe() override {}
-  folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
-  subscribeUpdate(SubscribeUpdate update) override {
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
     co_return folly::makeUnexpected(
-        SubscribeUpdateError{
-            update.requestID,
-            SubscribeUpdateErrorCode::NOT_SUPPORTED,
-            "Subscribe update not implemented"});
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "Request update not implemented"});
   }
 };
 

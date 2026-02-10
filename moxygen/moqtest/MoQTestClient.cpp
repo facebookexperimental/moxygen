@@ -62,14 +62,14 @@ void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
 
 folly::coro::Task<void> MoQTestClient::doSubscribeUpdate(
     std::shared_ptr<Publisher::SubscriptionHandle> handle,
-    SubscribeUpdate update) {
-  auto result = co_await handle->subscribeUpdate(std::move(update));
+    RequestUpdate update) {
+  auto result = co_await handle->requestUpdate(std::move(update));
   if (result.hasError()) {
-    XLOG(ERR) << "subscribeUpdate failed: error code="
+    XLOG(ERR) << "requestUpdate failed: error code="
               << static_cast<uint64_t>(result.error().errorCode)
               << ", reason=" << result.error().reasonPhrase;
   } else {
-    XLOG(INFO) << "subscribeUpdate succeeded: requestID="
+    XLOG(INFO) << "requestUpdate succeeded: requestID="
                << result.value().requestID.value;
   }
 }

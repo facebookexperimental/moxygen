@@ -92,6 +92,15 @@ class MoQRelay : public Publisher,
       relay_.publishNamespaceDone(trackNamespace_, this);
     }
 
+    folly::coro::Task<RequestUpdateResult> requestUpdate(
+        RequestUpdate reqUpdate) override {
+      co_return folly::makeUnexpected(
+          RequestError{
+              reqUpdate.requestID,
+              RequestErrorCode::NOT_SUPPORTED,
+              "REQUEST_UPDATE not supported for relay PUBLISH_NAMESPACE"});
+    }
+
     // Helper to check if THIS node (excluding children) has content
     bool hasLocalSessions() const {
       return !publishes.empty() || !sessions.empty() ||

@@ -1459,9 +1459,9 @@ TEST_F(MoQRelayTest, SubscribeUpdateStartLocationCanDecrease) {
       true}; // forward
 
   auto updateRes =
-      folly::coro::blockingWait(subscriber->subscribeUpdate(subscribeUpdate));
+      folly::coro::blockingWait(subscriber->requestUpdate(subscribeUpdate));
   EXPECT_TRUE(updateRes.hasValue())
-      << "SubscribeUpdate with decreased start should succeed";
+      << "RequestUpdate with decreased start should succeed";
 
   // Verify start location was updated
   EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{5, 0}))

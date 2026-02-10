@@ -555,8 +555,8 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
   }
 }
 
-folly::coro::Task<folly::Expected<SubscribeUpdateOk, SubscribeUpdateError>>
-MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
+folly::coro::Task<folly::Expected<RequestOk, RequestError>>
+MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   // Validation:
   // - Start location can be updated
   // - End location can increase or decrease
@@ -564,21 +564,21 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
   // - Forward state is optional and only updated if explicitly provided
 
   // Only update start if provided
-  if (subscribeUpdate.start.has_value()) {
-    range.start = *subscribeUpdate.start;
+  if (requestUpdate.start.has_value()) {
+    range.start = *requestUpdate.start;
   }
 
   // Only update end if provided
-  if (subscribeUpdate.endGroup.has_value()) {
-    AbsoluteLocation newEnd{*subscribeUpdate.endGroup, 0};
+  if (requestUpdate.endGroup.has_value()) {
+    AbsoluteLocation newEnd{*requestUpdate.endGroup, 0};
 
     // Validate: for bounded end, the end must not be less than the start
-    if (*subscribeUpdate.endGroup > 0 && range.start >= newEnd) {
-      XLOG(ERR) << "Invalid subscribeUpdate: end Location " << newEnd
+    if (*requestUpdate.endGroup > 0 && range.start >= newEnd) {
+      XLOG(ERR) << "Invalid requestUpdate: end Location " << newEnd
                 << " is less than start " << range.start;
       session->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-      co_return folly::makeUnexpected(SubscribeUpdateError(
-          subscribeUpdate.requestID,
+      co_return folly::makeUnexpected(RequestError(
+          requestUpdate.requestID,
           RequestErrorCode::INVALID_RANGE,
           "End Location is less than start"));
     }
@@ -587,8 +587,8 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
 
   auto wasForwarding = shouldForward;
   // Only update forward state if explicitly provided (per draft 15+)
-  if (subscribeUpdate.forward.has_value()) {
-    shouldForward = *subscribeUpdate.forward;
+  if (requestUpdate.forward.has_value()) {
+    shouldForward = *requestUpdate.forward;
   }
 
   if (shouldForward && !wasForwarding) {
@@ -597,7 +597,7 @@ MoQForwarder::Subscriber::subscribeUpdate(SubscribeUpdate subscribeUpdate) {
     forwarder.removeForwardingSubscriber();
   }
 
-  co_return SubscribeUpdateOk{.requestID = subscribeUpdate.requestID};
+  co_return RequestOk{.requestID = requestUpdate.requestID};
 }
 
 void MoQForwarder::Subscriber::unsubscribe() {

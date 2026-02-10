@@ -460,7 +460,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
     EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
     EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
 
-    co_await capturedHandle->subscribeUpdate(subscribeUpdate);
+    co_await capturedHandle->requestUpdate(subscribeUpdate);
 
     // Wait for subscribe update to be processed
     co_await subscribeUpdateProcessed;
@@ -524,7 +524,7 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
     EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
     EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
 
-    co_await capturedHandle->subscribeUpdate(subscribeUpdate);
+    co_await capturedHandle->requestUpdate(subscribeUpdate);
 
     // Wait for subscribe update to be processed
     co_await subscribeUpdateProcessed;

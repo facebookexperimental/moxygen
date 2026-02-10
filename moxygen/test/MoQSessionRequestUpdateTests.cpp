@@ -12,10 +12,12 @@ using namespace moxygen::test;
 namespace {
 using testing::_;
 
-// SUBSCRIPTION FILTER tests
+// =============================================================================
+// SUBSCRIBE REQUEST_UPDATE tests
+// =============================================================================
 
 // Test that subscription filter validation fails when start location decreases
-CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
+CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterStartDecreases) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -48,7 +50,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
         // Verify that start location decreased
         EXPECT_TRUE(actualUpdate.start.has_value());
@@ -56,12 +58,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
             << "Start should have decreased";
         subscribeUpdateInvoked.post();
       });
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateResult)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
       .WillOnce(
           testing::Return(
-              SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.existingRequestID}));
-  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+              RequestOk{.requestID = subscribeUpdate.existingRequestID}));
+  co_await subscribeHandler->requestUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
@@ -70,7 +71,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterStartDecreases) {
 }
 
 // Test that subscription filter validation fails when endGroup < start.group
-CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
+CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterEndLessThanStart) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -103,7 +104,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
         // Verify that endGroup is less than start.group
         EXPECT_TRUE(actualUpdate.endGroup.has_value());
@@ -113,12 +114,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
             << "End group should be less than start group";
         subscribeUpdateInvoked.post();
       });
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateResult)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
       .WillOnce(
           testing::Return(
-              SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.existingRequestID}));
-  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+              RequestOk{.requestID = subscribeUpdate.existingRequestID}));
+  co_await subscribeHandler->requestUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
@@ -127,7 +127,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterEndLessThanStart) {
 }
 
 // Test successful filter update via SubscribeUpdate with correct largest object
-CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
+CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterSuccess) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -167,7 +167,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
         // Verify the filter was updated correctly
         EXPECT_TRUE(actualUpdate.start.has_value());
@@ -188,12 +188,11 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
             << "End group should be >= start.group";
         subscribeUpdateInvoked.post();
       });
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateResult)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
       .WillOnce(
           testing::Return(
-              SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.existingRequestID}));
-  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+              RequestOk{.requestID = subscribeUpdate.existingRequestID}));
+  co_await subscribeHandler->requestUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
@@ -202,7 +201,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterSuccess) {
 }
 
 // Test that missing filter fields in SubscribeUpdate preserve existing values
-CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
+CO_TEST_P_X(
+    MoQSessionTest,
+    SubscribeRequestUpdateFilterMissingFieldsPreserved) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
@@ -245,7 +246,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
   EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
   folly::coro::Baton subscribeUpdateInvoked;
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateCalled)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked,
                  initialStart,
                  initialEndGroup,
@@ -262,16 +263,77 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateFilterMissingFieldsPreserved) {
             << "Priority should be updated";
         subscribeUpdateInvoked.post();
       });
-  EXPECT_CALL(*mockSubscriptionHandle, subscribeUpdateResult)
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
       .WillOnce(
           testing::Return(
-              SubscribeUpdateOk{
-                  .requestID = subscribeUpdate.existingRequestID}));
-  co_await subscribeHandler->subscribeUpdate(subscribeUpdate);
+              RequestOk{.requestID = subscribeUpdate.existingRequestID}));
+  co_await subscribeHandler->requestUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
   co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// =============================================================================
+// FETCH REQUEST_UPDATE tests
+// =============================================================================
+
+CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> mockFetchHandle = nullptr;
+  std::shared_ptr<FetchConsumer> fetchPubCaptured = nullptr;
+
+  expectFetch(
+      [&mockFetchHandle, &fetchPubCaptured](
+          Fetch fetch, auto fetchPub) -> TaskFetchResult {
+        auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+        EXPECT_NE(standalone, nullptr);
+        mockFetchHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+        fetchPubCaptured = fetchPub;
+        fetchPub->object(
+            standalone->start.group,
+            /*subgroupID=*/0,
+            standalone->start.object,
+            moxygen::test::makeBuf(100),
+            noExtensions(),
+            /*finFetch=*/false);
+        co_return mockFetchHandle;
+      });
+
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false))
+      .WillOnce([&] {
+        objectReceived.post();
+        return folly::unit;
+      });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await objectReceived;
+
+  // Send REQUEST_UPDATE for the fetch - should return NOT_SUPPORTED
+  RequestUpdate requestUpdate{
+      RequestID(0),                     // Will be assigned by client
+      res.value()->fetchOk().requestID, // Existing fetch request ID
+      AbsoluteLocation{50, 0},
+      200,
+      kDefaultPriority + 1,
+      true};
+
+  // FETCH REQUEST_UPDATE is not yet supported - returns NOT_SUPPORTED
+  auto updateResult = co_await res.value()->requestUpdate(requestUpdate);
+  EXPECT_TRUE(updateResult.hasError());
+  EXPECT_EQ(updateResult.error().errorCode, RequestErrorCode::NOT_SUPPORTED);
+
+  // Complete the fetch
+  EXPECT_CALL(*fetchCallback_, endOfFetch());
+  fetchPubCaptured->endOfFetch();
+
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
