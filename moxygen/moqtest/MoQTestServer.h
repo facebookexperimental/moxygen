@@ -142,7 +142,7 @@ class MoQTestServer : public moxygen::Publisher,
   std::unique_ptr<MoQClient> relayClient_;
   std::shared_ptr<MoQRelaySession> relaySession_;
   std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
-  std::unique_ptr<MoQFollyExecutorImpl> moqEvb_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 
 } // namespace moxygen

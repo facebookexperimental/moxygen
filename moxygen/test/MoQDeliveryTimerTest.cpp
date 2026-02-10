@@ -20,7 +20,7 @@ class MoQDeliveryTimerTest : public testing::Test {
  protected:
   void SetUp() override {
     evb_ = std::make_unique<folly::EventBase>();
-    executor_ = std::make_unique<MoQFollyExecutorImpl>(evb_.get());
+    executor_ = std::make_shared<MoQFollyExecutorImpl>(evb_.get());
     deliveryTimeout_ = std::chrono::milliseconds(100);
   }
 
@@ -29,7 +29,7 @@ class MoQDeliveryTimerTest : public testing::Test {
   }
 
   std::unique_ptr<folly::EventBase> evb_;
-  std::unique_ptr<MoQFollyExecutorImpl> executor_;
+  std::shared_ptr<MoQFollyExecutorImpl> executor_;
   std::chrono::milliseconds deliveryTimeout_{};
 };
 
@@ -38,7 +38,7 @@ TEST_F(MoQDeliveryTimerTest, BasicTimerExpiry) {
   ResetStreamErrorCode errorCode = ResetStreamErrorCode::INTERNAL_ERROR;
 
   auto timer = std::make_unique<MoQDeliveryTimer>(
-      executor_->keepAlive(),
+      executor_,
       deliveryTimeout_,
       [&callbackInvoked, &errorCode](ResetStreamErrorCode code) {
         callbackInvoked = true;
@@ -64,9 +64,9 @@ TEST_F(MoQDeliveryTimerTest, CancelActiveTimer) {
   bool callbackInvoked = false;
 
   auto timer = std::make_unique<MoQDeliveryTimer>(
-      executor_->keepAlive(),
-      deliveryTimeout_,
-      [&callbackInvoked](ResetStreamErrorCode) { callbackInvoked = true; });
+      executor_, deliveryTimeout_, [&callbackInvoked](ResetStreamErrorCode) {
+        callbackInvoked = true;
+      });
 
   uint64_t objectId = 1;
   timer->startTimer(objectId, std::chrono::microseconds(0));
@@ -88,9 +88,9 @@ TEST_F(MoQDeliveryTimerTest, CancelAllTimers) {
   int callbackCount = 0;
 
   auto timer = std::make_unique<MoQDeliveryTimer>(
-      executor_->keepAlive(),
-      deliveryTimeout_,
-      [&callbackCount](ResetStreamErrorCode) { callbackCount++; });
+      executor_, deliveryTimeout_, [&callbackCount](ResetStreamErrorCode) {
+        callbackCount++;
+      });
 
   timer->startTimer(1, std::chrono::microseconds(0));
   timer->startTimer(2, std::chrono::microseconds(0));
@@ -114,7 +114,7 @@ TEST_F(MoQDeliveryTimerTest, DuplicateTimerStart) {
   ResetStreamErrorCode errorCode = ResetStreamErrorCode::CANCELLED;
 
   auto timer = std::make_unique<MoQDeliveryTimer>(
-      executor_->keepAlive(),
+      executor_,
       deliveryTimeout_,
       [&callbackInvoked, &errorCode](ResetStreamErrorCode code) {
         callbackInvoked = true;
@@ -137,7 +137,7 @@ TEST_F(MoQDeliveryTimerTest, CancelNonExistentTimer) {
   ResetStreamErrorCode errorCode = ResetStreamErrorCode::CANCELLED;
 
   auto timer = std::make_unique<MoQDeliveryTimer>(
-      executor_->keepAlive(),
+      executor_,
       deliveryTimeout_,
       [&callbackInvoked, &errorCode](ResetStreamErrorCode code) {
         callbackInvoked = true;

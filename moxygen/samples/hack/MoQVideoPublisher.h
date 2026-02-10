@@ -39,7 +39,7 @@ class MoQVideoPublisher
       uint64_t timescale = 30)
       : evbThread_(std::make_unique<folly::ScopedEventBaseThread>()),
         moqExecutor_(
-            std::make_unique<MoQFollyExecutorImpl>(evbThread_->getEventBase())),
+            std::make_shared<MoQFollyExecutorImpl>(evbThread_->getEventBase())),
         videoForwarder_(std::move(fullVideoTrackName)),
         audioForwarder_(std::move(fullAudioTrackName)) {}
 
@@ -104,7 +104,7 @@ class MoQVideoPublisher
       FullTrackName ftn);
 
   std::unique_ptr<folly::ScopedEventBaseThread> evbThread_;
-  std::unique_ptr<MoQFollyExecutorImpl> moqExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQRelayClient> relayClient_;
   // uint64_t timescale_{30};
   MoQForwarder videoForwarder_;

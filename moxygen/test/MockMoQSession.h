@@ -7,19 +7,11 @@
 
 namespace moxygen::test {
 
-// Helper class to create an executor before passing to base class
-class MockMoQSessionExecutorHelper {
- protected:
-  folly::EventBase evb_;
-  std::unique_ptr<MoQFollyExecutorImpl> ownedExecutor_{
-      std::make_unique<MoQFollyExecutorImpl>(&evb_)};
-};
-
 // Mock MoQSession for testing relay behavior
-class MockMoQSession : private MockMoQSessionExecutorHelper, public MoQSession {
+class MockMoQSession : public MoQSession {
  public:
   // Constructor that accepts an external executor
-  explicit MockMoQSession(MoQExecutor::KeepAlive exec)
+  explicit MockMoQSession(std::shared_ptr<MoQExecutor> exec)
       : MoQSession(
             folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
             exec),
@@ -29,7 +21,7 @@ class MockMoQSession : private MockMoQSessionExecutorHelper, public MoQSession {
   MockMoQSession()
       : MoQSession(
             folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
-            ownedExecutor_->keepAlive()),
+            std::make_shared<MoQFollyExecutorImpl>(&evb_)),
         ownsEventBase_(true) {
     // Start EventBase in background thread for async operations
     evbThread_ = std::thread([this]() { evb_.loopForever(); });
@@ -74,6 +66,7 @@ class MockMoQSession : private MockMoQSessionExecutorHelper, public MoQSession {
   }
 
  private:
+  folly::EventBase evb_;
   std::thread evbThread_;
   bool ownsEventBase_;
   uint64_t nextRequestID_{1};

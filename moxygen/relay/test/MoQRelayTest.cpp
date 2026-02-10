@@ -28,11 +28,7 @@ class TestMoQExecutor : public MoQFollyExecutorImpl,
                         public folly::DrivableExecutor {
  public:
   explicit TestMoQExecutor() : MoQFollyExecutorImpl(&evb_) {}
-  ~TestMoQExecutor() override {
-    // Drive the EventBase to let pending work complete before joinKeepAlive
-    // blocks waiting for all tokens
-    evb_.loopOnce(EVLOOP_NONBLOCK);
-  }
+  ~TestMoQExecutor() override = default;
 
   void add(folly::Func func) override {
     MoQFollyExecutorImpl::add(std::move(func));
@@ -64,23 +60,12 @@ class MoQRelayTest : public ::testing::Test {
   }
 
   void TearDown() override {
-    // Clear mock session references to release KeepAlive tokens
-    // Note: Don't call cleanup() here as tests may have already cleaned up
-    // their state, and calling unsubscribe() on already-cleaned objects
-    // causes use-after-free
-    mockSessions_.clear();
-
     relay_.reset();
-    // Drive the executor to release any pending KeepAlive tokens
-    if (exec_) {
-      exec_->drive();
-    }
   }
 
   // Helper to create a mock session
   std::shared_ptr<MockMoQSession> createMockSession() {
-    auto session =
-        std::make_shared<NiceMock<MockMoQSession>>(exec_->keepAlive());
+    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
     ON_CALL(*session, getNegotiatedVersion())
         .WillByDefault(Return(std::optional<uint64_t>(kVersionDraftCurrent)));
     auto state = getOrCreateMockState(session);

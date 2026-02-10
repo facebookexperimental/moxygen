@@ -21,10 +21,10 @@ namespace moxygen {
 
 std::function<std::shared_ptr<MoQSession>(
     folly::MaybeManagedPtr<proxygen::WebTransport>,
-    MoQExecutor::KeepAlive)>
+    std::shared_ptr<MoQExecutor>)>
 MoQRelaySession::createRelaySessionFactory() {
   static auto factory = [](folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-                           MoQExecutor::KeepAlive exec) {
+                           std::shared_ptr<MoQExecutor> exec) {
     return std::static_pointer_cast<MoQSession>(
         std::make_shared<MoQRelaySession>(wt, std::move(exec)));
   };

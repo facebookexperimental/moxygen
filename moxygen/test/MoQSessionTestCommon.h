@@ -228,7 +228,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
 
   folly::EventBase eventBase_;
-  std::unique_ptr<MoQFollyExecutorImpl> MoQExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> MoQExecutor_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt_;
   std::shared_ptr<MoQSession> clientSession_;

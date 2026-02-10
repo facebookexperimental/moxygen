@@ -296,7 +296,7 @@ class MoQFlvReceiverClient
       public std::enable_shared_from_this<MoQFlvReceiverClient> {
  public:
   MoQFlvReceiverClient(
-      MoQExecutor::KeepAlive evb,
+      std::shared_ptr<MoQFollyExecutorImpl> evb,
       proxygen::URL url,
       bool useQuic,
       const std::string& flvOutPath,
@@ -480,8 +480,8 @@ int main(int argc, char* argv[]) {
 
   XLOGF(INFO, "Starting consumer from URL: {}", FLAGS_connect_url);
 
-  std::unique_ptr<MoQFollyExecutorImpl> moqEvb =
-      std::make_unique<MoQFollyExecutorImpl>(&eventBase);
+  std::shared_ptr<MoQFollyExecutorImpl> moqEvb =
+      std::make_shared<MoQFollyExecutorImpl>(&eventBase);
   std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr;
   if (FLAGS_insecure) {
     verifier = std::make_shared<
@@ -489,7 +489,7 @@ int main(int argc, char* argv[]) {
   }
 
   auto flvReceiverClient = std::make_shared<MoQFlvReceiverClient>(
-      moqEvb->keepAlive(),
+      moqEvb,
       std::move(url),
       FLAGS_quic_transport,
       FLAGS_flv_outpath,

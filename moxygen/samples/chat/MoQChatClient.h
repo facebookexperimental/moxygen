@@ -91,7 +91,7 @@ class MoQChatClient : public Publisher,
   std::string username_;
   std::string deviceId_;
   std::string timestampString_;
-  std::unique_ptr<MoQFollyExecutorImpl> executor_;
+  std::shared_ptr<MoQFollyExecutorImpl> executor_;
   MoQRelayClient moqClient_;
   std::optional<RequestID> chatRequestID_;
   std::optional<TrackAlias> chatTrackAlias_;

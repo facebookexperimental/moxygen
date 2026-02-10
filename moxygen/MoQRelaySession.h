@@ -34,7 +34,7 @@ class MoQRelaySession : public MoQSession {
   // Static factory for creating relay sessions in clients
   static std::function<std::shared_ptr<MoQSession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>,
-      MoQExecutor::KeepAlive)>
+      std::shared_ptr<MoQExecutor>)>
   createRelaySessionFactory();
 
   // Override cleanup method for proper inheritance pattern

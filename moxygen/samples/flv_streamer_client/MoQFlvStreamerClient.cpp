@@ -48,7 +48,7 @@ class MoQFlvStreamerClient
       public std::enable_shared_from_this<MoQFlvStreamerClient> {
  public:
   MoQFlvStreamerClient(
-      MoQExecutor::KeepAlive evb,
+      std::shared_ptr<MoQFollyExecutorImpl> evb,
       proxygen::URL url,
       FullTrackName fvtn,
       FullTrackName fatn,
@@ -385,13 +385,13 @@ int main(int argc, char* argv[]) {
     verifier = std::make_shared<
         moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>();
   }
-  std::unique_ptr<MoQFollyExecutorImpl> moqEvb =
-      std::make_unique<MoQFollyExecutorImpl>(&eventBase);
+  std::shared_ptr<MoQFollyExecutorImpl> moqEvb =
+      std::make_shared<MoQFollyExecutorImpl>(&eventBase);
 
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   auto streamerClient = std::make_shared<MoQFlvStreamerClient>(
-      moqEvb->keepAlive(),
+      moqEvb,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_video_track_name}),
       moxygen::FullTrackName({ns, FLAGS_audio_track_name}),

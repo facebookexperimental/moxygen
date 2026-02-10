@@ -31,7 +31,7 @@ class SubscriberState {
   SubscriberState(
       MoQPerfTestClient& testClient,
       size_t id,
-      MoQExecutor::KeepAlive executor,
+      std::shared_ptr<MoQFollyExecutorImpl> executor,
       const proxygen::URL& url,
       bool useQuicTransport);
 
@@ -83,7 +83,7 @@ class SubscriberState {
   };
 
   Callback callback_{*this};
-  MoQExecutor::KeepAlive moqExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClientBase> moqClient_;
   std::shared_ptr<ObjectReceiver> receiver_;
   std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
@@ -145,7 +145,7 @@ class MoQPerfTestClient {
   uint32_t deliveryTimeoutMs_;
 
   // Shared executor for all subscribers
-  std::unique_ptr<MoQFollyExecutorImpl> sharedExecutor_;
+  std::shared_ptr<MoQFollyExecutorImpl> sharedExecutor_;
 
   // MoQ test parameters
   MoQTestParameters params_;

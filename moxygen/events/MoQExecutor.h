@@ -6,22 +6,15 @@
 
 #pragma once
 
-#include <folly/DefaultKeepAliveExecutor.h>
+#include <folly/Executor.h>
 #include <quic/common/events/QuicEventBase.h>
 #include <chrono>
 
 namespace moxygen {
 
-class MoQExecutor : public folly::DefaultKeepAliveExecutor {
+class MoQExecutor : public folly::Executor {
  public:
-  using KeepAlive = folly::Executor::KeepAlive<MoQExecutor>;
-
-  virtual ~MoQExecutor() override = default;
-
-  // Returns a KeepAlive token for this executor
-  KeepAlive keepAlive() {
-    return getKeepAliveToken(this);
-  }
+  virtual ~MoQExecutor() = default;
 
   template <
       typename T,

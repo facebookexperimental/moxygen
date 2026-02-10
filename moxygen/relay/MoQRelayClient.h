@@ -21,7 +21,7 @@ class MoQRelayClient {
 
   // Convenience constructor for QUIC transport with relay session
   MoQRelayClient(
-      MoQExecutor::KeepAlive exec,
+      std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
       : moqClient_(

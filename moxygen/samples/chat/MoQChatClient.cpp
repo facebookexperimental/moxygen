@@ -41,9 +41,9 @@ MoQChatClient::MoQChatClient(
       timestampString_(
           folly::to<std::string>(std::chrono::system_clock::to_time_t(
               std::chrono::system_clock::now()))),
-      executor_(std::make_unique<MoQFollyExecutorImpl>(evb)),
+      executor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
       moqClient_(
-          executor_->keepAlive(),
+          executor_,
           std::move(url),
           FLAGS_insecure
               ? std::make_shared<

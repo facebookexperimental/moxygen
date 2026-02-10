@@ -20,8 +20,7 @@ class MoQClientMobile : public MoQClientBase {
   MoQClientMobile(
       std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
       proxygen::URL url)
-      : MoQClientBase(moqEvb->keepAlive(), std::move(url)),
-        moqlibevEvb_(std::move(moqEvb)) {}
+      : MoQClientBase(moqEvb, url), moqlibevEvb_(moqEvb) {}
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(

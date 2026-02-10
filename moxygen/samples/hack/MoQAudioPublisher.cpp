@@ -103,8 +103,8 @@ bool MoQAudioPublisher::setup(
     XLOG(ERR) << "Invalid url: " << connectURL;
     return false;
   }
-  relayClient_ = std::make_unique<MoQRelayClient>(std::make_unique<MoQClient>(
-      moqExecutor_->keepAlive(), url, std::move(verifier)));
+  relayClient_ = std::make_unique<MoQRelayClient>(
+      std::make_unique<MoQClient>(moqExecutor_, url, std::move(verifier)));
 
   cancel_ = folly::CancellationSource();
   running_ = true;

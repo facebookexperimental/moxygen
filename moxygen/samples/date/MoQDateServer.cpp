@@ -96,7 +96,7 @@ class DatePublisher : public Publisher {
       MoQRelayClient* relayClient,
       TrackNamespace ns,
       uint64_t requestId,
-      MoQExecutor::KeepAlive executor) {
+      std::shared_ptr<MoQExecutor> executor) {
     // Form PublishRequest
     PublishRequest req{
         requestId,
@@ -571,7 +571,7 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
     return nullptr;
   }
 
-  auto moqEvb = std::make_unique<MoQFollyExecutorImpl>(workerEvb);
+  auto moqEvb = std::make_shared<MoQFollyExecutorImpl>(workerEvb);
 
   auto verifier = FLAGS_insecure
       ? std::make_shared<
@@ -580,12 +580,12 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
 
   auto relayClient = std::make_unique<MoQRelayClient>(
       (FLAGS_quic_transport ? std::make_unique<MoQClient>(
-                                  moqEvb->keepAlive(),
+                                  moqEvb,
                                   url,
                                   MoQRelaySession::createRelaySessionFactory(),
                                   verifier)
                             : std::make_unique<MoQWebTransportClient>(
-                                  moqEvb->keepAlive(),
+                                  moqEvb,
                                   url,
                                   MoQRelaySession::createRelaySessionFactory(),
                                   verifier)));
@@ -616,10 +616,7 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
   if (FLAGS_publish) {
     publisher
         ->callPublish(
-            relayClient.get(),
-            TrackNamespace(FLAGS_ns, "/"),
-            0,
-            moqEvb->keepAlive())
+            relayClient.get(), TrackNamespace(FLAGS_ns, "/"), 0, moqEvb)
         .scheduleOn(workerEvb)
         .start();
   }

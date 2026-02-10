@@ -212,7 +212,7 @@ void MoQClientBase::setLogger(const std::shared_ptr<MLogger>& logger) {
 MoQClientBase::SessionFactory MoQClientBase::defaultSessionFactory() {
   static SessionFactory factory =
       [](folly::MaybeManagedPtr<proxygen::WebTransport> wt,
-         MoQExecutor::KeepAlive exec) {
+         std::shared_ptr<MoQExecutor> exec) {
         return std::make_shared<MoQSession>(std::move(wt), std::move(exec));
       };
   return factory;

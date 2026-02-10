@@ -19,17 +19,6 @@ class MoQLibevExecutorImpl : public MoQExecutor,
   explicit MoQLibevExecutorImpl(
       std::unique_ptr<quic::LibevQuicEventBase::EvLoopWeak> loop);
 
-  ~MoQLibevExecutorImpl() override {
-    // Wait for all KeepAlive tokens to be released before destruction
-    joinKeepAlive();
-  }
-
-  // Not copyable or movable - destructor calls joinKeepAlive()
-  MoQLibevExecutorImpl(const MoQLibevExecutorImpl&) = delete;
-  MoQLibevExecutorImpl& operator=(const MoQLibevExecutorImpl&) = delete;
-  MoQLibevExecutorImpl(MoQLibevExecutorImpl&&) = delete;
-  MoQLibevExecutorImpl& operator=(MoQLibevExecutorImpl&&) = delete;
-
   // Implementation of folly::Executor::add
   void add(folly::Func func) override;
 
