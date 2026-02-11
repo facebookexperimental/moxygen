@@ -330,7 +330,8 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
                 *curObjectHeader_.length,
                 std::move(payload),
                 endOfObject,
-                endOfStream && ingress_.chainLength() == 0);
+                endOfStream && ingress_.chainLength() == 0,
+                curObjectHeader_.forwardingPreferenceIsDatagram);
             if (result == ParseResult::BLOCKED) {
               XLOG(ERR)
                   << "onObjectBegin returned BLOCKED, converting to ERROR";

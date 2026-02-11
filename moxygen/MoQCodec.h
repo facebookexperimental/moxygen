@@ -183,7 +183,8 @@ class MoQObjectStreamCodec : public MoQCodec {
         uint64_t length,
         Payload initialPayload,
         bool objectComplete,
-        bool subgroupComplete) = 0;
+        bool subgroupComplete,
+        bool forwardingPreferenceIsDatagram = false) = 0;
     virtual ParseResult onObjectStatus(
         uint64_t group,
         uint64_t subgroup,

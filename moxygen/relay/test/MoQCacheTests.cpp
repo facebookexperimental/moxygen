@@ -275,14 +275,19 @@ class MoQCacheTest : public ::testing::Test {
         }
       } else {
         if (current < start) {
-          EXPECT_CALL(*consumer, object(_, _, _, _, _, _))
-              .WillOnce(
-                  [current](
-                      auto group, auto, auto object, auto, const auto&, auto) {
-                    EXPECT_EQ(group, current.group);
-                    EXPECT_EQ(object, current.object);
-                    return folly::unit;
-                  })
+          EXPECT_CALL(*consumer, object(_, _, _, _, _, _, _))
+              .WillOnce([current](
+                            auto group,
+                            auto,
+                            auto object,
+                            auto,
+                            const auto&,
+                            auto,
+                            auto) {
+                EXPECT_EQ(group, current.group);
+                EXPECT_EQ(object, current.object);
+                return folly::unit;
+              })
               .RetiresOnSaturation();
           current.object += objectIncrement;
         } else {
@@ -321,8 +326,15 @@ class MoQCacheTest : public ::testing::Test {
         start.group += groupIncrement;
         start.object = 0;
       } else {
-        EXPECT_CALL(*consumer, object(_, _, _, _, _, _))
-            .WillOnce([start](auto group, auto, auto object, auto, auto, auto) {
+        EXPECT_CALL(*consumer, object(_, _, _, _, _, _, _))
+            .WillOnce([start](
+                          auto group,
+                          auto,
+                          auto object,
+                          auto,
+                          const auto&,
+                          auto,
+                          auto) {
               EXPECT_EQ(group, start.group);
               EXPECT_EQ(object, start.object);
               return folly::unit;
@@ -660,8 +672,8 @@ CO_TEST_F(MoQCacheTest, TestConsumerObjectBlocked) {
   populateCacheRange({0, 0}, {0, 2});
   {
     InSequence enforceOrder;
-    EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _))
-        .WillOnce([](auto, auto, auto, auto, auto, auto) {
+    EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _, _))
+        .WillOnce([](auto, auto, auto, auto, const auto&, auto, auto) {
           return folly::makeUnexpected(
               MoQPublishError(MoQPublishError::BLOCKED));
         });
@@ -679,8 +691,8 @@ CO_TEST_F(MoQCacheTest, TestAwaitFails) {
   // Test case for consumer->object BLOCKED, but await fails.  This results
   // in FETCH_ERROR
   populateCacheRange({0, 0}, {0, 1});
-  EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _))
-      .WillOnce([](auto, auto, auto, auto, auto, auto) {
+  EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _, _))
+      .WillOnce([](auto, auto, auto, auto, const auto&, auto, auto) {
         return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
       });
   EXPECT_CALL(*consumer_, awaitReadyToConsume())
@@ -695,8 +707,8 @@ CO_TEST_F(MoQCacheTest, TestAwaitFails) {
 CO_TEST_F(MoQCacheTest, TestConsumerObjectFailsForAnotherReason) {
   // Test case for consumer->object fails for another reason (e.g., cancel)
   populateCacheRange({0, 0}, {0, 1});
-  EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _))
-      .WillOnce([](auto, auto, auto, auto, auto, auto) {
+  EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _, _))
+      .WillOnce([](auto, auto, auto, auto, const auto&, auto, auto) {
         return folly::makeUnexpected(
             MoQPublishError(MoQPublishError::CANCELLED));
       });
@@ -888,7 +900,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesObjectWithGap) {
             0, 0, 2, makeBuf(100), makeObjectGapExtensions(1), true);
       });
 
-  EXPECT_CALL(*consumer_, object(0, 0, 2, HasChainDataLengthOf(100), _, true))
+  EXPECT_CALL(
+      *consumer_, object(0, 0, 2, HasChainDataLengthOf(100), _, true, _))
       .WillOnce(Return(folly::unit));
   // Perform the fetch
   auto res =
@@ -915,7 +928,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupWithGap) {
             2, 0, 0, makeBuf(100), makeGroupGapExtensions(1), true);
       });
 
-  EXPECT_CALL(*consumer_, object(2, 0, 0, HasChainDataLengthOf(100), _, true))
+  EXPECT_CALL(
+      *consumer_, object(2, 0, 0, HasChainDataLengthOf(100), _, true, _))
       .WillOnce(Return(folly::unit));
   // Perform the fetch
   auto res =
@@ -1664,6 +1678,24 @@ TEST_F(MoQCacheTest, TestPriorObjectIdGapOverlappingNotExistOnly) {
   // Currently fails - see open spec issue about out-of-order datagram delivery
   EXPECT_TRUE(result2.hasError());
   EXPECT_EQ(result2.error().code, MoQPublishError::API_ERROR);
+}
+
+TEST_F(MoQCacheTest, TestForwardingPreferenceMismatchIsMalformedTrack) {
+  // If an object is cached with one forwarding preference and we try to cache
+  // the same object with a different forwarding preference, it should fail
+  // with MALFORMED_TRACK
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // (forwardingPreferenceIsDatagram = false)
+  auto result1 =
+      writeback->objectStream(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_TRUE(result1.hasValue());
+
+  // (forwardingPreferenceIsDatagram = true)
+  auto result2 =
+      writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_TRUE(result2.hasError());
+  EXPECT_EQ(result2.error().code, MoQPublishError::MALFORMED_TRACK);
 }
 
 } // namespace moxygen::test

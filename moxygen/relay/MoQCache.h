@@ -50,18 +50,21 @@ class MoQCache {
         ObjectStatus inStatus,
         Extensions inExtensions,
         Payload inPayload,
-        bool inComplete)
+        bool inComplete,
+        bool inForwardingPreferenceIsDatagram = false)
         : subgroup(inSubgroup),
           status(inStatus),
           extensions(std::move(inExtensions)),
           payload(std::move(inPayload)),
-          complete(inComplete) {}
+          complete(inComplete),
+          forwardingPreferenceIsDatagram(inForwardingPreferenceIsDatagram) {}
 
     uint64_t subgroup{0};
     ObjectStatus status;
     Extensions extensions;
     Payload payload;
     bool complete{false};
+    bool forwardingPreferenceIsDatagram{false};
   };
 
  private:
@@ -85,7 +88,8 @@ class MoQCache {
         ObjectStatus status,
         const Extensions& extensions,
         Payload payload,
-        bool complete);
+        bool complete,
+        bool forwardingPreferenceIsDatagram = false);
     void cacheMissingStatus(uint64_t objectID, ObjectStatus status);
   };
 

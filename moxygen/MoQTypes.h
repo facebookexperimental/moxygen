@@ -815,13 +815,17 @@ struct ObjectHeader {
   ObjectStatus status{ObjectStatus::NORMAL};
   Extensions extensions;
   std::optional<uint64_t> length{std::nullopt};
+  // Forwarding preference: true = Datagram, false = Subgroup (stream)
+  // Used in FETCH serialization to indicate how this object should be forwarded
+  bool forwardingPreferenceIsDatagram{false};
 
   // == Operator For Datagram Testing
   bool operator==(const ObjectHeader& other) const {
     return group == other.group && subgroup == other.subgroup &&
         id == other.id && priority == other.priority &&
         status == other.status && extensions == other.extensions &&
-        length == other.length;
+        length == other.length &&
+        forwardingPreferenceIsDatagram == other.forwardingPreferenceIsDatagram;
   }
 };
 

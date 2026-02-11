@@ -31,7 +31,7 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
 
   folly::coro::Baton baton;
   EXPECT_CALL(
-      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
       .WillOnce([&] {
         baton.post();
         return folly::unit;
@@ -73,7 +73,7 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   expectPublishDone();
   folly::coro::Baton fetchBaton;
   EXPECT_CALL(
-      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
       .WillOnce([&] {
         fetchBaton.post();
         return folly::unit;
@@ -143,7 +143,8 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
   folly::coro::Baton fetchBaton;
   for (uint32_t group = 2; group < 6; group++) {
     EXPECT_CALL(
-        *fetchCallback_, object(group, 0, 0, HasChainDataLengthOf(100), _, _))
+        *fetchCallback_,
+        object(group, 0, 0, HasChainDataLengthOf(100), _, _, _))
         .WillRepeatedly([&] {
           fetchBaton.post();
           return folly::unit;
@@ -203,7 +204,7 @@ CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
       /*finFetch=*/true);
   folly::coro::Baton baton;
   EXPECT_CALL(
-      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true))
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
       .WillOnce([&] {
         baton.post();
         return folly::unit;
@@ -273,7 +274,7 @@ CO_TEST_P_X(MoQSessionTest, FetchCancel) {
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
   });
   EXPECT_CALL(
-      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false))
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false, _))
       .WillOnce(testing::Return(folly::unit));
   // TODO: fetchCancel removes the callback - should it also deliver a
   // reset() call to the callback?
@@ -418,7 +419,7 @@ CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
       });
 
   EXPECT_CALL(
-      *fetchCallback_, object(1, 0, 1, HasChainDataLengthOf(100), _, false))
+      *fetchCallback_, object(1, 0, 1, HasChainDataLengthOf(100), _, false, _))
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::INTERNAL_ERROR));
 
@@ -453,16 +454,16 @@ CO_TEST_P_X(MoQSessionTest, FetchCallbackErrorTerminatesStream) {
   {
     testing::InSequence enforceOrder;
     // First object succeeds
-    EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, false))
+    EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, false, _))
         .WillOnce(testing::Return(folly::unit));
     // Second object returns error
-    EXPECT_CALL(*fetchCallback_, object(0, 0, 1, _, _, false))
+    EXPECT_CALL(*fetchCallback_, object(0, 0, 1, _, _, false, _))
         .WillOnce(
             testing::Return(
                 folly::makeUnexpected(MoQPublishError(
                     MoQPublishError::CANCELLED, "test fetch error"))));
     // Third object should NOT be delivered
-    EXPECT_CALL(*fetchCallback_, object(0, 0, 2, _, _, false)).Times(0);
+    EXPECT_CALL(*fetchCallback_, object(0, 0, 2, _, _, false, _)).Times(0);
   }
 
   auto fetch = getFetch(AbsoluteLocation{0, 0}, AbsoluteLocation{0, 2});

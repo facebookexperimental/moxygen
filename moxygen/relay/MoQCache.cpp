@@ -113,7 +113,8 @@ folly::Expected<folly::Unit, MoQPublishError> publishObject(
           current.object,
           object.payload->clone(),
           object.extensions,
-          lastObject);
+          lastObject,
+          object.forwardingPreferenceIsDatagram);
     // These are implicit
     case ObjectStatus::OBJECT_NOT_EXIST:
     case ObjectStatus::GROUP_NOT_EXIST:
@@ -142,7 +143,8 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
     ObjectStatus status,
     const Extensions& extensions,
     Payload payload,
-    bool complete) {
+    bool complete,
+    bool forwardingPreferenceIsDatagram) {
   XLOG(DBG1) << "caching objID=" << objectID << " status=" << (uint32_t)status
              << " complete=" << uint32_t(complete);
   auto it = objects.find(objectID);
@@ -166,14 +168,25 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "payload mismatch"));
     }
-
+    if (cachedObject->forwardingPreferenceIsDatagram !=
+        forwardingPreferenceIsDatagram) {
+      XLOG(ERR) << "forwardingPreferenceIsDatagram mismatch; objID="
+                << objectID;
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::MALFORMED_TRACK, "forwardingPreference mismatch"));
+    }
     cachedObject->status = status;
     cachedObject->extensions = extensions;
     cachedObject->payload = std::move(payload);
     cachedObject->complete = complete;
   } else {
     objects[objectID] = std::make_unique<CacheEntry>(
-        subgroup, status, extensions, std::move(payload), complete);
+        subgroup,
+        status,
+        extensions,
+        std::move(payload),
+        complete,
+        forwardingPreferenceIsDatagram);
   }
   if (objectID >= maxCachedObject) {
     maxCachedObject = objectID;
@@ -391,7 +404,13 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cPayload = payload ? payload->clone() : nullptr;
     auto cacheRes = cacheGroup_.cacheObject(
-        subgroup_, objID, ObjectStatus::NORMAL, ext, std::move(cPayload), true);
+        subgroup_,
+        objID,
+        ObjectStatus::NORMAL,
+        ext,
+        std::move(cPayload),
+        true /* complete */,
+        false /* forwardingPreferenceIsDatagram */);
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -601,7 +620,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
                             header.status,
                             header.extensions,
                             payload ? payload->clone() : nullptr,
-                            true);
+                            true,
+                            true /* forwardingPreferenceIsDatagram */);
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -727,10 +747,19 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       uint64_t objID,
       Payload payload,
       Extensions ext,
-      bool fin) override {
+      bool fin,
+      bool forwardingPreferenceIsDatagram = false) override {
     constexpr auto kNormal = ObjectStatus::NORMAL;
-    auto res =
-        cacheImpl(gID, sgID, objID, kNormal, ext, payload->clone(), true, fin);
+    auto res = cacheImpl(
+        gID,
+        sgID,
+        objID,
+        kNormal,
+        ext,
+        payload->clone(),
+        true,
+        fin,
+        forwardingPreferenceIsDatagram);
     if (!res) {
       return res;
     }
@@ -740,7 +769,13 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     }
     XLOG(DBG1) << "forward object " << AbsoluteLocation(gID, objID);
     return consumer_->object(
-        gID, sgID, objID, std::move(payload), std::move(ext), fin && proxyFin_);
+        gID,
+        sgID,
+        objID,
+        std::move(payload),
+        std::move(ext),
+        fin && proxyFin_,
+        forwardingPreferenceIsDatagram);
   }
 
   void checkpoint() override {
@@ -921,10 +956,17 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       const Extensions& extensions,
       Payload payload,
       bool complete,
-      bool finFetch) {
+      bool finFetch,
+      bool forwardingPreferenceIsDatagram = false) {
     auto& group = fetchRangeIt_.track->getOrCreateGroup(groupID);
     auto cacheRes = group.cacheObject(
-        subgroupID, objectID, status, extensions, std::move(payload), complete);
+        subgroupID,
+        objectID,
+        status,
+        extensions,
+        std::move(payload),
+        complete,
+        forwardingPreferenceIsDatagram);
     cacheMissing({groupID, objectID});
     if (cacheRes.hasError()) {
       updateInProgress();

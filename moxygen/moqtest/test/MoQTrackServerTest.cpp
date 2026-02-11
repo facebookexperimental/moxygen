@@ -509,13 +509,21 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
       // Set expectations for beginObject
       EXPECT_CALL(
           *mockConsumer,
-          object(groupId, 0, objectId, testing::_, testing::_, testing::_))
+          object(
+              groupId,
+              0,
+              objectId,
+              testing::_,
+              testing::_,
+              testing::_,
+              testing::_))
           .WillOnce([objectSize](
                         auto,
                         auto,
                         auto,
                         std::unique_ptr<folly::IOBuf> payload,
                         const auto&,
+                        auto,
                         auto) {
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
@@ -561,13 +569,21 @@ TEST_F(
       // Set expectations for beginObject
       EXPECT_CALL(
           *mockConsumer,
-          object(groupId, 0, objectId, testing::_, testing::_, testing::_))
+          object(
+              groupId,
+              0,
+              objectId,
+              testing::_,
+              testing::_,
+              testing::_,
+              testing::_))
           .WillOnce([objectSize](
                         auto,
                         auto,
                         auto,
                         std::unique_ptr<folly::IOBuf> payload,
                         auto extensions,
+                        auto,
                         auto) {
             // Check Extensions Generate
             EXPECT_EQ(extensions.size(), 2);
@@ -624,13 +640,20 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
       EXPECT_CALL(
           *mockConsumer,
           object(
-              groupId, objectId, objectId, testing::_, testing::_, testing::_))
+              groupId,
+              objectId,
+              objectId,
+              testing::_,
+              testing::_,
+              testing::_,
+              testing::_))
           .WillOnce([objectSize](
                         auto,
                         auto,
                         auto,
                         std::unique_ptr<folly::IOBuf> payload,
                         const auto&,
+                        auto,
                         auto) {
             // Check Payload
             auto payloadLength = (*payload).length();
@@ -676,6 +699,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
               objectId,
               testing::_,
               testing::_,
+              testing::_,
               testing::_))
           .WillOnce([objectSize](
                         auto,
@@ -683,6 +707,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
                         auto,
                         std::unique_ptr<folly::IOBuf> payload,
                         const auto&,
+                        auto,
                         auto) {
             // Check Payload
             auto payloadLength = (*payload).length();
@@ -731,6 +756,7 @@ TEST_F(
                 objectId,
                 testing::_,
                 testing::_,
+                testing::_,
                 testing::_))
             .WillOnce([objectSize](
                           auto,
@@ -738,6 +764,7 @@ TEST_F(
                           auto,
                           std::unique_ptr<folly::IOBuf> payload,
                           const auto&,
+                          auto,
                           auto) {
               // Check Payloadƒ
               auto payloadLength = (*payload).length();
@@ -798,6 +825,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
               expectedHeader.id,
               testing::_,
               testing::_,
+              testing::_,
               testing::_))
           .WillOnce([expectedHeader, objectSize](
                         auto,
@@ -805,6 +833,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
                         auto,
                         std::unique_ptr<folly::IOBuf> objectPayload,
                         const auto& /*extensions*/,
+                        auto,
                         auto) {
             // TODO: Extensions don't match?
             // EXPECT_EQ(expectedHeader.extensions, extensions);

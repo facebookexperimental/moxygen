@@ -468,7 +468,8 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       StreamType streamType,
       const ObjectHeader& objectHeader,
-      std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
+      std::unique_ptr<folly::IOBuf> objectPayload,
+      bool forwardingPreferenceIsDatagram = false) const noexcept;
 
   WriteResult writeSingleObjectStream(
       folly::IOBufQueue& writeBuf,
@@ -670,7 +671,8 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const ObjectHeader& objectHeader,
       size_t& size,
-      bool& error) const noexcept;
+      bool& error,
+      bool forwardingPreferenceIsDatagram = false) const noexcept;
 
   void resetWriterFetchContext() const noexcept;
 

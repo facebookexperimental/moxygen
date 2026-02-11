@@ -16,7 +16,11 @@ namespace {
 constexpr uint64_t kMaxExtensionLength = 1024;
 
 enum class FetchHeaderSerializationBits : uint8_t {
-  RESERVED_BITMASK = 0xC0, // 0x40 | 0x80
+  // Draft-15: 0xC0 reserved.
+  // Draft-16+: only 0x80 reserved, 0x40 = datagram
+  LEGACY_RESERVED_BITMASK = 0xC0, // Draft-15
+  RESERVED_BITMASK = 0x80,        // Draft-16+
+  DATAGRAM_BITMASK = 0x40,        // Datagram forwarding preference (draft-16+)
   GROUP_ID_BITMASK = 0x8,
   SUBGROUP_MODE_BITMASK = 0x3,
   SUBGROUP_ID_ZERO = 0x0,
@@ -1110,12 +1114,30 @@ MoQFrameParser::parseFetchObjectDraft15(
         flags == kSerializationFlagEndOfUnknownRange};
   }
 
-  // Any other value >= 128 is a PROTOCOL_VIOLATION per spec
-  // (valid bit flags are 0-127, plus special values 0x8C and 0x10C)
-  if (flags >= 128) {
-    XLOG(ERR) << "parseFetchObjectDraft15: Invalid serialization flags: 0x"
-              << std::hex << flags;
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  // Check reserved bits - version dependent
+  bool forwardingPreferenceIsDatagram = false;
+  if (getDraftMajorVersion(*version_) >= 16) {
+    // Draft-16+: Only 0x80 is reserved, 0x40 indicates datagram
+    if (flags &
+        folly::to_underlying(FetchHeaderSerializationBits::RESERVED_BITMASK)) {
+      XLOG(ERR) << "parseFetchObjectDraft15: Reserved bit 0x80 set in flags: 0x"
+                << std::hex << static_cast<int>(flags);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    // Check if this object has datagram forwarding preference
+    forwardingPreferenceIsDatagram =
+        (flags &
+         folly::to_underlying(
+             FetchHeaderSerializationBits::DATAGRAM_BITMASK)) != 0;
+  } else {
+    // Draft-15: Both 0x40 and 0x80 are reserved
+    if (flags &
+        folly::to_underlying(
+            FetchHeaderSerializationBits::LEGACY_RESERVED_BITMASK)) {
+      XLOG(ERR) << "parseFetchObjectDraft15: Reserved bits set in flags: 0x"
+                << std::hex << static_cast<int>(flags);
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
   }
 
   // flags < 128: interpret as bit flags for normal object
@@ -1143,45 +1165,53 @@ MoQFrameParser::parseFetchObjectDraft15(
   }
 
   // Decode Subgroup ID (flags & 0x03)
-  uint8_t subgroupMode = bitFlags &
-      folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
-  switch (subgroupMode) {
-    case folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO):
-      // Subgroup ID is zero
-      objectHeader.subgroup = 0;
-      break;
-    case folly::to_underlying(
-        FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR):
-      // Subgroup ID is the prior Object's Subgroup ID
-      if (!previousFetchSubgroup_.has_value()) {
-        XLOG(ERR) << "parseFetchObjectDraft15: First object cannot reference "
-                     "prior subgroup";
-        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-      }
-      objectHeader.subgroup = previousFetchSubgroup_.value();
-      break;
-    case folly::to_underlying(
-        FetchHeaderSerializationBits::SUBGROUP_ID_INC_BY_ONE):
-      // Subgroup ID is the prior Object's Subgroup ID plus one
-      if (!previousFetchSubgroup_.has_value()) {
-        XLOG(ERR) << "parseFetchObjectDraft15: First object cannot reference "
-                     "prior subgroup";
-        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-      }
-      objectHeader.subgroup = previousFetchSubgroup_.value() + 1;
-      break;
-    case folly::to_underlying(
-        FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK):
-      // Subgroup ID field is present
-      auto subgroup =
-          quic::follyutils::decodeQuicInteger(cursor, remainingLength);
-      if (!subgroup) {
-        XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on subgroup";
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      remainingLength -= subgroup->second;
-      objectHeader.subgroup = subgroup->first;
-      break;
+  // Ignore if datagram
+  if (forwardingPreferenceIsDatagram) {
+    // Datagram forwarding preference: ignore subgroup mode bits, use 0
+    objectHeader.subgroup = 0;
+  } else {
+    uint8_t subgroupMode =
+        bitFlags &
+        folly::to_underlying(
+            FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
+    switch (subgroupMode) {
+      case folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO):
+        // Subgroup ID is zero
+        objectHeader.subgroup = 0;
+        break;
+      case folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR):
+        // Subgroup ID is the prior Object's Subgroup ID
+        if (!previousFetchSubgroup_.has_value()) {
+          XLOG(ERR) << "parseFetchObjectDraft15: First object cannot reference "
+                       "prior subgroup";
+          return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+        }
+        objectHeader.subgroup = previousFetchSubgroup_.value();
+        break;
+      case folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_ID_INC_BY_ONE):
+        // Subgroup ID is the prior Object's Subgroup ID plus one
+        if (!previousFetchSubgroup_.has_value()) {
+          XLOG(ERR) << "parseFetchObjectDraft15: First object cannot reference "
+                       "prior subgroup";
+          return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+        }
+        objectHeader.subgroup = previousFetchSubgroup_.value() + 1;
+        break;
+      case folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK):
+        // Subgroup ID field is present
+        auto subgroup =
+            quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+        if (!subgroup) {
+          XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on subgroup";
+          return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+        }
+        remainingLength -= subgroup->second;
+        objectHeader.subgroup = subgroup->first;
+        break;
+    }
   }
 
   // Decode Object ID (flags & 0x04)
@@ -1255,6 +1285,9 @@ MoQFrameParser::parseFetchObjectDraft15(
   previousFetchSubgroup_ = objectHeader.subgroup;
   previousObjectID_ = objectHeader.id;
   previousFetchPriority_ = objectHeader.priority;
+
+  // Set the forwarding preference in the object header
+  objectHeader.forwardingPreferenceIsDatagram = forwardingPreferenceIsDatagram;
 
   length = remainingLength;
 
@@ -4038,31 +4071,38 @@ void MoQFrameWriter::writeFetchObjectDraft15(
     folly::IOBufQueue& writeBuf,
     const ObjectHeader& objectHeader,
     size_t& size,
-    bool& error) const noexcept {
+    bool& error,
+    bool forwardingPreferenceIsDatagram) const noexcept {
   // Draft-15+ FETCH object format with Serialization Flags
   uint8_t flags = 0;
 
-  // Determine Subgroup ID mode (bits 0-1)
-  if (objectHeader.subgroup == 0) {
-    // Mode 0x00: Subgroup ID is zero
+  if (forwardingPreferenceIsDatagram && getDraftMajorVersion(*version_) >= 16) {
+    // Set datagram bit
     flags |=
-        folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO);
-  } else if (
-      previousFetchSubgroup_.has_value() &&
-      objectHeader.subgroup == previousFetchSubgroup_.value()) {
-    // Mode 0x01: Same as prior
-    flags |= folly::to_underlying(
-        FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR);
-  } else if (
-      previousFetchSubgroup_.has_value() &&
-      objectHeader.subgroup == previousFetchSubgroup_.value() + 1) {
-    // Mode 0x02: Prior + 1
-    flags |= folly::to_underlying(
-        FetchHeaderSerializationBits::SUBGROUP_ID_INC_BY_ONE);
+        folly::to_underlying(FetchHeaderSerializationBits::DATAGRAM_BITMASK);
   } else {
-    // Mode 0x03: Explicit field
-    flags |= folly::to_underlying(
-        FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
+    // Determine Subgroup ID mode (bits 0-1) - only for non-datagram objects
+    if (objectHeader.subgroup == 0) {
+      // Mode 0x00: Subgroup ID is zero
+      flags |=
+          folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO);
+    } else if (
+        previousFetchSubgroup_.has_value() &&
+        objectHeader.subgroup == previousFetchSubgroup_.value()) {
+      // Mode 0x01: Same as prior
+      flags |= folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_ID_SAME_AS_PRIOR);
+    } else if (
+        previousFetchSubgroup_.has_value() &&
+        objectHeader.subgroup == previousFetchSubgroup_.value() + 1) {
+      // Mode 0x02: Prior + 1
+      flags |= folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_ID_INC_BY_ONE);
+    } else {
+      // Mode 0x03: Explicit field
+      flags |= folly::to_underlying(
+          FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
+    }
   }
 
   // Bit 2 (0x04): Object ID present
@@ -4153,7 +4193,8 @@ WriteResult MoQFrameWriter::writeStreamObject(
     folly::IOBufQueue& writeBuf,
     StreamType streamType,
     const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
+    std::unique_ptr<folly::IOBuf> objectPayload,
+    bool forwardingPreferenceIsDatagram) const noexcept {
   XCHECK(version_.has_value())
       << "The version must be set before writing stream object";
   size_t size = 0;
@@ -4161,7 +4202,8 @@ WriteResult MoQFrameWriter::writeStreamObject(
   if (streamType == StreamType::FETCH_HEADER) {
     // Dispatch to appropriate FETCH object writer based on version
     if (getDraftMajorVersion(*version_) >= 15) {
-      writeFetchObjectDraft15(writeBuf, objectHeader, size, error);
+      writeFetchObjectDraft15(
+          writeBuf, objectHeader, size, error, forwardingPreferenceIsDatagram);
     } else {
       writeFetchObjectHeaderLegacy(writeBuf, objectHeader, size, error);
     }

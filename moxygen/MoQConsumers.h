@@ -228,7 +228,8 @@ class FetchConsumer {
       uint64_t objectID,
       Payload payload,
       Extensions extensions = noExtensions(),
-      bool finFetch = false) = 0;
+      bool finFetch = false,
+      bool forwardingPreferenceIsDatagram = false) = 0;
 
   // Advance the reliable offset of the fetch stream to the current offset.
   virtual void checkpoint() {}

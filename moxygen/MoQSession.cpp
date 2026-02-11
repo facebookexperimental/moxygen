@@ -208,14 +208,19 @@ class StreamPublisherImpl
       uint64_t objectID,
       Payload payload,
       Extensions extensions,
-      bool finFetch) override {
+      bool finFetch,
+      bool forwardingPreferenceIsDatagram = false) override {
     if (!setGroupAndSubgroup(groupID, subgroupID)) {
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "Group moved back"));
     }
     header_.status = ObjectStatus::NORMAL;
-    return object(
-        objectID, std::move(payload), std::move(extensions), finFetch);
+    return objectImpl(
+        objectID,
+        std::move(payload),
+        std::move(extensions),
+        finFetch,
+        forwardingPreferenceIsDatagram);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
@@ -418,12 +423,19 @@ class StreamPublisherImpl
       uint64_t objectID);
   folly::Expected<ObjectPublishStatus, MoQPublishError>
   validateObjectPublishAndUpdateState(folly::IOBuf* payload, bool finStream);
+  folly::Expected<folly::Unit, MoQPublishError> objectImpl(
+      uint64_t objectID,
+      Payload payload,
+      const Extensions& extensions,
+      bool finStream,
+      bool forwardingPreferenceIsDatagram);
   folly::Expected<folly::Unit, MoQPublishError> writeCurrentObject(
       uint64_t objectID,
       uint64_t length,
       Payload payload,
       const Extensions& extensions,
-      bool finStream);
+      bool finStream,
+      bool forwardingPreferenceIsDatagram = false);
   folly::Expected<folly::Unit, MoQPublishError> writeToStream(
       bool finStream,
       bool endObject = false);
@@ -610,7 +622,8 @@ StreamPublisherImpl::writeCurrentObject(
     uint64_t length,
     Payload payload,
     const Extensions& extensions,
-    bool finStream) {
+    bool finStream,
+    bool forwardingPreferenceIsDatagram) {
   header_.id = objectID;
   header_.length = length;
   // copy is gratuitous
@@ -618,7 +631,11 @@ StreamPublisherImpl::writeCurrentObject(
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
   bool entireObjectWritten = (!currentLengthRemaining_.has_value());
   (void)moqFrameWriter_.writeStreamObject(
-      writeBuf_, streamType_, header_, std::move(payload));
+      writeBuf_,
+      streamType_,
+      header_,
+      std::move(payload),
+      forwardingPreferenceIsDatagram);
   return writeToStream(finStream, entireObjectWritten);
 }
 
@@ -711,6 +728,20 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
     Payload payload,
     Extensions extensions,
     bool finStream) {
+  return objectImpl(
+      objectID,
+      std::move(payload),
+      std::move(extensions),
+      finStream,
+      false /* forwardingPreferenceIsDatagram */);
+}
+
+folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
+    uint64_t objectID,
+    Payload payload,
+    const Extensions& extensions,
+    bool finStream,
+    bool forwardingPreferenceIsDatagram) {
   if (!forward_) {
     reset(ResetStreamErrorCode::INTERNAL_ERROR);
     return folly::makeUnexpected(
@@ -739,7 +770,12 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::object(
   }
 
   return writeCurrentObject(
-      objectID, length, std::move(payload), extensions, finStream);
+      objectID,
+      length,
+      std::move(payload),
+      extensions,
+      finStream,
+      forwardingPreferenceIsDatagram);
 }
 
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
@@ -2706,7 +2742,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t length,
       Payload initialPayload,
       bool objectComplete,
-      bool streamComplete) override {
+      bool streamComplete,
+      bool forwardingPreferenceIsDatagram = false) override {
     if (isCancelled()) {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
@@ -2719,6 +2756,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       obj.status = ObjectStatus::NORMAL;
       obj.length = length;
       obj.extensions = extensions;
+      obj.forwardingPreferenceIsDatagram = forwardingPreferenceIsDatagram;
       if (objectComplete && subscribeState_) {
         logger_->logSubgroupObjectParsed(
             currentStreamId_, trackAlias_, obj, initialPayload->clone());
@@ -2732,15 +2770,25 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
     folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
     if (objectComplete) {
-      res = invokeCallback(
-          &SubgroupConsumer::object,
-          &FetchConsumer::object,
-          group,
-          subgroup,
-          objectID,
-          std::move(initialPayload),
-          std::move(extensions),
-          streamComplete);
+      // Handle fetch and subscribe consumers differently due to different
+      // signatures for FetchConsumer::object (has
+      // forwardingPreferenceIsDatagram)
+      if (fetchState_) {
+        res = fetchState_->getFetchCallback()->object(
+            group,
+            subgroup,
+            objectID,
+            std::move(initialPayload),
+            std::move(extensions),
+            streamComplete,
+            forwardingPreferenceIsDatagram);
+      } else {
+        res = subgroupCallback_->object(
+            objectID,
+            std::move(initialPayload),
+            std::move(extensions),
+            streamComplete);
+      }
       if (streamComplete) {
         endOfSubgroup();
       }

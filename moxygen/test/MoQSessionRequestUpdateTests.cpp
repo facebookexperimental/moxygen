@@ -297,13 +297,15 @@ CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
             standalone->start.object,
             moxygen::test::makeBuf(100),
             noExtensions(),
-            /*finFetch=*/false);
+            /*finFetch=*/false,
+            /*forwardingPreferenceIsDatagram=*/false);
         co_return mockFetchHandle;
       });
 
   folly::coro::Baton objectReceived;
   EXPECT_CALL(
-      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false))
+      *fetchCallback_,
+      object(0, 0, 0, HasChainDataLengthOf(100), _, false, false))
       .WillOnce([&] {
         objectReceived.post();
         return folly::unit;

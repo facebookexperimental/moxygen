@@ -18,7 +18,8 @@ MoQPerfClientFetchConsumer::object(
     uint64_t objectID,
     Payload payload,
     Extensions extensions,
-    bool finFetch) {
+    bool finFetch,
+    bool /*forwardingPreferenceIsDatagram*/) {
   incrementFetchDataSent(payload->computeChainDataLength());
   return folly::Unit();
 }

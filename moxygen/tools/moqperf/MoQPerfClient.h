@@ -127,7 +127,8 @@ class MoQPerfClientFetchConsumer : public FetchConsumer {
       uint64_t objectID,
       Payload payload,
       Extensions extensions = noExtensions(),
-      bool finFetch = false);
+      bool finFetch = false,
+      bool forwardingPreferenceIsDatagram = false) override;
 
   void incrementFetchDataSent(uint64_t amount);
 

@@ -82,6 +82,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
        uint64_t,
        Payload,
        bool,
+       bool,
        bool));
   MOCK_METHOD(
       MoQCodec::ParseResult,
@@ -139,7 +140,7 @@ class MockFetchConsumer : public FetchConsumer {
   MOCK_METHOD(
       (folly::Expected<folly::Unit, MoQPublishError>),
       object,
-      (uint64_t, uint64_t, uint64_t, Payload, Extensions, bool),
+      (uint64_t, uint64_t, uint64_t, Payload, Extensions, bool, bool),
       (override));
 
   MOCK_METHOD(void, checkpoint, (), (override));

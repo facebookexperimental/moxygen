@@ -264,7 +264,8 @@ class ObjectReceiver : public TrackConsumer,
       uint64_t objectID,
       Payload payload,
       Extensions extensions,
-      bool finFetch) override {
+      bool finFetch,
+      bool /*forwardingPreferenceIsDatagram*/ = false) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
     return fetchPublisher_->object(
         objectID, std::move(payload), std::move(extensions), finFetch);

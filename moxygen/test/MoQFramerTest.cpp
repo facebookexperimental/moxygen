@@ -3551,6 +3551,94 @@ TEST_P(MoQFramerV16PlusTest, ParseInvalidSerializationFlags) {
   EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
+// Test that parsing FETCH object with datagram forwarding preference (bit 0x40)
+// succeeds in draft-16+
+TEST_P(MoQFramerV16PlusTest, FetchObjectWithDatagramForwardingPreference) {
+  // Use the public writeStreamObject API with
+  // forwardingPreferenceIsDatagram=true
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Write FETCH header using the public API
+  auto headerResult = writer_.writeFetchHeader(writeBuf, RequestID(1));
+  EXPECT_TRUE(headerResult.hasValue());
+
+  // Create an object header
+  ObjectHeader obj(
+      1, // group
+      2, // subgroup
+      3, // id
+      5, // priority
+      ObjectStatus::NORMAL,
+      Extensions({}, {}),
+      4 /* length */);
+
+  // Write a FETCH object with forwardingPreferenceIsDatagram = true
+  auto objResult = writer_.writeStreamObject(
+      writeBuf,
+      StreamType::FETCH_HEADER,
+      obj,
+      folly::IOBuf::copyBuffer("test"),
+      true /* forwardingPreferenceIsDatagram */);
+  EXPECT_TRUE(objResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Skip stream type
+  auto streamType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(streamType.has_value());
+  EXPECT_EQ(streamType->first, folly::to_underlying(StreamType::FETCH_HEADER));
+
+  // Parse FETCH header
+  auto fetchHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
+  EXPECT_TRUE(fetchHeaderResult.hasValue());
+
+  // Parse the FETCH object - should succeed with bit 0x40 set in draft-16+
+  ObjectHeader headerTemplate;
+  auto objParseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  EXPECT_TRUE(objParseResult.hasValue())
+      << "FETCH object with datagram forwarding preference (bit 0x40) should "
+         "parse successfully in draft-16+";
+  auto& objHeader = std::get<ObjectHeader>(objParseResult->value);
+  EXPECT_EQ(objHeader.group, 1);
+  EXPECT_EQ(objHeader.id, 3);
+  EXPECT_EQ(objHeader.status, ObjectStatus::NORMAL);
+}
+
+// Test that parsing FETCH object with reserved bit 0x80 set returns error
+TEST_P(MoQFramerV16PlusTest, FetchObjectReservedBit0x80ReturnsError) {
+  // Manually construct a FETCH object with bit 0x80 set
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Write FETCH header
+  writer_.writeFetchHeader(writeBuf, RequestID(1));
+
+  // Now write a malformed FETCH object with reserved bit 0x80 set
+  // In draft-16+, flags are varint-encoded. 0x80 (128) as QUIC varint:
+  // 128 >= 64, so 2-byte encoding: 0x40 | (128 >> 8), 128 & 0xFF = 0x40, 0x80
+  writeBuf.append(folly::IOBuf::copyBuffer("\x40\x80"));
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Skip stream type
+  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(parsedStreamType.has_value());
+
+  auto fetchHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
+  EXPECT_TRUE(fetchHeaderResult.hasValue());
+
+  ObjectHeader headerTemplate;
+  auto objParseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  EXPECT_TRUE(objParseResult.hasError())
+      << "Should return error when reserved bit 0x80 is set";
+  EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,
