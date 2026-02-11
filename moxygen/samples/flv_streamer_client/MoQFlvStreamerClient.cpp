@@ -412,24 +412,32 @@ int main(int argc, char* argv[]) {
     }
 
     void unreg() {
-      unregisterSignalHandler(SIGTERM);
-      unregisterSignalHandler(SIGINT);
+      if (!unreg_) {
+        unregisterSignalHandler(SIGTERM);
+        unregisterSignalHandler(SIGINT);
+        unreg_ = true;
+      }
     }
 
    private:
     std::function<void(int)> fn_;
+    bool unreg_{false};
   };
 
-  // TODO this does NOT work, we do not get the signal
-  SigHandler handler(
-      &eventBase, [&streamerClient](int) mutable { streamerClient->stop(); });
+  SigHandler handler(&eventBase, [&streamerClient](int) mutable {
+    XLOG(INFO, "Caught keyboard signal, stopping");
+    streamerClient->stop();
+  });
 
   co_withExecutor(
       &eventBase, streamerClient->run({RequestID(0), {std::move(ns)}}))
       .start()
-      .via(&eventBase)
-      .thenTry([&handler](auto) { handler.unreg(); });
-  if (!eventBase.loop()) {
+      .via(&eventBase);
+
+  auto ret = eventBase.loop();
+  handler.unreg();
+
+  if (!ret) {
     return 1;
   }
   return 0;
