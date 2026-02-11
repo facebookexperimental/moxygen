@@ -16,6 +16,8 @@
 #include <quic/codec/QuicInteger.h>
 #include <quic/folly_utils/Utils.h>
 
+#include <variant>
+
 namespace moxygen {
 
 //////// Constants ////////
@@ -132,13 +134,26 @@ class MoQFrameParser {
     ObjectHeader objectHeader;
   };
 
+  // Marker for End of Range results from FETCH parsing (MOQT spec)
+  // Indicates a range of objects that either don't exist or have unknown status
+  struct EndOfRangeMarker {
+    uint64_t groupId;
+    uint64_t objectId;
+    bool isUnknownOrNonexistent; // true = 0x10C (unknown), false = 0x8C
+                                 // (non-existent)
+  };
+
+  // Result from parsing FETCH objects - can be either a normal object or an
+  // End of Range marker
+  using FetchObjectParseResult = std::variant<ObjectHeader, EndOfRangeMarker>;
+
   folly::Expected<ParseResultAndLength<SubgroupHeaderResult>, ErrorCode>
   parseSubgroupHeader(
       folly::io::Cursor& cursor,
       size_t length,
       const SubgroupOptions& options) const noexcept;
 
-  folly::Expected<ParseResultAndLength<ObjectHeader>, ErrorCode>
+  folly::Expected<ParseResultAndLength<FetchObjectParseResult>, ErrorCode>
   parseFetchObjectHeader(
       folly::io::Cursor& cursor,
       size_t length,
@@ -297,7 +312,7 @@ class MoQFrameParser {
       const ObjectHeader& headerTemplate) const noexcept;
 
   // Draft-15+ FETCH object parser with Serialization Flags
-  folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectDraft15(
+  folly::Expected<FetchObjectParseResult, ErrorCode> parseFetchObjectDraft15(
       folly::io::Cursor& cursor,
       size_t& length,
       const ObjectHeader& headerTemplate) const noexcept;

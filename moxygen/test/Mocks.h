@@ -88,6 +88,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
       onObjectStatus,
       (uint64_t, uint64_t, uint64_t, std::optional<uint8_t>, ObjectStatus));
   MOCK_METHOD(MoQCodec::ParseResult, onObjectPayload, (Payload, bool));
+  MOCK_METHOD(MoQCodec::ParseResult, onEndOfRange, (uint64_t, uint64_t, bool));
   MOCK_METHOD(void, onEndOfStream, ());
 };
 
@@ -179,6 +180,12 @@ class MockFetchConsumer : public FetchConsumer {
       (folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>),
       awaitReadyToConsume,
       (),
+      (override));
+
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, MoQPublishError>),
+      endOfUnknownRange,
+      (uint64_t, uint64_t, bool),
       (override));
 };
 

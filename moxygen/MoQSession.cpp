@@ -2841,6 +2841,37 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
                : MoQCodec::ParseResult::ERROR_TERMINATE;
   }
 
+  MoQCodec::ParseResult onEndOfRange(
+      uint64_t groupId,
+      uint64_t objectId,
+      bool isUnknownOrNonexistent) override {
+    // For non-existent range (0x8C), just continue - the next object()
+    // call will implicitly tell us where we are.
+    if (!isUnknownOrNonexistent) {
+      return MoQCodec::ParseResult::CONTINUE;
+    }
+
+    // For unknown range (0x10C), forward to FetchConsumer
+    if (!fetchState_) {
+      XLOG(ERR) << "onEndOfRange called without fetchState";
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
+    }
+
+    auto fetchCallback = fetchState_->getFetchCallback();
+    if (!fetchCallback) {
+      XLOG(ERR) << "onEndOfRange: no fetch callback";
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
+    }
+
+    auto res = fetchCallback->endOfUnknownRange(groupId, objectId);
+    if (res.hasError()) {
+      XLOG(ERR) << "onEndOfRange: callback error: " << res.error().what();
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
+    }
+
+    return MoQCodec::ParseResult::CONTINUE;
+  }
+
   void onEndOfStream() override {
     if (!isCancelled()) {
       endOfSubgroup(/*deliverCallback=*/true);

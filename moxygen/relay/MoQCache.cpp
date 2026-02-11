@@ -844,6 +844,33 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     return consumer_->awaitReadyToConsume();
   }
 
+  folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
+      uint64_t groupId,
+      uint64_t objectId,
+      bool finFetch) override {
+    // Skip iterator forward WITHOUT marking objects as missing.
+    // This allows the cache to potentially serve these objects later
+    // if they become available from another source.
+    AbsoluteLocation target{groupId, objectId};
+    while (*fetchRangeIt_ != target) {
+      fetchRangeIt_.next();
+    }
+    // Advance to next-to-target
+    fetchRangeIt_.next();
+
+    // Record that this upstream fetch has made progress (or finished) so any
+    // other concurrent fetches waiting on the same range can continue.
+    updateInProgress();
+
+    if (finFetch) {
+      complete_.post();
+    }
+
+    // Forward to downstream consumer
+    return consumer_->endOfUnknownRange(
+        groupId, objectId, finFetch && proxyFin_);
+  }
+
   folly::coro::Task<void> complete() {
     co_await complete_;
   }

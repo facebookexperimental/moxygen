@@ -778,6 +778,85 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
   EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
 }
 
+// Test that onEndOfRange callback is invoked for End of Unknown Range (0x10C)
+TEST_P(MoQCodecTest, FetchEndOfUnknownRange) {
+  // End of Range markers require varint encoding, only supported in v16+
+  if (getDraftMajorVersion(GetParam()) < 16) {
+    GTEST_SKIP() << "End of Range not supported in draft < 16";
+  }
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  RequestID requestID(1);
+  ObjectHeader obj(2, 3, 4, 5);
+  StreamType streamType = StreamType::FETCH_HEADER;
+
+  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
+  EXPECT_TRUE(res);
+  obj.length = 5;
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
+  EXPECT_TRUE(res);
+
+  // Write End of Unknown Range marker (0x10C) + Group ID (5) + Object ID (10)
+  // 0x10C as 2-byte varint: 0x41 0x0C
+  folly::IOBufQueue endOfRangeBuf{folly::IOBufQueue::cacheChainLength()};
+  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x41\x0C")); // 0x10C varint
+  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x05"));     // Group 5
+  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x0A"));     // Object 10
+  writeBuf.append(endOfRangeBuf.move());
+
+  EXPECT_CALL(objectStreamCodecCallback_, onFetchHeader(testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(2, 3, 4, testing::_, 5, testing::_, true, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(objectStreamCodecCallback_, onEndOfRange(5, 10, true))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
+// Test that onEndOfRange callback is invoked for End of Non-Existent Range
+// (0x8C)
+TEST_P(MoQCodecTest, FetchEndOfNonExistentRange) {
+  // End of Range markers require varint encoding, only supported in v16+
+  if (getDraftMajorVersion(GetParam()) < 16) {
+    GTEST_SKIP() << "End of Range not supported in draft < 16";
+  }
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  RequestID requestID(1);
+  ObjectHeader obj(2, 3, 4, 5);
+  StreamType streamType = StreamType::FETCH_HEADER;
+
+  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
+  EXPECT_TRUE(res);
+  obj.length = 5;
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
+  EXPECT_TRUE(res);
+
+  // Write End of Non-Existent Range marker (0x8C) + Group ID (3) + Object ID
+  // (7) 0x8C (140) as 2-byte varint: 0x40 0x8C
+  folly::IOBufQueue endOfRangeBuf{folly::IOBufQueue::cacheChainLength()};
+  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x40\x8C")); // 0x8C varint
+  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x03"));     // Group 3
+  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x07"));     // Object 7
+  writeBuf.append(endOfRangeBuf.move());
+
+  EXPECT_CALL(objectStreamCodecCallback_, onFetchHeader(testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onObjectBegin(2, 3, 4, testing::_, 5, testing::_, true, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(objectStreamCodecCallback_, onEndOfRange(3, 7, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  auto result = objectStreamCodec_.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,

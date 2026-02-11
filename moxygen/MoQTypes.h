@@ -34,6 +34,11 @@ constexpr uint64_t kPublisherPriorityExtensionType = 0x0E;
 constexpr uint64_t kPublisherGroupOrderExtensionType = 0x22;
 constexpr uint64_t kDynamicGroupsExtensionType = 0x30;
 
+// End of Range serialization flags (MOQT spec)
+// Used in FETCH responses to indicate ranges of missing/unknown objects
+constexpr uint64_t kSerializationFlagEndOfNonExistentRange = 0x8C;
+constexpr uint64_t kSerializationFlagEndOfUnknownRange = 0x10C;
+
 //////// Types ////////
 
 using Payload = std::unique_ptr<folly::IOBuf>;

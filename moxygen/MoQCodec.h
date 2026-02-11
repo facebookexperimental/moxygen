@@ -193,6 +193,13 @@ class MoQObjectStreamCodec : public MoQCodec {
     virtual ParseResult onObjectPayload(
         Payload payload,
         bool objectComplete) = 0;
+    // Called when an End of Range marker is parsed from a FETCH response
+    // isUnknownOrNonexistent: true for 0x10C (unknown), false for 0x8C
+    // (non-existent)
+    virtual ParseResult onEndOfRange(
+        uint64_t groupId,
+        uint64_t objectId,
+        bool isUnknownOrNonexistent) = 0;
     virtual void onEndOfStream() = 0;
   };
 

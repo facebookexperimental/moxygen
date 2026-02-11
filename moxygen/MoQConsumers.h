@@ -273,6 +273,15 @@ class FetchConsumer {
   // Wait for the fetch to become writable
   virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() = 0;
+
+  // Called when the publisher indicates a range of objects is unknown.
+  // Default implementation is a no-op. This is majorly a caching concern.
+  virtual folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
+      uint64_t /* groupID */,
+      uint64_t /* objectId */,
+      bool /* finFetch */ = false) {
+    return folly::unit;
+  }
 };
 
 } // namespace moxygen

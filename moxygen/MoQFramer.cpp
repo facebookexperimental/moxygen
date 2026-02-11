@@ -1052,7 +1052,7 @@ MoQFrameParser::parseFetchObjectHeaderLegacy(
   return objectHeader;
 }
 
-folly::Expected<ObjectHeader, ErrorCode>
+folly::Expected<MoQFrameParser::FetchObjectParseResult, ErrorCode>
 MoQFrameParser::parseFetchObjectDraft15(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -1061,24 +1061,68 @@ MoQFrameParser::parseFetchObjectDraft15(
   auto remainingLength = length;
   ObjectHeader objectHeader = headerTemplate;
 
-  // Read Serialization Flags byte
-  if (remainingLength < 1 || !cursor.canAdvance(1)) {
-    XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on flags";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Read Serialization Flags - varint for v16+, single byte for v15
+  uint64_t flags;
+  if (getDraftMajorVersion(*version_) >= 16) {
+    auto flagsResult =
+        quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+    if (!flagsResult) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on flags";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    flags = flagsResult->first;
+    remainingLength -= flagsResult->second;
+  } else {
+    // v15: single byte
+    if (remainingLength < 1 || !cursor.canAdvance(1)) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on flags";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    flags = cursor.readBE<uint8_t>();
+    remainingLength -= 1;
   }
-  uint8_t flags = cursor.readBE<uint8_t>();
-  remainingLength--;
 
-  // Check reserved bits (0x40, 0x80)
-  if (flags &
-      folly::to_underlying(FetchHeaderSerializationBits::RESERVED_BITMASK)) {
-    XLOG(ERR) << "parseFetchObjectDraft15: Reserved bits set in flags: 0x"
-              << std::hex << static_cast<int>(flags);
+  // Check for End of Range markers (0x8C = non-existent, 0x10C = unknown)
+  // End of Range markers are only supported in v16+
+  if (getDraftMajorVersion(*version_) >= 16 &&
+      (flags == kSerializationFlagEndOfNonExistentRange ||
+       flags == kSerializationFlagEndOfUnknownRange)) {
+    // End of Range: parse only Group ID and Object ID
+    auto groupId = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+    if (!groupId) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on End of Range group";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    remainingLength -= groupId->second;
+
+    auto objectId =
+        quic::follyutils::decodeQuicInteger(cursor, remainingLength);
+    if (!objectId) {
+      XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on End of Range object";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    remainingLength -= objectId->second;
+
+    length = remainingLength;
+    return EndOfRangeMarker{
+        groupId->first,
+        objectId->first,
+        flags == kSerializationFlagEndOfUnknownRange};
+  }
+
+  // Any other value >= 128 is a PROTOCOL_VIOLATION per spec
+  // (valid bit flags are 0-127, plus special values 0x8C and 0x10C)
+  if (flags >= 128) {
+    XLOG(ERR) << "parseFetchObjectDraft15: Invalid serialization flags: 0x"
+              << std::hex << flags;
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
+  // flags < 128: interpret as bit flags for normal object
+  uint8_t bitFlags = static_cast<uint8_t>(flags);
+
   // Decode Group ID (flags & 0x08)
-  if (flags &
+  if (bitFlags &
       folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK)) {
     // Group ID field is present
     auto group = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
@@ -1099,7 +1143,7 @@ MoQFrameParser::parseFetchObjectDraft15(
   }
 
   // Decode Subgroup ID (flags & 0x03)
-  uint8_t subgroupMode = flags &
+  uint8_t subgroupMode = bitFlags &
       folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_MODE_BITMASK);
   switch (subgroupMode) {
     case folly::to_underlying(FetchHeaderSerializationBits::SUBGROUP_ID_ZERO):
@@ -1141,7 +1185,7 @@ MoQFrameParser::parseFetchObjectDraft15(
   }
 
   // Decode Object ID (flags & 0x04)
-  if (flags &
+  if (bitFlags &
       folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK)) {
     // Object ID field is present
     auto id = quic::follyutils::decodeQuicInteger(cursor, remainingLength);
@@ -1162,7 +1206,7 @@ MoQFrameParser::parseFetchObjectDraft15(
   }
 
   // Decode Priority (flags & 0x10)
-  if (flags &
+  if (bitFlags &
       folly::to_underlying(FetchHeaderSerializationBits::PRIORITY_BITMASK)) {
     // Priority field is present
     if (remainingLength < 1) {
@@ -1182,7 +1226,7 @@ MoQFrameParser::parseFetchObjectDraft15(
   }
 
   // Decode Extensions (flags & 0x20)
-  if (flags &
+  if (bitFlags &
       folly::to_underlying(FetchHeaderSerializationBits::EXTENSIONS_BITMASK)) {
     // Extensions field is present
     auto ext = parseExtensions(cursor, remainingLength, objectHeader);
@@ -1262,7 +1306,10 @@ bool MoQFrameParser::isValidStatusForExtensions(
   return true;
 }
 
-folly::Expected<MoQFrameParser::ParseResultAndLength<ObjectHeader>, ErrorCode>
+folly::Expected<
+    MoQFrameParser::ParseResultAndLength<
+        MoQFrameParser::FetchObjectParseResult>,
+    ErrorCode>
 MoQFrameParser::parseFetchObjectHeader(
     folly::io::Cursor& cursor,
     size_t length,
@@ -1270,16 +1317,16 @@ MoQFrameParser::parseFetchObjectHeader(
   auto startLength = length;
 
   if (getDraftMajorVersion(*version_) >= 15) {
-    auto draft15Header =
+    auto draft15Result =
         parseFetchObjectDraft15(cursor, length, headerTemplate);
-    if (!draft15Header) {
-      return folly::makeUnexpected(draft15Header.error());
+    if (!draft15Result) {
+      return folly::makeUnexpected(draft15Result.error());
     }
 
     auto v15Consumed = startLength - length;
 
-    return ParseResultAndLength<ObjectHeader>{
-        std::move(draft15Header.value()), v15Consumed};
+    return ParseResultAndLength<FetchObjectParseResult>{
+        std::move(draft15Result.value()), v15Consumed};
   } else {
     auto objectHeader =
         parseFetchObjectHeaderLegacy(cursor, length, headerTemplate);
@@ -1289,8 +1336,10 @@ MoQFrameParser::parseFetchObjectHeader(
 
     auto legacyConsumed = startLength - length;
 
-    return ParseResultAndLength<ObjectHeader>{
-        std::move(objectHeader.value()), legacyConsumed};
+    // Legacy path always returns ObjectHeader, wrap in variant
+    return ParseResultAndLength<FetchObjectParseResult>{
+        FetchObjectParseResult{std::move(objectHeader.value())},
+        legacyConsumed};
   }
 }
 
@@ -4046,9 +4095,13 @@ void MoQFrameWriter::writeFetchObjectDraft15(
         folly::to_underlying(FetchHeaderSerializationBits::EXTENSIONS_BITMASK);
   }
 
-  // Write Serialization Flags
-  writeBuf.append(&flags, 1);
-  size += 1;
+  // Write Serialization Flags - single byte for v15, varint for v16+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeVarint(writeBuf, flags, size, error);
+  } else {
+    writeBuf.append(&flags, 1);
+    size += 1;
+  }
 
   // Write Group ID if flag set
   if (flags &

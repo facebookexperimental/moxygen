@@ -248,27 +248,34 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r22 =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r22);
-    EXPECT_EQ(r22->value.id, 4);
-    skip(cursor, *r22->value.length);
+    ASSERT_TRUE(std::holds_alternative<ObjectHeader>(r22->value));
+    auto& r22obj = std::get<ObjectHeader>(r22->value);
+    EXPECT_EQ(r22obj.id, 4);
+    skip(cursor, *r22obj.length);
 
     auto r22a =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r22a);
-    EXPECT_EQ(r22a->value.id, 5);
-    EXPECT_EQ(
-        r22a->value.extensions, Extensions(test::getTestExtensions(), {}));
-    skip(cursor, *r22a->value.length);
+    ASSERT_TRUE(std::holds_alternative<ObjectHeader>(r22a->value));
+    auto& r22aobj = std::get<ObjectHeader>(r22a->value);
+    EXPECT_EQ(r22aobj.id, 5);
+    EXPECT_EQ(r22aobj.extensions, Extensions(test::getTestExtensions(), {}));
+    skip(cursor, *r22aobj.length);
 
     auto r23 =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23);
-    EXPECT_EQ(r23->value.status, ObjectStatus::END_OF_GROUP);
+    ASSERT_TRUE(std::holds_alternative<ObjectHeader>(r23->value));
+    auto& r23obj = std::get<ObjectHeader>(r23->value);
+    EXPECT_EQ(r23obj.status, ObjectStatus::END_OF_GROUP);
 
     auto r23a =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23a);
-    EXPECT_EQ(r23a->value.extensions, Extensions({}, {}));
-    EXPECT_EQ(r23a->value.status, ObjectStatus::END_OF_GROUP);
+    ASSERT_TRUE(std::holds_alternative<ObjectHeader>(r23a->value));
+    auto& r23aobj = std::get<ObjectHeader>(r23a->value);
+    EXPECT_EQ(r23aobj.extensions, Extensions({}, {}));
+    EXPECT_EQ(r23aobj.status, ObjectStatus::END_OF_GROUP);
   }
 
  protected:
@@ -758,20 +765,24 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
   auto parseResult = parser_.parseFetchObjectHeader(
       cursor, cursor.totalLength(), headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->value.group, 33);
-  EXPECT_EQ(parseResult->value.id, 44);
-  EXPECT_EQ(parseResult->value.priority, 55);
-  EXPECT_EQ(parseResult->value.status, ObjectStatus::NORMAL);
-  EXPECT_EQ(*parseResult->value.length, 4);
-  cursor.skip(*parseResult->value.length);
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(parseResult->value));
+  auto& obj1 = std::get<ObjectHeader>(parseResult->value);
+  EXPECT_EQ(obj1.group, 33);
+  EXPECT_EQ(obj1.id, 44);
+  EXPECT_EQ(obj1.priority, 55);
+  EXPECT_EQ(obj1.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*obj1.length, 4);
+  cursor.skip(*obj1.length);
 
   parseResult = parser_.parseFetchObjectHeader(
       cursor, cursor.totalLength(), headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
-  EXPECT_EQ(parseResult->value.group, 33);
-  EXPECT_EQ(parseResult->value.id, 44);
-  EXPECT_EQ(parseResult->value.priority, 55);
-  EXPECT_EQ(parseResult->value.status, ObjectStatus::OBJECT_NOT_EXIST);
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(parseResult->value));
+  auto& obj2 = std::get<ObjectHeader>(parseResult->value);
+  EXPECT_EQ(obj2.group, 33);
+  EXPECT_EQ(obj2.id, 44);
+  EXPECT_EQ(obj2.priority, 55);
+  EXPECT_EQ(obj2.status, ObjectStatus::OBJECT_NOT_EXIST);
 }
 
 TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
@@ -3423,6 +3434,121 @@ TEST_P(MoQFramerV16PlusTest, RequestErrorWithRetryInterval) {
   EXPECT_EQ(parseResult->errorCode, requestError.errorCode);
   EXPECT_EQ(parseResult->retryInterval, requestError.retryInterval);
   EXPECT_EQ(parseResult->reasonPhrase, requestError.reasonPhrase);
+}
+
+// Test parsing End of Unknown Range marker (0x10C) - v16+ only
+// End of Range markers require varint encoding which is only supported in v16+
+TEST_P(MoQFramerV16PlusTest, ParseEndOfUnknownRange) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Write FETCH header
+  writer_.writeFetchHeader(writeBuf, RequestID(1));
+
+  // Write End of Unknown Range marker (0x10C) + Group ID + Object ID
+  // 0x10C as varint: 0x80 | (0x10C & 0x3F) = 0x8C, then (0x10C >> 6) = 0x04
+  // Actually, QUIC varint encoding for 0x10C (268):
+  // 268 < 16384, so 2-byte encoding: 0x40 | (268 >> 8), 268 & 0xFF
+  // = 0x40 | 1 = 0x41, 0x0C
+  writeBuf.append(folly::IOBuf::copyBuffer("\x41\x0C")); // 0x10C as varint
+  // Group ID = 5, Object ID = 10
+  writeBuf.append(folly::IOBuf::copyBuffer("\x05\x0A"));
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Skip FETCH stream header
+  auto streamType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(streamType->first, folly::to_underlying(StreamType::FETCH_HEADER));
+
+  auto fetchHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
+  EXPECT_TRUE(fetchHeaderResult.hasValue());
+
+  ObjectHeader headerTemplate;
+  auto parseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+
+  EXPECT_TRUE(parseResult.hasValue());
+  ASSERT_TRUE(
+      std::holds_alternative<MoQFrameParser::EndOfRangeMarker>(
+          parseResult->value));
+  auto& marker = std::get<MoQFrameParser::EndOfRangeMarker>(parseResult->value);
+  EXPECT_EQ(marker.groupId, 5);
+  EXPECT_EQ(marker.objectId, 10);
+  EXPECT_TRUE(marker.isUnknownOrNonexistent);
+}
+
+// Test parsing End of Non-Existent Range marker (0x8C) - v16+ only
+// End of Range markers require varint encoding which is only supported in v16+
+TEST_P(MoQFramerV16PlusTest, ParseEndOfNonExistentRange) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Write FETCH header
+  writer_.writeFetchHeader(writeBuf, RequestID(1));
+
+  // Write End of Non-Existent Range marker (0x8C) + Group ID + Object ID
+  // 0x8C (140) as varint: 140 >= 64, so 2-byte encoding
+  // 0x40 | (140 >> 8), 140 & 0xFF = 0x40 | 0, 0x8C
+  writeBuf.append(folly::IOBuf::copyBuffer("\x40\x8C")); // 0x8C as varint
+  // Group ID = 3, Object ID = 7
+  writeBuf.append(folly::IOBuf::copyBuffer("\x03\x07"));
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Skip FETCH stream header
+  auto streamType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(streamType->first, folly::to_underlying(StreamType::FETCH_HEADER));
+
+  auto fetchHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
+  EXPECT_TRUE(fetchHeaderResult.hasValue());
+
+  ObjectHeader headerTemplate;
+  auto parseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+
+  EXPECT_TRUE(parseResult.hasValue());
+  ASSERT_TRUE(
+      std::holds_alternative<MoQFrameParser::EndOfRangeMarker>(
+          parseResult->value));
+  auto& marker = std::get<MoQFrameParser::EndOfRangeMarker>(parseResult->value);
+  EXPECT_EQ(marker.groupId, 3);
+  EXPECT_EQ(marker.objectId, 7);
+  EXPECT_FALSE(marker.isUnknownOrNonexistent);
+}
+
+// Test that invalid serialization flags >= 128 (not 0x8C or 0x10C) cause error
+// v16+ only since values >= 128 require varint encoding
+TEST_P(MoQFramerV16PlusTest, ParseInvalidSerializationFlags) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Write FETCH header
+  writer_.writeFetchHeader(writeBuf, RequestID(1));
+
+  // Write invalid serialization flags (0x80 = 128, which is >= 128 but not
+  // 0x8C or 0x10C)
+  // 128 as varint: 128 >= 64, so 2-byte encoding: 0x40 | (128 >> 8), 128 & 0xFF
+  // = 0x40 | 0, 0x80
+  writeBuf.append(folly::IOBuf::copyBuffer("\x40\x80"));
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Skip FETCH stream header
+  auto streamType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(streamType->first, folly::to_underlying(StreamType::FETCH_HEADER));
+
+  auto fetchHeaderResult =
+      parser_.parseFetchHeader(cursor, cursor.totalLength());
+  EXPECT_TRUE(fetchHeaderResult.hasValue());
+
+  ObjectHeader headerTemplate;
+  auto parseResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+
+  EXPECT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
 INSTANTIATE_TEST_SUITE_P(
