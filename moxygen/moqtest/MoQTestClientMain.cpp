@@ -73,6 +73,10 @@ DEFINE_bool(
     quic_transport,
     false,
     "Use QUIC transport instead of WebTransport");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
 DEFINE_uint64(
     datagram_drops_allowed_percentage,
     moxygen::kDefaultDatagramDropPercentage,
@@ -128,7 +132,9 @@ int main(int argc, char** argv) {
     // Connect Client to Server
     XLOG(INFO) << "Connecting to " << url.getHostAndPort();
     folly::coro::blockingWait(
-        folly::coro::co_withExecutor(&evb, client->connect(&evb)), &evb);
+        folly::coro::co_withExecutor(
+            &evb, client->connect(&evb, FLAGS_versions)),
+        &evb);
 
     if (FLAGS_request == "subscribe") {
       XLOG(INFO) << "Subscribing to " << url.getHostAndPort();

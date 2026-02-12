@@ -31,12 +31,17 @@ DEFINE_bool(
     "Use raw QUIC transport instead of WebTransport");
 DEFINE_string(cert, "", "Path to TLS certificate file");
 DEFINE_string(key, "", "Path to TLS private key file");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
   folly::Init init(&argc, &argv);
 
-  auto server = std::make_shared<moxygen::MoQTestServer>(FLAGS_cert, FLAGS_key);
+  auto server = std::make_shared<moxygen::MoQTestServer>(
+      FLAGS_cert, FLAGS_key, FLAGS_versions);
 
   folly::SocketAddress addr("::", FLAGS_port);
   server->start(addr);

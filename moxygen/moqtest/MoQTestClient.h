@@ -54,7 +54,9 @@ class MoQTestClient {
   MoQTestClient(MoQTestClient&&) = default;
   MoQTestClient& operator=(MoQTestClient&&) = delete;
 
-  folly::coro::Task<void> connect(folly::EventBase* evb);
+  folly::coro::Task<void> connect(
+      folly::EventBase* evb,
+      const std::string& versions = "");
 
   folly::coro::Task<moxygen::TrackNamespace> subscribe(
       MoQTestParameters params);

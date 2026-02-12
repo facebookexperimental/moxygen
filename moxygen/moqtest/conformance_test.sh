@@ -36,19 +36,28 @@ CURRENT_SECTION=""
 
 # Check arguments
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 <relay_url> [Q]"
+    echo "Usage: $0 <relay_url> [versions] [Q]"
     echo "Example: $0 http://localhost:9999"
-    echo "         $0 http://localhost:9999 [Q]"
+    echo "         $0 http://localhost:9999 16 Q"
+    echo "         $0 http://localhost:9999 14,16"
     exit 1
 fi
 
-# Transport flag: default to webtransport, use quic if 'Q' is present as second argument
-TRANSPORT_FLAG="--quic_transport=False"
-if [ $# -ge 2 ] && [ "$2" = "Q" ]; then
-    TRANSPORT_FLAG="--quic_transport=True"
-fi
-
 RELAY_URL="$1"
+
+# Transport flag: default to webtransport
+# Versions flag: default to empty (all supported)
+TRANSPORT_FLAG="--quic_transport=False"
+VERSION_FLAG=""
+shift 1
+for arg in "$@"; do
+    if [ "$arg" = "Q" ]; then
+        TRANSPORT_FLAG="--quic_transport=True"
+    elif [[ "$arg" =~ ^[0-9,]+$ ]]; then
+        VERSION_FLAG="--versions=$arg"
+    fi
+done
+
 CLIENT_BINARY="${MOXYGEN_DIR:-.}/moxygen/moqtest/moqtest_client"
 
 # Check if the client binary exists
@@ -90,7 +99,7 @@ run_test() {
     local exit_code
 
     if output=$("$CLIENT_BINARY" --url="$RELAY_URL" --request="$request_type" \
-        "$TRANSPORT_FLAG" "${args[@]}" 2>&1); then  # SC2086: quote expansions
+        "$TRANSPORT_FLAG" $VERSION_FLAG "${args[@]}" 2>&1); then  # SC2086: quote expansions
         exit_code=0
     else
         exit_code=$?

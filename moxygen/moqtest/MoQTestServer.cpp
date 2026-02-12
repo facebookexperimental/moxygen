@@ -47,20 +47,23 @@ void MoQTestFetchHandle::fetchCancel() {
   cancelSource_.requestCancellation();
 }
 
-MoQTestServer::MoQTestServer(const std::string& cert, const std::string& key)
+MoQTestServer::MoQTestServer(
+    const std::string& cert,
+    const std::string& key,
+    const std::string& versions)
     : MoQServer(
           quic::samples::createFizzServerContextWithInsecureDefault(
-              []() {
+              [&versions]() {
                 std::vector<std::string> alpns = {"h3"};
-                auto moqt = getDefaultMoqtProtocols(
-                    true); // Always experimental for tests
+                auto moqt = getMoqtProtocols(versions, true);
                 alpns.insert(alpns.end(), moqt.begin(), moqt.end());
                 return alpns;
               }(),
               fizz::server::ClientAuthMode::None,
               cert,
               key),
-          kEndpointName) {}
+          kEndpointName),
+      versions_(versions) {}
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     SubscribeRequest sub,
@@ -652,7 +655,7 @@ folly::coro::Task<void> MoQTestServer::doRelaySetup(
       /*publishHandler=*/shared_from_this(),
       /*subscribeHandler=*/nullptr,
       quic::TransportSettings(),
-      {});
+      getMoqtProtocols(versions_, true));
 
   // Get the session
   relaySession_ =

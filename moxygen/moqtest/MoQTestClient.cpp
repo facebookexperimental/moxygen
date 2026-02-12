@@ -84,9 +84,10 @@ void MoQTestClient::subscribeUpdate(SubscribeUpdate update) {
   }
 }
 
-folly::coro::Task<void> MoQTestClient::connect(folly::EventBase* evb) {
-  // Test client always uses experimental protocols for testing
-  std::vector<std::string> alpns = getDefaultMoqtProtocols(true);
+folly::coro::Task<void> MoQTestClient::connect(
+    folly::EventBase* evb,
+    const std::string& versions) {
+  auto alpns = getMoqtProtocols(versions, true);
 
   co_await moqClient_->setupMoQSession(
       std::chrono::milliseconds(FLAGS_connect_timeout),

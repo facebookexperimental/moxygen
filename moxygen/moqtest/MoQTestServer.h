@@ -60,7 +60,10 @@ class MoQTestServer : public moxygen::Publisher,
                       public moxygen::MoQServer,
                       public std::enable_shared_from_this<MoQTestServer> {
  public:
-  MoQTestServer(const std::string& cert = "", const std::string& key = "");
+  MoQTestServer(
+      const std::string& cert = "",
+      const std::string& key = "",
+      const std::string& versions = "");
 
   //  Override onNewSession to set publisher handler to be this object
   virtual void onNewSession(
@@ -139,6 +142,7 @@ class MoQTestServer : public moxygen::Publisher,
       int32_t transactionTimeout);
 
   // Relay client connection (if using relay mode)
+  std::string versions_;
   std::unique_ptr<MoQClient> relayClient_;
   std::shared_ptr<MoQRelaySession> relaySession_;
   std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
