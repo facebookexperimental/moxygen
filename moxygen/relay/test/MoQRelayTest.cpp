@@ -1700,4 +1700,60 @@ TEST_F(MoQRelayTest, HardErrorsRemoveSubscriber) {
   removeSession(subscriber);
 }
 
+// Regression test: endOfSubgroup with hard error used to cause use-after-free.
+// forEachSubscriber held a const reference to the subscriber's shared_ptr in
+// the map. When endOfSubgroup returned a hard error, handleSubgroupError
+// removed the subscriber from the map (destroying the shared_ptr). The onError
+// lambda's captured copy was then the last reference. After it was destroyed,
+// closeSubgroupForSubscriber accessed the freed subscriber.
+TEST_F(MoQRelayTest, EndOfSubgroupHardErrorDoesNotCrash) {
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+
+  // Setup: Publish track
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Create subscriber that fails with WRITE_ERROR on endOfSubgroup
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> sg;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+        sg = createMockSubgroupConsumer();
+        // Override endOfSubgroup to return a hard error (WRITE_ERROR)
+        EXPECT_CALL(*sg, endOfSubgroup())
+            .WillOnce(Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::WRITE_ERROR, "transport broken"))));
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  // publishDone is called when subscription is removed due to hard error
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  subscribeToTrack(
+      subscriberSession,
+      kTestTrackName,
+      consumer,
+      RequestID(1),
+      /*addToState=*/false);
+
+  // Begin subgroup - sets up the subscriber's subgroup consumer
+  auto subgroupRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+  auto subgroup = *subgroupRes;
+
+  // endOfSubgroup triggers the use-after-free without the fix:
+  // subscriber's endOfSubgroup() returns WRITE_ERROR -> handleSubgroupError
+  // removes subscriber from map -> onError lambda destroyed (last shared_ptr
+  // ref) -> closeSubgroupForSubscriber accesses freed subscriber
+  subgroup->endOfSubgroup();
+
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
+}
+
 } // namespace moxygen::test

@@ -36,7 +36,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::forEachSubscriber(
     Fn&& fn) {
   for (auto subscriberIt = subscribers_.begin();
        subscriberIt != subscribers_.end();) {
-    const auto& sub = subscriberIt->second;
+    auto sub = subscriberIt->second;
     subscriberIt++;
     fn(sub);
   }
