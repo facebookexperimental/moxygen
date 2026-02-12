@@ -701,10 +701,6 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
       }
     }
   }
-  if (length > 0) {
-    XLOG(ERR) << "Invalid key-value length";
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
   XLOG(DBG4) << "parseParams: returning success";
   return folly::unit;
 }
@@ -1822,30 +1818,20 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     subscribeOk.groupOrder = static_cast<GroupOrder>(order);
   }
 
-  if (length < 1) {
-    XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on contentExists";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
-  auto contentExists = cursor.readBE<uint8_t>();
-  length -= sizeof(uint8_t);
-  if (contentExists) {
-    auto res = parseAbsoluteLocation(cursor, length);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
+  if (getDraftMajorVersion(*version_) < 16) {
+    if (length < 1) {
+      XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on contentExists";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    subscribeOk.largest = *res;
-  }
-
-  // Draft 16+: Parse extensions
-  if (getDraftMajorVersion(*version_) >= 16) {
-    ObjectHeader tempHeader;
-    auto ext = parseExtensions(cursor, length, tempHeader);
-    if (!ext) {
-      XLOG(DBG4) << "parseSubscribeOk: error in parseExtensions: "
-                 << folly::to_underlying(ext.error());
-      return folly::makeUnexpected(ext.error());
+    auto contentExists = cursor.readBE<uint8_t>();
+    length -= sizeof(uint8_t);
+    if (contentExists) {
+      auto res = parseAbsoluteLocation(cursor, length);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
+      subscribeOk.largest = *res;
     }
-    subscribeOk.extensions = std::move(tempHeader.extensions);
   }
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -1865,10 +1851,6 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     XLOG(DBG4) << "parseSubscribeOk: parseTrackRequestParams failed";
     return folly::makeUnexpected(res2.error());
   }
-  if (length > 0) {
-    XLOG(DBG4) << "parseSubscribeOk: excess length";
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
 
   if (getDraftMajorVersion(*version_) >= 15) {
     // Set defaults for v15+ when parameters are absent
@@ -1876,6 +1858,24 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     subscribeOk.groupOrder = GroupOrder::OldestFirst;
     // Override from parameters if present
     handleRequestSpecificParams(subscribeOk, requestSpecificParams);
+  }
+
+  // Draft 16+: Parse extensions (bare key-value pairs, no length prefix)
+  if (getDraftMajorVersion(*version_) >= 16) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensionKvPairs(cursor, tempHeader, length, true);
+    if (!ext) {
+      XLOG(DBG4) << "parseSubscribeOk: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    length = 0;
+    subscribeOk.extensions = std::move(tempHeader.extensions);
+  }
+
+  if (length > 0) {
+    XLOG(DBG4) << "parseSubscribeOk: excess length";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
   // For < v16: convert track property params to extensions for uniform access
@@ -2060,18 +2060,6 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     publish.forward = true;
   }
 
-  // Draft 16+: Parse extensions
-  if (getDraftMajorVersion(*version_) >= 16) {
-    ObjectHeader tempHeader;
-    auto ext = parseExtensions(cursor, length, tempHeader);
-    if (!ext) {
-      XLOG(DBG4) << "parsePublish: error in parseExtensions: "
-                 << folly::to_underlying(ext.error());
-      return folly::makeUnexpected(ext.error());
-    }
-    publish.extensions = std::move(tempHeader.extensions);
-  }
-
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
     XLOG(DBG4) << "parsePublish: UNDERFLOW on numParams";
@@ -2084,9 +2072,6 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
   if (!paramRes) {
     return folly::makeUnexpected(paramRes.error());
   }
-  if (length > 0) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
 
   if (getDraftMajorVersion(*version_) >= 15) {
     // From the spec: If omitted from PUBLISH, the receiver uses Ascending
@@ -2094,6 +2079,23 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     // this might be overridden in handleRequestSpecificParams.
     publish.groupOrder = GroupOrder::OldestFirst;
     handleRequestSpecificParams(publish, requestSpecificParams);
+  }
+
+  // Draft 16+: Parse extensions (bare key-value pairs, no length prefix)
+  if (getDraftMajorVersion(*version_) >= 16) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensionKvPairs(cursor, tempHeader, length, true);
+    if (!ext) {
+      XLOG(DBG4) << "parsePublish: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    length = 0;
+    publish.extensions = std::move(tempHeader.extensions);
+  }
+
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
   // For < v16: convert track property params to extensions for uniform access
@@ -2837,18 +2839,6 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   }
   fetchOk.endLocation = std::move(res2.value());
 
-  // Draft 16+: Parse extensions
-  if (getDraftMajorVersion(*version_) >= 16) {
-    ObjectHeader tempHeader;
-    auto ext = parseExtensions(cursor, length, tempHeader);
-    if (!ext) {
-      XLOG(DBG4) << "parseFetchOk: error in parseExtensions: "
-                 << folly::to_underlying(ext.error());
-      return folly::makeUnexpected(ext.error());
-    }
-    fetchOk.extensions = std::move(tempHeader.extensions);
-  }
-
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!numParams) {
     XLOG(DBG4) << "parseFetchOk: UNDERFLOW on numParams";
@@ -2861,6 +2851,20 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   if (!res3) {
     return folly::makeUnexpected(res3.error());
   }
+
+  // Draft 16+: Parse extensions (bare key-value pairs, no length prefix)
+  if (getDraftMajorVersion(*version_) >= 16) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensionKvPairs(cursor, tempHeader, length, true);
+    if (!ext) {
+      XLOG(DBG4) << "parseFetchOk: error in parseExtensions: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    length = 0;
+    fetchOk.extensions = std::move(tempHeader.extensions);
+  }
+
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -3770,7 +3774,8 @@ void MoQFrameWriter::writeExtensions(
     folly::IOBufQueue& writeBuf,
     const Extensions& extensions,
     size_t& size,
-    bool& error) const noexcept {
+    bool& error,
+    bool withLengthPrefix) const noexcept {
   // Calculate total extension length (mutable + immutable blob if present)
   auto mutableExtLen =
       calculateExtensionVectorSize(extensions.getMutableExtensions(), error);
@@ -3809,9 +3814,11 @@ void MoQFrameWriter::writeExtensions(
   }
 
   auto totalExtLen = mutableExtLen + immutableBlobLen;
-  writeVarint(writeBuf, totalExtLen, size, error);
-  if (error) {
-    return;
+  if (withLengthPrefix) {
+    writeVarint(writeBuf, totalExtLen, size, error);
+    if (error) {
+      return;
+    }
   }
 
   // Write mutable extensions first
@@ -4541,17 +4548,14 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     size += 1;
   }
 
-  uint8_t contentExists = (subscribeOk.largest) ? 1 : 0;
-  writeBuf.append(&contentExists, 1);
-  size += 1;
-  if (subscribeOk.largest) {
-    writeVarint(writeBuf, subscribeOk.largest->group, size, error);
-    writeVarint(writeBuf, subscribeOk.largest->object, size, error);
-  }
-
-  // Draft 16+: Write extensions
-  if (getDraftMajorVersion(*version_) >= 16) {
-    writeExtensions(writeBuf, subscribeOk.extensions, size, error);
+  if (getDraftMajorVersion(*version_) < 16) {
+    uint8_t contentExists = (subscribeOk.largest) ? 1 : 0;
+    writeBuf.append(&contentExists, 1);
+    size += 1;
+    if (subscribeOk.largest) {
+      writeVarint(writeBuf, subscribeOk.largest->group, size, error);
+      writeVarint(writeBuf, subscribeOk.largest->object, size, error);
+    }
   }
 
   // Make a mutable copy of params for potential extension->param conversion
@@ -4583,6 +4587,16 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     }
   }
   writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
+
+  // Draft 16+: Write extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeExtensions(
+        writeBuf,
+        subscribeOk.extensions,
+        size,
+        error,
+        /*withLengthPrefix=*/false);
+  }
   return size;
 }
 
@@ -4708,11 +4722,6 @@ WriteResult MoQFrameWriter::writePublish(
     size += 1;
   }
 
-  // Draft 16+: Write extensions
-  if (getDraftMajorVersion(*version_) >= 16) {
-    writeExtensions(writeBuf, publish.extensions, size, error);
-  }
-
   // Make a mutable copy of params for potential extension->param conversion
   TrackRequestParameters params = publish.params;
 
@@ -4722,6 +4731,12 @@ WriteResult MoQFrameWriter::writePublish(
   }
 
   writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
+
+  // Draft 16+: Write extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeExtensions(
+        writeBuf, publish.extensions, size, error, /*withLengthPrefix=*/false);
+  }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -5258,11 +5273,6 @@ WriteResult MoQFrameWriter::writeFetchOk(
   writeVarint(writeBuf, fetchOk.endLocation.group, size, error);
   writeVarint(writeBuf, fetchOk.endLocation.object, size, error);
 
-  // Draft 16+: Write extensions
-  if (getDraftMajorVersion(*version_) >= 16) {
-    writeExtensions(writeBuf, fetchOk.extensions, size, error);
-  }
-
   // Make a mutable copy of params for potential extension->param conversion
   TrackRequestParameters params = fetchOk.params;
 
@@ -5272,6 +5282,12 @@ WriteResult MoQFrameWriter::writeFetchOk(
   }
 
   writeTrackRequestParams(writeBuf, params, {}, size, error);
+
+  // Draft 16+: Write extensions
+  if (getDraftMajorVersion(*version_) >= 16) {
+    writeExtensions(
+        writeBuf, fetchOk.extensions, size, error, /*withLengthPrefix=*/false);
+  }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

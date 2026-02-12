@@ -619,7 +619,8 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const Extensions& extensions,
       size_t& size,
-      bool& error) const noexcept;
+      bool& error,
+      bool withLengthPrefix = true) const noexcept;
 
  private:
   void writeKeyValuePairs(
