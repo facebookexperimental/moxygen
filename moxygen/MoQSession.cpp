@@ -5243,12 +5243,15 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
       close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
       return true;
     }
-    if (requestID.value != nextExpectedPeerRequestID_) {
-      XLOG(ERR) << "Invalid next requestID: " << requestID << " sess=" << this;
-      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
-      return true;
-    }
-    nextExpectedPeerRequestID_ += getRequestIDMultiplier();
+    if (getDraftMajorVersion(*getNegotiatedVersion()) < 16) {
+      if (requestID.value != nextExpectedPeerRequestID_) {
+        XLOG(ERR) << "Invalid next requestID: " << requestID
+                  << " sess=" << this;
+        close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+        return true;
+      }
+      nextExpectedPeerRequestID_ += getRequestIDMultiplier();
+    } // in draft 16+, request IDs can come out of order
   } else {
     if (requestID.value >= maxRequestID_) {
       XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
