@@ -458,6 +458,9 @@ class Parameters {
   // Validates if a parameter is allowed for frameType_
   bool isParamAllowed(TrackRequestParamKey key) const;
 
+  // Returns true if key is a known parameter key in kParamAllowlist
+  static bool isKnownParamKey(uint64_t key);
+
   const Parameter& getParam(size_t position) const {
     return params_.at(position);
   }

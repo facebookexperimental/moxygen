@@ -3934,3 +3934,99 @@ TEST_F(ParameterValidationFlowTest, SubscribeOkRejectsInvalidParam) {
   EXPECT_TRUE(result2.hasValue());
   EXPECT_EQ(subscribeOk.params.size(), 1);
 }
+
+class UnknownParamTest : public ::testing::Test {
+ protected:
+  // Build a minimal SUBSCRIBE payload with one unknown parameter.
+  // For v16+, the param key is delta-encoded; for v15-, absolute.
+  folly::IOBufQueue buildSubscribeWithUnknownParam(uint64_t version) {
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t size = 0;
+    bool error = false;
+
+    // Request ID = 0
+    writeVarint(writeBuf, 0, size, error);
+
+    // Full Track Name: 1 namespace tuple with "ns", track name "track"
+    // Namespace count
+    writeVarint(writeBuf, 1, size, error);
+    // Namespace entry "ns" - length-prefixed
+    writeVarint(writeBuf, 2, size, error);
+    writeBuf.append("ns", 2);
+    size += 2;
+    // Track name "t" - length-prefixed
+    writeVarint(writeBuf, 1, size, error);
+    writeBuf.append("t", 1);
+    size += 1;
+
+    // Number of params = 1 (the unknown param)
+    writeVarint(writeBuf, 1, size, error);
+
+    // Unknown even param key = 9998 (not in kParamAllowlist)
+    uint64_t unknownKey = 9998;
+    if (getDraftMajorVersion(version) >= 16) {
+      // Delta from 0 = key itself
+      writeVarint(writeBuf, unknownKey, size, error);
+    } else {
+      writeVarint(writeBuf, unknownKey, size, error);
+    }
+    // Even key -> int param: value varint
+    writeVarint(writeBuf, 42, size, error);
+
+    // Prepend frame header: frame type + 2-byte BE length
+    folly::IOBufQueue headerBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t headerSize = 0;
+    writeVarint(
+        headerBuf,
+        folly::to_underlying(FrameType::SUBSCRIBE),
+        headerSize,
+        error);
+    // 2-byte big-endian length
+    uint16_t sizeVal = folly::Endian::big(static_cast<uint16_t>(size));
+    headerBuf.append(&sizeVal, 2);
+
+    headerBuf.append(writeBuf.move());
+    return headerBuf;
+  }
+};
+
+TEST_F(UnknownParamTest, UnknownParamRejectedInV16) {
+  auto buf = buildSubscribeWithUnknownParam(kVersionDraft16);
+  auto data = buf.move();
+  folly::io::Cursor cursor(data.get());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft16);
+
+  // Skip frame type
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+
+  // Read length
+  auto length = static_cast<size_t>(cursor.readBE<uint16_t>());
+
+  auto result = parser.parseSubscribeRequest(cursor, length);
+  EXPECT_FALSE(result.hasValue());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST_F(UnknownParamTest, UnknownParamAcceptedInV15) {
+  auto buf = buildSubscribeWithUnknownParam(kVersionDraft15);
+  auto data = buf.move();
+  folly::io::Cursor cursor(data.get());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft15);
+
+  // Skip frame type
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+
+  // Read length
+  auto length = static_cast<size_t>(cursor.readBE<uint16_t>());
+
+  auto result = parser.parseSubscribeRequest(cursor, length);
+  EXPECT_TRUE(result.hasValue());
+}

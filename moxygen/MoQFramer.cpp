@@ -616,6 +616,13 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
       key = keyOrDelta->first;
     }
 
+    if (getDraftMajorVersion(version) >= 16 &&
+        paramsType == ParamsType::Request &&
+        !Parameters::isKnownParamKey(key)) {
+      XLOG(ERR) << "Unknown parameter key " << key << " in v16+";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+
     folly::Expected<std::optional<Parameter>, ErrorCode> res;
 
     if ((paramsType == ParamsType::Request &&

@@ -243,6 +243,11 @@ const folly::F14FastSet<FrameType> kAllowAllParamsFrameTypes = {
     FrameType::LEGACY_SERVER_SETUP,
 };
 
+bool Parameters::isKnownParamKey(uint64_t key) {
+  return kParamAllowlist.find(static_cast<TrackRequestParamKey>(key)) !=
+      kParamAllowlist.end();
+}
+
 bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   // Setup frame types allow all parameters
   if (kAllowAllParamsFrameTypes.contains(frameType_)) {
