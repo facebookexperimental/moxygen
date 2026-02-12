@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQServer.h"
+#include <folly/String.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include <proxygen/lib/http/session/HQSession.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
@@ -75,11 +76,25 @@ MoQServer::MoQServer(
   params_.udpSendBufferSize = kUdpBufferSize;
   params_.udpRecvBufferSize = kUdpBufferSize;
 
+  // Extract MoQT protocols from the fizz context (filter out "h3")
+  std::vector<std::string> quicAlpns;
+  for (const auto& alpn : fizzContext_->getSupportedAlpns()) {
+    if (alpn != "h3") {
+      quicAlpns.push_back(alpn);
+      // WT protocols exclude legacy ALPNs like moq-00
+      if (!isLegacyAlpn(alpn)) {
+        wtMoqtProtocols_.push_back(alpn);
+      }
+    }
+  }
+
   factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
 
-  // Register all handlers
-  registerAlpnHandler(getDefaultMoqtProtocols(true));
+  // Register ALPN handlers for direct QUIC MoQT connections
+  XLOG(DBG1) << "MoQServer: Registering ALPN handlers: "
+             << folly::join(", ", quicAlpns);
+  registerAlpnHandler(quicAlpns);
 
   hqServer_ =
       std::make_unique<HQServer>(params_, std::move(factory_), fizzContext_);
@@ -249,19 +264,23 @@ void MoQServer::Handler::onHeadersComplete(
   resp.setStatusCode(200);
   resp.getHeaders().add("sec-webtransport-http3-draft", "draft02");
 
-  // Use default MoQT protocols for WebTransport negotiation
-  std::vector<std::string> supportedProtocols = getDefaultMoqtProtocols(false);
+  // Use configured MoQT protocols for WebTransport negotiation
+  const auto& supportedProtocols = server_.wtMoqtProtocols_;
+  XLOG(DBG1) << "MoQServer WebTransport: supported protocols: "
+             << folly::join(", ", supportedProtocols);
   std::optional<std::string> negotiatedProtocol;
-  if (auto wtAvailableProtocols =
-          HTTPWebTransport::getWTAvailableProtocols(*req)) {
-    if (auto wtProtocol = HTTPWebTransport::negotiateWTProtocol(
-            wtAvailableProtocols.value(), supportedProtocols)) {
-      HTTPWebTransport::setWTProtocol(resp, wtProtocol.value());
-      negotiatedProtocol = wtProtocol.value();
-      XLOG(DBG1) << "WebTransport: Negotiated protocol: " << *wtProtocol;
-    } else {
-      VLOG(4) << "Failed to negotiate WebTransport protocol";
-      resp.setStatusCode(400);
+  if (!supportedProtocols.empty()) {
+    if (auto wtAvailableProtocols =
+            HTTPWebTransport::getWTAvailableProtocols(*req)) {
+      if (auto wtProtocol = HTTPWebTransport::negotiateWTProtocol(
+              wtAvailableProtocols.value(), supportedProtocols)) {
+        HTTPWebTransport::setWTProtocol(resp, wtProtocol.value());
+        negotiatedProtocol = wtProtocol.value();
+        XLOG(DBG1) << "WebTransport: Negotiated protocol: " << *wtProtocol;
+      } else {
+        VLOG(4) << "Failed to negotiate WebTransport protocol";
+        resp.setStatusCode(400);
+      }
     }
   }
   txn_->sendHeaders(resp);

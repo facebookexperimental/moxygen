@@ -7,6 +7,7 @@
 #include <moxygen/MoQVersions.h>
 
 #include <folly/Conv.h>
+#include <folly/String.h>
 #include <algorithm>
 
 namespace {
@@ -67,12 +68,17 @@ std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn) {
   return std::nullopt;
 }
 
-std::optional<std::string> getAlpnFromVersion(uint64_t version) {
+std::optional<std::string> getAlpnFromVersion(
+    uint64_t version,
+    bool useStandard) {
   uint64_t draftNum = getDraftMajorVersion(version);
 
   // Drafts < 15 use legacy ALPN "moq-00"
   if (draftNum < 15) {
     return std::string(kAlpnMoqtLegacy);
+  }
+  if (useStandard) {
+    return "moqt-" + folly::to<std::string>(draftNum);
   }
   if (draftNum == 15) {
     return std::string(kAlpnMoqtDraft15Latest);
@@ -80,13 +86,44 @@ std::optional<std::string> getAlpnFromVersion(uint64_t version) {
   return std::string(kAlpnMoqtDraft16Latest);
 }
 
-std::vector<std::string> getDefaultMoqtProtocols(bool includeExperimental) {
+std::vector<std::string> getDefaultMoqtProtocols(
+    bool includeExperimental,
+    bool useStandard) {
   std::vector<std::string> protocols;
   if (includeExperimental) {
-    protocols.emplace_back(kAlpnMoqtDraft15Latest);
-    protocols.emplace_back(kAlpnMoqtDraft16Latest);
+    // Highest version first so TLS ALPN negotiation prefers it
+    protocols.push_back(
+        getAlpnFromVersion(kVersionDraft16, useStandard).value());
+    protocols.push_back(
+        getAlpnFromVersion(kVersionDraft15, useStandard).value());
   }
   protocols.emplace_back(kAlpnMoqtLegacy);
+  return protocols;
+}
+
+std::vector<std::string> getMoqtProtocols(
+    const std::string& versions,
+    bool useStandard) {
+  if (versions.empty()) {
+    return getDefaultMoqtProtocols(true, useStandard);
+  }
+  std::vector<std::string> protocols;
+  std::vector<folly::StringPiece> parts;
+  folly::split(',', versions, parts);
+  for (auto& part : parts) {
+    auto trimmed = folly::trimWhitespace(part);
+    auto draftNum = folly::tryTo<int>(trimmed);
+    if (draftNum.hasValue()) {
+      uint64_t versionCode =
+          0xff000000 | static_cast<uint64_t>(draftNum.value());
+      auto alpn = getAlpnFromVersion(versionCode, useStandard);
+      if (alpn.has_value() &&
+          std::find(protocols.begin(), protocols.end(), alpn.value()) ==
+              protocols.end()) {
+        protocols.push_back(alpn.value());
+      }
+    }
+  }
   return protocols;
 }
 

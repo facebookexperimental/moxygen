@@ -5,6 +5,7 @@
  */
 
 #include <fizz/protocol/CertificateVerifier.h>
+#include <folly/String.h>
 #include <folly/coro/Error.h>
 #include <quic/client/QuicClientTransport.h>
 #include <moxygen/MoQClientBase.h>
@@ -34,6 +35,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
 
   std::vector<std::string> alpn =
       alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
+  XLOG(DBG1) << "MoQClientBase: QUIC ALPNs: " << folly::join(", ", alpn);
   // Establish QUIC connection with multiple ALPN options
   auto quicClient = co_await connectQuic(
       folly::SocketAddress(

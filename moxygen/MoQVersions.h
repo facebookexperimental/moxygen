@@ -77,12 +77,24 @@ uint64_t getDraftMajorVersion(uint64_t version);
 bool isLegacyAlpn(std::string_view alpn);
 std::vector<uint64_t> getSupportedLegacyVersions();
 std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn);
-std::optional<std::string> getAlpnFromVersion(uint64_t version);
+std::optional<std::string> getAlpnFromVersion(
+    uint64_t version,
+    bool useStandard = false);
 
 // Returns the default list of supported MoQT protocols
 // includeExperimental: if true, includes experimental/draft protocols
+// useStandard: if true, uses standard ALPNs (moqt-NN) instead of Meta-specific
 std::vector<std::string> getDefaultMoqtProtocols(
-    bool includeExperimental = false);
+    bool includeExperimental = false,
+    bool useStandard = false);
+
+// Returns a list of MoQT ALPNs for the given draft versions.
+// versions: comma-separated draft numbers (e.g. "14,16"). Empty = all
+// supported. useStandard: if true, uses standard ALPNs (moqt-NN) instead of
+// Meta-specific
+std::vector<std::string> getMoqtProtocols(
+    const std::string& versions = "",
+    bool useStandard = false);
 
 bool isSupportedVersion(uint64_t version);
 

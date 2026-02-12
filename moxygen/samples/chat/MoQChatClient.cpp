@@ -22,10 +22,10 @@ DEFINE_string(username, "", "Username to join chat");
 DEFINE_string(device, "12345", "Device ID");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
-DEFINE_bool(
-    use_legacy_setup,
-    false,
-    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
 
 namespace moxygen {
 
@@ -56,9 +56,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
   auto g =
       folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
   try {
-    // Default to experimental protocols, override to legacy if flag set
-    std::vector<std::string> alpns =
-        getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+    auto alpns = getMoqtProtocols(FLAGS_versions, true);
     co_await moqClient_.setup(
         /*publisher=*/shared_from_this(),
         /*subscriber=*/shared_from_this(),

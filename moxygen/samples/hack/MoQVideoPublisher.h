@@ -48,7 +48,7 @@ class MoQVideoPublisher
   bool setup(
       const std::string& connectURL,
       std::shared_ptr<Subscriber> subscriber = nullptr,
-      bool useLegacySetup = false,
+      const std::string& versions = "",
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
 
   /**

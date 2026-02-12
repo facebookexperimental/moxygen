@@ -89,6 +89,10 @@ class MoQServer : public MoQServerBase {
       folly::EventBase* evb,
       std::shared_ptr<const fizz::server::FizzServerContext> ctx);
 
+  void setWtMoqtProtocols(std::vector<std::string> protocols) {
+    wtMoqtProtocols_ = std::move(protocols);
+  }
+
  protected:
   // Register ALPN handlers for direct QUIC connections (internal use)
   void registerAlpnHandler(const std::vector<std::string>& alpns);
@@ -157,6 +161,7 @@ class MoQServer : public MoQServerBase {
   std::string key_;
   quic::samples::HQServerParams params_;
   std::shared_ptr<const fizz::server::FizzServerContext> fizzContext_;
+  std::vector<std::string> wtMoqtProtocols_;
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;

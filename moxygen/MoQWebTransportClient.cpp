@@ -6,6 +6,7 @@
 
 #include <moxygen/MoQWebTransportClient.h>
 
+#include <folly/String.h>
 #include <proxygen/lib/http/HQConnector.h>
 #include <proxygen/lib/http/session/QuicProtocolInfo.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
@@ -15,7 +16,7 @@ namespace {
 
 proxygen::HTTPMessage getWebTransportConnectRequest(
     const proxygen::URL& url,
-    const std::vector<std::string>& alpns) {
+    const std::vector<std::string>& wtProtocols) {
   proxygen::HTTPMessage req;
   req.setHTTPVersion(1, 1);
   req.setSecure(true);
@@ -25,8 +26,10 @@ proxygen::HTTPMessage getWebTransportConnectRequest(
   req.setMethod(proxygen::HTTPMethod::CONNECT);
   req.setUpgradeProtocol("webtransport");
 
-  // Set available MoQT protocols for version negotiation
-  proxygen::HTTPWebTransport::setWTAvailableProtocols(req, alpns);
+  // Set available MoQT protocols for version negotiation (skip if empty)
+  if (!wtProtocols.empty()) {
+    proxygen::HTTPWebTransport::setWTAvailableProtocols(req, wtProtocols);
+  }
 
   return req;
 }
@@ -108,6 +111,16 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
 
   std::vector<std::string> protocolList =
       alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
+  XLOG(DBG1) << "MoQWebTransportClient: WT ALPNs: "
+             << folly::join(", ", protocolList);
+
+  // Filter out legacy ALPN — not used for WebTransport protocol negotiation
+  std::vector<std::string> wtProtocols;
+  for (const auto& p : protocolList) {
+    if (!isLegacyAlpn(p)) {
+      wtProtocols.push_back(p);
+    }
+  }
 
   // Establish H3 connection
   auto session = co_await connectH3WithWebtransport(
@@ -134,7 +147,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
 
   // Establish WebTransport session
   auto txn = session->newTransaction(&httpHandler_);
-  txn->sendHeaders(getWebTransportConnectRequest(url_, protocolList));
+  txn->sendHeaders(getWebTransportConnectRequest(url_, wtProtocols));
   auto wtTry = co_await co_awaitTry(std::move(httpHandler_.wtContract.second));
   if (wtTry.hasException()) {
     XLOG(ERR) << wtTry.exception().what();

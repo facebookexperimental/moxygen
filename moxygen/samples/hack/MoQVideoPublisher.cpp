@@ -214,7 +214,7 @@ void MoQVideoPublisher::noteClientAudioSendTs(uint64_t ptsUs, uint64_t t0Us) {
 bool MoQVideoPublisher::setup(
     const std::string& connectURL,
     std::shared_ptr<Subscriber> subscriber,
-    bool useLegacySetup,
+    const std::string& versions,
     std::shared_ptr<fizz::CertificateVerifier> verifier) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
@@ -227,8 +227,7 @@ bool MoQVideoPublisher::setup(
   cancel_ = folly::CancellationSource();
   running_ = true;
 
-  // Get ALPN protocols based on legacy flag
-  std::vector<std::string> alpns = getDefaultMoqtProtocols(!useLegacySetup);
+  auto alpns = getMoqtProtocols(versions, true);
 
   folly::coro::blockingWait(co_withExecutor(
                                 evbThread_->getEventBase(),

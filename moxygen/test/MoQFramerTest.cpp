@@ -1728,6 +1728,44 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
   auto alpnDraft16 = getAlpnFromVersion(kVersionDraft16);
   ASSERT_TRUE(alpnDraft16.has_value());
   EXPECT_EQ(*alpnDraft16, kAlpnMoqtDraft16Latest);
+
+  // Standard ALPNs (moqt-NN format)
+  auto stdAlpnDraft14 = getAlpnFromVersion(kVersionDraft14, true);
+  ASSERT_TRUE(stdAlpnDraft14.has_value());
+  EXPECT_EQ(*stdAlpnDraft14, "moq-00"); // legacy always
+
+  auto stdAlpnDraft15 = getAlpnFromVersion(kVersionDraft15, true);
+  ASSERT_TRUE(stdAlpnDraft15.has_value());
+  EXPECT_EQ(*stdAlpnDraft15, "moqt-15");
+
+  auto stdAlpnDraft16 = getAlpnFromVersion(kVersionDraft16, true);
+  ASSERT_TRUE(stdAlpnDraft16.has_value());
+  EXPECT_EQ(*stdAlpnDraft16, "moqt-16");
+}
+
+TEST(MoQFramerTestUtils, GetMoqtProtocols) {
+  // Empty = all supported versions
+  auto all = getMoqtProtocols("", true);
+  EXPECT_EQ(all.size(), 3);
+  EXPECT_EQ(all[0], "moqt-16");
+  EXPECT_EQ(all[1], "moqt-15");
+  EXPECT_EQ(all[2], "moq-00");
+
+  // Single version
+  auto just16 = getMoqtProtocols("16", true);
+  EXPECT_EQ(just16.size(), 1);
+  EXPECT_EQ(just16[0], "moqt-16");
+
+  // Multiple versions
+  auto v14and16 = getMoqtProtocols("14,16", true);
+  EXPECT_EQ(v14and16.size(), 2);
+  EXPECT_EQ(v14and16[0], "moq-00");
+  EXPECT_EQ(v14and16[1], "moqt-16");
+
+  // Meta-specific ALPNs
+  auto meta16 = getMoqtProtocols("16");
+  EXPECT_EQ(meta16.size(), 1);
+  EXPECT_EQ(meta16[0], kAlpnMoqtDraft16Latest);
 }
 
 // Test class for immutable extensions feature (draft 14+)

@@ -43,10 +43,10 @@ DEFINE_int32(
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
 DEFINE_string(auth, "secret", "MOQ subscription auth string");
-DEFINE_bool(
-    use_legacy_setup,
-    false,
-    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
 DEFINE_bool(
     insecure,
     false,
@@ -314,9 +314,7 @@ class MoQFlvReceiverClient
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      // Default to experimental protocols, override to legacy if flag set
-      std::vector<std::string> alpns =
-          getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
+      auto alpns = getMoqtProtocols(FLAGS_versions, true);
       co_await moqClient_->setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),

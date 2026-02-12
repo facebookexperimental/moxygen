@@ -96,7 +96,7 @@ folly::Executor::KeepAlive<folly::EventBase> MoQAudioPublisher::getExecutor()
 bool MoQAudioPublisher::setup(
     const std::string& connectURL,
     std::shared_ptr<Subscriber> subscriber,
-    bool useLegacySetup,
+    const std::string& versions,
     std::shared_ptr<fizz::CertificateVerifier> verifier) {
   proxygen::URL url(connectURL);
   if (!url.isValid() || !url.hasHost()) {
@@ -109,8 +109,7 @@ bool MoQAudioPublisher::setup(
   cancel_ = folly::CancellationSource();
   running_ = true;
 
-  // Get ALPN protocols based on legacy flag
-  std::vector<std::string> alpns = getDefaultMoqtProtocols(!useLegacySetup);
+  auto alpns = getMoqtProtocols(versions, true);
   folly::coro::blockingWait(co_withExecutor(
                                 evbThread_->getEventBase(),
                                 relayClient_->setup(
