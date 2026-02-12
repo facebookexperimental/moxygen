@@ -544,10 +544,25 @@ folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
     p.asAuthToken = std::move(*tokenRes.value());
   } else if (
       key == subscriptionFilterKey && getDraftMajorVersion(version) >= 15) {
-    auto res = parseSubscriptionFilter(cursor, length);
+    // Read length prefix (odd key = length-prefixed)
+    auto lenRes = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!lenRes) {
+      XLOG(DBG4)
+          << "parseVariableParam: UNDERFLOW on subscriptionFilter length";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= lenRes->second;
+    auto filterLen = lenRes->first;
+    if (filterLen > length || !cursor.canAdvance(filterLen)) {
+      XLOG(DBG4) << "parseVariableParam: UNDERFLOW on subscriptionFilter data";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    size_t filterSize = filterLen;
+    auto res = parseSubscriptionFilter(cursor, filterSize);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
+    length -= lenRes->first;
     p.asSubscriptionFilter = res.value();
   }
 
@@ -640,11 +655,25 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
       }
 
-      auto largestLocation = parseAbsoluteLocation(cursor, length);
+      // Read length prefix (odd key = length-prefixed)
+      auto lenRes = quic::follyutils::decodeQuicInteger(cursor, length);
+      if (!lenRes) {
+        XLOG(DBG4) << "parseParams: UNDERFLOW on LARGEST_OBJECT length";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= lenRes->second;
+      auto objLen = lenRes->first;
+      if (objLen > length || !cursor.canAdvance(objLen)) {
+        XLOG(DBG4) << "parseParams: UNDERFLOW on LARGEST_OBJECT data";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      size_t objSize = objLen;
+      auto largestLocation = parseAbsoluteLocation(cursor, objSize);
       if (!largestLocation) {
         XLOG(DBG4) << "parseParams: returning error from parseAbsoluteLocation";
         return folly::makeUnexpected(largestLocation.error());
       }
+      length -= lenRes->first;
       res = Parameter(key, largestLocation.value());
     } else {
       res = parseVariableParam(
@@ -3912,10 +3941,27 @@ void MoQFrameWriter::writeParamValue(
       folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
 
   if (param.key == subscriptionFilterKey) {
-    writeSubscriptionFilter(writeBuf, param.asSubscriptionFilter, size, error);
+    // Subscription filter key is odd, so it needs a length prefix.
+    // Write to a temporary buffer to compute the length first.
+    folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t tmpSize = 0;
+    writeSubscriptionFilter(tmpBuf, param.asSubscriptionFilter, tmpSize, error);
+    if (!error) {
+      writeVarint(writeBuf, tmpSize, size, error);
+      writeBuf.append(tmpBuf.move());
+      size += tmpSize;
+    }
   } else if (param.key == largestObjectKey) {
-    writeVarint(writeBuf, param.largestObject->group, size, error);
-    writeVarint(writeBuf, param.largestObject->object, size, error);
+    // Largest object key is odd, so it needs a length prefix.
+    folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t tmpSize = 0;
+    writeVarint(tmpBuf, param.largestObject->group, tmpSize, error);
+    writeVarint(tmpBuf, param.largestObject->object, tmpSize, error);
+    if (!error) {
+      writeVarint(writeBuf, tmpSize, size, error);
+      writeBuf.append(tmpBuf.move());
+      size += tmpSize;
+    }
   } else if (param.key == expiresKey || param.key == groupOrderKey) {
     writeVarint(writeBuf, param.asUint64, size, error);
   } else if (

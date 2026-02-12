@@ -1352,7 +1352,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
     // sorts parameters by key, so AUTH_TOKEN (key=3) comes BEFORE
     // SUBSCRIPTION_FILTER (key=0x21=33), shortening the offset.
     const uint32_t kDraft16PreambleLength = 15;
-    const uint32_t kDraft15PreambleLength = 13;
+    const uint32_t kDraft15PreambleLength = 20;
     const uint32_t kDraft14PreambleLength = 19;
     uint32_t frontLength;
     if (getDraftMajorVersion(GetParam()) >= 16) {
@@ -1397,7 +1397,7 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
         parser_.setTokenCacheMaxSize(0);
         parser_.setTokenCacheMaxSize(100);
       }
-      EXPECT_FALSE(parseResult.hasValue());
+      EXPECT_FALSE(parseResult.hasValue()) << "j=" << j << " i=" << i;
     }
     if (j == 1 || j == 2) { // register / delete mutate cache state
       auto toParse = front->clone();
