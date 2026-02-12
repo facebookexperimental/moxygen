@@ -65,7 +65,7 @@ inline SubscribeRange toSubscribeRange(
     const SubscribeRequest& sub,
     std::optional<AbsoluteLocation> largest) {
   std::optional<AbsoluteLocation> end;
-  if (sub.endGroup > 0) {
+  if (sub.locType == LocationType::AbsoluteRange) {
     end = AbsoluteLocation({sub.endGroup, 0});
   }
   return toSubscribeRange(sub.start, end, sub.locType, std::move(largest));

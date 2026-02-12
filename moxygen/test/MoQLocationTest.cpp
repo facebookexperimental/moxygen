@@ -89,6 +89,28 @@ TEST(Location, AbsoluteRangeBehindLargest) {
   EXPECT_EQ(range.end.object, 0);
 }
 
+TEST(Location, AbsoluteRangeEndGroupZero) {
+  // endGroup=0 is valid for AbsoluteRange; old code checked endGroup > 0
+  // which would leave end as nullopt and trigger XCHECK failure
+  auto range = toSubscribeRange(
+      getRequest(LocationType::AbsoluteRange, AbsoluteLocation({0, 0}), 0),
+      std::nullopt);
+  EXPECT_EQ(range.start.group, 0);
+  EXPECT_EQ(range.start.object, 0);
+  EXPECT_EQ(range.end.group, 0);
+  EXPECT_EQ(range.end.object, 0);
+}
+
+TEST(Location, NonRangeWithNonZeroEndGroup) {
+  // endGroup field should be ignored for non-range location types
+  auto range = toSubscribeRange(
+      getRequest(LocationType::LargestGroup, std::nullopt, 5),
+      AbsoluteLocation({19, 77}));
+  EXPECT_EQ(range.start.group, 19);
+  EXPECT_EQ(range.start.object, 0);
+  EXPECT_EQ(range.end, kLocationMax);
+}
+
 TEST(Location, Compare) {
   AbsoluteLocation loc1 = {1, 2};
   AbsoluteLocation loc2 = {1, 3};
