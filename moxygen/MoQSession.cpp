@@ -2361,7 +2361,10 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   }
 
   setupComplete_ = true;
-  XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
+  auto negotiatedVersion = *getNegotiatedVersion();
+  XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
+             << std::dec << " (draft-"
+             << getDraftMajorVersion(negotiatedVersion) << ")";
 
   co_return *serverSetup;
 }
@@ -2469,7 +2472,12 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
          getMoQTImplementationString()}));
   }
 
-  XLOG(DBG1) << "Negotiated Version=" << *getNegotiatedVersion();
+  {
+    auto negotiatedVersion = *getNegotiatedVersion();
+    XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
+               << std::dec << " (draft-"
+               << getDraftMajorVersion(negotiatedVersion) << ")";
+  }
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
 
   // This sets the receive cache size and may evict received tokens
