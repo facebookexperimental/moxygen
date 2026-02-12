@@ -119,14 +119,16 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
                         auto) {
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           });
     }
     // Set expectations for endOfSubgroup
     EXPECT_CALL(*mockSubgroupConsumer, endOfSubgroup())
         .WillOnce(
             ::testing::Return(
-                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                    folly::unit)));
   }
 
   // Call the onSubscribe method
@@ -188,17 +190,20 @@ TEST_F(
             // Check Payload
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           })
           .WillRepeatedly(
               ::testing::Return(
-                  folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                  folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      folly::unit)));
     }
     // Set expectations for endOfSubgroup
     EXPECT_CALL(*mockSubgroupConsumer, endOfSubgroup())
         .WillRepeatedly(
             ::testing::Return(
-                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                    folly::unit)));
   }
 
   // Call the onSubscribe method
@@ -236,7 +241,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
                         auto) {
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           });
     }
   }
@@ -285,7 +291,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
                           auto) {
               auto payloadLength = (*payload).length();
               EXPECT_EQ(payloadLength, objectSize);
-              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit);
             });
       } else {
         EXPECT_CALL(
@@ -298,7 +305,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
                           auto) {
               auto payloadLength = (*payload).length();
               EXPECT_EQ(payloadLength, objectSize);
-              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit);
             });
       }
     }
@@ -306,12 +314,14 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
     EXPECT_CALL(*mockSubgroupConsumerZero, endOfSubgroup())
         .WillOnce(
             ::testing::Return(
-                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                    folly::unit)));
     EXPECT_CALL(*mockSubgroupConsumerOne, endOfSubgroup())
 
         .WillOnce(
             ::testing::Return(
-                folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                    folly::unit)));
   }
 
   // Call the onSubscribe method
@@ -358,13 +368,13 @@ TEST_F(
               .WillOnce(
                   ::testing::Return(
                       folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                          {})));
+                          folly::unit)));
 
           EXPECT_CALL(*mockSubgroupConsumerOne, endOfSubgroup())
               .WillOnce(
                   ::testing::Return(
                       folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                          {})));
+                          folly::unit)));
         } else {
           EXPECT_CALL(
               *mockSubgroupConsumerZero,
@@ -377,7 +387,7 @@ TEST_F(
                 auto payloadLength = (*payload).length();
                 EXPECT_EQ(payloadLength, objectSize);
                 return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                    {});
+                    folly::unit);
               });
         }
       } else {
@@ -391,7 +401,8 @@ TEST_F(
                           auto) {
               auto payloadLength = (*payload).length();
               EXPECT_EQ(payloadLength, objectSize);
-              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit);
             });
       }
     }
@@ -456,7 +467,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
             // Check Object Payload
             auto payloadLength = (*objectPayload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           });
     }
   }
@@ -527,18 +539,21 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
                         auto) {
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           })
           .WillRepeatedly(
               ::testing::Return(
-                  folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                  folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      folly::unit)));
     }
   }
 
   EXPECT_CALL(*mockConsumer, endOfFetch())
       .WillOnce(
           ::testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
 
   // Call the onSubscribe method
   auto task = server_->fetchOneSubgroupPerGroup(params_, mockConsumer);
@@ -604,18 +619,21 @@ TEST_F(
             // Check Payload
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           })
           .WillRepeatedly(
               ::testing::Return(
-                  folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                  folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      folly::unit)));
     }
   }
 
   EXPECT_CALL(*mockConsumer, endOfFetch())
       .WillOnce(
           ::testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
 
   // Call the onSubscribe method
   auto task = server_->fetchOneSubgroupPerGroup(params_, mockConsumer);
@@ -658,18 +676,21 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
             // Check Payload
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           })
           .WillRepeatedly(
               ::testing::Return(
-                  folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+                  folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                      folly::unit)));
     }
   }
 
   EXPECT_CALL(*mockConsumer, endOfFetch())
       .WillOnce(
           ::testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
 
   // Call the onSubscribe method
   auto task = server_->fetchOneSubgroupPerObject(params_, mockConsumer);
@@ -712,7 +733,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
             // Check Payload
             auto payloadLength = (*payload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           });
     }
   }
@@ -720,7 +742,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
   EXPECT_CALL(*mockConsumer, endOfFetch())
       .WillOnce(
           ::testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
 
   // Call the onSubscribe method
   auto task = server_->fetchOneSubgroupPerObject(params_, mockConsumer);
@@ -769,7 +792,8 @@ TEST_F(
               // Check Payloadƒ
               auto payloadLength = (*payload).length();
               EXPECT_EQ(payloadLength, objectSize);
-              return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit);
             });
       } else {
         EXPECT_CALL(
@@ -778,7 +802,7 @@ TEST_F(
             .WillOnce(
                 testing::Return(
                     folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                        {})));
+                        folly::unit)));
       }
     }
   }
@@ -786,7 +810,8 @@ TEST_F(
   EXPECT_CALL(*mockConsumer, endOfFetch())
       .WillOnce(
           ::testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
 
   // Call the onSubscribe method
   auto task = server_->fetchTwoSubgroupsPerGroup(params_, mockConsumer);
@@ -841,7 +866,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
             // Check Object Payload
             auto payloadLength = (*objectPayload).length();
             EXPECT_EQ(payloadLength, objectSize);
-            return folly::Expected<folly::Unit, moxygen::MoQPublishError>({});
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
           });
     }
   }
@@ -849,7 +875,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
   EXPECT_CALL(*mockConsumer, endOfFetch())
       .WillOnce(
           ::testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>({})));
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
 
   // Call the fetchDatagram method
   auto task = server_->fetchDatagram(params_, mockConsumer);
