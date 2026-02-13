@@ -3202,6 +3202,14 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
          "Session received GOAWAY"});
     return;
   }
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << " No publisher callback set";
+    subscribeError(
+        {subscribeRequest.requestID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         "No publisher callback set"});
+    return;
+  }
 
   // TODO: The publisher should maintain some state like
   //   Subscribe ID -> Track Name, Locations [currently held in
@@ -3923,6 +3931,14 @@ void MoQSession::onFetch(Fetch fetch) {
         {fetch.requestID,
          FetchErrorCode::GOING_AWAY,
          "Session received GOAWAY"});
+    return;
+  }
+  if (!publishHandler_) {
+    XLOG(DBG1) << __func__ << " No publisher callback set";
+    fetchError(
+        {fetch.requestID,
+         FetchErrorCode::INTERNAL_ERROR,
+         "No publisher callback set"});
     return;
   }
   if (standalone) {
