@@ -996,6 +996,44 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
       fetch, std::move(consumer), std::move(upstreamSession));
 }
 
+folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
+    TrackStatus trackStatus) {
+  XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName;
+  
+  // Find the subscription for this track
+  auto it = subscriptions_.find(trackStatus.fullTrackName); 
+  if (it == subscriptions_.end()) { 
+    // Track not found in relay's subscriptions
+    XLOG(DBG1) << "Track not found: " << trackStatus.fullTrackName; 
+    co_return folly::makeUnexpected(
+        TrackStatusError{
+            trackStatus.requestID,
+            TrackStatusErrorCode::TRACK_NOT_EXIST,
+            "Track not found"});
+  }
+
+  auto& subscription = it->second;
+  if (!subscription.upstream) {
+    XLOG(DBG1) << "No upstream session for track: " << trackStatus.fullTrackName; 
+    co_return folly::makeUnexpected(
+      TrackStatusError{
+        trackStatus.requestID,
+        TrackStatusErrorCode::INTERNAL_ERROR,
+        "No upstream session for track"});
+  }
+
+  //Forward tthe trackStatus request to the upstream publisher session
+  auto result = co_await subscription.upstream->trackStatus(trackStatus);
+
+  if (result.hasError()) {
+    XLOG(DBG1) << "Upstream trackStatus failed: " << result.error().reasonPhrase;
+  } else {
+    XLOG(DBG1) << "Upstream trackStatus succeeded";
+  }
+  co_return result;
+}
+
+
 void MoQRelay::onEmpty(MoQForwarder* forwarder) {
   auto subscriptionIt = subscriptions_.find(forwarder->fullTrackName());
   if (subscriptionIt == subscriptions_.end()) {

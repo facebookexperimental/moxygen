@@ -2111,4 +2111,70 @@ TEST_F(MoQRelayTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
       subscriber3->subscribeOk().extensions.getIntExtension(0xDEAD'0000), 123);
 }
 
+// Test: TrackStatus on non-existent track
+TEST_F(MoQRelayTest, TrackStatusNonExistentTrack) {
+  auto clientSession = createMockSession();
+
+  // Request trackStatus for a track that doesn't exist
+  TrackStatus trackStatus;
+  trackStatus.fullTrackName = kTestTrackName;
+  trackStatus.requestID = RequestID(1);
+
+  withSessionContext(clientSession, [&]() {
+    auto task = relay_->trackStatus(trackStatus);
+    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+
+    // Should return error indicating track not found
+    EXPECT_FALSE(res.hasValue());
+    EXPECT_EQ(res.error().errorCode, TrackStatusErrorCode::TRACK_NOT_EXIST);
+    EXPECT_FALSE(res.error().reasonPhrase.empty());
+  });
+
+  removeSession(clientSession);
+}
+
+// Test: TrackStatus on existing track - successful forward
+TEST_F(MoQRelayTest, TrackStatusSuccessfulForward) {
+  auto publisherSession = createMockSession();
+  auto clientSession = createMockSession();
+
+  // Setup: Publish track
+  doPublishNamespace(publisherSession, kTestNamespace);
+  doPublish(publisherSession, kTestTrackName);
+
+  // Subscribe to the track from another session (creates upstream subscription)
+  auto consumer = createMockConsumer();
+  subscribeToTrack(clientSession, kTestTrackName, consumer, RequestID(1));
+
+  // Now request trackStatus
+  TrackStatus trackStatus;
+  trackStatus.fullTrackName = kTestTrackName;
+  trackStatus.requestID = RequestID(2);
+
+  // Mock the upstream trackStatus call to return success
+  TrackStatusOk statusOk;
+  statusOk.requestID = RequestID(2);
+  statusOk.trackAlias = TrackAlias(0);
+  statusOk.largest = AbsoluteLocation{100, 50};
+
+  EXPECT_CALL(*publisherSession, trackStatus(_))
+      .WillOnce([statusOk](auto /*ts*/) {
+        return folly::coro::makeTask<Publisher::TrackStatusResult>(statusOk);
+      });
+
+  withSessionContext(clientSession, [&]() {
+    auto task = relay_->trackStatus(trackStatus);
+    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+
+    // Should successfully forward and return the result
+    EXPECT_TRUE(res.hasValue());
+    EXPECT_TRUE(res.value().largest.has_value());
+    EXPECT_EQ(res.value().largest->group, 100);
+    EXPECT_EQ(res.value().largest->object, 50);
+  });
+
+  removeSession(publisherSession);
+  removeSession(clientSession);
+}
+
 } // namespace moxygen::test
