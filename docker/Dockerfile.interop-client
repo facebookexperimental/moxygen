@@ -59,4 +59,4 @@ ENV TESTCASE=""
 ENV TLS_DISABLE_VERIFY=""
 ENV VERBOSE=""
 
-ENTRYPOINT ["sh", "-c", "eval $(./build/fbcode_builder/getdeps.py env moxygen) && INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && exec $INST_DIR/bin/moq_interop_client \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "eval $(./build/fbcode_builder/getdeps.py env moxygen) && for d in /tmp/fbcode_builder_getdeps-ZappZbuildZfbcode_builder-root/installed/*/lib; do LD_LIBRARY_PATH=\"$d:$LD_LIBRARY_PATH\"; done && export LD_LIBRARY_PATH && INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && exec $INST_DIR/bin/moq_interop_client \"$@\"", "--"]
