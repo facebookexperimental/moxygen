@@ -130,4 +130,6 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
+add_subdirectory(interop)
+
 #add_subdirectory(test)
