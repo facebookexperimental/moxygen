@@ -1,62 +1,83 @@
-# Dockerfile for building the MoQ Interop Test Client
-#
-# docker build -t moxygen-interop-client -f docker/Dockerfile.interop-client .
-#
-# To run the container:
-#
-# Basic usage with a relay URL
-# docker run --rm moxygen-interop-client --relay "https://example.com:4433/moq"
-#
-# With TLS verification disabled (for self-signed certs)
-# docker run --rm moxygen-interop-client --relay "https://example.com:4433/moq" --tls_disable_verify
-#
-# List available test cases
-# docker run --rm moxygen-interop-client --list
-#
-# Run a specific test
-# docker run --rm moxygen-interop-client --relay "https://example.com:4433/moq" --test setup-only
-#
-# Using environment variables
-# docker run --rm -e RELAY_URL="https://example.com:4433/moq" moxygen-interop-client
-#
-FROM ubuntu:latest
+ # Dockerfile for building the MoQ Interop Test Client
+  #
+  # docker build -t moxygen-interop-client -f docker/Dockerfile.interop-client .
+  #
+  # To run the container:
+  #
+  # Basic usage with a relay URL
+  # docker run --rm moxygen-interop-client --relay "https://example.com:4433/moq"
+  #
+  # With TLS verification disabled (for self-signed certs)
+  # docker run --rm moxygen-interop-client --relay "https://example.com:4433/moq" --tls_disable_verify
+  #
+  # List available test cases
+  # docker run --rm moxygen-interop-client --list
+  #
+  # Run a specific test
+  # docker run --rm moxygen-interop-client --relay "https://example.com:4433/moq" --test setup-only
+  #
+  # Using environment variables
+  # docker run --rm -e RELAY_URL="https://example.com:4433/moq" moxygen-interop-client
+  #
 
-# Install python3 and sudo (getdeps.py install-system-deps requires sudo)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    gcc \
-    g++ \
-    make \
-    libssl-dev \
-    m4 \
-    doxygen \
-    python3 \
-    python3-pip \
-    sudo
+  # Stage 1: Build
+  FROM ubuntu:latest AS builder
 
-# Allow pip to install packages system-wide (safe in Docker container)
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
+  # Install python3 and sudo (getdeps.py install-system-deps requires sudo)
+  RUN apt-get update && apt-get install -y \
+      build-essential \
+      git \
+      gcc \
+      g++ \
+      make \
+      libssl-dev \
+      m4 \
+      doxygen \
+      python3 \
+      python3-pip \
+      sudo
 
-# Set up working directory
-WORKDIR /app
+  # Allow pip to install packages system-wide (safe in Docker container)
+  ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
-# Copy the rest of the project files
-COPY . .
+  # Set up working directory
+  WORKDIR /app
 
-# Run the build script using getdeps.py (already running as root)
-# First install system dependencies to reduce compilation
-RUN ./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen
+  # Copy the rest of the project files
+  COPY . .
 
-RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages --verbose moxygen 2>&1 || \
-    (echo "=== Build failed, showing logs ===" && \
-     find /tmp -name "*.log" -type f -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null; \
-     exit 1)
+  # Run the build script using getdeps.py (already running as root)
+  # First install system dependencies to reduce compilation
+  RUN ./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen
 
-# Set default environment variables (can be overridden at runtime)
-ENV RELAY_URL=""
-ENV TESTCASE=""
-ENV TLS_DISABLE_VERIFY=""
-ENV VERBOSE=""
+  RUN ./build/fbcode_builder/getdeps.py build --allow-system-packages --verbose moxygen 2>&1 || \
+      (echo "=== Build failed, showing logs ===" && \
+       find /tmp -name "*.log" -type f -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null; \
+       exit 1)
 
-ENTRYPOINT ["sh", "-c", "eval $(./build/fbcode_builder/getdeps.py env moxygen) && for d in /tmp/fbcode_builder_getdeps-ZappZbuildZfbcode_builder-root/installed/*/lib; do LD_LIBRARY_PATH=\"$d:$LD_LIBRARY_PATH\"; done && export LD_LIBRARY_PATH && INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && exec $INST_DIR/bin/moq_interop_client \"$@\"", "--"]
+  # Stage the binary and getdeps-built shared libs for the runtime image
+  RUN INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && \
+      mkdir -p /staging/bin /staging/lib && \
+      cp $INST_DIR/bin/moq_interop_client /staging/bin/ && \
+      cp /tmp/fbcode_builder_getdeps-ZappZbuildZfbcode_builder-root/installed/*/lib/libglog.so* /staging/lib/ && \
+      cp /tmp/fbcode_builder_getdeps-ZappZbuildZfbcode_builder-root/installed/*/lib/libunwind.so* /staging/lib/
+
+  # Stage 2: Runtime
+  FROM ubuntu:latest
+
+  RUN apt-get update && apt-get install -y --no-install-recommends \
+      libsodium23 \
+      libdouble-conversion3 \
+      libevent-2.1-7 \
+      libgflags2.2 \
+      libssl3 \
+      zlib1g \
+      ca-certificates \
+      && rm -rf /var/lib/apt/lists/*
+
+  COPY --from=builder /staging/bin/moq_interop_client /usr/local/bin/
+  COPY --from=builder /staging/lib/ /usr/local/lib/
+
+  ENV LD_LIBRARY_PATH=/usr/local/lib
+
+  ENTRYPOINT ["moq_interop_client"]
