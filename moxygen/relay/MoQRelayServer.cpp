@@ -16,7 +16,7 @@ DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_string(endpoint, "/moq-relay", "End point");
 DEFINE_int32(port, 9668, "Relay Server Port");
-DEFINE_bool(enable_cache, false, "Enable relay cache");
+DEFINE_bool(enable_cache, true, "Enable relay cache");
 DEFINE_bool(
     insecure,
     false,
