@@ -268,10 +268,20 @@ MoQCache::CacheTrack::updateLargest(AbsoluteLocation current, bool eot) {
   return folly::unit;
 }
 
-MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(uint64_t groupID) {
+MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(
+    uint64_t groupID,
+    MoQCache* cache) {
   auto it = groups.find(groupID);
   if (it == groups.end()) {
+    // New group - try to evict old groups if needed
+    if (cache) {
+      cache->evictOldestGroupsIfNeeded(*this);
+    }
     it = groups.emplace(groupID, std::make_shared<CacheGroup>()).first;
+    // New group starts in LRU (evictable)
+    if (cache) {
+      cache->addGroupToLRU(groupID, *it->second, *this);
+    }
   }
   return *it->second;
 }
@@ -381,17 +391,27 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       uint64_t subgroup,
       std::shared_ptr<SubgroupConsumer> consumer,
       CacheTrack& cacheTrack,
-      CacheGroup& cacheGroup)
+      CacheGroup& cacheGroup,
+      MoQCache& cache)
       : group_(group),
         subgroup_(subgroup),
         consumer_(std::move(consumer)),
         cacheTrack_(cacheTrack),
-        cacheGroup_(cacheGroup) {}
+        cacheGroup_(cacheGroup),
+        cache_(cache) {
+    cache_.removeGroupFromLRU(cacheGroup_, cacheTrack_);
+  }
   SubgroupWriteback() = delete;
   SubgroupWriteback(const SubgroupWriteback&) = delete;
   SubgroupWriteback& operator=(const SubgroupWriteback&) = delete;
   SubgroupWriteback(SubgroupWriteback&&) = delete;
   SubgroupWriteback& operator=(SubgroupWriteback&&) = delete;
+
+  ~SubgroupWriteback() override {
+    // TODO: If the publisher writes many groups concurrently, all are pinned
+    // and none can be evicted, potentially using a lot of memory.
+    cache_.addGroupToLRU(group_, cacheGroup_, cacheTrack_);
+  }
 
   folly::Expected<folly::Unit, MoQPublishError> object(
       uint64_t objID,
@@ -522,6 +542,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   std::shared_ptr<SubgroupConsumer> consumer_;
   CacheTrack& cacheTrack_;
   CacheGroup& cacheGroup_;
+  MoQCache& cache_;
   uint64_t currentObject_{0};
   uint64_t currentLength_{0};
 };
@@ -530,8 +551,17 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
 // Also maintains the "live" bit for tracks in the cache.
 class MoQCache::SubscribeWriteback : public TrackConsumer {
  public:
-  SubscribeWriteback(std::shared_ptr<TrackConsumer> consumer, CacheTrack& track)
-      : consumer_(std::move(consumer)), track_(track) {
+  SubscribeWriteback(
+      std::shared_ptr<TrackConsumer> consumer,
+      CacheTrack& track,
+      MoQCache& cache,
+      const FullTrackName& ftn)
+      : consumer_(std::move(consumer)),
+        track_(track),
+        cache_(cache),
+        ftn_(ftn) {
+    // Track becomes non-evictable (remove from LRU)
+    cache_.removeTrackFromLRU(track_);
     track_.isLive = true;
   }
   SubscribeWriteback() = delete;
@@ -542,6 +572,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
 
   ~SubscribeWriteback() override {
     track_.isLive = false;
+    // Track may become evictable (add back to LRU if still in cache)
+    cache_.onTrackBecameEvictable(ftn_);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
@@ -563,7 +595,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
           subgroupID,
           std::move(res.value()),
           track_,
-          track_.getOrCreateGroup(groupID));
+          track_.getOrCreateGroup(groupID, &cache_),
+          cache_);
     } else {
       return res;
     }
@@ -584,7 +617,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     if (!res) {
       return res;
     }
-    auto cacheRes = track_.getOrCreateGroup(header.group)
+    auto cacheRes = track_.getOrCreateGroup(header.group, &cache_)
                         .cacheObject(
                             header.subgroup,
                             header.id,
@@ -613,7 +646,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     if (!res) {
       return res;
     }
-    auto cacheRes = track_.getOrCreateGroup(header.group)
+    auto cacheRes = track_.getOrCreateGroup(header.group, &cache_)
                         .cacheObject(
                             header.subgroup,
                             header.id,
@@ -641,6 +674,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
  private:
   std::shared_ptr<TrackConsumer> consumer_;
   CacheTrack& track_;
+  MoQCache& cache_;
+  FullTrackName ftn_;
 };
 
 // Caches incoming objects and forwards them to the consumer. Handles gaps in
@@ -652,12 +687,19 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       AbsoluteLocation end,
       bool proxyFin,
       std::shared_ptr<FetchConsumer> consumer,
-      FetchRangeIterator fetchRangeIt)
+      FetchRangeIterator fetchRangeIt,
+      MoQCache& cache,
+      const FullTrackName& ftn)
       : start_(start),
         end_(end),
         proxyFin_(proxyFin),
         consumer_(std::move(consumer)),
-        fetchRangeIt_(std::move(fetchRangeIt)) {
+        fetchRangeIt_(std::move(fetchRangeIt)),
+        cache_(cache),
+        ftn_(ftn) {
+    // Track becomes non-evictable (remove from LRU)
+    cache_.removeTrackFromLRU(*fetchRangeIt_.track);
+
     // Handle start group
     auto setIt = fetchRangeIt_.track->fetchInProgress.insert(
         start,
@@ -666,6 +708,8 @@ class MoQCache::FetchWriteback : public FetchConsumer {
             : AbsoluteLocation{start.group, std::numeric_limits<uint64_t>::max()},
         this);
     inProgressItersList_.push_back(setIt);
+    fetchRangeIt_.track->activeFetchCount++;
+
     // Handle middle groups (if any)
     for (auto currGroup = start.group + 1; currGroup < end.group; ++currGroup) {
       setIt = fetchRangeIt_.track->fetchInProgress.insert(
@@ -673,12 +717,14 @@ class MoQCache::FetchWriteback : public FetchConsumer {
           AbsoluteLocation{currGroup, std::numeric_limits<uint64_t>::max()},
           this);
       inProgressItersList_.push_back(setIt);
+      fetchRangeIt_.track->activeFetchCount++;
     }
     // Handle end group (if different from start)
     if (end.group != start.group) {
       setIt = fetchRangeIt_.track->fetchInProgress.insert(
           AbsoluteLocation{end.group, 0}, end, this);
       inProgressItersList_.push_back(setIt);
+      fetchRangeIt_.track->activeFetchCount++;
     }
 
     // Set the iterator to first or last element depending on order
@@ -693,11 +739,15 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       while (dualIter_ != dualIter_.end()) {
         auto it = *dualIter_;
         fetchRangeIt_.track->fetchInProgress.erase(it->start.group, it);
+        fetchRangeIt_.track->activeFetchCount--;
         ++dualIter_;
       }
       inProgressItersList_.clear();
     }
     cancelSource_.requestCancellation();
+
+    // Track may become evictable (add back to LRU if still in cache)
+    cache_.onTrackBecameEvictable(ftn_);
   }
 
   void updateInProgress() {
@@ -927,6 +977,8 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   bool wasReset_{false};
   folly::CancellationSource cancelSource_;
   FetchRangeIterator fetchRangeIt_;
+  MoQCache& cache_;
+  FullTrackName ftn_;
 
   void cacheMissing(AbsoluteLocation current) {
     while (*fetchRangeIt_ != current) {
@@ -995,10 +1047,16 @@ std::shared_ptr<TrackConsumer> MoQCache::getSubscribeWriteback(
     std::shared_ptr<TrackConsumer> consumer) {
   auto trackIt = cache_.find(ftn);
   if (trackIt == cache_.end()) {
+    // New track - try to evict if over limit
+    if (cache_.size() >= maxCachedTracks_) {
+      evictOldestTrackIfNeeded();
+      // Note: eviction may fail if all tracks have active operations,
+      // in which case we temporarily exceed maxCachedTracks_
+    }
     trackIt = cache_.emplace(ftn, std::make_shared<CacheTrack>()).first;
   }
   return std::make_shared<SubscribeWriteback>(
-      std::move(consumer), *trackIt->second);
+      std::move(consumer), *trackIt->second, *this, ftn);
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
@@ -1012,6 +1070,15 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
   auto trackIt = emplaceResult.first;
   auto track = trackIt->second;
   if (emplaceResult.second) {
+    // New track - try to evict if over limit
+    if (cache_.size() >= maxCachedTracks_) {
+      evictOldestTrackIfNeeded();
+      // Note: eviction may fail if all tracks have active operations,
+      // in which case we temporarily exceed maxCachedTracks_
+    }
+    // New track starts in LRU (evictable)
+    addTrackToLRU(fetch.fullTrackName, *track);
+
     // track is new (not cached), forward upstream, with writeback
     XLOG(DBG1) << "Cache miss, upstream fetch";
     FetchRangeIterator fetchRangeIt(
@@ -1023,7 +1090,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
             standalone->end,
             true,
             std::move(consumer),
-            fetchRangeIt));
+            fetchRangeIt,
+            *this,
+            fetch.fullTrackName));
   }
   AbsoluteLocation last = standalone->end;
   if (last.object > 0) {
@@ -1287,7 +1356,13 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
   FetchRangeIterator fetchRangeIt(
       fetchStart, fetchEnd, fetch.groupOrder, track);
   auto writeback = std::make_shared<FetchWriteback>(
-      fetchStart, adjFetchEnd, lastObject, consumer, fetchRangeIt);
+      fetchStart,
+      adjFetchEnd,
+      lastObject,
+      consumer,
+      fetchRangeIt,
+      *this,
+      fetch.fullTrackName);
   auto res = co_await upstream->fetch(
       Fetch(
           0,
@@ -1560,4 +1635,155 @@ AbsoluteLocation MoQCache::FetchRangeIterator::end() {
   }
   return end_;
 }
+
+// ============================================================================
+// Track LRU Management Helpers
+// ============================================================================
+
+void MoQCache::addTrackToLRU(const FullTrackName& ftn, CacheTrack& track) {
+  if (track.lruIter_.hasValue()) {
+    // Already in LRU
+    return;
+  }
+  trackLRU_.push_front(ftn);
+  track.lruIter_ = trackLRU_.begin();
+  XLOG(DBG2) << "Added track to LRU: " << ftn;
+}
+
+void MoQCache::removeTrackFromLRU(CacheTrack& track) {
+  if (!track.lruIter_.hasValue()) {
+    // Not in LRU
+    return;
+  }
+  trackLRU_.erase(*track.lruIter_);
+  track.lruIter_.reset();
+  XLOG(DBG2) << "Removed track from LRU";
+}
+
+void MoQCache::onTrackBecameEvictable(const FullTrackName& ftn) {
+  auto it = cache_.find(ftn);
+  if (it == cache_.end()) {
+    // Track was already evicted from cache
+    return;
+  }
+  auto& track = *it->second;
+  if (track.canEvict()) {
+    addTrackToLRU(ftn, track);
+  }
+}
+
+// ============================================================================
+// Group LRU Management Helpers
+// ============================================================================
+
+void MoQCache::addGroupToLRU(
+    uint64_t groupID,
+    CacheGroup& group,
+    CacheTrack& track) {
+  if (group.lruIter_.hasValue()) {
+    // Already in LRU
+    return;
+  }
+  track.groupLRU.push_front(groupID);
+  group.lruIter_ = track.groupLRU.begin();
+  XLOG(DBG2) << "Added group " << groupID << " to LRU";
+}
+
+void MoQCache::removeGroupFromLRU(CacheGroup& group, CacheTrack& track) {
+  if (!group.lruIter_.hasValue()) {
+    // Not in LRU
+    return;
+  }
+  track.groupLRU.erase(*group.lruIter_);
+  group.lruIter_.reset();
+  XLOG(DBG2) << "Removed group from LRU";
+}
+
+bool MoQCache::canEvictGroup(uint64_t groupID, CacheTrack& track) {
+  // Check if any active fetch interval contains this group
+  auto val =
+      track.fetchInProgress.getValue(groupID, AbsoluteLocation{groupID, 0});
+  return !val.has_value();
+}
+
+// ============================================================================
+// Eviction Methods
+// ============================================================================
+
+bool MoQCache::evictOldestTrackIfNeeded() {
+  if (maxCachedTracks_ == 0 || cache_.size() < maxCachedTracks_) {
+    return true;
+  }
+
+  if (trackLRU_.empty()) {
+    // All tracks are non-evictable (have active operations)
+    XLOG(DBG1) << "Cannot evict any track, all have active operations. "
+               << "Cache size: " << cache_.size()
+               << ", limit: " << maxCachedTracks_;
+    return false;
+  }
+
+  // Take oldest evictable track from back of LRU
+  const FullTrackName& oldestTrack = trackLRU_.back();
+  XLOG(DBG1) << "Evicting oldest track: " << oldestTrack
+             << " (cache size: " << cache_.size() << ")";
+  evictTrack(oldestTrack);
+  return true;
+}
+
+void MoQCache::evictTrack(const FullTrackName& ftn) {
+  auto it = cache_.find(ftn);
+  if (it == cache_.end()) {
+    return;
+  }
+
+  auto& track = *it->second;
+  // Remove from LRU if present
+  if (track.lruIter_.hasValue()) {
+    trackLRU_.erase(*track.lruIter_);
+  }
+
+  // Remove from cache
+  cache_.erase(it);
+  XLOG(DBG1) << "Evicted track: " << ftn;
+}
+
+void MoQCache::evictOldestGroupsIfNeeded(CacheTrack& track) {
+  if (maxCachedGroupsPerTrack_ == 0) {
+    return; // Unlimited groups
+  }
+
+  while (track.groups.size() > maxCachedGroupsPerTrack_ &&
+         !track.groupLRU.empty()) {
+    uint64_t oldestGroupID = track.groupLRU.back();
+    XLOG(DBG1) << "Evicting oldest group: " << oldestGroupID << " (track has "
+               << track.groups.size() << " groups)";
+    evictGroup(track, oldestGroupID);
+  }
+
+  if (track.groups.size() > maxCachedGroupsPerTrack_ &&
+      track.groupLRU.empty()) {
+    XLOG(DBG1) << "Cannot evict groups, all have active fetches. "
+               << "Track has " << track.groups.size()
+               << " groups, limit: " << maxCachedGroupsPerTrack_;
+  }
+}
+
+void MoQCache::evictGroup(CacheTrack& track, uint64_t groupID) {
+  auto it = track.groups.find(groupID);
+  if (it == track.groups.end()) {
+    return;
+  }
+
+  auto& group = *it->second;
+  // Remove from LRU if present
+  if (group.lruIter_.hasValue()) {
+    track.groupLRU.erase(*group.lruIter_);
+  }
+
+  // Remove from groups map
+  track.groups.erase(it);
+  XLOG(DBG1) << "Evicted group: " << groupID;
+}
+
 } // namespace moxygen

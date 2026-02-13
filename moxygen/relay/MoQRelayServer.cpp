@@ -25,6 +25,14 @@ DEFINE_string(
     versions,
     "",
     "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
+DEFINE_int32(
+    max_cached_tracks,
+    100,
+    "Maximum number of cached tracks (0 to disable caching)");
+DEFINE_int32(
+    max_cached_groups_per_track,
+    3,
+    "Maximum groups per track in cache");
 
 namespace {
 using namespace moxygen;
@@ -77,8 +85,9 @@ class MoQRelayServer : public MoQServer {
   }
 
  private:
-  std::shared_ptr<MoQRelay> relay_{
-      std::make_shared<MoQRelay>(FLAGS_enable_cache)};
+  std::shared_ptr<MoQRelay> relay_{std::make_shared<MoQRelay>(
+      FLAGS_max_cached_tracks,
+      FLAGS_max_cached_groups_per_track)};
 };
 } // namespace
 

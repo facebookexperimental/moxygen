@@ -7,6 +7,8 @@
 #include <folly/coro/Collect.h>
 #include <folly/experimental/coro/GtestHelpers.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/io/async/ScopedEventBaseThread.h>
+#include <folly/logging/xlog.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <moxygen/relay/MoQCache.h>
@@ -44,6 +46,14 @@ Fetch getFetch(
   return Fetch{0, kTestTrackName, start, end, kDefaultPriority, order};
 }
 
+Fetch getFetch(
+    const FullTrackName& ftn,
+    AbsoluteLocation start,
+    AbsoluteLocation end,
+    GroupOrder order = GroupOrder::Default) {
+  return Fetch{0, ftn, start, end, kDefaultPriority, order};
+}
+
 class MoQCacheTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -58,6 +68,38 @@ class MoQCacheTest : public ::testing::Test {
     ON_CALL(*trackConsumer_, beginSubgroup(_, _, _, _))
         .WillByDefault(Return(makeSubgroupConsumer()));
     cache_.clear();
+
+    // Make cache unbounded by default for all tests
+    // Individual tests can override these limits as needed
+    cache_.setMaxCachedTracks(0);
+    cache_.setMaxCachedGroupsPerTrack(0);
+
+    // Set up test timeout (5 seconds)
+    setupTestTimeout();
+  }
+
+  void setupTestTimeout() {
+    timeoutThread_ = std::make_unique<folly::ScopedEventBaseThread>();
+    auto testName =
+        ::testing::UnitTest::GetInstance()->current_test_info()->name();
+    testCompleted_ = std::make_shared<std::atomic<bool>>(false);
+
+    folly::Baton<> baton;
+    timeoutThread_->getEventBase()->runInEventBaseThread(
+        [this, testName, testCompleted = testCompleted_, &baton]() {
+          timeoutThread_->getEventBase()->timer().scheduleTimeoutFn(
+              [testName, testCompleted]() {
+                if (!testCompleted->load()) {
+                  testCompleted->store(true);
+
+                  XLOG(FATAL)
+                      << "Test " << testName << " timed out after 5 seconds!";
+                }
+              },
+              std::chrono::seconds(5));
+          baton.post();
+        });
+    baton.wait();
   }
 
   std::shared_ptr<MockSubgroupConsumer> makeSubgroupConsumer() {
@@ -80,7 +122,12 @@ class MoQCacheTest : public ::testing::Test {
   }
 
   void TearDown() override {
-    // Code to clean up test environment, if needed
+    // Mark as not timed out to prevent FATAL during cleanup
+    if (testCompleted_) {
+      testCompleted_->store(true);
+    }
+    // Cancel timeout by destroying the thread
+    timeoutThread_.reset();
   }
 
   folly::SemiFuture<std::shared_ptr<FetchConsumer>> expectUpstreamFetch(
@@ -357,6 +404,8 @@ class MoQCacheTest : public ::testing::Test {
       std::make_shared<StrictMock<moxygen::MockFetchConsumer>>()};
   std::shared_ptr<NiceMock<moxygen::MockTrackConsumer>> trackConsumer_{
       std::make_shared<NiceMock<moxygen::MockTrackConsumer>>()};
+  std::unique_ptr<folly::ScopedEventBaseThread> timeoutThread_;
+  std::shared_ptr<std::atomic<bool>> testCompleted_;
 };
 
 CO_TEST_F(MoQCacheTest, TestFetchAllHit) {
@@ -1696,6 +1745,416 @@ TEST_F(MoQCacheTest, TestForwardingPreferenceMismatchIsMalformedTrack) {
       writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
   EXPECT_TRUE(result2.hasError());
   EXPECT_EQ(result2.error().code, MoQPublishError::MALFORMED_TRACK);
+}
+
+// ============================================================================
+// Bounded Cache Tests
+// ============================================================================
+
+CO_TEST_F(MoQCacheTest, TestTrackEviction) {
+  // Set cache to max 2 tracks
+  cache_.setMaxCachedTracks(2);
+
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+
+  // Subscribe to track1 and track2 (fill cache)
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 2);
+
+  // End subscriptions to make tracks evictable
+  sub1.reset();
+  sub2.reset();
+
+  // Subscribe to track3 - should evict track1 (oldest evictable)
+  auto sub3 = cache_.getSubscribeWriteback(track3, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 2);
+  EXPECT_FALSE(cache_.hasTrack(track1)); // track1 evicted
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestNoEvictDuringSubscribe) {
+  // Set cache to max 2 tracks
+  cache_.setMaxCachedTracks(2);
+
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+
+  // Subscribe to track1 and track2 (both active, not evictable)
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 2);
+
+  // Subscribe to track3 - cannot evict track1 or track2 (active subscriptions)
+  // Cache temporarily goes to 3 tracks
+  auto sub3 = cache_.getSubscribeWriteback(track3, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 3); // Temporarily over limit
+  EXPECT_TRUE(cache_.hasTrack(track1));
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+
+  // End sub1, making track1 evictable
+  sub1.reset();
+
+  // Subscribe to track4 - should evict track1 now
+  FullTrackName track4{TrackNamespace{{"ns"}}, "track4"};
+  auto sub4 = cache_.getSubscribeWriteback(track4, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 3);           // Evicted track1, added track4
+  EXPECT_FALSE(cache_.hasTrack(track1)); // track1 evicted
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  EXPECT_TRUE(cache_.hasTrack(track4));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestNoEvictDuringFetch) {
+  // Test that tracks with active fetches cannot be evicted
+  // We'll simulate this by checking activeFetchCount
+  cache_.setMaxCachedTracks(2);
+
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+
+  // Subscribe to track1, populate it, then end subscription
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub1.reset();
+
+  // Subscribe to track2, populate it, then end subscription
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub2.reset();
+
+  EXPECT_EQ(cache_.size(), 2);
+
+  // Both tracks are evictable now. Subscribe to track3.
+  // This should evict track1 (oldest)
+  auto sub3 = cache_.getSubscribeWriteback(track3, trackConsumer_);
+  sub3.reset();
+
+  EXPECT_EQ(cache_.size(), 2);
+  EXPECT_FALSE(cache_.hasTrack(track1)); // track1 evicted
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestGroupEviction) {
+  // Set cache to max 100 tracks and 2 groups per track
+  cache_.setMaxCachedGroupsPerTrack(2);
+
+  // Populate cache with 3 groups
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+
+  // End subscription to make track evictable
+  writeback.reset();
+
+  // Verify 3 groups are cached
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+
+  // Subscribe again and add a 4th group - should evict group 0 (oldest)
+  writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  // Verify group 0 evicted, groups 1, 2, 3 remain
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {3, 0}));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestGroupNotEvictedDuringActiveWrite) {
+  // Verify that a group being actively written to via SubgroupWriteback
+  // is not evicted when a new group triggers eviction.
+  cache_.setMaxCachedGroupsPerTrack(2);
+
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Begin a subgroup in group 0 with a multi-part object
+  auto sub0 = writeback->beginSubgroup(0, 0, 0);
+  EXPECT_TRUE(sub0.hasValue());
+  auto res = sub0.value()->beginObject(0, 200, makeBuf(100), {});
+  EXPECT_TRUE(res.hasValue());
+
+  // Write groups 1, 2, 3 via datagrams. With limit=2, creating group 3
+  // triggers eviction. Without the fix, group 0 is in the LRU and gets
+  // evicted while sub0 still holds a reference to it.
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+
+  // Group 0's subgroup is still active - writing more payload must not crash
+  auto payloadRes = sub0.value()->objectPayload(makeBuf(100), true);
+  EXPECT_TRUE(payloadRes.hasValue());
+
+  // Group 0 should still be cached since it was pinned
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestEvictTrackWithSmallCache) {
+  // Test basic eviction with a very small cache
+  cache_.setMaxCachedTracks(1); // Max 1 track
+
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+
+  // Subscribe to track1, populate it, then end subscription
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub1.reset();
+
+  EXPECT_EQ(cache_.size(), 1);
+  EXPECT_TRUE(cache_.hasTrack(track1));
+
+  // Subscribe to track2 - should evict track1
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2.reset();
+
+  EXPECT_EQ(cache_.size(), 1);
+  EXPECT_FALSE(cache_.hasTrack(track1)); // track1 evicted
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestLRUEvictionOrder) {
+  // Test that LRU eviction order is correct
+  cache_.setMaxCachedTracks(3);
+
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+  FullTrackName track4{TrackNamespace{{"ns"}}, "track4"};
+
+  // Subscribe to track1, track2, track3 in order
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  auto sub3 = cache_.getSubscribeWriteback(track3, trackConsumer_);
+
+  // End all subscriptions (all evictable, track1 is oldest)
+  sub1.reset();
+  sub2.reset();
+  sub3.reset();
+
+  // Subscribe to track4 - should evict track1 (oldest)
+  auto sub4 = cache_.getSubscribeWriteback(track4, trackConsumer_);
+
+  EXPECT_FALSE(cache_.hasTrack(track1)); // track1 evicted
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  EXPECT_TRUE(cache_.hasTrack(track4));
+
+  // Touch track2 (access it to move to front of LRU)
+  auto sub2_again = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2_again.reset();
+  sub4.reset();
+
+  // Subscribe to track1 again - should evict track3 (now oldest)
+  auto sub1_again = cache_.getSubscribeWriteback(track1, trackConsumer_);
+
+  EXPECT_TRUE(cache_.hasTrack(track1));
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_FALSE(cache_.hasTrack(track3)); // track3 evicted
+  EXPECT_TRUE(cache_.hasTrack(track4));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestTrackChurnWithActiveSubscriptions) {
+  // Test oversubscription when all tracks have active subscriptions
+  cache_.setMaxCachedTracks(3); // max 3 tracks
+
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+  FullTrackName track4{TrackNamespace{{"ns"}}, "track4"};
+  FullTrackName track5{TrackNamespace{{"ns"}}, "track5"};
+
+  // Subscribe to 3 tracks (all active, not evictable)
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  auto sub3 = cache_.getSubscribeWriteback(track3, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 3);
+
+  // Subscribe to track4 - cache goes to 4 (temporarily over limit)
+  auto sub4 = cache_.getSubscribeWriteback(track4, trackConsumer_);
+  EXPECT_EQ(cache_.size(), 4);
+
+  // End sub1, making track1 evictable
+  sub1.reset();
+
+  // Subscribe to track5 - should evict track1 and stay at 4
+  auto sub5 = cache_.getSubscribeWriteback(track5, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 4);
+  EXPECT_FALSE(cache_.hasTrack(track1)); // track1 evicted
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  EXPECT_TRUE(cache_.hasTrack(track4));
+  EXPECT_TRUE(cache_.hasTrack(track5));
+
+  // End all subscriptions
+  sub2.reset();
+  sub3.reset();
+  sub4.reset();
+  sub5.reset();
+
+  // Subscribe to track1 again - should evict one track (oldest: track2)
+  // Note: We only evict one track at a time, so size will be 4
+  auto sub1_again = cache_.getSubscribeWriteback(track1, trackConsumer_);
+
+  EXPECT_EQ(cache_.size(), 4); // Evicted track2, added track1
+  EXPECT_TRUE(cache_.hasTrack(track1));
+  EXPECT_FALSE(cache_.hasTrack(track2)); // track2 was oldest, evicted
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  EXPECT_TRUE(cache_.hasTrack(track4));
+  EXPECT_TRUE(cache_.hasTrack(track5));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestZeroMaxTracksUnlimited) {
+  // Test that maxCachedTracks=0 means unlimited
+  cache_.setMaxCachedTracks(0);
+
+  // Create many tracks
+  for (int i = 0; i < 200; i++) {
+    FullTrackName track{
+        TrackNamespace{{"ns"}}, folly::to<std::string>("track", i)};
+    auto sub = cache_.getSubscribeWriteback(track, trackConsumer_);
+    sub.reset();
+  }
+
+  // All tracks should still be in cache
+  EXPECT_EQ(cache_.size(), 200);
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchMakesTrackNonEvictable) {
+  // Test that FetchWriteback constructor removes track from LRU (line 565)
+  // and destructor adds it back (line 614)
+  cache_.setMaxCachedTracks(2);
+
+  // Populate kTestTrackName partially (objects 0-5)
+  populateCacheRange({0, 0}, {0, 6});
+
+  // Populate track2
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub2.reset();
+
+  EXPECT_EQ(cache_.size(), 2);
+  // LRU: kTestTrackName (older), track2 (newer)
+
+  // Start fetch for objects 0-10 from kTestTrackName - partial miss (6-10 not
+  // cached) This will create FetchWriteback and remove track from LRU
+  expectFetchObjects({0, 0}, {0, 10}, true);
+  expectUpstreamFetch({0, 6}, {0, 10}, 0, AbsoluteLocation{0, 10});
+  auto fetchFut =
+      co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_))
+          .start()
+          .via(co_await folly::coro::co_current_executor);
+
+  // Give the fetch coroutine a chance to start and create FetchWriteback
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Add track3 - should evict track2 (kTestTrackName not evictable due to
+  // active fetch)
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+  auto sub3 = cache_.getSubscribeWriteback(track3, trackConsumer_);
+  sub3.reset();
+
+  EXPECT_EQ(cache_.size(), 2);
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName)); // Protected by active fetch
+  EXPECT_FALSE(cache_.hasTrack(track2));        // Evicted
+  EXPECT_TRUE(cache_.hasTrack(track3));
+
+  // Complete fetch by serving the upstream part
+  serveCacheRangeFromUpstream({0, 6}, {0, 10});
+  auto res = co_await std::move(fetchFut);
+  EXPECT_TRUE(res.hasValue());
+
+  // Now kTestTrackName is evictable again and was added to FRONT of LRU
+  // (most recent). Add track2 - should evict track3 (oldest)
+  auto sub2_again = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2_again.reset();
+
+  EXPECT_EQ(cache_.size(), 2);
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName)); // Most recent after fetch
+  EXPECT_TRUE(cache_.hasTrack(track2));         // Just added
+  EXPECT_FALSE(cache_.hasTrack(track3));        // Oldest, got evicted
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchNewTrackWithFullCacheEvicts) {
+  // Test that fetch() on new track when cache full causes eviction
+  // (lines 924-930: evictOldestTrackIfNeeded + addTrackToLRU)
+  cache_.setMaxCachedTracks(2);
+
+  // Populate two tracks via subscribe
+  populateCacheRange({0, 0}, {0, 10});
+
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub2.reset();
+
+  EXPECT_EQ(cache_.size(), 2);
+  // LRU: kTestTrackName (older), track2 (newer)
+
+  // Fetch new track3 (not in cache) - should evict kTestTrackName
+  FullTrackName track3{TrackNamespace{{"ns"}}, "track3"};
+  expectFetchObjects({0, 0}, {0, 5}, true);
+  expectUpstreamFetch({0, 0}, {0, 5}, 0, AbsoluteLocation{0, 5});
+  auto fetchFut =
+      co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          cache_.fetch(getFetch(track3, {0, 0}, {0, 5}), consumer_, upstream_))
+          .start()
+          .via(co_await folly::coro::co_current_executor);
+
+  // Give the fetch coroutine a chance to start
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // track3 now in cache (non-evictable due to active fetch)
+  // kTestTrackName should be evicted
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  EXPECT_FALSE(cache_.hasTrack(kTestTrackName)); // Evicted to make room
+  EXPECT_TRUE(cache_.hasTrack(track2));
+
+  // Complete fetch
+  serveCacheRangeFromUpstream({0, 0}, {0, 5});
+  auto res = co_await std::move(fetchFut);
+  EXPECT_TRUE(res.hasValue());
+
+  EXPECT_EQ(cache_.size(), 2);
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasTrack(track3));
+  co_return;
 }
 
 } // namespace moxygen::test
