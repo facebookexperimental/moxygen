@@ -52,6 +52,7 @@ find_package(wangle REQUIRED)
 find_package(mvfst REQUIRED)
 find_package(proxygen REQUIRED)
 find_package(Glog REQUIRED)
+add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 find_package(gflags REQUIRED)
 find_package(Zstd REQUIRED)
 
