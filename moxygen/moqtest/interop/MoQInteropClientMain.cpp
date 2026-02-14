@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
       FLAGS_tls_disable_verify,
       std::chrono::milliseconds(FLAGS_connect_timeout),
       std::chrono::milliseconds(FLAGS_transaction_timeout));
-
+  int passed = 0;
   int failed = 0;
 
   for (size_t i = 0; i < testsToRun.size(); ++i) {
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
     printTapResult(static_cast<int>(i + 1), result, FLAGS_verbose);
 
     if (result.passed) {
-      // no action
+      ++passed;
     } else {
       ++failed;
     }
