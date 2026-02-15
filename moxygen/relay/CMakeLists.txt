@@ -4,54 +4,55 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# Relay
-add_library(moqcache MoQCache.cpp)
-target_include_directories(
-  moqcache PUBLIC
-  $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
-)
-target_compile_options(
-  moqcache PRIVATE
-  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
-)
-target_link_libraries(
-  moqcache PUBLIC
-  moxygen
+# Manually maintained - has MoQRelayServer binary
+
+moxygen_add_library(moxygen_relay_moq_forwarder
+  SRCS
+    MoQForwarder.cpp
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_moq_location
+    Folly::folly_container_f14_hash
+    Folly::folly_hash_hash
+    Folly::folly_io_async_async_base
 )
 
-install(
-    TARGETS moqcache
-    EXPORT moxygen-exports
-    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
-    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+moxygen_add_library(moxygen_relay_moq_cache
+  SRCS
+    MoQCache.cpp
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_moq_consumers
+    moxygen_moq_framer
+    moxygen_util_bidi_iterator
+    moxygen_util_fetch_interval_set
+    Folly::folly_container_f14_hash
+    Folly::folly_coro_baton
+    Folly::folly_coro_task
 )
 
-add_library(moqrelay MoQRelay.cpp MoQCache.cpp MoQForwarder.cpp)
-target_include_directories(
-  moqrelay PUBLIC
-  $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
-)
-target_compile_options(
-  moqrelay PRIVATE
-  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
-)
-target_link_libraries(
-  moqrelay PUBLIC
-  Folly::folly
-  proxygen::proxygen
-  proxygen::proxygenhqserver
-  moxygen
-  moqrelaysession
+moxygen_add_library(moxygen_relay_moq_relay
+  SRCS
+    MoQRelay.cpp
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_moq_consumers
+    moxygen_relay_moq_cache
+    moxygen_relay_moq_forwarder
+    Folly::folly_container_f14_hash
+    Folly::folly_coro_shared_promise
 )
 
-install(
-    TARGETS moqrelay
-    EXPORT moxygen-exports
-    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
-    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+moxygen_add_library(moxygen_relay_moq_relay_client
+  EXPORTED_DEPS
+    moxygen_moq_relay_session
+    moxygen_moqclient
+    mvfst::mvfst_state_transport_settings
+    Folly::folly_coro_sleep
+    Folly::folly_logging_logging
 )
 
-# MoQRelayServer
+# MoQRelayServer binary
 add_executable(
   moqrelayserver
   MoQRelayServer.cpp
@@ -63,8 +64,7 @@ set_target_properties(
     INSTALL_RPATH ${DEPS_LIBRARIES_DIR}
 )
 target_include_directories(
-  moqrelayserver PUBLIC
-  $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+  moqrelayserver PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
 )
 target_compile_options(
   moqrelayserver PRIVATE
@@ -72,8 +72,10 @@ target_compile_options(
 )
 target_link_libraries(
   moqrelayserver PUBLIC
-  moqrelay
-  moxygenserver
+  moxygen_relay_moq_relay
+  moxygen_moq_relay_session
+  moxygen_moq_server
+  Folly::folly_init_init
 )
 
 install(
@@ -83,4 +85,6 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
-add_subdirectory(test)
+if(BUILD_TESTS)
+  add_subdirectory(test)
+endif()

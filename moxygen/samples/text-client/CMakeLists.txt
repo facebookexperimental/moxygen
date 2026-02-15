@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# MoQTextClient
+# Text Client
 add_executable(
   moqtextclient
   MoQTextClient.cpp
@@ -24,8 +24,12 @@ target_compile_options(
 )
 target_link_libraries(
   moqtextclient PUBLIC
-  moxygenwtclient
-  moqrelaysession
+  moxygen_mlog_file_mlogger
+  moxygen_mlog_mlogger
+  moxygen_moq_webtransport_client
+  moxygen_relay_moq_relay_client
+  Folly::folly_init_init
+  Folly::folly_io_async_async_signal_handler
 )
 
 install(

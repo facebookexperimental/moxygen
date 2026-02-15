@@ -102,6 +102,15 @@ class MoQChatClient : public Publisher,
     std::chrono::seconds timestamp;
     RequestID requestID;
     std::shared_ptr<Publisher::SubscriptionHandle> subscription;
+
+    static UserTrack
+    make(std::string device, std::chrono::seconds ts, RequestID reqId) {
+      UserTrack ut;
+      ut.deviceId = std::move(device);
+      ut.timestamp = ts;
+      ut.requestID = reqId;
+      return ut;
+    }
   };
   std::map<std::string, std::vector<UserTrack>> subscriptions_;
   std::pair<folly::coro::Promise<ServerSetup>, folly::coro::Future<ServerSetup>>

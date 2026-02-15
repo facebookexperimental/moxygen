@@ -4,12 +4,20 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.13)
 include(CheckCXXCompilerFlag)
+
+# Allow cross-directory target_link_libraries
+# (required for deferred dependency resolution)
+cmake_policy(SET CMP0079 NEW)
 
 project(
   moxygen
 )
+
+# Set for FetchContent to skip find_package(moxygen)
+set(moxygen_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+  CACHE INTERNAL "moxygen source directory")
 
 # Needs 20 for co routines
 set(CMAKE_CXX_STANDARD 20)
@@ -47,14 +55,30 @@ set (DEPS_LIBRARIES_DIR ${MOXYGEN_FBCODE_ROOT}/_build/deps/lib)
 #
 # IMPORTANT: If you change this, make the analogous update in:
 #   cmake/moxygen-config.cmake.in
-find_package(folly REQUIRED)
-find_package(wangle REQUIRED)
-find_package(mvfst REQUIRED)
-find_package(proxygen REQUIRED)
+# If deps are being built from source (FetchContent), skip find_package
+if (NOT DEFINED folly_SOURCE_DIR)
+  find_package(folly REQUIRED)
+endif()
+if (NOT DEFINED fizz_SOURCE_DIR)
+  find_package(fizz REQUIRED)
+endif()
+if (NOT DEFINED mvfst_SOURCE_DIR)
+  find_package(mvfst REQUIRED)
+endif()
+if (NOT DEFINED proxygen_SOURCE_DIR)
+  find_package(proxygen REQUIRED)
+endif()
 find_package(Glog REQUIRED)
 add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 find_package(gflags REQUIRED)
 find_package(Zstd REQUIRED)
+
+# Define BUILD_SAMPLES after find_package calls so it doesn't affect
+# proxygen's BUILD_SAMPLES option during config
+option(BUILD_SAMPLES
+  "If enabled, build moxygen sample executables and test tools."
+  ON
+)
 
 list(APPEND
   _MOXYGEN_COMMON_COMPILE_OPTIONS
@@ -92,8 +116,11 @@ if (COMPILER_HAS_W_UNUSED_VALUE)
 endif()
 
 include(MoxygenTest)
+include(MoxygenFunctions)
 
 add_subdirectory(moxygen)
+
+moxygen_resolve_deferred_dependencies()
 
 if (NOT DEFINED LIB_INSTALL_DIR)
     set(LIB_INSTALL_DIR "lib")
