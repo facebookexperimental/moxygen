@@ -25,11 +25,16 @@ target_compile_options(
 )
 target_link_libraries(
   moq_interop_client PUBLIC
-  moxygen
-  moxygenclient
-  moxygenwtclient
-  moqrelaysession
-  Folly::folly
+  moxygen_events_moq_folly_executor_impl
+  moxygen_moq_relay_session
+  moxygen_moq_webtransport_client
+  moxygen_moqclient
+  Folly::folly_coro_blocking_wait
+  Folly::folly_coro_collect
+  Folly::folly_coro_sleep
+  Folly::folly_coro_task
+  Folly::folly_coro_timeout
+  Folly::folly_init_init
 )
 
 install(

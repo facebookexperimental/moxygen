@@ -8,12 +8,21 @@ if(NOT BUILD_TESTS)
     return()
 endif()
 
-moxygen_add_test(TARGET FlvParserTests
-  PREFIX "FlvParser"
+moxygen_add_test(TARGET FlvReaderTests
+  PREFIX "FlvReader"
   SOURCES
     FlvReaderTest.cpp
+  DEPENDS
+    moxygen_flv_parser_flv_reader
+    testmain
+)
+
+moxygen_add_test(TARGET FlvSequentialReaderTests
+  PREFIX "FlvSequentialReader"
+  SOURCES
     FlvSequentialReaderTest.cpp
   DEPENDS
-    flvparser
-    moqmi
+    moxygen_flv_parser_flv_reader
+    moxygen_flv_parser_flv_stream_parser
+    testmain
 )

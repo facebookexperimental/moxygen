@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# MoQFlvStreamerClient
+# FLV Streamer Client
 add_executable(
   moqflvstreamerclient
   MoQFlvStreamerClient.cpp
@@ -24,10 +24,12 @@ target_compile_options(
 )
 target_link_libraries(
   moqflvstreamerclient PUBLIC
-  moqrelaysession
-  moxygenwtclient
-  flvparser
-  moqmi
+  moxygen_flv_parser_flv_reader
+  moxygen_moq_mi
+  moxygen_moq_webtransport_client
+  moxygen_relay_moq_relay_client
+  Folly::folly_init_init
+  Folly::folly_io_async_async_signal_handler
 )
 
 install(

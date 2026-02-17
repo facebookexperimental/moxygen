@@ -13,9 +13,11 @@ moxygen_add_test(TARGET MoQCacheTests
   SOURCES
     MoQCacheTests.cpp
   DEPENDS
-    moqcache
+    moxygen_relay_moq_cache
     moqtestutils
     testmain
+    Folly::folly_coro_gtest_helpers
+    Folly::folly_io_async_scoped_event_base_thread
 )
 
 moxygen_add_test(TARGET MoQRelayTest
@@ -23,8 +25,8 @@ moxygen_add_test(TARGET MoQRelayTest
   SOURCES
     MoQRelayTest.cpp
   DEPENDS
-    moqrelay
+    moxygen_relay_moq_relay
     moqtestutils
-    moqfollyexecutorimpl
+    moxygen_events_moq_folly_executor_impl
     testmain
 )

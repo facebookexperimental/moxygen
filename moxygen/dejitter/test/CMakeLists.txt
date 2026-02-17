@@ -8,13 +8,11 @@ if(NOT BUILD_TESTS)
     return()
 endif()
 
-moxygen_add_test(TARGET MoQMiTests
-  PREFIX "MoQMi"
+moxygen_add_test(TARGET DeJitterTests
+  PREFIX "DeJitter"
   SOURCES
-    MoQMiTest.cpp
+    DeJitterTest.cpp
   DEPENDS
-    moxygen_moq_mi
-    moxygen_flv_parser_flv_reader
-    proxygen::proxygen_utils_logging
+    moxygen_dejitter
     testmain
 )

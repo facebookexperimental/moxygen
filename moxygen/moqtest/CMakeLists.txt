@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# Relay
+# Test utilities
 add_library(moqtest_utils Utils.cpp)
 target_include_directories(
   moqtest_utils PUBLIC
@@ -16,7 +16,7 @@ target_compile_options(
 )
 target_link_libraries(
   moqtest_utils PUBLIC
-  moxygen
+  moxygen_moq
 )
 
 install(
@@ -25,8 +25,6 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
-
-
 
 # moqtest_client
 add_executable(
@@ -50,8 +48,10 @@ target_compile_options(
 target_link_libraries(
   moqtest_client PUBLIC
   moqtest_utils
-  moxygenwtclient
-  moqrelaysession
+  moxygen_mlog_file_mlogger
+  moxygen_moq_webtransport_client
+  moxygen_moq_relay_session
+  Folly::folly_init_init
 )
 
 install(
@@ -60,7 +60,6 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
-
 
 # moqtest_server
 add_executable(
@@ -75,8 +74,7 @@ set_target_properties(
     INSTALL_RPATH ${DEPS_LIBRARIES_DIR}
 )
 target_include_directories(
-  moqtest_server PUBLIC
-  $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+  moqtest_server PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
 )
 target_compile_options(
   moqtest_server PRIVATE
@@ -85,9 +83,11 @@ target_compile_options(
 target_link_libraries(
   moqtest_server PUBLIC
   moqtest_utils
-  moxygenserver
-  moqrelaysession
-  moxygenwtclient
+  moxygen_mlog_file_mlogger
+  moxygen_moq_server
+  moxygen_moq_relay_session
+  moxygen_moq_webtransport_client
+  Folly::folly_init_init
 )
 
 install(
@@ -96,7 +96,6 @@ install(
     ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
-
 
 # moqperf_test_client
 add_executable(
@@ -120,7 +119,9 @@ target_compile_options(
 target_link_libraries(
   moqperf_test_client PUBLIC
   moqtest_utils
-  moxygenwtclient
+  moxygen_moq_webtransport_client
+  Folly::folly_init_init
+  Folly::folly_io_async_scoped_event_base_thread
 )
 
 install(
@@ -131,5 +132,3 @@ install(
 )
 
 add_subdirectory(interop)
-
-#add_subdirectory(test)
