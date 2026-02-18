@@ -2177,4 +2177,51 @@ TEST_F(MoQRelayTest, TrackStatusSuccessfulForward) {
   removeSession(clientSession);
 }
 
+// Test: TrackStatus using namespace prefix matching (no exact subscription)
+// Verifies that when there's no exact subscription but a publisher has
+// published a matching namespace prefix, the relay correctly routes TRACK_STATUS
+// upstream using prefix matching
+TEST_F(MoQRelayTest, TrackStatusViaPrefixMatching) {
+  auto publisher = createMockSession();
+  auto requester = createMockSession();
+
+  // Publisher publishes namespace but NOT the specific track
+  doPublishNamespace(publisher, kTestNamespace);
+
+  // No exact subscription exists for kTestTrackName, so trackStatus should
+  // use prefix matching to find the publisher
+
+  // Mock the upstream trackStatus call
+  TrackStatusOk statusOk;
+  statusOk.requestID = RequestID(1);
+  statusOk.trackAlias = TrackAlias(0);
+  statusOk.largest = AbsoluteLocation{50, 25};
+
+  EXPECT_CALL(*publisher, trackStatus(_))
+      .WillOnce([statusOk](auto /*ts*/) {
+        return folly::coro::makeTask<Publisher::TrackStatusResult>(statusOk);
+      });
+
+  // Execute trackStatus from requester's perspective
+  TrackStatus trackStatus;
+  trackStatus.requestID = RequestID(1);
+  trackStatus.fullTrackName = kTestTrackName;
+
+  withSessionContext(requester, [&]() {
+    auto task = relay_->trackStatus(trackStatus);
+    auto result = folly::coro::blockingWait(std::move(task), exec_.get());
+
+    // Should successfully forward via prefix matching and return the result
+    EXPECT_TRUE(result.hasValue())
+        << "TrackStatus via namespace prefix matching should succeed";
+    EXPECT_EQ(result.value().requestID, RequestID(1));
+    EXPECT_TRUE(result.value().largest.has_value());
+    EXPECT_EQ(result.value().largest->group, 50);
+    EXPECT_EQ(result.value().largest->object, 25);
+  });
+
+  removeSession(publisher);
+  removeSession(requester);
+}
+
 } // namespace moxygen::test

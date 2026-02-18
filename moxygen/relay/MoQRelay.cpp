@@ -1000,30 +1000,38 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName;
   
-  // Find the subscription for this track
-  auto it = subscriptions_.find(trackStatus.fullTrackName); 
-  if (it == subscriptions_.end()) { 
-    // Track not found in relay's subscriptions
-    XLOG(DBG1) << "Track not found: " << trackStatus.fullTrackName; 
+  // get trackNamespace
+  if (trackStatus.fullTrackName.trackNamespace.empty()) {
+    co_return folly::makeUnexpected(TrackStatusError(
+        {trackStatus.requestID,
+         TrackStatusErrorCode::TRACK_NOT_EXIST,
+         "namespace required"}));
+  }
+
+  // First check if there's an exact subscription for this track
+  std::shared_ptr<MoQSession> upstreamSession = nullptr;
+  auto subscriptionIt = subscriptions_.find(trackStatus.fullTrackName);
+  if (subscriptionIt != subscriptions_.end()) {
+    upstreamSession = subscriptionIt->second.upstream;
+  }
+
+  // Fallback: try to find using prefix matching
+  if (!upstreamSession) {
+    upstreamSession =
+        findPublishNamespaceSession(trackStatus.fullTrackName.trackNamespace);
+  }
+  
+  if (!upstreamSession) {
+    XLOG(DBG1) << "No upstream session for track: " << trackStatus.fullTrackName;
     co_return folly::makeUnexpected(
         TrackStatusError{
             trackStatus.requestID,
             TrackStatusErrorCode::TRACK_NOT_EXIST,
-            "Track not found"});
+            "no such namespace or track"});
   }
 
-  auto& subscription = it->second;
-  if (!subscription.upstream) {
-    XLOG(DBG1) << "No upstream session for track: " << trackStatus.fullTrackName; 
-    co_return folly::makeUnexpected(
-      TrackStatusError{
-        trackStatus.requestID,
-        TrackStatusErrorCode::INTERNAL_ERROR,
-        "No upstream session for track"});
-  }
-
-  //Forward tthe trackStatus request to the upstream publisher session
-  auto result = co_await subscription.upstream->trackStatus(trackStatus);
+  // Forward the trackStatus request to the upstream publisher session
+  auto result = co_await upstreamSession->trackStatus(trackStatus);
 
   if (result.hasError()) {
     XLOG(DBG1) << "Upstream trackStatus failed: " << result.error().reasonPhrase;
