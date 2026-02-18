@@ -39,5 +39,6 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
-# Note: Python bindings (moq_client_pybinding, moq_simple_publisher_pybinding,
-# py_moq_client_tester) are not built in the OSS CMake build.
+# Note: MoQSimplePublisher, Python bindings (moq_client_pybinding,
+# moq_simple_publisher_pybinding, py_moq_client_tester) are not built
+# in the OSS CMake build.
