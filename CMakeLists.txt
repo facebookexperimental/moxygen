@@ -122,6 +122,8 @@ add_subdirectory(moxygen)
 
 moxygen_resolve_deferred_dependencies()
 
+moxygen_install_headers(moxygen ${CMAKE_CURRENT_SOURCE_DIR}/moxygen)
+
 if (NOT DEFINED LIB_INSTALL_DIR)
     set(LIB_INSTALL_DIR "lib")
 endif()
