@@ -1756,4 +1756,162 @@ TEST_F(MoQRelayTest, EndOfSubgroupHardErrorDoesNotCrash) {
   removeSession(subscriberSession);
 }
 
+// Helper callback that drops the forwarder shared_ptr when onEmpty fires,
+// simulating what happens in production when the last reference holder
+// (e.g., SubscribeWriteback destructor chain) destroys the forwarder.
+class ForwarderDestroyingCallback : public MoQForwarder::Callback {
+ public:
+  explicit ForwarderDestroyingCallback(
+      std::shared_ptr<MoQForwarder>& forwarderRef)
+      : forwarderRef_(forwarderRef) {}
+
+  void onEmpty(MoQForwarder*) override {
+    // Drop the last shared_ptr, destroying the forwarder.
+    // This simulates the production scenario where onEmpty ->
+    // subscriptions_.erase -> MoQForwarder destructor.
+    forwarderRef_.reset();
+  }
+
+ private:
+  std::shared_ptr<MoQForwarder>& forwarderRef_;
+};
+
+// Regression test: SubgroupForwarder::reset() use-after-free.
+// When the forwarder is draining (publishDone received) and a subscriber's
+// last subgroup is closed via reset(), closeSubgroupForSubscriber calls
+// removeSubscriber -> checkAndFireOnEmpty -> onEmpty callback. The onEmpty
+// callback destroys the MoQForwarder (by dropping the last shared_ptr).
+// But reset() is still inside forEachSubscriberSubgroup, which accesses
+// forwarder_.subscribers_ after the lambda returns, causing
+// heap-use-after-free.
+TEST_F(MoQRelayTest, ResetDuringDrainingDoesNotCrash) {
+  auto session = createMockSession();
+
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+  auto callback = std::make_shared<ForwarderDestroyingCallback>(forwarder);
+  forwarder->setCallback(callback);
+
+  // Create a subscriber
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> sg;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+        sg = createMockSubgroupConsumer();
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  SubscribeRequest sub;
+  sub.fullTrackName = kTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.locType = LocationType::LargestGroup;
+  forwarder->addSubscriber(session, sub, consumer);
+
+  // Begin subgroup
+  auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+  auto subgroup = *subgroupRes;
+
+  // Drain the subscriber
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "publisher ended"});
+
+  // Now reset the subgroup. This triggers:
+  //  SubgroupForwarder::reset()
+  //    -> forEachSubscriberSubgroup()
+  //      -> reset subscriber's subgroupConsumer
+  //      -> closeSubgroupForSubscriber()
+  //        -> sub->shouldRemove() returns true (draining, last subgroup)
+  //        -> removeSubscriber()
+  //          -> checkAndFireOnEmpty()
+  //            -> onEmpty destroys the forwarder (drops shared_ptr)
+  //    -> forEachSubscriberSubgroup accesses forwarder_.subscribers_ -> CRASH
+  EXPECT_CALL(*sg, reset(_)).Times(1);
+  subgroup->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+
+  // forwarder should have been destroyed by onEmpty
+  EXPECT_EQ(forwarder, nullptr);
+}
+
+// Same as above but with multiple subscribers draining.
+TEST_F(MoQRelayTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
+  auto session1 = createMockSession();
+  auto session2 = createMockSession();
+
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+  auto callback = std::make_shared<ForwarderDestroyingCallback>(forwarder);
+  forwarder->setCallback(callback);
+
+  // Create two subscribers
+  std::shared_ptr<MockSubgroupConsumer> sg1, sg2;
+  auto consumer1 = createMockConsumer();
+  auto consumer2 = createMockConsumer();
+
+  EXPECT_CALL(*consumer1, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg1](uint64_t, uint64_t, uint8_t, bool) {
+        sg1 = createMockSubgroupConsumer();
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg1);
+      });
+
+  EXPECT_CALL(*consumer2, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg2](uint64_t, uint64_t, uint8_t, bool) {
+        sg2 = createMockSubgroupConsumer();
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg2);
+      });
+
+  EXPECT_CALL(*consumer1, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*consumer2, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  SubscribeRequest sub1;
+  sub1.fullTrackName = kTestTrackName;
+  sub1.requestID = RequestID(1);
+  sub1.locType = LocationType::LargestGroup;
+  forwarder->addSubscriber(session1, sub1, consumer1);
+
+  SubscribeRequest sub2;
+  sub2.fullTrackName = kTestTrackName;
+  sub2.requestID = RequestID(2);
+  sub2.locType = LocationType::LargestGroup;
+  forwarder->addSubscriber(session2, sub2, consumer2);
+
+  // Begin subgroup - both subscribers get it
+  auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+  auto subgroup = *subgroupRes;
+
+  // Drain both subscribers
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "publisher ended"});
+
+  // Reset the subgroup. Both subscribers are draining with only this subgroup.
+  // As each is removed, the second removal triggers onEmpty which destroys
+  // the forwarder while we may still be iterating.
+  EXPECT_CALL(*sg1, reset(_)).Times(1);
+  EXPECT_CALL(*sg2, reset(_)).Times(1);
+  subgroup->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+
+  EXPECT_EQ(forwarder, nullptr);
+}
+
 } // namespace moxygen::test

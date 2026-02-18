@@ -482,7 +482,11 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       Payload payload,
       bool finSubgroup) override {
     auto& object = cacheGroup_.objects[currentObject_];
-    object->payload->appendChain(payload->clone());
+    if (object->payload) {
+      object->payload->appendChain(payload->clone());
+    } else {
+      object->payload = payload->clone();
+    }
     currentLength_ -= payload->computeChainDataLength();
     if (currentLength_ == 0) {
       object->complete = true;

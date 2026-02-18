@@ -2157,4 +2157,60 @@ CO_TEST_F(MoQCacheTest, TestFetchNewTrackWithFullCacheEvicts) {
   co_return;
 }
 
+// Regression test: SubgroupWriteback::objectPayload() crashes when
+// beginObject() was called with a null initialPayload. The cache entry is
+// created with payload=nullptr and complete=false. When objectPayload() is
+// subsequently called, it unconditionally does:
+//   object->payload->appendChain(payload->clone());
+// which dereferences the null payload pointer, causing a SEGV.
+// The FetchWriteback version of objectPayload() correctly handles this case
+// by checking for null and assigning instead of appending.
+TEST_F(MoQCacheTest, SubgroupWritebackObjectPayloadNullInitialPayload) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // beginSubgroup to get a SubgroupWriteback
+  auto sgRes = writeback->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto sg = std::move(sgRes.value());
+
+  // Call beginObject with a null initialPayload (length=100 bytes to come)
+  auto beginRes = sg->beginObject(
+      /*objectID=*/0,
+      /*length=*/100,
+      /*initialPayload=*/nullptr,
+      /*extensions=*/Extensions());
+  ASSERT_TRUE(beginRes.hasValue());
+
+  // Now call objectPayload - this will SEGV without the fix because
+  // the cache entry's payload is null from the nullptr initialPayload above
+  auto payload = makeBuf(100);
+  auto payloadRes = sg->objectPayload(std::move(payload), false);
+  EXPECT_TRUE(payloadRes.hasValue());
+}
+
+// Same test but with a non-null initialPayload followed by more payload data.
+// This should work correctly (and did before the bug).
+TEST_F(MoQCacheTest, SubgroupWritebackObjectPayloadWithInitialPayload) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  auto sgRes = writeback->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto sg = std::move(sgRes.value());
+
+  // Call beginObject with a non-null initialPayload (50 of 100 bytes)
+  auto beginRes = sg->beginObject(
+      /*objectID=*/0,
+      /*length=*/100,
+      /*initialPayload=*/makeBuf(50),
+      /*extensions=*/Extensions());
+  ASSERT_TRUE(beginRes.hasValue());
+
+  // Call objectPayload with the remaining 50 bytes
+  auto payloadRes = sg->objectPayload(makeBuf(50), false);
+  EXPECT_TRUE(payloadRes.hasValue());
+
+  // Verify the object is marked complete in the cache
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+}
+
 } // namespace moxygen::test

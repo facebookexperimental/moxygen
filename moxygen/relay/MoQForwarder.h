@@ -21,6 +21,12 @@ class MoQForwarder : public TrackConsumer {
       FullTrackName ftn,
       std::optional<AbsoluteLocation> largest = std::nullopt);
 
+  ~MoQForwarder() override;
+  MoQForwarder(const MoQForwarder&) = delete;
+  MoQForwarder& operator=(const MoQForwarder&) = delete;
+  MoQForwarder(MoQForwarder&&) = delete;
+  MoQForwarder& operator=(MoQForwarder&&) = delete;
+
   const FullTrackName& fullTrackName() const {
     return fullTrackName_;
   }
@@ -188,7 +194,7 @@ class MoQForwarder : public TrackConsumer {
 
   class SubgroupForwarder : public SubgroupConsumer {
     std::optional<uint64_t> currentObjectLength_;
-    MoQForwarder& forwarder_;
+    MoQForwarder* forwarder_;
     SubgroupIdentifier identifier_;
     Priority priority_;
 
@@ -213,12 +219,18 @@ class MoQForwarder : public TrackConsumer {
     folly::Expected<T, MoQPublishError> cleanupOnError(
         const folly::Expected<T, MoQPublishError>& result);
 
+    // Updates largest on the forwarder (no-op if detached)
+    void updateLargest(uint64_t group, uint64_t object);
+
    public:
     SubgroupForwarder(
         MoQForwarder& forwarder,
         uint64_t group,
         uint64_t subgroup,
         Priority priority);
+
+    // Detach from the owning MoQForwarder (called from MoQForwarder destructor)
+    void detach();
 
     folly::Expected<folly::Unit, MoQPublishError> object(
         uint64_t objectID,
