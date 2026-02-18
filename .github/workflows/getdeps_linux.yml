@@ -31,9 +31,6 @@ jobs:
     - name: Fetch cmake
       if: ${{ steps.paths.outputs.cmake_SOURCE }}
       run: python3 build/fbcode_builder/getdeps.py --allow-system-packages fetch --no-tests cmake
-    - name: Fetch zlib
-      if: ${{ steps.paths.outputs.zlib_SOURCE }}
-      run: python3 build/fbcode_builder/getdeps.py --allow-system-packages fetch --no-tests zlib
     - name: Fetch zstd
       if: ${{ steps.paths.outputs.zstd_SOURCE }}
       run: python3 build/fbcode_builder/getdeps.py --allow-system-packages fetch --no-tests zstd
@@ -147,22 +144,6 @@ jobs:
       with:
        path: ${{ steps.paths.outputs.cmake_INSTALL }}
        key: ${{ steps.paths.outputs.cmake_CACHE_KEY }}-install
-    - name: Restore zlib from cache
-      id: restore_zlib
-      if: ${{ steps.paths.outputs.zlib_SOURCE }}
-      uses: actions/cache/restore@v4
-      with:
-       path: ${{ steps.paths.outputs.zlib_INSTALL }}
-       key: ${{ steps.paths.outputs.zlib_CACHE_KEY }}-install
-    - name: Build zlib
-      if: ${{ steps.paths.outputs.zlib_SOURCE && ! steps.restore_zlib.outputs.cache-hit }}
-      run: python3 build/fbcode_builder/getdeps.py --allow-system-packages build --no-tests zlib
-    - name: Save zlib to cache
-      uses: actions/cache/save@v4
-      if: ${{ steps.paths.outputs.zlib_SOURCE && ! steps.restore_zlib.outputs.cache-hit }}
-      with:
-       path: ${{ steps.paths.outputs.zlib_INSTALL }}
-       key: ${{ steps.paths.outputs.zlib_CACHE_KEY }}-install
     - name: Restore zstd from cache
       id: restore_zstd
       if: ${{ steps.paths.outputs.zstd_SOURCE }}
