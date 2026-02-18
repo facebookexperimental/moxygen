@@ -10,6 +10,7 @@ repo_url = https://github.com/facebook/wangle.git
 [build]
 builder = cmake
 subdir = wangle
+patchfile = fbcode_builder_FindLibUnwind_pkgconfig.patch
 
 [cmake.defines.test=on]
 BUILD_TESTS=ON

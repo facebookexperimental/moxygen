@@ -10,6 +10,7 @@ repo_url = https://github.com/facebook/mvfst.git
 [build]
 builder = cmake
 subdir = .
+patchfile = fbcode_builder_FindLibUnwind_pkgconfig.patch
 
 [cmake.defines.test=on]
 BUILD_TESTS = ON

@@ -14,6 +14,7 @@ builder = nop
 builder = cmake
 subdir = .
 job_weight_mib = 3072
+patchfile = fbcode_builder_FindLibUnwind_pkgconfig.patch
 
 [cmake.defines.test=on]
 BUILD_TESTS = ON

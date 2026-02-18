@@ -10,6 +10,7 @@ repo_url = https://github.com/facebookincubator/fizz.git
 [build]
 builder = cmake
 subdir = fizz
+patchfile = fbcode_builder_FindLibUnwind_pkgconfig.patch
 
 [cmake.defines]
 BUILD_EXAMPLES = OFF
