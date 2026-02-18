@@ -11,6 +11,7 @@
 #include <fmt/core.h>
 
 #include <string>
+#include <type_traits>
 
 namespace moxygen {
 
@@ -36,7 +37,10 @@ struct MoQPublishError {
       : code(inCode), msg(std::move(inMsg)) {}
 
   std::string describe() const {
-    return fmt::format("error={} msg={}", fmt::underlying(code), msg);
+    return fmt::format(
+        "error={} msg={}",
+        static_cast<std::underlying_type_t<Code>>(code),
+        msg);
   }
 
   const char* what() const noexcept {
