@@ -7,8 +7,7 @@
 option(BUILD_TESTS  "Enable tests" OFF)
 include(CTest)
 if(BUILD_TESTS)
-  find_package(GMock 1.10.0 MODULE REQUIRED)
-  find_package(GTest 1.10.0 MODULE REQUIRED)
+  find_package(GTest 1.10.0 REQUIRED)
 endif()
 
 function(moxygen_add_test)
@@ -33,21 +32,14 @@ function(moxygen_add_test)
       "${MOXYGEN_TEST_SOURCES}"
     )
 
-    set_property(TARGET ${MOXYGEN_TEST_TARGET} PROPERTY ENABLE_EXPORTS true)
-
     target_include_directories(${MOXYGEN_TEST_TARGET} PUBLIC
       "${MOXYGEN_TEST_INCLUDES}"
-      ${LIBGMOCK_INCLUDE_DIR}
-      ${LIBGTEST_INCLUDE_DIRS}
-    )
-
-    target_compile_definitions(${MOXYGEN_TEST_TARGET} PUBLIC
-      ${LIBGMOCK_DEFINES}
     )
 
     target_link_libraries(${MOXYGEN_TEST_TARGET} PUBLIC
       "${MOXYGEN_TEST_DEPENDS}"
-      ${LIBGMOCK_LIBRARIES}
+      GTest::gmock
+      GTest::gmock_main
       ${GLOG_LIBRARY}
     )
 
