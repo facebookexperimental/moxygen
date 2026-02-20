@@ -12,13 +12,11 @@ add_library(testmain TestMain.cpp)
 target_include_directories(
     testmain PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    ${LIBGMOCK_INCLUDE_DIR}
-    ${LIBGTEST_INCLUDE_DIR}
 )
 target_link_libraries(testmain PUBLIC
     Folly::folly_init_init
-    ${LIBGMOCK_LIBRARY}
-    ${LIBGTEST_LIBRARY}
+    GTest::gmock
+    GTest::gtest
 )
 target_compile_options(
     testmain PRIVATE
@@ -30,8 +28,6 @@ target_include_directories(
     moqtestutils PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
-    ${LIBGMOCK_INCLUDE_DIR}
-    ${LIBGTEST_INCLUDE_DIR}
 )
 target_compile_options(
     moqtestutils PRIVATE
@@ -44,6 +40,7 @@ target_link_libraries(
     moxygen_moq_consumers
     moxygen_moq_framer
     moxygen_events_moq_folly_executor_impl
+    GTest::gmock
 )
 
 add_library(moqsessiontestcommon MoQSessionTestCommon.cpp)
@@ -51,8 +48,6 @@ target_include_directories(
     moqsessiontestcommon PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
-    ${LIBGMOCK_INCLUDE_DIR}
-    ${LIBGTEST_INCLUDE_DIR}
 )
 target_compile_options(
     moqsessiontestcommon PRIVATE
@@ -66,6 +61,8 @@ target_link_libraries(
     moxygen_moqclient
     moxygen_relay_moq_relay_client
     Folly::folly_coro_gtest_helpers
+    GTest::gmock
+    GTest::gtest
 )
 
 moxygen_add_test(TARGET MoQTests
