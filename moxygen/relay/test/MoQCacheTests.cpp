@@ -139,37 +139,40 @@ class MoQCacheTest : public ::testing::Test {
     auto [p, future] =
         folly::makePromiseContract<std::shared_ptr<FetchConsumer>>();
     EXPECT_CALL(*upstream_, fetch(_, _))
-        .WillOnce([start,
-                   end,
-                   endOfTrack,
-                   largest,
-                   order,
-                   promise = std::move(p),
-                   this](auto fetch, auto consumer) mutable {
-          auto [standalone, joining] = fetchType(fetch);
-          EXPECT_EQ(standalone->start, start);
-          EXPECT_EQ(standalone->end, end);
-          upstreamFetchConsumer_ = std::move(consumer);
-          promise.setValue(upstreamFetchConsumer_);
-          upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(
-              FetchOk{0, order, endOfTrack, largest});
-          return folly::coro::makeTask<Publisher::FetchResult>(
-              upstreamFetchHandle_);
-        })
+        .WillOnce(
+            [start,
+             end,
+             endOfTrack,
+             largest,
+             order,
+             promise = std::move(p),
+             this](
+                Fetch fetch, std::shared_ptr<FetchConsumer> consumer) mutable {
+              auto [standalone, joining] = fetchType(fetch);
+              EXPECT_EQ(standalone->start, start);
+              EXPECT_EQ(standalone->end, end);
+              upstreamFetchConsumer_ = std::move(consumer);
+              promise.setValue(upstreamFetchConsumer_);
+              upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(
+                  FetchOk{0, order, endOfTrack, largest});
+              return folly::coro::makeTask<Publisher::FetchResult>(
+                  upstreamFetchHandle_);
+            })
         .RetiresOnSaturation();
     return std::move(future);
   }
 
   void expectUpstreamFetch(const FetchError& err) {
     EXPECT_CALL(*upstream_, fetch(_, _))
-        .WillOnce(Return(
-            folly::coro::makeTask<Publisher::FetchResult>(
-                folly::makeUnexpected(err))));
+        .WillOnce([err](Fetch, std::shared_ptr<FetchConsumer>) {
+          return folly::coro::makeTask<Publisher::FetchResult>(
+              folly::makeUnexpected(err));
+        });
   }
 
   void expectUpstreamFetch(const FetchOk& ok) {
     EXPECT_CALL(*upstream_, fetch(_, _))
-        .WillOnce([ok, this](const auto&, auto consumer) {
+        .WillOnce([ok, this](Fetch, std::shared_ptr<FetchConsumer> consumer) {
           upstreamFetchConsumer_ = std::move(consumer);
           upstreamFetchConsumer_->endOfFetch();
           upstreamFetchHandle_ = std::make_shared<moxygen::MockFetchHandle>(ok);
@@ -726,8 +729,9 @@ CO_TEST_F(MoQCacheTest, TestConsumerObjectBlocked) {
           return folly::makeUnexpected(
               MoQPublishError(MoQPublishError::BLOCKED));
         });
-    EXPECT_CALL(*consumer_, awaitReadyToConsume())
-        .WillOnce(Return(uint64_t(0)));
+    EXPECT_CALL(*consumer_, awaitReadyToConsume()).WillOnce([] {
+      return folly::makeSemiFuture<uint64_t>(0);
+    });
     expectFetchObjects({0, 1}, {0, 2}, false);
   }
   auto res =
@@ -744,9 +748,9 @@ CO_TEST_F(MoQCacheTest, TestAwaitFails) {
       .WillOnce([](auto, auto, auto, auto, const auto&, auto, auto) {
         return folly::makeUnexpected(MoQPublishError(MoQPublishError::BLOCKED));
       });
-  EXPECT_CALL(*consumer_, awaitReadyToConsume())
-      .WillOnce(Return(
-          folly::makeUnexpected(MoQPublishError(MoQPublishError::CANCELLED))));
+  EXPECT_CALL(*consumer_, awaitReadyToConsume()).WillOnce([] {
+    return folly::makeUnexpected(MoQPublishError(MoQPublishError::CANCELLED));
+  });
   EXPECT_CALL(*consumer_, reset(_));
   auto res =
       co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
