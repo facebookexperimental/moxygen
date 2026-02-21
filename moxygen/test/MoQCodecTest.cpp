@@ -101,17 +101,23 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     expectOnTrackStatusOk(callback, GetParam());
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
-    EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
-    expectOnRequestError(
-        callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-    EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
+    // SubscribeNamespace messages are not on the control stream for draft 16+
+    if (getDraftMajorVersion(GetParam()) < 16) {
+      EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
+      expectOnRequestOk(
+          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
+      expectOnRequestError(
+          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+      EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
+    }
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::FETCH_ERROR);
 
-    EXPECT_CALL(callback, onFrame(testing::_)).Times(28);
+    // 28 frames for draft < 16, 24 for draft 16+ (no subscribe namespace msgs)
+    int expectedFrames = (getDraftMajorVersion(GetParam()) < 16) ? 28 : 24;
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(expectedFrames);
 
     codec.onIngress(std::move(allMsgs), true);
   }
@@ -155,17 +161,22 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     expectOnTrackStatusOk(callback, GetParam());
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
-    EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
-
-    expectOnRequestError(
-        callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-    EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
+    // SubscribeNamespace messages are not on the control stream for draft 16+
+    if (getDraftMajorVersion(GetParam()) < 16) {
+      EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
+      expectOnRequestOk(
+          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
+      expectOnRequestError(
+          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+      EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
+    }
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
     expectOnRequestError(callback, GetParam(), FrameType::FETCH_ERROR);
-    EXPECT_CALL(callback, onFrame(testing::_)).Times(28);
+    // 28 frames for draft < 16, 24 for draft 16+ (no subscribe namespace msgs)
+    int expectedFrames = (getDraftMajorVersion(GetParam()) < 16) ? 28 : 24;
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(expectedFrames);
     while (!readBuf.empty()) {
       codec.onIngress(readBuf.split(1), false);
     }

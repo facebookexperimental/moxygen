@@ -115,10 +115,12 @@ class MoQRelaySession::SubscribeNamespaceHandle
   SubscribeNamespaceHandle(
       std::shared_ptr<MoQRelaySession> session,
       TrackNamespace trackNamespacePrefix,
-      SubscribeNamespaceOk subAnnOk)
+      SubscribeNamespaceOk subAnnOk,
+      proxygen::WebTransport::BidiStreamHandle bidiStreamHandle = {})
       : Publisher::SubscribeNamespaceHandle(std::move(subAnnOk)),
         trackNamespacePrefix_(std::move(trackNamespacePrefix)),
-        session_(std::move(session)) {}
+        session_(std::move(session)),
+        bidiStreamHandle_(bidiStreamHandle) {}
   SubscribeNamespaceHandle(const SubscribeNamespaceHandle&) = delete;
   SubscribeNamespaceHandle& operator=(const SubscribeNamespaceHandle&) = delete;
   SubscribeNamespaceHandle(SubscribeNamespaceHandle&&) = delete;
@@ -129,17 +131,31 @@ class MoQRelaySession::SubscribeNamespaceHandle
 
   void unsubscribeNamespace() override {
     if (session_) {
-      UnsubscribeNamespace msg;
-
-      // v15+: Send requestID
-      if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
-        msg.requestID = subscribeNamespaceOk_->requestID;
+      if (bidiStreamHandle_.writeHandle) {
+        // Draft 16+: Close the bidi stream with a FIN
+        MOQ_SUBSCRIBER_STATS(
+            session_->subscriberStatsCallback_, onUnsubscribeNamespace);
+        auto res = bidiStreamHandle_.writeHandle->writeStreamData(
+            nullptr, /*fin*/ true, nullptr);
+        if (!res) {
+          XLOG(ERR)
+              << "writeStreamData(fin=true) for SUBSCRIBE_NAMESPACE failed error="
+              << uint64_t(res.error());
+        }
+        if (bidiStreamHandle_.readHandle) {
+          bidiStreamHandle_.readHandle->stopSending(0);
+        }
+        bidiStreamHandle_ = {};
       } else {
-        // <v15: Send namespace
-        msg.trackNamespacePrefix = trackNamespacePrefix_;
+        // Draft <=15: Send UnsubscribeNamespace on the control stream
+        UnsubscribeNamespace msg;
+        if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
+          msg.requestID = subscribeNamespaceOk_->requestID;
+        } else {
+          msg.trackNamespacePrefix = trackNamespacePrefix_;
+        }
+        session_->unsubscribeNamespace(msg);
       }
-
-      session_->unsubscribeNamespace(msg);
       session_.reset();
     }
   }
@@ -156,6 +172,7 @@ class MoQRelaySession::SubscribeNamespaceHandle
  private:
   TrackNamespace trackNamespacePrefix_;
   std::shared_ptr<MoQRelaySession> session_;
+  proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
 };
 
 // MoQRelayPendingRequestState - extends base PendingRequestState with
@@ -833,7 +850,41 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone unAnn) {
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
-// SubscribeAnnounces subscriber methods
+// This is an adapter class that forwards messages to the MoQSession.
+class SubNsStreamCallback : public MoQControlCodec::ControlCallback {
+ public:
+  explicit SubNsStreamCallback(
+      MoQSession* session,
+      std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle)
+      : session_(session), namespacePublishHandle_(namespacePublishHandle) {}
+
+  void onConnectionError(ErrorCode error) override {
+    session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  void onNamespace(Namespace ns) override {
+    namespacePublishHandle_->namespaceMsg(ns.trackNamespaceSuffix);
+  }
+
+  void onNamespaceDone(NamespaceDone namespaceDone) override {
+    namespacePublishHandle_->namespaceDoneMsg(
+        namespaceDone.trackNamespaceSuffix);
+  }
+
+  void onRequestOk(RequestOk ok, FrameType frameType) override {
+    session_->onRequestOk(ok, FrameType::SUBSCRIBE_NAMESPACE_OK);
+  }
+
+  void onRequestError(RequestError error, FrameType frameType) override {
+    session_->onRequestError(error, FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  }
+
+ private:
+  MoQSession* session_;
+  std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle_;
+};
+
+// SubscribeNamespace subscriber methods
 folly::coro::Task<Publisher::SubscribeNamespaceResult>
 MoQRelaySession::subscribeNamespace(
     SubscribeNamespace sa,
@@ -844,24 +895,63 @@ MoQRelaySession::subscribeNamespace(
   aliasifyAuthTokens(sa.params);
   sa.requestID = getNextRequestID();
 
-  auto res = moqFrameWriter_.writeSubscribeNamespace(controlWriteBuf_, sa);
-  if (!res) {
-    XLOG(ERR) << "writeSubscribeNamespace failed sess=" << this;
-    co_return folly::makeUnexpected(SubscribeNamespaceError(
-        {RequestID(0),
-         SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-         "local write failed"}));
+  proxygen::WebTransport::BidiStreamHandle subNsBidiStreamHandle;
+  if (getDraftMajorVersion(*negotiatedVersion_) <= 15) {
+    auto res = moqFrameWriter_.writeSubscribeNamespace(controlWriteBuf_, sa);
+    if (!res) {
+      XLOG(ERR) << "writeSubscribeNamespace failed sess=" << this;
+      co_return folly::makeUnexpected(SubscribeNamespaceError(
+          {RequestID(0),
+           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+           "local write failed"}));
+    }
+    controlWriteEvent_.signal();
+  } else {
+    folly::IOBufQueue buf;
+    auto res = moqFrameWriter_.writeSubscribeNamespace(buf, sa);
+    if (!res) {
+      XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
+      co_return folly::makeUnexpected(SubscribeNamespaceError(
+          {RequestID(0),
+           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+           "local write failed"}));
+    }
+    // Create a bidirectional stream and write the SUBSCRIBE_NAMESPACE frame
+    auto subNsStream = wt_->createBidiStream();
+    if (!subNsStream) {
+      XLOG(ERR) << "Failed to get control stream sess=" << this;
+      wt_->closeSession();
+      co_return folly::makeUnexpected(SubscribeNamespaceError(
+          {RequestID(0),
+           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+           "failed to create local bidi stream"}));
+    }
+
+    subNsBidiStreamHandle = *subNsStream;
+    subNsBidiStreamHandle.writeHandle->writeStreamData(
+        buf.move(), /*fin*/ false, nullptr);
   }
+
   if (logger_) {
     logger_->logSubscribeNamespace(sa);
   }
-  controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>();
   pendingRequests_.emplace(
       sa.requestID,
       MoQRelayPendingRequestState::makeSubscribeNamespace(
           std::move(contract.first)));
+
+  if (getDraftMajorVersion(*negotiatedVersion_) >= 16) {
+    co_withExecutor(
+        exec_.get(),
+        co_withCancellation(
+            cancellationSource_.getToken(),
+            subscribeNamespaceSenderReadLoop(
+                subNsBidiStreamHandle.readHandle, namespacePublishHandle)))
+        .start();
+  }
+
   auto subAnnResult = co_await std::move(contract.second);
   if (subAnnResult.hasError()) {
     MOQ_SUBSCRIBER_STATS(
@@ -874,8 +964,24 @@ MoQRelaySession::subscribeNamespace(
     co_return std::make_shared<SubscribeNamespaceHandle>(
         std::static_pointer_cast<MoQRelaySession>(shared_from_this()),
         trackNamespace,
-        std::move(subAnnResult.value()));
+        std::move(subAnnResult.value()),
+        subNsBidiStreamHandle);
   }
+}
+
+folly::coro::Task<void> MoQRelaySession::subscribeNamespaceSenderReadLoop(
+    proxygen::WebTransport::StreamReadHandle* readHandle,
+    std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle) {
+  SubNsStreamCallback subNsStreamCallback(this, namespacePublishHandle);
+  MoQSubNsSenderCodec subNsCodec(&subNsStreamCallback);
+  subNsCodec.initializeVersion(*negotiatedVersion_);
+
+  // TODO: Hold state inside controlReadLoop so we don't need two coroutines
+  // here with a tail co_await.
+  co_await controlReadLoop(
+      readHandle,
+      proxygen::WebTransport::StreamData{nullptr, false},
+      &subNsCodec);
 }
 
 void MoQRelaySession::unsubscribeNamespace(
@@ -984,12 +1090,9 @@ void MoQRelaySession::subscribeNamespaceOk(
     XLOG(ERR) << "writeSubscribeNamespaceOk failed sess=" << this;
     return;
   }
-
   if (logger_) {
     logger_->logSubscribeNamespaceOk(saOk);
   }
-
-  controlWriteEvent_.signal();
 }
 
 void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {

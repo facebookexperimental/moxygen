@@ -247,30 +247,32 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeTrackStatusOk(writeBuf, trackStatusOk);
   res = moqFrameWriter.writeGoaway(writeBuf, Goaway({"new uri"}));
 
-  // SubscribeNamespace
-  SubscribeNamespace subscribeNamespace;
-  subscribeNamespace.requestID = 2;
-  subscribeNamespace.trackNamespacePrefix = TrackNamespace({"hello"});
-  subscribeNamespace.forward = true;
-  subscribeNamespace.params.insertParam(
-      getTestAuthParam(moqFrameWriter, "binky"));
-  res = moqFrameWriter.writeSubscribeNamespace(writeBuf, subscribeNamespace);
+  // SubscribeNamespace - not on control stream for draft 16+
+  if (getDraftMajorVersion(version) < 16) {
+    SubscribeNamespace subscribeNamespace;
+    subscribeNamespace.requestID = 2;
+    subscribeNamespace.trackNamespacePrefix = TrackNamespace({"hello"});
+    subscribeNamespace.forward = true;
+    subscribeNamespace.params.insertParam(
+        getTestAuthParam(moqFrameWriter, "binky"));
+    res = moqFrameWriter.writeSubscribeNamespace(writeBuf, subscribeNamespace);
 
-  // SubscribeNamespaceOk
-  SubscribeNamespaceOk subscribeNamespaceOk;
-  subscribeNamespaceOk.requestID = 2;
-  res =
-      moqFrameWriter.writeSubscribeNamespaceOk(writeBuf, subscribeNamespaceOk);
-  res = moqFrameWriter.writeRequestError(
-      writeBuf,
-      SubscribeNamespaceError(
-          {RequestID(2),
-           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-           "server error"}),
-      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-  res = moqFrameWriter.writeUnsubscribeNamespace(
-      writeBuf,
-      UnsubscribeNamespace({RequestID(2), TrackNamespace({"hello"})}));
+    // SubscribeNamespaceOk
+    SubscribeNamespaceOk subscribeNamespaceOk;
+    subscribeNamespaceOk.requestID = 2;
+    res = moqFrameWriter.writeSubscribeNamespaceOk(
+        writeBuf, subscribeNamespaceOk);
+    res = moqFrameWriter.writeRequestError(
+        writeBuf,
+        SubscribeNamespaceError(
+            {RequestID(2),
+             SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+             "server error"}),
+        FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+    res = moqFrameWriter.writeUnsubscribeNamespace(
+        writeBuf,
+        UnsubscribeNamespace({RequestID(2), TrackNamespace({"hello"})}));
+  }
 
   // Fetch - using StandaloneFetch variant
   Fetch fetch;

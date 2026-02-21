@@ -150,11 +150,9 @@ class MoQControlCodec : public MoQCodec {
       // In draft 16, NAMESPACE is PUBLISH_NAMESPACE_ERROR (0x8) and
       // NAMESPACE_DONE is TRACK_STATUS_OK (0xE). They must be on a
       // separate bidi stream, not the control stream.
-      case FrameType::PUBLISH_NAMESPACE_ERROR:
-      case FrameType::TRACK_STATUS_OK:
-        return true;
-        // TODO: change to return getDraftMajorVersion(*negotiatedVersion_) <
-        // 16; once we actually send the SUBSCRIBE_NAMESPACE on a bidi stream
+      case FrameType::NAMESPACE:
+      case FrameType::NAMESPACE_DONE:
+        return getDraftMajorVersion(*negotiatedVersion_) < 16;
     }
     return false;
   }

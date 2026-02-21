@@ -432,6 +432,7 @@ class MoQSession : public Subscriber,
   class SubscribeTrackReceiveState;
   class FetchTrackReceiveState;
   friend class FetchTrackReceiveState;
+  friend class SubNsStreamCallback;
 
   std::shared_ptr<SubscribeTrackReceiveState> getSubscribeTrackReceiveState(
       TrackAlias alias);
@@ -455,10 +456,6 @@ class MoQSession : public Subscriber,
 
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
-  folly::coro::Task<void> controlReadLoop(
-      proxygen::WebTransport::StreamReadHandle* readHandle,
-      proxygen::WebTransport::StreamData initialData,
-      MoQControlCodec* controlCodec);
 
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
@@ -569,6 +566,11 @@ class MoQSession : public Subscriber,
   // Protected members and methods for MoQRelaySession subclass access
 
   void requestUpdate(const RequestUpdate& reqUpdate);
+
+  folly::coro::Task<void> controlReadLoop(
+      proxygen::WebTransport::StreamReadHandle* readHandle,
+      proxygen::WebTransport::StreamData initialData,
+      MoQControlCodec* controlCodec);
 
   // Core session state
   MoQControlCodec::Direction dir_;

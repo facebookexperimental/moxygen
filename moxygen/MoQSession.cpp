@@ -2551,8 +2551,9 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
     }
   }
 
-  void namespaceDoneMsg() override {
+  void namespaceDoneMsg(const TrackNamespace& trackNamespaceSuffix) override {
     NamespaceDone namespaceDone;
+    namespaceDone.trackNamespaceSuffix = trackNamespaceSuffix;
     auto writeResult =
         moqFrameWriter_.writeNamespaceDone(writeBuf_, namespaceDone);
     if (!writeResult) {
@@ -2645,6 +2646,7 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
         return;
       }
       receivedSubscribeNamespace_ = true;
+      requestID_ = subscribeNamespace.requestID;
 
       auto subNsReply =
           session_->getSubNsReply(bufQueue_, bidiStreamHandle_.writeHandle);
@@ -2661,12 +2663,21 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
       session_->close(error);
     }
 
+    bool receivedSubscribeNamespace() const {
+      return receivedSubscribeNamespace_;
+    }
+
+    std::optional<RequestID> requestID() const {
+      return requestID_;
+    }
+
    private:
     MoQSession* session_;
     proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
     folly::IOBufQueue& bufQueue_;
     MoQFrameWriter& moqFrameWriter_;
     bool receivedSubscribeNamespace_{false};
+    std::optional<RequestID> requestID_;
   };
 
   folly::IOBufQueue bufQueue;
@@ -2681,6 +2692,16 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
   // TODO: Could perhaps return controlReadLoop instead of awaiting
   co_await controlReadLoop(
       bh.readHandle, std::move(initialData), moQSubNsReceiverCodec.get());
+
+  // If the peer closes the SUBSCRIBE_NAMESPACE stream (FIN) or resets it
+  // (draft16+), treat it as an unsubscribe
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  if (!token.isCancellationRequested() && cb.receivedSubscribeNamespace() &&
+      cb.requestID()) {
+    UnsubscribeNamespace unsub;
+    unsub.requestID = cb.requestID().value();
+    onUnsubscribeNamespace(std::move(unsub));
+  }
 }
 
 std::shared_ptr<MoQSession::SubscribeTrackReceiveState>

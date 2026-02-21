@@ -173,22 +173,27 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r14 = parser_.parseGoaway(cursor, frameLength(cursor));
     testUnderflowResult(r14);
 
-    skip(cursor, 1);
-    auto r9a = parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
-    testUnderflowResult(r9a);
+    // SubscribeNamespace messages are not on control stream for draft 16+
+    if (getDraftMajorVersion(GetParam()) < 16) {
+      skip(cursor, 1);
+      auto r9a = parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
+      testUnderflowResult(r9a);
 
-    skip(cursor, 1);
-    auto r10a = parser_.parseSubscribeNamespaceOk(cursor, frameLength(cursor));
-    testUnderflowResult(r10a);
+      skip(cursor, 1);
+      auto r10a =
+          parser_.parseSubscribeNamespaceOk(cursor, frameLength(cursor));
+      testUnderflowResult(r10a);
 
-    skip(cursor, 1);
-    auto r11a = parser_.parseRequestError(
-        cursor, frameLength(cursor), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-    testUnderflowResult(r11a);
+      skip(cursor, 1);
+      auto r11a = parser_.parseRequestError(
+          cursor, frameLength(cursor), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+      testUnderflowResult(r11a);
 
-    skip(cursor, 1);
-    auto r13a = parser_.parseUnsubscribeNamespace(cursor, frameLength(cursor));
-    testUnderflowResult(r13a);
+      skip(cursor, 1);
+      auto r13a =
+          parser_.parseUnsubscribeNamespace(cursor, frameLength(cursor));
+      testUnderflowResult(r13a);
+    }
 
     skip(cursor, 1);
     auto r16 = parser_.parseFetch(cursor, frameLength(cursor));

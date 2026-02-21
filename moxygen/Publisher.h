@@ -165,7 +165,8 @@ class Publisher {
 
     virtual void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) = 0;
 
-    virtual void namespaceDoneMsg() = 0;
+    virtual void namespaceDoneMsg(
+        const TrackNamespace& trackNamespaceSuffix) = 0;
   };
 
   // Send/respond to SUBSCRIBE_NAMESPACE
