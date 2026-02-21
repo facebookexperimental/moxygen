@@ -2344,9 +2344,11 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     setupSerializationVersion = *negotiatedVersion_;
   }
 
-  // This sets the receive token cache size, but it's necesarily empty
-  controlCodec_->setMaxAuthTokenCacheSize(
-      getMaxAuthTokenCacheSizeIfPresent(setup.params));
+  // Set up the shared receive-side token cache and point the control codec
+  // at it. The cache is necessarily empty at this point.
+  receiveTokenCache_.setMaxSize(
+      getMaxAuthTokenCacheSizeIfPresent(setup.params), /*evict=*/false);
+  controlCodec_->setTokenCache(&receiveTokenCache_);
   // Optimistically registers params without knowing peer's capabilities
   aliasifyAuthTokens(setup.params, setupSerializationVersion);
   auto res =
@@ -2424,10 +2426,10 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
   }
 
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
+  auto peerAuthCacheSize =
+      getMaxAuthTokenCacheSizeIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(
-      std::min(
-          kMaxSendTokenCacheSize,
-          getMaxAuthTokenCacheSizeIfPresent(serverSetup.params)),
+      std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
       /*evict=*/true);
   setupPromise_.setValue(std::move(serverSetup));
 }
@@ -2447,10 +2449,10 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
 
   peerMaxRequestID_ = getMaxRequestIDIfPresent(clientSetup.params);
+  auto peerAuthCacheSize =
+      getMaxAuthTokenCacheSizeIfPresent(clientSetup.params);
   tokenCache_.setMaxSize(
-      std::min(
-          kMaxSendTokenCacheSize,
-          getMaxAuthTokenCacheSizeIfPresent(clientSetup.params)),
+      std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
       /*evict=*/true);
 
   auto serverSetup =
@@ -2506,9 +2508,11 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   }
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
 
-  // This sets the receive cache size and may evict received tokens
-  controlCodec_->setMaxAuthTokenCacheSize(
-      getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
+  // Set up the shared receive-side token cache and point the control codec
+  // at it. May evict tokens optimistically registered during CLIENT_SETUP.
+  receiveTokenCache_.setMaxSize(
+      getMaxAuthTokenCacheSizeIfPresent(serverSetup->params), /*evict=*/true);
+  controlCodec_->setTokenCache(&receiveTokenCache_);
   aliasifyAuthTokens(serverSetup->params);
   auto res =
       writeServerSetup(controlWriteBuf_, *serverSetup, *getNegotiatedVersion());
@@ -2668,7 +2672,9 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
   folly::IOBufQueue bufQueue;
   auto moQSubNsReceiverCodec = std::make_shared<MoQSubNsReceiverCodec>(nullptr);
   moQSubNsReceiverCodec->initializeVersion(*negotiatedVersion_);
-
+  // Point at the session-wide receive token cache so that auth-token aliases
+  // registered on the control stream are visible here, and vice versa.
+  moQSubNsReceiverCodec->setTokenCache(&receiveTokenCache_);
   SubNsCb cb(this, bh, bufQueue, moqFrameWriter_);
   moQSubNsReceiverCodec->setCallback(&cb);
 

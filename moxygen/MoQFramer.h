@@ -293,7 +293,13 @@ class MoQFrameParser {
   }
 
   void setTokenCacheMaxSize(size_t size) {
-    tokenCache_.setMaxSize(size, /*evict=*/true);
+    tokenCache_->setMaxSize(size, /*evict=*/true);
+  }
+
+  // Use an external token cache instead of the internal one.
+  // The caller must ensure the external cache outlives this parser.
+  void setTokenCache(MoQTokenCache* cache) {
+    tokenCache_ = cache;
   }
 
   // Test only
@@ -410,7 +416,7 @@ class MoQFrameParser {
       Extensions& extensions) const noexcept;
 
   std::optional<uint64_t> version_;
-  mutable MoQTokenCache tokenCache_;
+  MoQTokenCache* tokenCache_{nullptr};
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding (draft-15+)
   mutable std::optional<uint64_t> previousFetchGroup_;

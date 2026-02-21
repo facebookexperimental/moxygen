@@ -33,6 +33,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   void SetUp() override {
     parser_.initializeVersion(GetParam());
     writer_.initializeVersion(GetParam());
+    parser_.setTokenCache(&tokenCache_);
   }
 
   StreamType parseStreamType(folly::io::Cursor& cursor) {
@@ -281,6 +282,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
  protected:
   MoQFrameParser parser_;
   MoQFrameWriter writer_;
+  MoQTokenCache tokenCache_;
 
   ObjectHeader testUnderflowDatagramHelper(
       folly::IOBufQueue& writeBuf,
@@ -2382,6 +2384,8 @@ TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
 TEST(MoQFramerTest, ClientSetupRejectsDelete) {
   MoQFrameParser parser;
   parser.initializeVersion(kVersionDraftCurrent);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
   parser.setTokenCacheMaxSize(100);
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -2430,6 +2434,8 @@ TEST(MoQFramerTest, ClientSetupRejectsDelete) {
 TEST(MoQFramerTest, ClientSetupRejectsUseAlias) {
   MoQFrameParser parser;
   parser.initializeVersion(kVersionDraftCurrent);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
   parser.setTokenCacheMaxSize(100);
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};

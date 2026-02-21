@@ -755,7 +755,7 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
       numParams->first,
       clientSetup.params,
       requestSpecificParams,
-      tokenCache_,
+      *tokenCache_,
       ParamsType::ClientSetup);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
@@ -806,7 +806,7 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
       numParams->first,
       serverSetup.params,
       requestSpecificParams,
-      tokenCache_,
+      *tokenCache_,
       ParamsType::ServerSetup);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
@@ -1477,7 +1477,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       numParams,
       params,
       requestSpecificParams,
-      tokenCache_,
+      *tokenCache_,
       ParamsType::Request);
 }
 

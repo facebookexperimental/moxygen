@@ -862,6 +862,12 @@ class MoQSession : public Subscriber,
  protected:
   std::optional<uint64_t> negotiatedVersion_;
 
+  // Shared receive-side auth token cache. All codecs that parse auth tokens
+  // (control stream, draft16+ SUBSCRIBE_NAMESPACE bidi streams, etc.) point to
+  // this cache so that aliases registered on one stream are visible on all
+  // others and the total budget is enforced once rather than per-codec.
+  MoQTokenCache receiveTokenCache_;
+
  private:
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
@@ -893,6 +899,7 @@ class MoQSession : public Subscriber,
   MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
 
+  // Send-side auth token cache (for aliasifyAuthTokens).
   MoQTokenCache tokenCache_{1024};
 
   // Cached transport info to avoid expensive getTransportInfo calls

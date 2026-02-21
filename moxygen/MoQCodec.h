@@ -40,6 +40,12 @@ class MoQCodec {
     moqFrameParser_.setTokenCacheMaxSize(size);
   }
 
+  // Share an external token cache with this codec's frame parser.
+  // The caller must ensure the external cache outlives this codec.
+  void setTokenCache(MoQTokenCache* cache) {
+    moqFrameParser_.setTokenCache(cache);
+  }
+
   // If ParseResult::BLOCKED is returned, must call onIngress again to restart
   virtual ParseResult onIngress(
       std::unique_ptr<folly::IOBuf> data,
