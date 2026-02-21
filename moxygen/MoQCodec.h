@@ -88,6 +88,8 @@ class MoQControlCodec : public MoQCodec {
     virtual void onUnsubscribeNamespace(UnsubscribeNamespace) {}
     virtual void onTrackStatus(TrackStatus) {}
     virtual void onTrackStatusOk(TrackStatusOk) {}
+    virtual void onNamespace(Namespace) {}
+    virtual void onNamespaceDone(NamespaceDone) {}
     virtual void onTrackStatusError(TrackStatusError) {}
     virtual void onGoaway(Goaway) {}
   };
@@ -247,6 +249,31 @@ class MoQObjectStreamCodec : public MoQCodec {
   StreamType streamType_{StreamType::SUBGROUP_HEADER_SG};
   SubgroupOptions subgroupOptions_;
   ObjectCallback* callback_;
+};
+
+// Parses incoming NAMESPACE, NAMESPACE_DONE, REQUEST_OK, and REQUEST_ERROR
+// frames and calls the appropriate callback method.
+class MoQSubNsSenderCodec : public MoQControlCodec {
+ public:
+  // The direction doesn't really matter, so I'm just setting it
+  // to SERVER for now.
+  explicit MoQSubNsSenderCodec(ControlCallback* callback)
+      : MoQControlCodec(Direction::SERVER, callback) {
+    seenSetup_ = true;
+  }
+
+ protected:
+  bool checkFrameAllowed(FrameType f) override {
+    switch (f) {
+      case FrameType::NAMESPACE:
+      case FrameType::NAMESPACE_DONE:
+      case FrameType::REQUEST_OK:
+      case FrameType::REQUEST_ERROR:
+        return true;
+      default:
+        return false;
+    }
+  }
 };
 
 } // namespace moxygen
