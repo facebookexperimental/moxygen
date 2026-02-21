@@ -994,6 +994,26 @@ StreamPublisherImpl::ensureWriteHandle() {
 
 namespace moxygen {
 
+class ControlStreamSubNsReply : public SubNSReply {
+ public:
+  ControlStreamSubNsReply(
+      MoQFrameWriter& moqFrameWriter,
+      folly::IOBufQueue& controlWriteBuf,
+      moxygen::TimedBaton& controlWriteEvent)
+      : SubNSReply(moqFrameWriter),
+        controlWriteBuf_(controlWriteBuf),
+        controlWriteEvent_(controlWriteEvent) {}
+
+  ~ControlStreamSubNsReply() override = default;
+
+  WriteResult ok(const SubscribeNamespaceOk&) override;
+  WriteResult error(const SubscribeNamespaceError&) override;
+
+ private:
+  folly::IOBufQueue& controlWriteBuf_;
+  moxygen::TimedBaton& controlWriteEvent_;
+};
+
 class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
                                        public TrackConsumer {
  public:
@@ -2100,9 +2120,10 @@ MoQSession::MoQSession(
     : dir_(MoQControlCodec::Direction::CLIENT),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
+      controlCodec_(std::make_shared<MoQControlCodec>(dir_, this)),
       nextRequestID_(0),
-      nextExpectedPeerRequestID_(1),
-      controlCodec_(dir_, this) {}
+
+      nextExpectedPeerRequestID_(1) {}
 
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
@@ -2111,10 +2132,10 @@ MoQSession::MoQSession(
     : dir_(MoQControlCodec::Direction::SERVER),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
+      controlCodec_(std::make_shared<MoQControlCodec>(dir_, this)),
       nextRequestID_(1),
       nextExpectedPeerRequestID_(0),
-      serverSetupCallback_(&serverSetupCallback),
-      controlCodec_(dir_, this) {}
+      serverSetupCallback_(&serverSetupCallback) {}
 
 MoQSession::~MoQSession() {
   cleanup();
@@ -2200,11 +2221,16 @@ void MoQSession::start() {
         co_withCancellation(
             std::move(mergeToken), controlWriteLoop(controlStream.writeHandle)))
         .start();
+
+    proxygen::WebTransport::StreamData streamData{nullptr, false};
     co_withExecutor(
         exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(),
-            controlReadLoop(controlStream.readHandle)))
+            controlReadLoop(
+                controlStream.readHandle,
+                std::move(streamData),
+                controlCodec_.get())))
         .start();
   }
 }
@@ -2319,7 +2345,7 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   }
 
   // This sets the receive token cache size, but it's necesarily empty
-  controlCodec_.setMaxAuthTokenCacheSize(
+  controlCodec_->setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(setup.params));
   // Optimistically registers params without knowing peer's capabilities
   aliasifyAuthTokens(setup.params, setupSerializationVersion);
@@ -2481,7 +2507,7 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
 
   // This sets the receive cache size and may evict received tokens
-  controlCodec_.setMaxAuthTokenCacheSize(
+  controlCodec_->setMaxAuthTokenCacheSize(
       getMaxAuthTokenCacheSizeIfPresent(serverSetup->params));
   aliasifyAuthTokens(serverSetup->params);
   auto res =
@@ -2544,20 +2570,21 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
 
 folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle,
-    std::unique_ptr<folly::IOBuf> initialData) {
+    proxygen::WebTransport::StreamData initialData,
+    MoQControlCodec* controlCodec) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
   });
   co_await folly::coro::co_safe_point;
   auto streamId = readHandle->getID();
-  controlCodec_.setStreamId(streamId);
+  controlCodec->setStreamId(streamId);
 
   // Process any pre-buffered data first
-  if (initialData) {
+  if (initialData.data || initialData.fin) {
     try {
       auto guard = shared_from_this();
-      controlCodec_.onIngress(std::move(initialData), false);
+      controlCodec->onIngress(std::move(initialData.data), initialData.fin);
     } catch (const std::exception& ex) {
       XLOG(FATAL) << "exception thrown from onIngress ex="
                   << folly::exceptionStr(ex);
@@ -2578,7 +2605,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
         (streamData->data || streamData->fin)) {
       try {
         auto guard = shared_from_this();
-        controlCodec_.onIngress(std::move(streamData->data), streamData->fin);
+        controlCodec->onIngress(std::move(streamData->data), streamData->fin);
       } catch (const std::exception& ex) {
         XLOG(FATAL) << "exception thrown from onIngress ex="
                     << folly::exceptionStr(ex);
@@ -2588,6 +2615,66 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     XLOG_IF(DBG3, fin) << "End of stream id=" << streamId << " sess=" << this;
   }
   // TODO: close session on control exit
+}
+
+folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
+    proxygen::WebTransport::BidiStreamHandle bh,
+    proxygen::WebTransport::StreamData initialData) {
+  XLOG(DBG1) << __func__ << " sess=" << this;
+
+  class SubNsCb : public MoQControlCodec::ControlCallback {
+   public:
+    SubNsCb(
+        MoQSession* session,
+        proxygen::WebTransport::BidiStreamHandle bidiStreamHandle,
+        folly::IOBufQueue& bufQueue,
+        MoQFrameWriter& moqFrameWriter)
+        : session_(session),
+          bidiStreamHandle_(bidiStreamHandle),
+          bufQueue_(bufQueue),
+          moqFrameWriter_(moqFrameWriter) {}
+
+    void onSubscribeNamespace(SubscribeNamespace subscribeNamespace) override {
+      if (receivedSubscribeNamespace_) {
+        XLOG(ERR) << "Received more than one SubscribeNamespace message";
+        session_->close(ErrorCode::PROTOCOL_VIOLATION);
+        return;
+      }
+      receivedSubscribeNamespace_ = true;
+
+      auto subNsReply =
+          session_->getSubNsReply(bufQueue_, bidiStreamHandle_.writeHandle);
+      session_->onSubscribeNamespaceImpl(
+          subscribeNamespace, std::move(subNsReply));
+    }
+
+    void onRequestUpdate(RequestUpdate requestUpdate) override {
+      session_->onRequestUpdate(std::move(requestUpdate));
+    }
+
+    void onConnectionError(ErrorCode error) override {
+      XLOG(ERR) << "Parse error=" << folly::to_underlying(error);
+      session_->close(error);
+    }
+
+   private:
+    MoQSession* session_;
+    proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
+    folly::IOBufQueue& bufQueue_;
+    MoQFrameWriter& moqFrameWriter_;
+    bool receivedSubscribeNamespace_{false};
+  };
+
+  folly::IOBufQueue bufQueue;
+  auto moQSubNsReceiverCodec = std::make_shared<MoQSubNsReceiverCodec>(nullptr);
+  moQSubNsReceiverCodec->initializeVersion(*negotiatedVersion_);
+
+  SubNsCb cb(this, bh, bufQueue, moqFrameWriter_);
+  moQSubNsReceiverCodec->setCallback(&cb);
+
+  // TODO: Could perhaps return controlReadLoop instead of awaiting
+  co_await controlReadLoop(
+      bh.readHandle, std::move(initialData), moQSubNsReceiverCodec.get());
 }
 
 std::shared_ptr<MoQSession::SubscribeTrackReceiveState>
@@ -5084,12 +5171,12 @@ void MoQSession::onNewBidiStream(
     return;
   }
 
-  handleClientSetup(bh);
+  handleClientSetup(bh, proxygen::WebTransport::StreamData{nullptr, false});
 }
 
 void MoQSession::handleClientSetup(
     proxygen::WebTransport::BidiStreamHandle bh,
-    std::unique_ptr<folly::IOBuf> initialData) noexcept {
+    proxygen::WebTransport::StreamData initialData) noexcept {
   // TODO: prevent second control stream?
   if (dir_ == MoQControlCodec::Direction::CLIENT) {
     XLOG(ERR) << "Received bidi stream on client, kill it sess=" << this;
@@ -5106,7 +5193,8 @@ void MoQSession::handleClientSetup(
         exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(),
-            controlReadLoop(bh.readHandle, std::move(initialData))))
+            controlReadLoop(
+                bh.readHandle, std::move(initialData), controlCodec_.get())))
         .start();
     auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
@@ -5126,29 +5214,40 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     co_return;
   }
   auto readHandle = bh.readHandle;
-  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
-  folly::Optional<FrameType> frameType = folly::none;
+  std::optional<FrameType> frameType = std::nullopt;
 
-  folly::Try<proxygen::WebTransport::StreamData> streamData;
-  // Keep reading the data until we can parse the frame type. Use a do/while so
-  // we only issue one read per iteration and also ensure we append any final
-  // data chunk that arrives with a FIN.
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  bool fin = false;
+
   do {
-    streamData =
+    auto streamData =
         co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
     if (!streamData.hasValue()) {
       break;
     }
-    readBuf.append(std::move(streamData->data));
+    // Accumulate data in the buffer
+    if (streamData->data) {
+      readBuf.append(std::move(streamData->data));
+    }
+    fin = streamData->fin;
+    // Try to parse frame type from the accumulated buffer
     frameType = getFrameType(readBuf);
-  } while (!frameType.hasValue() && !streamData->fin);
+  } while (!frameType.has_value() && !fin);
 
-  if (frameType.hasValue()) {
+  if (frameType.has_value() && readBuf.chainLength() > 0) {
+    // Create StreamData with the accumulated buffer
+    proxygen::WebTransport::StreamData accumulatedData{readBuf.move(), fin};
     if (*frameType == FrameType::CLIENT_SETUP) {
       // Process the frame as a CLIENT_SETUP
-      handleClientSetup(bh, readBuf.move());
+      handleClientSetup(bh, std::move(accumulatedData));
     } else if (*frameType == FrameType::SUBSCRIBE_NAMESPACE) {
-      // TODO: Handle SUBSCRIBE_ANNOUNCES on bidirectional stream
+      co_withExecutor(
+          exec_.get(),
+          co_withCancellation(
+              cancellationSource_.getToken(),
+              subscribeNamespaceReceiverReadLoop(
+                  std::move(bh), std::move(accumulatedData))))
+          .start();
     }
   }
 }
@@ -5289,7 +5388,7 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
 void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
   negotiatedVersion_ = negotiatedVersion;
   moqFrameWriter_.initializeVersion(*negotiatedVersion_);
-  controlCodec_.initializeVersion(*negotiatedVersion_);
+  controlCodec_->initializeVersion(*negotiatedVersion_);
   for (const auto& versionBaton : subgroupsWaitingForVersion_) {
     versionBaton->signal();
   }
@@ -5517,6 +5616,14 @@ void MoQSession::onPublishNamespaceCancel(
 }
 
 void MoQSession::onSubscribeNamespace(SubscribeNamespace subscribeNamespace) {
+  auto subNsReply = std::make_unique<ControlStreamSubNsReply>(
+      moqFrameWriter_, controlWriteBuf_, controlWriteEvent_);
+  onSubscribeNamespaceImpl(subscribeNamespace, std::move(subNsReply));
+}
+
+void MoQSession::onSubscribeNamespaceImpl(
+    const SubscribeNamespace& subscribeNamespace,
+    std::unique_ptr<SubNSReply>&& subNsReply) {
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeNamespace.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
@@ -5527,14 +5634,16 @@ void MoQSession::onSubscribeNamespace(SubscribeNamespace subscribeNamespace) {
         SubscribeNamespaceError{
             subscribeNamespace.requestID,
             SubscribeNamespaceErrorCode::GOING_AWAY,
-            "Session received GOAWAY"});
+            "Session received GOAWAY"},
+        std::move(subNsReply));
     return;
   }
   subscribeNamespaceError(
       SubscribeNamespaceError{
           subscribeNamespace.requestID,
           SubscribeNamespaceErrorCode::NOT_SUPPORTED,
-          "SubscribeNamespace not supported by simple client"});
+          "SubscribeNamespace not supported by simple client"},
+      std::move(subNsReply));
 }
 
 void MoQSession::onUnsubscribeNamespace(
@@ -5596,17 +5705,15 @@ void MoQSession::publishNamespaceError(
 }
 
 void MoQSession::subscribeNamespaceError(
-    const SubscribeNamespaceError& subscribeNamespaceError) {
+    const SubscribeNamespaceError& subscribeNamespaceError,
+    std::unique_ptr<SubNSReply>&& subNsReply) {
   XLOG(DBG1) << __func__ << " reqID=" << subscribeNamespaceError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_,
       onSubscribeNamespaceError,
       subscribeNamespaceError.errorCode);
-  auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_,
-      subscribeNamespaceError,
-      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  auto res = subNsReply->error(subscribeNamespaceError);
   if (!res) {
     XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
     return;
@@ -5614,7 +5721,6 @@ void MoQSession::subscribeNamespaceError(
   if (logger_) {
     logger_->logSubscribeNamespaceError(subscribeNamespaceError);
   }
-  controlWriteEvent_.signal();
 }
 
 // Static methods
@@ -5671,6 +5777,39 @@ void MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
   if (version) {
     initializeNegotiatedVersion(*version);
   }
+}
+
+WriteResult ControlStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
+  auto res =
+      moqFrameWriter_.writeSubscribeNamespaceOk(controlWriteBuf_, subNsOk);
+  controlWriteEvent_.signal();
+  return res;
+}
+
+WriteResult ControlStreamSubNsReply::error(
+    const SubscribeNamespaceError& subNsError) {
+  auto res = moqFrameWriter_.writeRequestError(
+      controlWriteBuf_, subNsError, FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  controlWriteEvent_.signal();
+  return res;
+}
+
+WriteResult SeparateStreamSubNsReplyBase::error(
+    const SubscribeNamespaceError& subNsError) {
+  if (okSent_) {
+    // We already sent OK (SubscribeNamespaceOk) on this stream.
+    // After that, the stream should only carry NAMESPACE/NAMESPACE_DONE.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (namespaceFrameSent_) {
+    // We already sent at least one NAMESPACE frame.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeRequestError(
+      writeBuf_, subNsError, FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+  errorSent_ = true;
+  return res;
 }
 
 } // namespace moxygen

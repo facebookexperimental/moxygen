@@ -32,6 +32,7 @@ class MoQCodec {
   }
 
   void initializeVersion(uint64_t version) {
+    negotiatedVersion_ = version;
     moqFrameParser_.initializeVersion(version);
   }
 
@@ -52,6 +53,7 @@ class MoQCodec {
   folly::IOBufQueue ingress_{folly::IOBufQueue::cacheChainLength()};
 
   std::optional<ErrorCode> connError_;
+  std::optional<uint64_t> negotiatedVersion_;
   ObjectHeader curObjectHeader_;
   MoQFrameParser moqFrameParser_;
 };
@@ -62,36 +64,32 @@ class MoQControlCodec : public MoQCodec {
    public:
     ~ControlCallback() override = default;
 
-    virtual void onFrame(FrameType /*frameType*/) {}
-    virtual void onClientSetup(ClientSetup clientSetup) = 0;
-    virtual void onServerSetup(ServerSetup serverSetup) = 0;
-    virtual void onSubscribe(SubscribeRequest subscribeRequest) = 0;
-    virtual void onRequestUpdate(RequestUpdate requestUpdate) = 0;
-    virtual void onSubscribeOk(SubscribeOk subscribeOk) = 0;
-    virtual void onRequestOk(RequestOk ok, FrameType frameType) = 0;
-    virtual void onRequestError(RequestError error, FrameType frameType) = 0;
-    virtual void onPublishDone(PublishDone publishDone) = 0;
-    virtual void onUnsubscribe(Unsubscribe unsubscribe) = 0;
-    virtual void onPublish(PublishRequest publish) = 0;
-    virtual void onPublishOk(PublishOk publishOk) = 0;
-    virtual void onMaxRequestID(MaxRequestID maxSubId) = 0;
-    virtual void onRequestsBlocked(RequestsBlocked subscribesBlocked) = 0;
-    virtual void onFetch(Fetch fetch) = 0;
-    virtual void onFetchCancel(FetchCancel fetchCancel) = 0;
-    virtual void onFetchOk(FetchOk fetchOk) = 0;
-    virtual void onPublishNamespace(PublishNamespace publishNamespace) = 0;
-    virtual void onPublishNamespaceDone(
-        PublishNamespaceDone publishNamespaceDone) = 0;
-    virtual void onPublishNamespaceCancel(
-        PublishNamespaceCancel publishNamespaceCancel) = 0;
-    virtual void onSubscribeNamespace(
-        SubscribeNamespace subscribeNamespace) = 0;
-    virtual void onUnsubscribeNamespace(
-        UnsubscribeNamespace unsubscribeNamespace) = 0;
-    virtual void onTrackStatus(TrackStatus trackStatus) = 0;
-    virtual void onTrackStatusOk(TrackStatusOk trackStatusOk) = 0;
-    virtual void onTrackStatusError(TrackStatusError trackStatusError) = 0;
-    virtual void onGoaway(Goaway goaway) = 0;
+    virtual void onFrame(FrameType) {}
+    virtual void onClientSetup(ClientSetup) {}
+    virtual void onServerSetup(ServerSetup) {}
+    virtual void onSubscribe(SubscribeRequest) {}
+    virtual void onRequestUpdate(RequestUpdate) {}
+    virtual void onSubscribeOk(SubscribeOk) {}
+    virtual void onRequestOk(RequestOk, FrameType) {}
+    virtual void onRequestError(RequestError, FrameType) {}
+    virtual void onPublishDone(PublishDone) {}
+    virtual void onUnsubscribe(Unsubscribe) {}
+    virtual void onPublish(PublishRequest) {}
+    virtual void onPublishOk(PublishOk) {}
+    virtual void onMaxRequestID(MaxRequestID) {}
+    virtual void onRequestsBlocked(RequestsBlocked) {}
+    virtual void onFetch(Fetch) {}
+    virtual void onFetchCancel(FetchCancel) {}
+    virtual void onFetchOk(FetchOk) {}
+    virtual void onPublishNamespace(PublishNamespace) {}
+    virtual void onPublishNamespaceDone(PublishNamespaceDone) {}
+    virtual void onPublishNamespaceCancel(PublishNamespaceCancel) {}
+    virtual void onSubscribeNamespace(SubscribeNamespace) {}
+    virtual void onUnsubscribeNamespace(UnsubscribeNamespace) {}
+    virtual void onTrackStatus(TrackStatus) {}
+    virtual void onTrackStatusOk(TrackStatusOk) {}
+    virtual void onTrackStatusError(TrackStatusError) {}
+    virtual void onGoaway(Goaway) {}
   };
 
   enum class Direction { CLIENT, SERVER };
@@ -105,8 +103,8 @@ class MoQControlCodec : public MoQCodec {
   // If ParseResult::BLOCKED is returned, must call onIngress again to restart
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
- private:
-  bool checkFrameAllowed(FrameType f) {
+ protected:
+  virtual bool checkFrameAllowed(FrameType f) {
     switch (f) {
       case FrameType::SUBSCRIBE:
       case FrameType::SUBSCRIBE_UPDATE:
@@ -116,7 +114,6 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_NAMESPACE:
       // case FrameType::PUBLISH_NAMESPACE_OK:
       case FrameType::REQUEST_OK:
-      case FrameType::PUBLISH_NAMESPACE_ERROR:
       case FrameType::PUBLISH_NAMESPACE_DONE:
       case FrameType::UNSUBSCRIBE:
       case FrameType::PUBLISH_DONE:
@@ -125,13 +122,8 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_ERROR:
       case FrameType::PUBLISH_NAMESPACE_CANCEL:
       case FrameType::TRACK_STATUS:
-      case FrameType::TRACK_STATUS_OK:
       case FrameType::TRACK_STATUS_ERROR:
       case FrameType::GOAWAY:
-      case FrameType::SUBSCRIBE_NAMESPACE:
-      case FrameType::SUBSCRIBE_NAMESPACE_OK:
-      case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
-      case FrameType::UNSUBSCRIBE_NAMESPACE:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
       case FrameType::LEGACY_CLIENT_SETUP:
@@ -143,6 +135,18 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::FETCH_OK:
       case FrameType::FETCH_ERROR:
         return true;
+      case FrameType::SUBSCRIBE_NAMESPACE:
+      case FrameType::SUBSCRIBE_NAMESPACE_OK:
+      case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
+      case FrameType::UNSUBSCRIBE_NAMESPACE:
+      // In draft 16, NAMESPACE is PUBLISH_NAMESPACE_ERROR (0x8) and
+      // NAMESPACE_DONE is TRACK_STATUS_OK (0xE). They must be on a
+      // separate bidi stream, not the control stream.
+      case FrameType::PUBLISH_NAMESPACE_ERROR:
+      case FrameType::TRACK_STATUS_OK:
+        return true;
+        // TODO: change to return getDraftMajorVersion(*negotiatedVersion_) <
+        // 16; once we actually send the SUBSCRIBE_NAMESPACE on a bidi stream
     }
     return false;
   }
@@ -160,6 +164,23 @@ class MoQControlCodec : public MoQCodec {
   };
   ParseState parseState_{ParseState::FRAME_HEADER_TYPE};
   bool seenSetup_{false};
+};
+
+class MoQSubNsReceiverCodec : public MoQControlCodec {
+ public:
+  // The direction doesn't really matter, so I'm just setting it
+  // to SERVER for now.
+  explicit MoQSubNsReceiverCodec(ControlCallback* callback)
+      : MoQControlCodec(Direction::SERVER, callback) {
+    // Bypass the setup gating in MoQControlCodec::parseFrame().
+    seenSetup_ = true;
+  }
+
+ protected:
+  bool checkFrameAllowed(FrameType f) override {
+    return f == FrameType::SUBSCRIBE_NAMESPACE ||
+        f == FrameType::REQUEST_UPDATE;
+  }
 };
 
 class MoQObjectStreamCodec : public MoQCodec {

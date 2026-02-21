@@ -906,7 +906,9 @@ void MoQRelaySession::unsubscribeNamespace(
 }
 
 // SubscribeNamespace publisher methods
-void MoQRelaySession::onSubscribeNamespace(SubscribeNamespace sa) {
+void MoQRelaySession::onSubscribeNamespaceImpl(
+    const SubscribeNamespace& sa,
+    std::unique_ptr<SubNSReply>&& subNsReply) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   if (logger_) {
@@ -922,14 +924,18 @@ void MoQRelaySession::onSubscribeNamespace(SubscribeNamespace sa) {
         SubscribeNamespaceError{
             sa.requestID,
             SubscribeNamespaceErrorCode::NOT_SUPPORTED,
-            "Not a publisher"});
+            "Not a publisher"},
+        std::move(subNsReply));
     return;
   }
-  co_withExecutor(exec_.get(), handleSubscribeNamespace(std::move(sa))).start();
+  co_withExecutor(
+      exec_.get(), handleSubscribeNamespace(sa, std::move(subNsReply)))
+      .start();
 }
 
 folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
-    SubscribeNamespace subAnn) {
+    SubscribeNamespace subAnn,
+    std::unique_ptr<SubNSReply> subNsReply) {
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto subAnnResult = co_await co_awaitTry(co_withCancellation(
@@ -942,7 +948,8 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
         SubscribeNamespaceError{
             subAnn.requestID,
             SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-            subAnnResult.exception().what().toStdString()});
+            subAnnResult.exception().what().toStdString()},
+        std::move(subNsReply));
     co_return;
   }
   if (subAnnResult->hasError()) {
@@ -951,11 +958,11 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
     auto subAnnErr = std::move(subAnnResult->error());
     subAnnErr.requestID = subAnn.requestID; // In case app got it wrong
     // trackNamespacePrefix removed from unified RequestError
-    subscribeNamespaceError(subAnnErr);
+    subscribeNamespaceError(subAnnErr, std::move(subNsReply));
   } else {
     auto handle = std::move(subAnnResult->value());
     auto subAnnOk = handle->subscribeNamespaceOk();
-    subscribeNamespaceOk(subAnnOk);
+    subscribeNamespaceOk(subAnnOk, std::move(subNsReply));
 
     // Store by RequestID (primary key)
     subscribeNamespaceHandles_[subAnn.requestID] = std::move(handle);
@@ -967,10 +974,12 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
   }
 }
 
-void MoQRelaySession::subscribeNamespaceOk(const SubscribeNamespaceOk& saOk) {
+void MoQRelaySession::subscribeNamespaceOk(
+    const SubscribeNamespaceOk& saOk,
+    std::unique_ptr<SubNSReply>&& subNsReply) {
   XLOG(DBG1) << __func__ << " id=" << saOk.requestID << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeNamespaceSuccess);
-  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(controlWriteBuf_, saOk);
+  auto res = subNsReply->ok(saOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeNamespaceOk failed sess=" << this;
     return;
@@ -1093,6 +1102,62 @@ void MoQRelaySession::handleSubscribeNamespaceOkFromRequestOk(
   }
 
   subscribeNamespacePtr->setValue(requestOk);
+}
+
+WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
+  if (errorSent_) {
+    // We already sent an ERROR; protocol doesn't allow OK after that.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(writeBuf_, subNsOk);
+  writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+  okSent_ = true;
+  flushPendingMessages();
+  return res;
+}
+
+WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
+  if (errorSent_) {
+    // No NAMESPACE frames allowed after we send an ERROR on this stream.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeNamespace(writeBuf_, msg);
+  namespaceFrameSent_ = true;
+  if (okSent_) {
+    writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+  } else {
+    pendingBuf_.append(writeBuf_.move());
+  }
+  return res;
+}
+
+WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
+    const NamespaceDone& msg) {
+  if (errorSent_) {
+    // No NAMESPACE_DONE frames allowed after we send an ERROR on this stream.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeNamespaceDone(writeBuf_, msg);
+  if (okSent_) {
+    writeHandle_->writeStreamData(writeBuf_.move(), true /* fin */, nullptr);
+  } else {
+    pendingBuf_.append(writeBuf_.move());
+    pendingFin_ = true;
+  }
+  return res;
+}
+
+void SeparateStreamSubNsReply::flushPendingMessages() {
+  if (errorSent_) {
+    // If we sent error before OK, we should never flush queued NAMESPACE
+    // frames.
+    pendingBuf_.move();
+    pendingFin_ = false;
+    return;
+  }
+  if (!pendingBuf_.empty()) {
+    writeHandle_->writeStreamData(pendingBuf_.move(), pendingFin_, nullptr);
+  }
 }
 
 } // namespace moxygen

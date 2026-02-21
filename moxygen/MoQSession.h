@@ -51,6 +51,53 @@ struct MoQSettings {
       std::chrono::seconds(2)};
 };
 
+class SubNSReply {
+ public:
+  explicit SubNSReply(MoQFrameWriter& moqFrameWriter)
+      : moqFrameWriter_(moqFrameWriter) {}
+
+  virtual ~SubNSReply() = default;
+
+  virtual WriteResult ok(const SubscribeNamespaceOk&) {
+    XLOG(FATAL) << "Unimplemented";
+    folly::assume_unreachable();
+  }
+  virtual WriteResult error(const SubscribeNamespaceError&) = 0;
+  virtual WriteResult namespaceMsg(const Namespace&) {
+    XLOG(FATAL) << "Unimplemented";
+    folly::assume_unreachable();
+  }
+  virtual WriteResult namespaceDoneMsg(const NamespaceDone&) {
+    XLOG(FATAL) << "Unimplemented";
+    folly::assume_unreachable();
+  }
+
+ protected:
+  MoQFrameWriter& moqFrameWriter_;
+};
+
+class SeparateStreamSubNsReplyBase : public SubNSReply {
+ public:
+  SeparateStreamSubNsReplyBase(
+      MoQFrameWriter& moqFrameWriter,
+      folly::IOBufQueue& writeBuf,
+      proxygen::WebTransport::StreamWriteHandle* writeHandle)
+      : SubNSReply(moqFrameWriter),
+        writeBuf_(writeBuf),
+        writeHandle_(writeHandle) {}
+
+  ~SeparateStreamSubNsReplyBase() override = default;
+
+  WriteResult error(const SubscribeNamespaceError&) override;
+
+ protected:
+  folly::IOBufQueue& writeBuf_;
+  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
+  bool okSent_{false};
+  bool namespaceFrameSent_{false};
+  bool errorSent_{false};
+};
+
 class MoQSession : public Subscriber,
                    public Publisher,
                    public MoQControlCodec::ControlCallback,
@@ -121,6 +168,13 @@ class MoQSession : public Subscriber,
 
   virtual std::optional<uint64_t> getNegotiatedVersion() const {
     return negotiatedVersion_;
+  }
+
+  virtual std::unique_ptr<SubNSReply> getSubNsReply(
+      folly::IOBufQueue& bufQueue,
+      proxygen::WebTransport::StreamWriteHandle* writeHandle) {
+    return std::make_unique<SeparateStreamSubNsReplyBase>(
+        moqFrameWriter_, bufQueue, writeHandle);
   }
 
   [[nodiscard]] MoQExecutor* getExecutor() const {
@@ -356,7 +410,7 @@ class MoQSession : public Subscriber,
 
   void handleClientSetup(
       proxygen::WebTransport::BidiStreamHandle bh,
-      std::unique_ptr<folly::IOBuf> initialData = nullptr) noexcept;
+      proxygen::WebTransport::StreamData initialData) noexcept;
 
   // Used to tease apart the control stream from subscribe namespace streams.
   // This is only called for draft >= 16.
@@ -403,11 +457,16 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle,
-      std::unique_ptr<folly::IOBuf> initialData = nullptr);
+      proxygen::WebTransport::StreamData initialData,
+      MoQControlCodec* controlCodec);
 
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
+
+  folly::coro::Task<void> subscribeNamespaceReceiverReadLoop(
+      proxygen::WebTransport::BidiStreamHandle bh,
+      proxygen::WebTransport::StreamData initialData);
 
   class TrackPublisherImpl;
   class FetchPublisherImpl;
@@ -521,6 +580,8 @@ class MoQSession : public Subscriber,
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
 
+  std::shared_ptr<MoQControlCodec> controlCodec_;
+
   // Track management maps
   folly::F14FastMap<
       TrackAlias,
@@ -563,7 +624,12 @@ class MoQSession : public Subscriber,
   void publishNamespaceError(
       const PublishNamespaceError& publishNamespaceError);
   void subscribeNamespaceError(
-      const SubscribeNamespaceError& subscribeNamespaceError);
+      const SubscribeNamespaceError& subscribeNamespaceError,
+      std::unique_ptr<SubNSReply>&& subNsReply);
+
+  virtual void onSubscribeNamespaceImpl(
+      const SubscribeNamespace& subscribeNamespace,
+      std::unique_ptr<SubNSReply>&& subNsReply);
 
   // REQUEST_UPDATE error response - available for subclass handlers
   void requestUpdateError(
@@ -793,6 +859,9 @@ class MoQSession : public Subscriber,
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
 
+ protected:
+  std::optional<uint64_t> negotiatedVersion_;
+
  private:
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
@@ -824,8 +893,6 @@ class MoQSession : public Subscriber,
   MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
 
-  std::optional<uint64_t> negotiatedVersion_;
-  MoQControlCodec controlCodec_;
   MoQTokenCache tokenCache_{1024};
 
   // Cached transport info to avoid expensive getTransportInfo calls

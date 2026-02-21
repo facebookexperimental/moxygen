@@ -51,7 +51,7 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(
       void,
       onSubscribeNamespace,
-      (SubscribeNamespace publishNamespace));
+      (SubscribeNamespace subscribeNamespace));
 
   MOCK_METHOD(
       void,
