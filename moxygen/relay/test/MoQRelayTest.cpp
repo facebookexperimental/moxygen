@@ -2133,44 +2133,29 @@ TEST_F(MoQRelayTest, TrackStatusNonExistentTrack) {
   removeSession(clientSession);
 }
 
-// Test: TrackStatus on existing track - successful forward
+// Test: TrackStatus on existing track - returns forwarder state (no upstream call)
 TEST_F(MoQRelayTest, TrackStatusSuccessfulForward) {
   auto publisherSession = createMockSession();
   auto clientSession = createMockSession();
 
-  // Setup: Publish track
-  doPublishNamespace(publisherSession, kTestNamespace);
   doPublish(publisherSession, kTestTrackName);
 
-  // Subscribe to the track from another session (creates upstream subscription)
   auto consumer = createMockConsumer();
   subscribeToTrack(clientSession, kTestTrackName, consumer, RequestID(1));
 
-  // Now request trackStatus
   TrackStatus trackStatus;
   trackStatus.fullTrackName = kTestTrackName;
   trackStatus.requestID = RequestID(2);
-
-  // Mock the upstream trackStatus call to return success
-  TrackStatusOk statusOk;
-  statusOk.requestID = RequestID(2);
-  statusOk.trackAlias = TrackAlias(0);
-  statusOk.largest = AbsoluteLocation{100, 50};
-
-  EXPECT_CALL(*publisherSession, trackStatus(_))
-      .WillOnce([statusOk](auto /*ts*/) {
-        return folly::coro::makeTask<Publisher::TrackStatusResult>(statusOk);
-      });
 
   withSessionContext(clientSession, [&]() {
     auto task = relay_->trackStatus(trackStatus);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
 
-    // Should successfully forward and return the result
+    // Should return status from local forwarder
+    // Since no data was sent, statusCode should be TRACK_NOT_STARTED
     EXPECT_TRUE(res.hasValue());
-    EXPECT_TRUE(res.value().largest.has_value());
-    EXPECT_EQ(res.value().largest->group, 100);
-    EXPECT_EQ(res.value().largest->object, 50);
+    EXPECT_EQ(res.value().statusCode, TrackStatusCode::TRACK_NOT_STARTED);
+    EXPECT_EQ(res.value().fullTrackName, kTestTrackName);
   });
 
   removeSession(publisherSession);
