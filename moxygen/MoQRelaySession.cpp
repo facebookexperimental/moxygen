@@ -1014,7 +1014,7 @@ void MoQRelaySession::unsubscribeNamespace(
 // SubscribeNamespace publisher methods
 void MoQRelaySession::onSubscribeNamespaceImpl(
     const SubscribeNamespace& sa,
-    std::unique_ptr<SubNSReply>&& subNsReply) {
+    std::shared_ptr<SubNSReply> subNsReply) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   if (logger_) {
@@ -1034,19 +1034,54 @@ void MoQRelaySession::onSubscribeNamespaceImpl(
         std::move(subNsReply));
     return;
   }
-  co_withExecutor(
-      exec_.get(), handleSubscribeNamespace(sa, std::move(subNsReply)))
+  co_withExecutor(exec_.get(), handleSubscribeNamespace(sa, subNsReply))
       .start();
 }
 
+class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
+ public:
+  MoQNamespacePublishHandle(
+      std::shared_ptr<SubNSReply> subNsReply,
+      uint64_t negotiatedVersion)
+      : subNsReply_(std::move(subNsReply)) {
+    moqFrameWriter_.initializeVersion(negotiatedVersion);
+  }
+
+  void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override {
+    Namespace ns;
+    ns.trackNamespaceSuffix = trackNamespaceSuffix;
+    auto writeResult = subNsReply_->namespaceMsg(ns);
+    if (!writeResult) {
+      XLOG(ERR) << "writeNamespace failed";
+      return;
+    }
+  }
+
+  void namespaceDoneMsg(const TrackNamespace& trackNamespaceSuffix) override {
+    NamespaceDone namespaceDone;
+    namespaceDone.trackNamespaceSuffix = trackNamespaceSuffix;
+    auto writeResult = subNsReply_->namespaceDoneMsg(namespaceDone);
+    if (!writeResult) {
+      XLOG(ERR) << "writeNamespaceDone failed";
+      return;
+    }
+  }
+
+ private:
+  std::shared_ptr<SubNSReply> subNsReply_;
+  MoQFrameWriter moqFrameWriter_;
+};
+
 folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
     SubscribeNamespace subAnn,
-    std::unique_ptr<SubNSReply> subNsReply) {
+    std::shared_ptr<SubNSReply> subNsReply) {
   folly::RequestContextScopeGuard guard;
   setRequestSession();
+  auto publishHandle = std::make_shared<MoQNamespacePublishHandle>(
+      subNsReply, *negotiatedVersion_);
   auto subAnnResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
-      publishHandler_->subscribeNamespace(subAnn, nullptr)));
+      publishHandler_->subscribeNamespace(subAnn, publishHandle)));
   if (subAnnResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subAnnResult.exception().what().toStdString();
@@ -1082,7 +1117,7 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
 
 void MoQRelaySession::subscribeNamespaceOk(
     const SubscribeNamespaceOk& saOk,
-    std::unique_ptr<SubNSReply>&& subNsReply) {
+    std::shared_ptr<SubNSReply>&& subNsReply) {
   XLOG(DBG1) << __func__ << " id=" << saOk.requestID << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeNamespaceSuccess);
   auto res = subNsReply->ok(saOk);

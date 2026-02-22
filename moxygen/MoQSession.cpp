@@ -2527,52 +2527,6 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   controlWriteEvent_.signal();
 }
 
-class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
- public:
-  MoQNamespacePublishHandle(
-      proxygen::WebTransport::StreamWriteHandle* writeHandle,
-      uint64_t negotiatedVersion)
-      : writeHandle_(writeHandle) {
-    moqFrameWriter_.initializeVersion(negotiatedVersion);
-  }
-
-  void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override {
-    Namespace ns;
-    ns.trackNamespaceSuffix = trackNamespaceSuffix;
-    auto writeResult = moqFrameWriter_.writeNamespace(writeBuf_, ns);
-    if (!writeResult) {
-      XLOG(ERR) << "writeNamespace failed";
-      return;
-    }
-    auto res = writeHandle_->writeStreamData(writeBuf_.move(), false, nullptr);
-    if (!res) {
-      XLOG(ERR) << "writeStreamData for NAMESPACE failed error="
-                << uint64_t(res.error());
-    }
-  }
-
-  void namespaceDoneMsg(const TrackNamespace& trackNamespaceSuffix) override {
-    NamespaceDone namespaceDone;
-    namespaceDone.trackNamespaceSuffix = trackNamespaceSuffix;
-    auto writeResult =
-        moqFrameWriter_.writeNamespaceDone(writeBuf_, namespaceDone);
-    if (!writeResult) {
-      XLOG(ERR) << "writeNamespaceDone failed";
-      return;
-    }
-    auto res = writeHandle_->writeStreamData(writeBuf_.move(), true, nullptr);
-    if (!res) {
-      XLOG(ERR) << "writeStreamData for NAMESPACE_DONE failed error="
-                << uint64_t(res.error());
-    }
-  }
-
- private:
-  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
-  MoQFrameWriter moqFrameWriter_;
-  folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
-};
-
 folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle,
     proxygen::WebTransport::StreamData initialData,
@@ -5643,14 +5597,14 @@ void MoQSession::onPublishNamespaceCancel(
 }
 
 void MoQSession::onSubscribeNamespace(SubscribeNamespace subscribeNamespace) {
-  auto subNsReply = std::make_unique<ControlStreamSubNsReply>(
+  auto subNsReply = std::make_shared<ControlStreamSubNsReply>(
       moqFrameWriter_, controlWriteBuf_, controlWriteEvent_);
   onSubscribeNamespaceImpl(subscribeNamespace, std::move(subNsReply));
 }
 
 void MoQSession::onSubscribeNamespaceImpl(
     const SubscribeNamespace& subscribeNamespace,
-    std::unique_ptr<SubNSReply>&& subNsReply) {
+    std::shared_ptr<SubNSReply> subNsReply) {
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeNamespace.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
@@ -5733,7 +5687,7 @@ void MoQSession::publishNamespaceError(
 
 void MoQSession::subscribeNamespaceError(
     const SubscribeNamespaceError& subscribeNamespaceError,
-    std::unique_ptr<SubNSReply>&& subNsReply) {
+    std::shared_ptr<SubNSReply>&& subNsReply) {
   XLOG(DBG1) << __func__ << " reqID=" << subscribeNamespaceError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(

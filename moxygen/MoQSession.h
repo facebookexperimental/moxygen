@@ -170,10 +170,10 @@ class MoQSession : public Subscriber,
     return negotiatedVersion_;
   }
 
-  virtual std::unique_ptr<SubNSReply> getSubNsReply(
+  virtual std::shared_ptr<SubNSReply> getSubNsReply(
       folly::IOBufQueue& bufQueue,
       proxygen::WebTransport::StreamWriteHandle* writeHandle) {
-    return std::make_unique<SeparateStreamSubNsReplyBase>(
+    return std::make_shared<SeparateStreamSubNsReplyBase>(
         moqFrameWriter_, bufQueue, writeHandle);
   }
 
@@ -627,11 +627,11 @@ class MoQSession : public Subscriber,
       const PublishNamespaceError& publishNamespaceError);
   void subscribeNamespaceError(
       const SubscribeNamespaceError& subscribeNamespaceError,
-      std::unique_ptr<SubNSReply>&& subNsReply);
+      std::shared_ptr<SubNSReply>&& subNsReply);
 
   virtual void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
-      std::unique_ptr<SubNSReply>&& subNsReply);
+      std::shared_ptr<SubNSReply> subNsReply);
 
   // REQUEST_UPDATE error response - available for subclass handlers
   void requestUpdateError(
