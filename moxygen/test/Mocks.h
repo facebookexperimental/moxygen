@@ -59,6 +59,8 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
       (UnsubscribeNamespace unsubscribeNamespace));
   MOCK_METHOD(void, onTrackStatus, (TrackStatus trackStatus));
   MOCK_METHOD(void, onTrackStatusOk, (TrackStatusOk trackStatusOk));
+  MOCK_METHOD(void, onNamespace, (Namespace ns));
+  MOCK_METHOD(void, onNamespaceDone, (NamespaceDone nsDone));
   MOCK_METHOD(void, onTrackStatusError, (TrackStatusError trackStatusError));
   MOCK_METHOD(void, onGoaway, (Goaway goaway));
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));

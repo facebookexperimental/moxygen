@@ -64,6 +64,7 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     objectStreamCodec_.initializeVersion(GetParam());
     serverControlCodec_.initializeVersion(GetParam());
     clientControlCodec_.initializeVersion(GetParam());
+    subscribeNamespaceCodec_.initializeVersion(GetParam());
   }
 
   void testAll(MoQControlCodec::Direction dir) {
@@ -204,6 +205,9 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
   MoQControlCodec clientControlCodec_{
       MoQControlCodec::Direction::CLIENT,
       &clientControlCodecCallback_};
+
+  testing::NiceMock<MockMoQCodecCallback> subNsCodecCallback_;
+  MoQSubNsSenderCodec subscribeNamespaceCodec_{&subNsCodecCallback_};
 };
 
 TEST_P(MoQCodecTest, All) {
@@ -901,6 +905,70 @@ TEST_P(MoQCodecTest, FetchEndOfNonExistentRange) {
 
   auto result = objectStreamCodec_.onIngress(writeBuf.move(), false);
   EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
+TEST_P(MoQCodecTest, NamespaceFrame) {
+  if (getDraftMajorVersion(GetParam()) < 16) {
+    GTEST_SKIP() << "NAMESPACE not supported in draft < 16";
+  }
+  folly::IOBufQueue controlWriteBuf{folly::IOBufQueue::cacheChainLength()};
+  folly::IOBufQueue subNsWriteBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Send setup first to establish the connection
+  auto setupFrame = [version = GetParam()]() {
+    ServerSetup setup{.selectedVersion = version};
+    setup.params.insertParam(
+        Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+    return setup;
+  }();
+  writeServerSetup(controlWriteBuf, setupFrame, GetParam());
+
+  // Write a NAMESPACE frame
+  Namespace ns;
+  ns.trackNamespaceSuffix =
+      TrackNamespace(std::vector<std::string>({"test", "namespace"}));
+  moqFrameWriter_.writeNamespace(subNsWriteBuf, ns);
+
+  EXPECT_CALL(clientControlCodecCallback_, onServerSetup(testing::_));
+  EXPECT_CALL(clientControlCodecCallback_, onFrame(testing::_));
+
+  EXPECT_CALL(subNsCodecCallback_, onFrame(testing::_));
+  EXPECT_CALL(subNsCodecCallback_, onNamespace(testing::_));
+
+  clientControlCodec_.onIngress(controlWriteBuf.move(), true);
+  subscribeNamespaceCodec_.onIngress(subNsWriteBuf.move(), true);
+}
+
+TEST_P(MoQCodecTest, NamespaceDoneFrame) {
+  if (getDraftMajorVersion(GetParam()) < 16) {
+    GTEST_SKIP() << "NAMESPACE_DONE not supported in draft < 16";
+  }
+  folly::IOBufQueue controlWriteBuf{folly::IOBufQueue::cacheChainLength()};
+  folly::IOBufQueue subNsWriteBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Send setup first to establish the connection
+  auto setupFrame = [version = GetParam()]() {
+    ServerSetup setup{.selectedVersion = version};
+    setup.params.insertParam(
+        Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+    return setup;
+  }();
+  writeServerSetup(controlWriteBuf, setupFrame, GetParam());
+
+  // Write a NAMESPACE_DONE frame
+  NamespaceDone namespaceDone;
+  namespaceDone.trackNamespaceSuffix =
+      TrackNamespace(std::vector<std::string>({"test", "namespace"}));
+  moqFrameWriter_.writeNamespaceDone(subNsWriteBuf, namespaceDone);
+
+  EXPECT_CALL(clientControlCodecCallback_, onServerSetup(testing::_));
+  EXPECT_CALL(clientControlCodecCallback_, onFrame(testing::_));
+
+  EXPECT_CALL(subNsCodecCallback_, onFrame(testing::_));
+  EXPECT_CALL(subNsCodecCallback_, onNamespaceDone(testing::_));
+
+  clientControlCodec_.onIngress(controlWriteBuf.move(), true);
+  subscribeNamespaceCodec_.onIngress(subNsWriteBuf.move(), true);
 }
 
 INSTANTIATE_TEST_SUITE_P(
