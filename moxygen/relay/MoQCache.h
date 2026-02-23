@@ -16,6 +16,8 @@
 #include <moxygen/Publisher.h>
 #include <moxygen/util/BidiIterator.h>
 #include <moxygen/util/FetchIntervalSet.h>
+#include <chrono>
+#include <functional>
 #include <limits>
 
 namespace moxygen {
@@ -26,11 +28,15 @@ constexpr size_t kDefaultMaxCachedGroupsPerTrack = 3;
 
 class MoQCache {
  public:
+  using SteadyClock = std::chrono::steady_clock;
+  using TimePoint = SteadyClock::time_point;
+
   explicit MoQCache(
       size_t maxCachedTracks = kDefaultMaxCachedTracks,
       size_t maxCachedGroupsPerTrack = kDefaultMaxCachedGroupsPerTrack)
       : maxCachedTracks_(maxCachedTracks),
-        maxCachedGroupsPerTrack_(maxCachedGroupsPerTrack) {}
+        maxCachedGroupsPerTrack_(maxCachedGroupsPerTrack),
+        clock_([]() { return SteadyClock::now(); }) {}
 
   // Returns a filter for a subscribe that writes objects to the cache and
   // passes to the next consumer
@@ -68,7 +74,7 @@ class MoQCache {
     if (it == cache_.end()) {
       return false;
     }
-    return getCachedObjectMaybe(*it->second, obj).has_value();
+    return getCachedObjectMaybe(*it->second, obj, now()).has_value();
   }
 
   // Setters for testing - update cache limits and evict if necessary
@@ -92,6 +98,19 @@ class MoQCache {
     }
   }
 
+  void setMaxCacheDuration(
+      const FullTrackName& ftn,
+      std::chrono::milliseconds duration);
+  void clearMaxCacheDuration(const FullTrackName& ftn);
+
+  TimePoint now() const {
+    return clock_();
+  }
+
+  void setClockForTesting(std::function<TimePoint()> clock) {
+    clock_ = std::move(clock);
+  }
+
   // Entry for single cached object
   struct CacheEntry {
     CacheEntry(
@@ -100,13 +119,15 @@ class MoQCache {
         Extensions inExtensions,
         Payload inPayload,
         bool inComplete,
-        bool inForwardingPreferenceIsDatagram = false)
+        bool inForwardingPreferenceIsDatagram = false,
+        TimePoint inCachedAt = TimePoint::min())
         : subgroup(inSubgroup),
           status(inStatus),
           extensions(std::move(inExtensions)),
           payload(std::move(inPayload)),
           complete(inComplete),
-          forwardingPreferenceIsDatagram(inForwardingPreferenceIsDatagram) {}
+          forwardingPreferenceIsDatagram(inForwardingPreferenceIsDatagram),
+          cachedAt(inCachedAt) {}
 
     uint64_t subgroup{0};
     ObjectStatus status;
@@ -114,6 +135,7 @@ class MoQCache {
     Payload payload;
     bool complete{false};
     bool forwardingPreferenceIsDatagram{false};
+    TimePoint cachedAt;
   };
 
  private:
@@ -140,7 +162,8 @@ class MoQCache {
         const Extensions& extensions,
         Payload payload,
         bool complete,
-        bool forwardingPreferenceIsDatagram = false);
+        bool forwardingPreferenceIsDatagram,
+        TimePoint now);
     void cacheMissingStatus(uint64_t objectID, ObjectStatus status);
   };
 
@@ -163,6 +186,8 @@ class MoQCache {
     std::list<uint64_t> groupLRU;
     // Count of active fetch intervals (for O(1) canEvict check)
     size_t activeFetchCount{0};
+    // Optional max cache duration for this track
+    std::optional<std::chrono::milliseconds> maxCacheDuration;
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
@@ -231,9 +256,11 @@ class MoQCache {
   size_t maxCachedTracks_;
   size_t maxCachedGroupsPerTrack_;
 
-  std::optional<MoQCache::CacheEntry*> getCachedObjectMaybe(
-      CacheTrack& track,
-      AbsoluteLocation obj);
+  // Injectable clock for testing
+  std::function<TimePoint()> clock_;
+
+  std::optional<MoQCache::CacheEntry*>
+  getCachedObjectMaybe(CacheTrack& track, AbsoluteLocation obj, TimePoint now);
 
   folly::coro::Task<Publisher::FetchResult> fetchImpl(
       std::shared_ptr<FetchHandle> fetchHandle,

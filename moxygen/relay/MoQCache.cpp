@@ -11,7 +11,6 @@
 
 #include <folly/logging/xlog.h>
 
-// TTL / MAX_CACHE_DURATION
 // Maxmimum cache size / per track? Number of groups
 // Fancy: handle streaming incomplete objects (forwarder?)
 
@@ -144,7 +143,8 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
     const Extensions& extensions,
     Payload payload,
     bool complete,
-    bool forwardingPreferenceIsDatagram) {
+    bool forwardingPreferenceIsDatagram,
+    TimePoint now) {
   XLOG(DBG1) << "caching objID=" << objectID << " status=" << (uint32_t)status
              << " complete=" << uint32_t(complete);
   auto it = objects.find(objectID);
@@ -179,6 +179,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
     cachedObject->extensions = extensions;
     cachedObject->payload = std::move(payload);
     cachedObject->complete = complete;
+    cachedObject->cachedAt = now;
   } else {
     objects[objectID] = std::make_unique<CacheEntry>(
         subgroup,
@@ -186,7 +187,8 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
         extensions,
         std::move(payload),
         complete,
-        forwardingPreferenceIsDatagram);
+        forwardingPreferenceIsDatagram,
+        now);
   }
   if (objectID >= maxCachedObject) {
     maxCachedObject = objectID;
@@ -203,8 +205,16 @@ void MoQCache::CacheGroup::cacheMissingStatus(
   XLOG(DBG1) << "caching missing objID=" << objectID;
   static constexpr auto kInvalidSubgroup = std::numeric_limits<uint64_t>::max();
   // can't have status or payload mismatch
+  // Use TimePoint::max() so gaps never expire
   cacheObject(
-      kInvalidSubgroup, objectID, status, noExtensions(), nullptr, true);
+      kInvalidSubgroup,
+      objectID,
+      status,
+      noExtensions(),
+      nullptr,
+      true,
+      false,
+      TimePoint::max());
 }
 
 class MoQCache::FetchHandle : public Publisher::FetchHandle {
@@ -430,7 +440,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         ext,
         std::move(cPayload),
         true /* complete */,
-        false /* forwardingPreferenceIsDatagram */);
+        false /* forwardingPreferenceIsDatagram */,
+        cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -460,7 +471,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         ObjectStatus::NORMAL,
         extensions,
         initialPayload ? initialPayload->clone() : nullptr,
-        false);
+        false,
+        false,
+        cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -506,7 +519,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         ObjectStatus::END_OF_GROUP,
         noExtensions(),
         nullptr,
-        true);
+        true,
+        false,
+        cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -525,7 +540,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         ObjectStatus::END_OF_TRACK,
         noExtensions(),
         nullptr,
-        true);
+        true,
+        false,
+        cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -628,7 +645,9 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
                             header.status,
                             header.extensions,
                             payload ? payload->clone() : nullptr,
-                            true);
+                            true,
+                            false,
+                            cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -658,7 +677,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
                             header.extensions,
                             payload ? payload->clone() : nullptr,
                             true,
-                            true /* forwardingPreferenceIsDatagram */);
+                            true /* forwardingPreferenceIsDatagram */,
+                            cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -1022,7 +1042,8 @@ class MoQCache::FetchWriteback : public FetchConsumer {
         extensions,
         std::move(payload),
         complete,
-        forwardingPreferenceIsDatagram);
+        forwardingPreferenceIsDatagram,
+        cache_.now());
     cacheMissing({groupID, objectID});
     if (cacheRes.hasError()) {
       updateInProgress();
@@ -1167,6 +1188,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     consumer->reset(ResetStreamErrorCode::CANCELLED);
   });
   auto lastObject = false;
+  auto cachedNow = now();
   FetchRangeIterator fetchRangeIt(
       standalone->start, standalone->end, fetch.groupOrder, track);
   while (!token.isCancellationRequested() &&
@@ -1180,10 +1202,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       XLOG(DBG1) << "fetchInProgress for {" << current.group << ","
                  << current.object << "}";
       co_await writeback->waitFor(current);
+      cachedNow = now();
     }
 
     // Gets cached object if cache hit, else none.
-    auto cachedObjectMaybe = getCachedObjectMaybe(*track, current);
+    auto cachedObjectMaybe = getCachedObjectMaybe(*track, current, cachedNow);
     if (!cachedObjectMaybe) {
       if (!fetchStart) {
         fetchStart = current;
@@ -1216,6 +1239,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
             track,
             consumer,
             upstream);
+        cachedNow = now();
         if (res.hasError()) {
           co_return folly::makeUnexpected(res.error());
         } // else success but only returns FetchOk on lastObject
@@ -1232,6 +1256,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       if (res.error().code == MoQPublishError::BLOCKED) {
         XLOG(DBG1) << "Fetch blocked, waiting";
         auto blockedRes = co_await handleBlocked(consumer, fetch);
+        cachedNow = now();
         if (blockedRes.hasError()) {
           co_return folly::makeUnexpected(blockedRes.error());
         }
@@ -1321,7 +1346,8 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
 
 std::optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
     CacheTrack& track,
-    AbsoluteLocation current) {
+    AbsoluteLocation current,
+    TimePoint now) {
   auto groupIt = track.groups.find(current.group);
   // Group missing from cache, advance.
   if (groupIt == track.groups.end()) {
@@ -1337,6 +1363,15 @@ std::optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
     XLOG(DBG1) << "object cache miss for {" << current.group << ","
                << current.object << "}";
     return std::nullopt;
+  }
+  if (track.maxCacheDuration) {
+    auto age = now - objIt->second->cachedAt;
+    if (age > *track.maxCacheDuration) {
+      XLOG(DBG1) << "object expired for {" << current.group << ","
+                 << current.object << "}";
+      group->objects.erase(objIt);
+      return std::nullopt;
+    }
   }
   return std::make_optional(objIt->second.get());
 }
@@ -1434,6 +1469,24 @@ MoQCache::handleBlocked(
   }
   co_await std::move(awaitRes.value());
   co_return folly::unit;
+}
+
+void MoQCache::setMaxCacheDuration(
+    const FullTrackName& ftn,
+    std::chrono::milliseconds duration) {
+  auto it = cache_.find(ftn);
+  if (it == cache_.end()) {
+    it = cache_.emplace(ftn, std::make_shared<CacheTrack>()).first;
+    addTrackToLRU(ftn, *it->second);
+  }
+  it->second->maxCacheDuration = duration;
+}
+
+void MoQCache::clearMaxCacheDuration(const FullTrackName& ftn) {
+  auto it = cache_.find(ftn);
+  if (it != cache_.end()) {
+    it->second->maxCacheDuration.reset();
+  }
 }
 
 MoQCache::FetchRangeIterator::FetchRangeIterator(

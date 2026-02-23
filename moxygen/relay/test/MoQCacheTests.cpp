@@ -2217,4 +2217,153 @@ TEST_F(MoQCacheTest, SubgroupWritebackObjectPayloadWithInitialPayload) {
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
 }
 
+// ============================================================================
+// Max Cache Duration Tests
+// ============================================================================
+
+TEST_F(MoQCacheTest, TestMaxCacheDurationExpiration) {
+  // Populate cache, advance clock past TTL, verify objects expire
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  populateCacheRange({0, 0}, {0, 5});
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  // Advance clock past TTL
+  currentTime += std::chrono::milliseconds(1001);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
+}
+
+TEST_F(MoQCacheTest, TestMaxCacheDurationNotExpired) {
+  // Advance clock within TTL, verify objects still cached
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  populateCacheRange({0, 0}, {0, 5});
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  // Advance clock within TTL
+  currentTime += std::chrono::milliseconds(999);
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
+}
+
+TEST_F(MoQCacheTest, TestNoMaxCacheDurationNoExpiration) {
+  // No TTL set, advance clock far, objects still cached
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  populateCacheRange({0, 0}, {0, 5});
+
+  // Advance clock very far - no TTL, so objects should stay
+  currentTime += std::chrono::hours(24);
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
+}
+
+TEST_F(MoQCacheTest, TestMaxCacheDurationRefreshOnRecache) {
+  // Cache at T=0, re-cache at T=800ms with same payload,
+  // verify still cached at T=1200ms (past original TTL),
+  // expired at T=1801ms
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  // Cache object at T=0
+  populateCacheRange({0, 0}, {0, 1});
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  // Re-cache at T=800ms
+  currentTime += std::chrono::milliseconds(800);
+  populateCacheRange({0, 0}, {0, 1});
+
+  // At T=1200ms (past original TTL but within re-cache TTL)
+  currentTime += std::chrono::milliseconds(400);
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  // At T=1801ms (past re-cache TTL)
+  currentTime += std::chrono::milliseconds(601);
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+}
+
+CO_TEST_F(MoQCacheTest, TestMaxCacheDurationFetchMissOnExpired) {
+  // Populate, expire, fetch triggers upstream fetch for expired range
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  populateCacheRange({0, 0}, {0, 10});
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  // Advance past TTL
+  currentTime += std::chrono::milliseconds(1001);
+
+  // Fetch should trigger upstream since objects expired
+  expectFetchObjects({0, 0}, {0, 10}, true);
+  auto upstreamFuture =
+      expectUpstreamFetch({0, 0}, {0, 10}, false, AbsoluteLocation{0, 10});
+  auto fetchFut =
+      co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_))
+          .start()
+          .via(co_await folly::coro::co_current_executor);
+
+  // Wait for upstream fetch to be established
+  co_await std::move(upstreamFuture);
+  serveCacheRangeFromUpstream({0, 0}, {0, 10});
+  auto res = co_await std::move(fetchFut);
+  EXPECT_TRUE(res.hasValue());
+}
+
+TEST_F(MoQCacheTest, TestMaxCacheDurationMixedExpiration) {
+  // Cache objects at different times, advance clock so some expire and
+  // some don't
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  // Cache objects 0-4 at T=0
+  populateCacheRange({0, 0}, {0, 5});
+
+  // Cache objects 5-9 at T=600ms
+  currentTime += std::chrono::milliseconds(600);
+  populateCacheRange({0, 5}, {0, 10});
+
+  // At T=1001ms: objects 0-4 expired (age=1001ms), objects 5-9 still valid
+  // (age=401ms)
+  currentTime += std::chrono::milliseconds(401);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 5}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 9}));
+}
+
+TEST_F(MoQCacheTest, TestClearMaxCacheDuration) {
+  // Set TTL, clear it, advance clock, verify objects not expired
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  populateCacheRange({0, 0}, {0, 5});
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  // Clear the TTL
+  cache_.clearMaxCacheDuration(kTestTrackName);
+
+  // Advance clock past what was the TTL
+  currentTime += std::chrono::milliseconds(2000);
+
+  // Objects should still be cached since TTL was cleared
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
+}
+
 } // namespace moxygen::test
