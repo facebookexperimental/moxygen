@@ -70,9 +70,7 @@
   # Stage the binary and getdeps-built shared libs for the runtime image
   RUN INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && \
       mkdir -p /staging/bin /staging/lib && \
-      cp $INST_DIR/bin/moqrelayserver /staging/bin/ && \
-      cp /tmp/fbcode_builder_getdeps-ZappZbuildZfbcode_builder-root/installed/*/lib/libglog.so* /staging/lib/ && \
-      cp /tmp/fbcode_builder_getdeps-ZappZbuildZfbcode_builder-root/installed/*/lib/libunwind.so* /staging/lib/
+      cp $INST_DIR/bin/moqrelayserver /staging/bin/
 
   # Stage 2: Runtime
   FROM ubuntu:latest
