@@ -10,8 +10,8 @@
 #include <folly/coro/Sleep.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
+#include <folly/logging/xlog.h>
 #include <folly/portability/GFlags.h>
-#include <glog/logging.h>
 #include <moxygen/tools/moqperf/MoQPerfClient.h>
 #include <moxygen/tools/moqperf/MoQPerfParams.h>
 #include <moxygen/tools/moqperf/MoQPerfServer.h>
@@ -56,7 +56,7 @@ void runSubscribe(
   auto trackConsumer = std::make_shared<MoQPerfClientTrackConsumer>();
   auto subscribeResult = folly::coro::blockingWait(
       co_withExecutor(evb, subscribe(client, trackConsumer, params)));
-  CHECK(subscribeResult.hasValue()) << "Subscription failed";
+  XCHECK(subscribeResult.hasValue()) << "Subscription failed";
 
   sleep(10);
 
@@ -66,8 +66,8 @@ void runSubscribe(
     client->drain();
   });
 
-  LOG(INFO) << "Sent " << trackConsumer->getDataSent()
-            << " bytes in 10 seconds.";
+  XLOG(INFO) << "Sent " << trackConsumer->getDataSent()
+             << " bytes in 10 seconds.";
 }
 
 void runFetch(
@@ -77,7 +77,7 @@ void runFetch(
   auto fetchConsumer = std::make_shared<MoQPerfClientFetchConsumer>();
   auto fetchResult = folly::coro::blockingWait(
       co_withExecutor(evb, client->fetch(fetchConsumer, params)));
-  CHECK(fetchResult.hasValue()) << "Fetch failed";
+  XCHECK(fetchResult.hasValue()) << "Fetch failed";
 
   sleep(10);
 
@@ -87,8 +87,8 @@ void runFetch(
     client->drain();
   });
 
-  LOG(INFO) << "Received " << fetchConsumer->getFetchDataSent()
-            << " bytes in 10 seconds.";
+  XLOG(INFO) << "Received " << fetchConsumer->getFetchDataSent()
+             << " bytes in 10 seconds.";
 }
 
 void runClient(folly::EventBase* evb) {
@@ -121,9 +121,9 @@ int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
   folly::Init init(&argc, &argv);
 
-  CHECK(FLAGS_mode == "client" || FLAGS_mode == "server")
+  XCHECK(FLAGS_mode == "client" || FLAGS_mode == "server")
       << "Mode must be one of \"server\" or \"client\"";
-  CHECK(FLAGS_request_type == "subscribe" || FLAGS_request_type == "fetch")
+  XCHECK(FLAGS_request_type == "subscribe" || FLAGS_request_type == "fetch")
       << "Request type must be one of \"subscribe\" or \"fetch\"";
 
   if (FLAGS_mode == "client") {
