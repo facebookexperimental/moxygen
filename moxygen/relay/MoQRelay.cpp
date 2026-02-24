@@ -39,14 +39,16 @@ std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findNamespaceNode(
     const TrackNamespace& ns,
     bool createMissingNodes,
     MatchType matchType,
-    std::vector<std::pair<std::shared_ptr<MoQSession>, bool>>* sessions) {
+    std::vector<std::pair<
+        std::shared_ptr<MoQSession>,
+        NamespaceNode::NamespaceSubscriberInfo>>* sessions) {
   std::shared_ptr<NamespaceNode> nodePtr(
       std::shared_ptr<void>(), &publishNamespaceRoot_);
   for (auto i = 0ul; i < ns.size(); i++) {
     if (sessions) {
-      // Extract session pointers with their forward preferences from the map
-      for (const auto& [session, forward] : nodePtr->sessions) {
-        sessions->emplace_back(session, forward);
+      // Extract session pointers with their subscriber info from the map
+      for (const auto& [session, info] : nodePtr->sessions) {
+        sessions->emplace_back(session, info);
       }
     }
     auto& name = ns[i];
@@ -85,7 +87,10 @@ MoQRelay::publishNamespace(
             PublishNamespaceErrorCode::UNINTERESTED,
             "bad namespace"});
   }
-  std::vector<std::pair<std::shared_ptr<MoQSession>, bool>> sessions;
+  std::vector<std::pair<
+      std::shared_ptr<MoQSession>,
+      NamespaceNode::NamespaceSubscriberInfo>>
+      sessions;
   auto nodePtr = findNamespaceNode(
       ann.trackNamespace,
       /*createMissingNodes=*/true,
@@ -134,11 +139,25 @@ MoQRelay::publishNamespace(
   if (wasEmpty && nodePtr->parent_) {
     nodePtr->parent_->incrementActiveChildren();
   }
-  for (auto& [outSession, forward] : sessions) {
-    if (outSession != session) {
-      auto exec = outSession->getExecutor();
-      co_withExecutor(exec, publishNamespaceToSession(outSession, ann, nodePtr))
-          .start();
+  for (auto& [outSession, info] : sessions) {
+    if (outSession != session &&
+        (info.options == SubscribeNamespaceOptions::NAMESPACE ||
+         info.options == SubscribeNamespaceOptions::BOTH)) {
+      if (info.namespacePublishHandle) {
+        // Draft 16+: send NAMESPACE message on the bidi stream
+        TrackNamespace suffix(
+            std::vector<std::string>(
+                ann.trackNamespace.trackNamespace.begin() +
+                    info.trackNamespacePrefix.size(),
+                ann.trackNamespace.trackNamespace.end()));
+        info.namespacePublishHandle->namespaceMsg(suffix);
+      } else {
+        // Draft <= 15: send PUBLISH_NAMESPACE on a new stream
+        auto exec = outSession->getExecutor();
+        co_withExecutor(
+            exec, publishNamespaceToSession(outSession, ann, nodePtr))
+            .start();
+      }
     }
   }
   co_return nodePtr;
@@ -252,11 +271,48 @@ void MoQRelay::publishNamespaceDone(
 
   nodePtr->sourceSession = nullptr;
   nodePtr->publishNamespaceCallback.reset();
-  for (auto& pubNamespace : nodePtr->namespacesPublished) {
-    auto exec = pubNamespace.first->getExecutor();
-    exec->add([publishNamespaceHandle = pubNamespace.second] {
-      publishNamespaceHandle->publishNamespaceDone();
-    });
+
+  // Notify downstream namespace subscribers
+  std::vector<std::pair<
+      std::shared_ptr<MoQSession>,
+      NamespaceNode::NamespaceSubscriberInfo>>
+      sessions;
+  findNamespaceNode(
+      trackNamespace,
+      /*createMissingNodes=*/false,
+      MatchType::Exact,
+      &sessions);
+  // Also include sessions at the target node itself
+  for (const auto& [sessionPtr, info] : nodePtr->sessions) {
+    sessions.emplace_back(sessionPtr, info);
+  }
+  for (auto& [outSession, info] : sessions) {
+    if (outSession != session &&
+        (info.options == SubscribeNamespaceOptions::NAMESPACE ||
+         info.options == SubscribeNamespaceOptions::BOTH)) {
+      auto maybeVersion = outSession->getNegotiatedVersion();
+      if (maybeVersion.has_value() &&
+          getDraftMajorVersion(*maybeVersion) >= 16) {
+        // Draft 16+: send NAMESPACE_DONE on the bidi stream
+        if (info.namespacePublishHandle) {
+          TrackNamespace suffix(
+              std::vector<std::string>(
+                  trackNamespace.trackNamespace.begin() +
+                      info.trackNamespacePrefix.size(),
+                  trackNamespace.trackNamespace.end()));
+          info.namespacePublishHandle->namespaceDoneMsg(suffix);
+        }
+      } else {
+        // Draft <= 15: send PUBLISH_NAMESPACE_DONE on the existing stream
+        auto it = nodePtr->namespacesPublished.find(outSession);
+        if (it != nodePtr->namespacesPublished.end()) {
+          auto exec = outSession->getExecutor();
+          exec->add([publishNamespaceHandle = it->second] {
+            publishNamespaceHandle->publishNamespaceDone();
+          });
+        }
+      }
+    }
   }
   nodePtr->namespacesPublished.clear();
 
@@ -324,15 +380,18 @@ Subscriber::PublishResult MoQRelay::publish(
 
   // Find All Nodes that Subscribed to this namespace (including
   // prefix ns)
-  std::vector<std::pair<std::shared_ptr<MoQSession>, bool>> sessions = {};
+  std::vector<std::pair<
+      std::shared_ptr<MoQSession>,
+      NamespaceNode::NamespaceSubscriberInfo>>
+      sessions = {};
   auto nodePtr = findNamespaceNode(
       pub.fullTrackName.trackNamespace,
       /*createMissingNodes=*/true,
       MatchType::Exact,
       &sessions);
-  // Extract session pointers with their forward preferences from the map
-  for (const auto& [sessionPtr, forward] : nodePtr->sessions) {
-    sessions.emplace_back(sessionPtr, forward);
+  // Extract session pointers with their subscriber info from the map
+  for (const auto& [sessionPtr, info] : nodePtr->sessions) {
+    sessions.emplace_back(sessionPtr, info);
   }
 
   auto session = MoQSession::getRequestSession();
@@ -386,12 +445,14 @@ Subscriber::PublishResult MoQRelay::publish(
   rsub.isPublish = true;
 
   uint64_t nSubscribers = 0;
-  for (auto& [outSession, forward] : sessions) {
-    if (outSession != session) {
+  for (auto& [outSession, info] : sessions) {
+    if (outSession != session &&
+        (info.options == SubscribeNamespaceOptions::PUBLISH ||
+         info.options == SubscribeNamespaceOptions::BOTH)) {
       nSubscribers++;
       auto exec = outSession->getExecutor();
       co_withExecutor(
-          exec, publishToSession(outSession, forwarder, pub, forward))
+          exec, publishToSession(outSession, forwarder, pub, info.forward))
           .start();
     }
   }
@@ -553,9 +614,18 @@ MoQRelay::subscribeNamespace(
   auto nodePtr = findNamespaceNode(
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
 
+  SubscribeNamespaceOptions effectiveOptions;
+  effectiveOptions = subNs.options;
+
   // Check if this is the first session subscriber for this node
   bool wasEmpty = !nodePtr->hasLocalSessions();
-  nodePtr->sessions.emplace(session, subNs.forward);
+  nodePtr->sessions.emplace(
+      session,
+      NamespaceNode::NamespaceSubscriberInfo{
+          subNs.forward,
+          effectiveOptions,
+          namespacePublishHandle,
+          subNs.trackNamespacePrefix});
 
   // If this is the first content added to this node, notify parent
   if (wasEmpty && nodePtr->hasLocalSessions() && nodePtr->parent_) {
@@ -570,12 +640,27 @@ MoQRelay::subscribeNamespace(
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
-      // TODO: Auth/params
-      co_withExecutor(
-          exec,
-          publishNamespaceToSession(
-              session, {subNs.requestID, prefix}, nodePtr))
-          .start();
+      auto maybeNegotiatedVersion = session->getNegotiatedVersion();
+      CHECK(maybeNegotiatedVersion.has_value());
+      if (getDraftMajorVersion(*maybeNegotiatedVersion) >= 16) {
+        if (subNs.options == SubscribeNamespaceOptions::NAMESPACE ||
+            subNs.options == SubscribeNamespaceOptions::BOTH) {
+          // Compute the suffix: prefix minus subNs.trackNamespacePrefix
+          TrackNamespace suffix(
+              std::vector<std::string>(
+                  prefix.trackNamespace.begin() +
+                      subNs.trackNamespacePrefix.size(),
+                  prefix.trackNamespace.end()));
+          namespacePublishHandle->namespaceMsg(suffix);
+        }
+      } else {
+        // TODO: Auth/params
+        co_withExecutor(
+            exec,
+            publishNamespaceToSession(
+                session, {subNs.requestID, prefix}, nodePtr))
+            .start();
+      }
     }
     PublishRequest pub{
         0,
@@ -603,10 +688,16 @@ MoQRelay::subscribeNamespace(
       }
       pub.groupOrder = forwarder->groupOrder();
       pub.largest = forwarder->largest();
-      if (publishSession != session) {
-        co_withExecutor(
-            exec, publishToSession(session, forwarder, pub, subNs.forward))
-            .start();
+      auto maybeNegotiatedVersion = session->getNegotiatedVersion();
+      CHECK(maybeNegotiatedVersion.has_value());
+      if (getDraftMajorVersion(*maybeNegotiatedVersion) <= 15 ||
+          (subNs.options == SubscribeNamespaceOptions::BOTH ||
+           subNs.options == SubscribeNamespaceOptions::PUBLISH)) {
+        if (publishSession != session) {
+          co_withExecutor(
+              exec, publishToSession(session, forwarder, pub, subNs.forward))
+              .start();
+        }
       }
     }
     for (auto& nextNodeIt : nodePtr->children) {

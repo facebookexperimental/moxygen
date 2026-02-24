@@ -122,9 +122,21 @@ class MoQRelay : public Publisher,
 
     // Maps a track name to a the session performing the PUBLISH
     folly::F14FastMap<std::string, std::shared_ptr<MoQSession>> publishes;
-    // Sessions with a SUBSCRIBE_NAMESPACE here, with their forward preference
-    // Key: session, Value: forward (true = forward data, false = don't forward)
-    folly::F14FastMap<std::shared_ptr<MoQSession>, bool> sessions;
+
+    // Info stored per SUBSCRIBE_NAMESPACE subscriber
+    struct NamespaceSubscriberInfo {
+      bool forward{true};
+      SubscribeNamespaceOptions options{SubscribeNamespaceOptions::BOTH};
+      // Handle for sending NAMESPACE / NAMESPACE_DONE on the bidi stream
+      // (draft 16+). Null for draft <= 15.
+      std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle;
+      // The namespace prefix this subscriber used for SUBSCRIBE_NAMESPACE
+      TrackNamespace trackNamespacePrefix;
+    };
+
+    // Sessions with a SUBSCRIBE_NAMESPACE here, with their preferences
+    folly::F14FastMap<std::shared_ptr<MoQSession>, NamespaceSubscriberInfo>
+        sessions;
     // All active PUBLISH_NAMESPACEs for this node (includes prefix sessions)
     folly::F14FastMap<
         std::shared_ptr<MoQSession>,
@@ -153,8 +165,9 @@ class MoQRelay : public Publisher,
       const TrackNamespace& ns,
       bool createMissingNodes = false,
       MatchType matchType = MatchType::Exact,
-      std::vector<std::pair<std::shared_ptr<MoQSession>, bool>>* sessions =
-          nullptr);
+      std::vector<std::pair<
+          std::shared_ptr<MoQSession>,
+          NamespaceNode::NamespaceSubscriberInfo>>* sessions = nullptr);
 
   struct RelaySubscription {
     RelaySubscription(

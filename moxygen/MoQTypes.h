@@ -1175,7 +1175,8 @@ struct SubscribeNamespace {
   TrackNamespace trackNamespacePrefix;
   bool forward{true}; // Only used in draft-15 and above
   TrackRequestParameters params{FrameType::SUBSCRIBE_NAMESPACE};
-  SubscribeNamespaceOptions options; // Only used in draft-16 and above
+  SubscribeNamespaceOptions options{
+      SubscribeNamespaceOptions::BOTH}; // Only used in draft-16 and above
 };
 
 // Only used in draft-16 and above

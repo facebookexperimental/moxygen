@@ -82,13 +82,17 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
         .requestID = RequestID(0),
         .trackNamespacePrefix = TrackNamespace(chatPrefix()),
         .forward = true,
+        .options = SubscribeNamespaceOptions::BOTH,
     };
     subAnn.params.insertParam(getAuthParam(negotiatedVersion, username_));
-    auto sa =
-        co_await moqClient_.getSession()->subscribeNamespace(subAnn, nullptr);
+    auto sa = co_await moqClient_.getSession()->subscribeNamespace(
+        subAnn,
+        std::make_shared<ChatNamespacePublishHandle>(
+            shared_from_this(), TrackNamespace(chatPrefix())));
     if (sa.hasValue()) {
       XLOG(INFO) << "subscribeNamespace success";
-      folly::getGlobalCPUExecutor()->add([this] { publishLoop(); });
+      folly::getGlobalCPUExecutor()->add(
+          [self = shared_from_this()] { self->publishLoop(); });
       subscribeNamespaceHandle_ = std::move(sa.value());
     } else {
       XLOG(INFO) << "SubscribeNamespace reqID=" << sa.error().requestID.value
@@ -135,9 +139,53 @@ MoQChatClient::publishNamespace(
       std::move(trackNamespaceCopy));
 }
 
-void MoQChatClient::publishNamespaceDone(const TrackNamespace&) {
-  // TODO: Upon receiving an PUBLISH_NAMESPACE_DONE, a client SHOULD UNSUBSCRIBE
-  // from that matching track if it had previously subscribed.
+void MoQChatClient::publishNamespaceDone(const TrackNamespace& ns) {
+  if (ns.size() < 5) {
+    XLOG(ERR) << "Invalid publishNamespaceDone namespace size=" << ns.size();
+    return;
+  }
+  std::string username = ns[2];
+  std::string deviceId = ns[3];
+  XLOG(INFO) << "publishNamespaceDone user=" << username
+             << " device=" << deviceId;
+  auto userIt = subscriptions_.find(username);
+  if (userIt == subscriptions_.end()) {
+    return;
+  }
+  auto& userTracks = userIt->second;
+  for (auto it = userTracks.begin(); it != userTracks.end(); ++it) {
+    if (it->deviceId == deviceId) {
+      if (it->subscription) {
+        it->subscription->unsubscribe();
+        it->subscription.reset();
+      }
+      userTracks.erase(it);
+      break;
+    }
+  }
+  if (userTracks.empty()) {
+    subscriptions_.erase(userIt);
+  }
+}
+
+void MoQChatClient::ChatNamespacePublishHandle::namespaceMsg(
+    const TrackNamespace& trackNamespaceSuffix) {
+  // Reconstruct the full namespace from prefix + suffix
+  auto parts = prefix_.trackNamespace;
+  parts.insert(
+      parts.end(),
+      trackNamespaceSuffix.trackNamespace.begin(),
+      trackNamespaceSuffix.trackNamespace.end());
+  TrackNamespace fullNs(std::move(parts));
+  XLOG(INFO) << "Namespace ns=" << fullNs;
+  if (fullNs.size() != 5) {
+    XLOG(ERR) << "Invalid chat namespace, expected 5 parts";
+    return;
+  }
+  co_withExecutor(
+      client_->moqClient_.getSession()->getExecutor(),
+      client_->subscribeToUser(std::move(fullNs)))
+      .start();
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
@@ -197,46 +245,43 @@ void MoQChatClient::publishLoop() {
     std::getline(std::cin, input);
     if (token.isCancellationRequested()) {
       XLOG(DBG1) << "Detected deleted moqSession, cleaning up";
-      evb->add([this] {
-        publishNamespaceHandle_.reset();
-        subscribeNamespaceHandle_.reset();
-        publisher_.reset();
-      });
       break;
     }
-    evb->add([this, input] {
-      if (input == "/leave") {
-        XLOG(INFO) << "Leaving chat";
-        publishNamespaceHandle_->publishNamespaceDone();
-        subscribeNamespaceHandle_->unsubscribeNamespace();
-        if (publisher_) {
-          publisher_->objectStream(
-              {nextGroup_++,
-               /*subgroupIn=*/0,
-               /*idIn=*/0,
-               /*priorityIn=*/0,
-               ObjectStatus::END_OF_TRACK},
-              nullptr);
-          // Publisher=TrackReceiveState which contains a shared_ptr to the
-          // chat client (to deliver unsubscribe/subscribeUpdate).  It *must*
-          // be reset to prevent memory leaks
-          publisher_.reset();
-        }
-        moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
-        moqClient_.shutdown();
-      } else if (publisher_) {
-        publisher_->objectStream(
-            {nextGroup_++,
-             /*subgroupIn=*/0,
-             /*idIn=*/0,
-             /*priorityIn=*/0,
-             ObjectStatus::NORMAL},
-            folly::IOBuf::copyBuffer(input));
-      }
-    });
+    evb->add([self = shared_from_this(), input] { self->handleInput(input); });
     if (input == "/leave") {
       break;
     }
+  }
+}
+
+void MoQChatClient::handleInput(const std::string& input) {
+  if (input == "/leave") {
+    XLOG(INFO) << "Leaving chat";
+    publishNamespaceHandle_->publishNamespaceDone();
+    subscribeNamespaceHandle_->unsubscribeNamespace();
+    if (publisher_) {
+      publisher_->objectStream(
+          {nextGroup_++,
+           /*subgroupIn=*/0,
+           /*idIn=*/0,
+           /*priorityIn=*/0,
+           ObjectStatus::END_OF_TRACK},
+          nullptr);
+      // Publisher=TrackReceiveState which contains a shared_ptr to the
+      // chat client (to deliver unsubscribe/subscribeUpdate).  It *must*
+      // be reset to prevent memory leaks
+      publisher_.reset();
+    }
+    moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
+    moqClient_.shutdown();
+  } else if (publisher_) {
+    publisher_->objectStream(
+        {nextGroup_++,
+         /*subgroupIn=*/0,
+         /*idIn=*/0,
+         /*priorityIn=*/0,
+         ObjectStatus::NORMAL},
+        folly::IOBuf::copyBuffer(input));
   }
 }
 

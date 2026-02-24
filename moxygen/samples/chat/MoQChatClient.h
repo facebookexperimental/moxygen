@@ -41,6 +41,24 @@ class MoQChatClient : public Publisher,
   }
   void unsubscribe() override;
 
+  class ChatNamespacePublishHandle : public Publisher::NamespacePublishHandle {
+   public:
+    ChatNamespacePublishHandle(
+        std::shared_ptr<MoQChatClient> client,
+        TrackNamespace prefix)
+        : client_(std::move(client)), prefix_(std::move(prefix)) {}
+
+    void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override;
+    // TODO: invoke publishNamespaceDone when namespaceDoneMsg provides the
+    // namespace suffix
+    void namespaceDoneMsg(
+        const TrackNamespace& /*trackNamespaceSuffix*/) override {}
+
+   private:
+    std::shared_ptr<MoQChatClient> client_;
+    TrackNamespace prefix_;
+  };
+
   class PublishNamespaceHandle : public Subscriber::PublishNamespaceHandle {
    public:
     PublishNamespaceHandle(
@@ -67,6 +85,7 @@ class MoQChatClient : public Publisher,
   void publishNamespaceDone(const TrackNamespace&);
 
   void publishLoop();
+  void handleInput(const std::string& input);
   folly::coro::Task<void> subscribeToUser(TrackNamespace trackNamespace);
   void publishDone(PublishDone pubDone);
 

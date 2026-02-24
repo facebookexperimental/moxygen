@@ -2921,6 +2921,8 @@ MoQFrameParser::parseSubscribeNamespace(
     length -= options->second;
     subscribeNamespace.options =
         static_cast<SubscribeNamespaceOptions>(options->first);
+  } else {
+    subscribeNamespace.options = SubscribeNamespaceOptions::BOTH;
   }
 
   // Parse Parameters
