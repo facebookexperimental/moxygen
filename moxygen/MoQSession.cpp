@@ -2629,7 +2629,7 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
     MoQSession* session_;
     proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
     folly::IOBufQueue& bufQueue_;
-    MoQFrameWriter& moqFrameWriter_;
+    [[maybe_unused]] MoQFrameWriter& moqFrameWriter_;
     bool receivedSubscribeNamespace_{false};
     std::optional<RequestID> requestID_;
   };
