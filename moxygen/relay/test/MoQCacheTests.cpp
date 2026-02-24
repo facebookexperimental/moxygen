@@ -2366,4 +2366,87 @@ TEST_F(MoQCacheTest, TestClearMaxCacheDuration) {
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
 }
 
+// Regression test: SubgroupWriteback does not propagate cache errors to the
+// inner SubgroupConsumer. When an upstream subgroup stream delivers an object
+// that hits a cache error (e.g., payload mismatch with an already-cached
+// object), SubgroupWriteback::beginObject returns the error but does NOT call
+// consumer_->reset() on the inner SubgroupConsumer. This leaves the
+// SubgroupForwarder with open downstream subgroups that are never cleaned up,
+// preventing the forwarder from ever becoming empty and causing a subscription
+// leak.
+TEST_F(MoQCacheTest, SubgroupWritebackCacheErrorResetsInnerConsumer) {
+  // Step 1: Populate the cache with an object at (group=0, objectID=0)
+  // using a NiceMock consumer (the default trackConsumer_).
+  auto writeback1 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto sgRes1 = writeback1->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes1.hasValue());
+  auto sg1 = std::move(sgRes1.value());
+  // Cache a complete object with payload length 50
+  auto objRes = sg1->object(0, makeBuf(50), noExtensions(), false);
+  ASSERT_TRUE(objRes.hasValue());
+  sg1->endOfSubgroup();
+  writeback1.reset();
+
+  // Step 2: Create a new SubscribeWriteback with a mock inner consumer.
+  // The inner consumer represents the MoQForwarder in production.
+  auto innerConsumer = std::make_shared<NiceMock<MockTrackConsumer>>();
+  auto innerSg = std::make_shared<StrictMock<MockSubgroupConsumer>>();
+
+  EXPECT_CALL(*innerConsumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(std::static_pointer_cast<SubgroupConsumer>(innerSg)));
+
+  auto writeback2 = cache_.getSubscribeWriteback(kTestTrackName, innerConsumer);
+  auto sgRes2 = writeback2->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes2.hasValue());
+  auto sg2 = std::move(sgRes2.value());
+
+  // Step 3: Try to write the same object with a DIFFERENT payload size.
+  // The cache already has objectID=0 with payload length 50.
+  // Writing it with length 100 triggers "Payload mismatch" error.
+  //
+  // BUG: SubgroupWriteback::object() returns the error without calling
+  // consumer_->reset() on the inner SubgroupConsumer. The inner consumer
+  // (SubgroupForwarder) is left with open downstream subgroups.
+  //
+  // FIX: SubgroupWriteback should call consumer_->reset() before returning
+  // the cache error, so the inner SubgroupConsumer properly cleans up.
+  EXPECT_CALL(*innerSg, reset(_)).Times(1);
+
+  auto objRes2 = sg2->object(0, makeBuf(100), noExtensions(), false);
+  EXPECT_TRUE(objRes2.hasError());
+}
+
+// Same test but for beginObject path (multi-part object delivery).
+TEST_F(MoQCacheTest, SubgroupWritebackBeginObjectCacheErrorResetsInner) {
+  // Pre-populate cache with a complete object
+  auto writeback1 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto sgRes1 = writeback1->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes1.hasValue());
+  auto sg1 = std::move(sgRes1.value());
+  auto objRes = sg1->object(0, makeBuf(50), noExtensions(), false);
+  ASSERT_TRUE(objRes.hasValue());
+  sg1->endOfSubgroup();
+  writeback1.reset();
+
+  // Create new writeback with mock inner consumer
+  auto innerConsumer = std::make_shared<NiceMock<MockTrackConsumer>>();
+  auto innerSg = std::make_shared<StrictMock<MockSubgroupConsumer>>();
+
+  EXPECT_CALL(*innerConsumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(std::static_pointer_cast<SubgroupConsumer>(innerSg)));
+
+  auto writeback2 = cache_.getSubscribeWriteback(kTestTrackName, innerConsumer);
+  auto sgRes2 = writeback2->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes2.hasValue());
+  auto sg2 = std::move(sgRes2.value());
+
+  // beginObject with different payload size triggers "Payload mismatch"
+  EXPECT_CALL(*innerSg, reset(_)).Times(1);
+
+  auto beginRes = sg2->beginObject(0, 100, makeBuf(100), Extensions());
+  EXPECT_TRUE(beginRes.hasError());
+}
+
 } // namespace moxygen::test

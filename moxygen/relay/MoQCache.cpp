@@ -430,6 +430,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       bool finSub) override {
     auto res = cacheTrack_.updateLargest({group_, objID});
     if (!res) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
     auto cPayload = payload ? payload->clone() : nullptr;
@@ -443,10 +444,12 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         false /* forwardingPreferenceIsDatagram */,
         cache_.now());
     if (cacheRes.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return cacheRes;
     }
     auto gapRes = cacheTrack_.processGapExtensions(group_, objID, ext);
     if (gapRes.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return gapRes;
     }
     return consumer_->object(objID, std::move(payload), std::move(ext), finSub);
@@ -463,6 +466,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       Extensions extensions) override {
     auto res = cacheTrack_.updateLargest({group_, objectID});
     if (!res) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
     auto cacheRes = cacheGroup_.cacheObject(
@@ -475,11 +479,13 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         false,
         cache_.now());
     if (cacheRes.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return cacheRes;
     }
     auto gapRes =
         cacheTrack_.processGapExtensions(group_, objectID, extensions);
     if (gapRes.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return gapRes;
     }
     currentObject_ = objectID;
@@ -511,6 +517,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       uint64_t endOfGroupObjectID) override {
     auto res = cacheTrack_.updateLargest({group_, endOfGroupObjectID});
     if (!res) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
     auto cacheRes = cacheGroup_.cacheObject(
@@ -523,6 +530,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         false,
         cache_.now());
     if (cacheRes.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return cacheRes;
     }
     return consumer_->endOfGroup(endOfGroupObjectID);
@@ -532,6 +540,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       uint64_t endOfTrackObjectID) override {
     auto res = cacheTrack_.updateLargest({group_, endOfTrackObjectID}, true);
     if (!res) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
     auto cacheRes = cacheGroup_.cacheObject(
@@ -544,6 +553,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         false,
         cache_.now());
     if (cacheRes.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return cacheRes;
     }
     return consumer_->endOfTrackAndGroup(endOfTrackObjectID);
