@@ -1,0 +1,67 @@
+name: standalone
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+permissions:
+  contents: read
+
+# Dependency overrides: set these to override the default dependency source.
+# Useful when testing with in-flight changes to upstream deps.
+# Example: FIZZ_REV_OVERRIDE: "abc123def456..."
+# Example: FIZZ_REPO_OVERRIDE: "https://github.com/myuser/fizz.git"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macOS-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: ./standalone/install-system-deps.sh
+
+    - name: Cache FetchContent downloads
+      uses: actions/cache@v4
+      with:
+        path: _build/_deps
+        key: standalone-${{ matrix.os }}-fetchcontent-${{ hashFiles('build/deps/github_hashes/**/*-rev.txt') }}-${{ env.FOLLY_REV_OVERRIDE }}-${{ env.FIZZ_REV_OVERRIDE }}-${{ env.PROXYGEN_REV_OVERRIDE }}
+        restore-keys: |
+          standalone-${{ matrix.os }}-fetchcontent-
+
+    - name: Configure
+      run: |
+        cmake_args="-DBUILD_TESTS=ON"
+        if [ -n "$FOLLY_REV_OVERRIDE" ]; then
+          cmake_args="$cmake_args -DFOLLY_REV_OVERRIDE=$FOLLY_REV_OVERRIDE"
+        fi
+        if [ -n "$FOLLY_REPO_OVERRIDE" ]; then
+          cmake_args="$cmake_args -DFOLLY_REPO_OVERRIDE=$FOLLY_REPO_OVERRIDE"
+        fi
+        if [ -n "$FIZZ_REV_OVERRIDE" ]; then
+          cmake_args="$cmake_args -DFIZZ_REV_OVERRIDE=$FIZZ_REV_OVERRIDE"
+        fi
+        if [ -n "$FIZZ_REPO_OVERRIDE" ]; then
+          cmake_args="$cmake_args -DFIZZ_REPO_OVERRIDE=$FIZZ_REPO_OVERRIDE"
+        fi
+        if [ -n "$PROXYGEN_REV_OVERRIDE" ]; then
+          cmake_args="$cmake_args -DPROXYGEN_REV_OVERRIDE=$PROXYGEN_REV_OVERRIDE"
+        fi
+        if [ -n "$PROXYGEN_REPO_OVERRIDE" ]; then
+          cmake_args="$cmake_args -DPROXYGEN_REPO_OVERRIDE=$PROXYGEN_REPO_OVERRIDE"
+        fi
+        cmake -B _build -S standalone -G Ninja $cmake_args
+
+    - name: Build
+      run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+
+    - name: Test
+      run: ctest --test-dir _build --output-on-failure
