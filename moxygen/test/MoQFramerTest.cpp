@@ -3254,6 +3254,68 @@ TEST_P(MoQFramerV15PlusTest, SubscribeNamespaceForwardFalse) {
   EXPECT_EQ(parseResult->forward, false);
 }
 
+// Test PUBLISH with largest location roundtrips correctly for v15+
+// (largest is sent as LARGEST_OBJECT parameter, not fixed fields)
+TEST_P(MoQFramerV15PlusTest, PublishWithLargestLocation) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishRequest publishRequest;
+  publishRequest.requestID = RequestID(100);
+  publishRequest.fullTrackName =
+      FullTrackName({TrackNamespace({"test"}), "pub"});
+  publishRequest.trackAlias = TrackAlias(42);
+  publishRequest.groupOrder = GroupOrder::NewestFirst;
+  publishRequest.largest = AbsoluteLocation{5, 10};
+  publishRequest.forward = true;
+
+  auto writeResult = writer_.writePublish(writeBuf, publishRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::PUBLISH));
+
+  auto parseResult = parser_.parsePublish(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, publishRequest.requestID);
+  EXPECT_EQ(parseResult->trackAlias, publishRequest.trackAlias);
+  EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+  EXPECT_TRUE(parseResult->largest.has_value());
+  EXPECT_EQ(parseResult->largest->group, 5);
+  EXPECT_EQ(parseResult->largest->object, 10);
+  EXPECT_TRUE(parseResult->forward);
+}
+
+// Test PUBLISH without largest location roundtrips correctly for v15+
+TEST_P(MoQFramerV15PlusTest, PublishWithoutLargestLocation) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishRequest publishRequest;
+  publishRequest.requestID = RequestID(101);
+  publishRequest.fullTrackName =
+      FullTrackName({TrackNamespace({"test"}), "pub"});
+  publishRequest.trackAlias = TrackAlias(43);
+  publishRequest.largest = std::nullopt;
+
+  auto writeResult = writer_.writePublish(writeBuf, publishRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::PUBLISH));
+
+  auto parseResult = parser_.parsePublish(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, publishRequest.requestID);
+  EXPECT_FALSE(parseResult->largest.has_value());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV15PlusTest,
     MoQFramerV15PlusTest,
