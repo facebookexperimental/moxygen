@@ -3242,6 +3242,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
       } else if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
         XLOG(ERR) << "Error parsing/consuming stream id=" << id
                   << " sess=" << this;
+        dcb.reset(ResetStreamErrorCode::INTERNAL_ERROR);
         break;
       }
     } // else empty read

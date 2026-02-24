@@ -921,11 +921,63 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCallbackErrorTerminatesStream) {
     // Fourth object should NOT be delivered
     EXPECT_CALL(*sg1, object(3, _, _, false)).Times(0);
   }
+  // The ERROR_TERMINATE from the object error triggers reset on the
+  // SubgroupConsumer to properly clean up the subgroup state.
+  EXPECT_CALL(*sg1, reset(_)).Times(1);
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
 
   co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Regression test: When a subscriber's SubgroupConsumer returns an error from
+// beginObject (e.g., due to a cache payload mismatch in the relay), the
+// session's unidirectionalReadLoop gets ERROR_TERMINATE from codec.onIngress.
+// Without the fix, the read loop just breaks without calling dcb.reset(),
+// leaving the SubgroupConsumer in a zombie state. The SubgroupForwarder
+// retains open downstream subgroups that are never cleaned up.
+// Fix: call dcb.reset() on the ERROR_TERMINATE path so the SubgroupConsumer
+// properly cleans up.
+CO_TEST_P_X(MoQSessionTest, ObjectCallbackErrorResetsSubgroupConsumer) {
+  co_await setupMoQSession();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub, sub] {
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      // Send an object that the subscriber will reject.
+      sgp->object(0, moxygen::test::makeBuf(100));
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    });
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton resetBaton;
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+
+  // object() returns an error, triggering ERROR_TERMINATE in the read loop
+  EXPECT_CALL(*sg1, object(0, _, _, false))
+      .WillOnce(
+          testing::Return(
+              folly::makeUnexpected(MoQPublishError(
+                  MoQPublishError::API_ERROR, "payload mismatch"))));
+
+  // After ERROR_TERMINATE, reset should be called to clean up the subgroup.
+  // Without the fix, this expectation fails (reset is never called).
+  EXPECT_CALL(*sg1, reset(_)).WillOnce([&](auto) { resetBaton.post(); });
+
+  expectPublishDone();
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await resetBaton;
+  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

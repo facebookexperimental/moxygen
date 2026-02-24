@@ -465,6 +465,9 @@ CO_TEST_P_X(MoQSessionTest, FetchCallbackErrorTerminatesStream) {
     // Third object should NOT be delivered
     EXPECT_CALL(*fetchCallback_, object(0, 0, 2, _, _, false, _)).Times(0);
   }
+  // The ERROR_TERMINATE from the object error triggers reset on the
+  // FetchConsumer to properly clean up the stream state.
+  EXPECT_CALL(*fetchCallback_, reset(_)).Times(1);
 
   auto fetch = getFetch(AbsoluteLocation{0, 0}, AbsoluteLocation{0, 2});
   auto res = co_await clientSession_->fetch(fetch, fetchCallback_);
