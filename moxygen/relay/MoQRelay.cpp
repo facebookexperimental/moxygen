@@ -1008,8 +1008,9 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
   }
 
   auto subscriptionIt = subscriptions_.find(trackStatus.fullTrackName);
-  if (subscriptionIt != subscriptions_.end()) {
-    // We have a subscription - answer directly from local forwarder state
+  if (subscriptionIt != subscriptions_.end() &&
+      subscriptionIt->second.forwarder->numForwardingSubscribers() > 0) {
+    // We have active subscription - answer directly from local forwarder state
     auto& subscription = subscriptionIt->second;
     auto& forwarder = subscription.forwarder;
     
