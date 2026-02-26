@@ -2586,12 +2586,10 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
     SubNsCb(
         MoQSession* session,
         proxygen::WebTransport::BidiStreamHandle bidiStreamHandle,
-        folly::IOBufQueue& bufQueue,
-        MoQFrameWriter& moqFrameWriter)
+        folly::IOBufQueue& bufQueue)
         : session_(session),
           bidiStreamHandle_(bidiStreamHandle),
-          bufQueue_(bufQueue),
-          moqFrameWriter_(moqFrameWriter) {}
+          bufQueue_(bufQueue) {}
 
     void onSubscribeNamespace(SubscribeNamespace subscribeNamespace) override {
       if (receivedSubscribeNamespace_) {
@@ -2629,7 +2627,6 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
     MoQSession* session_;
     proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
     folly::IOBufQueue& bufQueue_;
-    [[maybe_unused]] MoQFrameWriter& moqFrameWriter_;
     bool receivedSubscribeNamespace_{false};
     std::optional<RequestID> requestID_;
   };
@@ -2640,7 +2637,7 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
   // Point at the session-wide receive token cache so that auth-token aliases
   // registered on the control stream are visible here, and vice versa.
   moQSubNsReceiverCodec->setTokenCache(&receiveTokenCache_);
-  SubNsCb cb(this, bh, bufQueue, moqFrameWriter_);
+  SubNsCb cb(this, bh, bufQueue);
   moQSubNsReceiverCodec->setCallback(&cb);
 
   // TODO: Could perhaps return controlReadLoop instead of awaiting
