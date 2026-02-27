@@ -63,7 +63,6 @@ bool isValidGroupOrderParam(uint64_t value) {
     default:
       return false;
   }
-  return true;
 }
 
 bool isValidSubscriberPriorityParam(uint64_t value) {
