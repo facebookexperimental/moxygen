@@ -13,8 +13,8 @@
 #include <vector>
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Sleep.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include <folly/experimental/coro/Sleep.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/logging/xlog.h>

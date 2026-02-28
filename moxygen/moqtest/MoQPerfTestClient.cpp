@@ -8,7 +8,7 @@
 
 #include "moxygen/moqtest/MoQPerfTestClient.h"
 
-#include <folly/experimental/coro/Sleep.h>
+#include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
