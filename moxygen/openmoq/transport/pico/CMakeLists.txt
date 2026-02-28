@@ -15,3 +15,7 @@ moxygen_add_library(openmoq_pico_transport
     Folly::folly_string
     picoquic::picoquic-core
 )
+
+if(BUILD_SAMPLES)
+  add_subdirectory(sample)
+endif()
