@@ -285,4 +285,13 @@ uint32_t read4Bytes(folly::io::Cursor& cursor) {
   return cursor.readBE<uint32_t>();
 }
 
+std::unique_ptr<folly::IOBuf> readNBytes(
+    folly::io::Cursor& cursor,
+    uint32_t size) {
+  std::unique_ptr<folly::IOBuf> ret;
+  cursor.clone(ret, size);
+
+  return ret;
+}
+
 } // namespace moxygen::flv
