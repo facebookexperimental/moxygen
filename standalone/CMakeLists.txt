@@ -22,6 +22,7 @@ option(BUILD_TESTS "Build tests" ON)
 option(BUILD_SAMPLES "Build moxygen sample executables and test tools" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
 option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
+option(BUILD_PICOQUIC "Build with picoquic transport support" OFF)
 
 # =============================================================================
 # Linking preferences
@@ -219,6 +220,14 @@ FetchContent_Declare(proxygen
     GIT_TAG ${_PROXYGEN_REV}
 )
 
+if(BUILD_PICOQUIC)
+    FetchContent_Declare(picoquic
+        GIT_REPOSITORY https://github.com/afrind/picoquic.git
+        GIT_TAG cmake-embed-support
+    )
+endif()
+
+
 # Override find_package for deps we provide via FetchContent, since sub-projects
 # (fizz, wangle, mvfst, proxygen) call find_package(folly),
 # find_package(fizz), etc.
@@ -227,6 +236,9 @@ FetchContent_Declare(proxygen
 # Skip lzma unless libunwind is available (lzma is used for symbolization).
 set(_FETCHCONTENT_PROVIDED_DEPS folly fizz wangle mvfst proxygen GTest GMock
     BZip2 LZ4 Snappy glog Glog)
+if(BUILD_PICOQUIC)
+    list(APPEND _FETCHCONTENT_PROVIDED_DEPS picoquic)
+endif()
 if(NOT LibUnwind_FOUND)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibLZMA)
     message(STATUS "LibUnwind not found, disabling lzma")
@@ -294,6 +306,23 @@ if(NOT proxygen_POPULATED)
     apply_dep_patches(proxygen "${proxygen_SOURCE_DIR}")
     set(CMAKE_INSTALL_DIR "lib/cmake/proxygen" CACHE STRING "" FORCE)
     add_subdirectory(${proxygen_SOURCE_DIR} ${proxygen_BINARY_DIR} ${_EXCLUDE_FLAG})
+endif()
+
+if(BUILD_PICOQUIC)
+    # Save and override settings for picoquic build
+    set(_SAVED_BUILD_TESTING ${BUILD_TESTING})
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(PICOQUIC_FETCH_PTLS ON CACHE BOOL "Build picotls from source" FORCE)
+
+    FetchContent_GetProperties(picoquic)
+    if(NOT picoquic_POPULATED)
+        FetchContent_Populate(picoquic)
+        # No EXCLUDE_FROM_ALL: picoquic's own install rules must be reachable
+        # so that picoquic-core and picotls libs are installed alongside moxygen.
+        add_subdirectory(${picoquic_SOURCE_DIR} ${picoquic_BINARY_DIR})
+    endif()
+
+    set(BUILD_TESTING ${_SAVED_BUILD_TESTING} CACHE BOOL "" FORCE)
 endif()
 
 # =============================================================================

@@ -19,6 +19,12 @@ find_dependency(mvfst)
 find_dependency(proxygen)
 find_dependency(Glog)
 
+# === OpenMOQ ===
+if(@BUILD_PICOQUIC@)
+    find_dependency(picoquic)
+endif()
+# === End OpenMOQ ===
+
 if(NOT TARGET moxygen::moxygen_moq)
     include("${CMAKE_CURRENT_LIST_DIR}/moxygen-targets.cmake")
     get_target_property(moxygen_INCLUDE_DIRS moxygen::moxygen_moq INTERFACE_INCLUDE_DIRECTORIES)
