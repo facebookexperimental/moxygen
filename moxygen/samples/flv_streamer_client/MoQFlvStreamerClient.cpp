@@ -121,10 +121,11 @@ class MoQFlvStreamerClient
     flv::FlvReader flvSeqReader(FLAGS_input_flv_file);
     while (moqClient_.getSession()) {
       auto item = flvSeqReader.getNextItem();
-      if (item == nullptr) {
+      if (!item) {
         XLOG(ERR) << "Error reading FLV file";
         break;
       }
+      XLOG(DBG1) << "Media item to publish data: " << *item;
       for (auto& sub : subscriptions_) {
         XLOG(DBG1) << "Evaluating to send item: " << item->id
                    << ", type: " << folly::to_underlying(item->type)

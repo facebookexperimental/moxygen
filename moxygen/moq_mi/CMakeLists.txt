@@ -9,6 +9,7 @@
 moxygen_add_library(moxygen_moq_mi
   SRCS
     MoQMi.cpp
+    MediaItem.cpp
   EXPORTED_DEPS
     moxygen_flv_parser_flv_common
     moxygen_moq_framer

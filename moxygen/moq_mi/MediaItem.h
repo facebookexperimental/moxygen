@@ -126,6 +126,8 @@ struct MediaItem {
     clone->metadata = metadata != nullptr ? metadata->clone() : nullptr;
     return clone;
   }
+
+  friend std::ostream& operator<<(std::ostream& os, const MediaItem& a);
 };
 
 } // namespace moxygen
