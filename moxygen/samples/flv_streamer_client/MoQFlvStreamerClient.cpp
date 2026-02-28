@@ -108,8 +108,8 @@ class MoQFlvStreamerClient
     }
     if (moqClient_.getSession()) {
       moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
-      moqClient_.shutdown();
     }
+    moqClient_.shutdown();
   }
 
   void publishLoop() {
@@ -118,6 +118,7 @@ class MoQFlvStreamerClient
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     auto keepAlive = folly::getKeepAliveToken(moqClient_.getEventBase());
 
+    // This blocks until there is bytes (ex: PIPE)
     flv::FlvReader flvSeqReader(FLAGS_input_flv_file);
     while (moqClient_.getSession()) {
       auto item = flvSeqReader.getNextItem();

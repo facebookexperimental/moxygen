@@ -206,6 +206,7 @@ class TrackReceiverHandler : public ObjectReceiverCallback {
     ;
   }
   void onPublishDone(PublishDone) override {
+    XLOG(INFO) << trackMediaType_.toStr() << " Publish Done";
     baton.post();
   }
 
@@ -411,11 +412,10 @@ class MoQFlvReceiverClient
       XLOG(ERR) << ex.what();
       co_return;
     }
-    // TODO: should we co_await collectAll(trackReceiverHandlerAudio_.baton,
-    // trackReceiverHandlerVideo_.baton);
     co_await trackReceiverHandlerAudio_->baton;
     co_await trackReceiverHandlerVideo_->baton;
-    XLOG(INFO) << __func__ << " done";
+
+    stop();
   }
 
   folly::coro::Task<PublishNamespaceResult> publishNamespace(
@@ -436,6 +436,14 @@ class MoQFlvReceiverClient
   }
 
   void stop() {
+    XLOG(INFO) << __func__;
+    if (trackReceiverHandlerAudio_) {
+      trackReceiverHandlerAudio_->baton.post();
+    }
+    if (trackReceiverHandlerVideo_) {
+      trackReceiverHandlerVideo_->baton.post();
+    }
+
     if (audioSubscribeHandle_) {
       audioSubscribeHandle_->unsubscribe();
       audioSubscribeHandle_.reset();
@@ -444,7 +452,10 @@ class MoQFlvReceiverClient
       videoSubscribeHandle_->unsubscribe();
       videoSubscribeHandle_.reset();
     }
-    moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    if (moqClient_ && moqClient_->moqSession_) {
+      moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    }
+    XLOG(INFO) << __func__ << " done";
   }
 
  private:
@@ -501,6 +512,7 @@ int main(int argc, char* argv[]) {
       registerSignalHandler(SIGINT);
     }
     void signalReceived(int signum) noexcept override {
+      XLOGF(INFO, "Received signal {}", signum);
       fn_(signum);
       unreg();
     }
