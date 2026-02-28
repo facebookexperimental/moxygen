@@ -1,0 +1,9 @@
+moxygen_add_library(openmoq_pico_transport
+  SRCS
+    PicoQuicExecutor.cpp
+  EXPORTED_DEPS
+    moxygen_events_moq_executor
+    Folly::folly_function
+    Folly::folly_logging_logging
+    picoquic::picoquic-core
+)
