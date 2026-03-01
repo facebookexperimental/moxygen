@@ -121,8 +121,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           # If a sync PR already exists, it auto-updates when main advances
-          PR_NUM=$(gh api repos/${{ github.repository }}/pulls \
-            -f state=open -f base=openmoq-main -f head=main \
+          PR_NUM=$(gh api "repos/${{ github.repository }}/pulls?state=open&base=openmoq-main&head=${{ github.repository_owner }}:main" \
             --jq '.[0].number // empty')
 
           if [ -n "$PR_NUM" ]; then

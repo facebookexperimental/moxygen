@@ -82,7 +82,7 @@ jobs:
             -DBUILD_TESTING=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUNDLE_DEPS=ON \
-            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install"
 
       - name: Build
         run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
@@ -93,10 +93,10 @@ jobs:
       - name: Package
         run: |
           bash openmoq/scripts/collect-artifacts-standalone.sh \
-            --install-prefix ${{ github.workspace }}/install \
+            --install-prefix "$GITHUB_WORKSPACE/install" \
             --output "${{ matrix.artifact }}" \
             --debug-output "${{ matrix.debug_artifact }}" \
-            --src-dir ${{ github.workspace }}
+            --src-dir "$GITHUB_WORKSPACE"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
