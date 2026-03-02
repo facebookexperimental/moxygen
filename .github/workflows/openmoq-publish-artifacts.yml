@@ -143,7 +143,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "${{ needs.build.result == 'success' && ':package: *moxygen artifacts published*' || ':x: *moxygen artifact build FAILED*' }}\nCommit: `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+              "text": "${{ needs.build.result == 'success' && ':white_check_mark: *moxygen artifacts published* — 4-platform standalone build' || ':warning: *moxygen artifact build failed* — needs attention' }}\nCommit: `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}

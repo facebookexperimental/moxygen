@@ -232,7 +232,7 @@ jobs:
         with:
           payload: |
             {
-              "text": ":x: *moxygen upstream sync FAILED*\nUpstream: `${{ steps.upstream.outputs.upstream_sha || 'unknown' }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+              "text": ":warning: *moxygen upstream sync failed* — needs attention\nUpstream: `${{ steps.upstream.outputs.upstream_sha || 'unknown' }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
