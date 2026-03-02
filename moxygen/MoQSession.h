@@ -144,6 +144,10 @@ class MoQSession : public Subscriber,
     closeCallback_ = cb;
   }
 
+  bool isClosed() const {
+    return closed_;
+  }
+
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::shared_ptr<MoQExecutor> exec);

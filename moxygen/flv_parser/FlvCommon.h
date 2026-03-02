@@ -336,4 +336,8 @@ uint8_t read1Byte(folly::io::Cursor& cursor);
 uint32_t read3Bytes(folly::io::Cursor& cursor);
 uint32_t read4Bytes(folly::io::Cursor& cursor);
 
+std::unique_ptr<folly::IOBuf> readNBytes(
+    folly::io::Cursor& cursor,
+    uint32_t size);
+
 } // namespace moxygen::flv
