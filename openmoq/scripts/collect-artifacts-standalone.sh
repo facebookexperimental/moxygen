@@ -75,15 +75,12 @@ echo "    Total size (before strip): $PRE_STRIP_SIZE"
 
 if [[ -n "$SRC_DIR" && -d "$SRC_DIR" ]]; then
   # Check if moxygen headers were installed; if not, copy from source
-  if [[ ! -d "$INSTALL_PREFIX/include/moxygen" ]]; then
+  MOXYGEN_HDRS=$(find "$INSTALL_PREFIX/include/moxygen" -name '*.h' 2>/dev/null | wc -l)
+  if [[ "$MOXYGEN_HDRS" -eq 0 ]]; then
     echo "==> Supplementing moxygen headers from source..."
-    mkdir -p "$INSTALL_PREFIX/include/moxygen"
-    find "$SRC_DIR/moxygen" -name '*.h' -exec cp --parents -t "$INSTALL_PREFIX/include/" {} + 2>/dev/null || \
-    find "$SRC_DIR/moxygen" -name '*.h' | while read -r hdr; do
-      REL="${hdr#$SRC_DIR/}"
-      mkdir -p "$INSTALL_PREFIX/include/$(dirname "$REL")"
-      cp "$hdr" "$INSTALL_PREFIX/include/$REL"
-    done
+    (cd "$SRC_DIR" && find moxygen -name '*.h' \
+      ! -path '*/test/*' ! -path '*/facebook/*' \
+      -exec cp --parents -t "$INSTALL_PREFIX/include/" {} +)
     HEADER_COUNT=$(find "$INSTALL_PREFIX/include/moxygen" -name '*.h' | wc -l)
     echo "    Copied $HEADER_COUNT header files"
   fi

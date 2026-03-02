@@ -258,10 +258,15 @@ else()
     set(_EXCLUDE_FLAG EXCLUDE_FROM_ALL)
 endif()
 
+# Each Meta dep uses CMAKE_INSTALL_DIR (CACHE STRING) for its cmake config
+# install path. Since they all share the same variable name, the first one
+# (folly) wins and the rest inherit "lib/cmake/folly". We force-set before
+# each add_subdirectory so configs land in lib/cmake/<dep>/.
 FetchContent_GetProperties(folly)
 if(NOT folly_POPULATED)
     FetchContent_Populate(folly)
     apply_dep_patches(folly "${folly_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/folly" CACHE STRING "" FORCE)
     add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
@@ -269,6 +274,7 @@ FetchContent_GetProperties(fizz)
 if(NOT fizz_POPULATED)
     FetchContent_Populate(fizz)
     apply_dep_patches(fizz "${fizz_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/fizz" CACHE STRING "" FORCE)
     add_subdirectory(${fizz_SOURCE_DIR}/fizz ${fizz_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
@@ -276,6 +282,7 @@ FetchContent_GetProperties(wangle)
 if(NOT wangle_POPULATED)
     FetchContent_Populate(wangle)
     apply_dep_patches(wangle "${wangle_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/wangle" CACHE STRING "" FORCE)
     add_subdirectory(${wangle_SOURCE_DIR}/wangle ${wangle_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
@@ -283,6 +290,7 @@ FetchContent_GetProperties(mvfst)
 if(NOT mvfst_POPULATED)
     FetchContent_Populate(mvfst)
     apply_dep_patches(mvfst "${mvfst_SOURCE_DIR}")
+    # mvfst uses CMAKE_INSTALL_MODULE_DIR, not CMAKE_INSTALL_DIR — no conflict
     add_subdirectory(${mvfst_SOURCE_DIR} ${mvfst_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
@@ -290,6 +298,7 @@ FetchContent_GetProperties(proxygen)
 if(NOT proxygen_POPULATED)
     FetchContent_Populate(proxygen)
     apply_dep_patches(proxygen "${proxygen_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/proxygen" CACHE STRING "" FORCE)
     add_subdirectory(${proxygen_SOURCE_DIR} ${proxygen_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
@@ -323,28 +332,28 @@ endif()
 # Include moxygen's main CMakeLists.txt
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../moxygen moxygen)
 
+moxygen_install_headers(moxygen ${CMAKE_CURRENT_SOURCE_DIR}/../moxygen)
+
 # =============================================================================
 # Installation (mirrors main CMakeLists.txt)
 # =============================================================================
 set(LIB_INSTALL_DIR "lib" CACHE STRING "Library install directory")
-set(CMAKE_INSTALL_DIR
-    "${LIB_INSTALL_DIR}/cmake/moxygen/"
-    CACHE STRING "CMake config install directory")
+set(_MOXYGEN_CMAKE_INSTALL_DIR "${LIB_INSTALL_DIR}/cmake/moxygen/")
 
 install(
     EXPORT moxygen-exports
     FILE moxygen-targets.cmake
     NAMESPACE moxygen::
-    DESTINATION ${CMAKE_INSTALL_DIR}
+    DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/moxygen-config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/moxygen-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_DIR}
+    INSTALL_DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
 install(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/moxygen-config.cmake
-    DESTINATION ${CMAKE_INSTALL_DIR}
+    DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
