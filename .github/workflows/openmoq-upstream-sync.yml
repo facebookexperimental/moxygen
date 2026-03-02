@@ -215,7 +215,7 @@ jobs:
       - name: Enable auto-merge
         if: steps.blocking.outputs.blocked == 'false' && steps.merge.outputs.needs_merge == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.OMOQ_SYNC_TOKEN }}
         run: |
           PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
           [ -z "$PR_NUM" ] && { echo "::warning::No PR number"; exit 0; }
