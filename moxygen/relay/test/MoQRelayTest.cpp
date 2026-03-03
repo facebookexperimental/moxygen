@@ -1914,4 +1914,201 @@ TEST_F(MoQRelayTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
   EXPECT_EQ(forwarder, nullptr);
 }
 
+// Test: Extensions from publish are forwarded to subscribers via
+// subscribeNamespace
+TEST_F(MoQRelayTest, PublishExtensionsForwardedToSubscribers) {
+  auto publisherSession = createMockSession();
+  auto subscriber = createMockSession();
+
+  // Subscribe to namespace first
+  auto mockConsumer = createMockConsumer();
+  Extensions receivedExtensions;
+  EXPECT_CALL(*subscriber, publish(testing::_, testing::_))
+      .WillOnce([&mockConsumer, &receivedExtensions](
+                    PublishRequest pubReq, auto subHandle) {
+        receivedExtensions = pubReq.extensions;
+        return Subscriber::PublishResult(
+            Subscriber::PublishConsumerAndReplyTask{
+                mockConsumer,
+                []() -> folly::coro::Task<
+                         folly::Expected<PublishOk, PublishError>> {
+                  co_return PublishOk{
+                      RequestID(1),
+                      true,
+                      0,
+                      GroupOrder::OldestFirst,
+                      LocationType::LargestObject,
+                      std::nullopt,
+                      std::nullopt};
+                }()});
+      });
+
+  doSubscribeNamespace(subscriber, kTestNamespace);
+
+  // Publish with extensions (both known and unknown)
+  PublishRequest pub;
+  pub.fullTrackName = kTestTrackName;
+  pub.extensions.insertMutableExtension(
+      Extension{kDeliveryTimeoutExtensionType, 5000});
+  pub.extensions.insertMutableExtension(Extension{0xBEEF'0000, 42});
+
+  withSessionContext(publisherSession, [&]() {
+    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    EXPECT_TRUE(res.hasValue());
+    if (res.hasValue()) {
+      getOrCreateMockState(publisherSession)
+          ->publishConsumers.push_back(res->consumer);
+    }
+  });
+  exec_->drive();
+
+  // Verify extensions were forwarded
+  EXPECT_EQ(
+      receivedExtensions.getIntExtension(kDeliveryTimeoutExtensionType), 5000);
+  EXPECT_EQ(receivedExtensions.getIntExtension(0xBEEF'0000), 42);
+
+  removeSession(publisherSession);
+  removeSession(subscriber);
+}
+
+// Test: Extensions from publish are forwarded to late-joining subscribers
+TEST_F(MoQRelayTest, PublishExtensionsForwardedToLateJoiners) {
+  auto publisherSession = createMockSession();
+  auto subscriber1 = createMockSession();
+  auto subscriber2 = createMockSession();
+
+  // Subscriber 1 subscribes first
+  auto mockConsumer1 = createMockConsumer();
+  EXPECT_CALL(*subscriber1, publish(testing::_, testing::_))
+      .WillOnce([&mockConsumer1](auto, auto) {
+        return Subscriber::PublishResult(
+            Subscriber::PublishConsumerAndReplyTask{
+                mockConsumer1,
+                []() -> folly::coro::Task<
+                         folly::Expected<PublishOk, PublishError>> {
+                  co_return PublishOk{
+                      RequestID(1),
+                      true,
+                      0,
+                      GroupOrder::OldestFirst,
+                      LocationType::LargestObject,
+                      std::nullopt,
+                      std::nullopt};
+                }()});
+      });
+
+  doSubscribeNamespace(subscriber1, kTestNamespace);
+
+  // Publish with extensions
+  PublishRequest pub;
+  pub.fullTrackName = kTestTrackName;
+  pub.extensions.insertMutableExtension(
+      Extension{kDeliveryTimeoutExtensionType, 3000});
+  pub.extensions.insertMutableExtension(Extension{0xCAFE'0000, 99});
+
+  withSessionContext(publisherSession, [&]() {
+    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    EXPECT_TRUE(res.hasValue());
+    if (res.hasValue()) {
+      getOrCreateMockState(publisherSession)
+          ->publishConsumers.push_back(res->consumer);
+    }
+  });
+  exec_->drive();
+
+  // Late-joining subscriber 2 should also get extensions
+  Extensions receivedExtensions;
+  auto mockConsumer2 = createMockConsumer();
+  EXPECT_CALL(*subscriber2, publish(testing::_, testing::_))
+      .WillOnce(
+          [&mockConsumer2, &receivedExtensions](PublishRequest pubReq, auto) {
+            receivedExtensions = pubReq.extensions;
+            return Subscriber::PublishResult(
+                Subscriber::PublishConsumerAndReplyTask{
+                    mockConsumer2,
+                    []() -> folly::coro::Task<
+                             folly::Expected<PublishOk, PublishError>> {
+                      co_return PublishOk{
+                          RequestID(2),
+                          true,
+                          0,
+                          GroupOrder::OldestFirst,
+                          LocationType::LargestObject,
+                          std::nullopt,
+                          std::nullopt};
+                    }()});
+          });
+
+  doSubscribeNamespace(subscriber2, kTestNamespace);
+  exec_->drive();
+
+  // Verify late-joiner received extensions
+  EXPECT_EQ(
+      receivedExtensions.getIntExtension(kDeliveryTimeoutExtensionType), 3000);
+  EXPECT_EQ(receivedExtensions.getIntExtension(0xCAFE'0000), 99);
+
+  removeSession(publisherSession);
+  removeSession(subscriber1);
+  removeSession(subscriber2);
+}
+
+// Test: Extensions are included in SubscribeOk for subscribe path subscribers
+TEST_F(MoQRelayTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
+  auto session1 = createMockSession();
+  auto session2 = createMockSession();
+
+  // Create forwarder with extensions
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+  Extensions ext;
+  ext.insertMutableExtension(Extension{kDeliveryTimeoutExtensionType, 7000});
+  ext.insertMutableExtension(Extension{0xDEAD'0000, 123});
+  forwarder->setExtensions(ext);
+
+  // Add subscriber via SubscribeRequest
+  auto consumer1 = createMockConsumer();
+  SubscribeRequest sub1;
+  sub1.fullTrackName = kTestTrackName;
+  sub1.requestID = RequestID(1);
+  sub1.locType = LocationType::LargestGroup;
+  auto subscriber1 = forwarder->addSubscriber(session1, sub1, consumer1);
+  ASSERT_NE(subscriber1, nullptr);
+
+  // Verify extensions are in the SubscribeOk
+  EXPECT_EQ(
+      subscriber1->subscribeOk().extensions.getIntExtension(
+          kDeliveryTimeoutExtensionType),
+      7000);
+  EXPECT_EQ(
+      subscriber1->subscribeOk().extensions.getIntExtension(0xDEAD'0000), 123);
+
+  // Second subscriber should also get extensions
+  auto consumer2 = createMockConsumer();
+  SubscribeRequest sub2;
+  sub2.fullTrackName = kTestTrackName;
+  sub2.requestID = RequestID(2);
+  sub2.locType = LocationType::LargestGroup;
+  auto subscriber2 = forwarder->addSubscriber(session2, sub2, consumer2);
+  ASSERT_NE(subscriber2, nullptr);
+
+  EXPECT_EQ(
+      subscriber2->subscribeOk().extensions.getIntExtension(
+          kDeliveryTimeoutExtensionType),
+      7000);
+  EXPECT_EQ(
+      subscriber2->subscribeOk().extensions.getIntExtension(0xDEAD'0000), 123);
+
+  // Add subscriber via publish path (bool forward)
+  auto session3 = createMockSession();
+  auto subscriber3 = forwarder->addSubscriber(session3, /*forward=*/false);
+  ASSERT_NE(subscriber3, nullptr);
+
+  EXPECT_EQ(
+      subscriber3->subscribeOk().extensions.getIntExtension(
+          kDeliveryTimeoutExtensionType),
+      7000);
+  EXPECT_EQ(
+      subscriber3->subscribeOk().extensions.getIntExtension(0xDEAD'0000), 123);
+}
+
 } // namespace moxygen::test

@@ -138,6 +138,10 @@ void MoQForwarder::setDeliveryTimeout(uint64_t timeout) {
   upstreamDeliveryTimeout_ = std::chrono::milliseconds(timeout);
 }
 
+void MoQForwarder::setExtensions(Extensions extensions) {
+  extensions_ = std::move(extensions);
+}
+
 void MoQForwarder::setLargest(AbsoluteLocation largest) {
   largest_ = largest;
 }
@@ -165,17 +169,13 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
           trackAlias,
           std::chrono::milliseconds(0),
           MoQSession::resolveGroupOrder(groupOrder_, subReq.groupOrder),
-          largest_},
+          largest_,
+          extensions_},
       std::move(session),
       subReq.requestID,
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
-  if (upstreamDeliveryTimeout_.count() > 0) {
-    subscriber->setParam(
-        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-         static_cast<uint64_t>(upstreamDeliveryTimeout_.count())});
-  }
   subscribers_.emplace(sessionPtr, subscriber);
   if (subReq.forward) {
     addForwardingSubscriber();
@@ -185,7 +185,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
 
 std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
     std::shared_ptr<MoQSession> session,
-    const PublishRequest& pub) {
+    bool forward) {
   if (draining_) {
     XLOG(ERR) << "addSubscriber called on draining track";
     return nullptr;
@@ -194,18 +194,19 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
   auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
       *this,
       SubscribeOk{
-          pub.requestID,
-          pub.trackAlias,
+          RequestID(0),
+          trackAlias_.value_or(TrackAlias(0)),
           std::chrono::milliseconds(0),
-          pub.groupOrder,
-          largest_},
+          groupOrder_,
+          largest_,
+          extensions_},
       std::move(session),
-      pub.requestID,
+      RequestID(0),
       SubscribeRange{{0, 0}, kLocationMax},
       nullptr,
-      pub.forward);
+      forward);
   subscribers_.emplace(sessionPtr, subscriber);
-  if (pub.forward) {
+  if (forward) {
     addForwardingSubscriber();
   }
   return subscriber;
@@ -547,6 +548,21 @@ void MoQForwarder::Subscriber::setPublisherGroupOrder(
 
 void MoQForwarder::Subscriber::updateLargest(AbsoluteLocation largest) {
   subscribeOk_->largest = largest;
+}
+
+void MoQForwarder::Subscriber::setExtensions(Extensions extensions) {
+  subscribeOk_->extensions = std::move(extensions);
+}
+
+PublishRequest MoQForwarder::Subscriber::getPublishRequest() const {
+  return PublishRequest{
+      RequestID(0),
+      forwarder.fullTrackName(),
+      TrackAlias(0),
+      forwarder.groupOrder(),
+      forwarder.largest(),
+      shouldForward,
+      forwarder.extensions()};
 }
 
 void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {

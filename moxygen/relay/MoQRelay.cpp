@@ -422,10 +422,11 @@ Subscriber::PublishResult MoQRelay::publish(
 
   // Create Forwarder for this publish
   auto forwarder =
-      std::make_shared<MoQForwarder>(pub.fullTrackName, std::nullopt);
+      std::make_shared<MoQForwarder>(pub.fullTrackName, pub.largest);
 
   // Set Forwarder Params
   forwarder->setGroupOrder(pub.groupOrder);
+  forwarder->setExtensions(pub.extensions);
 
   // Extract delivery timeout from publish request extensions and store in
   // forwarder
@@ -452,7 +453,7 @@ Subscriber::PublishResult MoQRelay::publish(
       nSubscribers++;
       auto exec = outSession->getExecutor();
       co_withExecutor(
-          exec, publishToSession(outSession, forwarder, pub, info.forward))
+          exec, publishToSession(outSession, forwarder, info.forward))
           .start();
     }
   }
@@ -479,23 +480,18 @@ Subscriber::PublishResult MoQRelay::publish(
 folly::coro::Task<void> MoQRelay::publishToSession(
     std::shared_ptr<MoQSession> session,
     std::shared_ptr<MoQForwarder> forwarder,
-    PublishRequest pub,
     bool forward) {
-  pub.forward = forward;
-  auto subscriber = forwarder->addSubscriber(session, pub);
+  auto subscriber = forwarder->addSubscriber(session, forward);
   if (!subscriber) {
     XLOG(ERR) << "Subscribe failed: addSubscriber returned null for "
-              << forwarder->fullTrackName() << " reqID=" << pub.requestID;
+              << forwarder->fullTrackName();
     co_return;
   }
-  XLOG(DBG4) << "added subscriber for ftn=" << pub.fullTrackName;
+  XLOG(DBG4) << "added subscriber for ftn=" << forwarder->fullTrackName();
   auto guard = folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
-  if (pub.largest) {
-    subscriber->updateLargest(*pub.largest);
-  }
-  subscriber->setPublisherGroupOrder(pub.groupOrder);
 
-  auto pubInitial = session->publish(pub, subscriber);
+  auto pubInitial =
+      session->publish(subscriber->getPublishRequest(), subscriber);
   if (pubInitial.hasError()) {
     XLOG(ERR) << "Publish failed err=" << pubInitial.error().reasonPhrase;
     co_return;
@@ -662,20 +658,12 @@ MoQRelay::subscribeNamespace(
             .start();
       }
     }
-    PublishRequest pub{
-        0,
-        FullTrackName{prefix, ""},
-        TrackAlias(0), // filled in by library
-        GroupOrder::Default,
-        std::nullopt,
-        /*forward=*/false};
     for (auto& publishEntry : nodePtr->publishes) {
       auto& publishSession = publishEntry.second;
-      pub.fullTrackName.trackName = publishEntry.first;
-      auto subscriptionIt = subscriptions_.find(pub.fullTrackName);
+      FullTrackName ftn{prefix, publishEntry.first};
+      auto subscriptionIt = subscriptions_.find(ftn);
       if (subscriptionIt == subscriptions_.end()) {
-        XLOG(ERR) << "Invalid state, no subscription for publish ftn="
-                  << pub.fullTrackName;
+        XLOG(ERR) << "Invalid state, no subscription for publish ftn=" << ftn;
         continue;
       }
       auto& forwarder = subscriptionIt->second.forwarder;
@@ -686,8 +674,6 @@ MoQRelay::subscribeNamespace(
             doSubscribeUpdate(subscriptionIt->second.handle, subNs.forward))
             .start();
       }
-      pub.groupOrder = forwarder->groupOrder();
-      pub.largest = forwarder->largest();
       auto maybeNegotiatedVersion = session->getNegotiatedVersion();
       CHECK(maybeNegotiatedVersion.has_value());
       if (getDraftMajorVersion(*maybeNegotiatedVersion) <= 15 ||
@@ -695,7 +681,7 @@ MoQRelay::subscribeNamespace(
            subNs.options == SubscribeNamespaceOptions::PUBLISH)) {
         if (publishSession != session) {
           co_withExecutor(
-              exec, publishToSession(session, forwarder, pub, subNs.forward))
+              exec, publishToSession(session, forwarder, subNs.forward))
               .start();
         }
       }
@@ -868,15 +854,14 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     // Store upstream delivery timeout in forwarder
     auto deliveryTimeout =
         getPublisherDeliveryTimeout(subRes.value()->subscribeOk());
-
-    // Add delivery timeout to downstream subscriber explicitly as this is the
-    // first subscriber. Forwarder can add it to subsequent subscribers
     if (deliveryTimeout && deliveryTimeout->count() > 0) {
       forwarder->setDeliveryTimeout(deliveryTimeout->count());
-      subscriber->setParam(
-          {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
-           static_cast<uint64_t>(deliveryTimeout->count())});
     }
+
+    // Save full extensions to forwarder and first subscriber
+    auto& upstreamExtensions = subRes.value()->subscribeOk().extensions;
+    forwarder->setExtensions(upstreamExtensions);
+    subscriber->setExtensions(upstreamExtensions);
 
     subscriber->setPublisherGroupOrder(pubGroupOrder);
     auto it = subscriptions_.find(subReq.fullTrackName);

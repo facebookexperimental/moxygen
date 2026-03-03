@@ -194,7 +194,6 @@ class MoQRelay : public Publisher,
   folly::coro::Task<void> publishToSession(
       std::shared_ptr<MoQSession> session,
       std::shared_ptr<MoQForwarder> forwarder,
-      PublishRequest pub,
       bool forward);
 
   folly::coro::Task<void> doSubscribeUpdate(
