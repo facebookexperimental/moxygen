@@ -29,6 +29,7 @@ endif()
 
 set(moxygen_LIBRARIES
   moxygen::moxygen_moq
+  moxygen::moxygen_moq_server_base
   moxygen::moxygen_moq_server
   moxygen::moxygen_moq_relay_session
   moxygen::moxygen_relay_moq_relay
