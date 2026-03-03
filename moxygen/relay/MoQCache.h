@@ -103,6 +103,8 @@ class MoQCache {
       std::chrono::milliseconds duration);
   void clearMaxCacheDuration(const FullTrackName& ftn);
 
+  void setTrackExtensions(const FullTrackName& ftn, Extensions extensions);
+
   TimePoint now() const {
     return clock_();
   }
@@ -188,6 +190,8 @@ class MoQCache {
     size_t activeFetchCount{0};
     // Optional max cache duration for this track
     std::optional<std::chrono::milliseconds> maxCacheDuration;
+    // Track-level extensions to include in FetchOk
+    Extensions extensions;
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
@@ -199,7 +203,7 @@ class MoQCache {
     folly::Expected<folly::Unit, MoQPublishError> processGapExtensions(
         uint64_t groupID,
         uint64_t objectID,
-        const Extensions& extensions);
+        const Extensions& objectExtensions);
 
     // Returns true if track can be evicted (not live, no active fetches)
     bool canEvict() const {

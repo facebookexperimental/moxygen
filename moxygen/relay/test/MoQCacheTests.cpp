@@ -2449,4 +2449,64 @@ TEST_F(MoQCacheTest, SubgroupWritebackBeginObjectCacheErrorResetsInner) {
   EXPECT_TRUE(beginRes.hasError());
 }
 
+CO_TEST_F(MoQCacheTest, TestFetchOkIncludesTrackExtensions) {
+  // Set extensions on the track via setTrackExtensions
+  Extensions ext;
+  ext.insertMutableExtension(Extension{kDeliveryTimeoutExtensionType, 5000});
+  ext.insertMutableExtension(Extension{0xBEEF'0000, 42});
+  cache_.setTrackExtensions(kTestTrackName, ext);
+
+  // Populate cache so the fetch is a full cache hit
+  populateCacheRange({0, 0}, {0, 10});
+  expectFetchObjects({0, 0}, {0, 10}, false);
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // Verify extensions are in the FetchOk
+  auto& fetchExtensions = res.value()->fetchOk().extensions;
+  EXPECT_EQ(
+      fetchExtensions.getIntExtension(kDeliveryTimeoutExtensionType), 5000);
+  EXPECT_EQ(fetchExtensions.getIntExtension(0xBEEF'0000), 42);
+}
+
+CO_TEST_F(MoQCacheTest, TestUpstreamFetchSavesExtensionsToTrack) {
+  // Upstream fetch with extensions — extensions should be saved to the track
+  // and appear on subsequent cache-served FetchOk
+  Extensions upstreamExt;
+  upstreamExt.insertMutableExtension(
+      Extension{kDeliveryTimeoutExtensionType, 3000});
+  upstreamExt.insertMutableExtension(Extension{0xCAFE'0000, 99});
+
+  // Set up upstream fetch that returns FetchOk with extensions and serves data
+  expectUpstreamFetch(
+      {0, 0}, {0, 10}, /*endOfTrack=*/0, AbsoluteLocation{1, 0});
+  // Override the handle's FetchOk extensions
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // Set extensions on the track (simulates what MoQRelay does after
+  // SubscribeOk)
+  cache_.setTrackExtensions(kTestTrackName, upstreamExt);
+
+  // Serve data from upstream so the cache is populated
+  expectFetchObjects({0, 0}, {0, 10}, true);
+  serveCacheRangeFromUpstream({0, 0}, {0, 10});
+
+  // Now do another fetch that hits cache — should include saved extensions
+  auto consumer2 = std::make_shared<StrictMock<moxygen::MockFetchConsumer>>();
+  expectFetchObjects({0, 0}, {0, 10}, false, 10, 1, 1, false, consumer2);
+
+  auto res2 =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer2, upstream_);
+  EXPECT_TRUE(res2.hasValue());
+
+  auto& fetchExtensions = res2.value()->fetchOk().extensions;
+  EXPECT_EQ(
+      fetchExtensions.getIntExtension(kDeliveryTimeoutExtensionType), 3000);
+  EXPECT_EQ(fetchExtensions.getIntExtension(0xCAFE'0000), 99);
+}
+
 } // namespace moxygen::test

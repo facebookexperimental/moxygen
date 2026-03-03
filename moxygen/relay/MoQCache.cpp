@@ -300,10 +300,10 @@ folly::Expected<folly::Unit, MoQPublishError>
 MoQCache::CacheTrack::processGapExtensions(
     uint64_t groupID,
     uint64_t objectID,
-    const Extensions& extensions) {
+    const Extensions& objectExtensions) {
   // Process Prior Group ID Gap extension (0x3C)
   auto priorGroupGap =
-      extensions.getIntExtension(kPriorGroupIdGapExtensionType);
+      objectExtensions.getIntExtension(kPriorGroupIdGapExtensionType);
   if (priorGroupGap) {
     uint64_t gap = *priorGroupGap;
 
@@ -357,7 +357,7 @@ MoQCache::CacheTrack::processGapExtensions(
   // valid (each object can independently indicate which prior objects don't
   // exist). We allow redundant marking of already-not-existing objects.
   auto priorObjectGap =
-      extensions.getIntExtension(kPriorObjectIdGapExtensionType);
+      objectExtensions.getIntExtension(kPriorObjectIdGapExtensionType);
   if (priorObjectGap) {
     uint64_t gap = *priorObjectGap;
 
@@ -1155,7 +1155,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
       largestInFetch.group--;
     }
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
-        fetch.requestID, fetch.groupOrder, isEndOfTrack, largestInFetch, {}});
+        fetch.requestID,
+        fetch.groupOrder,
+        isEndOfTrack,
+        largestInFetch,
+        track->extensions});
     co_withExecutor(
         co_await folly::coro::co_current_executor,
         folly::coro::co_withCancellation(
@@ -1430,6 +1434,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
   }
 
   XLOG(DBG1) << "upstream success";
+  track->extensions = res.value()->fetchOk().extensions;
   if (lastObject) {
     if (!fetchHandle) {
       XLOG(DBG1) << "no fetchHandle and last object";
@@ -1497,6 +1502,17 @@ void MoQCache::clearMaxCacheDuration(const FullTrackName& ftn) {
   if (it != cache_.end()) {
     it->second->maxCacheDuration.reset();
   }
+}
+
+void MoQCache::setTrackExtensions(
+    const FullTrackName& ftn,
+    Extensions extensions) {
+  auto it = cache_.find(ftn);
+  if (it == cache_.end()) {
+    it = cache_.emplace(ftn, std::make_shared<CacheTrack>()).first;
+    addTrackToLRU(ftn, *it->second);
+  }
+  it->second->extensions = std::move(extensions);
 }
 
 MoQCache::FetchRangeIterator::FetchRangeIterator(

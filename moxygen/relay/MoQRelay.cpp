@@ -858,10 +858,13 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       forwarder->setDeliveryTimeout(deliveryTimeout->count());
     }
 
-    // Save full extensions to forwarder and first subscriber
+    // Save full extensions to forwarder, first subscriber, and cache
     auto& upstreamExtensions = subRes.value()->subscribeOk().extensions;
     forwarder->setExtensions(upstreamExtensions);
     subscriber->setExtensions(upstreamExtensions);
+    if (cache_) {
+      cache_->setTrackExtensions(subReq.fullTrackName, upstreamExtensions);
+    }
 
     subscriber->setPublisherGroupOrder(pubGroupOrder);
     auto it = subscriptions_.find(subReq.fullTrackName);
