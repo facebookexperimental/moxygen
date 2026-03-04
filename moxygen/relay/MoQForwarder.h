@@ -34,15 +34,14 @@ class MoQForwarder : public TrackConsumer {
     return groupOrder_;
   }
 
+  // Deprecated: use setExtensions instead, which extracts group order
+  // internally
   void setGroupOrder(GroupOrder order) {
     groupOrder_ = order;
   }
 
+  // Deprecated: delivery timeout is now carried in extensions
   void setDeliveryTimeout(uint64_t timeout);
-
-  std::chrono::milliseconds upstreamDeliveryTimeout() const {
-    return upstreamDeliveryTimeout_;
-  }
 
   void setExtensions(Extensions extensions);
 
@@ -93,16 +92,15 @@ class MoQForwarder : public TrackConsumer {
         std::shared_ptr<TrackConsumer> tc,
         bool shouldForwardIn);
 
-    // This method is for a relay to fixup the publisher group order of the
-    // first subscriber if it was added before the upstream SubscribeOK.
+    // Deprecated: setExtensions now internally resolves group order
     void setPublisherGroupOrder(GroupOrder pubGroupOrder);
 
     void updateLargest(AbsoluteLocation largest);
 
-    // Updates the params of the subscribeOk
-    // updates existing param if key matches, otherwise adds new param
+    // Deprecated: track properties are now carried in extensions
     void setParam(const TrackRequestParameter& param);
 
+    // Deprecated: MoQForwarder::setExtensions now updates all subscribers
     void setExtensions(Extensions extensions);
 
     // Constructs a PublishRequest from the forwarder's track-level state.
@@ -318,8 +316,6 @@ class MoQForwarder : public TrackConsumer {
       subgroups_;
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
   std::optional<AbsoluteLocation> largest_;
-  // This should eventually be a vector of params that can be cascaded e2e
-  std::chrono::milliseconds upstreamDeliveryTimeout_{};
   Extensions extensions_;
   std::shared_ptr<Callback> callback_;
   uint64_t forwardingSubscribers_{0};

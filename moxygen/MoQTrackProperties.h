@@ -47,6 +47,13 @@ std::optional<uint64_t> getIntExtension(const Msg& msg, uint64_t type) {
   return msg.extensions.getIntExtension(type);
 }
 
+// Overload for Extensions directly
+inline std::optional<uint64_t> getIntExtension(
+    const Extensions& extensions,
+    uint64_t type) {
+  return extensions.getIntExtension(type);
+}
+
 } // namespace detail
 
 // ============================================================================
