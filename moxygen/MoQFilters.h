@@ -56,4 +56,64 @@ class TrackConsumerFilter : public TrackConsumer {
   std::shared_ptr<TrackConsumer> downstream_;
 };
 
+class SubgroupConsumerFilter : public SubgroupConsumer {
+ public:
+  explicit SubgroupConsumerFilter(std::shared_ptr<SubgroupConsumer> downstream)
+      : downstream_(std::move(downstream)) {}
+
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions = noExtensions(),
+      bool finSubgroup = false) override {
+    return downstream_->object(
+        objectID, std::move(payload), std::move(extensions), finSubgroup);
+  }
+
+  void checkpoint() override {
+    downstream_->checkpoint();
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions = noExtensions()) override {
+    return downstream_->beginObject(
+        objectID, length, std::move(initialPayload), std::move(extensions));
+  }
+
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finSubgroup = false) override {
+    return downstream_->objectPayload(std::move(payload), finSubgroup);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t endOfGroupObjectID) override {
+    return downstream_->endOfGroup(endOfGroupObjectID);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t endOfTrackObjectID) override {
+    return downstream_->endOfTrackAndGroup(endOfTrackObjectID);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override {
+    return downstream_->endOfSubgroup();
+  }
+
+  void reset(ResetStreamErrorCode error) override {
+    downstream_->reset(error);
+  }
+
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return downstream_->awaitReadyToConsume();
+  }
+
+ private:
+  std::shared_ptr<SubgroupConsumer> downstream_;
+};
+
 } // namespace moxygen

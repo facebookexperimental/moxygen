@@ -182,6 +182,13 @@ const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeout = {
     FrameType::SUBSCRIBE,
     FrameType::SUBSCRIBE_UPDATE};
 
+// In v16+, DELIVERY_TIMEOUT is allowed in subscriber request messages and
+// PUBLISH_OK
+const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeoutV16 = {
+    FrameType::SUBSCRIBE,
+    FrameType::FETCH,
+    FrameType::PUBLISH_OK};
+
 const folly::F14FastSet<FrameType> kAllowedFramesForSubscriberPriority = {
     FrameType::SUBSCRIBE,
     FrameType::FETCH,
@@ -252,6 +259,20 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   // Setup frame types allow all parameters
   if (kAllowAllParamsFrameTypes.contains(frameType_)) {
     return true;
+  }
+
+  // v16+ version-specific restrictions for track property params
+  if (majorVersion_.has_value() && *majorVersion_ >= 16) {
+    switch (key) {
+      case TrackRequestParamKey::MAX_CACHE_DURATION:
+      case TrackRequestParamKey::PUBLISHER_PRIORITY:
+        // These are extensions-only in v16+, not allowed as params
+        return false;
+      case TrackRequestParamKey::DELIVERY_TIMEOUT:
+        return kAllowedFramesForDeliveryTimeoutV16.contains(frameType_);
+      default:
+        break;
+    }
   }
 
   auto it = kParamAllowlist.find(key);

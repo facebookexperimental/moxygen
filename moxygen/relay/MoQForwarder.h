@@ -45,6 +45,12 @@ class MoQForwarder : public TrackConsumer {
     return upstreamDeliveryTimeout_;
   }
 
+  void setExtensions(Extensions extensions);
+
+  const Extensions& extensions() const {
+    return extensions_;
+  }
+
   void setLargest(AbsoluteLocation largest);
 
   std::optional<AbsoluteLocation> largest() {
@@ -98,6 +104,12 @@ class MoQForwarder : public TrackConsumer {
     // updates existing param if key matches, otherwise adds new param
     void setParam(const TrackRequestParameter& param);
 
+    void setExtensions(Extensions extensions);
+
+    // Constructs a PublishRequest from the forwarder's track-level state.
+    // requestID and trackAlias are placeholders (overwritten by MoQSession).
+    PublishRequest getPublishRequest() const;
+
     folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
         RequestUpdate requestUpdate) override;
 
@@ -134,7 +146,13 @@ class MoQForwarder : public TrackConsumer {
 
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
       std::shared_ptr<MoQSession> session,
-      const PublishRequest& pub);
+      bool forward);
+
+  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
+      std::shared_ptr<MoQSession> session,
+      const PublishRequest& pub) {
+    return addSubscriber(std::move(session), pub.forward);
+  }
 
   folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
       const std::shared_ptr<MoQSession>& session,
@@ -303,6 +321,7 @@ class MoQForwarder : public TrackConsumer {
   std::optional<AbsoluteLocation> largest_;
   // This should eventually be a vector of params that can be cascaded e2e
   std::chrono::milliseconds upstreamDeliveryTimeout_{};
+  Extensions extensions_;
   std::shared_ptr<Callback> callback_;
   uint64_t forwardingSubscribers_{0};
   bool draining_{false};

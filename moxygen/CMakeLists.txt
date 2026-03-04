@@ -104,23 +104,30 @@ moxygen_add_library(moxygen_moq_consumers
     proxygen::proxygen_http_webtransport
 )
 
+moxygen_add_library(moxygen_moq_server_base
+  SRCS
+    MoQServerBase.cpp
+  EXPORTED_DEPS
+    moxygen_mlog_mlogger_factory
+    moxygen_moq
+    Folly::folly_coro_baton
+    Folly::folly_logging_logging
+)
+
 moxygen_add_library(moxygen_moq_server
   SRCS
     MoQServer.cpp
-    MoQServerBase.cpp
   EXPORTED_DEPS
     moxygen_events_moq_folly_executor_impl
-    moxygen_mlog_mlogger_factory
     moxygen_moq
+    moxygen_moq_server_base
     proxygen::proxygen_hq_server
     proxygen::proxygen_http_session_hq_session
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quicwebtransport
-    Folly::folly_coro_baton
     Folly::folly_init_init
     Folly::folly_io_async_async_base
     Folly::folly_io_async_event_base_manager
-    Folly::folly_logging_logging
     Folly::folly_string
 )
 
