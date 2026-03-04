@@ -999,7 +999,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
 folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName;
-  
+
   if (trackStatus.fullTrackName.trackNamespace.empty()) {
     co_return folly::makeUnexpected(TrackStatusError(
         {trackStatus.requestID,
@@ -1013,7 +1013,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     // We have active subscription - answer directly from local forwarder state
     auto& subscription = subscriptionIt->second;
     auto& forwarder = subscription.forwarder;
-    
+
     TrackStatusCode statusCode = TrackStatusCode::TRACK_NOT_STARTED;
     if (forwarder->largest()) {
       if (subscription.handle) {
@@ -1023,14 +1023,14 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
         statusCode = TrackStatusCode::TRACK_ENDED;
       }
     }
-    
+
     TrackStatusOk trackStatusOk;
     trackStatusOk.requestID = trackStatus.requestID;
     trackStatusOk.groupOrder = forwarder->groupOrder();
     trackStatusOk.largest = forwarder->largest();
     trackStatusOk.fullTrackName = trackStatus.fullTrackName;
     trackStatusOk.statusCode = statusCode;
-    
+
     XLOG(DBG1) << "Returning local track status for " << trackStatus.fullTrackName
                << " statusCode=" << (uint32_t)statusCode;
     co_return trackStatusOk;
@@ -1038,7 +1038,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     // No subscription - forward to upstream
     auto upstreamSession =
         findPublishNamespaceSession(trackStatus.fullTrackName.trackNamespace);
-    
+
     if (!upstreamSession) {
       XLOG(DBG1) << "No upstream session for track: " << trackStatus.fullTrackName;
       co_return folly::makeUnexpected(
