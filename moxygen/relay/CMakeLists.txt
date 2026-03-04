@@ -14,7 +14,6 @@ moxygen_add_library(moxygen_relay_moq_forwarder
     moxygen_moq_location
     Folly::folly_container_f14_hash
     Folly::folly_hash_hash
-    Folly::folly_io_async_async_base
 )
 
 moxygen_add_library(moxygen_relay_moq_cache

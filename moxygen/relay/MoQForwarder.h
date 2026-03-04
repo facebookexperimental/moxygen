@@ -11,7 +11,6 @@
 
 #include <folly/container/F14Set.h>
 #include <folly/hash/Hash.h>
-#include <folly/io/async/EventBase.h>
 
 namespace moxygen {
 

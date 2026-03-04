@@ -7,7 +7,6 @@
 #include "moxygen/MoQSession.h"
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
-#include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
 #include <quic/priority/HTTPPriorityQueue.h>
 #include <moxygen/MoQTrackProperties.h>

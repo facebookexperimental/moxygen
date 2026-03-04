@@ -78,7 +78,6 @@ moxygen_add_library(moxygen_moq
     Folly::folly_coro_promise
     Folly::folly_coro_task
     Folly::folly_coro_timeout
-    Folly::folly_io_async_async_base
     Folly::folly_logging_logging
     Folly::folly_maybe_managed_ptr
 )
