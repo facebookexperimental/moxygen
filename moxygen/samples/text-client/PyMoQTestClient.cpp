@@ -446,6 +446,14 @@ class PyMoQTestClient {
     }
   }
 
+  uint64_t objectCount() const {
+    return objectCount_;
+  }
+
+  uint64_t bytesReceived() const {
+    return bytesReceived_;
+  }
+
  private:
   int runInternal() {
     try {
@@ -525,7 +533,24 @@ class PyMoQTestClient {
                 eventBase.terminateLoopSoon();
               });
 
+      // Enforce transaction timeout on the event loop to prevent hanging
+      // forever when baton is never posted (e.g., no onPublishDone signal).
+      if (options_.transactionTimeout > 0) {
+        eventBase.runAfterDelay(
+            [resultPtr, &eventBase]() {
+              if (*resultPtr == -999) {
+                *resultPtr = -6; // Timeout
+                eventBase.terminateLoopSoon();
+              }
+            },
+            options_.transactionTimeout * 1000);
+      }
+
       eventBase.loop();
+
+      // Capture handler stats after loop exits (normal completion or timeout)
+      objectCount_ = client->handler_->objectCount_;
+      bytesReceived_ = client->handler_->bytesReceived_;
 
       return *resultPtr;
     } catch (const MoQClientError& e) {
@@ -537,6 +562,8 @@ class PyMoQTestClient {
   }
 
   MoQClientOptions options_;
+  uint64_t objectCount_{0};
+  uint64_t bytesReceived_{0};
 };
 
 // Helper to get supported parameters with defaults (for Python testing)
@@ -695,7 +722,16 @@ PYBIND11_MODULE(moq_client_pybinding, m) {
       .def(
           "run",
           &PyMoQTestClient::run,
-          "Run the MoQ client. Behavior determined by options. Raises MoQClientError on failure.");
+          pybind11::call_guard<pybind11::gil_scoped_release>(),
+          "Run the MoQ client. Behavior determined by options. Raises MoQClientError on failure.")
+      .def_property_readonly(
+          "object_count",
+          &PyMoQTestClient::objectCount,
+          "Number of objects received during run().")
+      .def_property_readonly(
+          "bytes_received",
+          &PyMoQTestClient::bytesReceived,
+          "Total bytes received during run().");
 }
 
 } // namespace facebook::moxygen
