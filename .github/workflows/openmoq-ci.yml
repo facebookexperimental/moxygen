@@ -1,0 +1,69 @@
+name: OpenMOQ CI
+
+# Standalone build validation for PRs to openmoq-main.
+# This is the required status check for branch protection.
+
+on:
+  pull_request:
+    branches: [openmoq-main]
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  standalone-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux
+          - os: macos-15
+            name: macos
+    name: standalone (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: bash standalone/install-system-deps.sh
+
+      - name: Cache FetchContent downloads
+        uses: actions/cache@v4
+        with:
+          path: _build/_deps
+          key: ci-ninja-${{ matrix.os }}-deps-${{ hashFiles('build/deps/github_hashes/**/*-rev.txt', 'standalone/patches/**') }}
+          restore-keys: |
+            ci-ninja-${{ matrix.os }}-deps-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ci-${{ matrix.os }}
+          max-size: 500M
+
+      - name: Configure
+        run: |
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/_install
+
+      - name: Build
+        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: Test
+        run: ctest --test-dir _build --output-on-failure --output-junit test-results.xml
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1.9.1
+        if: success() || failure()
+        with:
+          name: "Tests (${{ matrix.name }})"
+          path: _build/test-results.xml
+          reporter: java-junit
+
+      - name: Install (smoke test)
+        run: cmake --install _build

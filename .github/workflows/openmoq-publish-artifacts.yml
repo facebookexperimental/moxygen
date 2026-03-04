@@ -1,0 +1,175 @@
+name: OpenMOQ Publish Artifacts
+
+# Builds moxygen via standalone CMake on each target platform and publishes
+# per-architecture artifact bundles as a GitHub Release keyed by commit SHA.
+
+on:
+  push:
+    branches: [openmoq-main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-22.04-x86_64
+            runner: ubuntu-22.04
+            artifact: moxygen-ubuntu-22.04-x86_64.tar.gz
+            debug_artifact: moxygen-ubuntu-22.04-x86_64-dbg.tar.gz
+            container: ""
+
+          - name: macos-15-arm64
+            runner: macos-15
+            artifact: moxygen-macos-15-arm64.tar.gz
+            debug_artifact: moxygen-macos-15-arm64-dbg.tar.gz
+            container: ""
+
+          - name: bookworm-amd64
+            runner: ubuntu-22.04
+            artifact: moxygen-bookworm-amd64.tar.gz
+            debug_artifact: moxygen-bookworm-amd64-dbg.tar.gz
+            container: debian:bookworm
+
+          - name: bookworm-arm64
+            runner: ubuntu-22.04-arm
+            artifact: moxygen-bookworm-arm64.tar.gz
+            debug_artifact: moxygen-bookworm-arm64-dbg.tar.gz
+            container: debian:bookworm
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install container base deps
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git ca-certificates curl pkg-config sudo
+
+      - name: Install system dependencies
+        run: bash standalone/install-system-deps.sh
+
+      - name: Cache FetchContent downloads
+        uses: actions/cache@v4
+        with:
+          path: _build/_deps
+          key: publish-ninja-${{ matrix.name }}-deps-${{ hashFiles('build/deps/github_hashes/**/*-rev.txt', 'standalone/patches/**') }}
+          restore-keys: |
+            publish-ninja-${{ matrix.name }}-deps-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: publish-${{ matrix.name }}
+          max-size: 500M
+
+      - name: Configure
+        run: |
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUNDLE_DEPS=ON \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install"
+
+      - name: Build
+        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: Install
+        run: cmake --install _build
+
+      - name: Package
+        run: |
+          bash openmoq/scripts/collect-artifacts-standalone.sh \
+            --install-prefix "$GITHUB_WORKSPACE/install" \
+            --output "${{ matrix.artifact }}" \
+            --debug-output "${{ matrix.debug_artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 90
+
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.debug_artifact }}
+          path: ${{ matrix.debug_artifact }}
+          retention-days: 90
+
+  release:
+    runs-on: ubuntu-22.04
+    needs: [build]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.build.result == 'success'
+
+      - name: Download all artifacts
+        if: needs.build.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create release
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash openmoq/scripts/create-release.sh \
+            --artifacts-dir artifacts/ \
+            --sha "$GITHUB_SHA" \
+            --keep 20
+
+      - name: Notify Slack
+        if: always()
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v1.26
+        with:
+          payload: |
+            {
+              "text": "${{ needs.build.result == 'success' && job.status == 'success' && ':white_check_mark: *moxygen artifacts published* — 4-platform standalone build' || ':warning: *moxygen artifact build failed* — needs attention' }}\nCommit: `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+
+      - name: Notify email
+        if: always()
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          RESULT="${{ needs.build.result }}"
+          JOB_STATUS="${{ job.status }}"
+          if [ "$RESULT" = "success" ] && [ "$JOB_STATUS" = "success" ]; then
+            SUBJECT="[moxygen] artifacts published"
+            BODY="Artifacts published successfully."
+          else
+            SUBJECT="[moxygen] artifact build FAILED"
+            BODY="Artifact build failed — needs attention."
+          fi
+          BODY="$BODY\n\nCommit: ${{ github.sha }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"$SUBJECT\"},
+              \"Body\": {\"Text\": {\"Data\": \"$BODY\"}}
+            }"
