@@ -1436,7 +1436,6 @@ MoQFrameParser::parseSubgroupObjectHeader(
     } else {
       objectHeader.id = objectIDDelta;
     }
-    previousObjectID_ = objectHeader.id;
   }
 
   if (options.hasExtensions) {
@@ -1457,6 +1456,9 @@ MoQFrameParser::parseSubgroupObjectHeader(
   }
   if (!isValidStatusForExtensions(objectHeader)) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (getDraftMajorVersion(*version_) >= 14) {
+    previousObjectID_ = objectHeader.id;
   }
   return ParseResultAndLength<ObjectHeader>{objectHeader, startLength - length};
 }
