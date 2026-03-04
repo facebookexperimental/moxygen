@@ -232,7 +232,6 @@ class DatePublisher : public Publisher {
       co_withExecutor(session->getExecutor(), publishDateLoop()).start();
     }
 
-    forwarder_.setDeliveryTimeout(deliveryTimeout_);
     auto subscriber = forwarder_.addSubscriber(
         std::move(session), subReq, std::move(consumer));
     co_return subscriber;

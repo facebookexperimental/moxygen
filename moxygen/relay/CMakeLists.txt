@@ -12,6 +12,7 @@ moxygen_add_library(moxygen_relay_moq_forwarder
   EXPORTED_DEPS
     moxygen_moq
     moxygen_moq_location
+    moxygen_moq_types
     Folly::folly_container_f14_hash
     Folly::folly_hash_hash
     Folly::folly_io_async_async_base
