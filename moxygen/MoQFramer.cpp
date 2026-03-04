@@ -1469,6 +1469,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     std::vector<Parameter>& requestSpecificParams) const noexcept {
   CHECK(version_.has_value())
       << "The version must be set before parsing track request params";
+  params.setMajorVersion(getDraftMajorVersion(*version_));
   return parseParams(
       cursor,
       length,
@@ -1881,6 +1882,13 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   if (getDraftMajorVersion(*version_) < 16) {
     convertTrackPropertyParamsToExtensions(
         subscribeOk.params, subscribeOk.extensions);
+  } else {
+    // For v16+: extract GROUP_ORDER from extensions into struct field
+    auto go = subscribeOk.extensions.getIntExtension(
+        kPublisherGroupOrderExtensionType);
+    if (go) {
+      subscribeOk.groupOrder = static_cast<GroupOrder>(*go);
+    }
   }
 
   return subscribeOk;
@@ -1897,6 +1905,9 @@ void MoQFrameParser::handleRequestSpecificParams(
         break;
       case TrackRequestParamKey::GROUP_ORDER:
         subscribeOk.groupOrder = static_cast<GroupOrder>(param.asUint64);
+        break;
+      case TrackRequestParamKey::LARGEST_OBJECT:
+        subscribeOk.largest = param.largestObject;
         break;
       default:
         // Ignore unknown request-specific parameters
@@ -2102,6 +2113,12 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
   // For < v16: convert track property params to extensions for uniform access
   if (getDraftMajorVersion(*version_) < 16) {
     convertTrackPropertyParamsToExtensions(publish.params, publish.extensions);
+  } else {
+    auto go =
+        publish.extensions.getIntExtension(kPublisherGroupOrderExtensionType);
+    if (go) {
+      publish.groupOrder = static_cast<GroupOrder>(*go);
+    }
   }
 
   return publish;
@@ -2830,18 +2847,27 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   length -= res->second;
 
   // Check for next two bytes
-  if (length < 2) {
-    XLOG(DBG4) << "parseFetchOk: UNDERFLOW on order/endOfTrack";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  if (getDraftMajorVersion(*version_) < 15) {
+    if (length < 2) {
+      XLOG(DBG4) << "parseFetchOk: UNDERFLOW on order/endOfTrack";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    auto order = cursor.readBE<uint8_t>();
+    if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
+      XLOG(ERR) << "order = 0 or order > NewestFirst =" << order;
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    fetchOk.groupOrder = static_cast<GroupOrder>(order);
+    fetchOk.endOfTrack = cursor.readBE<uint8_t>();
+    length -= 2 * sizeof(uint8_t);
+  } else {
+    if (length < 1) {
+      XLOG(DBG4) << "parseFetchOk: UNDERFLOW on endOfTrack";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    fetchOk.endOfTrack = cursor.readBE<uint8_t>();
+    length -= sizeof(uint8_t);
   }
-  auto order = cursor.readBE<uint8_t>();
-  if (order > folly::to_underlying(GroupOrder::NewestFirst)) {
-    XLOG(ERR) << "order = 0 or order > NewestFirst =" << order;
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  fetchOk.groupOrder = static_cast<GroupOrder>(order);
-  fetchOk.endOfTrack = cursor.readBE<uint8_t>();
-  length -= 2 * sizeof(uint8_t);
 
   auto res2 = parseAbsoluteLocation(cursor, length);
   if (!res2) {
@@ -2860,6 +2886,13 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
       cursor, length, numParams->first, fetchOk.params, requestSpecificParams);
   if (!res3) {
     return folly::makeUnexpected(res3.error());
+  }
+
+  // For v15+: GROUP_ORDER comes from request-specific params (not fixed field)
+  if (getDraftMajorVersion(*version_) >= 15) {
+    fetchOk.groupOrder = GroupOrder::OldestFirst;
+    handleGroupOrderParam(
+        fetchOk.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
   }
 
   // Draft 16+: Parse extensions (bare key-value pairs, no length prefix)
@@ -2882,6 +2915,12 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   // For < v16: convert track property params to extensions for uniform access
   if (getDraftMajorVersion(*version_) < 16) {
     convertTrackPropertyParamsToExtensions(fetchOk.params, fetchOk.extensions);
+  } else {
+    auto go =
+        fetchOk.extensions.getIntExtension(kPublisherGroupOrderExtensionType);
+    if (go) {
+      fetchOk.groupOrder = static_cast<GroupOrder>(*go);
+    }
   }
 
   return fetchOk;
@@ -4589,13 +4628,22 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
       requestSpecificParams.push_back(expiresParam);
     }
 
-    // Add GROUP_ORDER parameter (only if non-default)
-    if (subscribeOk.groupOrder != GroupOrder::Default) {
+    // Add GROUP_ORDER parameter (only if non-default, v15 only)
+    if (getDraftMajorVersion(*version_) == 15 &&
+        subscribeOk.groupOrder != GroupOrder::Default) {
       Parameter groupOrderParam;
       groupOrderParam.key =
           folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
       groupOrderParam.asUint64 = folly::to_underlying(subscribeOk.groupOrder);
       requestSpecificParams.push_back(groupOrderParam);
+    }
+
+    // Add LARGEST_OBJECT parameter (v16+ only, replaces fixed contentExists)
+    if (getDraftMajorVersion(*version_) >= 16 &&
+        subscribeOk.largest.has_value()) {
+      requestSpecificParams.push_back(Parameter(
+          folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
+          subscribeOk.largest));
     }
   }
   writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
@@ -4714,7 +4762,8 @@ WriteResult MoQFrameWriter::writePublish(
 
   std::vector<Parameter> requestSpecificParams;
   if (getDraftMajorVersion(*version_) >= 15) {
-    if (publish.groupOrder != GroupOrder::Default) {
+    if (getDraftMajorVersion(*version_) == 15 &&
+        publish.groupOrder != GroupOrder::Default) {
       Parameter groupOrderParam;
       groupOrderParam.key =
           folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
@@ -5285,9 +5334,11 @@ WriteResult MoQFrameWriter::writeFetchOk(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
   writeVarint(writeBuf, fetchOk.requestID.value, size, error);
-  auto order = folly::to_underlying(fetchOk.groupOrder);
-  writeBuf.append(&order, 1);
-  size += 1;
+  if (getDraftMajorVersion(*version_) < 15) {
+    auto order = folly::to_underlying(fetchOk.groupOrder);
+    writeBuf.append(&order, 1);
+    size += 1;
+  }
   writeBuf.append(&fetchOk.endOfTrack, 1);
   size += 1;
   writeVarint(writeBuf, fetchOk.endLocation.group, size, error);
@@ -5446,8 +5497,12 @@ void MoQFrameWriter::convertTrackPropertyExtensionsToParams(
       folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
       extensions.getIntExtension(kPublisherPriorityExtensionType));
 
-  // Note: GROUP_ORDER and DYNAMIC_GROUPS are v16+ only extensions,
-  // they don't have param equivalents in older versions
+  checkAndAddIfPresent(
+      kDynamicGroupsExtensionType,
+      extensions.getIntExtension(kDynamicGroupsExtensionType));
+
+  // Note: GROUP_ORDER is intentionally not here — it's handled per-message
+  // as a request-specific param for v15 and as a fixed field for < v15
 }
 
 void MoQFrameParser::convertTrackPropertyParamsToExtensions(
@@ -5469,6 +5524,10 @@ void MoQFrameParser::convertTrackPropertyParamsToExtensions(
       case folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY):
         extensions.insertMutableExtension(
             Extension{kPublisherPriorityExtensionType, param.asUint64});
+        break;
+      case kDynamicGroupsExtensionType:
+        extensions.insertMutableExtension(
+            Extension{kDynamicGroupsExtensionType, param.asUint64});
         break;
       default:
         // Other params are not track properties, skip

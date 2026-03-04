@@ -1122,11 +1122,7 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
   trackStatusOk.largest = AbsoluteLocation({19, 77});
   trackStatusOk.groupOrder = GroupOrder::OldestFirst;
-  // Use params that are allowed for REQUEST_OK and NOT request-specific
-  // MAX_CACHE_DURATION is allowed for all frame types and is not
-  // request-specific
-  trackStatusOk.params.insertParam(Parameter(
-      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION), 1000));
+  trackStatusOk.expires = std::chrono::milliseconds(1000);
   auto writeResult = writer_.writeTrackStatusOk(writeBuf, trackStatusOk);
   EXPECT_TRUE(writeResult.hasValue());
 
@@ -1150,11 +1146,7 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   EXPECT_EQ(parseResult->largest->group, 19);
   EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
-  EXPECT_EQ(parseResult->params.size(), 1);
-  EXPECT_EQ(
-      parseResult->params.at(0).key,
-      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION));
-  EXPECT_EQ(parseResult->params.at(0).asUint64, 1000);
+  EXPECT_EQ(parseResult->expires, std::chrono::milliseconds(1000));
 }
 
 static std::string encodeToken(
@@ -2962,8 +2954,7 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExplicitGroupOrder) {
   subscribeOk.requestID = RequestID(42);
   subscribeOk.trackAlias = TrackAlias(1);
   subscribeOk.expires = std::chrono::milliseconds(1000);
-  subscribeOk.groupOrder =
-      GroupOrder::NewestFirst; // Non-default, will be written
+  setPublisherGroupOrder(subscribeOk, GroupOrder::NewestFirst);
   subscribeOk.largest = AbsoluteLocation{10, 20};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
@@ -2978,7 +2969,6 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExplicitGroupOrder) {
   auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
-  // Explicit value should be preserved
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
 }
 
@@ -3018,7 +3008,7 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExpiresZeroNotWritten) {
   subscribeOk.requestID = RequestID(42);
   subscribeOk.trackAlias = TrackAlias(1);
   subscribeOk.expires = std::chrono::milliseconds(0); // Zero expires
-  subscribeOk.groupOrder = GroupOrder::NewestFirst;
+  setPublisherGroupOrder(subscribeOk, GroupOrder::NewestFirst);
   subscribeOk.largest = AbsoluteLocation{10, 20};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
@@ -3073,8 +3063,7 @@ TEST_P(MoQFramerV15PlusTest, PublishExplicitGroupOrder) {
   publishRequest.requestID = RequestID(100);
   publishRequest.fullTrackName =
       FullTrackName({TrackNamespace({"test"}), "pub"});
-  publishRequest.groupOrder =
-      GroupOrder::NewestFirst; // Non-default, will be written
+  setPublisherGroupOrder(publishRequest, GroupOrder::NewestFirst);
 
   auto writeResult = writer_.writePublish(writeBuf, publishRequest);
   EXPECT_TRUE(writeResult.hasValue());
@@ -3088,7 +3077,6 @@ TEST_P(MoQFramerV15PlusTest, PublishExplicitGroupOrder) {
   auto parseResult = parser_.parsePublish(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
-  // Explicit value should be preserved
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
 }
 
@@ -3264,7 +3252,7 @@ TEST_P(MoQFramerV15PlusTest, PublishWithLargestLocation) {
   publishRequest.fullTrackName =
       FullTrackName({TrackNamespace({"test"}), "pub"});
   publishRequest.trackAlias = TrackAlias(42);
-  publishRequest.groupOrder = GroupOrder::NewestFirst;
+  setPublisherGroupOrder(publishRequest, GroupOrder::NewestFirst);
   publishRequest.largest = AbsoluteLocation{5, 10};
   publishRequest.forward = true;
 
@@ -3314,6 +3302,34 @@ TEST_P(MoQFramerV15PlusTest, PublishWithoutLargestLocation) {
 
   EXPECT_EQ(parseResult->requestID, publishRequest.requestID);
   EXPECT_FALSE(parseResult->largest.has_value());
+}
+
+// Test SubscribeOk with largest location roundtrips correctly for v15+
+TEST_P(MoQFramerV15PlusTest, SubscribeOkWithLargestLocation) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(42);
+  subscribeOk.trackAlias = TrackAlias(1);
+  subscribeOk.expires = std::chrono::milliseconds(0);
+  subscribeOk.groupOrder = GroupOrder::OldestFirst;
+  subscribeOk.largest = AbsoluteLocation{5, 10};
+
+  auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_OK));
+
+  auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasValue());
+
+  EXPECT_TRUE(parseResult->largest.has_value());
+  EXPECT_EQ(parseResult->largest->group, 5);
+  EXPECT_EQ(parseResult->largest->object, 10);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -4102,4 +4118,45 @@ TEST_F(UnknownParamTest, UnknownParamAcceptedInV15) {
 
   auto result = parser.parseSubscribeRequest(cursor, length);
   EXPECT_TRUE(result.hasValue());
+}
+
+// Tests for v16-specific track property param restrictions
+TEST_F(ParametersIsParamAllowedTest, TrackPropertyParamRejectedInV16) {
+  // MAX_CACHE_DURATION and PUBLISHER_PRIORITY are extensions-only in v16
+  Parameters params(FrameType::SUBSCRIBE_OK);
+  params.setMajorVersion(16);
+
+  EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
+  EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
+}
+
+TEST_F(ParametersIsParamAllowedTest, TrackPropertyParamAcceptedInV15) {
+  // Same params should be allowed in v15
+  Parameters params(FrameType::SUBSCRIBE_OK);
+  params.setMajorVersion(15);
+
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
+}
+
+TEST_F(ParametersIsParamAllowedTest, DeliveryTimeoutAllowedInV16Subscribe) {
+  Parameters params(FrameType::SUBSCRIBE);
+  params.setMajorVersion(16);
+
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
+}
+
+TEST_F(ParametersIsParamAllowedTest, DeliveryTimeoutAllowedInV16PublishOk) {
+  // DELIVERY_TIMEOUT is allowed in PUBLISH_OK for both v15 and v16
+  Parameters params(FrameType::PUBLISH_OK);
+  params.setMajorVersion(16);
+
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
+}
+
+TEST_F(ParametersIsParamAllowedTest, GroupOrderStillAllowedInV16PublishOk) {
+  Parameters params(FrameType::PUBLISH_OK);
+  params.setMajorVersion(16);
+
+  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::GROUP_ORDER));
 }

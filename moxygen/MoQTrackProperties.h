@@ -93,6 +93,7 @@ void setPublisherGroupOrder(
     Msg& msg,
     GroupOrder order,
     bool immutable = false) {
+  msg.groupOrder = order;
   detail::setIntExtension(
       msg,
       kPublisherGroupOrderExtensionType,
