@@ -9,27 +9,23 @@
 #   collect-artifacts-standalone.sh \
 #     --install-prefix /path/to/install \
 #     --output /path/to/moxygen-platform.tar.gz \
-#     [--src-dir /path/to/moxygen-source] \
 #     [--debug-output /path/to/moxygen-platform-dbg.tar.gz]
 #
-# The --src-dir option is used to gather any headers not installed by cmake.
 # The --debug-output option extracts split debug symbols before stripping.
 
 set -euo pipefail
 
 INSTALL_PREFIX=""
 OUTPUT=""
-SRC_DIR=""
 DEBUG_OUTPUT=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") --install-prefix DIR --output FILE [--src-dir DIR] [--debug-output FILE]
+Usage: $(basename "$0") --install-prefix DIR --output FILE [--debug-output FILE]
 
 Options:
   --install-prefix DIR   Path to the cmake install prefix
   --output FILE          Output tarball path (must end in .tar.gz)
-  --src-dir DIR          Path to the moxygen source tree (for supplemental headers)
   --debug-output FILE    Create a separate tarball of unstripped libs before stripping
   -h, --help             Show this help
 EOF
@@ -40,7 +36,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-prefix) INSTALL_PREFIX="$2"; shift 2 ;;
     --output)         OUTPUT="$2"; shift 2 ;;
-    --src-dir)        SRC_DIR="$2"; shift 2 ;;
     --debug-output)   DEBUG_OUTPUT="$2"; shift 2 ;;
     -h|--help)        usage 0 ;;
     *)                echo "Unknown option: $1" >&2; usage 1 ;;
@@ -71,22 +66,7 @@ done
 PRE_STRIP_SIZE=$(du -sh "$INSTALL_PREFIX" | cut -f1)
 echo "    Total size (before strip): $PRE_STRIP_SIZE"
 
-# ── Step 2: Supplement headers if needed ─────────────────────────────────────
-
-if [[ -n "$SRC_DIR" && -d "$SRC_DIR" ]]; then
-  # Check if moxygen headers were installed; if not, copy from source
-  MOXYGEN_HDRS=$(find "$INSTALL_PREFIX/include/moxygen" -name '*.h' 2>/dev/null | wc -l)
-  if [[ "$MOXYGEN_HDRS" -eq 0 ]]; then
-    echo "==> Supplementing moxygen headers from source..."
-    (cd "$SRC_DIR" && find moxygen -name '*.h' \
-      ! -path '*/test/*' ! -path '*/facebook/*' \
-      -exec cp --parents -t "$INSTALL_PREFIX/include/" {} +)
-    HEADER_COUNT=$(find "$INSTALL_PREFIX/include/moxygen" -name '*.h' | wc -l)
-    echo "    Copied $HEADER_COUNT header files"
-  fi
-fi
-
-# ── Step 3: Extract split debug symbols and strip ────────────────────────────
+# ── Step 2: Extract split debug symbols and strip ────────────────────────────
 
 echo "==> Stripping debug symbols..."
 
@@ -136,7 +116,7 @@ fi
 POST_STRIP_SIZE=$(du -sh "$INSTALL_PREFIX" | cut -f1)
 echo "    Size after strip: $POST_STRIP_SIZE"
 
-# ── Step 4: Create debug tarball ─────────────────────────────────────────────
+# ── Step 3: Create debug tarball ─────────────────────────────────────────────
 
 if [[ -n "$DEBUG_OUTPUT" && -n "$DEBUG_DIR" ]]; then
   DBG_FILE_COUNT=$(find "$DEBUG_DIR" -name '*.debug' -type f | wc -l)
@@ -152,7 +132,7 @@ if [[ -n "$DEBUG_OUTPUT" && -n "$DEBUG_DIR" ]]; then
   rm -rf "$DEBUG_DIR"
 fi
 
-# ── Step 5: Create release tarball (stripped) ─────────────────────────────────
+# ── Step 4: Create release tarball (stripped) ─────────────────────────────────
 
 mkdir -p "$(dirname "$OUTPUT")"
 

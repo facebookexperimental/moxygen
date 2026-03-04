@@ -95,8 +95,7 @@ jobs:
           bash openmoq/scripts/collect-artifacts-standalone.sh \
             --install-prefix "$GITHUB_WORKSPACE/install" \
             --output "${{ matrix.artifact }}" \
-            --debug-output "${{ matrix.debug_artifact }}" \
-            --src-dir "$GITHUB_WORKSPACE"
+            --debug-output "${{ matrix.debug_artifact }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -143,7 +142,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "${{ needs.build.result == 'success' && ':white_check_mark: *moxygen artifacts published* — 4-platform standalone build' || ':warning: *moxygen artifact build failed* — needs attention' }}\nCommit: `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+              "text": "${{ needs.build.result == 'success' && job.status == 'success' && ':white_check_mark: *moxygen artifacts published* — 4-platform standalone build' || ':warning: *moxygen artifact build failed* — needs attention' }}\nCommit: `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
@@ -157,7 +156,8 @@ jobs:
           AWS_DEFAULT_REGION: us-east-1
         run: |
           RESULT="${{ needs.build.result }}"
-          if [ "$RESULT" = "success" ]; then
+          JOB_STATUS="${{ job.status }}"
+          if [ "$RESULT" = "success" ] && [ "$JOB_STATUS" = "success" ]; then
             SUBJECT="[moxygen] artifacts published"
             BODY="Artifacts published successfully."
           else

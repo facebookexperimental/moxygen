@@ -13,6 +13,8 @@ on:
   workflow_run:
     workflows: ["OpenMOQ CI"]
     types: [completed]
+    branches:
+      - sync/**
 
 permissions:
   contents: write

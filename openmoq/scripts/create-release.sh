@@ -95,6 +95,28 @@ echo "    Found $ASSET_COUNT artifact(s)"
 SHORT_SHA="${SHA:0:12}"
 TAG="build-${SHORT_SHA}"
 
+# Upload a single asset with retry on transient failures (502/404 on large files).
+upload_with_retry() {
+  local asset="$1"
+  local name
+  name=$(basename "$asset")
+  local max=3 delay=10 attempt=1
+  while [[ $attempt -le $max ]]; do
+    # shellcheck disable=SC2086
+    if gh release upload "$TAG" "$asset" --clobber $REPO_FLAG; then
+      return 0
+    fi
+    if [[ $attempt -lt $max ]]; then
+      echo "    Upload failed (attempt $attempt/$max), retrying in ${delay}s..."
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+    attempt=$((attempt + 1))
+  done
+  echo "    ERROR: $name upload failed after $max attempts" >&2
+  return 1
+}
+
 echo "==> Creating release: $TAG"
 
 if [[ "$DRY_RUN" == true ]]; then
@@ -107,7 +129,7 @@ else
   git tag -d "$TAG" 2>/dev/null || true
   git push origin ":refs/tags/$TAG" 2>/dev/null || true
 
-  # Create the release
+  # Create the release (no assets yet — upload separately for per-asset retry)
   # shellcheck disable=SC2086
   gh release create "$TAG" \
     --title "Build artifacts for ${SHORT_SHA}" \
@@ -130,8 +152,13 @@ tar xzf .scratch/moxygen-*.tar.gz -C .scratch/
 \`\`\`
 EOF
     )" \
-    $REPO_FLAG \
-    "$RELEASE_DIR"/*.tar.gz
+    $REPO_FLAG
+
+  # Upload each asset individually with retry
+  for asset in "$RELEASE_DIR"/*.tar.gz; do
+    echo "    Uploading $(basename "$asset")..."
+    upload_with_retry "$asset"
+  done
 
   echo "    Release created: $TAG"
 fi
