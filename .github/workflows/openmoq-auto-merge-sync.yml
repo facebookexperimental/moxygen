@@ -21,6 +21,34 @@ permissions:
   pull-requests: write
 
 jobs:
+  notify-ci-failure:
+    runs-on: ubuntu-22.04
+    if: |
+      github.event.workflow_run.conclusion != 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'sync/')
+    steps:
+      - name: Find sync PR
+        id: find-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR_NUM=$(gh api "repos/${REPO}/pulls?state=open&base=openmoq-main" \
+            --jq "[.[] | select(.head.ref == \"${HEAD_BRANCH}\")] | .[0].number // empty")
+          echo "pr_num=${PR_NUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack (sync CI failure)
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v1.26
+        with:
+          payload: |
+            {
+              "text": ":x: *moxygen sync CI failed* — `${{ github.event.workflow_run.head_branch }}` needs conflict resolution\n<${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.find-pr.outputs.pr_num }}|View PR> · <${{ github.event.workflow_run.html_url }}|View CI run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+
   auto-merge:
     runs-on: ubuntu-22.04
     if: |
