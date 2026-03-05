@@ -46,7 +46,11 @@ const char* getFrameTypeString(moxygen::FrameType type) {
       // can happen when type was cast from uint8_t
       return "Unknown";
   }
+#if defined(__APPLE__)
+  __builtin_unreachable();
+#else
   LOG(FATAL) << "Unreachable";
+#endif
 }
 
 const char* getStreamTypeString(moxygen::StreamType type) {
@@ -64,7 +68,11 @@ const char* getStreamTypeString(moxygen::StreamType type) {
       // can happen when type was cast from uint8_t
       return "Unknown";
   }
+#if defined(__APPLE__)
+  __builtin_unreachable();
+#else
   LOG(FATAL) << "Unreachable";
+#endif
 }
 
 const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
@@ -83,7 +91,11 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
       // can happen when type was cast from uint8_t
       return "Unknown";
   }
+#if defined(__APPLE__)
+  __builtin_unreachable();
+#else
   LOG(FATAL) << "Unreachable";
+#endif
 }
 
 } // namespace
