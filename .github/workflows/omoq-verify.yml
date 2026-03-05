@@ -85,3 +85,62 @@ jobs:
       - name: Install (smoke test)
         if: matrix.name != 'asan debug'
         run: cmake --install _build
+
+  build-pico:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux
+            cache_prefix: ci-pico-ninja-ubuntu-22.04
+          - os: macos-15
+            name: macos
+            cache_prefix: ci-pico-ninja-macos-15
+    name: pico (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: bash standalone/install-system-deps.sh
+
+      - name: Cache FetchContent downloads
+        uses: actions/cache@v4
+        with:
+          path: _build/_deps
+          key: ${{ matrix.cache_prefix }}-deps-${{ hashFiles('build/deps/github_hashes/**/*-rev.txt', 'standalone/patches/**') }}
+          restore-keys: |
+            ${{ matrix.cache_prefix }}-deps-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ matrix.cache_prefix }}
+          max-size: 500M
+
+      - name: Configure
+        run: |
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_TESTING=ON \
+            -DBUILD_PICOQUIC=ON \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/_install
+
+      - name: Build
+        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: Test
+        run: ctest --test-dir _build --output-on-failure --output-junit test-results.xml
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1.9.1
+        if: success() || failure()
+        with:
+          name: "test pico (${{ matrix.name }})"
+          path: _build/test-results.xml
+          reporter: java-junit
+
+      - name: Install (smoke test)
+        run: cmake --install _build
