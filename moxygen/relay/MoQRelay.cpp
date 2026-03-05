@@ -589,15 +589,21 @@ MoQRelay::subscribeNamespace(
     SubscribeNamespace subNs,
     std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
+
+  auto session = MoQSession::getRequestSession();
+  auto maybeNegotiatedVersion = session->getNegotiatedVersion();
+  CHECK(maybeNegotiatedVersion.has_value());
+
   // check auth
-  if (subNs.trackNamespacePrefix.empty()) {
+  // Allow empty namespace prefix only for draft-16 and above.
+  if (subNs.trackNamespacePrefix.empty() &&
+      getDraftMajorVersion(*maybeNegotiatedVersion) < 16) {
     co_return folly::makeUnexpected(
         SubscribeNamespaceError{
             subNs.requestID,
             SubscribeNamespaceErrorCode::NAMESPACE_PREFIX_UNKNOWN,
             "empty"});
   }
-  auto session = MoQSession::getRequestSession();
   auto nodePtr = findNamespaceNode(
       subNs.trackNamespacePrefix, /*createMissingNodes=*/true);
 
@@ -627,8 +633,6 @@ MoQRelay::subscribeNamespace(
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
-      auto maybeNegotiatedVersion = session->getNegotiatedVersion();
-      CHECK(maybeNegotiatedVersion.has_value());
       if (getDraftMajorVersion(*maybeNegotiatedVersion) >= 16) {
         if (subNs.options == SubscribeNamespaceOptions::NAMESPACE ||
             subNs.options == SubscribeNamespaceOptions::BOTH) {

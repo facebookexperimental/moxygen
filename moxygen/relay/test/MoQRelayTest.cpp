@@ -1776,6 +1776,40 @@ class ForwarderDestroyingCallback : public MoQForwarder::Callback {
   std::shared_ptr<MoQForwarder>& forwarderRef_;
 };
 
+TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixRejectedPreV16) {
+  // Default session uses kVersionDraftCurrent (draft-14, which is < 16)
+  auto session = createMockSession();
+
+  TrackNamespace emptyNs{{}};
+  SubscribeNamespace subNs;
+  subNs.trackNamespacePrefix = emptyNs;
+
+  withSessionContext(session, [&]() {
+    auto task = relay_->subscribeNamespace(std::move(subNs), nullptr);
+    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+    ASSERT_FALSE(res.hasValue())
+        << "Empty namespace prefix should be rejected for pre-v16 sessions";
+    EXPECT_EQ(
+        res.error().errorCode,
+        SubscribeNamespaceErrorCode::NAMESPACE_PREFIX_UNKNOWN);
+    EXPECT_EQ(res.error().reasonPhrase, "empty");
+  });
+
+  removeSession(session);
+}
+
+TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixAllowedV16) {
+  auto session = createMockSession();
+  // Override the negotiated version to draft-16
+  ON_CALL(*session, getNegotiatedVersion())
+      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft16)));
+
+  TrackNamespace emptyNs{{}};
+  doSubscribeNamespace(session, emptyNs);
+
+  removeSession(session);
+}
+
 // Regression test: SubgroupForwarder::reset() use-after-free.
 // When the forwarder is draining (publishDone received) and a subscriber's
 // last subgroup is closed via reset(), closeSubgroupForSubscriber calls
