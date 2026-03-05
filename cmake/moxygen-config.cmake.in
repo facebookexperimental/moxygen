@@ -13,6 +13,7 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(folly)
+find_dependency(fizz)
 find_dependency(wangle)
 find_dependency(mvfst)
 find_dependency(proxygen)
