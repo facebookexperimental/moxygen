@@ -223,7 +223,7 @@ FetchContent_Declare(proxygen
 if(BUILD_PICOQUIC)
     FetchContent_Declare(picoquic
         GIT_REPOSITORY https://github.com/afrind/picoquic.git
-        GIT_TAG cmake-embed-support
+        GIT_TAG fix-picotls-brotli
     )
 endif()
 
