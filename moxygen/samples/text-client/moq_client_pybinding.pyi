@@ -115,3 +115,13 @@ class PyMoQTestClient:
                 - code=-7: SubscribeAnnounces failed
         """
         ...
+
+    @property
+    def object_count(self) -> int:
+        """Number of objects received during run()."""
+        ...
+
+    @property
+    def bytes_received(self) -> int:
+        """Total bytes received during run()."""
+        ...

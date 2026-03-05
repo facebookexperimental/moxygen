@@ -377,6 +377,7 @@ PYBIND11_MODULE(moq_simple_publisher_pybinding, m) {
       .def(
           "run",
           &PyMoQSimplePublisher::run,
+          pybind11::call_guard<pybind11::gil_scoped_release>(),
           "Run the publisher. Blocks until all messages are sent or error occurs.");
 }
 

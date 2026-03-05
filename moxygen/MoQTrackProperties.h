@@ -1,6 +1,6 @@
 /*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
- * This source code is licensed under the MIT license found in the
+ * This source code is licensed under the Apache 2.0 license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
@@ -45,6 +45,13 @@ void setIntExtension(Msg& msg, uint64_t type, uint64_t value, bool immutable) {
 template <typename Msg>
 std::optional<uint64_t> getIntExtension(const Msg& msg, uint64_t type) {
   return msg.extensions.getIntExtension(type);
+}
+
+// Overload for Extensions directly
+inline std::optional<uint64_t> getIntExtension(
+    const Extensions& extensions,
+    uint64_t type) {
+  return extensions.getIntExtension(type);
 }
 
 } // namespace detail

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
- * This source code is licensed under the MIT license found in the
+ * This source code is licensed under the Apache 2.0 license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
@@ -4159,4 +4159,54 @@ TEST_F(ParametersIsParamAllowedTest, GroupOrderStillAllowedInV16PublishOk) {
   params.setMajorVersion(16);
 
   EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::GROUP_ORDER));
+}
+
+// Verify that a parse underflow doesn't corrupt delta-encoded object ID state.
+TEST_P(MoQFramerTest, SubgroupObjectUnderflowDoesNotCorruptDeltaState) {
+  if (getDraftMajorVersion(GetParam()) < 14) {
+    return;
+  }
+
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false, false);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  ObjectHeader obj(1, 0, 0, 128, ObjectStatus::NORMAL, noExtensions(), 4);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  writer_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Zero, false);
+  writer_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("AAAA"));
+  obj.id = 1;
+  writer_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("BBBB"));
+  auto serialized = writeBuf.move();
+
+  folly::io::Cursor cursor(serialized.get());
+  parseStreamType(cursor);
+  auto hdr =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
+  ASSERT_TRUE(hdr.hasValue());
+
+  // Parse object 0 successfully
+  auto r0 = parser_.parseSubgroupObjectHeader(
+      cursor, cursor.totalLength(), hdr->value.objectHeader, sgOptions);
+  ASSERT_TRUE(r0.hasValue());
+  EXPECT_EQ(r0->value.id, 0);
+  cursor.skip(*r0->value.length);
+
+  // Trigger underflow on object 1 by passing only 1 byte (ID varint only)
+  auto obj1Offset = cursor.getCurrentPosition();
+  {
+    folly::io::Cursor truncCursor(serialized.get());
+    truncCursor.skip(obj1Offset);
+    auto uf = parser_.parseSubgroupObjectHeader(
+        truncCursor, 1, hdr->value.objectHeader, sgOptions);
+    EXPECT_EQ(uf.error(), ErrorCode::PARSE_UNDERFLOW);
+  }
+
+  // Re-parse object 1 with full data — ID must still be 1, not 2
+  auto r1 = parser_.parseSubgroupObjectHeader(
+      cursor, cursor.totalLength(), hdr->value.objectHeader, sgOptions);
+  ASSERT_TRUE(r1.hasValue());
+  EXPECT_EQ(r1->value.id, 1);
 }

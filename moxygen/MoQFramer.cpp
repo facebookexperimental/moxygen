@@ -1,6 +1,6 @@
 /*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
- * This source code is licensed under the MIT license found in the
+ * This source code is licensed under the Apache 2.0 license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
@@ -1436,7 +1436,6 @@ MoQFrameParser::parseSubgroupObjectHeader(
     } else {
       objectHeader.id = objectIDDelta;
     }
-    previousObjectID_ = objectHeader.id;
   }
 
   if (options.hasExtensions) {
@@ -1457,6 +1456,9 @@ MoQFrameParser::parseSubgroupObjectHeader(
   }
   if (!isValidStatusForExtensions(objectHeader)) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (getDraftMajorVersion(*version_) >= 14) {
+    previousObjectID_ = objectHeader.id;
   }
   return ParseResultAndLength<ObjectHeader>{objectHeader, startLength - length};
 }

@@ -1,13 +1,12 @@
 /*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
- * This source code is licensed under the MIT license found in the
+ * This source code is licensed under the Apache 2.0 license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
 #include "moxygen/MoQSession.h"
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
-#include <folly/io/async/EventBase.h>
 #include <quic/common/CircularDeque.h>
 #include <quic/priority/HTTPPriorityQueue.h>
 #include <moxygen/MoQTrackProperties.h>

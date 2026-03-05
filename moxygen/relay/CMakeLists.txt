@@ -1,7 +1,5 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
+# This source code is licensed under the Apache 2.0 license found in the
 # LICENSE file in the root directory of this source tree.
 
 # Manually maintained - has MoQRelayServer binary
@@ -12,9 +10,9 @@ moxygen_add_library(moxygen_relay_moq_forwarder
   EXPORTED_DEPS
     moxygen_moq
     moxygen_moq_location
+    moxygen_moq_types
     Folly::folly_container_f14_hash
     Folly::folly_hash_hash
-    Folly::folly_io_async_async_base
 )
 
 moxygen_add_library(moxygen_relay_moq_cache
