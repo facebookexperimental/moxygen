@@ -128,8 +128,16 @@ MoQRelay::publishNamespace(
 
   // TODO: store auth for forwarding on future SubscribeNamespace?
   auto session = MoQSession::getRequestSession();
+
+  // Include sessions that subscribed exactly this namespace as well.
+  // findNamespaceNode(..., &sessions) collects subscribers attached to prefixes
+  // along the path, but does not include this node's own sessions.
+  for (const auto& [outSession, info] : nodePtr->sessions) {
+    sessions.emplace_back(outSession, info);
+  }
+
   bool wasEmpty = !nodePtr->hasLocalSessions();
-  nodePtr->sourceSession = std::move(session);
+  nodePtr->sourceSession = session;
   nodePtr->publishNamespaceCallback = std::move(callback);
   nodePtr->trackNamespace_ = ann.trackNamespace;
   nodePtr->setPublishNamespaceOk({ann.requestID});

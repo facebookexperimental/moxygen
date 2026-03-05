@@ -2145,4 +2145,35 @@ TEST_F(MoQRelayTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
       subscriber3->subscribeOk().extensions.getIntExtension(0xDEAD'0000), 123);
 }
 
+TEST_F(MoQRelayTest, ExactNamespaceSubscriberReceivesPublishNamespace) {
+  auto subscriber = createMockSession();
+  auto publisher = createMockSession();
+
+  // Subscriber subscribes to exact namespace {"test", "namespace"}
+  doSubscribeNamespace(subscriber, kTestNamespace);
+
+  // Expect the subscriber to receive a publishNamespace forwarding when
+  // the publisher announces the same exact namespace
+  EXPECT_CALL(*subscriber, publishNamespace(_, _))
+      .WillOnce(
+          [](PublishNamespace ann,
+             auto) -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            EXPECT_EQ(ann.trackNamespace, kTestNamespace);
+            co_return folly::makeUnexpected(
+                PublishNamespaceError{
+                    ann.requestID,
+                    PublishNamespaceErrorCode::UNINTERESTED,
+                    "test"});
+          });
+
+  // Publisher announces the same exact namespace
+  doPublishNamespace(publisher, kTestNamespace);
+
+  // Drive the executor so the async publishNamespace forwarding runs
+  exec_->drive();
+
+  removeSession(publisher);
+  removeSession(subscriber);
+}
+
 } // namespace moxygen::test
