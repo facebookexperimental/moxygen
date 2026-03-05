@@ -8,43 +8,42 @@
 
 #include <folly/SocketAddress.h>
 #include <memory>
-#include <moxygen/MoQServerBase.h>
+#include <moxygen/openmoq/transport/pico/MoQPicoServerBase.h>
 #include <string>
 
 namespace moxygen {
 
 /**
- * MoQPicoQuicServer - MoQ server using picoquic transport
+ * MoQPicoQuicServer - MoQ server using picoquic transport (thread-based).
  *
- * This server creates WebTransport sessions over raw QUIC using picoquic,
- * as opposed to MoQServer which uses HTTP/3 WebTransport over proxygen.
+ * Creates a background thread running the picoquic packet loop.
+ * For an EventBase-integrated alternative see MoQPicoQuicEventBaseServer.
  */
-class MoQPicoQuicServer : public MoQServerBase {
-public:
-  MoQPicoQuicServer(
-      std::string cert,
-      std::string key,
-      std::string endpoint,
-      std::string versions = "");
+class MoQPicoQuicServer : public MoQPicoServerBase {
+ public:
+  MoQPicoQuicServer(std::string cert,
+                    std::string key,
+                    std::string endpoint,
+                    std::string versions = "");
 
-  MoQPicoQuicServer(const MoQPicoQuicServer &) = delete;
-  MoQPicoQuicServer(MoQPicoQuicServer &&) = delete;
-  MoQPicoQuicServer &operator=(const MoQPicoQuicServer &) = delete;
-  MoQPicoQuicServer &operator=(MoQPicoQuicServer &&) = delete;
+  MoQPicoQuicServer(const MoQPicoQuicServer&) = delete;
+  MoQPicoQuicServer(MoQPicoQuicServer&&) = delete;
+  MoQPicoQuicServer& operator=(const MoQPicoQuicServer&) = delete;
+  MoQPicoQuicServer& operator=(MoQPicoQuicServer&&) = delete;
   ~MoQPicoQuicServer() override;
 
   /**
    * Start the server on the specified address.
-   * This will create a background thread running the picoquic packet loop.
+   * Creates a background thread running the picoquic packet loop.
    */
-  void start(const folly::SocketAddress &addr);
+  void start(const folly::SocketAddress& addr) override;
 
   /**
    * Stop the server and wait for the packet loop thread to finish.
    */
-  void stop();
+  void stop() override;
 
-private:
+ private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
