@@ -20,7 +20,7 @@ namespace {
 inline void writeVarintTo(folly::IOBufQueue& q, uint64_t v) {
   folly::io::QueueAppender appender(&q, kMaxFrameHeaderSize);
   auto appenderOp = [appender = std::move(appender)](auto val) mutable {
-    appender.writeBE(val);
+    appender.writeBE(folly::tag<decltype(val)>, val);
   };
   (void)quic::encodeQuicInteger(v, appenderOp);
 }
@@ -475,7 +475,7 @@ TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
   folly::IOBufQueue patchBuf{folly::IOBufQueue::cacheChainLength()};
   folly::io::QueueAppender appender(&patchBuf, kMaxFrameHeaderSize);
   XCHECK(quic::encodeQuicInteger(kVersionDraft03, [&](auto val) {
-    appender.writeBE(val);
+    appender.writeBE(folly::tag<decltype(val)>, val);
   }));
   auto patchIOBuf = patchBuf.move();
 
@@ -570,7 +570,7 @@ TEST_P(MoQFramerTest, parseFixedString) {
   CHECK(
       quic::encodeQuicInteger(
           s.length(), [appender = std::move(appender)](auto val) mutable {
-            appender.writeBE(val);
+            appender.writeBE(folly::tag<decltype(val)>, val);
           }));
 
   // Write a blob of bytes to buffer

@@ -92,7 +92,7 @@ std::unique_ptr<folly::IOBuf> serializeAVCDecoderConfigurationRecord(
   folly::io::Appender appender(configRecord.get(), 1024);
 
   // Configuration record header (ISO/IEC 14496-15 AVC file format)
-  appender.writeBE<uint8_t>(1); // configurationVersion_
+  appender.writeBE<uint8_t>(static_cast<uint8_t>(1)); // configurationVersion_
 
   // Get profile/level from first SPS
   folly::io::Cursor spsCursor(spsNalus.data());
@@ -107,21 +107,24 @@ std::unique_ptr<folly::IOBuf> serializeAVCDecoderConfigurationRecord(
 
   // 6 bits reserved (111111 = 0xFC) + 2 bits NAL length size - 1
   const uint8_t lengthSizeMinusOne = 3; // Using 4 byte NAL length size
-  appender.writeBE<uint8_t>(0xFC | lengthSizeMinusOne);
+  appender.writeBE<uint8_t>(static_cast<uint8_t>(0xFC | lengthSizeMinusOne));
 
   // 3 bits reserved (111 = 0xE0) + 5 bits number of SPS NALUs
-  appender.writeBE<uint8_t>(0xE0 | (spsNalus.size() & 0x1F));
+  appender.writeBE<uint8_t>(
+      static_cast<uint8_t>(0xE0 | (spsNalus.size() & 0x1F)));
 
   // Write SPS NALUs
   for (const auto& sps : spsNalus) {
-    appender.writeBE<uint16_t>(sps.computeChainDataLength());
+    appender.writeBE<uint16_t>(
+        static_cast<uint16_t>(sps.computeChainDataLength()));
     appender.push(sps.data(), sps.computeChainDataLength());
   }
 
   // Write PPS count and NALUs
-  appender.writeBE<uint8_t>(ppsNalus.size());
+  appender.writeBE<uint8_t>(static_cast<uint8_t>(ppsNalus.size()));
   for (const auto& pps : ppsNalus) {
-    appender.writeBE<uint16_t>(pps.computeChainDataLength());
+    appender.writeBE<uint16_t>(
+        static_cast<uint16_t>(pps.computeChainDataLength()));
     appender.push(pps.data(), pps.computeChainDataLength());
   }
 
@@ -130,13 +133,13 @@ std::unique_ptr<folly::IOBuf> serializeAVCDecoderConfigurationRecord(
       AVCProfileIndication != 77 && // Main
       AVCProfileIndication != 88) { // Extended
     // 6 bits reserved (111111) + 2 bits chroma format (typically 1 = 4:2:0)
-    appender.writeBE<uint8_t>(0xFC | 1);
+    appender.writeBE<uint8_t>(static_cast<uint8_t>(0xFC | 1));
     // 5 bits reserved (11111) + 3 bits bit depth luma minus 8 (typically 0)
-    appender.writeBE<uint8_t>(0xF8);
+    appender.writeBE<uint8_t>(static_cast<uint8_t>(0xF8));
     // 5 bits reserved (11111) + 3 bits bit depth chroma minus 8 (typically 0)
-    appender.writeBE<uint8_t>(0xF8);
+    appender.writeBE<uint8_t>(static_cast<uint8_t>(0xF8));
     // Number of SPS Ext NALUs (typically 0)
-    appender.writeBE<uint8_t>(0);
+    appender.writeBE<uint8_t>(static_cast<uint8_t>(0));
   }
 
   return configRecord;
