@@ -61,6 +61,12 @@ class MockMoQSession : public MoQSession {
       (),
       (const, override));
 
+  MOCK_METHOD(
+      folly::coro::Task<Publisher::TrackStatusResult>,
+      trackStatus,
+      (TrackStatus),
+      (override));
+
   RequestID peekNextRequestID() {
     return RequestID(nextRequestID_++);
   }

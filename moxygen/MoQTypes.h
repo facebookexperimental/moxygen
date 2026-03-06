@@ -896,8 +896,7 @@ struct TrackNamespace {
     return result;
   }
   bool empty() const {
-    return trackNamespace.empty() ||
-        (trackNamespace.size() == 1 && trackNamespace[0].empty());
+    return trackNamespace.empty();
   }
   size_t size() const {
     return trackNamespace.size();

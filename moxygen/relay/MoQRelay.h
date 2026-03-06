@@ -57,6 +57,9 @@ class MoQRelay : public Publisher,
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
   }
 
+  folly::coro::Task<Publisher::TrackStatusResult> trackStatus(
+      TrackStatus req) override;
+
   std::shared_ptr<MoQSession> findPublishNamespaceSession(
       const TrackNamespace& ns);
 

@@ -31,10 +31,9 @@ install_ubuntu() {
 }
 
 install_fedora() {
-    echo "Installing dependencies for Fedora..."
+    echo "Installing dependencies for Fedora/CentOS/RHEL..."
     sudo dnf install -y \
         cmake \
-        ninja-build \
         git \
         openssl-devel \
         glog-devel \
@@ -48,6 +47,17 @@ install_fedora() {
         zlib-devel \
         c-ares-devel \
         gperf
+    # ninja-build is available on Fedora but not CentOS/RHEL base repos.
+    # Try to install it; if unavailable, warn with alternatives.
+    if ! command -v ninja &>/dev/null; then
+        if ! sudo dnf install -y ninja-build 2>/dev/null; then
+            echo ""
+            echo "WARNING: ninja-build not available in configured repos."
+            echo "Install ninja manually, e.g.:"
+            echo "  pip install ninja"
+            echo "  # or download from https://github.com/ninja-build/ninja/releases"
+        fi
+    fi
 }
 
 install_macos() {
@@ -77,7 +87,7 @@ elif [[ -f /etc/os-release ]]; then
         ubuntu|debian)
             install_ubuntu
             ;;
-        fedora)
+        fedora|centos|rhel)
             install_fedora
             ;;
         *)

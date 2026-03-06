@@ -25,12 +25,6 @@ option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
 # =============================================================================
 # Linking preferences
 # =============================================================================
-# Use static Boost (required by folly). Other system libraries use platform
-# defaults (shared on Linux) to avoid PIE issues with non-PIC static libs.
-# FetchContent deps are built from source with BUILD_SHARED_LIBS=OFF so
-# they are already static.
-set(Boost_USE_STATIC_LIBS ON CACHE BOOL "Use static Boost libraries" FORCE)
-set(BOOST_LINK_STATIC ON CACHE BOOL "Link Boost statically (for folly)" FORCE)
 
 find_package(ZLIB REQUIRED)
 find_library(ZSTD_LIBRARY NAMES zstd)
@@ -78,7 +72,7 @@ list(APPEND CMAKE_MODULE_PATH
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(gflags CONFIG REQUIRED)
-find_package(glog CONFIG REQUIRED)
+find_package(Glog REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(double-conversion CONFIG REQUIRED)
 find_package(Boost 1.70 REQUIRED COMPONENTS
@@ -230,7 +224,7 @@ FetchContent_Declare(proxygen
 # Also skip optional compression codecs not needed for moxygen.
 # Skip lzma unless libunwind is available (lzma is used for symbolization).
 set(_FETCHCONTENT_PROVIDED_DEPS folly fizz wangle mvfst proxygen GTest GMock
-    BZip2 LZ4 Snappy)
+    BZip2 LZ4 Snappy glog Glog)
 if(NOT LibUnwind_FOUND)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibLZMA)
     message(STATUS "LibUnwind not found, disabling lzma")
