@@ -1,17 +1,17 @@
-name: OpenMOQ Auto-Merge Sync
+name: sync auto-merge
 
 # Fires when OpenMOQ CI completes on a sync/* branch.
-# If CI passed, merges the corresponding open sync PR into openmoq-main.
+# If CI passed, merges the corresponding open sync PR into main.
 #
 # This handles auto-merge reliably via the REST merge API, avoiding the
 # enablePullRequestAutoMerge GraphQL mutation which is unreliable with PATs.
 #
-# NOTE: This workflow runs from openmoq-main (workflow_run events always use
-# the default branch). The sync PR must already be approved before CI runs.
+# NOTE: This workflow runs from the default branch (workflow_run events always
+# use the default branch). The sync PR must already be approved before CI runs.
 
 on:
   workflow_run:
-    workflows: ["OpenMOQ CI"]
+    workflows: ["pull request ci"]
     types: [completed]
     branches:
       - sync/**
@@ -34,7 +34,7 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           REPO: ${{ github.repository }}
         run: |
-          PR_NUM=$(gh api "repos/${REPO}/pulls?state=open&base=openmoq-main" \
+          PR_NUM=$(gh api "repos/${REPO}/pulls?state=open&base=main" \
             --jq "[.[] | select(.head.ref == \"${HEAD_BRANCH}\")] | .[0].number // empty")
           echo "pr_num=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
@@ -72,10 +72,10 @@ jobs:
         run: |
           echo "CI passed on ${HEAD_BRANCH} (${HEAD_SHA})"
 
-          # Find open sync PR from this branch targeting openmoq-main,
+          # Find open sync PR from this branch targeting main,
           # matching the exact SHA that CI ran on.
           PR_NUM=$(gh api \
-            "repos/${REPO}/pulls?state=open&base=openmoq-main" \
+            "repos/${REPO}/pulls?state=open&base=main" \
             --jq "[.[] | select(.head.ref == \"${HEAD_BRANCH}\" and .head.sha == \"${HEAD_SHA}\")] | .[0].number // empty")
 
           if [ -z "$PR_NUM" ]; then

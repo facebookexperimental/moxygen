@@ -1,7 +1,7 @@
-name: OpenMOQ Upstream Sync
+name: upstream sync
 
 # Mirrors upstream to `origin/upstream` branch, creates sync/<sha> PR branches
-# for merging into `openmoq-main`. One PR at a time — blocks if one is pending.
+# for merging into `main`. One PR at a time — blocks if one is pending.
 # See: https://github.com/openmoq/o-rly/blob/main/design/GITHUB_WORKFLOW.md
 
 on:
@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: openmoq-main
+          ref: main
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
@@ -40,8 +40,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Look for any open PR from a sync/* branch targeting openmoq-main
-          PR=$(gh api "repos/${{ github.repository }}/pulls?state=open&base=openmoq-main" \
+          # Look for any open PR from a sync/* branch targeting main
+          PR=$(gh api "repos/${{ github.repository }}/pulls?state=open&base=main" \
             --jq '[.[] | select(.head.ref | startswith("sync/"))] | .[0] // empty')
 
           if [ -n "$PR" ]; then
@@ -148,12 +148,12 @@ jobs:
         if: steps.blocking.outputs.blocked == 'false'
         id: merge
         run: |
-          git fetch origin upstream openmoq-main
-          if git merge-base --is-ancestor origin/upstream origin/openmoq-main; then
-            echo "openmoq-main already contains all upstream commits. Nothing to merge."
+          git fetch origin upstream main
+          if git merge-base --is-ancestor origin/upstream origin/main; then
+            echo "main already contains all upstream commits. Nothing to merge."
             echo "needs_merge=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Upstream commits need merging into openmoq-main."
+            echo "Upstream commits need merging into main."
             echo "needs_merge=true" >> "$GITHUB_OUTPUT"
 
             # Determine the SHA for the sync branch name
@@ -182,7 +182,7 @@ jobs:
 
           - **Upstream commit:** [\`${SYNC_SHA}\`](https://github.com/facebookexperimental/moxygen/commit/$FULL_SHA)
           - **Upstream status:** success (green)
-          - **Merge type:** git merge (sync/$SYNC_SHA → openmoq-main)
+          - **Merge type:** git merge (sync/$SYNC_SHA → main)
 
           CI will validate the standalone build. On success, this PR auto-merges.
           Devs can push conflict-resolution commits to \`$BRANCH\` if needed.
@@ -191,7 +191,7 @@ jobs:
           EOF
           )" \
             -f head="$BRANCH" \
-            -f base="openmoq-main" \
+            -f base="main" \
             --jq '.number')
 
           echo "Created sync PR #$PR_NUM"

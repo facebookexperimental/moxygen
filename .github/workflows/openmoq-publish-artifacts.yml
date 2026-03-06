@@ -1,11 +1,11 @@
-name: OpenMOQ Publish Artifacts
+name: release publish
 
 # Builds moxygen via standalone CMake on each target platform and publishes
 # per-architecture artifact bundles as a GitHub Release keyed by commit SHA.
 
 on:
   push:
-    branches: [openmoq-main]
+    branches: [openmoq-main, main]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: ubuntu-22.04-x86_64
+          - name: ubuntu-22.04-amd64
             runner: ubuntu-22.04
             artifact: moxygen-ubuntu-22.04-x86_64.tar.gz
             debug_artifact: moxygen-ubuntu-22.04-x86_64-dbg.tar.gz
@@ -135,15 +135,27 @@ jobs:
             --sha "$GITHUB_SHA" \
             --keep 20
 
+      - name: Slack message
+        id: slack-msg
+        if: always()
+        run: |
+          SHORT="${GITHUB_SHA:0:12}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/build-${SHORT}"
+            TEXT=":white_check_mark: ${{ github.repository }} ${{ github.ref_name }} commit: \`${SHORT}\`\nrelease published: <${REL_URL}|view>\nworkflow run: <${RUN_URL}|view>"
+          else
+            TEXT=":x: ${{ github.repository }} ${{ github.ref_name }} commit: \`${SHORT}\`\nbuild failed\nworkflow run: <${RUN_URL}|view>"
+          fi
+          echo "text=${TEXT}" >> "$GITHUB_OUTPUT"
+
       - name: Notify Slack
         if: always()
         continue-on-error: true
         uses: slackapi/slack-github-action@v1.26
         with:
           payload: |
-            {
-              "text": "${{ needs.build.result == 'success' && job.status == 'success' && ':white_check_mark: *moxygen artifacts published* — 4-platform standalone build' || ':warning: *moxygen artifact build failed* — needs attention' }}\nCommit: `${{ github.sha }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
-            }
+            {"text": "${{ steps.slack-msg.outputs.text }}"}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
 
