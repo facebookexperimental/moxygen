@@ -1116,16 +1116,19 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     // if session closes before completion
     co_withExecutor(
         session_->getExecutor(),
-        folly::coro::co_invoke(
-            [trackPubImpl = std::move(trackPubImpl),
-             update = std::move(
-                 requestUpdate)]() mutable -> folly::coro::Task<void> {
-              co_await trackPubImpl->handleRequestUpdate(std::move(update));
-            }))
+        co_withCancellation(
+            session_->cancellationSource_.getToken(),
+            folly::coro::co_invoke(
+                [trackPubImpl = std::move(trackPubImpl),
+                 update = std::move(
+                     requestUpdate)]() mutable -> folly::coro::Task<void> {
+                  co_await trackPubImpl->handleRequestUpdate(std::move(update));
+                })))
         .start();
   }
 
   folly::coro::Task<void> handleRequestUpdate(RequestUpdate requestUpdate) {
+    co_await folly::coro::co_safe_point;
     folly::RequestContextScopeGuard guard;
     session_->setRequestSession();
 
@@ -3493,11 +3496,14 @@ void MoQSession::handleFetchRequestUpdate(
   // Simple passthrough - just deliver to application and relay response
   co_withExecutor(
       getExecutor(),
-      folly::coro::co_invoke(
-          [fetchPublisher, update = std::move(requestUpdate)]() mutable
-              -> folly::coro::Task<void> {
-            co_await fetchPublisher->onRequestUpdate(std::move(update));
-          }))
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          folly::coro::co_invoke(
+              [fetchPublisher = fetchPublisher,
+               update = requestUpdate]() mutable -> folly::coro::Task<void> {
+                co_await folly::coro::co_safe_point;
+                co_await fetchPublisher->onRequestUpdate(std::move(update));
+              })))
       .start();
 }
 
