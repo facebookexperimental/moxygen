@@ -20,8 +20,8 @@ jobs:
         include:
           - name: ubuntu-22.04-amd64
             runner: ubuntu-22.04
-            artifact: moxygen-ubuntu-22.04-x86_64.tar.gz
-            debug_artifact: moxygen-ubuntu-22.04-x86_64-dbg.tar.gz
+            artifact: moxygen-ubuntu-22.04-amd64.tar.gz
+            debug_artifact: moxygen-ubuntu-22.04-amd64-dbg.tar.gz
             container: ""
 
           - name: macos-15-arm64
