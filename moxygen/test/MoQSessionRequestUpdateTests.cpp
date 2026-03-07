@@ -339,4 +339,53 @@ CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Regression test: when a REQUEST_UPDATE is queued on the executor but the
+// session closes before it runs, the update should not be delivered to the
+// application handler.  cleanup() calls unsubscribe() on the handle; the
+// subsequent requestUpdate should be suppressed.
+CO_TEST_P_X(MoQSessionTest, RequestUpdateAfterClose) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+
+  // Cleanup will deliver a publishDone to the client's subscribeCallback_
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  expectSubscribe(
+      [&mockSubscriptionHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+
+  // Simulate a REQUEST_UPDATE arriving at the server for the existing
+  // subscribe (requestID 0).  This queues handleRequestUpdate on the
+  // executor but it won't run until we yield.
+  RequestUpdate update;
+  update.existingRequestID = subscribeRequest.requestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.priority = kDefaultPriority + 1;
+  update.forward = true;
+  cb->onRequestUpdate(std::move(update));
+
+  // requestUpdateCalled must NOT be invoked — the session is about to close
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(0);
+
+  // Close the session before handleRequestUpdate runs.  Use a PUBLISH with
+  // wrong requestID parity to trigger closeSessionIfRequestIDInvalid.
+  cb->onPublish(PublishRequest{.requestID = RequestID(1), .fullTrackName = {}});
+
+  // Yield to let queued coroutines run
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
 } // namespace

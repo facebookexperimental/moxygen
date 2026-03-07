@@ -358,37 +358,42 @@ void MoQRelaySession::handlePublishNamespaceRequestUpdate(
   // Handle asynchronously with shared ownership to prevent use-after-free
   co_withExecutor(
       getExecutor(),
-      folly::coro::co_invoke(
-          [this,
-           announceHandle = std::move(announceHandle),
-           update = std::move(requestUpdate),
-           existingRequestID,
-           updateRequestID]() mutable -> folly::coro::Task<void> {
-            // Call the handle's requestUpdate
-            auto updateResult = co_await co_awaitTry(co_withCancellation(
-                cancellationSource_.getToken(),
-                announceHandle->requestUpdate(std::move(update))));
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          folly::coro::co_invoke(
+              [this,
+               announceHandle = std::move(announceHandle),
+               update = std::move(requestUpdate),
+               existingRequestID,
+               updateRequestID]() mutable -> folly::coro::Task<void> {
+                co_await folly::coro::co_safe_point;
+                // Call the handle's requestUpdate
+                auto updateResult = co_await co_awaitTry(co_withCancellation(
+                    cancellationSource_.getToken(),
+                    announceHandle->requestUpdate(std::move(update))));
 
-            // Only send responses for v15+
-            if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-              if (updateResult.hasException()) {
-                XLOG(ERR) << "Exception in requestUpdate ex="
-                          << updateResult.exception().what();
-                requestUpdateError(
-                    RequestError{
-                        updateRequestID,
-                        RequestErrorCode::INTERNAL_ERROR,
-                        "Exception in requestUpdate"},
-                    existingRequestID);
-              } else if (updateResult->hasError()) {
-                auto updateErr = updateResult->error();
-                requestUpdateError(updateErr, existingRequestID);
-              } else {
-                RequestOk requestOk{.requestID = updateRequestID};
-                requestUpdateOk(requestOk);
-              }
-            }
-          }))
+                // Only send responses for v15+
+                if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+                  if (updateResult.hasException()) {
+                    XLOG(ERR) << "Exception in requestUpdate ex="
+                              << updateResult.exception().what();
+                    requestUpdateError(
+                        RequestError{
+                            updateRequestID,
+                            RequestErrorCode::INTERNAL_ERROR,
+                            "Exception in requestUpdate"},
+                        existingRequestID);
+                  } else if (updateResult->hasError()) {
+                    auto updateErr = updateResult->error();
+                    requestUpdateError(updateErr, existingRequestID);
+                  } else {
+                    RequestOk requestOk{
+                        .requestID = updateRequestID,
+                        .requestSpecificParams = {}};
+                    requestUpdateOk(requestOk);
+                  }
+                }
+              })))
       .start();
 }
 
@@ -405,37 +410,43 @@ void MoQRelaySession::handleSubscribeNamespaceRequestUpdate(
   // Handle asynchronously with shared ownership to prevent use-after-free
   co_withExecutor(
       getExecutor(),
-      folly::coro::co_invoke(
-          [this,
-           subscribeNamespaceHandle = std::move(subscribeNamespaceHandle),
-           update = std::move(requestUpdate),
-           existingRequestID,
-           updateRequestID]() mutable -> folly::coro::Task<void> {
-            // Call the handle's requestUpdate
-            auto updateResult = co_await co_awaitTry(co_withCancellation(
-                cancellationSource_.getToken(),
-                subscribeNamespaceHandle->requestUpdate(std::move(update))));
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          folly::coro::co_invoke(
+              [this,
+               subscribeNamespaceHandle = std::move(subscribeNamespaceHandle),
+               update = std::move(requestUpdate),
+               existingRequestID,
+               updateRequestID]() mutable -> folly::coro::Task<void> {
+                co_await folly::coro::co_safe_point;
+                // Call the handle's requestUpdate
+                auto updateResult = co_await co_awaitTry(co_withCancellation(
+                    cancellationSource_.getToken(),
+                    subscribeNamespaceHandle->requestUpdate(
+                        std::move(update))));
 
-            // Only send responses for v15+
-            if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-              if (updateResult.hasException()) {
-                XLOG(ERR) << "Exception in requestUpdate ex="
-                          << updateResult.exception().what();
-                requestUpdateError(
-                    RequestError{
-                        updateRequestID,
-                        RequestErrorCode::INTERNAL_ERROR,
-                        "Exception in requestUpdate"},
-                    existingRequestID);
-              } else if (updateResult->hasError()) {
-                auto updateErr = updateResult->error();
-                requestUpdateError(updateErr, existingRequestID);
-              } else {
-                RequestOk requestOk{.requestID = updateRequestID};
-                requestUpdateOk(requestOk);
-              }
-            }
-          }))
+                // Only send responses for v15+
+                if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
+                  if (updateResult.hasException()) {
+                    XLOG(ERR) << "Exception in requestUpdate ex="
+                              << updateResult.exception().what();
+                    requestUpdateError(
+                        RequestError{
+                            updateRequestID,
+                            RequestErrorCode::INTERNAL_ERROR,
+                            "Exception in requestUpdate"},
+                        existingRequestID);
+                  } else if (updateResult->hasError()) {
+                    auto updateErr = updateResult->error();
+                    requestUpdateError(updateErr, existingRequestID);
+                  } else {
+                    RequestOk requestOk{
+                        .requestID = updateRequestID,
+                        .requestSpecificParams = {}};
+                    requestUpdateOk(requestOk);
+                  }
+                }
+              })))
       .start();
 }
 
@@ -720,11 +731,17 @@ void MoQRelaySession::onPublishNamespace(PublishNamespace ann) {
             "Not a subscriber"});
     return;
   }
-  co_withExecutor(exec_.get(), handlePublishNamespace(std::move(ann))).start();
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handlePublishNamespace(std::move(ann))))
+      .start();
 }
 
 folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
     PublishNamespace publishNamespace) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto annCb = std::make_shared<SubscriberPublishNamespaceCallback>(
@@ -1032,7 +1049,11 @@ void MoQRelaySession::onSubscribeNamespaceImpl(
         std::move(subNsReply));
     return;
   }
-  co_withExecutor(exec_.get(), handleSubscribeNamespace(sa, subNsReply))
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handleSubscribeNamespace(sa, subNsReply)))
       .start();
 }
 
@@ -1073,6 +1094,7 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
 folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
     SubscribeNamespace subAnn,
     std::shared_ptr<SubNSReply> subNsReply) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto publishHandle = std::make_shared<MoQNamespacePublishHandle>(

@@ -442,7 +442,7 @@ void MoQMi::writeVarint(
   }
   folly::io::QueueAppender appender(&buf, MoQMi::kMaxQuicIntSize);
   auto appenderOp = [appender = std::move(appender)](auto val) mutable {
-    appender.writeBE(val);
+    appender.writeBE(folly::tag<decltype(val)>, val);
   };
   auto res = quic::encodeQuicInteger(value, appenderOp);
   if (res.hasError()) {

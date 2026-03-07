@@ -1116,16 +1116,19 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     // if session closes before completion
     co_withExecutor(
         session_->getExecutor(),
-        folly::coro::co_invoke(
-            [trackPubImpl = std::move(trackPubImpl),
-             update = std::move(
-                 requestUpdate)]() mutable -> folly::coro::Task<void> {
-              co_await trackPubImpl->handleRequestUpdate(std::move(update));
-            }))
+        co_withCancellation(
+            session_->cancellationSource_.getToken(),
+            folly::coro::co_invoke(
+                [trackPubImpl = std::move(trackPubImpl),
+                 update = std::move(
+                     requestUpdate)]() mutable -> folly::coro::Task<void> {
+                  co_await trackPubImpl->handleRequestUpdate(std::move(update));
+                })))
         .start();
   }
 
   folly::coro::Task<void> handleRequestUpdate(RequestUpdate requestUpdate) {
+    co_await folly::coro::co_safe_point;
     folly::RequestContextScopeGuard guard;
     session_->setRequestSession();
 
@@ -3323,13 +3326,17 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   // subscribeOK/Error
   co_withExecutor(
       exec_.get(),
-      handleSubscribe(std::move(subscribeRequest), std::move(trackPublisher)))
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handleSubscribe(
+              std::move(subscribeRequest), std::move(trackPublisher))))
       .start();
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackPublisherImpl> trackPublisher) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto requestID = sub.requestID;
@@ -3489,11 +3496,14 @@ void MoQSession::handleFetchRequestUpdate(
   // Simple passthrough - just deliver to application and relay response
   co_withExecutor(
       getExecutor(),
-      folly::coro::co_invoke(
-          [fetchPublisher, update = std::move(requestUpdate)]() mutable
-              -> folly::coro::Task<void> {
-            co_await fetchPublisher->onRequestUpdate(std::move(update));
-          }))
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          folly::coro::co_invoke(
+              [fetchPublisher = fetchPublisher,
+               update = requestUpdate]() mutable -> folly::coro::Task<void> {
+                co_await folly::coro::co_safe_point;
+                co_await fetchPublisher->onRequestUpdate(std::move(update));
+              })))
       .start();
 }
 
@@ -3822,13 +3832,17 @@ void MoQSession::onPublish(PublishRequest publish) {
 
   // Use single coroutine pattern like working onPublishNamespace
   co_withExecutor(
-      exec_.get(), handlePublish(std::move(publish), std::move(publishHandle)))
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handlePublish(std::move(publish), std::move(publishHandle))))
       .start();
 }
 
 folly::coro::Task<void> MoQSession::handlePublish(
     PublishRequest publish,
     std::shared_ptr<Publisher::SubscriptionHandle> publishHandle) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   // Capture params before moving publish
@@ -4054,13 +4068,17 @@ void MoQSession::onFetch(Fetch fetch) {
   fetchPublisher->initialize();
   pubTracks_.emplace(fetch.requestID, fetchPublisher);
   co_withExecutor(
-      exec_.get(), handleFetch(std::move(fetch), std::move(fetchPublisher)))
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handleFetch(std::move(fetch), std::move(fetchPublisher))))
       .start();
 }
 
 folly::coro::Task<void> MoQSession::handleFetch(
     Fetch fetch,
     std::shared_ptr<FetchPublisherImpl> fetchPublisher) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto requestID = fetch.requestID;
@@ -4189,12 +4207,17 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
          TrackStatusErrorCode::INTERNAL_ERROR,
          "No publisher callback set"});
   } else {
-    co_withExecutor(exec_.get(), handleTrackStatus(std::move(trackStatus)))
+    co_withExecutor(
+        exec_.get(),
+        co_withCancellation(
+            cancellationSource_.getToken(),
+            handleTrackStatus(std::move(trackStatus))))
         .start();
   }
 }
 
 folly::coro::Task<void> MoQSession::handleTrackStatus(TrackStatus trackStatus) {
+  co_await folly::coro::co_safe_point;
   auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->trackStatus(trackStatus)));

@@ -1019,3 +1019,30 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinPublishDoneHandler) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Regression test for crash when session closes after onSubscribe queues
+// handleSubscribe but before handleSubscribe runs. handleSubscribe would
+// dereference null publishHandler_ (reset in cleanup()) causing SIGSEGV.
+CO_TEST_P_X(MoQSessionTest, CloseWhileHandleSubscribePending) {
+  co_await setupMoQSession();
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+
+  // Simulate receiving a SUBSCRIBE frame on the server. This queues
+  // handleSubscribe on the executor via co_withExecutor(..).start(), but
+  // it won't run until we yield.
+  cb->onSubscribe(getSubscribe(kTestTrackName));
+
+  // Simulate a PUBLISH arriving with wrong requestID parity (odd ID to
+  // server which expects even from client). closeSessionIfRequestIDInvalid
+  // detects the mismatch and calls close(), which resets publishHandler_
+  // to null before handleSubscribe runs.
+  cb->onPublish(PublishRequest{RequestID(1)});
+
+  // Yield to let the event loop process the pending handleSubscribe.
+  // Without the fix, this crashes with SIGSEGV dereferencing null
+  // publishHandler_.
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
