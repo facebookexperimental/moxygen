@@ -89,6 +89,10 @@ class MoQServer : public MoQServerBase {
       folly::EventBase* evb,
       std::shared_ptr<const fizz::server::FizzServerContext> ctx);
 
+  void addEndpoint(std::string endpoint) {
+    MoQServerBase::addEndpoint(std::move(endpoint));
+  }
+
   void setWtMoqtProtocols(std::vector<std::string> protocols) {
     wtMoqtProtocols_ = std::move(protocols);
   }

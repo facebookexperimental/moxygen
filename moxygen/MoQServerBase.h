@@ -10,6 +10,7 @@
 #include <moxygen/mlog/MLoggerFactory.h>
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 namespace moxygen {
 
@@ -79,15 +80,18 @@ class MoQServerBase : public MoQSession::ServerSetupCallback {
   // Create a logger from the factory if one is set
   std::shared_ptr<MLogger> createLogger() const;
 
-  [[nodiscard]] const std::string& getEndpoint() const {
-    return endpoint_;
+  void addEndpoint(std::string endpoint) {
+    endpoints_.insert(std::move(endpoint));
+  }
+  bool isAcceptedEndpoint(folly::StringPiece path) const {
+    return endpoints_.count(std::string(path)) > 0;
   }
 
   // AUTHORITY parameter validation methods
   bool isValidAuthorityFormat(const std::string& authority);
   bool isSupportedAuthority(const std::string& authority);
 
-  std::string endpoint_;
+  std::unordered_set<std::string> endpoints_;
   std::shared_ptr<MLoggerFactory> mLoggerFactory_;
 };
 
