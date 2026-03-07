@@ -720,11 +720,17 @@ void MoQRelaySession::onPublishNamespace(PublishNamespace ann) {
             "Not a subscriber"});
     return;
   }
-  co_withExecutor(exec_.get(), handlePublishNamespace(std::move(ann))).start();
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handlePublishNamespace(std::move(ann))))
+      .start();
 }
 
 folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
     PublishNamespace publishNamespace) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto annCb = std::make_shared<SubscriberPublishNamespaceCallback>(
@@ -1032,7 +1038,11 @@ void MoQRelaySession::onSubscribeNamespaceImpl(
         std::move(subNsReply));
     return;
   }
-  co_withExecutor(exec_.get(), handleSubscribeNamespace(sa, subNsReply))
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handleSubscribeNamespace(sa, subNsReply)))
       .start();
 }
 
@@ -1073,6 +1083,7 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
 folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
     SubscribeNamespace subAnn,
     std::shared_ptr<SubNSReply> subNsReply) {
+  co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto publishHandle = std::make_shared<MoQNamespacePublishHandle>(
