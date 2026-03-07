@@ -186,11 +186,45 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
     serverSession->close(SessionCloseErrorCode::NO_ERROR);
   }
 }
+// === AUTHORITY / PATH tests ===
+
+using MoQAuthorityPathTest = MoQSessionTest;
+INSTANTIATE_TEST_SUITE_P(
+    MoQAuthorityPathTest,
+    MoQAuthorityPathTest,
+    testing::ValuesIn(getSupportedVersionParams()));
+
+// After a normal setup the server session's path should be populated from the
+// PATH parameter in CLIENT_SETUP, and authority should remain empty (no
+// AUTHORITY param is sent in the test ClientSetup).
+CO_TEST_P_X(MoQAuthorityPathTest, ServerSessionPathFromClientSetup) {
+  co_await setupMoQSession();
+  EXPECT_EQ(serverSession_->getPath(), "/foo");
+  EXPECT_EQ(serverSession_->getAuthority(), "");
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// If authority/path are already set on the server session before CLIENT_SETUP
+// arrives (e.g. populated from HTTP Host/request-path in the WT case), a
+// CLIENT_SETUP that also carries PATH is a protocol violation and must close
+// the session.
+CO_TEST_P_X(MoQAuthorityPathTest, PathInClientSetupConflictsWithPreSetPath) {
+  serverSession_->setPath("/pre-set-path");
+
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  clientSession_->start();
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+  serverSession_->start();
+
+  auto result = co_await folly::coro::co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
+  EXPECT_TRUE(result.hasException() || serverWt_->isSessionClosed());
+}
+
 CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await setupMoQSession();
-
-  // Make a SUBSCRIBE request so that we don't immediately close when goaway()
-  // is called.
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
     auto pubResult = pub->beginSubgroup(0, 0, 0);
     EXPECT_FALSE(pubResult.hasError());
