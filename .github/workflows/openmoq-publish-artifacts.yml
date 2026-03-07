@@ -1,4 +1,4 @@
-name: release publish
+name: publish release
 
 # Builds moxygen via standalone CMake on each target platform and publishes
 # per-architecture artifact bundles as a GitHub Release keyed by commit SHA.

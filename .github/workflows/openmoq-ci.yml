@@ -1,4 +1,4 @@
-name: pull request ci
+name: build
 
 # Standalone build validation for PRs. Required status check for branch protection.
 
