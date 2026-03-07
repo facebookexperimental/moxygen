@@ -19,6 +19,7 @@ add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 # Options
 # =============================================================================
 option(BUILD_TESTS "Build tests" ON)
+option(BUILD_SAMPLES "Build moxygen sample executables and test tools" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
 option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
 
@@ -125,8 +126,9 @@ if(BUILD_TESTS)
     endif()
 endif()
 
-# Save original BUILD_TESTS value, then disable for fetched dependencies
+# Save original BUILD_TESTS/BUILD_SAMPLES values, then disable for fetched dependencies
 set(_MOXYGEN_BUILD_TESTS ${BUILD_TESTS})
+set(_MOXYGEN_BUILD_SAMPLES ${BUILD_SAMPLES})
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
@@ -297,8 +299,9 @@ endif()
 # =============================================================================
 # Moxygen
 # =============================================================================
-# Re-enable tests for moxygen itself
+# Re-enable tests and samples for moxygen itself
 set(BUILD_TESTS ${_MOXYGEN_BUILD_TESTS} CACHE BOOL "" FORCE)
+set(BUILD_SAMPLES ${_MOXYGEN_BUILD_SAMPLES} CACHE BOOL "" FORCE)
 
 # Set MOXYGEN_FBCODE_ROOT to match what main CMakeLists.txt expects
 set(MOXYGEN_FBCODE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
