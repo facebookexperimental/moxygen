@@ -35,6 +35,21 @@ moxygen_add_library(openmoq_pico_server_transport
     openmoq_pico_server_base
 )
 
+# EventBase-driven UDP I/O engine shared by both evb server and evb client.
+moxygen_add_library(openmoq_pico_evb_base
+  SRCS
+    PicoQuicSocketHandler.cpp
+  EXPORTED_DEPS
+    openmoq_pico_base
+    Folly::folly_io_async_async_udp_socket
+)
+if(APPLE)
+  # RFC 3542 advanced IPv6 API (IPV6_PKTINFO, in6_pktinfo) must be unlocked
+  # before any system headers are processed; do it via compile definition so
+  # it precedes all transitive includes (e.g. from picoquic.h).
+  target_compile_definitions(openmoq_pico_evb_base PRIVATE __APPLE_USE_RFC_3542)
+endif()
+
 if(BUILD_SAMPLES)
   add_subdirectory(sample)
 endif()
