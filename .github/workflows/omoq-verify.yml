@@ -1,10 +1,10 @@
-name: build
+name: verify
 
 # Standalone build validation for PRs. Required status check for branch protection.
 
 on:
   pull_request:
-    branches: [openmoq-main, main]
+    branches: [main]
 
 permissions:
   contents: read

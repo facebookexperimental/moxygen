@@ -1,11 +1,11 @@
-name: publish release
+name: publish artifacts
 
 # Builds moxygen via standalone CMake on each target platform and publishes
-# per-architecture artifact bundles as a GitHub Release keyed by commit SHA.
+# per-architecture artifact bundles as a rolling GitHub pre-release (snapshot-latest).
 
 on:
   push:
-    branches: [openmoq-main, main]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -125,39 +125,32 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Create release
+      - name: Publish snapshot
         if: needs.build.result == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          bash openmoq/scripts/create-release.sh \
+          bash openmoq/scripts/publish-artifacts.sh \
             --artifacts-dir artifacts/ \
-            --sha "$GITHUB_SHA" \
-            --keep 20
-
-      - name: Slack message
-        id: slack-msg
-        if: always()
-        run: |
-          SHORT="${GITHUB_SHA:0:12}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          if [ "${{ needs.build.result }}" = "success" ]; then
-            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/build-${SHORT}"
-            TEXT=":white_check_mark: ${{ github.repository }} ${{ github.ref_name }} commit: \`${SHORT}\`\nrelease published: <${REL_URL}|view>\nworkflow run: <${RUN_URL}|view>"
-          else
-            TEXT=":x: ${{ github.repository }} ${{ github.ref_name }} commit: \`${SHORT}\`\nbuild failed\nworkflow run: <${RUN_URL}|view>"
-          fi
-          echo "text=${TEXT}" >> "$GITHUB_OUTPUT"
+            --sha "$GITHUB_SHA"
 
       - name: Notify Slack
         if: always()
         continue-on-error: true
-        uses: slackapi/slack-github-action@v1.26
-        with:
-          payload: |
-            {"text": "${{ steps.slack-msg.outputs.text }}"}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/snapshot-latest"
+            TEXT=":white_check_mark: moxygen ${{ github.ref_name }} ${SHORT} — run: <${RUN_URL}|#${{ github.run_number }}> artifacts: <${REL_URL}|view>"
+          else
+            TEXT=":x: moxygen ${{ github.ref_name }} ${SHORT} — run: <${RUN_URL}|#${{ github.run_number }}>"
+          fi
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
 
       - name: Notify email
         if: always()
@@ -167,21 +160,20 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: us-east-1
         run: |
-          RESULT="${{ needs.build.result }}"
-          JOB_STATUS="${{ job.status }}"
-          if [ "$RESULT" = "success" ] && [ "$JOB_STATUS" = "success" ]; then
-            SUBJECT="[moxygen] artifacts published"
-            BODY="Artifacts published successfully."
+          SHORT="${GITHUB_SHA:0:7}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/snapshot-latest"
+            SUBJECT="[moxygen] published ${{ github.ref_name }} ${SHORT}"
+            BODY="Repository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nCommit: ${GITHUB_SHA}\nArtifacts: ${REL_URL}\nRun: ${RUN_URL}"
           else
-            SUBJECT="[moxygen] artifact build FAILED"
-            BODY="Artifact build failed — needs attention."
+            SUBJECT="[moxygen] build FAILED ${{ github.ref_name }} ${SHORT}"
+            BODY="Repository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nCommit: ${GITHUB_SHA}\nRun: ${RUN_URL}"
           fi
-          BODY="$BODY\n\nCommit: ${{ github.sha }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
           aws ses send-email \
             --from "noreply@ci.openmoq.org" \
             --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
             --message "{
-              \"Subject\": {\"Data\": \"$SUBJECT\"},
-              \"Body\": {\"Text\": {\"Data\": \"$BODY\"}}
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
             }"

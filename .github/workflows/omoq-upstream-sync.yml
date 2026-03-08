@@ -59,14 +59,37 @@ jobs:
       - name: Notify blocked (Slack)
         if: steps.blocking.outputs.blocked == 'true'
         continue-on-error: true
-        uses: slackapi/slack-github-action@v1.26
-        with:
-          payload: |
-            {
-              "text": ":pause_button: *moxygen sync paused* — PR #${{ steps.blocking.outputs.pr_num }} (`${{ steps.blocking.outputs.pr_ref }}`) pending.\n<${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.blocking.outputs.pr_num }}|View PR>"
-            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          PR_NUM="${{ steps.blocking.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          TEXT=":pause_button: moxygen sync paused — PR <${PR_URL}|#${PR_NUM}> pending"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify blocked (email)
+        if: steps.blocking.outputs.blocked == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          PR_NUM="${{ steps.blocking.outputs.pr_num }}"
+          PR_REF="${{ steps.blocking.outputs.pr_ref }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] sync paused — PR #${PR_NUM} pending"
+          BODY="Upstream sync blocked by open PR.\n\nPR: ${PR_URL}\nBranch: ${PR_REF}\nRun: ${RUN_URL}"
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
 
       # ══════════════════════════════════════════════════════════
       # PHASE B: Advance upstream mirror (if not blocked)
@@ -187,7 +210,7 @@ jobs:
           CI will validate the standalone build. On success, this PR auto-merges.
           Devs can push conflict-resolution commits to \`$BRANCH\` if needed.
 
-          Created by \`openmoq-upstream-sync\` workflow.
+          Created by \`omoq-upstream-sync\` workflow.
           EOF
           )" \
             -f head="$BRANCH" \
@@ -216,14 +239,14 @@ jobs:
       - name: Notify Slack (sync failure)
         if: failure()
         continue-on-error: true
-        uses: slackapi/slack-github-action@v1.26
-        with:
-          payload: |
-            {
-              "text": ":warning: *moxygen upstream sync failed* — needs attention\nUpstream: `${{ steps.upstream.outputs.upstream_sha || 'unknown' }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
-            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT=":warning: moxygen upstream sync failed — run: <${RUN_URL}|#${{ github.run_number }}>"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
 
       - name: Notify email (sync failure)
         if: failure()
@@ -233,10 +256,14 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: us-east-1
         run: |
+          UPSTREAM="${{ steps.upstream.outputs.upstream_sha || 'unknown' }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] upstream sync FAILED"
+          BODY="Upstream sync workflow failed.\n\nUpstream SHA: ${UPSTREAM}\nRun: ${RUN_URL}"
           aws ses send-email \
             --from "noreply@ci.openmoq.org" \
             --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
-            --message '{
-              "Subject": {"Data": "[moxygen] upstream sync FAILED"},
-              "Body": {"Text": {"Data": "Upstream sync failed.\n\nUpstream: ${{ steps.upstream.outputs.upstream_sha || 'unknown' }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}}
-            }'
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"

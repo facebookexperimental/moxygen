@@ -5,9 +5,9 @@ This directory contains OpenMOQ-specific files that are not part of the upstream
 
 ## Branch Architecture
 
-- **`main`** — Pure upstream mirror. Unmodified copy of the latest green upstream
-  commit. No workflows run. Not the default branch.
-- **`openmoq-main`** (default) — Working branch with all OpenMOQ customizations.
+- **`upstream`** — Pure upstream mirror. Unmodified copy of the latest green upstream
+  commit. No workflows run.
+- **`main`** (default) — Working branch with all OpenMOQ customizations.
   Developer PRs go here. Artifacts published from here.
 
 See [GITHUB_WORKFLOW.md](https://github.com/openmoq/o-rly/blob/main/design/GITHUB_WORKFLOW.md)
@@ -21,28 +21,35 @@ for the full design.
 
 ## Workflows
 
-OpenMOQ workflows live on `openmoq-main` and are prefixed `openmoq-` to avoid
-collisions with upstream workflow files:
+OpenMOQ workflows live on `main` and are prefixed `omoq-` to avoid collisions
+with upstream workflow files:
 
-- `openmoq-upstream-sync.yml` — Daily upstream sync: mirrors upstream to `main`,
-  creates merge PR to `openmoq-main`, auto-merges on CI pass.
-- `openmoq-publish-artifacts.yml` — Builds per-platform artifact bundles on merge
-  to `openmoq-main` using the standalone CMake build.
-- `openmoq-ci.yml` — Standalone build CI for PRs to `openmoq-main`.
+- `omoq-upstream-sync.yml` — Daily upstream sync: mirrors upstream to `upstream`,
+  creates merge PR to `main`, auto-merges on CI pass.
+- `omoq-auto-merge-sync.yml` — Merges sync PRs after CI passes (triggered by
+  `verify` workflow completion on `sync/*` branches).
+- `omoq-publish-artifacts.yml` — Builds per-platform artifact bundles on merge
+  to `main` using the standalone CMake build. Publishes as rolling
+  `snapshot-latest` pre-release.
+- `omoq-verify.yml` — Standalone build CI for PRs to `main`.
 
 ## Scripts
 
-### `openmoq/scripts/create-release.sh`
+### `openmoq/scripts/publish-artifacts.sh`
 
-Creates a GitHub Release from artifact tarballs and prunes old releases.
+Publishes build artifacts as a rolling `snapshot-latest` GitHub pre-release.
 
 ```bash
-openmoq/scripts/create-release.sh \
+openmoq/scripts/publish-artifacts.sh \
   --artifacts-dir ./my-artifacts \
   --sha "$(git rev-parse HEAD)" \
-  --keep 20 \
   --dry-run
 ```
+
+### `openmoq/scripts/collect-artifacts-standalone.sh`
+
+Strips binaries, splits debug symbols, and creates release tarballs from a
+cmake install prefix.
 
 ## Building Moxygen
 
@@ -54,7 +61,7 @@ openmoq/scripts/create-release.sh \
 
 # Build
 cmake -B _build -S standalone -G Ninja
-cmake --build _build -j$(nproc)
+cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
 
 # Test
 ctest --test-dir _build --output-on-failure
