@@ -483,6 +483,14 @@ void PicoQuicWebTransport::onPrepareToSend(uint64_t streamId, uint8_t *context,
   // Dequeue data from WtStreamManager
   auto streamData = streamManager_->dequeue(*handle, maxLength);
 
+  // Picoquic has no ACK callback integration, so fire onByteEvent immediately
+  // when data is handed off to picoquic (optimistic delivery notification).
+  // Without this, keepaliveForDeliveryCallbacks_ in StreamPublisherImpl would
+  // never be cleared for data that was already dequeued.
+  if (streamData.deliveryCallback) {
+    streamData.deliveryCallback->onByteEvent(streamId, streamData.lastByteStreamOffset);
+  }
+
   // Calculate how much data we have to send
   // dequeue() already respects maxLength, so returned data is never > maxLength
   size_t dataSize = 0;
