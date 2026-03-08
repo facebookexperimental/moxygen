@@ -62,9 +62,10 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
         run: |
+          SHORT="${GITHUB_SHA:0:7}"
           PR_NUM="${{ steps.blocking.outputs.pr_num }}"
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
-          TEXT=":pause_button: moxygen sync paused — PR <${PR_URL}|#${PR_NUM}> pending"
+          TEXT=":pause_button: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — upstream sync paused: PR <${PR_URL}|#${PR_NUM}> pending"
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             --data "{\"text\": \"${TEXT}\"}"
@@ -120,7 +121,7 @@ jobs:
               break
             fi
 
-            # Check CI status
+            # Check build status
             STATE=$(gh api "repos/facebookexperimental/moxygen/commits/$SHA/check-suites" \
               -q '[.check_suites[] | select(.app.name=="GitHub Actions")] |
                   if length == 0 then "failure"
@@ -207,7 +208,7 @@ jobs:
           - **Upstream status:** success (green)
           - **Merge type:** git merge (sync/$SYNC_SHA → main)
 
-          CI will validate the standalone build. On success, this PR auto-merges.
+          The verify workflow will validate the standalone build. On success, this PR auto-merges.
           Devs can push conflict-resolution commits to \`$BRANCH\` if needed.
 
           Created by \`omoq-upstream-sync\` workflow.
@@ -242,8 +243,9 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
         run: |
+          SHORT="${GITHUB_SHA:0:7}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TEXT=":warning: moxygen upstream sync failed — run: <${RUN_URL}|#${{ github.run_number }}>"
+          TEXT=":warning: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — upstream sync failed: Run <${RUN_URL}|#${{ github.run_number }}>"
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             --data "{\"text\": \"${TEXT}\"}"

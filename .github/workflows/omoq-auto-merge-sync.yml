@@ -1,13 +1,13 @@
 name: sync auto-merge
 
 # Fires when verify completes on a sync/* branch.
-# If CI passed, merges the corresponding open sync PR into main.
-# If CI failed, sends Slack + email notifications.
+# If build passed, merges the corresponding open sync PR into main.
+# If build failed, sends Slack + email notifications.
 #
 # Single job with step-level conditions avoids "Skipped" job noise.
 #
 # NOTE: This workflow runs from the default branch (workflow_run events always
-# use the default branch). The sync PR must already be approved before CI runs.
+# use the default branch). The sync PR must already be approved before verify runs.
 
 on:
   workflow_run:
@@ -36,9 +36,9 @@ jobs:
             --jq "[.[] | select(.head.ref == \"${HEAD_BRANCH}\")] | .[0].number // empty")
           echo "pr_num=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
-      # ── CI failed: notify ──────────────────────────────────────────────
+      # ── verification failed: notify ───────────────────────────────────
 
-      - name: Notify Slack (CI failure)
+      - name: Notify Slack (verification failure)
         if: github.event.workflow_run.conclusion != 'success'
         continue-on-error: true
         env:
@@ -46,14 +46,13 @@ jobs:
         run: |
           PR_NUM="${{ steps.find-pr.outputs.pr_num }}"
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
-          CI_RUN_URL="${{ github.event.workflow_run.html_url }}"
           BRANCH="${{ github.event.workflow_run.head_branch }}"
-          TEXT=":x: moxygen ${BRANCH} CI failed — PR: <${PR_URL}|#${PR_NUM}> run: <${CI_RUN_URL}|view>"
+          TEXT=":x: *${{ github.repository }}* \`${BRANCH}\` — verification failed: PR: <${PR_URL}|#${PR_NUM}>"
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             --data "{\"text\": \"${TEXT}\"}"
 
-      - name: Notify email (CI failure)
+      - name: Notify email (verification failure)
         if: github.event.workflow_run.conclusion != 'success'
         continue-on-error: true
         env:
@@ -65,8 +64,8 @@ jobs:
           BRANCH="${{ github.event.workflow_run.head_branch }}"
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
           CI_RUN_URL="${{ github.event.workflow_run.html_url }}"
-          SUBJECT="[moxygen] sync CI failed — ${BRANCH}"
-          BODY="Sync branch CI failed — needs conflict resolution.\n\nBranch: ${BRANCH}\nPR: ${PR_URL}\nCI Run: ${CI_RUN_URL}"
+          SUBJECT="[moxygen] sync verification failed — ${BRANCH}"
+          BODY="Sync branch verification failed — needs conflict resolution.\n\nBranch: ${BRANCH}\nPR: ${PR_URL}\nRun: ${CI_RUN_URL}"
           aws ses send-email \
             --from "noreply@ci.openmoq.org" \
             --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
@@ -75,7 +74,7 @@ jobs:
               \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
             }"
 
-      # ── CI passed: merge ───────────────────────────────────────────────
+      # ── build passed: merge ──────────────────────────────────────────────
 
       - name: Generate app token
         if: github.event.workflow_run.conclusion == 'success'
@@ -93,7 +92,7 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           REPO: ${{ github.repository }}
         run: |
-          echo "CI passed on ${HEAD_BRANCH} (${HEAD_SHA})"
+          echo "Build passed on ${HEAD_BRANCH} (${HEAD_SHA})"
 
           PR_NUM=$(gh api \
             "repos/${REPO}/pulls?state=open&base=main" \

@@ -144,9 +144,9 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ needs.build.result }}" = "success" ]; then
             REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/snapshot-latest"
-            TEXT=":white_check_mark: moxygen ${{ github.ref_name }} ${SHORT} — run: <${RUN_URL}|#${{ github.run_number }}> artifacts: <${REL_URL}|view>"
+            TEXT=":white_check_mark: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — publish release: <${RUN_URL}|#${{ github.run_number }}> artifacts: <${REL_URL}|view>"
           else
-            TEXT=":x: moxygen ${{ github.ref_name }} ${SHORT} — run: <${RUN_URL}|#${{ github.run_number }}>"
+            TEXT=":x: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — publish release failed: <${RUN_URL}|#${{ github.run_number }}>"
           fi
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
