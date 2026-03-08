@@ -50,6 +50,16 @@ if(APPLE)
   target_compile_definitions(openmoq_pico_evb_base PRIVATE __APPLE_USE_RFC_3542)
 endif()
 
+# EventBase server: picoquic I/O driven by a caller-supplied folly::EventBase.
+moxygen_add_library(openmoq_pico_evb_server_transport
+  SRCS
+    MoQPicoQuicEventBaseServer.cpp
+  EXPORTED_DEPS
+    openmoq_pico_evb_base
+    openmoq_pico_server_base
+    moxygen_events_moq_folly_executor_impl
+)
+
 if(BUILD_SAMPLES)
   add_subdirectory(sample)
 endif()
