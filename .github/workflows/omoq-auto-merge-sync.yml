@@ -1,0 +1,108 @@
+name: sync auto-merge
+
+# Fires when verify completes on a sync/* branch.
+# If build passed, merges the corresponding open sync PR into main.
+# If build failed, sends Slack + email notifications.
+#
+# Single job with step-level conditions avoids "Skipped" job noise.
+#
+# NOTE: This workflow runs from the default branch (workflow_run events always
+# use the default branch). The sync PR must already be approved before verify runs.
+
+on:
+  workflow_run:
+    workflows: ["verify"]
+    types: [completed]
+    branches:
+      - sync/**
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    if: startsWith(github.event.workflow_run.head_branch, 'sync/')
+    steps:
+      - name: Find sync PR
+        id: find-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR_NUM=$(gh api "repos/${REPO}/pulls?state=open&base=main" \
+            --jq "[.[] | select(.head.ref == \"${HEAD_BRANCH}\")] | .[0].number // empty")
+          echo "pr_num=${PR_NUM}" >> "$GITHUB_OUTPUT"
+
+      # ── verification failed: notify ───────────────────────────────────
+
+      - name: Notify Slack (verification failure)
+        if: github.event.workflow_run.conclusion != 'success'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          PR_NUM="${{ steps.find-pr.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          TEXT=":x: *${{ github.repository }}* \`${BRANCH}\` — verification failed: PR: <${PR_URL}|#${PR_NUM}>"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify email (verification failure)
+        if: github.event.workflow_run.conclusion != 'success'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          PR_NUM="${{ steps.find-pr.outputs.pr_num }}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          CI_RUN_URL="${{ github.event.workflow_run.html_url }}"
+          SUBJECT="[moxygen] sync verification failed — ${BRANCH}"
+          BODY="Sync branch verification failed — needs conflict resolution.\n\nBranch: ${BRANCH}\nPR: ${PR_URL}\nRun: ${CI_RUN_URL}"
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
+
+      # ── build passed: merge ──────────────────────────────────────────────
+
+      - name: Generate app token
+        if: github.event.workflow_run.conclusion == 'success'
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+
+      - name: Merge sync PR
+        if: github.event.workflow_run.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Build passed on ${HEAD_BRANCH} (${HEAD_SHA})"
+
+          PR_NUM=$(gh api \
+            "repos/${REPO}/pulls?state=open&base=main" \
+            --jq "[.[] | select(.head.ref == \"${HEAD_BRANCH}\" and .head.sha == \"${HEAD_SHA}\")] | .[0].number // empty")
+
+          if [ -z "$PR_NUM" ]; then
+            echo "No open sync PR found for ${HEAD_BRANCH} at ${HEAD_SHA}. Nothing to do."
+            exit 0
+          fi
+
+          echo "Merging sync PR #${PR_NUM}..."
+          gh pr merge "${PR_NUM}" --merge --repo "${REPO}"
+          echo "Merged PR #${PR_NUM}."
