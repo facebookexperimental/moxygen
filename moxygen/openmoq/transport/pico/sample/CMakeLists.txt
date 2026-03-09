@@ -13,3 +13,11 @@ target_link_libraries(pico_evb_relay_server
   moxygen_moq_relay_session
   Folly::folly_init_init
 )
+
+add_executable(pico_evb_text_client PicoTextClient.cpp)
+target_link_libraries(pico_evb_text_client
+  openmoq_pico_evb_client_transport
+  moxygen_moq
+  moxygen_moq_versions
+  Folly::folly_init_init
+)
