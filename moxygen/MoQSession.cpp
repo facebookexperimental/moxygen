@@ -2188,6 +2188,12 @@ void MoQSession::cleanup() {
     cancellationSource_.requestCancellation();
   }
   bufferedDatagrams_.clear();
+  // Break any shared_ptr cycle between the session and its handlers.  A
+  // handler that holds a shared_ptr<MoQSession> back to this session would
+  // otherwise keep both objects alive indefinitely once all external
+  // references are released.
+  publishHandler_.reset();
+  subscribeHandler_.reset();
 }
 
 const folly::RequestToken& MoQSession::sessionRequestToken() {

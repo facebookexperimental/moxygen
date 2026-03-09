@@ -447,6 +447,59 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
 
+// Demonstrate and verify that cleanup() breaks the shared_ptr cycle between
+// a session and a handler that holds a back-reference to that session.
+//
+// The cycle:
+//   MoQSession --[publishHandler_]--> CyclingHandler
+//   CyclingHandler --[session_]-----> MoQSession
+//
+// Without the reset in cleanup() both objects keep each other alive after all
+// external shared_ptrs are released.
+TEST(MoQSessionTest, SharedPtrCycleBreaksOnCleanup) {
+  folly::EventBase eventBase;
+  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+
+  auto session = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      moqExecutor);
+
+  // A minimal Publisher whose only purpose is to hold a strong ref back to the
+  // session, forming a cycle when the session holds it as publishHandler_.
+  struct CyclingPublisher : public Publisher {
+    explicit CyclingPublisher(std::shared_ptr<MoQSession> s)
+        : session_(std::move(s)) {}
+    std::shared_ptr<MoQSession> session_;
+  };
+
+  auto handler = std::make_shared<CyclingPublisher>(session);
+  std::weak_ptr<CyclingPublisher> weakHandler = handler;
+  std::weak_ptr<MoQSession> weakSession = session;
+
+  // Establish the cycle: session holds handler, handler holds session.
+  session->setPublishHandler(handler);
+
+  // Drop the local strong references — only the cycle keeps both alive.
+  handler.reset();
+  session.reset();
+
+  // Both objects are still alive because they reference each other.
+  EXPECT_FALSE(weakSession.expired()) << "session kept alive by handler";
+  EXPECT_FALSE(weakHandler.expired()) << "handler kept alive by session";
+
+  // close() calls cleanup(), which must reset publishHandler_ (and
+  // subscribeHandler_) to break the cycle and allow both objects to be
+  // destroyed.
+  auto locked = weakSession.lock();
+  locked->close(SessionCloseErrorCode::NO_ERROR);
+  locked.reset();
+
+  EXPECT_TRUE(weakHandler.expired()) << "handler freed after close()";
+  EXPECT_TRUE(weakSession.expired()) << "session freed after close()";
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,
