@@ -183,6 +183,7 @@ void MoQPicoServerBase::onNewConnectionImpl(void* vcnx) {
 
   auto webTransport =
       std::make_shared<PicoQuicWebTransport>(cnx, localSockAddr, peerSockAddr);
+  onWebTransportCreated(*webTransport);
 
   auto moqSession = createSession(webTransport, executor_);
   webTransport->setHandler(moqSession.get());

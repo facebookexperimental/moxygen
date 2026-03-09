@@ -13,6 +13,33 @@
 
 namespace moxygen {
 
+namespace {
+
+// RAII guard: captures picoquic's next wake time on construction and fires
+// a callback on destruction if the wake time decreased (e.g. after
+// mark_active_stream / mark_datagram_ready).
+struct WakeTimeGuard {
+  WakeTimeGuard(picoquic_cnx_t* cnx, const std::function<void()>& cb)
+      : quic_(picoquic_get_quic_ctx(cnx)), cb_(cb) {
+    if (cb_) {
+      before_ = picoquic_get_next_wake_time(quic_, picoquic_current_time());
+    }
+  }
+  ~WakeTimeGuard() {
+    if (cb_ &&
+        picoquic_get_next_wake_time(quic_, picoquic_current_time()) < before_) {
+      cb_();
+    }
+  }
+
+ private:
+  picoquic_quic_t* quic_;
+  const std::function<void()>& cb_;
+  uint64_t before_{UINT64_MAX};
+};
+
+} // namespace
+
 // File-local picoquic callback that delegates to the PicoQuicWebTransport
 // instance. Used as the function pointer passed to picoquic_set_callback().
 static int picoCallback(picoquic_cnx_t *cnx, uint64_t stream_id,
@@ -784,6 +811,7 @@ void PicoQuicWebTransport::markStreamActive(uint64_t streamId) {
     XLOG(ERR) << "markStreamActive: cnx_ is null for stream " << streamId;
     return;
   }
+  WakeTimeGuard guard(cnx_, updateWakeTimeoutCallback_);
   // Mark stream as active in picoquic
   // This will cause picoquic to call prepare_to_send when ready
   // Stream context is nullptr - we use callback context instead
@@ -800,6 +828,7 @@ void PicoQuicWebTransport::markDatagramActive() {
     return;
   }
   XLOG(DBG4) << "markDatagramActive: marking datagram as ready";
+  WakeTimeGuard guard(cnx_, updateWakeTimeoutCallback_);
   // Mark datagram as ready in picoquic
   // This will cause picoquic to call prepare_datagram when ready
   int ret = picoquic_mark_datagram_ready(cnx_, 1);

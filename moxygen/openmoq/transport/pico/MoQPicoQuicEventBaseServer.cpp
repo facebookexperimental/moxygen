@@ -8,6 +8,7 @@
 #include <folly/logging/xlog.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicSocketHandler.h>
+#include <moxygen/openmoq/transport/pico/PicoQuicWebTransport.h>
 #include <picoquic.h>
 
 namespace moxygen {
@@ -54,6 +55,12 @@ void MoQPicoQuicEventBaseServer::start(const folly::SocketAddress& addr) {
   impl_->handler =
       std::make_unique<PicoQuicSocketHandler>(evb_.get(), quic_);
   impl_->handler->start(addr);
+}
+
+void MoQPicoQuicEventBaseServer::onWebTransportCreated(
+    PicoQuicWebTransport& wt) noexcept {
+  wt.setUpdateWakeTimeoutCallback(
+      [handler = impl_->handler.get()] { handler->updateWakeTimeout(); });
 }
 
 void MoQPicoQuicEventBaseServer::stop() {

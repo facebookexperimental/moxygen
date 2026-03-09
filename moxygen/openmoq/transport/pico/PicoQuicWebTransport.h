@@ -10,6 +10,7 @@
 
 #include <deque>
 #include <folly/SocketAddress.h>
+#include <functional>
 #include <memory>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <proxygen/lib/http/webtransport/WtStreamManager.h>
@@ -43,6 +44,15 @@ public:
    */
   void setHandler(proxygen::WebTransportHandler *handler) {
     handler_ = handler;
+  }
+
+  /**
+   * Set a callback invoked when picoquic's wake time decreases (e.g. after
+   * mark_active_stream). The callback should cancel and reschedule the wake
+   * timer so sends are not delayed up to kMaxWakeDelayUs.
+   */
+  void setUpdateWakeTimeoutCallback(std::function<void()> cb) {
+    updateWakeTimeoutCallback_ = std::move(cb);
   }
 
   /**
@@ -182,6 +192,7 @@ private:
   // Track streams that need handler notification
   std::unordered_set<uint64_t> pendingStreamNotifications_;
 
+  std::function<void()> updateWakeTimeoutCallback_;
   std::function<void()> onConnectionClosedCallback_;
 };
 

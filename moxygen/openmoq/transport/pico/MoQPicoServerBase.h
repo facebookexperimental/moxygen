@@ -11,12 +11,14 @@
 #include <string>
 
 // Forward declaration — avoids exposing picoquic.h to consumers
+// (C struct typedefs must be at file scope, not inside a namespace)
 typedef struct st_picoquic_quic_t picoquic_quic_t;
 typedef struct st_picoquic_cnx_t picoquic_cnx_t;
 
 namespace moxygen {
 
 class MoQExecutor;
+class PicoQuicWebTransport;
 
 /**
  * MoQPicoServerBase - shared picoquic machinery for MoQ servers.
@@ -58,6 +60,14 @@ class MoQPicoServerBase : public MoQServerBase {
   // MoQPicoQuicEventBaseServer stores MoQFollyExecutorImpl with a no-op
   // deleter (caller retains ownership).
   std::shared_ptr<MoQExecutor> executor_;
+
+  /**
+   * Called after a PicoQuicWebTransport is created for a new connection.
+   * Override to configure the web transport (e.g. set wake timeout callback).
+   * Default is a no-op.
+   */
+  virtual void onWebTransportCreated(
+      PicoQuicWebTransport& /*wt*/) noexcept {}
 
  private:
   // Called from picoCallback via MoQPicoServerBaseCallbacks (friend).
