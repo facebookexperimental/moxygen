@@ -49,6 +49,13 @@ class MoQForwarder : public TrackConsumer {
     return extensions_;
   }
 
+  // Extract the NEW_GROUP_REQUEST param from `params`, check if it should
+  // be forwarded upstream, record it as outstanding, and optionally fire
+  // the newGroupRequested callback.  Pass fire=false when the NGR already
+  // rides an outgoing SUBSCRIBE and no extra REQUEST_UPDATE is needed.
+  void tryProcessNewGroupRequest(const Parameters& params, bool fire = true);
+
+
   void setLargest(AbsoluteLocation largest);
 
   std::optional<AbsoluteLocation> largest() {
@@ -60,6 +67,8 @@ class MoQForwarder : public TrackConsumer {
     virtual ~Callback() = default;
     virtual void onEmpty(MoQForwarder*) = 0;
     virtual void forwardChanged(MoQForwarder*) {}
+    // This fires whenever an unseen NGR is received
+    virtual void newGroupRequested(MoQForwarder*, uint64_t group) {}
   };
 
   void setCallback(std::shared_ptr<Callback> callback);
@@ -106,6 +115,10 @@ class MoQForwarder : public TrackConsumer {
     // Constructs a PublishRequest from the forwarder's track-level state.
     // requestID and trackAlias are placeholders (overwritten by MoQSession).
     PublishRequest getPublishRequest() const;
+
+    // Process PUBLISH_OK response, updating range, forward flag, and handling
+    // NEW_GROUP_REQUEST forwarding via callback
+    void onPublishOk(const PublishOk& pubOk);
 
     folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
         RequestUpdate requestUpdate) override;
@@ -306,6 +319,10 @@ class MoQForwarder : public TrackConsumer {
       const MoQPublishError& err,
       const std::string& callsite);
 
+  void setOutstandingNewGroupRequest(uint64_t value);
+  bool shouldForwardNewGroupRequest(uint64_t requestedGroup) const;
+  void fireNewGroupRequest();
+
   FullTrackName fullTrackName_;
   std::optional<TrackAlias> trackAlias_;
   folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;
@@ -317,6 +334,9 @@ class MoQForwarder : public TrackConsumer {
   GroupOrder groupOrder_{GroupOrder::OldestFirst};
   std::optional<AbsoluteLocation> largest_;
   Extensions extensions_;
+  // The NEW_GROUP_REQUEST value most recently forwarded upstream; cleared when
+  // the upstream Largest Group advances (indicating the request was fulfilled).
+  std::optional<uint64_t> outstandingNewGroupRequest_{};
   std::shared_ptr<Callback> callback_;
   uint64_t forwardingSubscribers_{0};
   bool draining_{false};

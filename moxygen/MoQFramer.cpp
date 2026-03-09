@@ -49,6 +49,7 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
     case moxygen::TrackRequestParamKey::FORWARD:
+    case moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST:
       return true;
     default:
       return false;
@@ -4452,6 +4453,16 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       forwardParam.asUint64 = 0;
       requestSpecificParams.push_back(forwardParam);
     }
+
+    auto newGroupRequestValue = getFirstIntParam(
+        subscribeRequest.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+    if (newGroupRequestValue.has_value()) {
+      Parameter newGroupRequestParam;
+      newGroupRequestParam.key =
+          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+      newGroupRequestParam.asUint64 = *newGroupRequestValue;
+      requestSpecificParams.push_back(newGroupRequestParam);
+    }
   } else {
     writeVarint(
         writeBuf,
@@ -4537,6 +4548,16 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
       forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
       forwardParam.asUint64 = *update.forward ? 1 : 0;
       requestSpecificParams.push_back(forwardParam);
+    }
+
+    auto newGroupRequestValue = getFirstIntParam(
+        update.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+    if (newGroupRequestValue.has_value()) {
+      Parameter newGroupRequestParam;
+      newGroupRequestParam.key =
+          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+      newGroupRequestParam.asUint64 = *newGroupRequestValue;
+      requestSpecificParams.push_back(newGroupRequestParam);
     }
   } else {
     // For draft < 15, start and endGroup are mandatory
@@ -4872,6 +4893,16 @@ WriteResult MoQFrameWriter::writePublishOk(
       forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
       forwardParam.asUint64 = 0;
       requestSpecificParams.push_back(forwardParam);
+    }
+
+    auto newGroupRequestValue = getFirstIntParam(
+        publishOk.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+    if (newGroupRequestValue.has_value()) {
+      Parameter newGroupRequestParam;
+      newGroupRequestParam.key =
+          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+      newGroupRequestParam.asUint64 = *newGroupRequestValue;
+      requestSpecificParams.push_back(newGroupRequestParam);
     }
   } else {
     writeVarint(
