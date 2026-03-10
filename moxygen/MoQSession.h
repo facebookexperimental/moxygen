@@ -148,6 +148,19 @@ class MoQSession : public Subscriber,
     return closed_;
   }
 
+  void setAuthority(std::string a) {
+    authority_ = std::move(a);
+  }
+  void setPath(std::string p) {
+    path_ = std::move(p);
+  }
+  const std::string& getAuthority() const {
+    return authority_;
+  }
+  const std::string& getPath() const {
+    return path_;
+  }
+
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::shared_ptr<MoQExecutor> exec);
@@ -912,5 +925,7 @@ class MoQSession : public Subscriber,
   mutable quic::TransportInfo cachedTransportInfo_;
   mutable std::chrono::steady_clock::time_point lastTransportInfoUpdate_{};
   bool closed_{false};
+  std::string authority_;
+  std::string path_;
 };
 } // namespace moxygen

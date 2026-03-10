@@ -2341,6 +2341,18 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
+  // Set authority/path from CLIENT_SETUP params if present
+  auto setupAuthority = getFirstStringParam(
+      setup.params, folly::to_underlying(SetupKey::AUTHORITY));
+  if (!setupAuthority.empty()) {
+    authority_ = std::move(setupAuthority);
+  }
+  auto setupPath =
+      getFirstStringParam(setup.params, folly::to_underlying(SetupKey::PATH));
+  if (!setupPath.empty()) {
+    path_ = std::move(setupPath);
+  }
+
   if (shouldIncludeMoqtImplementationParam(setup.supportedVersions)) {
     setup.params.insertParam(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
@@ -2462,6 +2474,30 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   tokenCache_.setMaxSize(
       std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
       /*evict=*/true);
+
+  auto clientAuthority = getFirstStringParam(
+      clientSetup.params, folly::to_underlying(SetupKey::AUTHORITY));
+  if (!clientAuthority.empty()) {
+    if (!authority_.empty()) {
+      XLOG(ERR) << "AUTHORITY in CLIENT_SETUP conflicts with pre-set authority"
+                << " sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
+    }
+    authority_ = std::move(clientAuthority);
+  }
+
+  auto clientPath = getFirstStringParam(
+      clientSetup.params, folly::to_underlying(SetupKey::PATH));
+  if (!clientPath.empty()) {
+    if (!path_.empty()) {
+      XLOG(ERR) << "PATH in CLIENT_SETUP conflicts with pre-set path"
+                << " sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
+    }
+    path_ = std::move(clientPath);
+  }
 
   auto serverSetup =
       serverSetupCallback_->onClientSetup(clientSetup, shared_from_this());

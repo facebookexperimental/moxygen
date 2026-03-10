@@ -89,6 +89,9 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
   moqSession_ =
       createSession(folly::MaybeManagedPtr<proxygen::WebTransport>(wt));
 
+  moqSession_->setPath(url_.getPath());
+  moqSession_->setAuthority(url_.getHostAndPortOmitDefault());
+
   // Configure session based on negotiated ALPN
   // If there is no ALPN negotiation, the negotiation will be done in the
   // Setup messages.
