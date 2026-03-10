@@ -345,7 +345,7 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<std::vector<std::string>, ErrorCode> parseFixedTuple(
+  folly::Expected<std::vector<std::string>, ErrorCode> parseNamespaceTuple(
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
 

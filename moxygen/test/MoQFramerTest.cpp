@@ -3406,6 +3406,37 @@ TEST_P(MoQFramerV16PlusTest, NamespaceEmptySuffix) {
   EXPECT_EQ(parseResult->trackNamespaceSuffix, ns.trackNamespaceSuffix);
 }
 
+// Test that a namespace field with length 0 is rejected with PROTOCOL_VIOLATION
+// in draft >= 16
+TEST_P(MoQFramerV16PlusTest, NamespaceEmptyFieldValueProtocolViolation) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Manually construct a NAMESPACE frame with one empty field value:
+  //   Frame type: NAMESPACE
+  //   Frame length: 2 bytes
+  //   Tuple item count: 1
+  //   Field 1 length: 0 (empty - violates draft 16 requirement)
+  bool error = false;
+  size_t size = 0;
+  writeVarint(
+      writeBuf, folly::to_underlying(FrameType::NAMESPACE), size, error);
+  // Frame length (2 bytes): tuple count (1 byte) + field length 0 (1 byte) = 2
+  writeBuf.append("\x00\x02", 2);
+  // Tuple with 1 item, where the item has length 0
+  writeBuf.append("\x01\x00", 2);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  // Skip frame type
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::NAMESPACE));
+
+  auto parseResult = parser_.parseNamespace(cursor, frameLength(cursor));
+  EXPECT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 // Test NamespaceDone message roundtrip
 TEST_P(MoQFramerV16PlusTest, NamespaceDoneRoundtrip) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
