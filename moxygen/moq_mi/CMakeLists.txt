@@ -8,10 +8,11 @@ moxygen_add_library(moxygen_moq_mi
   SRCS
     MediaItem.cpp
     MoQMi.cpp
+  DEPS
+    mvfst::mvfst_codec_types
   EXPORTED_DEPS
     moxygen_flv_parser_flv_common
     moxygen_moq_framer
-    mvfst::mvfst_codec_types
     Folly::folly_io_iobuf
 )
 

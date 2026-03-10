@@ -7,8 +7,9 @@
 moxygen_add_library(moxygen_moq_mi_to_flv
   SRCS
     MoQMiToFlv.cpp
+  DEPS
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_flv_parser_flv_common
     moxygen_moq_mi
-    Folly::folly_logging_logging
 )
