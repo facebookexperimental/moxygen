@@ -45,6 +45,15 @@ public:
     handler_ = handler;
   }
 
+  /**
+   * Fired after picoquic_callback_close. Allows the owner to stop shared I/O
+   * infrastructure after the drain cycle completes.
+   */
+  void setOnConnectionClosedCallback(std::function<void()> cb) {
+    onConnectionClosedCallback_ = std::move(cb);
+  }
+
+
   // Stream creation
   folly::Expected<StreamWriteHandle *, ErrorCode> createUniStream() override;
   folly::Expected<BidiStreamHandle, ErrorCode> createBidiStream() override;
@@ -172,6 +181,8 @@ private:
 
   // Track streams that need handler notification
   std::unordered_set<uint64_t> pendingStreamNotifications_;
+
+  std::function<void()> onConnectionClosedCallback_;
 };
 
 } // namespace moxygen

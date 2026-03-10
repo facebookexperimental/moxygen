@@ -328,8 +328,9 @@ PicoQuicWebTransport::closeSession(folly::Optional<uint32_t> error) {
     }
   }
 
-  // Clear picoquic callback to prevent further events
-  clearPicoquicCallback();
+  // Do NOT clear the picoquic callback here — let the 3xPTO drain complete.
+  // picoquic_callback_close will fire and route to onConnectionClose() which
+  // clears it. handler_ is nulled now to prevent a double onSessionEnd.
 
   // Use std::exchange to prevent re-entrancy issues
   // The handler callback may destroy this object
@@ -687,6 +688,11 @@ void PicoQuicWebTransport::onConnectionClose(uint64_t error_code) {
   // Clear picoquic callback to prevent further events
   clearPicoquicCallback();
 
+  // Signal the owner (if set) to stop shared I/O after this drain cycle.
+  if (auto cb = std::exchange(onConnectionClosedCallback_, nullptr)) {
+    cb();
+  }
+
   // Use std::exchange to prevent re-entrancy issues
   // The handler callback may destroy this object
   if (auto handler = std::exchange(handler_, nullptr)) {
@@ -728,12 +734,7 @@ void PicoQuicWebTransport::processEgressEvents() {
     } else if (auto *closeSession = std::get_if<
                    proxygen::detail::WtStreamManager::CloseSession>(
                    &event)) {
-      int ret = picoquic_close(cnx_, closeSession->err);
-      if (ret != 0) {
-        XLOG(WARN) << "Failed to close session error=" << closeSession->err
-                   << " picoquic_ret=" << ret;
-      }
-      sessionClosed_ = true;
+      this->closeSession(closeSession->err);
     } else if (std::get_if<
                    proxygen::detail::WtStreamManager::DrainSession>(
                    &event)) {
