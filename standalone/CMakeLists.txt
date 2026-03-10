@@ -28,6 +28,26 @@ option(BUILD_PICOQUIC "Build with picoquic transport support" OFF)
 # Linking preferences
 # =============================================================================
 
+# When building artifacts for distribution, prefer static system libraries
+# so the tarball consumers only need libc/libstdc++/libssl at runtime.
+if(BUNDLE_DEPS)
+    # MODULE-mode find_package() and find_library() respect this.
+    # Linux only: macOS/homebrew doesn't ship .a for zlib, fmt, etc.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    endif()
+
+    # CONFIG-mode packages ignore CMAKE_FIND_LIBRARY_SUFFIXES and hardcode
+    # .so/.dylib paths in their cmake configs. Use per-package variables.
+    # GFLAGS_SHARED OFF is Linux-only: on macOS, glog is always shared
+    # (homebrew has no libglog.a), and glog.dylib links gflags.dylib;
+    # mixing static gflags with shared glog causes dual-linkage crashes.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(GFLAGS_SHARED OFF CACHE BOOL "" FORCE)
+    endif()
+    set(Boost_USE_STATIC_LIBS ON)
+endif()
+
 find_package(ZLIB REQUIRED)
 find_library(ZSTD_LIBRARY NAMES zstd)
 
@@ -75,6 +95,17 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(gflags CONFIG REQUIRED)
 find_package(Glog REQUIRED)
+# FindGlog.cmake internally calls find_package(LibUnwind), which with
+# CMAKE_FIND_LIBRARY_SUFFIXES=".a" picks up libunwind.a.  On Debian/Ubuntu
+# x86_64 that file is not compiled with -fPIC, causing PIE link failure.
+# Patch the glog target to use the shared library instead.
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET glog::glog)
+    get_target_property(_glog_link_libs glog::glog IMPORTED_LINK_INTERFACE_LIBRARIES)
+    if(_glog_link_libs)
+        string(REGEX REPLACE "([/a-zA-Z0-9._-]*)libunwind\\.a" "\\1libunwind.so" _glog_link_libs "${_glog_link_libs}")
+        set_target_properties(glog::glog PROPERTIES IMPORTED_LINK_INTERFACE_LIBRARIES "${_glog_link_libs}")
+    endif()
+endif()
 find_package(fmt CONFIG REQUIRED)
 find_package(double-conversion CONFIG REQUIRED)
 find_package(Boost 1.70 REQUIRED COMPONENTS
@@ -84,8 +115,20 @@ find_package(Zstd REQUIRED)
 find_package(LibEvent REQUIRED)
 find_package(Sodium REQUIRED)
 
-# Check for libunwind to decide if we need lzma for symbolization
-find_package(LibUnwind QUIET)
+# Check for libunwind to decide if we need lzma for symbolization.
+# When BUNDLE_DEPS is on, CMAKE_FIND_LIBRARY_SUFFIXES=".a" would cause
+# folly to pick up libunwind.a which on Ubuntu/Debian x86_64 is not
+# compiled with -fPIC (PIE link failure). Find it here with .so preference
+# so the result is cached; folly's internal find_package(LibUnwind) is
+# then skipped via _FETCHCONTENT_PROVIDED_DEPS below.
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_saved_find_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".so;.a")
+    find_package(LibUnwind QUIET)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES "${_saved_find_suffixes}")
+else()
+    find_package(LibUnwind QUIET)
+endif()
 
 # =============================================================================
 # FetchContent: Meta OSS Dependencies (using pinned hashes)
@@ -238,6 +281,11 @@ set(_FETCHCONTENT_PROVIDED_DEPS folly fizz wangle mvfst proxygen GTest GMock
     BZip2 LZ4 Snappy glog Glog)
 if(BUILD_PICOQUIC)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS picoquic)
+endif()
+# When BUNDLE_DEPS is on, we already found libunwind with .so preference
+# above. Skip folly's internal re-find to prevent it picking up .a.
+if(BUNDLE_DEPS)
+    list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibUnwind)
 endif()
 if(NOT LibUnwind_FOUND)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibLZMA)

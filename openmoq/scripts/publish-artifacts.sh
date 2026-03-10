@@ -152,6 +152,16 @@ EOF
     upload_with_retry "$asset"
   done
 
+  # Ensure the release is not stuck as draft
+  # (gh release create without files may leave it in draft state)
+  RELEASE_ID=$(gh api repos/{owner}/{repo}/releases \
+    --jq ".[] | select(.tag_name == \"$TAG\") | .id")
+  if [[ -n "$RELEASE_ID" ]]; then
+    gh api "repos/{owner}/{repo}/releases/$RELEASE_ID" \
+      -X PATCH -f draft=false >/dev/null
+    echo "    Release published (draft=false)"
+  fi
+
   echo "    Snapshot published: $TAG"
 fi
 

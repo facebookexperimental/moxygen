@@ -199,6 +199,22 @@ jobs:
           git push origin "origin/upstream:refs/heads/$BRANCH"
           echo "Created branch $BRANCH"
 
+          # Pre-merge main into sync branch to resolve expected conflicts
+          # (github_hashes files diverge every sync; upstream version wins)
+          git fetch origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          if ! git merge origin/main -X ours --no-edit; then
+            echo "::error::Merge conflicts could not be auto-resolved."
+            echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+            git merge --abort
+            git checkout main
+          else
+            echo "Pre-merged main into sync branch (conflicts auto-resolved)"
+            git push origin "$BRANCH"
+            echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+            git checkout main
+          fi
+
           PR_NUM=$(gh api repos/${{ github.repository }}/pulls \
             -f title="sync: upstream moxygen $SYNC_SHA" \
             -f body="$(cat <<EOF
@@ -220,6 +236,44 @@ jobs:
 
           echo "Created sync PR #$PR_NUM"
           echo "pr_num=$PR_NUM" >> "$GITHUB_OUTPUT"
+
+      # ── Notify merge conflicts ──
+      - name: Notify conflicts (Slack)
+        if: steps.new_pr.outputs.has_conflicts == 'true'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          SYNC_SHA="${{ steps.merge.outputs.sync_sha }}"
+          TEXT=":warning: *${{ github.repository }}* sync \`${SYNC_SHA}\` has merge conflicts — PR <${PR_URL}|#${PR_NUM}> needs manual resolution"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify conflicts (email)
+        if: steps.new_pr.outputs.has_conflicts == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          SYNC_SHA="${{ steps.merge.outputs.sync_sha }}"
+          FULL_SHA=$(git rev-parse origin/upstream)
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] sync ${SYNC_SHA} has merge conflicts"
+          BODY="Automated upstream sync created a PR with merge conflicts that could not be auto-resolved.\n\nPR: ${PR_URL}\nUpstream commit: ${FULL_SHA}\nRun: ${RUN_URL}\n\nManual conflict resolution required."
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
 
       # ── Approve and enable auto-merge ──
       - name: Approve PR
