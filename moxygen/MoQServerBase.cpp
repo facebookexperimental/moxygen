@@ -10,8 +10,9 @@
 
 namespace moxygen {
 
-MoQServerBase::MoQServerBase(std::string endpoint)
-    : endpoint_(std::move(endpoint)) {}
+MoQServerBase::MoQServerBase(std::string endpoint) {
+  endpoints_.insert(std::move(endpoint));
+}
 
 void MoQServerBase::setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory) {
   mLoggerFactory_ = std::move(factory);
