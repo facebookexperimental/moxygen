@@ -1,0 +1,79 @@
+name: version release
+
+# Manual workflow to promote snapshot-latest artifacts to a versioned release.
+# Downloads tarballs from the current snapshot-latest pre-release and creates
+# a tagged, non-prerelease GitHub release.
+#
+# Usage: Actions → version release → Run workflow → enter version (e.g. 1.2.3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: version must be semver (e.g. 1.2.3 or 1.2.3-rc1)" >&2
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Error: tag $TAG already exists" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Download snapshot artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release-assets
+          echo "Downloading artifacts from snapshot-latest..."
+          gh release download snapshot-latest --dir release-assets --pattern '*.tar.gz'
+          echo "Downloaded:"
+          ls -lh release-assets/
+
+      - name: Get snapshot commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SNAPSHOT_SHA=$(gh api repos/{owner}/{repo}/releases \
+            --jq '.[] | select(.tag_name == "snapshot-latest") | .target_commitish')
+          echo "Snapshot built from commit: $SNAPSHOT_SHA"
+          echo "SNAPSHOT_SHA=$SNAPSHOT_SHA" >> "$GITHUB_ENV"
+
+      - name: Create versioned release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Creating release $TAG from snapshot commit $SNAPSHOT_SHA..."
+          gh release create "$TAG" release-assets/*.tar.gz \
+            --target "$SNAPSHOT_SHA" \
+            --title "moxygen $VERSION" \
+            --notes "$(cat <<EOF
+          **Version:** \`${VERSION}\`
+          **Commit:** \`${SNAPSHOT_SHA}\`
+
+          Promoted from [\`snapshot-latest\`](${{ github.server_url }}/${{ github.repository }}/releases/tag/snapshot-latest).
+
+          Each platform has two tarballs:
+          - \`moxygen-<platform>.tar.gz\` — stripped release build
+          - \`moxygen-<platform>-dbg.tar.gz\` — split debug symbols
+          EOF
+          )"
+          echo "Released: $TAG"
