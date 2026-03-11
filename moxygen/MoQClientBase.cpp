@@ -36,6 +36,9 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   std::vector<std::string> alpn =
       alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
   XLOG(DBG1) << "MoQClientBase: QUIC ALPNs: " << folly::join(", ", alpn);
+
+  auto quicConnectStart = std::chrono::steady_clock::now();
+
   // Establish QUIC connection with multiple ALPN options
   auto quicClient = co_await connectQuic(
       folly::SocketAddress(
@@ -44,6 +47,9 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       verifier_,
       alpn,
       transportSettings);
+
+  quicConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - quicConnectStart);
 
   if (logger_) {
     if (auto scid = quicClient->getClientConnectionId()) {
@@ -69,11 +75,16 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   quicWebTransport_->setHandler(this);
   wt = quicWebTransport_.get();
 
+  auto moqHandshakeStart = std::chrono::steady_clock::now();
+
   auto result = co_await folly::coro::co_awaitTry(completeSetupMoQSession(
       wt,
       url_.getPath(),
       std::move(publishHandler),
       std::move(subscribeHandler)));
+
+  moqHandshakeTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - moqHandshakeStart);
 
   if (result.hasException()) {
     co_yield folly::coro::co_error(result.exception());
