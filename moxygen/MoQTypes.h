@@ -130,6 +130,8 @@ enum class RequestErrorCode : uint32_t {
   // PublishNamespace-specific codes
   UNINTERESTED = 4, // Same value as TRACK_NOT_EXIST
 
+  DUPLICATE_SUBSCRIPTION = 0x19,
+
   // Special values
   CANCELLED = std::numeric_limits<uint32_t>::max(),
 };
@@ -571,6 +573,18 @@ std::optional<uint64_t> getFirstIntParam(
     }
   }
   return std::nullopt;
+}
+
+// Helper function to extract a string parameter by key from a parameter list
+inline std::string getFirstStringParam(
+    const SetupParameters& params,
+    uint64_t key) {
+  for (const auto& param : params) {
+    if (param.key == key) {
+      return param.asString;
+    }
+  }
+  return {};
 }
 
 struct ClientSetup {

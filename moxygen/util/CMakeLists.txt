@@ -7,17 +7,18 @@
 moxygen_add_library(moxygen_util_quic_connector
   SRCS
     QuicConnector.cpp
-  EXPORTED_DEPS
+  DEPS
     mvfst::mvfst_client
     mvfst::mvfst_common_events_folly_eventbase
     mvfst::mvfst_common_udpsocket_folly_async_udp_socket
     mvfst::mvfst_fizz_client_handshake
-    mvfst::mvfst_state_transport_settings
-    fizz::fizz
     Folly::folly_coro_promise
-    Folly::folly_coro_task
     Folly::folly_coro_timeout
     Folly::folly_futures_core
+  EXPORTED_DEPS
+    mvfst::mvfst_state_transport_settings
+    fizz::fizz
+    Folly::folly_coro_task
     Folly::folly_io_async_async_base
     Folly::folly_network_address
 )

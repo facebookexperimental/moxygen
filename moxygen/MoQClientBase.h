@@ -63,6 +63,14 @@ class MoQClientBase : public proxygen::WebTransportHandler {
     return exec_;
   }
 
+  std::chrono::milliseconds getQuicConnectTime() {
+    return quicConnectTime_;
+  }
+
+  std::chrono::milliseconds getMoQHandshakeTime() {
+    return moqHandshakeTime_;
+  }
+
   std::shared_ptr<MoQSession> moqSession_;
   virtual folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,
@@ -114,6 +122,8 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
   std::optional<std::string> negotiatedProtocol_;
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
+  std::chrono::milliseconds quicConnectTime_{0};
+  std::chrono::milliseconds moqHandshakeTime_{0};
 };
 
 } // namespace moxygen

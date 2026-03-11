@@ -923,3 +923,68 @@ CO_TEST_P_X(MoQSessionTest, PublishConsumerObjectStreamAfterSessionClose) {
   EXPECT_TRUE(res.hasError());
   EXPECT_EQ(res.error().code, MoQPublishError::API_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, SubscribeDuplicatesPendingPublish) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  FullTrackName ftn{TrackNamespace{{"test"}}, "test-track"};
+  PublishRequest pub{
+      RequestID(0),
+      ftn,
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100},
+      true,
+  };
+
+  // Use a baton to delay the PUBLISH_OK so the publish stays pending
+  folly::coro::Baton publishOkBaton;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&publishOkBaton](
+              PublishRequest actualPub, auto) -> Subscriber::PublishResult {
+            auto consumer =
+                std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+            ON_CALL(*consumer, setTrackAlias(_))
+                .WillByDefault(
+                    testing::Return(
+                        folly::Expected<folly::Unit, MoQPublishError>(
+                            folly::unit)));
+            ON_CALL(*consumer, publishDone(_))
+                .WillByDefault(testing::Return(folly::unit));
+            return Subscriber::PublishConsumerAndReplyTask{
+                std::static_pointer_cast<TrackConsumer>(consumer),
+                folly::coro::co_invoke(
+                    [&publishOkBaton, actualPub]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await publishOkBaton;
+                      co_return PublishOk{
+                          actualPub.requestID,
+                          true,
+                          128,
+                          GroupOrder::Default,
+                          LocationType::LargestObject,
+                          std::nullopt,
+                          std::make_optional(uint64_t(0))};
+                    })};
+          });
+
+  auto publishResult =
+      clientSession_->publish(std::move(pub), makePublishHandle());
+  EXPECT_TRUE(publishResult.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Server subscribes to client for the same track while publish is pending
+  auto subRes = co_await serverSession_->subscribe(
+      getSubscribe(ftn),
+      std::make_shared<testing::NiceMock<MockTrackConsumer>>());
+  EXPECT_TRUE(subRes.hasError());
+  EXPECT_EQ(
+      subRes.error().errorCode, SubscribeErrorCode::DUPLICATE_SUBSCRIPTION);
+
+  publishOkBaton.post();
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasValue());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

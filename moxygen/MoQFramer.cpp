@@ -2357,7 +2357,7 @@ MoQFrameParser::parsePublishNamespace(folly::io::Cursor& cursor, size_t length)
   length -= requestID->second;
   publishNamespace.requestID = requestID->first;
 
-  auto res = parseFixedTuple(cursor, length);
+  auto res = parseNamespaceTuple(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
@@ -2450,7 +2450,7 @@ MoQFrameParser::parsePublishNamespaceDone(
     publishNamespaceDone.requestID = RequestID(requestID->first);
   } else {
     // v15 and below: Parse TrackNamespace
-    auto res = parseFixedTuple(cursor, length);
+    auto res = parseNamespaceTuple(cursor, length);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -2481,7 +2481,7 @@ MoQFrameParser::parsePublishNamespaceCancel(
     publishNamespaceCancel.requestID = RequestID(requestID->first);
   } else {
     // v15 and below: Parse TrackNamespace
-    auto res = parseFixedTuple(cursor, length);
+    auto res = parseNamespaceTuple(cursor, length);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -2944,7 +2944,7 @@ MoQFrameParser::parseSubscribeNamespace(
   subscribeNamespace.requestID = requestID->first;
 
   // Parse Track Namespace Prefix
-  auto res = parseFixedTuple(cursor, length);
+  auto res = parseNamespaceTuple(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
@@ -3084,7 +3084,7 @@ MoQFrameParser::parseUnsubscribeNamespace(
     unsubscribeNamespace.requestID = RequestID(requestID->first);
   } else {
     // <v15: Parse Track Namespace Prefix
-    auto res = parseFixedTuple(cursor, length);
+    auto res = parseNamespaceTuple(cursor, length);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -3108,7 +3108,7 @@ folly::Expected<Namespace, ErrorCode> MoQFrameParser::parseNamespace(
   Namespace ns;
 
   // Parse Track Namespace Suffix
-  auto res = parseFixedTuple(cursor, length);
+  auto res = parseNamespaceTuple(cursor, length);
   if (!res) {
     XLOG(DBG4) << "parseNamespace: error parsing track namespace suffix";
     return folly::makeUnexpected(res.error());
@@ -3132,7 +3132,7 @@ folly::Expected<NamespaceDone, ErrorCode> MoQFrameParser::parseNamespaceDone(
   NamespaceDone namespaceDone;
 
   // Parse Track Namespace Suffix
-  auto res = parseFixedTuple(cursor, length);
+  auto res = parseNamespaceTuple(cursor, length);
   if (!res) {
     XLOG(DBG4) << "parseNamespaceDone: error parsing track namespace suffix";
     return folly::makeUnexpected(res.error());
@@ -3149,7 +3149,7 @@ folly::Expected<FullTrackName, ErrorCode> MoQFrameParser::parseFullTrackName(
     folly::io::Cursor& cursor,
     size_t& length) const noexcept {
   FullTrackName fullTrackName;
-  auto res = parseFixedTuple(cursor, length);
+  auto res = parseNamespaceTuple(cursor, length);
   if (!res) {
     return folly::makeUnexpected(res.error());
   }
@@ -3335,11 +3335,11 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
 }
 
 folly::Expected<std::vector<std::string>, ErrorCode>
-MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length)
+MoQFrameParser::parseNamespaceTuple(folly::io::Cursor& cursor, size_t& length)
     const noexcept {
   auto itemCount = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!itemCount) {
-    XLOG(DBG4) << "parseFixedTuple: UNDERFLOW on itemCount";
+    XLOG(DBG4) << "parseNamespaceTuple: UNDERFLOW on itemCount";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   if (itemCount->first > kMaxNamespaceLength) {
@@ -3353,6 +3353,12 @@ MoQFrameParser::parseFixedTuple(folly::io::Cursor& cursor, size_t& length)
     auto res = parseFixedString(cursor, length);
     if (!res) {
       return folly::makeUnexpected(res.error());
+    }
+    if (version_ && getDraftMajorVersion(*version_) >= 16 &&
+        res.value().empty()) {
+      XLOG(ERR)
+          << "parseNamespaceTuple: empty namespace field value in draft >= 16";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     items.emplace_back(std::move(res.value()));
   }

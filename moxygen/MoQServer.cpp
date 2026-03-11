@@ -248,7 +248,7 @@ void MoQServer::Handler::onHeadersComplete(
   HTTPMessage resp;
   resp.setHTTPVersion(1, 1);
 
-  if (req->getPathAsStringPiece() != server_.getEndpoint()) {
+  if (!server_.isAcceptedEndpoint(req->getPathAsStringPiece())) {
     XLOG(DBG0) << req->getPathAsStringPiece();
     req->dumpMessage(0);
     resp.setStatusCode(404);
@@ -294,6 +294,9 @@ void MoQServer::Handler::onHeadersComplete(
   clientSession_ = server_.createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
       server_.getOrCreateExecutor(evb));
+  clientSession_->setAuthority(
+      std::string(req->getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST)));
+  clientSession_->setPath(std::string(req->getPathAsStringPiece()));
   if (server_.mLoggerFactory_) {
     auto logger = server_.createLogger();
     // Set QUIC connection IDs and addresses on the logger from the underlying

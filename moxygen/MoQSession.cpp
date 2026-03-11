@@ -2183,6 +2183,7 @@ void MoQSession::cleanup() {
         pendingState->getErrorFrameType());
   }
   pendingRequests_.clear();
+  pendingPublishTracks_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
@@ -2341,6 +2342,18 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
+  // Set authority/path from CLIENT_SETUP params if present
+  auto setupAuthority = getFirstStringParam(
+      setup.params, folly::to_underlying(SetupKey::AUTHORITY));
+  if (!setupAuthority.empty()) {
+    authority_ = std::move(setupAuthority);
+  }
+  auto setupPath =
+      getFirstStringParam(setup.params, folly::to_underlying(SetupKey::PATH));
+  if (!setupPath.empty()) {
+    path_ = std::move(setupPath);
+  }
+
   if (shouldIncludeMoqtImplementationParam(setup.supportedVersions)) {
     setup.params.insertParam(SetupParameter(
         {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
@@ -2462,6 +2475,30 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
   tokenCache_.setMaxSize(
       std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
       /*evict=*/true);
+
+  auto clientAuthority = getFirstStringParam(
+      clientSetup.params, folly::to_underlying(SetupKey::AUTHORITY));
+  if (!clientAuthority.empty()) {
+    if (!authority_.empty()) {
+      XLOG(ERR) << "AUTHORITY in CLIENT_SETUP conflicts with pre-set authority"
+                << " sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
+    }
+    authority_ = std::move(clientAuthority);
+  }
+
+  auto clientPath = getFirstStringParam(
+      clientSetup.params, folly::to_underlying(SetupKey::PATH));
+  if (!clientPath.empty()) {
+    if (!path_.empty()) {
+      XLOG(ERR) << "PATH in CLIENT_SETUP conflicts with pre-set path"
+                << " sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
+    }
+    path_ = std::move(clientPath);
+  }
 
   auto serverSetup =
       serverSetupCallback_->onClientSetup(clientSetup, shared_from_this());
@@ -3302,6 +3339,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     return;
   }
   // TODO: Check for duplicate alias
+
   bool forward = subscribeRequest.forward;
 
   // Extract delivery timeout from subscribe request params
@@ -3328,6 +3366,19 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   }
 
   pubTracks_.emplace(requestID, trackPublisher);
+
+  // Check for duplicate subscription: if there's already a pending outgoing
+  // PUBLISH for the same track, reject the SUBSCRIBE
+  if (pendingPublishTracks_.count(subscribeRequest.fullTrackName)) {
+    XLOG(DBG1) << "Duplicate subscription for track with pending publish"
+               << " ftn=" << subscribeRequest.fullTrackName << " sess=" << this;
+    subscribeError(
+        {subscribeRequest.requestID,
+         SubscribeErrorCode::DUPLICATE_SUBSCRIPTION,
+         "duplicate subscription"});
+    return;
+  }
+
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
   co_withExecutor(
@@ -3579,6 +3630,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     auto trackPublisher =
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
+    pendingPublishTracks_.erase(trackIt->second->fullTrackName());
   }
 
   publishPtr->setValue(std::move(publishOk));
@@ -3632,6 +3684,7 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
     case FrameType::PUBLISH_ERROR: {
       auto pubIt = pubTracks_.find(error.requestID);
       if (pubIt != pubTracks_.end()) {
+        pendingPublishTracks_.erase(pubIt->second->fullTrackName());
         pubIt->second->setSession(nullptr);
         pubTracks_.erase(pubIt);
       }
@@ -4529,6 +4582,7 @@ Subscriber::PublishResult MoQSession::publish(
 
   // Store the track publisher for later lookup
   pubTracks_.emplace(pub.requestID, trackPublisher);
+  pendingPublishTracks_.insert(pub.fullTrackName);
 
   // Create Contract and place in pending publishes
   auto contract = folly::coro::makePromiseContract<
