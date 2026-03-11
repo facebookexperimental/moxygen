@@ -201,6 +201,8 @@ jobs:
 
           # Pre-merge main into sync branch to resolve expected conflicts
           # (github_hashes files diverge every sync; upstream version wins)
+          git config user.email "omoq-sync-bot[bot]@users.noreply.github.com"
+          git config user.name "omoq-sync-bot[bot]"
           git fetch origin "$BRANCH"
           git checkout -B "$BRANCH" "origin/$BRANCH"
           if ! git merge origin/main -X ours --no-edit; then
