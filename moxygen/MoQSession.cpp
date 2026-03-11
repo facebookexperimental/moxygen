@@ -2183,6 +2183,7 @@ void MoQSession::cleanup() {
         pendingState->getErrorFrameType());
   }
   pendingRequests_.clear();
+  pendingPublishTracks_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
@@ -3338,6 +3339,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     return;
   }
   // TODO: Check for duplicate alias
+
   bool forward = subscribeRequest.forward;
 
   // Extract delivery timeout from subscribe request params
@@ -3364,6 +3366,19 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
   }
 
   pubTracks_.emplace(requestID, trackPublisher);
+
+  // Check for duplicate subscription: if there's already a pending outgoing
+  // PUBLISH for the same track, reject the SUBSCRIBE
+  if (pendingPublishTracks_.count(subscribeRequest.fullTrackName)) {
+    XLOG(DBG1) << "Duplicate subscription for track with pending publish"
+               << " ftn=" << subscribeRequest.fullTrackName << " sess=" << this;
+    subscribeError(
+        {subscribeRequest.requestID,
+         SubscribeErrorCode::DUPLICATE_SUBSCRIPTION,
+         "duplicate subscription"});
+    return;
+  }
+
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
   co_withExecutor(
@@ -3615,6 +3630,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     auto trackPublisher =
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
+    pendingPublishTracks_.erase(trackIt->second->fullTrackName());
   }
 
   publishPtr->setValue(std::move(publishOk));
@@ -3668,6 +3684,7 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
     case FrameType::PUBLISH_ERROR: {
       auto pubIt = pubTracks_.find(error.requestID);
       if (pubIt != pubTracks_.end()) {
+        pendingPublishTracks_.erase(pubIt->second->fullTrackName());
         pubIt->second->setSession(nullptr);
         pubTracks_.erase(pubIt);
       }
@@ -4565,6 +4582,7 @@ Subscriber::PublishResult MoQSession::publish(
 
   // Store the track publisher for later lookup
   pubTracks_.emplace(pub.requestID, trackPublisher);
+  pendingPublishTracks_.insert(pub.fullTrackName);
 
   // Create Contract and place in pending publishes
   auto contract = folly::coro::makePromiseContract<

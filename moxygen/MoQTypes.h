@@ -130,6 +130,8 @@ enum class RequestErrorCode : uint32_t {
   // PublishNamespace-specific codes
   UNINTERESTED = 4, // Same value as TRACK_NOT_EXIST
 
+  DUPLICATE_SUBSCRIPTION = 0x19,
+
   // Special values
   CANCELLED = std::numeric_limits<uint32_t>::max(),
 };
