@@ -111,6 +111,9 @@ jobs:
 
           echo "Scanning up to 20 recent upstream commits..."
           UPSTREAM_SHA=""
+          NEW_COUNT=0
+          FAIL_COUNT=0
+          LATEST_NEW_SHA=""
 
           for SHA in $COMMITS; do
             SHORT="${SHA:0:12}"
@@ -120,6 +123,9 @@ jobs:
               echo "  $SHORT: already on upstream mirror (stopping scan)"
               break
             fi
+
+            NEW_COUNT=$((NEW_COUNT + 1))
+            [ -z "$LATEST_NEW_SHA" ] && LATEST_NEW_SHA="$SHA"
 
             # Check build status
             STATE=$(gh api "repos/facebookexperimental/moxygen/commits/$SHA/check-suites" \
@@ -135,20 +141,68 @@ jobs:
               UPSTREAM_SHA="$SHA"
               break
             fi
+            FAIL_COUNT=$((FAIL_COUNT + 1))
           done
 
           if [ -z "$UPSTREAM_SHA" ]; then
             echo "No new qualifying upstream commit found."
             echo "advanced=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          else
+            SHORT_SHA="${UPSTREAM_SHA:0:12}"
+            echo ""
+            echo "Selected upstream commit: $SHORT_SHA"
+            echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+            echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+            echo "advanced=true" >> "$GITHUB_OUTPUT"
           fi
 
-          SHORT_SHA="${UPSTREAM_SHA:0:12}"
-          echo ""
-          echo "Selected upstream commit: $SHORT_SHA"
-          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
-          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          echo "advanced=true" >> "$GITHUB_OUTPUT"
+          echo "new_count=$NEW_COUNT" >> "$GITHUB_OUTPUT"
+          echo "fail_count=$FAIL_COUNT" >> "$GITHUB_OUTPUT"
+          echo "latest_new_sha=$LATEST_NEW_SHA" >> "$GITHUB_OUTPUT"
+
+          # Flag if all new commits are failing
+          if [ "$NEW_COUNT" -gt 0 ] && [ "$FAIL_COUNT" -eq "$NEW_COUNT" ]; then
+            echo "all_failing=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::All $NEW_COUNT new upstream commits have failing CI"
+          else
+            echo "all_failing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify upstream CI broken (Slack)
+        if: steps.upstream.outputs.all_failing == 'true'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          LATEST="${{ steps.upstream.outputs.latest_new_sha }}"
+          LATEST_SHORT="${LATEST:0:7}"
+          ACTIONS_URL="https://github.com/facebookexperimental/moxygen/actions"
+          TEXT=":warning: *${{ github.repository }}* upstream CI failing — ${{ steps.upstream.outputs.fail_count }} of ${{ steps.upstream.outputs.new_count }} recent commits red \`${LATEST_SHORT}\` <${ACTIONS_URL}|view>"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify upstream CI broken (email)
+        if: steps.upstream.outputs.all_failing == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          LATEST="${{ steps.upstream.outputs.latest_new_sha }}"
+          LATEST_SHORT="${LATEST:0:7}"
+          ACTIONS_URL="https://github.com/facebookexperimental/moxygen/actions"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] upstream CI failing — ${{ steps.upstream.outputs.fail_count }} of ${{ steps.upstream.outputs.new_count }} commits red"
+          BODY="Upstream CI is failing. All ${{ steps.upstream.outputs.new_count }} new commits since our mirror have broken GitHub Actions.\n\nLatest: ${LATEST}\nUpstream actions: ${ACTIONS_URL}\nSync run: ${RUN_URL}"
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
 
       - name: Advance upstream mirror
         if: steps.blocking.outputs.blocked == 'false' && steps.upstream.outputs.advanced == 'true'

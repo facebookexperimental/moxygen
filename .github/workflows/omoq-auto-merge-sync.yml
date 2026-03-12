@@ -1,6 +1,6 @@
 name: sync auto-merge
 
-# Fires when verify completes on a sync/* branch.
+# Fires when ci pr completes on a sync/* branch.
 # If build passed, merges the corresponding open sync PR into main.
 # If build failed, sends Slack + email notifications.
 #
@@ -11,7 +11,7 @@ name: sync auto-merge
 
 on:
   workflow_run:
-    workflows: ["verify"]
+    workflows: ["ci pr"]
     types: [completed]
     branches:
       - sync/**

@@ -1,16 +1,25 @@
-name: verify
+name: ci pr
 
-# Standalone build validation for PRs. Required status check for branch protection.
+# PR verification: build/test matrix.
+# Main push uses omoq-ci-main.yml which adds publish/release/notify.
 
 on:
   pull_request:
     branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   checks: write
 
 jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  # Verify: build/test matrix
+  # ════════════════════════════════════════════════════════════════════════════
+
   build:
     strategy:
       fail-fast: false
