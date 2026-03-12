@@ -480,4 +480,10 @@ uint8_t MoQSessionTest::getRequestIDMultiplier() const {
   return 2;
 }
 
+folly::coro::Task<void> MoQSessionTest::rescheduleN(int n) {
+  for (int i = 0; i < n; ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+}
+
 }} // namespace moxygen::test

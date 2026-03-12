@@ -938,10 +938,13 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDuplicatesPendingPublish) {
 
   // Use a baton to delay the PUBLISH_OK so the publish stays pending
   folly::coro::Baton publishOkBaton;
+  bool publishMockCalled = false;
   EXPECT_CALL(*serverSubscriber, publish(_, _))
       .WillOnce(
-          [&publishOkBaton](
-              PublishRequest actualPub, auto) -> Subscriber::PublishResult {
+          [&publishOkBaton, &publishMockCalled](
+              const PublishRequest& actualPub,
+              auto) -> Subscriber::PublishResult {
+            publishMockCalled = true;
             auto consumer =
                 std::make_shared<testing::NiceMock<MockTrackConsumer>>();
             ON_CALL(*consumer, setTrackAlias(_))
@@ -972,7 +975,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDuplicatesPendingPublish) {
   auto publishResult =
       clientSession_->publish(std::move(pub), makePublishHandle());
   EXPECT_TRUE(publishResult.hasValue());
-  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Wait for the server to process the PUBLISH (handlePublish is dispatched
+  // asynchronously via .start(), so multiple event loop iterations may be
+  // needed)
+  co_await rescheduleN(5);
+  EXPECT_TRUE(publishMockCalled);
 
   // Server subscribes to client for the same track while publish is pending
   auto subRes = co_await serverSession_->subscribe(
@@ -985,6 +993,67 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDuplicatesPendingPublish) {
   publishOkBaton.post();
   auto replyRes = co_await std::move(publishResult.value().reply);
   EXPECT_TRUE(replyRes.hasValue());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+CO_TEST_P_X(MoQSessionTest, PublishDuplicatesPendingSubscribe) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  FullTrackName ftn{TrackNamespace{{"test"}}, "test-track"};
+
+  // Use a baton to delay the SUBSCRIBE_OK so the subscribe stays pending
+  folly::coro::Baton subscribeOkBaton;
+  bool subscribeMockCalled = false;
+  expectSubscribe(
+      [&subscribeOkBaton, &subscribeMockCalled](
+          auto sub, auto) -> TaskSubscribeResult {
+        subscribeMockCalled = true;
+        co_await subscribeOkBaton;
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  // Client subscribes — start eagerly so it populates pendingSubscribeTracks_
+  auto subscribeConsumer =
+      std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*subscribeConsumer, setTrackAlias(_))
+      .WillByDefault(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  ON_CALL(*subscribeConsumer, publishDone(_))
+      .WillByDefault(testing::Return(folly::unit));
+  auto subscribeSf =
+      clientSession_->subscribe(getSubscribe(ftn), subscribeConsumer)
+          .scheduleOn(&eventBase_)
+          .start();
+
+  // Wait for the SUBSCRIBE to be delivered and processed by the server
+  co_await rescheduleN(5);
+  EXPECT_TRUE(subscribeMockCalled);
+
+  // Server sends PUBLISH for the same track while subscribe is pending.
+  // Client should reject with DUPLICATE_SUBSCRIPTION.
+  auto handle = makePublishHandle();
+  auto publishResult = serverSession_->publish(
+      PublishRequest{
+          RequestID(0),
+          ftn,
+          TrackAlias(100),
+          GroupOrder::Default,
+          AbsoluteLocation{0, 100},
+          true,
+      },
+      handle);
+  EXPECT_TRUE(publishResult.hasValue());
+
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasError());
+  EXPECT_EQ(
+      replyRes.error().errorCode, PublishErrorCode::DUPLICATE_SUBSCRIPTION);
+
+  // Let the SUBSCRIBE_OK through and complete the subscribe
+  subscribeOkBaton.post();
+  auto subRes = co_await std::move(subscribeSf).via(&eventBase_);
+  EXPECT_TRUE(subRes.hasValue());
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

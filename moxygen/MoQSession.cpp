@@ -2184,6 +2184,7 @@ void MoQSession::cleanup() {
   }
   pendingRequests_.clear();
   pendingPublishTracks_.clear();
+  pendingSubscribeTracks_.clear();
   if (!cancellationSource_.isCancellationRequested()) {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
@@ -3652,6 +3653,11 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
   if (it != pendingRequests_.end()) {
     auto pendingState = std::move(it->second);
     pendingRequests_.erase(it);
+    // Remove from pending subscribe tracks if this was a subscribe
+    auto* trackPtr = pendingState->tryGetSubscribeTrack();
+    if (trackPtr) {
+      pendingSubscribeTracks_.erase((*trackPtr)->fullTrackName());
+    }
     if (getDraftMajorVersion(*getNegotiatedVersion()) > 14) {
       // determine real frame type from pendingRequest
       frameType = pendingState->getErrorFrameType();
@@ -3730,6 +3736,7 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   }
   auto trackReceiveState = std::move(*trackPtr);
   pendingRequests_.erase(it);
+  pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
 
   auto res = reqIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
   if (!res.second) {
@@ -3883,6 +3890,19 @@ void MoQSession::onPublish(PublishRequest publish) {
             publish.requestID,
             PublishErrorCode::NOT_SUPPORTED,
             "Not a subscriber"});
+    return;
+  }
+
+  // Check for duplicate subscription: if there's already a pending outgoing
+  // SUBSCRIBE for the same track, reject the PUBLISH
+  if (pendingSubscribeTracks_.count(publish.fullTrackName)) {
+    XLOG(DBG1) << "Duplicate subscription for track with pending subscribe"
+               << " ftn=" << publish.fullTrackName << " sess=" << this;
+    publishError(
+        PublishError{
+            publish.requestID,
+            PublishErrorCode::DUPLICATE_SUBSCRIPTION,
+            "duplicate subscription"});
     return;
   }
 
@@ -4719,6 +4739,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       fullTrackName, reqID, callback, this, trackAlias, logger_);
   pendingRequests_.emplace(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
+  pendingSubscribeTracks_.insert(fullTrackName);
   auto subscribeResultTry =
       co_await co_awaitTry(trackReceiveState->subscribeFuture());
   if (subscribeResultTry.hasException()) {

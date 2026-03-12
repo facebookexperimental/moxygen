@@ -227,6 +227,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
       std::shared_ptr<MockSubgroupConsumer> sgc)>;
   folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
 
+  folly::coro::Task<void> rescheduleN(int n);
+
   folly::EventBase eventBase_;
   std::shared_ptr<MoQFollyExecutorImpl> MoQExecutor_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;
