@@ -27,6 +27,7 @@ moxygen_add_library(moxygen_relay_moq_cache
     Folly::folly_container_f14_hash
     Folly::folly_coro_baton
     Folly::folly_coro_task
+    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_relay_moq_relay
@@ -35,6 +36,7 @@ moxygen_add_library(moxygen_relay_moq_relay
   EXPORTED_DEPS
     moxygen_moq
     moxygen_moq_consumers
+    moxygen_moq_types
     moxygen_relay_moq_cache
     moxygen_relay_moq_forwarder
     Folly::folly_container_f14_hash

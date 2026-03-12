@@ -445,6 +445,7 @@ enum class TrackRequestParamKey : uint64_t {
   GROUP_ORDER = 0x22,
   LARGEST_OBJECT = 0x9,
   FORWARD = 0x10,
+  NEW_GROUP_REQUEST = 0x32,
 };
 
 class Parameters {
