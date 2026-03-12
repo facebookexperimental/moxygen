@@ -1,7 +1,10 @@
-"""MoQ Test Client Python Bindings Type Stubs"""
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This source code is licensed under the Apache 2.0 license found in the
+# LICENSE file in the root directory of this source tree.
 
 # @generated
-# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+
+"""MoQ Test Client Python Bindings Type Stubs"""
 
 from typing import Any
 
