@@ -4649,9 +4649,9 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     // Add LARGEST_OBJECT parameter (v16+ only, replaces fixed contentExists)
     if (getDraftMajorVersion(*version_) >= 16 &&
         subscribeOk.largest.has_value()) {
-      requestSpecificParams.push_back(Parameter(
+      requestSpecificParams.emplace_back(
           folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
-          subscribeOk.largest));
+          subscribeOk.largest);
     }
   }
   writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
@@ -4789,9 +4789,9 @@ WriteResult MoQFrameWriter::writePublish(
     }
 
     if (publish.largest.has_value()) {
-      requestSpecificParams.push_back(Parameter(
+      requestSpecificParams.emplace_back(
           folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
-          publish.largest));
+          publish.largest);
     }
   } else {
     uint8_t forwardFlag = publish.forward ? 1 : 0;

@@ -896,6 +896,7 @@ class MoQSession : public Subscriber,
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
       pubTracks_;
   folly::F14FastSet<FullTrackName, FullTrackName::hash> pendingPublishTracks_;
+  folly::F14FastSet<FullTrackName, FullTrackName::hash> pendingSubscribeTracks_;
   folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
       bufferedDatagrams_;
   folly::F14FastMap<TrackAlias, std::list<TimedBaton*>, TrackAlias::hash>
