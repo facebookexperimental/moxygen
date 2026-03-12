@@ -106,7 +106,9 @@ std::string AbsoluteLocation::describe() const {
   return folly::to<std::string>("{", group, ",", object, "}");
 }
 
-TrackNamespace::TrackNamespace(std::string tns, std::string delimiter) {
+TrackNamespace::TrackNamespace(
+    const std::string& tns,
+    const std::string& delimiter) {
   folly::split(delimiter, tns, trackNamespace);
 }
 

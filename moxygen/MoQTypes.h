@@ -290,7 +290,7 @@ enum class AliasType : uint8_t {
 };
 
 struct AuthToken {
-  uint64_t tokenType;
+  uint64_t tokenType{0};
   std::string tokenValue;
   std::optional<uint64_t> alias;
   // Set alias to one of these constants when sending an AuthToken parameter
@@ -660,8 +660,8 @@ std::ostream& operator<<(std::ostream& os, RequestID id);
 struct Extension {
   // Even type => holds value in intValue
   // Odd type => holds value in arrayValue
-  uint64_t type;
-  uint64_t intValue;
+  uint64_t type{0};
+  uint64_t intValue{0};
   std::unique_ptr<folly::IOBuf> arrayValue;
 
   Extension() noexcept : Extension(0, 0) {}
@@ -709,7 +709,7 @@ struct Extension {
     type = other.type;
     intValue = other.intValue;
     arrayValue = other.arrayValue ? other.arrayValue->clone() : nullptr;
-  };
+  }
   void moveFrom(Extension&& other) {
     type = other.type;
     intValue = other.intValue;
@@ -830,9 +830,9 @@ struct ObjectHeader {
         status(ObjectStatus::NORMAL),
         extensions(std::move(extensionsIn)),
         length(lengthIn) {}
-  uint64_t group;
+  uint64_t group{0};
   uint64_t subgroup{0}; // meaningless for Datagram
-  uint64_t id;
+  uint64_t id{0};
   std::optional<uint8_t> priority{kDefaultPriority};
   ObjectStatus status{ObjectStatus::NORMAL};
   Extensions extensions;
@@ -869,7 +869,7 @@ struct TrackNamespace {
   explicit TrackNamespace(std::vector<std::string> tns) {
     trackNamespace = std::move(tns);
   }
-  explicit TrackNamespace(std::string tns, std::string delimiter);
+  explicit TrackNamespace(const std::string& tns, const std::string& delimiter);
 
   bool operator==(const TrackNamespace& other) const {
     return trackNamespace == other.trackNamespace;
@@ -982,11 +982,11 @@ struct SubscribeRequest {
   RequestID requestID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
-  GroupOrder groupOrder;
+  GroupOrder groupOrder{GroupOrder::Default};
   bool forward{true};
-  LocationType locType;
+  LocationType locType{LocationType::LargestObject};
   std::optional<AbsoluteLocation> start;
-  uint64_t endGroup;
+  uint64_t endGroup{0};
   TrackRequestParameters params{FrameType::SUBSCRIBE};
 };
 
@@ -1008,8 +1008,8 @@ using SubscribeUpdate = RequestUpdate;
 struct SubscribeOk {
   RequestID requestID;
   TrackAlias trackAlias;
-  std::chrono::milliseconds expires;
-  GroupOrder groupOrder;
+  std::chrono::milliseconds expires{std::chrono::milliseconds(0)};
+  GroupOrder groupOrder{GroupOrder::OldestFirst};
   // context exists is inferred from presence of largest
   std::optional<AbsoluteLocation> largest;
   Extensions extensions; // Draft 16+
@@ -1033,19 +1033,19 @@ struct PublishRequest {
   RequestID requestID{0};
   FullTrackName fullTrackName;
   TrackAlias trackAlias{0};
-  GroupOrder groupOrder{GroupOrder::Default};
+  GroupOrder groupOrder{GroupOrder::OldestFirst};
   std::optional<AbsoluteLocation> largest;
-  bool forward{true};
+  bool forward{false};
   Extensions extensions; // Draft 16+
   TrackRequestParameters params{FrameType::PUBLISH};
 };
 
 struct PublishOk {
   RequestID requestID;
-  bool forward;
-  uint8_t subscriberPriority;
-  GroupOrder groupOrder;
-  LocationType locType;
+  bool forward{true};
+  uint8_t subscriberPriority{kDefaultPriority};
+  GroupOrder groupOrder{GroupOrder::OldestFirst};
+  LocationType locType{LocationType::LargestObject};
   std::optional<AbsoluteLocation> start;
   std::optional<uint64_t> endGroup;
   TrackRequestParameters params{FrameType::PUBLISH_OK};
@@ -1080,8 +1080,8 @@ using TrackStatus = SubscribeRequest;
 struct TrackStatusOk {
   RequestID requestID;
   TrackAlias trackAlias;
-  std::chrono::milliseconds expires{};
-  GroupOrder groupOrder{};
+  std::chrono::milliseconds expires{std::chrono::milliseconds(0)};
+  GroupOrder groupOrder{GroupOrder::OldestFirst};
   // context exists is inferred from presence of largest
   std::optional<AbsoluteLocation> largest;
   TrackRequestParameters params{FrameType::REQUEST_OK};
@@ -1174,8 +1174,8 @@ struct FetchCancel {
 
 struct FetchOk {
   RequestID requestID;
-  GroupOrder groupOrder;
-  uint8_t endOfTrack;
+  GroupOrder groupOrder{GroupOrder::OldestFirst};
+  uint8_t endOfTrack{0};
   AbsoluteLocation endLocation;
   Extensions extensions; // Draft 16+
   TrackRequestParameters params{FrameType::FETCH_OK};
