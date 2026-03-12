@@ -54,6 +54,10 @@ jobs:
         run: |
           SNAPSHOT_SHA=$(gh api repos/{owner}/{repo}/releases \
             --jq '.[] | select(.tag_name == "snapshot-latest") | .target_commitish')
+          if [[ -z "$SNAPSHOT_SHA" ]]; then
+            echo "Error: snapshot-latest release not found. Run the main pipeline first." >&2
+            exit 1
+          fi
           echo "Snapshot built from commit: $SNAPSHOT_SHA"
           echo "SNAPSHOT_SHA=$SNAPSHOT_SHA" >> "$GITHUB_ENV"
 
