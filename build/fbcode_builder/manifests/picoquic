@@ -2,8 +2,8 @@
 name = picoquic
 
 [git]
-repo_url = https://github.com/private-octopus/picoquic.git
-branch = master
+repo_url = https://github.com/afrind/picoquic.git
+branch = fix-picotls-brotli
 
 [build]
 builder = cmake
