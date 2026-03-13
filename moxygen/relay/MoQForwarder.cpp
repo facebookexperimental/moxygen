@@ -361,6 +361,11 @@ void MoQForwarder::removeSubscriberIt(
 void MoQForwarder::updateLargest(uint64_t group, uint64_t object) {
   AbsoluteLocation now{group, object};
   if (!largest_ || now > *largest_) {
+    // Clear any outstanding NEW_GROUP_REQUEST once the upstream group advances.
+    if (outstandingNewGroupRequest_.has_value() &&
+        (!largest_ || group > largest_->group)) {
+      outstandingNewGroupRequest_.reset();
+    }
     largest_ = now;
   }
 }
@@ -529,6 +534,34 @@ void MoQForwarder::removeForwardingSubscriber() {
   }
 }
 
+void MoQForwarder::tryProcessNewGroupRequest(
+    const Parameters& params,
+    bool fire) {
+  auto value =
+      getFirstIntParam(params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+  if (!value.has_value()) {
+    return;
+  }
+  // the track must support dynamic groups.
+  if (!getPublisherDynamicGroups(extensions_).value_or(false)) {
+    return;
+  }
+  // non-zero value <= LargestGroup means the new group is already
+  // available — do not send upstream.
+  if (*value != 0 && largest_.has_value() && *value <= largest_->group) {
+    return;
+  }
+  // already have an outstanding request with >= value.
+  if (outstandingNewGroupRequest_.has_value() &&
+      *outstandingNewGroupRequest_ >= *value) {
+    return;
+  }
+  outstandingNewGroupRequest_ = *value;
+  if (fire && callback_) {
+    callback_->newGroupRequested(this, *value);
+  }
+}
+
 Payload MoQForwarder::maybeClone(const Payload& payload) {
   return payload ? payload->clone() : nullptr;
 }
@@ -597,6 +630,22 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
   }
 }
 
+void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
+  // Update subscriber range from PUBLISH_OK
+  std::optional<AbsoluteLocation> end;
+  if (pubOk.endGroup) {
+    end = AbsoluteLocation{*pubOk.endGroup, 0};
+  }
+  range =
+      toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder.largest());
+
+  // Update forward flag
+  shouldForward = pubOk.forward;
+
+  // Handle NEW_GROUP_REQUEST forwarding if present
+  forwarder.tryProcessNewGroupRequest(pubOk.params);
+}
+
 folly::coro::Task<folly::Expected<RequestOk, RequestError>>
 MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   // Validation:
@@ -604,6 +653,7 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   // - End location can increase or decrease
   // - For bounded subscriptions (endGroup > 0), end must be >= start
   // - Forward state is optional and only updated if explicitly provided
+  // - A New Group can be requested
 
   // Only update start if provided
   if (requestUpdate.start.has_value()) {
@@ -638,6 +688,9 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   } else if (wasForwarding && !shouldForward) {
     forwarder.removeForwardingSubscriber();
   }
+
+  // Only update new group request if provided
+  forwarder.tryProcessNewGroupRequest(requestUpdate.params);
 
   co_return RequestOk{.requestID = requestUpdate.requestID};
 }

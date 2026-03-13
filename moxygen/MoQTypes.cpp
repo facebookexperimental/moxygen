@@ -106,7 +106,9 @@ std::string AbsoluteLocation::describe() const {
   return folly::to<std::string>("{", group, ",", object, "}");
 }
 
-TrackNamespace::TrackNamespace(std::string tns, std::string delimiter) {
+TrackNamespace::TrackNamespace(
+    const std::string& tns,
+    const std::string& delimiter) {
   folly::split(delimiter, tns, trackNamespace);
 }
 
@@ -235,6 +237,11 @@ const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
     FrameType::PUBLISH_OK,
     FrameType::SUBSCRIBE_NAMESPACE};
 
+const folly::F14FastSet<FrameType> kAllowedFramesForNewGroupRequest = {
+    FrameType::SUBSCRIBE,
+    FrameType::REQUEST_UPDATE,
+    FrameType::PUBLISH_OK};
+
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -252,6 +259,8 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
         {TrackRequestParamKey::GROUP_ORDER, kAllowedFramesForGroupOrder},
         {TrackRequestParamKey::LARGEST_OBJECT, kAllowedFramesForLargestObject},
         {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
+        {TrackRequestParamKey::NEW_GROUP_REQUEST,
+         kAllowedFramesForNewGroupRequest},
 };
 
 // Frame types that allow all parameters (no validation)

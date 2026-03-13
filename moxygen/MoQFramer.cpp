@@ -5,8 +5,6 @@
  */
 
 #include "moxygen/MoQFramer.h"
-#include <folly/container/F14Map.h>
-#include <folly/container/F14Set.h>
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
 
@@ -49,6 +47,7 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
     case moxygen::TrackRequestParamKey::FORWARD:
+    case moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST:
       return true;
     default:
       return false;
@@ -144,82 +143,6 @@ folly::Expected<uint64_t, moxygen::ErrorCode> decodeDelta(
 } // namespace
 
 namespace moxygen {
-
-// Frame type sets for parameter allowlist
-const folly::F14FastSet<FrameType> kAllowedFramesForAuthToken = {
-    FrameType::PUBLISH,
-    FrameType::SUBSCRIBE,
-    FrameType::SUBSCRIBE_UPDATE,
-    FrameType::SUBSCRIBE_NAMESPACE,
-    FrameType::PUBLISH_NAMESPACE,
-    FrameType::TRACK_STATUS,
-    FrameType::FETCH};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeout = {
-    FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE,
-    FrameType::SUBSCRIBE_UPDATE};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForSubscriberPriority = {
-    FrameType::SUBSCRIBE,
-    FrameType::FETCH,
-    FrameType::SUBSCRIBE_UPDATE,
-    FrameType::PUBLISH_OK};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForSubscriptionFilter = {
-    FrameType::SUBSCRIBE,
-    FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE_UPDATE};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForExpires = {
-    FrameType::SUBSCRIBE_OK,
-    FrameType::PUBLISH,
-    FrameType::PUBLISH_OK,
-    FrameType::REQUEST_OK};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForGroupOrder = {
-    FrameType::SUBSCRIBE,
-    FrameType::PUBLISH_OK,
-    FrameType::FETCH};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForLargestObject = {
-    FrameType::SUBSCRIBE_OK,
-    FrameType::PUBLISH,
-    FrameType::REQUEST_OK};
-
-const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
-    FrameType::SUBSCRIBE,
-    FrameType::SUBSCRIBE_UPDATE,
-    FrameType::PUBLISH,
-    FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE_NAMESPACE};
-
-// Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
-// Empty set means allowed for all frame types
-const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
-    kParamAllowlist = {
-        {TrackRequestParamKey::AUTHORIZATION_TOKEN, kAllowedFramesForAuthToken},
-        {TrackRequestParamKey::DELIVERY_TIMEOUT,
-         kAllowedFramesForDeliveryTimeout},
-        {TrackRequestParamKey::MAX_CACHE_DURATION, {}},
-        {TrackRequestParamKey::PUBLISHER_PRIORITY, {}},
-        {TrackRequestParamKey::SUBSCRIBER_PRIORITY,
-         kAllowedFramesForSubscriberPriority},
-        {TrackRequestParamKey::SUBSCRIPTION_FILTER,
-         kAllowedFramesForSubscriptionFilter},
-        {TrackRequestParamKey::EXPIRES, kAllowedFramesForExpires},
-        {TrackRequestParamKey::GROUP_ORDER, kAllowedFramesForGroupOrder},
-        {TrackRequestParamKey::LARGEST_OBJECT, kAllowedFramesForLargestObject},
-        {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
-};
-
-// Frame types that allow all parameters (no validation)
-const folly::F14FastSet<FrameType> kAllowAllParamsFrameTypes = {
-    FrameType::CLIENT_SETUP,
-    FrameType::SERVER_SETUP,
-    FrameType::LEGACY_CLIENT_SETUP,
-    FrameType::LEGACY_SERVER_SETUP,
-};
 
 // Forward declarations for iOS.
 enum class ParamsType { ClientSetup, ServerSetup, Request };
@@ -4458,6 +4381,16 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       forwardParam.asUint64 = 0;
       requestSpecificParams.push_back(forwardParam);
     }
+
+    auto newGroupRequestValue = getFirstIntParam(
+        subscribeRequest.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+    if (newGroupRequestValue.has_value()) {
+      Parameter newGroupRequestParam;
+      newGroupRequestParam.key =
+          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+      newGroupRequestParam.asUint64 = *newGroupRequestValue;
+      requestSpecificParams.push_back(newGroupRequestParam);
+    }
   } else {
     writeVarint(
         writeBuf,
@@ -4543,6 +4476,16 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
       forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
       forwardParam.asUint64 = *update.forward ? 1 : 0;
       requestSpecificParams.push_back(forwardParam);
+    }
+
+    auto newGroupRequestValue = getFirstIntParam(
+        update.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+    if (newGroupRequestValue.has_value()) {
+      Parameter newGroupRequestParam;
+      newGroupRequestParam.key =
+          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+      newGroupRequestParam.asUint64 = *newGroupRequestValue;
+      requestSpecificParams.push_back(newGroupRequestParam);
     }
   } else {
     // For draft < 15, start and endGroup are mandatory
@@ -4878,6 +4821,16 @@ WriteResult MoQFrameWriter::writePublishOk(
       forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
       forwardParam.asUint64 = 0;
       requestSpecificParams.push_back(forwardParam);
+    }
+
+    auto newGroupRequestValue = getFirstIntParam(
+        publishOk.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
+    if (newGroupRequestValue.has_value()) {
+      Parameter newGroupRequestParam;
+      newGroupRequestParam.key =
+          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+      newGroupRequestParam.asUint64 = *newGroupRequestValue;
+      requestSpecificParams.push_back(newGroupRequestParam);
     }
   } else {
     writeVarint(
