@@ -31,17 +31,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: [self-hosted, linode]
+          - os: ubuntu-22.04
             name: linux
             cache_prefix: ci-ninja-ubuntu-22.04
-          - runner: macos-15
+          - os: macos-15
             name: macos
             cache_prefix: ci-ninja-macos-15
-          - runner: [self-hosted, linode]
+          - os: ubuntu-22.04
             name: asan debug
             cache_prefix: ci-asan-ubuntu-22.04
     name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +49,6 @@ jobs:
         run: bash standalone/install-system-deps.sh
 
       - name: Cache FetchContent downloads
-        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: actions/cache@v4
         with:
           path: _build/_deps
@@ -58,7 +57,6 @@ jobs:
             ${{ matrix.cache_prefix }}-deps-
 
       - name: Set up ccache
-        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: ${{ matrix.cache_prefix }}
@@ -108,14 +106,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: [self-hosted, linode]
+          - os: ubuntu-22.04
             name: linux
             cache_prefix: ci-pico-ninja-ubuntu-22.04
-          - runner: macos-15
+          - os: macos-15
             name: macos
             cache_prefix: ci-pico-ninja-macos-15
     name: pico (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -123,7 +121,6 @@ jobs:
         run: bash standalone/install-system-deps.sh
 
       - name: Cache FetchContent downloads
-        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: actions/cache@v4
         with:
           path: _build/_deps
@@ -132,7 +129,6 @@ jobs:
             ${{ matrix.cache_prefix }}-deps-
 
       - name: Set up ccache
-        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: ${{ matrix.cache_prefix }}
@@ -175,7 +171,7 @@ jobs:
       matrix:
         include:
           - name: ubuntu-22.04-amd64
-            runner: [self-hosted, linode]
+            runner: ubuntu-22.04
             artifact: moxygen-ubuntu-22.04-amd64.tar.gz
             debug_artifact: moxygen-ubuntu-22.04-amd64-dbg.tar.gz
             container: ""
@@ -187,7 +183,7 @@ jobs:
             container: ""
 
           - name: bookworm-amd64
-            runner: [self-hosted, linode]
+            runner: ubuntu-22.04
             artifact: moxygen-bookworm-amd64.tar.gz
             debug_artifact: moxygen-bookworm-amd64-dbg.tar.gz
             container: debian:bookworm
@@ -216,7 +212,6 @@ jobs:
         run: bash standalone/install-system-deps.sh
 
       - name: Cache FetchContent downloads
-        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: actions/cache@v4
         with:
           path: _build/_deps
@@ -225,7 +220,6 @@ jobs:
             publish-ninja-${{ matrix.name }}-deps-
 
       - name: Set up ccache
-        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: publish-${{ matrix.name }}
