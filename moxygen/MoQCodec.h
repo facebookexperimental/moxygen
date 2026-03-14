@@ -170,6 +170,15 @@ class MoQControlCodec : public MoQCodec {
   };
   ParseState parseState_{ParseState::FRAME_HEADER_TYPE};
   bool seenSetup_{false};
+
+ private:
+  // State-machine helpers called from onIngress().
+  folly::Expected<folly::Unit, ErrorCode> parseFrameHeaderType(
+      folly::io::Cursor& cursor,
+      size_t& remainingLength);
+  folly::Expected<folly::Unit, ErrorCode> parseFrameLength(
+      folly::io::Cursor& cursor,
+      size_t& remainingLength);
 };
 
 class MoQSubNsReceiverCodec : public MoQControlCodec {

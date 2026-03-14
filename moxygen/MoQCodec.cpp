@@ -16,6 +16,76 @@ void MoQCodec::onIngressStart(std::unique_ptr<folly::IOBuf> data) {
   ingress_.append(std::move(data));
 }
 
+folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrameHeaderType(
+    folly::io::Cursor& cursor,
+    size_t& remainingLength) {
+  auto type = quic::follyutils::decodeQuicInteger(cursor);
+  if (!type) {
+    XLOG(DBG6) << __func__ << " underflow";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  curFrameType_ = FrameType(type->first);
+  remainingLength -= type->second;
+  if (!checkFrameAllowed(curFrameType_)) {
+    XLOG(DBG4) << "Frame not allowed: 0x" << std::setfill('0')
+               << std::setw(sizeof(uint64_t) * 2) << std::hex
+               << (uint64_t)curFrameType_ << " on streamID=" << streamId_;
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (callback_) {
+    callback_->onFrame(curFrameType_);
+  }
+  parseState_ = ParseState::FRAME_LENGTH;
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrameLength(
+    folly::io::Cursor& cursor,
+    size_t& remainingLength) {
+  uint64_t length = 0;
+  size_t bytesParsed = 0;
+
+  bool parseFrameLengthAs16bit = false;
+  if (curFrameType_ == FrameType::CLIENT_SETUP ||
+      curFrameType_ == FrameType::SERVER_SETUP) {
+    parseFrameLengthAs16bit = true;
+  } else if (
+      curFrameType_ == FrameType::LEGACY_CLIENT_SETUP ||
+      curFrameType_ == FrameType::LEGACY_SERVER_SETUP) {
+    parseFrameLengthAs16bit = false;
+  } else if (!moqFrameParser_.getVersion().has_value()) {
+    XLOG(DBG4)
+        << "Received a non-setup frame before knowing the negotiated version";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  } else {
+    parseFrameLengthAs16bit =
+        (getDraftMajorVersion(*moqFrameParser_.getVersion()) >= 11);
+  }
+
+  if (parseFrameLengthAs16bit) {
+    if (remainingLength < 2) {
+      XLOG(DBG6) << __func__ << " underflow";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    // Parse the length as a 16 bit integer
+    length = cursor.readBE<uint16_t>();
+    bytesParsed = 2;
+  } else {
+    // Parse the length as a varint
+    auto decodeResult = quic::follyutils::decodeQuicInteger(cursor);
+    if (!decodeResult) {
+      XLOG(DBG6) << __func__ << " underflow";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length = decodeResult->first;
+    bytesParsed = decodeResult->second;
+  }
+  curFrameLength_ = length;
+  remainingLength -= bytesParsed;
+  parseState_ = ParseState::FRAME_PAYLOAD;
+  return folly::unit;
+}
+
 MoQCodec::ParseResult MoQControlCodec::onIngress(
     std::unique_ptr<folly::IOBuf> data,
     bool eom) {
@@ -25,73 +95,19 @@ MoQCodec::ParseResult MoQControlCodec::onIngress(
   while (!connError_ && remainingLength > 0) {
     switch (parseState_) {
       case ParseState::FRAME_HEADER_TYPE: {
-        auto type = quic::follyutils::decodeQuicInteger(cursor);
-        if (!type) {
-          XLOG(DBG6) << __func__ << " underflow";
-          connError_ = ErrorCode::PARSE_UNDERFLOW;
+        auto res = parseFrameHeaderType(cursor, remainingLength);
+        if (res.hasError()) {
+          connError_ = res.error();
           break;
         }
-        curFrameType_ = FrameType(type->first);
-        remainingLength -= type->second;
-        auto res = checkFrameAllowed(curFrameType_);
-        if (!res) {
-          XLOG(DBG4) << "Frame not allowed: 0x" << std::setfill('0')
-                     << std::setw(sizeof(uint64_t) * 2) << std::hex
-                     << (uint64_t)curFrameType_ << " on streamID=" << streamId_;
-          connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
-          break;
-        }
-        if (callback_) {
-          callback_->onFrame(curFrameType_);
-        }
-        parseState_ = ParseState::FRAME_LENGTH;
         [[fallthrough]];
       }
       case ParseState::FRAME_LENGTH: {
-        uint64_t length = 0;
-        size_t bytesParsed = 0;
-
-        bool parseFrameLengthAs16bit = false;
-        if (curFrameType_ == FrameType::CLIENT_SETUP ||
-            curFrameType_ == FrameType::SERVER_SETUP) {
-          parseFrameLengthAs16bit = true;
-        } else if (
-            curFrameType_ == FrameType::LEGACY_CLIENT_SETUP ||
-            curFrameType_ == FrameType::LEGACY_SERVER_SETUP) {
-          parseFrameLengthAs16bit = false;
-        } else if (!moqFrameParser_.getVersion().has_value()) {
-          XLOG(DBG4)
-              << "Received a non-setup frame before knowing the negotiated version";
-          connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
+        auto res = parseFrameLength(cursor, remainingLength);
+        if (res.hasError()) {
+          connError_ = res.error();
           break;
-        } else {
-          parseFrameLengthAs16bit =
-              (getDraftMajorVersion(*moqFrameParser_.getVersion()) >= 11);
         }
-
-        if (parseFrameLengthAs16bit) {
-          if (remainingLength < 2) {
-            XLOG(DBG6) << __func__ << " underflow";
-            connError_ = ErrorCode::PARSE_UNDERFLOW;
-            break;
-          }
-          // Parse the length as a 16 bit integer
-          length = cursor.readBE<uint16_t>();
-          bytesParsed = 2;
-        } else {
-          // Parse the length as a varint
-          auto decodeResult = quic::follyutils::decodeQuicInteger(cursor);
-          if (!decodeResult) {
-            XLOG(DBG6) << __func__ << " underflow";
-            connError_ = ErrorCode::PARSE_UNDERFLOW;
-            break;
-          }
-          length = decodeResult->first;
-          bytesParsed = decodeResult->second;
-        }
-        curFrameLength_ = length;
-        remainingLength -= bytesParsed;
-        parseState_ = ParseState::FRAME_PAYLOAD;
         [[fallthrough]];
       }
       case ParseState::FRAME_PAYLOAD: {
