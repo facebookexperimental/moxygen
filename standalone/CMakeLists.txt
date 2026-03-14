@@ -44,6 +44,7 @@ if(BUNDLE_DEPS)
     # mixing static gflags with shared glog causes dual-linkage crashes.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set(GFLAGS_SHARED OFF CACHE BOOL "" FORCE)
+        set(sodium_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
     endif()
     set(Boost_USE_STATIC_LIBS ON)
 endif()
@@ -106,7 +107,6 @@ if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET glog::glog)
         set_target_properties(glog::glog PROPERTIES IMPORTED_LINK_INTERFACE_LIBRARIES "${_glog_link_libs}")
     endif()
 endif()
-find_package(fmt CONFIG REQUIRED)
 find_package(double-conversion CONFIG REQUIRED)
 find_package(Boost 1.70 REQUIRED COMPONENTS
     context filesystem program_options regex)
@@ -191,6 +191,14 @@ if(NOT fast_float_POPULATED)
 endif()
 set(FASTFLOAT_INCLUDE_DIR
     "${fast_float_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+
+# fmt: build from source to guarantee static libfmt.a.
+# Ubuntu 22.04's libfmt-dev only ships .so; CONFIG-mode find_package
+# hardcodes .so paths, so CMAKE_FIND_LIBRARY_SUFFIXES can't help.
+FetchContent_Declare(fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+    GIT_TAG 10.2.1
+)
 
 # Allow overriding folly repo/rev via -DFOLLY_REPO_OVERRIDE and
 # -DFOLLY_REV_OVERRIDE
@@ -278,7 +286,7 @@ endif()
 # Also skip optional compression codecs not needed for moxygen.
 # Skip lzma unless libunwind is available (lzma is used for symbolization).
 set(_FETCHCONTENT_PROVIDED_DEPS folly fizz wangle mvfst proxygen GTest GMock
-    BZip2 LZ4 Snappy glog Glog)
+    BZip2 LZ4 Snappy glog Glog fmt Fmt)
 if(BUILD_PICOQUIC)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS picoquic)
 endif()
@@ -316,6 +324,19 @@ endif()
 # install path. Since they all share the same variable name, the first one
 # (folly) wins and the rest inherit "lib/cmake/folly". We force-set before
 # each add_subdirectory so configs land in lib/cmake/<dep>/.
+FetchContent_GetProperties(fmt)
+if(NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
+    apply_dep_patches(fmt "${fmt_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/fmt" CACHE STRING "" FORCE)
+    add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR} ${_EXCLUDE_FLAG})
+endif()
+# Tell folly's folly-deps.cmake that fmt is already configured so it
+# doesn't fall back to FindFmt.cmake (which would conflict with the
+# ALIAS target created by fmt's own CMakeLists.txt).
+set(fmt_FOUND TRUE)
+set(fmt_CONFIG "${fmt_SOURCE_DIR}/CMakeLists.txt")
+
 FetchContent_GetProperties(folly)
 if(NOT folly_POPULATED)
     FetchContent_Populate(folly)
