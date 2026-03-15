@@ -19,11 +19,35 @@ add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 # Options
 # =============================================================================
 option(BUILD_TESTS "Build tests" ON)
+option(BUILD_SAMPLES "Build moxygen sample executables and test tools" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
+option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
+option(BUILD_PICOQUIC "Build with picoquic transport support" OFF)
 
 # =============================================================================
 # Linking preferences
 # =============================================================================
+
+# When building artifacts for distribution, prefer static system libraries
+# so the tarball consumers only need libc/libstdc++/libssl at runtime.
+if(BUNDLE_DEPS)
+    # MODULE-mode find_package() and find_library() respect this.
+    # Linux only: macOS/homebrew doesn't ship .a for zlib, fmt, etc.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    endif()
+
+    # CONFIG-mode packages ignore CMAKE_FIND_LIBRARY_SUFFIXES and hardcode
+    # .so/.dylib paths in their cmake configs. Use per-package variables.
+    # GFLAGS_SHARED OFF is Linux-only: on macOS, glog is always shared
+    # (homebrew has no libglog.a), and glog.dylib links gflags.dylib;
+    # mixing static gflags with shared glog causes dual-linkage crashes.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(GFLAGS_SHARED OFF CACHE BOOL "" FORCE)
+        set(sodium_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    endif()
+    set(Boost_USE_STATIC_LIBS ON)
+endif()
 
 find_package(ZLIB REQUIRED)
 find_library(ZSTD_LIBRARY NAMES zstd)
@@ -72,7 +96,17 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(gflags CONFIG REQUIRED)
 find_package(Glog REQUIRED)
-find_package(fmt CONFIG REQUIRED)
+# FindGlog.cmake internally calls find_package(LibUnwind), which with
+# CMAKE_FIND_LIBRARY_SUFFIXES=".a" picks up libunwind.a.  On Debian/Ubuntu
+# x86_64 that file is not compiled with -fPIC, causing PIE link failure.
+# Patch the glog target to use the shared library instead.
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET glog::glog)
+    get_target_property(_glog_link_libs glog::glog IMPORTED_LINK_INTERFACE_LIBRARIES)
+    if(_glog_link_libs)
+        string(REGEX REPLACE "([/a-zA-Z0-9._-]*)libunwind\\.a" "\\1libunwind.so" _glog_link_libs "${_glog_link_libs}")
+        set_target_properties(glog::glog PROPERTIES IMPORTED_LINK_INTERFACE_LIBRARIES "${_glog_link_libs}")
+    endif()
+endif()
 find_package(double-conversion CONFIG REQUIRED)
 find_package(Boost 1.70 REQUIRED COMPONENTS
     context filesystem program_options regex)
@@ -81,8 +115,20 @@ find_package(Zstd REQUIRED)
 find_package(LibEvent REQUIRED)
 find_package(Sodium REQUIRED)
 
-# Check for libunwind to decide if we need lzma for symbolization
-find_package(LibUnwind QUIET)
+# Check for libunwind to decide if we need lzma for symbolization.
+# When BUNDLE_DEPS is on, CMAKE_FIND_LIBRARY_SUFFIXES=".a" would cause
+# folly to pick up libunwind.a which on Ubuntu/Debian x86_64 is not
+# compiled with -fPIC (PIE link failure). Find it here with .so preference
+# so the result is cached; folly's internal find_package(LibUnwind) is
+# then skipped via _FETCHCONTENT_PROVIDED_DEPS below.
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_saved_find_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".so;.a")
+    find_package(LibUnwind QUIET)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES "${_saved_find_suffixes}")
+else()
+    find_package(LibUnwind QUIET)
+endif()
 
 # =============================================================================
 # FetchContent: Meta OSS Dependencies (using pinned hashes)
@@ -124,10 +170,12 @@ if(BUILD_TESTS)
     endif()
 endif()
 
-# Save original BUILD_TESTS value, then disable for fetched dependencies
+# Save original BUILD_TESTS/BUILD_SAMPLES values, then disable for fetched dependencies
 set(_MOXYGEN_BUILD_TESTS ${BUILD_TESTS})
+set(_MOXYGEN_BUILD_SAMPLES ${BUILD_SAMPLES})
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 
 message(STATUS "Fetching Meta OSS dependencies using pinned revisions...")
 
@@ -135,6 +183,7 @@ message(STATUS "Fetching Meta OSS dependencies using pinned revisions...")
 FetchContent_Declare(fast_float
     GIT_REPOSITORY https://github.com/fastfloat/fast_float.git
     GIT_TAG v8.0.0
+    GIT_SHALLOW ON
 )
 FetchContent_GetProperties(fast_float)
 if(NOT fast_float_POPULATED)
@@ -142,6 +191,14 @@ if(NOT fast_float_POPULATED)
 endif()
 set(FASTFLOAT_INCLUDE_DIR
     "${fast_float_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+
+# fmt: build from source to guarantee static libfmt.a.
+# Ubuntu 22.04's libfmt-dev only ships .so; CONFIG-mode find_package
+# hardcodes .so paths, so CMAKE_FIND_LIBRARY_SUFFIXES can't help.
+FetchContent_Declare(fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+    GIT_TAG 10.2.1
+)
 
 # Allow overriding folly repo/rev via -DFOLLY_REPO_OVERRIDE and
 # -DFOLLY_REV_OVERRIDE
@@ -214,8 +271,14 @@ FetchContent_Declare(proxygen
     GIT_TAG ${_PROXYGEN_REV}
 )
 
-# Populate and add dependencies with EXCLUDE_FROM_ALL so only moxygen
-# targets are in 'all'
+if(BUILD_PICOQUIC)
+    FetchContent_Declare(picoquic
+        GIT_REPOSITORY https://github.com/afrind/picoquic.git
+        GIT_TAG fix-picotls-brotli
+    )
+endif()
+
+
 # Override find_package for deps we provide via FetchContent, since sub-projects
 # (fizz, wangle, mvfst, proxygen) call find_package(folly),
 # find_package(fizz), etc.
@@ -223,7 +286,15 @@ FetchContent_Declare(proxygen
 # Also skip optional compression codecs not needed for moxygen.
 # Skip lzma unless libunwind is available (lzma is used for symbolization).
 set(_FETCHCONTENT_PROVIDED_DEPS folly fizz wangle mvfst proxygen GTest GMock
-    BZip2 LZ4 Snappy glog Glog)
+    BZip2 LZ4 Snappy glog Glog fmt Fmt)
+if(BUILD_PICOQUIC)
+    list(APPEND _FETCHCONTENT_PROVIDED_DEPS picoquic)
+endif()
+# When BUNDLE_DEPS is on, we already found libunwind with .so preference
+# above. Skip folly's internal re-find to prevent it picking up .a.
+if(BUNDLE_DEPS)
+    list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibUnwind)
+endif()
 if(NOT LibUnwind_FOUND)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibLZMA)
     message(STATUS "LibUnwind not found, disabling lzma")
@@ -239,44 +310,96 @@ macro(find_package PKG_NAME)
     endif()
 endmacro()
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/apply-patches.cmake)
+
+# When BUNDLE_DEPS is OFF (default), only build dep targets that moxygen
+# actually needs. When ON, build everything for artifact bundling.
+if(BUNDLE_DEPS)
+    set(_EXCLUDE_FLAG "")
+else()
+    set(_EXCLUDE_FLAG EXCLUDE_FROM_ALL)
+endif()
+
+# Each Meta dep uses CMAKE_INSTALL_DIR (CACHE STRING) for its cmake config
+# install path. Since they all share the same variable name, the first one
+# (folly) wins and the rest inherit "lib/cmake/folly". We force-set before
+# each add_subdirectory so configs land in lib/cmake/<dep>/.
+FetchContent_GetProperties(fmt)
+if(NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
+    apply_dep_patches(fmt "${fmt_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/fmt" CACHE STRING "" FORCE)
+    add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR} ${_EXCLUDE_FLAG})
+endif()
+# Tell folly's folly-deps.cmake that fmt is already configured so it
+# doesn't fall back to FindFmt.cmake (which would conflict with the
+# ALIAS target created by fmt's own CMakeLists.txt).
+set(fmt_FOUND TRUE)
+set(fmt_CONFIG "${fmt_SOURCE_DIR}/CMakeLists.txt")
+
 FetchContent_GetProperties(folly)
 if(NOT folly_POPULATED)
     FetchContent_Populate(folly)
-    add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(folly "${folly_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/folly" CACHE STRING "" FORCE)
+    add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(fizz)
 if(NOT fizz_POPULATED)
     FetchContent_Populate(fizz)
-    add_subdirectory(
-        ${fizz_SOURCE_DIR}/fizz ${fizz_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(fizz "${fizz_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/fizz" CACHE STRING "" FORCE)
+    add_subdirectory(${fizz_SOURCE_DIR}/fizz ${fizz_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(wangle)
 if(NOT wangle_POPULATED)
     FetchContent_Populate(wangle)
-    add_subdirectory(
-        ${wangle_SOURCE_DIR}/wangle ${wangle_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(wangle "${wangle_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/wangle" CACHE STRING "" FORCE)
+    add_subdirectory(${wangle_SOURCE_DIR}/wangle ${wangle_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(mvfst)
 if(NOT mvfst_POPULATED)
     FetchContent_Populate(mvfst)
-    add_subdirectory(${mvfst_SOURCE_DIR} ${mvfst_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(mvfst "${mvfst_SOURCE_DIR}")
+    # mvfst uses CMAKE_INSTALL_MODULE_DIR, not CMAKE_INSTALL_DIR — no conflict
+    add_subdirectory(${mvfst_SOURCE_DIR} ${mvfst_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(proxygen)
 if(NOT proxygen_POPULATED)
     FetchContent_Populate(proxygen)
-    add_subdirectory(
-        ${proxygen_SOURCE_DIR} ${proxygen_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(proxygen "${proxygen_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/proxygen" CACHE STRING "" FORCE)
+    add_subdirectory(${proxygen_SOURCE_DIR} ${proxygen_BINARY_DIR} ${_EXCLUDE_FLAG})
+endif()
+
+if(BUILD_PICOQUIC)
+    # Save and override settings for picoquic build
+    set(_SAVED_BUILD_TESTING ${BUILD_TESTING})
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(PICOQUIC_FETCH_PTLS ON CACHE BOOL "Build picotls from source" FORCE)
+
+    FetchContent_GetProperties(picoquic)
+    if(NOT picoquic_POPULATED)
+        FetchContent_Populate(picoquic)
+        # No EXCLUDE_FROM_ALL: picoquic's own install rules must be reachable
+        # so that picoquic-core and picotls libs are installed alongside moxygen.
+        add_subdirectory(${picoquic_SOURCE_DIR} ${picoquic_BINARY_DIR})
+    endif()
+
+    set(BUILD_TESTING ${_SAVED_BUILD_TESTING} CACHE BOOL "" FORCE)
 endif()
 
 # =============================================================================
 # Moxygen
 # =============================================================================
-# Re-enable tests for moxygen itself
+# Re-enable tests and samples for moxygen itself
 set(BUILD_TESTS ${_MOXYGEN_BUILD_TESTS} CACHE BOOL "" FORCE)
+set(BUILD_SAMPLES ${_MOXYGEN_BUILD_SAMPLES} CACHE BOOL "" FORCE)
 
 # Set MOXYGEN_FBCODE_ROOT to match what main CMakeLists.txt expects
 set(MOXYGEN_FBCODE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -302,28 +425,28 @@ endif()
 # Include moxygen's main CMakeLists.txt
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../moxygen moxygen)
 
+moxygen_install_headers(moxygen ${CMAKE_CURRENT_SOURCE_DIR}/../moxygen)
+
 # =============================================================================
 # Installation (mirrors main CMakeLists.txt)
 # =============================================================================
 set(LIB_INSTALL_DIR "lib" CACHE STRING "Library install directory")
-set(CMAKE_INSTALL_DIR
-    "${LIB_INSTALL_DIR}/cmake/moxygen/"
-    CACHE STRING "CMake config install directory")
+set(_MOXYGEN_CMAKE_INSTALL_DIR "${LIB_INSTALL_DIR}/cmake/moxygen/")
 
 install(
     EXPORT moxygen-exports
     FILE moxygen-targets.cmake
     NAMESPACE moxygen::
-    DESTINATION ${CMAKE_INSTALL_DIR}
+    DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/moxygen-config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/moxygen-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_DIR}
+    INSTALL_DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
 install(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/moxygen-config.cmake
-    DESTINATION ${CMAKE_INSTALL_DIR}
+    DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
