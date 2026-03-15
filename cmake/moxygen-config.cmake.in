@@ -12,6 +12,11 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+# fmt must be found before folly: folly-targets.cmake references fmt::fmt in
+# Folly::folly_deps INTERFACE_LINK_LIBRARIES, and CMake >= 3.24 validates
+# imported-target dependencies at load time (before folly-config.cmake's own
+# find_dependency(fmt) is reached).
+find_dependency(fmt)
 find_dependency(folly)
 find_dependency(fizz)
 find_dependency(wangle)
