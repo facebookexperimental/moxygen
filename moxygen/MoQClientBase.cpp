@@ -13,16 +13,6 @@
 #include <utility>
 
 namespace moxygen {
-/*static*/
-bool MoQClientBase::shouldSendAuthorityParam(
-    const std::vector<uint64_t>& supportedVersions) {
-  for (const auto& version : supportedVersions) {
-    if (getDraftMajorVersion(version) >= 14) {
-      return true;
-    }
-  }
-  return false;
-}
 
 folly::coro::Task<void> MoQClientBase::setupMoQSession(
     std::chrono::milliseconds connect_timeout,
@@ -91,7 +81,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   }
 }
 
-folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
+folly::coro::Task<Setup> MoQClientBase::completeSetupMoQSession(
     proxygen::WebTransport* wt,
     const std::optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
@@ -116,21 +106,21 @@ folly::coro::Task<ServerSetup> MoQClientBase::completeSetupMoQSession(
   moqSession_->start();
   ClientSetup clientSetup = getClientSetup(pathParam);
   if (logger_) {
-    logger_->logClientSetup(clientSetup);
+    logger_->logClientSetup(
+        clientSetup,
+        moqSession_->getNegotiatedVersion().value_or(kVersionDraft14));
   }
   return moqSession_->setup(clientSetup);
 }
 
-ClientSetup MoQClientBase::getClientSetup(
-    const std::optional<std::string>& path) {
+Setup MoQClientBase::getClientSetup(const std::optional<std::string>& path) {
   // Setup MoQSession parameters
   // TODO: maybe let the caller set max subscribes.  Any client that publishes
   // via relay needs to support subscribes.
   const uint32_t kDefaultMaxRequestID = 100;
   const uint32_t kMaxAuthTokenCacheSize = 1024;
 
-  const auto& legacyVersions = getSupportedLegacyVersions();
-  ClientSetup clientSetup{.supportedVersions = legacyVersions};
+  Setup clientSetup;
   clientSetup.params.insertParam(Parameter(
       folly::to_underlying(SetupKey::MAX_REQUEST_ID), kDefaultMaxRequestID));
   clientSetup.params.insertParam(Parameter(
@@ -142,18 +132,16 @@ ClientSetup MoQClientBase::getClientSetup(
         SetupParameter(folly::to_underlying(SetupKey::PATH), *path));
   }
 
-  if (shouldSendAuthorityParam(clientSetup.supportedVersions)) {
-    // Add AUTHORITY parameter for Direct QUIC with moqt:// scheme only
-    if (path.has_value() && url_.getScheme() == "moqt") {
-      // Extract authority from URI as per RFC 3986
-      std::string authority = url_.getHost();
-      if (url_.getPort() != 0 && url_.getPort() != 443) {
-        authority += ":" + std::to_string(url_.getPort());
-      }
-
-      clientSetup.params.insertParam(
-          SetupParameter(folly::to_underlying(SetupKey::AUTHORITY), authority));
+  // Add AUTHORITY parameter for Direct QUIC with moqt:// scheme only
+  if (path.has_value() && url_.getScheme() == "moqt") {
+    // Extract authority from URI as per RFC 3986
+    std::string authority = url_.getHost();
+    if (url_.getPort() != 0 && url_.getPort() != 443) {
+      authority += ":" + std::to_string(url_.getPort());
     }
+
+    clientSetup.params.insertParam(
+        SetupParameter(folly::to_underlying(SetupKey::AUTHORITY), authority));
   }
 
   return clientSetup;

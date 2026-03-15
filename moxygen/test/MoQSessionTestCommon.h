@@ -157,12 +157,12 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   void TearDown() override;
 
   folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-      const ClientSetup& clientSetup,
+      const moxygen::Setup& clientSetup,
       uint64_t negotiatedVersion,
       std::shared_ptr<MoQSession> session) override;
 
-  folly::Try<ServerSetup> onClientSetup(
-      ClientSetup setup,
+  folly::Try<moxygen::Setup> onClientSetup(
+      moxygen::Setup setup,
       const std::shared_ptr<MoQSession>&) override;
 
   virtual folly::coro::Task<void> setupMoQSession();
@@ -210,7 +210,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
   // GCC barfs when using struct brace initializers inside a coroutine?
   // Helper function to make ClientSetup with MAX_REQUEST_ID
-  ClientSetup getClientSetup(uint64_t initialMaxRequestID);
+  moxygen::Setup getClientSetup(uint64_t initialMaxRequestID);
 
   std::vector<uint64_t> getClientSupportedVersions();
 

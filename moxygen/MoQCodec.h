@@ -71,8 +71,8 @@ class MoQControlCodec : public MoQCodec {
     ~ControlCallback() override = default;
 
     virtual void onFrame(FrameType) {}
-    virtual void onClientSetup(ClientSetup) {}
-    virtual void onServerSetup(ServerSetup) {}
+    virtual void onClientSetup(Setup) {}
+    virtual void onServerSetup(Setup) {}
     virtual void onSubscribe(SubscribeRequest) {}
     virtual void onRequestUpdate(RequestUpdate) {}
     virtual void onSubscribeOk(SubscribeOk) {}

@@ -21,8 +21,8 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   ~MockMoQCodecCallback() override = default;
 
   MOCK_METHOD(void, onFrame, (FrameType /*frameType*/));
-  MOCK_METHOD(void, onClientSetup, (ClientSetup clientSetup));
-  MOCK_METHOD(void, onServerSetup, (ServerSetup serverSetup));
+  MOCK_METHOD(void, onClientSetup, (Setup clientSetup));
+  MOCK_METHOD(void, onServerSetup, (Setup serverSetup));
   MOCK_METHOD(void, onSubscribe, (SubscribeRequest subscribeRequest));
   MOCK_METHOD(void, onRequestUpdate, (RequestUpdate requestUpdate));
   MOCK_METHOD(void, onSubscribeOk, (SubscribeOk subscribeOk));

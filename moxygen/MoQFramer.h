@@ -111,11 +111,11 @@ class MoQFrameParser {
     T value;
     size_t bytesConsumed;
   };
-  folly::Expected<ClientSetup, ErrorCode> parseClientSetup(
+  folly::Expected<Setup, ErrorCode> parseClientSetup(
       folly::io::Cursor& cursor,
       size_t length) noexcept;
 
-  folly::Expected<ServerSetup, ErrorCode> parseServerSetup(
+  folly::Expected<Setup, ErrorCode> parseServerSetup(
       folly::io::Cursor& cursor,
       size_t length) noexcept;
 
@@ -435,12 +435,12 @@ TrackRequestParameter getAuthParam(
 
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
-    const ClientSetup& clientSetup,
+    const Setup& clientSetup,
     uint64_t version) noexcept;
 
 WriteResult writeServerSetup(
     folly::IOBufQueue& writeBuf,
-    const ServerSetup& serverSetup,
+    const Setup& serverSetup,
     uint64_t version) noexcept;
 
 // writeClientSetup and writeServerSetup are the only two functions that

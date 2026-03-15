@@ -46,54 +46,26 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
   terminateClientSession(std::move(clientSession));
 }
 
-folly::Try<ServerSetup> MoQServerBase::onClientSetup(
-    ClientSetup setup,
+folly::Try<Setup> MoQServerBase::onClientSetup(
+    Setup setup,
     const std::shared_ptr<MoQSession>& session) {
   XLOG(DBG1) << "MoQServerBase::ClientSetup";
 
-  uint64_t negotiatedVersion = 0;
-
-  // Check if version was negotiated via ALPN first (takes precedence)
+  // Version is either negotiated via ALPN or defaults to draft-14
   auto sessionVersion = session->getNegotiatedVersion();
   if (sessionVersion) {
-    // ALPN mode: use the ALPN-negotiated version
-    negotiatedVersion = *sessionVersion;
     XLOG(DBG1)
         << "MoQServerBase::ClientSetup: Using ALPN-negotiated version: moqt-"
-        << getDraftMajorVersion(negotiatedVersion);
-  } else if (!setup.supportedVersions.empty()) {
-    // Legacy mode: negotiate from version array in CLIENT_SETUP
-    // Iterate over supported versions and set the highest version within the
-    // range
-    uint64_t highestVersion = 0;
-    for (const auto& version : setup.supportedVersions) {
-      if (getDraftMajorVersion(version) >= 15) {
-        XLOG(WARN) << "MoQServerBase::ClientSetup: Skiping version " << version
-                   << " (which needs alpn negotiation), to attempt fallback.";
-        continue;
-      }
-      if (isSupportedVersion(version)) {
-        highestVersion = std::max(highestVersion, version);
-      }
-    }
-    if (highestVersion == 0) {
-      std::string errorMessage = folly::to<std::string>(
-          "The only supported versions in client_setup are ",
-          getSupportedVersionsString());
-      return folly::Try<ServerSetup>(std::runtime_error(errorMessage));
-    }
-    negotiatedVersion = highestVersion;
+        << getDraftMajorVersion(*sessionVersion);
   } else {
-    // No version available from either ALPN or CLIENT_SETUP
-    return folly::Try<ServerSetup>(
-        std::runtime_error("No version negotiated via ALPN or CLIENT_SETUP"));
+    XLOG(DBG1) << "MoQServerBase::ClientSetup: No ALPN, using draft-14";
   }
 
   // TODO: Make the default MAX_REQUEST_ID configurable and
   // take in the value from ClientSetup
   static constexpr size_t kDefaultMaxRequestID = 100;
   static constexpr size_t kMaxAuthTokenCacheSize = 1024;
-  ServerSetup serverSetup{.selectedVersion = negotiatedVersion};
+  Setup serverSetup;
   serverSetup.params.insertParam(
       Parameter{
           folly::to_underlying(SetupKey::MAX_REQUEST_ID),
@@ -105,15 +77,16 @@ folly::Try<ServerSetup> MoQServerBase::onClientSetup(
 
   // Log Server Setup
   if (auto logger = session->getLogger()) {
-    logger->logServerSetup(serverSetup);
+    logger->logServerSetup(
+        serverSetup, sessionVersion.value_or(kVersionDraft14));
   }
 
-  return folly::Try<ServerSetup>(serverSetup);
+  return folly::Try<Setup>(serverSetup);
 }
 
 folly::Expected<folly::Unit, SessionCloseErrorCode>
 MoQServerBase::validateAuthority(
-    const ClientSetup& setup,
+    const Setup& setup,
     uint64_t negotiatedVersion,
     std::shared_ptr<MoQSession>) {
   if (getDraftMajorVersion(negotiatedVersion) >= 14) {

@@ -115,28 +115,14 @@ void MLogger::addFetchObjectParsedLog(MOQTFetchObjectParsed req) {
   logs_.push_back(std::move(log));
 }
 
-MOQTClientSetupMessage MLogger::createClientSetupControlMessage(
-    uint64_t numberOfSupportedVersions,
-    std::vector<uint64_t> supportedVersions,
+MOQTSetupMessage MLogger::createSetupControlMessage(
+    const std::string& setupType,
     uint64_t numberOfParameters,
     std::vector<MOQTSetupParameter> params) {
-  MOQTClientSetupMessage client;
-  client.numberOfSupportedVersions = numberOfSupportedVersions;
-  client.supportedVersions = std::move(supportedVersions);
-  client.numberOfParameters = numberOfParameters;
-  client.setupParameters = std::move(params);
-  return client;
-}
-
-MOQTServerSetupMessage MLogger::createServerSetupControlMessage(
-    uint64_t selectedVersion,
-    uint64_t number_of_parameters,
-    std::vector<MOQTSetupParameter> params) {
-  MOQTServerSetupMessage server;
-  server.selectedVersion = selectedVersion;
-  server.numberOfParameters = number_of_parameters;
-  server.setupParameters = std::move(params);
-  return server;
+  MOQTSetupMessage msg(setupType);
+  msg.numberOfParameters = numberOfParameters;
+  msg.setupParameters = std::move(params);
+  return msg;
 }
 
 folly::dynamic MLogger::formatLog(const MLogEvent& log) {
@@ -205,17 +191,15 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
 }
 
 void MLogger::logClientSetup(
-    const ClientSetup& setup,
+    const Setup& setup,
+    uint64_t version,
     ControlMessageType controlType) {
-  std::vector<uint64_t> versions = setup.supportedVersions;
-
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
 
-  auto msg = std::make_unique<MOQTClientSetupMessage>();
-  msg->numberOfSupportedVersions = versions.size();
-  msg->supportedVersions = std::move(versions);
+  auto msg = std::make_unique<MOQTSetupMessage>("client_setup");
+  msg->version = version;
   msg->numberOfParameters = params.size();
   msg->setupParameters = std::move(params);
 
@@ -224,14 +208,15 @@ void MLogger::logClientSetup(
 }
 
 void MLogger::logServerSetup(
-    const ServerSetup& setup,
+    const Setup& setup,
+    uint64_t version,
     ControlMessageType controlType) {
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
 
-  auto msg = std::make_unique<MOQTServerSetupMessage>();
-  msg->selectedVersion = setup.selectedVersion;
+  auto msg = std::make_unique<MOQTSetupMessage>("server_setup");
+  msg->version = version;
   msg->numberOfParameters = params.size();
   msg->setupParameters = std::move(params);
 

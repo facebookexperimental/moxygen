@@ -60,9 +60,8 @@ static void addTestParams(
 }
 
 // Helper to create a ClientSetup with test params
-static ClientSetup makeClientSetup(uint64_t version) {
-  ClientSetup setup;
-  setup.supportedVersions = {version};
+static Setup makeClientSetup(uint64_t /*version*/) {
+  Setup setup;
   setup.params.insertParam(
       Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
   setup.params.insertParam(
@@ -71,9 +70,8 @@ static ClientSetup makeClientSetup(uint64_t version) {
 }
 
 // Helper to create a ServerSetup with test params
-static ServerSetup makeServerSetup(uint64_t version) {
-  ServerSetup setup;
-  setup.selectedVersion = version;
+static Setup makeServerSetup(uint64_t /*version*/) {
+  Setup setup;
   setup.params.insertParam(
       Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
   return setup;

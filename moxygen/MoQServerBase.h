@@ -59,12 +59,12 @@ class MoQServerBase : public MoQSession::ServerSetupCallback {
   void setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory);
 
   // ServerSetupCallback overrides
-  folly::Try<ServerSetup> onClientSetup(
-      ClientSetup clientSetup,
+  folly::Try<Setup> onClientSetup(
+      Setup clientSetup,
       const std::shared_ptr<MoQSession>& session) override;
 
   folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-      const ClientSetup& clientSetup,
+      const Setup& clientSetup,
       uint64_t negotiatedVersion,
       std::shared_ptr<MoQSession> session) override;
 

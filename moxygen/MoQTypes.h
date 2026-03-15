@@ -588,15 +588,12 @@ inline std::string getFirstStringParam(
   return {};
 }
 
-struct ClientSetup {
-  std::vector<uint64_t> supportedVersions;
+struct Setup {
   SetupParameters params{FrameType::CLIENT_SETUP};
 };
 
-struct ServerSetup {
-  uint64_t selectedVersion;
-  SetupParameters params{FrameType::SERVER_SETUP};
-};
+using ClientSetup = Setup;
+using ServerSetup = Setup;
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,

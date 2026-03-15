@@ -120,14 +120,14 @@ class MoQSession : public Subscriber,
   class ServerSetupCallback {
    public:
     virtual ~ServerSetupCallback() = default;
-    virtual folly::Try<ServerSetup> onClientSetup(
-        ClientSetup clientSetup,
+    virtual folly::Try<Setup> onClientSetup(
+        Setup clientSetup,
         const std::shared_ptr<MoQSession>& session) = 0;
 
     // Authority validation callback - returns error code if validation fails
     virtual folly::Expected<folly::Unit, SessionCloseErrorCode>
     validateAuthority(
-        const ClientSetup& clientSetup,
+        const Setup& clientSetup,
         uint64_t negotiatedVersion,
         std::shared_ptr<MoQSession> session) = 0;
   };
@@ -235,7 +235,7 @@ class MoQSession : public Subscriber,
 
   void goaway(Goaway goaway) override;
 
-  folly::coro::Task<ServerSetup> setup(ClientSetup setup);
+  folly::coro::Task<Setup> setup(Setup setup);
 
   void setMaxConcurrentRequests(uint64_t maxConcurrent);
 
@@ -525,8 +525,8 @@ class MoQSession : public Subscriber,
   class ReceiverSubscriptionHandle;
   class ReceiverFetchHandle;
 
-  void onClientSetup(ClientSetup clientSetup) override;
-  void onServerSetup(ServerSetup setup) override;
+  void onClientSetup(Setup clientSetup) override;
+  void onServerSetup(Setup setup) override;
   void onSubscribe(SubscribeRequest subscribeRequest) override;
   void onSubscribeOk(SubscribeOk subscribeOk) override;
   void onRequestOk(RequestOk requestOk, FrameType frameType) override;
@@ -570,8 +570,6 @@ class MoQSession : public Subscriber,
       const SetupParameters& params);
   static std::optional<std::string> getMoQTImplementationIfPresent(
       const SetupParameters& params);
-  static bool shouldIncludeMoqtImplementationParam(
-      const std::vector<uint64_t>& supportedVersions);
   void setPublisherPriorityFromParams(
       const TrackRequestParameters& params,
       const std::shared_ptr<TrackPublisherImpl>& trackPublisher);
@@ -907,7 +905,7 @@ class MoQSession : public Subscriber,
   uint64_t maxConcurrentRequests_{100};
   uint64_t peerMaxRequestID_{0};
 
-  folly::coro::Promise<ServerSetup> setupPromise_;
+  folly::coro::Promise<Setup> setupPromise_;
   bool setupComplete_{false};
   bool draining_{false};
   bool receivedGoaway_{false};
