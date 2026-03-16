@@ -16,10 +16,6 @@ namespace {
 
 const char* getFrameTypeString(moxygen::FrameType type) {
   switch (type) {
-    case moxygen::FrameType::LEGACY_CLIENT_SETUP:
-      return "LEGACY_CLIENT_SETUP";
-    case moxygen::FrameType::LEGACY_SERVER_SETUP:
-      return "LEGACY_SERVER_SETUP";
     case moxygen::FrameType::SUBSCRIBE:
       return "SUBSCRIBE";
     case moxygen::FrameType::SUBSCRIBE_OK:
@@ -267,8 +263,6 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
 const folly::F14FastSet<FrameType> kAllowAllParamsFrameTypes = {
     FrameType::CLIENT_SETUP,
     FrameType::SERVER_SETUP,
-    FrameType::LEGACY_CLIENT_SETUP,
-    FrameType::LEGACY_SERVER_SETUP,
 };
 
 bool Parameters::isKnownParamKey(uint64_t key) {

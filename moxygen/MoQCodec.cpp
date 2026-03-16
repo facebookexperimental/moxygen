@@ -45,41 +45,13 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrameLength(
   uint64_t length = 0;
   size_t bytesParsed = 0;
 
-  bool parseFrameLengthAs16bit = false;
-  if (curFrameType_ == FrameType::CLIENT_SETUP ||
-      curFrameType_ == FrameType::SERVER_SETUP) {
-    parseFrameLengthAs16bit = true;
-  } else if (
-      curFrameType_ == FrameType::LEGACY_CLIENT_SETUP ||
-      curFrameType_ == FrameType::LEGACY_SERVER_SETUP) {
-    parseFrameLengthAs16bit = false;
-  } else if (!moqFrameParser_.getVersion().has_value()) {
-    XLOG(DBG4)
-        << "Received a non-setup frame before knowing the negotiated version";
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  } else {
-    parseFrameLengthAs16bit =
-        (getDraftMajorVersion(*moqFrameParser_.getVersion()) >= 11);
+  if (remainingLength < 2) {
+    XLOG(DBG6) << __func__ << " underflow";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
-
-  if (parseFrameLengthAs16bit) {
-    if (remainingLength < 2) {
-      XLOG(DBG6) << __func__ << " underflow";
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    // Parse the length as a 16 bit integer
-    length = cursor.readBE<uint16_t>();
-    bytesParsed = 2;
-  } else {
-    // Parse the length as a varint
-    auto decodeResult = quic::follyutils::decodeQuicInteger(cursor);
-    if (!decodeResult) {
-      XLOG(DBG6) << __func__ << " underflow";
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length = decodeResult->first;
-    bytesParsed = decodeResult->second;
-  }
+  // Parse the length as a 16 bit integer
+  length = cursor.readBE<uint16_t>();
+  bytesParsed = 2;
   curFrameLength_ = length;
   remainingLength -= bytesParsed;
   parseState_ = ParseState::FRAME_PAYLOAD;
@@ -460,12 +432,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
   XLOG(DBG4) << "parsing frame type=" << folly::to_underlying(curFrameType_);
   if (!seenSetup_) {
     switch (curFrameType_) {
-      case FrameType::LEGACY_CLIENT_SETUP:
-      case FrameType::LEGACY_SERVER_SETUP:
-        XLOG(WARN) << "Skipping unexpected legacy setup frame "
-                   << curFrameType_;
-        cursor.skip(curFrameLength_);
-        break;
       case FrameType::CLIENT_SETUP: {
         if (dir_ == Direction::CLIENT) {
           return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -504,9 +470,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
   }
   XCHECK(seenSetup_);
   switch (curFrameType_) {
-    case FrameType::LEGACY_CLIENT_SETUP:
     case FrameType::CLIENT_SETUP:
-    case FrameType::LEGACY_SERVER_SETUP:
     case FrameType::SERVER_SETUP:
       XLOG(ERR) << "Duplicate setup frame";
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
