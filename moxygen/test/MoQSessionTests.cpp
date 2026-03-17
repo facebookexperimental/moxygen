@@ -530,6 +530,60 @@ TEST(MoQSessionTest, SharedPtrCycleBreaksOnCleanup) {
   EXPECT_TRUE(weakSession.expired()) << "session freed after close()";
 }
 
+TEST(MoQSessionTest, BidiStreamRejectsUnexpectedFrameType) {
+  folly::EventBase eventBase;
+  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+
+  class TestServerSetupCallback : public MoQSession::ServerSetupCallback {
+   public:
+    folly::Try<ServerSetup> onClientSetup(
+        ClientSetup,
+        const std::shared_ptr<MoQSession>&) override {
+      return folly::Try<ServerSetup>(ServerSetup{});
+    }
+    folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+        const ClientSetup&,
+        uint64_t,
+        std::shared_ptr<MoQSession>) override {
+      return folly::unit;
+    }
+  };
+
+  TestServerSetupCallback serverSetupCallback;
+  auto serverSession = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
+      serverSetupCallback,
+      moqExecutor);
+
+  // Set version to moqt-16 via ALPN so bidiStreamDemuxer is used
+  serverSession->validateAndSetVersionFromAlpn("moqt-16");
+
+  // Set the peer handler so createBidiStream triggers onNewBidiStream
+  clientWt->setPeerHandler(serverSession.get());
+
+  // Create a bidi stream from the client side
+  auto bidiResult = clientWt->createBidiStream();
+  ASSERT_TRUE(bidiResult.hasValue());
+  auto writeHandle = bidiResult->writeHandle;
+
+  // Write LEGACY_CLIENT_SETUP frame type (0x40) which is invalid for moqt-16.
+  // 0x40 as a QUIC varint encodes as two bytes: 0x40 0x40
+  auto buf = folly::IOBuf::create(4);
+  buf->append(4);
+  buf->writableData()[0] = 0x40;
+  buf->writableData()[1] = 0x40;
+  buf->writableData()[2] = 0x00;
+  buf->writableData()[3] = 0x00;
+  writeHandle->writeStreamData(std::move(buf), false, nullptr);
+
+  eventBase.loop();
+
+  // The server should have closed the session due to unexpected frame type
+  EXPECT_TRUE(serverWt->isSessionClosed());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,

@@ -5312,6 +5312,10 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
               subscribeNamespaceReceiverReadLoop(
                   std::move(bh), std::move(accumulatedData))))
           .start();
+    } else {
+      XLOG(ERR) << "Unexpected frame type on bidi stream: "
+                << folly::to_underlying(*frameType) << " sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     }
   }
 }
