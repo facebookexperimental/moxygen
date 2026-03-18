@@ -22,7 +22,7 @@ option(BUILD_TESTS "Build tests" ON)
 option(BUILD_SAMPLES "Build moxygen sample executables and test tools" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
 option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
-option(BUILD_PICOQUIC "Build with picoquic transport support" OFF)
+option(BUILD_PICOQUIC "Build with picoquic transport support" ON)
 
 # =============================================================================
 # Linking preferences

@@ -5,8 +5,8 @@ name: ci main
 #
 # Job graph:
 #
-#   build (linux, macos, pico linux, pico macos, asan debug) ──────────────────┐
-#   publish (4 platforms) ─────────────────────────────────────────────────────┼── release ── notify
+#   build (linux, macos, asan debug) ─────────────────────────────────────────┐
+#   publish (3 platforms) ───────────────────────────────────────────────────┼── release ── notify
 
 on:
   push:
@@ -30,32 +30,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - runner: ubuntu-22.04
             name: linux
             cache_prefix: ci-ninja-ubuntu-22.04
-          - os: macos-15
+          - runner: macos-15
             name: macos
             cache_prefix: ci-ninja-macos-15
-          - os: ubuntu-22.04
-            name: pico (linux)
-            cache_prefix: ci-pico-ninja-ubuntu-22.04
-            picoquic: true
-          - os: macos-15
-            name: pico (macos)
-            cache_prefix: ci-pico-ninja-macos-15
-            picoquic: true
-          - os: ubuntu-22.04
+          - runner: [self-hosted, linode]
             name: asan debug
             cache_prefix: ci-asan-ubuntu-22.04
     name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     steps:
+      - name: Fix workspace ownership (self-hosted)
+        if: ${{ contains(toJSON(matrix.runner), 'linode') }}
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE/_build" "$GITHUB_WORKSPACE/install"
+          sudo chown -R $(id -u):$(id -g) "$GITHUB_WORKSPACE"
+
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
+        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         run: bash standalone/install-system-deps.sh
 
       - name: Cache FetchContent downloads
+        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: actions/cache@v4
         with:
           path: _build/_deps
@@ -64,6 +64,7 @@ jobs:
             ${{ matrix.cache_prefix }}-deps-
 
       - name: Set up ccache
+        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: ${{ matrix.cache_prefix }}
@@ -71,23 +72,27 @@ jobs:
 
       - name: Configure
         run: |
+          ASAN_FLAGS=()
+          EXTRA_FLAGS=()
           if [ "${{ matrix.name }}" = "asan debug" ]; then
-            cmake -B _build -S standalone -G Ninja \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-              -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
-              -DBUILD_TESTING=ON
-          else
-            cmake -B _build -S standalone -G Ninja \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DBUILD_TESTING=ON \
-              ${{ matrix.picoquic && '-DBUILD_PICOQUIC=ON' || '' }} \
-              -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/_install
+            ASAN_FLAGS=(
+              -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+              -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+            )
           fi
+          # On self-hosted: persist FetchContent outside workspace (namespaced
+          # per job to avoid collisions with other builds on the same runner)
+          if echo '${{ toJSON(matrix.runner) }}' | grep -q linode; then
+            EXTRA_FLAGS+=(-DFETCHCONTENT_BASE_DIR="$HOME/.cache/moxygen-${{ matrix.cache_prefix }}/_deps")
+          fi
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/_install \
+            "${ASAN_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
 
       - name: Build
         run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
@@ -132,20 +137,24 @@ jobs:
             container: ""
 
           - name: bookworm-amd64
-            runner: ubuntu-22.04
+            runner: [self-hosted, linode]
             artifact: moxygen-bookworm-amd64.tar.gz
             debug_artifact: moxygen-bookworm-amd64-dbg.tar.gz
             container: debian:bookworm
+            cache_opts: "-v /home/github-runner/.cache/moxygen-publish-bookworm-amd64:/cache"
 
-          - name: bookworm-arm64
-            runner: ubuntu-22.04-arm
-            artifact: moxygen-bookworm-arm64.tar.gz
-            debug_artifact: moxygen-bookworm-arm64-dbg.tar.gz
-            container: debian:bookworm
+          # bookworm-arm64 disabled — no current consumers
+          # - name: bookworm-arm64
+          #   runner: ubuntu-22.04-arm
+          #   artifact: moxygen-bookworm-arm64.tar.gz
+          #   debug_artifact: moxygen-bookworm-arm64-dbg.tar.gz
+          #   container: debian:bookworm
 
     name: publish (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    container: ${{ matrix.container || null }}
+    container:
+      image: ${{ matrix.container || null }}
+      options: ${{ matrix.cache_opts || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -155,12 +164,14 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            git ca-certificates curl pkg-config sudo
+            git ca-certificates curl pkg-config sudo bash ccache
 
       - name: Install system dependencies
+        if: ${{ !contains(toJSON(matrix.runner), 'linode') || matrix.container != '' }}
         run: bash standalone/install-system-deps.sh
 
       - name: Cache FetchContent downloads
+        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: actions/cache@v4
         with:
           path: _build/_deps
@@ -169,13 +180,25 @@ jobs:
             publish-ninja-${{ matrix.name }}-deps-
 
       - name: Set up ccache
+        if: ${{ !contains(toJSON(matrix.runner), 'linode') }}
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: publish-${{ matrix.name }}
           max-size: 500M
 
       - name: Configure
+        shell: bash
         run: |
+          EXTRA_FLAGS=()
+          # On self-hosted with volume mount: persist FetchContent + ccache
+          if [ -d /cache ]; then
+            mkdir -p /cache/_deps /cache/ccache
+            export CCACHE_DIR=/cache/ccache
+            EXTRA_FLAGS+=(-DFETCHCONTENT_BASE_DIR=/cache/_deps)
+          elif echo '${{ toJSON(matrix.runner) }}' | grep -q linode; then
+            # Self-hosted without container: use home dir
+            EXTRA_FLAGS+=(-DFETCHCONTENT_BASE_DIR="$HOME/.cache/moxygen-publish-${{ matrix.name }}/_deps")
+          fi
           cmake -B _build -S standalone -G Ninja \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -183,7 +206,8 @@ jobs:
             -DBUILD_TESTING=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUNDLE_DEPS=ON \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install"
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install" \
+            "${EXTRA_FLAGS[@]}"
 
       - name: Build
         run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
