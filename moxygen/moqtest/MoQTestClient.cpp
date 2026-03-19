@@ -251,7 +251,7 @@ void MoQTestClient::onObjectStatus(
 
   if (!params_.sendEndOfGroupMarkers) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: End of Group Marker Recieved When Not Expected";
+        << "MoQTest verification result: FAILURE! reason: End of Group Marker Received When Not Expected";
     return;
   }
 
@@ -304,7 +304,7 @@ void MoQTestClient::onAllDataReceived() {
         uint64_t{1}, totalExpected * params_.datagramDropPercentage / 100);
     if (datagramObjects_ == 0) {
       XLOG(ERR)
-          << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Recieved";
+          << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Received";
       subHandle_->unsubscribe();
       return;
     } else if (expectedObjects_.size() > dropsAllowed) {
@@ -314,7 +314,7 @@ void MoQTestClient::onAllDataReceived() {
       subHandle_->unsubscribe();
       return;
     } else {
-      XLOG(INFO) << "MoQTest verification result: SUCCESS! Datagram Recieved "
+      XLOG(INFO) << "MoQTest verification result: SUCCESS! Datagram Received "
                  << datagramObjects_ << " objects";
       return;
     }
@@ -323,7 +323,7 @@ void MoQTestClient::onAllDataReceived() {
   // For non-datagram: success == scoreboard.empty()
   if (!expectedObjects_.empty()) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: PublishDone recieved while "
+        << "MoQTest verification result: FAILURE! reason: PublishDone received while "
         << expectedObjects_.size() << " objects are still expected";
     for (const auto& [group, objId] : expectedObjects_) {
       XLOG(ERR) << "  Missing object: group=" << group << " id=" << objId;
@@ -332,7 +332,7 @@ void MoQTestClient::onAllDataReceived() {
     return;
   }
 
-  XLOG(INFO) << "MoQTest verification result: SUCCESS! All Data Recieved";
+  XLOG(INFO) << "MoQTest verification result: SUCCESS! All Data Received";
 }
 
 bool MoQTestClient::validateSubscribedData(
