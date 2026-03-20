@@ -3855,6 +3855,106 @@ TEST_P(MoQFramerV16PlusTest, FetchObjectReservedBit0x80ReturnsError) {
   EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
+// Regression test: calculateExtensionVectorSize must account for delta-encoded
+// extension types in draft >= 16.
+TEST_P(MoQFramerV16PlusTest, ExtensionBlockLengthWithDeltaEncoding) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Use large extension types with small deltas between them.
+  std::vector<Extension> exts = {
+      Extension{765966, 1}, // 4-byte varint absolute
+      Extension{765968, 2}, // delta=2, 1-byte varint
+      Extension{765970, 3}, // delta=2, 1-byte varint
+  };
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::NORMAL,
+      Extensions(exts, {}),
+      4); // length
+
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Present, true, false);
+  auto res = writer_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+  ASSERT_TRUE(res.hasValue());
+  res = writer_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("AAAA"));
+  ASSERT_TRUE(res.hasValue());
+
+  // Parse back
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(parsedStreamType.has_value());
+  EXPECT_EQ(StreamType(parsedStreamType->first), streamType);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  auto hdrRes =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
+  ASSERT_TRUE(hdrRes.hasValue());
+
+  auto objRes = parser_.parseSubgroupObjectHeader(
+      cursor, cursor.totalLength(), hdrRes->value.objectHeader, sgOptions);
+  ASSERT_TRUE(objRes.hasValue())
+      << "Object should parse successfully (delta-encoded extensions)";
+  EXPECT_EQ(objRes->value.group, 2);
+  EXPECT_EQ(objRes->value.id, 4);
+  EXPECT_EQ(objRes->value.priority, 5);
+  EXPECT_EQ(objRes->value.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*objRes->value.length, 4);
+  ASSERT_EQ(objRes->value.extensions.size(), 3);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[0].type, 765966);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[0].intValue, 1);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[1].type, 765968);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[1].intValue, 2);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[2].type, 765970);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[2].intValue, 3);
+}
+
+// Verify calculateExtensionVectorSize matches actual written size for
+// delta-encoded extensions.
+TEST_P(MoQFramerV16PlusTest, CalculateExtensionVectorSizeMatchesWritten) {
+  // Extensions with large types that benefit from delta encoding
+  std::vector<Extension> exts = {
+      Extension{100000, 42},
+      Extension{100002, 99},
+      Extension{100004, 7},
+  };
+  Extensions extensions(exts, {});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writer_.writeExtensions(writeBuf, extensions, size, error);
+  ASSERT_FALSE(error);
+
+  auto buffer = writeBuf.move();
+  auto totalWritten = buffer->computeChainDataLength();
+
+  // The length prefix varint encodes the extension block size.
+  // Parse it to get the declared block length.
+  folly::io::Cursor cursor(buffer.get());
+  auto blockLen = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(blockLen.has_value());
+
+  // The remaining bytes after the length prefix should exactly equal
+  // the declared block length.
+  auto remainingBytes = cursor.totalLength();
+  EXPECT_EQ(blockLen->first, remainingBytes)
+      << "Extension block length prefix must match actual extension data size";
+
+  // Also verify the extensions parse correctly
+  ObjectHeader obj;
+  size_t parseLen = totalWritten;
+  folly::io::Cursor parseCursor(buffer.get());
+  auto parseResult = parser_.parseExtensions(parseCursor, parseLen, obj);
+  ASSERT_TRUE(parseResult.hasValue()) << "Extensions should parse successfully";
+  EXPECT_EQ(obj.extensions.size(), 3);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,

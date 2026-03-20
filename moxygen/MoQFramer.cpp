@@ -3834,8 +3834,24 @@ size_t MoQFrameWriter::calculateExtensionVectorSize(
   if (error) {
     return 0;
   }
-  for (const auto& ext : extensions) {
-    auto maybeTypeSize = quic::getQuicIntegerSize(ext.type);
+
+  // For v16+ delta encoding, sort and compute delta-encoded type sizes
+  // to match what writeKeyValuePairs actually writes.
+  std::vector<Extension> sortedExtensions;
+  const std::vector<Extension>* extensionsToUse = &extensions;
+  if (getDraftMajorVersion(*version_) >= 16) {
+    sortedExtensions = sortExtensionsByType(extensions);
+    extensionsToUse = &sortedExtensions;
+  }
+
+  uint64_t previousType = 0;
+  for (const auto& ext : *extensionsToUse) {
+    uint64_t typeToSize = ext.type;
+    if (getDraftMajorVersion(*version_) >= 16) {
+      typeToSize = ext.type - previousType;
+      previousType = ext.type;
+    }
+    auto maybeTypeSize = quic::getQuicIntegerSize(typeToSize);
     if (maybeTypeSize.hasError()) {
       error = true;
       return 0;
