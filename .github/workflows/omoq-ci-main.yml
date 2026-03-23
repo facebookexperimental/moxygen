@@ -268,6 +268,30 @@ jobs:
     if: always()
     runs-on: ubuntu-22.04
     steps:
+      # ── Dispatch submodule update to o-rly (on successful release) ──
+      - name: Generate o-rly app token
+        if: needs.release.result == 'success'
+        id: orly-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+          repositories: o-rly
+
+      - name: Dispatch moxygen sync to o-rly
+        if: needs.release.result == 'success'
+        env:
+          GH_TOKEN: ${{ steps.orly-token.outputs.token }}
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          echo "Dispatching moxygen-update to o-rly (sha: ${SHORT}, run: ${{ github.run_id }})"
+          gh api repos/openmoq/o-rly/dispatches \
+            -f event_type=moxygen-update \
+            -f "client_payload[sha]=${GITHUB_SHA}" \
+            -f "client_payload[short_sha]=${SHORT}" \
+            -f "client_payload[run_id]=${{ github.run_id }}"
+
+      # ── Notifications ──
       - name: Notify Slack
         continue-on-error: true
         env:
