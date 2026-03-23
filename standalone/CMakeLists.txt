@@ -22,6 +22,9 @@ option(BUILD_TESTS "Build tests" ON)
 option(BUILD_SAMPLES "Build moxygen sample executables and test tools" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
 option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
+# INSTALL_DEPS=ON builds and installs all transitive deps (folly, fizz, etc.)
+# without requiring static system libs. Implied by BUNDLE_DEPS.
+option(INSTALL_DEPS "Build and install all transitive dep targets" OFF)
 option(BUILD_PICOQUIC "Build with picoquic transport support" ON)
 
 # =============================================================================
@@ -164,12 +167,14 @@ if(BUILD_TESTS)
     endif()
 endif()
 
-# Save original BUILD_TESTS/BUILD_SAMPLES values, then disable for fetched dependencies
+# Save original BUILD_TESTS/BUILD_SAMPLES/BUILD_TESTING values, then disable for fetched dependencies
 set(_MOXYGEN_BUILD_TESTS ${BUILD_TESTS})
 set(_MOXYGEN_BUILD_SAMPLES ${BUILD_SAMPLES})
+set(_MOXYGEN_BUILD_TESTING ${BUILD_TESTING})
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 
 message(STATUS "Fetching Meta OSS dependencies using pinned revisions...")
 
@@ -306,9 +311,9 @@ endmacro()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/apply-patches.cmake)
 
-# When BUNDLE_DEPS is OFF (default), only build dep targets that moxygen
-# actually needs. When ON, build everything for artifact bundling.
-if(BUNDLE_DEPS)
+# When BUNDLE_DEPS or INSTALL_DEPS is ON, build all dep targets so they can be
+# installed. BUNDLE_DEPS additionally prefers static system libs for distribution.
+if(BUNDLE_DEPS OR INSTALL_DEPS)
     set(_EXCLUDE_FLAG "")
 else()
     set(_EXCLUDE_FLAG EXCLUDE_FROM_ALL)
@@ -394,6 +399,7 @@ endif()
 # Re-enable tests and samples for moxygen itself
 set(BUILD_TESTS ${_MOXYGEN_BUILD_TESTS} CACHE BOOL "" FORCE)
 set(BUILD_SAMPLES ${_MOXYGEN_BUILD_SAMPLES} CACHE BOOL "" FORCE)
+set(BUILD_TESTING ${_MOXYGEN_BUILD_TESTING} CACHE BOOL "" FORCE)
 
 # Set MOXYGEN_FBCODE_ROOT to match what main CMakeLists.txt expects
 set(MOXYGEN_FBCODE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
