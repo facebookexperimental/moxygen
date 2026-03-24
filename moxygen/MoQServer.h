@@ -53,7 +53,7 @@ class MoQServer : public MoQServerBase {
     return hqServer_->getWorkerEvbs();
   }
 
-  [[nodiscard]] folly::SocketAddress getAddress() const {
+  [[nodiscard]] folly::SocketAddress getAddress() const override {
     return hqServer_->getAddress();
   }
 
