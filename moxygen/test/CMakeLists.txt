@@ -2,6 +2,10 @@
 # This source code is licensed under the Apache 2.0 license found in the
 # LICENSE file in the root directory of this source tree.
 
+install(FILES MockMoQSession.h Mocks.h
+    DESTINATION include/moxygen/test
+)
+
 if(NOT BUILD_TESTS)
     return()
 endif()
