@@ -297,15 +297,17 @@ void MoQPicoQuicEventBaseClient::onConnectionReady(void* vcnx) {
          std::shared_ptr<MoQSession> moqSession)
       -> folly::coro::Task<void> {
         const uint32_t kDefaultMaxRequestID = 100;
-        ClientSetup clientSetup{
-            .supportedVersions = getSupportedLegacyVersions()};
+        Setup clientSetup;
         clientSetup.params.insertParam(Parameter(
             folly::to_underlying(SetupKey::MAX_REQUEST_ID),
             kDefaultMaxRequestID));
         try {
           auto serverSetup = co_await moqSession->setup(std::move(clientSetup));
-          XLOG(DBG1) << "MoQ SETUP complete, selected version="
-                     << serverSetup.selectedVersion;
+          (void)serverSetup;
+          auto negotiatedVersion = moqSession->getNegotiatedVersion();
+          XLOG(DBG1) << "MoQ SETUP complete, negotiated draft-"
+                     << getDraftMajorVersion(
+                            negotiatedVersion.value_or(kVersionDraft14));
         } catch (const std::exception& ex) {
           XLOG(ERR) << "MoQ SETUP failed: " << ex.what();
           co_return;
