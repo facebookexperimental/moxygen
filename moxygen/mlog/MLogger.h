@@ -28,15 +28,24 @@ class MLogger {
   explicit MLogger(VantagePoint vantagePoint) : vantagePoint_(vantagePoint) {}
   virtual ~MLogger() = default;
 
-  MOQTClientSetupMessage createClientSetupControlMessage(
-      uint64_t numberOfSupportedVersions,
-      std::vector<uint64_t> supportedVersions,
+  MOQTSetupMessage createSetupControlMessage(
+      const std::string& setupType,
       uint64_t numberOfParameters,
       std::vector<MOQTSetupParameter> params);
-  MOQTServerSetupMessage createServerSetupControlMessage(
-      uint64_t selectedVersion,
-      uint64_t number_of_parameters,
-      std::vector<MOQTSetupParameter> params);
+
+  // Keep old names for backward compatibility
+  MOQTSetupMessage createClientSetupControlMessage(
+      uint64_t numberOfParameters,
+      std::vector<MOQTSetupParameter> params) {
+    return createSetupControlMessage(
+        "client_setup", numberOfParameters, std::move(params));
+  }
+  MOQTSetupMessage createServerSetupControlMessage(
+      uint64_t numberOfParameters,
+      std::vector<MOQTSetupParameter> params) {
+    return createSetupControlMessage(
+        "server_setup", numberOfParameters, std::move(params));
+  }
 
   void addControlMessageCreatedLog(MOQTControlMessageCreated req);
   void addControlMessageParsedLog(MOQTControlMessageParsed req);
@@ -57,10 +66,12 @@ class MLogger {
   virtual void outputLogs() = 0;
 
   void logClientSetup(
-      const ClientSetup& setup,
+      const Setup& setup,
+      uint64_t version,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logServerSetup(
-      const ServerSetup& setup,
+      const Setup& setup,
+      uint64_t version,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logGoaway(
       const Goaway& goaway,

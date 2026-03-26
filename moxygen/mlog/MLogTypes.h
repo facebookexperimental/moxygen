@@ -191,28 +191,20 @@ class MOQTBaseControlMessage {
   std::string parseTrackName(const MOQTByteString& trackName) const;
 };
 
-class MOQTClientSetupMessage : public MOQTBaseControlMessage {
+class MOQTSetupMessage : public MOQTBaseControlMessage {
  public:
-  MOQTClientSetupMessage() {
-    type = "client_setup";
+  explicit MOQTSetupMessage(const std::string& setupType) {
+    type = setupType;
   }
   folly::dynamic toDynamic() const override;
-  uint64_t numberOfSupportedVersions{0};
-  std::vector<uint64_t> supportedVersions;
+  uint64_t version{0};
   uint64_t numberOfParameters{0};
   std::vector<MOQTSetupParameter> setupParameters;
 };
 
-class MOQTServerSetupMessage : public MOQTBaseControlMessage {
- public:
-  MOQTServerSetupMessage() {
-    type = "server_setup";
-  }
-  folly::dynamic toDynamic() const override;
-  uint64_t selectedVersion{0};
-  uint64_t numberOfParameters{0};
-  std::vector<MOQTSetupParameter> setupParameters;
-};
+// Keep old names as aliases for backward compatibility
+using MOQTClientSetupMessage = MOQTSetupMessage;
+using MOQTServerSetupMessage = MOQTSetupMessage;
 
 class MOQTGoaway : public MOQTBaseControlMessage {
  public:

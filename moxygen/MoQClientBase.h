@@ -86,8 +86,6 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   std::shared_ptr<MLogger> logger_ = nullptr;
 
  protected:
-  static bool shouldSendAuthorityParam(
-      const std::vector<uint64_t>& supportedVersions);
   virtual folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
   connectQuic(
       folly::SocketAddress connectAddr,
@@ -101,12 +99,12 @@ class MoQClientBase : public proxygen::WebTransportHandler {
 
   static SessionFactory defaultSessionFactory();
 
-  folly::coro::Task<ServerSetup> completeSetupMoQSession(
+  folly::coro::Task<Setup> completeSetupMoQSession(
       proxygen::WebTransport* wt,
       const std::optional<std::string>& pathParam,
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler);
-  ClientSetup getClientSetup(const std::optional<std::string>& path);
+  Setup getClientSetup(const std::optional<std::string>& path);
 
   void onSessionEnd(folly::Optional<uint32_t>) noexcept override;
   void onSessionDrain() noexcept override;

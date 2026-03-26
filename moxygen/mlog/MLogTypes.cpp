@@ -32,13 +32,11 @@ folly::dynamic MOQTControlMessageParsed::toDynamic() const {
   return jsonObject;
 }
 
-folly::dynamic MOQTClientSetupMessage::toDynamic() const {
-  folly::dynamic clientSetupObj = folly::dynamic::object;
-  clientSetupObj["type"] = type;
-  clientSetupObj["number_of_supported_versions"] = numberOfSupportedVersions;
-  clientSetupObj["supported_versions"] =
-      folly::dynamic::array(supportedVersions.begin(), supportedVersions.end());
-  clientSetupObj["number_of_parameters"] = numberOfParameters;
+folly::dynamic MOQTSetupMessage::toDynamic() const {
+  folly::dynamic setupObj = folly::dynamic::object;
+  setupObj["type"] = type;
+  setupObj["version"] = version;
+  setupObj["number_of_parameters"] = numberOfParameters;
 
   if (!setupParameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
@@ -46,26 +44,9 @@ folly::dynamic MOQTClientSetupMessage::toDynamic() const {
     for (const auto& param : setupParameters) {
       paramObjects.push_back(setupParameterToDynamic(param));
     }
-    clientSetupObj["setup_parameters"] = folly::dynamic::array(paramObjects);
+    setupObj["setup_parameters"] = folly::dynamic::array(paramObjects);
   }
-  return clientSetupObj;
-}
-
-folly::dynamic MOQTServerSetupMessage::toDynamic() const {
-  folly::dynamic serverSetupObj = folly::dynamic::object;
-  serverSetupObj["type"] = type;
-  serverSetupObj["selected_version"] = selectedVersion;
-  serverSetupObj["number_of_parameters"] = numberOfParameters;
-
-  if (!setupParameters.empty()) {
-    std::vector<folly::dynamic> paramObjects;
-    paramObjects.reserve(setupParameters.size());
-    for (const auto& param : setupParameters) {
-      paramObjects.push_back(setupParameterToDynamic(param));
-    }
-    serverSetupObj["setup_parameters"] = folly::dynamic::array(paramObjects);
-  }
-  return serverSetupObj;
+  return setupObj;
 }
 
 // Parameter toDynamic implementations

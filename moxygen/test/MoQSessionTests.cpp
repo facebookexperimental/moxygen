@@ -50,8 +50,7 @@ CO_TEST_P_X(CurrentVersionOnly, SetupTimeout) {
   MoQSettings moqSettings;
   moqSettings.setupTimeout = std::chrono::milliseconds(500);
   clientSession_->setMoqSettings(moqSettings);
-  ClientSetup setup;
-  setup.supportedVersions.push_back(kVersionDraftCurrent);
+  moxygen::Setup setup;
   auto serverSetup = co_await co_awaitTry(clientSession_->setup(setup));
   EXPECT_TRUE(serverSetup.hasException());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -118,10 +117,8 @@ TEST(MoQSessionTest, SetVersionFromAlpnInvalidAlpn) {
   session->validateAndSetVersionFromAlpn("invalid-alpn");
   EXPECT_FALSE(session->getNegotiatedVersion().has_value());
 }
-TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
-  // Test that when version >= 15 is present in SERVER_SETUP but not
-  // pre-negotiated via ALPN, the server should close with
-  // VERSION_NEGOTIATION_FAILED
+TEST(MoQSessionTest, WithoutAlpnUsesDraft14) {
+  // Test that when no ALPN negotiation happens, the session uses draft-14
 
   folly::EventBase eventBase;
   auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
@@ -130,17 +127,14 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
 
   class TestServerSetupCallback : public MoQSession::ServerSetupCallback {
    public:
-    folly::Try<ServerSetup> onClientSetup(
-        ClientSetup /*clientSetup*/,
+    folly::Try<moxygen::Setup> onClientSetup(
+        moxygen::Setup /*clientSetup*/,
         const std::shared_ptr<MoQSession>& /*session*/) override {
-      // Server tries to select version >= 15 without ALPN negotiation
-      ServerSetup serverSetup;
-      serverSetup.selectedVersion = 0xff00000f;
-      return folly::Try<ServerSetup>(serverSetup);
+      return folly::Try<moxygen::Setup>(moxygen::Setup{});
     }
 
     folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-        const ClientSetup& /*clientSetup*/,
+        const moxygen::Setup& /*clientSetup*/,
         uint64_t /*negotiatedVersion*/,
         std::shared_ptr<MoQSession> /*session*/) override {
       return folly::unit;
@@ -165,18 +159,20 @@ TEST(MoQSessionTest, ServerSetupVersion15WithoutAlpnShouldFail) {
   serverSession->start();
   clientSession->start();
 
-  // Client sends setup with version < 15 (no ALPN negotiation happened)
-  ClientSetup clientSetup;
-  clientSetup.supportedVersions.push_back(kVersionDraft14);
+  // Client sends setup without ALPN negotiation.
+  // MoQSession::onClientSetup will call
+  // initializeNegotiatedVersion(kVersionDraft14) since no ALPN version was set
+  // on the session.
+  moxygen::Setup clientSetup;
 
   folly::coro::co_withExecutor(
       moqExecutor.get(), clientSession->setup(clientSetup))
       .start();
   eventBase.loop();
 
-  // Server should have closed the session with VERSION_NEGOTIATION_FAILED
-  EXPECT_TRUE(serverWt->isSessionClosed())
-      << "Server should close when version >= 15 is selected without ALPN";
+  // Without ALPN, version should be draft-14
+  EXPECT_TRUE(serverSession->getNegotiatedVersion().has_value());
+  EXPECT_EQ(getDraftMajorVersion(*serverSession->getNegotiatedVersion()), 14);
 
   // Cleanup
   if (!clientWt->isSessionClosed()) {
@@ -532,6 +528,60 @@ TEST(MoQSessionTest, SharedPtrCycleBreaksOnCleanup) {
 
   EXPECT_TRUE(weakHandler.expired()) << "handler freed after close()";
   EXPECT_TRUE(weakSession.expired()) << "session freed after close()";
+}
+
+TEST(MoQSessionTest, BidiStreamRejectsUnexpectedFrameType) {
+  folly::EventBase eventBase;
+  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+
+  class TestServerSetupCallback : public MoQSession::ServerSetupCallback {
+   public:
+    folly::Try<ServerSetup> onClientSetup(
+        ClientSetup,
+        const std::shared_ptr<MoQSession>&) override {
+      return folly::Try<ServerSetup>(ServerSetup{});
+    }
+    folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+        const ClientSetup&,
+        uint64_t,
+        std::shared_ptr<MoQSession>) override {
+      return folly::unit;
+    }
+  };
+
+  TestServerSetupCallback serverSetupCallback;
+  auto serverSession = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
+      serverSetupCallback,
+      moqExecutor);
+
+  // Set version to moqt-16 via ALPN so bidiStreamDemuxer is used
+  serverSession->validateAndSetVersionFromAlpn("moqt-16");
+
+  // Set the peer handler so createBidiStream triggers onNewBidiStream
+  clientWt->setPeerHandler(serverSession.get());
+
+  // Create a bidi stream from the client side
+  auto bidiResult = clientWt->createBidiStream();
+  ASSERT_TRUE(bidiResult.hasValue());
+  auto writeHandle = bidiResult->writeHandle;
+
+  // Write LEGACY_CLIENT_SETUP frame type (0x40) which is invalid for moqt-16.
+  // 0x40 as a QUIC varint encodes as two bytes: 0x40 0x40
+  auto buf = folly::IOBuf::create(4);
+  buf->append(4);
+  buf->writableData()[0] = 0x40;
+  buf->writableData()[1] = 0x40;
+  buf->writableData()[2] = 0x00;
+  buf->writableData()[3] = 0x00;
+  writeHandle->writeStreamData(std::move(buf), false, nullptr);
+
+  eventBase.loop();
+
+  // The server should have closed the session due to unexpected frame type
+  EXPECT_TRUE(serverWt->isSessionClosed());
 }
 
 INSTANTIATE_TEST_SUITE_P(

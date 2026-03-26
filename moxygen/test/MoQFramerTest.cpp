@@ -25,6 +25,54 @@ inline void writeVarintTo(folly::IOBufQueue& q, uint64_t v) {
   (void)quic::encodeQuicInteger(v, appenderOp);
 }
 
+// Build a legacy CLIENT_SETUP frame (versions array + 0 params).
+// Returns the IOBuf and positions a cursor at the payload (past frame header).
+// Usage: auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft14});
+//        auto result = parser.parseClientSetup(cursor, len);
+std::pair<std::unique_ptr<folly::IOBuf>, size_t> makeLegacyClientSetupFrame(
+    const std::vector<uint64_t>& versions) {
+  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t payloadSize = 0;
+  bool error = false;
+  writeVarint(payloadBuf, versions.size(), payloadSize, error);
+  for (auto v : versions) {
+    writeVarint(payloadBuf, v, payloadSize, error);
+  }
+  writeVarint(payloadBuf, 0, payloadSize, error); // num_params
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  writeVarint(
+      writeBuf, folly::to_underlying(FrameType::CLIENT_SETUP), size, error);
+  writeVarint(writeBuf, payloadSize, size, error);
+  writeBuf.append(payloadBuf.move());
+  return {writeBuf.move(), payloadSize};
+}
+
+// Build a legacy SERVER_SETUP frame (selected version + 0 params).
+std::pair<std::unique_ptr<folly::IOBuf>, size_t> makeLegacyServerSetupFrame(
+    uint64_t selectedVersion) {
+  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t payloadSize = 0;
+  bool error = false;
+  writeVarint(payloadBuf, selectedVersion, payloadSize, error);
+  writeVarint(payloadBuf, 0, payloadSize, error); // num_params
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  writeVarint(
+      writeBuf, folly::to_underlying(FrameType::SERVER_SETUP), size, error);
+  writeVarint(writeBuf, payloadSize, size, error);
+  writeBuf.append(payloadBuf.move());
+  return {writeBuf.move(), payloadSize};
+}
+
+// Skip the frame type and length varints; return payload length.
+size_t skipFrameHeader(folly::io::Cursor& cursor) {
+  quic::follyutils::decodeQuicInteger(cursor); // frame type
+  return quic::follyutils::decodeQuicInteger(cursor)->first;
+}
+
 class TestUnderflow : public std::exception {};
 
 // The parameter is the MoQ version
@@ -442,67 +490,55 @@ TEST(MoQFramerTest, ParseServerSetupLengthParseParam) {
 }
 
 TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
-  // Compose a CLIENT_SETUP with both supported and unknown versions, and extra
-  // params
-  // Compose a CLIENT_SETUP with two supported versions (one valid, one
-  // unknown/unsupported)
-  ClientSetup clientSetup;
-  clientSetup.supportedVersions = {kVersionDraftCurrent, kVersionDraftCurrent};
-  clientSetup.params.insertParam(
-      Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 42));
-  clientSetup.params.insertParam(
-      Parameter(folly::to_underlying(SetupKey::PATH), "/foo/bar"));
-
+  // Hand-roll a CLIENT_SETUP frame with 2 versions: one unsupported, one
+  // supported (draft-14), plus 2 params (MAX_REQUEST_ID=42, PATH="/foo/bar").
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto resultWrite =
-      writeClientSetup(writeBuf, clientSetup, kVersionDraftCurrent);
-  EXPECT_TRUE(resultWrite.hasValue()) << "Failed to write CLIENT_SETUP";
+  size_t size = 0;
+  bool error = false;
 
-  // Coalesce the buffer so we can index into it
+  // Build the payload first to compute its length
+  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t payloadSize = 0;
+
+  // num_versions = 2
+  writeVarint(payloadBuf, 2, payloadSize, error);
+  // version 1: unsupported (draft-03)
+  writeVarint(payloadBuf, kVersionDraft03, payloadSize, error);
+  // version 2: supported (draft-14)
+  writeVarint(payloadBuf, kVersionDraft14, payloadSize, error);
+  // num_params = 2
+  writeVarint(payloadBuf, 2, payloadSize, error);
+  // param 1: MAX_REQUEST_ID = 42 (even key -> varint value, no length prefix)
+  writeVarint(
+      payloadBuf,
+      folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+      payloadSize,
+      error);
+  writeVarint(payloadBuf, 42, payloadSize, error);
+  // param 2: PATH = "/foo/bar" (odd key -> length-prefixed string)
+  writeVarint(
+      payloadBuf, folly::to_underlying(SetupKey::PATH), payloadSize, error);
+  std::string path = "/foo/bar";
+  writeVarint(payloadBuf, path.size(), payloadSize, error);
+  payloadBuf.append(path.data(), path.size());
+  payloadSize += path.size();
+
+  EXPECT_FALSE(error);
+
+  // Write frame header: type + length
+  writeVarint(
+      writeBuf, folly::to_underlying(FrameType::CLIENT_SETUP), size, error);
+  writeVarint(writeBuf, payloadSize, size, error);
+  writeBuf.append(payloadBuf.move());
+
   auto buffer = writeBuf.move();
-  buffer->coalesce();
-
-  // Overwrite the second version with kVersionDraft03 (unsupported) by splicing
-  // in a new IOBuf Layout: [1 byte frame type][2 byte length][1 byte
-  // num_versions][varint][varint] So offset = 1 (frame type) + 2 (length) + 1
-  // (num_versions) + <size of first version>
-  size_t offset = 1 + 2 + 1;
-  size_t firstVersionSize = *quic::getQuicIntegerSize(kVersionDraftCurrent);
-  size_t secondVersionOffset = offset + firstVersionSize;
-  size_t secondVersionSize = *quic::getQuicIntegerSize(kVersionDraftCurrent);
-
-  // Create a new IOBuf with kVersionDraft03 encoded as a quic varint
-  folly::IOBufQueue patchBuf{folly::IOBufQueue::cacheChainLength()};
-  folly::io::QueueAppender appender(&patchBuf, kMaxFrameHeaderSize);
-  XCHECK(quic::encodeQuicInteger(kVersionDraft03, [&](auto val) {
-    appender.writeBE(folly::tag<decltype(val)>, val);
-  }));
-  auto patchIOBuf = patchBuf.move();
-
-  // Splice: [head][patch][tail]
-  auto head = buffer->cloneOne();
-  head->trimEnd(buffer->length() - secondVersionOffset);
-  auto tail = buffer->cloneOne();
-  tail->trimStart(secondVersionOffset + secondVersionSize);
-
-  // Build new buffer chain: head -> patchIOBuf -> tail
-  head->appendToChain(std::move(patchIOBuf));
-  head->appendToChain(std::move(tail));
-  buffer = std::move(head);
-
   folly::io::Cursor cursor(buffer.get());
-
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraftCurrent);
+  auto len = skipFrameHeader(cursor);
 
-  cursor.skip(3);
-  auto length = buffer->computeChainDataLength() - 3;
-  auto result = parser.parseClientSetup(cursor, length);
+  auto result = parser.parseClientSetup(cursor, len);
   EXPECT_TRUE(result.hasValue())
       << "Parsing CLIENT_SETUP with mixed versions should succeed";
-  // Check only supported versions are present in the parsed setup
-  ASSERT_EQ(result->supportedVersions.size(), 1);
-  EXPECT_EQ(result->supportedVersions[0], kVersionDraftCurrent);
   // Check parameters
   ASSERT_EQ(result->params.size(), 2);
   auto it = result->params.begin();
@@ -511,6 +547,39 @@ TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
   ++it;
   EXPECT_EQ(it->key, folly::to_underlying(SetupKey::PATH));
   EXPECT_EQ(it->asString, "/foo/bar");
+}
+
+TEST(MoQFramerTest, ParseClientSetupWithOnlyUnsupportedVersionsFails) {
+  auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft03});
+  folly::io::Cursor cursor(buf.get());
+  MoQFrameParser parser;
+  skipFrameHeader(cursor);
+  auto result = parser.parseClientSetup(cursor, len);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
+}
+
+TEST(MoQFramerTest, ParseClientSetupWithOnlyDraft15InLegacyModeFails) {
+  // Client offers only draft-15 without ALPN — should fail because
+  // legacy mode only supports draft-14
+  auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft15});
+  folly::io::Cursor cursor(buf.get());
+  MoQFrameParser parser; // no ALPN set — legacy mode
+  skipFrameHeader(cursor);
+  auto result = parser.parseClientSetup(cursor, len);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
+}
+
+TEST(MoQFramerTest, ParseServerSetupWithNon14VersionInLegacyModeFails) {
+  // SERVER_SETUP selecting draft-15 without ALPN — should error
+  auto [buf, len] = makeLegacyServerSetupFrame(kVersionDraft15);
+  folly::io::Cursor cursor(buf.get());
+  MoQFrameParser parser; // no ALPN set — legacy mode
+  skipFrameHeader(cursor);
+  auto result = parser.parseServerSetup(cursor, len);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
 }
 
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
@@ -804,7 +873,7 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
       quic::kFourByteLimit + 1,
       quic::kEightByteLimit};
   for (auto maxRequestID : kTestMaxRequestIDs) {
-    ClientSetup clientSetup{.supportedVersions = {kVersionDraftCurrent}};
+    moxygen::Setup clientSetup;
     clientSetup.params.insertParam(Parameter(
         folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID));
 
@@ -821,11 +890,6 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
         parser_.parseClientSetup(cursor, frameLength(cursor));
     EXPECT_TRUE(parseClientSetupResult.hasValue())
         << "Failed to parse client setup for maxRequestID:" << maxRequestID;
-    if (getDraftMajorVersion(GetParam()) < 15) {
-      EXPECT_EQ(parseClientSetupResult->supportedVersions.size(), 1);
-      EXPECT_EQ(
-          parseClientSetupResult->supportedVersions[0], kVersionDraftCurrent);
-    }
     EXPECT_EQ(parseClientSetupResult->params.size(), 1);
     EXPECT_EQ(
         parseClientSetupResult->params.at(0).key,
@@ -2273,16 +2337,12 @@ TEST(MoQFramerTest, ParseClientSetupWithAlpnVersion15NoVersionArray) {
       parser.parseClientSetup(cursor, buffer->computeChainDataLength());
 
   EXPECT_TRUE(result.hasValue()) << "CLIENT_SETUP should parse successfully";
-  EXPECT_TRUE(result->supportedVersions.empty())
-      << "Version array should be empty when ALPN negotiated";
 }
 
 TEST(MoQFramerTest, WriteClientSetupWithAlpnVersion15NoVersionArray) {
   // When version >= 15, CLIENT_SETUP should not write version array
 
-  auto clientSetup = ClientSetup{
-      .supportedVersions = {kVersionDraft15},
-  };
+  auto clientSetup = moxygen::Setup{};
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft15);
@@ -2334,9 +2394,7 @@ TEST(MoQFramerTest, ParseServerSetupWithAlpnVersion15NoVersionField) {
 TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
   // When version >= 15, SERVER_SETUP should not write version field
 
-  auto serverSetup = ServerSetup{
-      .selectedVersion = kVersionDraft15,
-  };
+  auto serverSetup = moxygen::Setup{};
 
   MoQFrameWriter writer;
   writer.initializeVersion(kVersionDraft15);
@@ -3795,6 +3853,106 @@ TEST_P(MoQFramerV16PlusTest, FetchObjectReservedBit0x80ReturnsError) {
   EXPECT_TRUE(objParseResult.hasError())
       << "Should return error when reserved bit 0x80 is set";
   EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+// Regression test: calculateExtensionVectorSize must account for delta-encoded
+// extension types in draft >= 16.
+TEST_P(MoQFramerV16PlusTest, ExtensionBlockLengthWithDeltaEncoding) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  // Use large extension types with small deltas between them.
+  std::vector<Extension> exts = {
+      Extension{765966, 1}, // 4-byte varint absolute
+      Extension{765968, 2}, // delta=2, 1-byte varint
+      Extension{765970, 3}, // delta=2, 1-byte varint
+  };
+
+  ObjectHeader obj(
+      2, // group
+      3, // subgroup
+      4, // id
+      5, // priority
+      ObjectStatus::NORMAL,
+      Extensions(exts, {}),
+      4); // length
+
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Present, true, false);
+  auto res = writer_.writeSubgroupHeader(
+      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+  ASSERT_TRUE(res.hasValue());
+  res = writer_.writeStreamObject(
+      writeBuf, streamType, obj, folly::IOBuf::copyBuffer("AAAA"));
+  ASSERT_TRUE(res.hasValue());
+
+  // Parse back
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(parsedStreamType.has_value());
+  EXPECT_EQ(StreamType(parsedStreamType->first), streamType);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  auto hdrRes =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
+  ASSERT_TRUE(hdrRes.hasValue());
+
+  auto objRes = parser_.parseSubgroupObjectHeader(
+      cursor, cursor.totalLength(), hdrRes->value.objectHeader, sgOptions);
+  ASSERT_TRUE(objRes.hasValue())
+      << "Object should parse successfully (delta-encoded extensions)";
+  EXPECT_EQ(objRes->value.group, 2);
+  EXPECT_EQ(objRes->value.id, 4);
+  EXPECT_EQ(objRes->value.priority, 5);
+  EXPECT_EQ(objRes->value.status, ObjectStatus::NORMAL);
+  EXPECT_EQ(*objRes->value.length, 4);
+  ASSERT_EQ(objRes->value.extensions.size(), 3);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[0].type, 765966);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[0].intValue, 1);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[1].type, 765968);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[1].intValue, 2);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[2].type, 765970);
+  EXPECT_EQ(objRes->value.extensions.getMutableExtensions()[2].intValue, 3);
+}
+
+// Verify calculateExtensionVectorSize matches actual written size for
+// delta-encoded extensions.
+TEST_P(MoQFramerV16PlusTest, CalculateExtensionVectorSizeMatchesWritten) {
+  // Extensions with large types that benefit from delta encoding
+  std::vector<Extension> exts = {
+      Extension{100000, 42},
+      Extension{100002, 99},
+      Extension{100004, 7},
+  };
+  Extensions extensions(exts, {});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writer_.writeExtensions(writeBuf, extensions, size, error);
+  ASSERT_FALSE(error);
+
+  auto buffer = writeBuf.move();
+  auto totalWritten = buffer->computeChainDataLength();
+
+  // The length prefix varint encodes the extension block size.
+  // Parse it to get the declared block length.
+  folly::io::Cursor cursor(buffer.get());
+  auto blockLen = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(blockLen.has_value());
+
+  // The remaining bytes after the length prefix should exactly equal
+  // the declared block length.
+  auto remainingBytes = cursor.totalLength();
+  EXPECT_EQ(blockLen->first, remainingBytes)
+      << "Extension block length prefix must match actual extension data size";
+
+  // Also verify the extensions parse correctly
+  ObjectHeader obj;
+  size_t parseLen = totalWritten;
+  folly::io::Cursor parseCursor(buffer.get());
+  auto parseResult = parser_.parseExtensions(parseCursor, parseLen, obj);
+  ASSERT_TRUE(parseResult.hasValue()) << "Extensions should parse successfully";
+  EXPECT_EQ(obj.extensions.size(), 3);
 }
 
 INSTANTIATE_TEST_SUITE_P(

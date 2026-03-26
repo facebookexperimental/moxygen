@@ -2334,12 +2334,12 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
   }
 }
 
-folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
+folly::coro::Task<Setup> MoQSession::setup(Setup setup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  folly::coro::Future<ServerSetup> setupFuture;
+  folly::coro::Future<Setup> setupFuture;
   std::tie(setupPromise_, setupFuture) =
-      folly::coro::makePromiseContract<ServerSetup>();
+      folly::coro::makePromiseContract<Setup>();
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
@@ -2355,11 +2355,9 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
     path_ = std::move(setupPath);
   }
 
-  if (shouldIncludeMoqtImplementationParam(setup.supportedVersions)) {
-    setup.params.insertParam(SetupParameter(
-        {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-         getMoQTImplementationString()}));
-  }
+  setup.params.insertParam(SetupParameter(
+      {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
+       getMoQTImplementationString()}));
 
   uint64_t setupSerializationVersion = kVersionDraft14;
   if (negotiatedVersion_) {
@@ -2398,17 +2396,8 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
   }
-  // Only validate version selection in non-alpn mode
-  if (!negotiatedVersion_) {
-    if (std::find(
-            setup.supportedVersions.begin(),
-            setup.supportedVersions.end(),
-            serverSetup->selectedVersion) == setup.supportedVersions.end()) {
-      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-      XLOG(ERR) << "Server chose a version that the client doesn't support";
-      co_yield folly::coro::co_error(serverSetup.exception());
-    }
-  }
+  // The framer/codec only invokes onServerSetup in legacy mode after
+  // validating the server selected draft-14.
 
   setupComplete_ = true;
   auto negotiatedVersion = *getNegotiatedVersion();
@@ -2419,12 +2408,15 @@ folly::coro::Task<ServerSetup> MoQSession::setup(ClientSetup setup) {
   co_return *serverSetup;
 }
 
-void MoQSession::onServerSetup(ServerSetup serverSetup) {
+void MoQSession::onServerSetup(Setup serverSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   if (logger_) {
-    logger_->logServerSetup(serverSetup, ControlMessageType::PARSED);
+    logger_->logServerSetup(
+        serverSetup,
+        negotiatedVersion_.value_or(kVersionDraft14),
+        ControlMessageType::PARSED);
   }
 
   // Validate that server MUST NOT send AUTHORITY parameter
@@ -2444,7 +2436,7 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
 
   // In LEGACY mode: initialize version from SERVER_SETUP
   if (!negotiatedVersion_) {
-    initializeNegotiatedVersion(serverSetup.selectedVersion);
+    initializeNegotiatedVersion(kVersionDraft14);
   }
 
   peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
@@ -2456,12 +2448,15 @@ void MoQSession::onServerSetup(ServerSetup serverSetup) {
   setupPromise_.setValue(std::move(serverSetup));
 }
 
-void MoQSession::onClientSetup(ClientSetup clientSetup) {
+void MoQSession::onClientSetup(Setup clientSetup) {
   XCHECK(dir_ == MoQControlCodec::Direction::SERVER);
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   if (logger_) {
-    logger_->logClientSetup(clientSetup, ControlMessageType::PARSED);
+    logger_->logClientSetup(
+        clientSetup,
+        negotiatedVersion_.value_or(kVersionDraft14),
+        ControlMessageType::PARSED);
   }
 
   auto moqtImplementation = getMoQTImplementationIfPresent(clientSetup.params);
@@ -2513,20 +2508,9 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
 
   if (!getNegotiatedVersion()) {
     // Version negotiation has not happened at alpn
-    // Negotiate from setup message
-
-    auto majorVersion = getDraftMajorVersion(serverSetup->selectedVersion);
-
-    if (majorVersion >= 15) {
-      // Version >= 15 should always be negotiated using alpn
-      XLOG(ERR) << "Selected version " << serverSetup->selectedVersion
-                << " (major=" << majorVersion
-                << ") can only be negotiated via alpn. sess=" << this;
-      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-      return;
-    }
-
-    initializeNegotiatedVersion(serverSetup->selectedVersion);
+    // In legacy mode, always use draft-14. If the client didn't offer
+    // draft-14, the framer would have returned VERSION_NEGOTIATION_FAILED.
+    initializeNegotiatedVersion(kVersionDraft14);
   }
 
   // Validate authority with the negotiated version
@@ -2540,11 +2524,9 @@ void MoQSession::onClientSetup(ClientSetup clientSetup) {
     return;
   }
 
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 14) {
-    serverSetup->params.insertParam(SetupParameter(
-        {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-         getMoQTImplementationString()}));
-  }
+  serverSetup->params.insertParam(SetupParameter(
+      {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
+       getMoQTImplementationString()}));
 
   {
     auto negotiatedVersion = *getNegotiatedVersion();
@@ -5330,6 +5312,10 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
               subscribeNamespaceReceiverReadLoop(
                   std::move(bh), std::move(accumulatedData))))
           .start();
+    } else {
+      XLOG(ERR) << "Unexpected frame type on bidi stream: "
+                << folly::to_underlying(*frameType) << " sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     }
   }
 }
@@ -5506,17 +5492,6 @@ std::optional<std::string> MoQSession::getMoQTImplementationIfPresent(
 std::string MoQSession::getMoQTImplementationString() {
   return fmt::format(
       "Meta MoQ C++ Draft-{}", getDraftMajorVersion(kVersionDraftCurrent));
-}
-
-/*static*/
-bool MoQSession::shouldIncludeMoqtImplementationParam(
-    const std::vector<uint64_t>& supportedVersions) {
-  for (const auto& version : supportedVersions) {
-    if (getDraftMajorVersion(version) >= 14) {
-      return true;
-    }
-  }
-  return false;
 }
 
 uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(

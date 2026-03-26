@@ -53,6 +53,10 @@ class MoQServer : public MoQServerBase {
     return hqServer_->getWorkerEvbs();
   }
 
+  [[nodiscard]] folly::SocketAddress getAddress() const override {
+    return hqServer_->getAddress();
+  }
+
   // QUIC stats factory setter
   void setQuicStatsFactory(
       std::unique_ptr<quic::QuicTransportStatsCallbackFactory> factory);

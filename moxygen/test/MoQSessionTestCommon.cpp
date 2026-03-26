@@ -223,24 +223,20 @@ void MoQSessionTest::TearDown() {
 
 folly::Expected<folly::Unit, SessionCloseErrorCode>
 MoQSessionTest::validateAuthority(
-    const ClientSetup& /* clientSetup */,
+    const moxygen::Setup& /* clientSetup */,
     uint64_t /* negotiatedVersion */,
     std::shared_ptr<MoQSession> /* session */) {
   // For test purposes, always return success
   return folly::unit;
 }
 
-folly::Try<ServerSetup> MoQSessionTest::onClientSetup(
-    ClientSetup setup,
+folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
+    moxygen::Setup setup,
     const std::shared_ptr<MoQSession>&) {
   if (invalidVersion_) {
-    return folly::Try<ServerSetup>(std::runtime_error("invalid version"));
+    return folly::Try<moxygen::Setup>(std::runtime_error("invalid version"));
   }
 
-  // For Draft15+, supportedVersions is not included in CLIENT_SETUP
-  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
-    EXPECT_EQ(setup.supportedVersions[0], getClientSupportedVersions()[0]);
-  }
   EXPECT_EQ(setup.params.at(0).key, folly::to_underlying(SetupKey::PATH));
   EXPECT_EQ(setup.params.at(0).asString, "/foo");
   EXPECT_EQ(
@@ -251,11 +247,10 @@ folly::Try<ServerSetup> MoQSessionTest::onClientSetup(
       folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
   if (failServerSetup_) {
     return folly::makeTryWith(
-        []() -> ServerSetup { throw std::runtime_error("failed"); });
+        []() -> moxygen::Setup { throw std::runtime_error("failed"); });
   }
-  return folly::Try<ServerSetup>([&]() {
-    ServerSetup ss;
-    ss.selectedVersion = getServerSelectedVersion();
+  return folly::Try<moxygen::Setup>([&]() {
+    moxygen::Setup ss;
     ss.params.insertParam(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID),
@@ -278,11 +273,6 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
 
-  // For Draft15+, selectedVersion is negotiated via ALPN and not in
-  // SERVER_SETUP
-  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
-    EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
-  }
   EXPECT_EQ(
       serverSetup.params.at(0).key,
       folly::to_underlying(SetupKey::MAX_REQUEST_ID));
@@ -322,11 +312,6 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(maxRequestID));
 
-  // For Draft15+, selectedVersion is negotiated via ALPN and not in
-  // SERVER_SETUP
-  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
-    EXPECT_EQ(serverSetup.selectedVersion, getServerSelectedVersion());
-  }
   EXPECT_EQ(
       serverSetup.params.at(0).key,
       folly::to_underlying(SetupKey::MAX_REQUEST_ID));
@@ -454,9 +439,8 @@ void MoQSessionTest::expectPublishDone(MoQControlCodec::Direction recipient) {
   });
 }
 
-ClientSetup MoQSessionTest::getClientSetup(uint64_t initialMaxRequestID) {
-  ClientSetup setup;
-  setup.supportedVersions = getClientSupportedVersions();
+moxygen::Setup MoQSessionTest::getClientSetup(uint64_t initialMaxRequestID) {
+  moxygen::Setup setup;
   setup.params.insertParam(
       SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo"});
   setup.params.insertParam(

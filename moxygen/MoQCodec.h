@@ -71,8 +71,8 @@ class MoQControlCodec : public MoQCodec {
     ~ControlCallback() override = default;
 
     virtual void onFrame(FrameType) {}
-    virtual void onClientSetup(ClientSetup) {}
-    virtual void onServerSetup(ServerSetup) {}
+    virtual void onClientSetup(Setup) {}
+    virtual void onServerSetup(Setup) {}
     virtual void onSubscribe(SubscribeRequest) {}
     virtual void onRequestUpdate(RequestUpdate) {}
     virtual void onSubscribeOk(SubscribeOk) {}
@@ -134,8 +134,6 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::GOAWAY:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
-      case FrameType::LEGACY_CLIENT_SETUP:
-      case FrameType::LEGACY_SERVER_SETUP:
       case FrameType::MAX_REQUEST_ID:
       case FrameType::REQUESTS_BLOCKED:
       case FrameType::FETCH:

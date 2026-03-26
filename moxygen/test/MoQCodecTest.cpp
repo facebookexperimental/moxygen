@@ -462,8 +462,7 @@ TEST_P(MoQCodecTest, ClientGetsClientSetup) {
 
   // client gets client setup
   auto setupFrame = [version = GetParam()]() {
-    ClientSetup setup;
-    setup.supportedVersions = {version};
+    moxygen::Setup setup;
     setup.params.insertParam(
         Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
     setup.params.insertParam(
@@ -494,7 +493,7 @@ TEST_P(MoQCodecTest, TwoSetups) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
   auto setupFrame = [version = GetParam()]() {
-    ServerSetup setup{.selectedVersion = version};
+    moxygen::Setup setup;
     setup.params.insertParam(
         Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
     return setup;
@@ -513,7 +512,7 @@ TEST_P(MoQCodecTest, ServerGetsServerSetup) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
   auto setupFrame = [version = GetParam()]() {
-    ServerSetup setup{.selectedVersion = version};
+    moxygen::Setup setup;
     setup.params.insertParam(
         Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
     return setup;
@@ -916,7 +915,7 @@ TEST_P(MoQCodecTest, NamespaceFrame) {
 
   // Send setup first to establish the connection
   auto setupFrame = [version = GetParam()]() {
-    ServerSetup setup{.selectedVersion = version};
+    moxygen::Setup setup;
     setup.params.insertParam(
         Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
     return setup;
@@ -948,7 +947,7 @@ TEST_P(MoQCodecTest, NamespaceDoneFrame) {
 
   // Send setup first to establish the connection
   auto setupFrame = [version = GetParam()]() {
-    ServerSetup setup{.selectedVersion = version};
+    moxygen::Setup setup;
     setup.params.insertParam(
         Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
     return setup;

@@ -180,8 +180,6 @@ enum class FrameType : uint64_t {
   PUBLISH_ERROR = 0x1F,
   CLIENT_SETUP = 0x20,
   SERVER_SETUP = 0x21,
-  LEGACY_CLIENT_SETUP = 0x40,
-  LEGACY_SERVER_SETUP = 0x41,
 };
 
 enum class DatagramType : uint64_t {
@@ -588,15 +586,12 @@ inline std::string getFirstStringParam(
   return {};
 }
 
-struct ClientSetup {
-  std::vector<uint64_t> supportedVersions;
+struct Setup {
   SetupParameters params{FrameType::CLIENT_SETUP};
 };
 
-struct ServerSetup {
-  uint64_t selectedVersion;
-  SetupParameters params{FrameType::SERVER_SETUP};
-};
+using ClientSetup = Setup;
+using ServerSetup = Setup;
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,

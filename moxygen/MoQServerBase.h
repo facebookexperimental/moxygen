@@ -54,17 +54,25 @@ class MoQServerBase : public MoQSession::ServerSetupCallback {
   virtual void stop() = 0;
 
   /**
+   * Get the address the server is listening on.
+   * Derived classes that support address binding should override this.
+   */
+  [[nodiscard]] virtual folly::SocketAddress getAddress() const {
+    return folly::SocketAddress{};
+  }
+
+  /**
    * Set the logger factory for creating per-session loggers.
    */
   void setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory);
 
   // ServerSetupCallback overrides
-  folly::Try<ServerSetup> onClientSetup(
-      ClientSetup clientSetup,
+  folly::Try<Setup> onClientSetup(
+      Setup clientSetup,
       const std::shared_ptr<MoQSession>& session) override;
 
   folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-      const ClientSetup& clientSetup,
+      const Setup& clientSetup,
       uint64_t negotiatedVersion,
       std::shared_ptr<MoQSession> session) override;
 

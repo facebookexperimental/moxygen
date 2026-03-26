@@ -19,5 +19,6 @@ target_link_libraries(pico_evb_text_client
   openmoq_pico_evb_client_transport
   moxygen_moq
   moxygen_moq_versions
+  proxygen::proxygen_utils_parse_url
   Folly::folly_init_init
 )

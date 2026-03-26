@@ -627,10 +627,10 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
   return folly::unit;
 }
 
-folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
+folly::Expected<Setup, ErrorCode> MoQFrameParser::parseClientSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
-  ClientSetup clientSetup;
+  Setup clientSetup;
   uint64_t serializationVersion = kVersionDraft14;
 
   // Only parse version array when version is not initialized, i.e. alpn did not
@@ -642,6 +642,7 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= numVersions->second;
+    bool foundDraft14 = false;
     for (auto i = 0ul; i < numVersions->first; i++) {
       auto version = quic::follyutils::decodeQuicInteger(cursor, length);
       if (!version) {
@@ -649,13 +650,14 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
       length -= version->second;
-      if (!isSupportedVersion(version->first)) {
-        XLOG(WARN) << "Peer advertised unsupported version " << version->first
-                   << ", supported versions are: "
-                   << getSupportedVersionsString();
-        continue;
+      if (getDraftMajorVersion(version->first) == 14) {
+        foundDraft14 = true;
       }
-      clientSetup.supportedVersions.push_back(version->first);
+    }
+    if (!foundDraft14) {
+      XLOG(ERR) << "Draft-14 not found in ClientSetup version array"
+                   " (legacy mode only supports draft-14)";
+      return folly::makeUnexpected(ErrorCode::VERSION_NEGOTIATION_FAILED);
     }
   } else {
     XLOG(DBG3)
@@ -688,10 +690,11 @@ folly::Expected<ClientSetup, ErrorCode> MoQFrameParser::parseClientSetup(
   return clientSetup;
 }
 
-folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
+folly::Expected<Setup, ErrorCode> MoQFrameParser::parseServerSetup(
     folly::io::Cursor& cursor,
     size_t length) noexcept {
-  ServerSetup serverSetup;
+  Setup serverSetup;
+  uint64_t serializationVersion = kVersionDraft14;
 
   // Only parse version when version is not initialized, i.e. alpn did not
   // happen, or when version is initialized but is < 15 (in tests)
@@ -702,16 +705,17 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= version->second;
-    if (!isSupportedVersion(version->first)) {
-      XLOG(WARN) << "Peer advertised unsupported version " << version->first
-                 << ", supported versions are: "
-                 << getSupportedVersionsString();
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    if (getDraftMajorVersion(version->first) != 14) {
+      XLOG(ERR) << "Server selected version draft-"
+                << getDraftMajorVersion(version->first)
+                << " but we only offer draft-14 in legacy mode";
+      return folly::makeUnexpected(ErrorCode::VERSION_NEGOTIATION_FAILED);
     }
-    serverSetup.selectedVersion = version->first;
+    serializationVersion = version->first;
   } else {
     XLOG(DBG3)
         << "Skipped parsing version from wire for alpn ServerSetup message";
+    serializationVersion = *version_;
   }
 
   auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
@@ -724,7 +728,7 @@ folly::Expected<ServerSetup, ErrorCode> MoQFrameParser::parseServerSetup(
   auto res = parseParams(
       cursor,
       length,
-      version_ ? *version_ : serverSetup.selectedVersion,
+      serializationVersion,
       numParams->first,
       serverSetup.params,
       requestSpecificParams,
@@ -3500,7 +3504,7 @@ bool includeSetupParam(uint64_t version, SetupKey key) {
 
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
-    const ClientSetup& clientSetup,
+    const Setup& clientSetup,
     uint64_t version) noexcept {
   size_t size = 0;
   bool error = false;
@@ -3509,17 +3513,12 @@ WriteResult writeClientSetup(
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
   if (getDraftMajorVersion(version) < 15) {
-    // Check that all versions are supported
-    for (auto ver : clientSetup.supportedVersions) {
-      XCHECK(isSupportedVersion(ver))
-          << "Version " << ver << " is not supported. Supported versions are: "
-          << getSupportedVersionsString();
-    }
-    // Only write version array in non-alpn mode
-    writeVarint(writeBuf, clientSetup.supportedVersions.size(), size, error);
-    for (auto ver : clientSetup.supportedVersions) {
-      writeVarint(writeBuf, ver, size, error);
-    }
+    XCHECK_EQ(getDraftMajorVersion(version), 14u)
+        << "Legacy mode only supports draft-14, got draft-"
+        << getDraftMajorVersion(version);
+    // Only write version array in non-alpn mode, hardcode draft-14
+    writeVarint(writeBuf, 1, size, error);
+    writeVarint(writeBuf, kVersionDraft14, size, error);
   } else {
     XLOG(DBG3)
         << "Skipped writing versions to wire for alpn ClientSetup message";
@@ -3563,7 +3562,7 @@ WriteResult writeClientSetup(
 
 WriteResult writeServerSetup(
     folly::IOBufQueue& writeBuf,
-    const ServerSetup& serverSetup,
+    const Setup& serverSetup,
     uint64_t version) noexcept {
   size_t size = 0;
   bool error = false;
@@ -3573,20 +3572,19 @@ WriteResult writeServerSetup(
 
   // Only write selected version in non-alpn mode
   if (getDraftMajorVersion(version) < 15) {
-    XCHECK(isSupportedVersion(serverSetup.selectedVersion))
-        << "Supported version " << serverSetup.selectedVersion
-        << ") is not supported. Supported versions are: "
-        << getSupportedVersionsString();
-    writeVarint(writeBuf, serverSetup.selectedVersion, size, error);
+    XCHECK_EQ(getDraftMajorVersion(version), 14u)
+        << "Legacy mode only supports draft-14, got draft-"
+        << getDraftMajorVersion(version);
+    writeVarint(writeBuf, kVersionDraft14, size, error);
   } else {
     XLOG(DBG3)
-        << "Skipped writing version to wire for alpn ClientSetup message";
+        << "Skipped writing version to wire for alpn ServerSetup message";
   }
 
   // Collect params that should be included
   std::vector<Parameter> filteredParams;
   for (const auto& param : serverSetup.params) {
-    if (includeSetupParam(serverSetup.selectedVersion, SetupKey(param.key))) {
+    if (includeSetupParam(version, SetupKey(param.key))) {
       filteredParams.push_back(param);
     }
   }
@@ -3836,8 +3834,24 @@ size_t MoQFrameWriter::calculateExtensionVectorSize(
   if (error) {
     return 0;
   }
-  for (const auto& ext : extensions) {
-    auto maybeTypeSize = quic::getQuicIntegerSize(ext.type);
+
+  // For v16+ delta encoding, sort and compute delta-encoded type sizes
+  // to match what writeKeyValuePairs actually writes.
+  std::vector<Extension> sortedExtensions;
+  const std::vector<Extension>* extensionsToUse = &extensions;
+  if (getDraftMajorVersion(*version_) >= 16) {
+    sortedExtensions = sortExtensionsByType(extensions);
+    extensionsToUse = &sortedExtensions;
+  }
+
+  uint64_t previousType = 0;
+  for (const auto& ext : *extensionsToUse) {
+    uint64_t typeToSize = ext.type;
+    if (getDraftMajorVersion(*version_) >= 16) {
+      typeToSize = ext.type - previousType;
+      previousType = ext.type;
+    }
+    auto maybeTypeSize = quic::getQuicIntegerSize(typeToSize);
     if (maybeTypeSize.hasError()) {
       error = true;
       return 0;
