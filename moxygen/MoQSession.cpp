@@ -2335,10 +2335,18 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
 }
 
 folly::coro::Task<Setup> MoQSession::setup(Setup setup) {
+  auto res = sendSetup(std::move(setup));
+  if (res.hasError()) {
+    throw std::runtime_error("Failed to write setup");
+  }
+  return awaitPeerSetup();
+}
+
+folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
+    Setup setup) {
   XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
-  folly::coro::Future<Setup> setupFuture;
-  std::tie(setupPromise_, setupFuture) =
+  std::tie(setupPromise_, setupFuture_) =
       folly::coro::makePromiseContract<Setup>();
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
@@ -2373,20 +2381,25 @@ folly::coro::Task<Setup> MoQSession::setup(Setup setup) {
   aliasifyAuthTokens(setup.params, setupSerializationVersion);
   auto res =
       writeClientSetup(controlWriteBuf_, setup, setupSerializationVersion);
-  if (!res) {
+  if (res.hasError()) {
     XLOG(ERR) << "writeClientSetup failed sess=" << this;
-    co_yield folly::coro::co_error(std::runtime_error("Failed to write setup"));
+    return folly::makeUnexpected(res.error());
   }
   maxRequestID_ = maxRequestID;
   maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
   controlWriteEvent_.signal();
+  return folly::unit;
+}
 
+folly::coro::Task<Setup> MoQSession::awaitPeerSetup() {
+  XLOG(DBG1) << __func__ << " sess=" << this;
   auto deletedToken = cancellationSource_.getToken();
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto mergeToken = folly::cancellation_token_merge(deletedToken, token);
   auto serverSetup = co_await co_awaitTry(co_withCancellation(
       mergeToken,
-      folly::coro::timeout(std::move(setupFuture), moqSettings_.setupTimeout)));
+      folly::coro::timeout(
+          std::move(setupFuture_), moqSettings_.setupTimeout)));
   if (mergeToken.isCancellationRequested()) {
     co_yield folly::coro::co_stopped_may_throw;
   }
