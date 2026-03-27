@@ -104,5 +104,5 @@ jobs:
           fi
 
           echo "Merging sync PR #${PR_NUM}..."
-          gh pr merge "${PR_NUM}" --merge --repo "${REPO}"
+          gh pr merge "${PR_NUM}" --merge --delete-branch --repo "${REPO}"
           echo "Merged PR #${PR_NUM}."
