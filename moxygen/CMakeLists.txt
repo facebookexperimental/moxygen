@@ -219,5 +219,8 @@ if(BUILD_TESTS)
   add_subdirectory(test)
 endif()
 
+# OpenMoQ extensions (isolated to minimize upstream merge conflicts)
+add_subdirectory(openmoq)
+
 # Resolve deferred moxygen internal dependencies
 moxygen_resolve_deferred_dependencies()
