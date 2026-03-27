@@ -58,7 +58,7 @@ class TrackConsumerFilter : public TrackConsumer {
     downstream_->setDeliveryCallback(std::move(callback));
   }
 
- private:
+ protected:
   std::shared_ptr<TrackConsumer> downstream_;
 };
 
