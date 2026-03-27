@@ -35,7 +35,6 @@ moxygen_add_library(moxygen_moq_framer
     mvfst::mvfst_codec_types
     mvfst::mvfst_exception
     mvfst::mvfst_folly_utils
-    Folly::folly_container_f14_hash
     Folly::folly_io_iobuf
     Folly::folly_lang_bits
     Folly::folly_logging_logging
@@ -126,6 +125,15 @@ moxygen_add_library(moxygen_moq_server
     Folly::folly_io_async_async_base
     Folly::folly_io_async_event_base_manager
     Folly::folly_string
+)
+
+moxygen_add_library(moxygen_moq_early_data_handler
+  EXPORTED_DEPS
+    mvfst::mvfst_codec_types
+    mvfst::mvfst_folly_utils
+    mvfst::mvfst_state_early_data_app_params_handler
+    Folly::folly_io_iobuf
+    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moqclient_base

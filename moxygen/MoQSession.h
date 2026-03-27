@@ -236,6 +236,8 @@ class MoQSession : public Subscriber,
   void goaway(Goaway goaway) override;
 
   folly::coro::Task<Setup> setup(Setup setup);
+  folly::Expected<folly::Unit, quic::TransportErrorCode> sendSetup(Setup setup);
+  folly::coro::Task<Setup> awaitPeerSetup();
 
   void setMaxConcurrentRequests(uint64_t maxConcurrent);
 
@@ -906,6 +908,7 @@ class MoQSession : public Subscriber,
   uint64_t peerMaxRequestID_{0};
 
   folly::coro::Promise<Setup> setupPromise_;
+  folly::coro::Future<Setup> setupFuture_;
   bool setupComplete_{false};
   bool draining_{false};
   bool receivedGoaway_{false};
