@@ -215,9 +215,7 @@ if(BUILD_SAMPLES)
   add_subdirectory(samples)
 endif()
 
-if(BUILD_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
 
 # Resolve deferred moxygen internal dependencies
 moxygen_resolve_deferred_dependencies()
