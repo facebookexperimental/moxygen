@@ -128,6 +128,7 @@ void MoQServer::start(
 
 void MoQServer::stop() {
   hqServer_->stop();
+  hqServer_.reset();
 }
 
 void MoQServer::rejectNewConnections(std::function<bool()> rejectFn) {
