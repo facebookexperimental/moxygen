@@ -1,0 +1,23 @@
+--- a/folly/Demangle.cpp
++++ b/folly/Demangle.cpp
+@@ -31,8 +31,10 @@
+ //  The headers <libiberty.h> (binutils) and <string.h> (glibc) both declare the
+ //  symbol basename. Unfortunately, the declarations are different. So including
+ //  both headers in the same translation unit fails due to the two conflicting
+-//  declarations. Since <demangle.h> includes <libiberty.h> we must be careful.
+-#if __has_include(<demangle.h>)
++//  declarations.
++//  Disabled: older libiberty (Ubuntu 22.04 / Debian 12) lacks
++//  demangle_callbackref. cxxabi demangling is sufficient.
++#if 0 // __has_include(<demangle.h>)
+ #pragma push_macro("HAVE_DECL_BASENAME")
+ #define HAVE_DECL_BASENAME 1
+ #include <demangle.h> // @manual
+@@ -65,7 +67,7 @@
+ //  for rust_demangle_callback, detect its declaration in the header
+
+-#if __has_include(<demangle.h>)
++#if 0 // __has_include(<demangle.h>)
+
+ namespace {
+ struct poison {};
