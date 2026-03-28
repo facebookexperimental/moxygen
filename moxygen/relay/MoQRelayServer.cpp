@@ -9,6 +9,8 @@
 #include "moxygen/relay/MoQRelay.h"
 
 #include <folly/init/Init.h>
+#include <folly/io/async/AsyncSignalHandler.h>
+#include <signal.h>
 
 using namespace proxygen;
 
@@ -102,6 +104,23 @@ int main(int argc, char* argv[]) {
   folly::SocketAddress addr("::", FLAGS_port);
   moqRelayServer->start(addr);
   folly::EventBase evb;
+  struct SigHandler : public folly::AsyncSignalHandler {
+    SigHandler(folly::EventBase* evb, std::function<void()> fn)
+        : folly::AsyncSignalHandler(evb), fn_(std::move(fn)) {
+      registerSignalHandler(SIGTERM);
+      registerSignalHandler(SIGINT);
+    }
+    void signalReceived(int /*signum*/) noexcept override {
+      unregisterSignalHandler(SIGTERM);
+      unregisterSignalHandler(SIGINT);
+      fn_();
+    }
+    std::function<void()> fn_;
+  } sigHandler(&evb, [&] {
+    XLOG(INFO) << "Caught signal, stopping relay server";
+    moqRelayServer->stop();
+    evb.terminateLoopSoon();
+  });
   evb.loopForever();
   return 0;
 }

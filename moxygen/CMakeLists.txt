@@ -215,9 +215,7 @@ if(BUILD_SAMPLES)
   add_subdirectory(samples)
 endif()
 
-if(BUILD_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
 
 # OpenMoQ extensions (isolated to minimize upstream merge conflicts)
 add_subdirectory(openmoq)
