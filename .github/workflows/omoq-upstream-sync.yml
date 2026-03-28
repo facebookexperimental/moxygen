@@ -2,7 +2,7 @@ name: upstream sync
 
 # Mirrors upstream to `origin/upstream` branch, creates sync/<sha> PR branches
 # for merging into `main`. One PR at a time — blocks if one is pending.
-# See: https://github.com/openmoq/o-rly/blob/main/design/GITHUB_WORKFLOW.md
+# See: https://github.com/openmoq/moqx/blob/main/design/GITHUB_WORKFLOW.md
 
 on:
   schedule:

@@ -10,7 +10,7 @@ This directory contains OpenMOQ-specific files that are not part of the upstream
 - **`main`** (default) — Working branch with all OpenMOQ customizations.
   Developer PRs go here. Artifacts published from here.
 
-See [GITHUB_WORKFLOW.md](https://github.com/openmoq/o-rly/blob/main/design/GITHUB_WORKFLOW.md)
+See [GITHUB_WORKFLOW.md](https://github.com/openmoq/moqx/blob/main/design/GITHUB_WORKFLOW.md)
 for the full design.
 
 ## Directory Structure
