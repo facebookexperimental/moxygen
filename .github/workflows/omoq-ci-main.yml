@@ -268,7 +268,7 @@ jobs:
     if: always()
     runs-on: ubuntu-22.04
     steps:
-      # ── Dispatch submodule update to o-rly (on successful release) ──
+      # ── Dispatch submodule update to moqx (on successful release) ──
       - name: Generate moqx app token
         if: needs.release.result == 'success'
         id: moqx-token
