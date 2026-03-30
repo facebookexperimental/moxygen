@@ -30,3 +30,7 @@ moqflvreceiverclient
 FlvParserTests
 MoQMiTests
 DeJitterTests
+
+# IDE / tooling
+.claude/
+.vscode/
