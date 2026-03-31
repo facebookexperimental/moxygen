@@ -444,19 +444,43 @@ MoQForwarder::beginSubgroup(
     uint64_t subgroupID,
     Priority priority,
     bool containsLastInGroup) {
+  XLOG(DBG1) << "beginSubgroup: group=" << groupID << " subgroup=" << subgroupID
+             << " subscribers=" << subscribers_.size();
   updateLargest(groupID, 0);
+  SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
+
+  // Check if a SubgroupForwarder already exists for this (group, subgroup).
+  // This can happen if a publisher opens multiple streams with the same
+  // group/subgroup (e.g., after a network issue or client bug).
+  // Return the existing forwarder to avoid state corruption - the old stream
+  // will continue using it and the data will merge. This is better than
+  // crashing or corrupting state.
+  auto existingIt = subgroups_.find(subgroupIdentifier);
+  if (existingIt != subgroups_.end()) {
+    XLOG(WARN) << "beginSubgroup: duplicate group=" << groupID
+               << " subgroup=" << subgroupID
+               << " - reusing existing forwarder";
+    return existingIt->second;
+  }
+
   auto subgroupForwarder =
       std::make_shared<SubgroupForwarder>(*this, groupID, subgroupID, priority);
-  SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
   auto res = forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (!checkRange(*sub) || !sub->checkShouldForward()) {
+    bool rangeOk = checkRange(*sub);
+    bool forwardOk = sub->checkShouldForward();
+    XLOG(DBG4) << "  subscriber=" << sub.get() << " rangeOk=" << rangeOk
+               << " forwardOk=" << forwardOk
+               << " hasConsumer=" << (sub->trackConsumer != nullptr);
+    if (!rangeOk || !forwardOk) {
       return;
     }
     auto sgRes = sub->trackConsumer->beginSubgroup(
         groupID, subgroupID, priority, containsLastInGroup);
     if (sgRes.hasError()) {
+      XLOG(ERR) << "  beginSubgroup failed: " << sgRes.error().what();
       removeSubscriberOnError(*sub, sgRes.error(), "beginSubgroup");
     } else {
+      XLOG(DBG4) << "  beginSubgroup succeeded for subscriber";
       sub->subgroups[subgroupIdentifier] = sgRes.value();
     }
   });
@@ -767,6 +791,8 @@ MoQForwarder::SubgroupForwarder::object(
     Payload payload,
     Extensions extensions,
     bool finSubgroup) {
+  XLOG(DBG4) << "SubgroupForwarder::object objID=" << objectID
+             << " group=" << identifier_.group << " finSubgroup=" << finSubgroup;
   if (currentObjectLength_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Still publishing previous object"));
@@ -798,6 +824,8 @@ MoQForwarder::SubgroupForwarder::beginObject(
     uint64_t length,
     Payload initialPayload,
     Extensions extensions) {
+  XLOG(DBG4) << "SubgroupForwarder::beginObject objID=" << objectID
+             << " length=" << length << " group=" << identifier_.group;
   // TODO: use a shared class for object publish state validation
   updateLargest(identifier_.group, objectID);
   if (currentObjectLength_) {
@@ -900,11 +928,15 @@ folly::Expected<ObjectPublishStatus, MoQPublishError>
 MoQForwarder::SubgroupForwarder::objectPayload(
     Payload payload,
     bool finSubgroup) {
+  auto payloadLength = (payload) ? payload->computeChainDataLength() : 0;
+  XLOG(DBG4) << "SubgroupForwarder::objectPayload len=" << payloadLength
+             << " finSubgroup=" << finSubgroup
+             << " remaining=" << (currentObjectLength_ ? *currentObjectLength_ : 0)
+             << " group=" << identifier_.group;
   if (!currentObjectLength_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Haven't started publishing object"));
   }
-  auto payloadLength = (payload) ? payload->computeChainDataLength() : 0;
   if (payloadLength > *currentObjectLength_) {
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::API_ERROR, "Payload exceeded length"));
