@@ -2423,6 +2423,48 @@ TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
       << "No additional data should be present (version field not written)";
 }
 
+TEST(MoQFramerTest, WriteClientSetupUsesSetupFrameTypeForDraft17) {
+  auto clientSetup = moxygen::Setup{};
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft17);
+  EXPECT_TRUE(result.hasValue()) << "Failed to write CLIENT_SETUP";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SETUP));
+}
+
+TEST(MoQFramerTest, WriteServerSetupUsesSetupFrameTypeForDraft17) {
+  auto serverSetup = moxygen::Setup{};
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeServerSetup(writeBuf, serverSetup, kVersionDraft17);
+  EXPECT_TRUE(result.hasValue()) << "Failed to write SERVER_SETUP";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SETUP));
+}
+
+TEST(MoQFramerTest, WriteClientSetupUsesClientSetupFrameTypeForDraft16) {
+  auto clientSetup = moxygen::Setup{};
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft16);
+  EXPECT_TRUE(result.hasValue()) << "Failed to write CLIENT_SETUP";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::CLIENT_SETUP));
+}
+
 /* Test cases to add
  *
  * parseStreamHeader (group)

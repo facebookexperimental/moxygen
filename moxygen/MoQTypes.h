@@ -180,6 +180,7 @@ enum class FrameType : uint64_t {
   PUBLISH_ERROR = 0x1F,
   CLIENT_SETUP = 0x20,
   SERVER_SETUP = 0x21,
+  SETUP = 0x2F00,
 };
 
 enum class DatagramType : uint64_t {

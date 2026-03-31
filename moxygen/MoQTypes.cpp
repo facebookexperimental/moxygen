@@ -263,6 +263,7 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
 const folly::F14FastSet<FrameType> kAllowAllParamsFrameTypes = {
     FrameType::CLIENT_SETUP,
     FrameType::SERVER_SETUP,
+    FrameType::SETUP,
 };
 
 bool Parameters::isKnownParamKey(uint64_t key) {

@@ -462,6 +462,31 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
         }
         break;
       }
+      case FrameType::SETUP: {
+        seenSetup_ = true;
+        if (dir_ == Direction::SERVER) {
+          // We are a server, so this is a client setup
+          auto res = moqFrameParser_.parseClientSetup(cursor, curFrameLength_);
+          if (res) {
+            if (callback_) {
+              callback_->onClientSetup(std::move(res.value()));
+            }
+          } else {
+            return folly::makeUnexpected(res.error());
+          }
+        } else {
+          // We are a client, so this is a server setup
+          auto res = moqFrameParser_.parseServerSetup(cursor, curFrameLength_);
+          if (res) {
+            if (callback_) {
+              callback_->onServerSetup(std::move(res.value()));
+            }
+          } else {
+            return folly::makeUnexpected(res.error());
+          }
+        }
+        break;
+      }
       default:
         XLOG(ERR) << "Invalid message before setup type=" << curFrameType_;
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -472,6 +497,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
   switch (curFrameType_) {
     case FrameType::CLIENT_SETUP:
     case FrameType::SERVER_SETUP:
+    case FrameType::SETUP:
       XLOG(ERR) << "Duplicate setup frame";
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     case FrameType::SUBSCRIBE: {
