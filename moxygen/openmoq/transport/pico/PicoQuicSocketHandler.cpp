@@ -17,6 +17,7 @@
 #ifdef __linux__
 #include <linux/errqueue.h>
 #endif
+#include <sys/select.h>
 
 // IP_PKTINFO (Linux) provides dst addr + ifindex in one cmsg.
 // On macOS/BSD, use IP_RECVDSTADDR for dst addr instead.
@@ -41,8 +42,9 @@ constexpr size_t kMaxPacketSize = 1500;
 // cmsg buffer per message: space for IP_PKTINFO/IPV6_PKTINFO + IP_TOS.
 constexpr size_t kCmsgBufSize =
     CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint8_t));
-// Max wake delay passed to picoquic (200 ms in microseconds).
-constexpr int64_t kMaxWakeDelayUs = 200'000;
+// Max wake delay passed to picoquic (1 ms in microseconds).
+// Video streaming requires frequent polling to keep congestion window open.
+constexpr int64_t kMaxWakeDelayUs = 1'000;
 
 } // namespace
 
@@ -55,9 +57,52 @@ PicoQuicSocketHandler::~PicoQuicSocketHandler() {
 }
 
 void PicoQuicSocketHandler::start(const folly::SocketAddress& addr) {
-  socket_.bind(addr);
-  fd_ = socket_.getNetworkSocket().toFd();
-  localPort_ = socket_.address().getPort();
+  XLOG(INFO) << "PicoQuicSocketHandler::start called, addr=" << addr.describe();
+
+  // For IPv6, we need dual-stack support to receive both IPv4 and IPv6 packets.
+  // This requires setting IPV6_V6ONLY=0 BEFORE bind, which AsyncUDPSocket
+  // doesn't support directly. So we create and configure the socket manually.
+  if (addr.getFamily() == AF_INET6) {
+    int fd = ::socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+      throw std::runtime_error(
+          "Failed to create IPv6 socket: " + folly::errnoStr(errno));
+    }
+
+    // Enable dual-stack: accept both IPv4 and IPv6
+    int zero = 0;
+    if (::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero)) < 0) {
+      ::close(fd);
+      throw std::runtime_error(
+          "Failed to set IPV6_V6ONLY=0: " + folly::errnoStr(errno));
+    }
+    XLOG(INFO) << "Dual-stack enabled (IPV6_V6ONLY=0)";
+
+    // Set reuse addr for quick restart
+    int one = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    // Bind manually
+    sockaddr_storage storage;
+    addr.getAddress(&storage);
+    socklen_t len = addr.getActualSize();
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&storage), len) < 0) {
+      ::close(fd);
+      throw std::runtime_error(
+          "Failed to bind dual-stack socket: " + folly::errnoStr(errno));
+    }
+
+    // Transfer ownership to AsyncUDPSocket
+    auto netSock = folly::NetworkSocket::fromFd(fd);
+    socket_.setFD(netSock, folly::AsyncUDPSocket::FDOwnership::OWNS);
+    fd_ = fd;
+    localPort_ = addr.getPort();
+  } else {
+    socket_.bind(addr);
+    fd_ = socket_.getNetworkSocket().toFd();
+    localPort_ = socket_.address().getPort();
+  }
+  XLOG(INFO) << "Socket bound, fd=" << fd_ << " localPort=" << localPort_;
 
   // Enable IP_PKTINFO / IPV6_RECVPKTINFO so recvmsg delivers the local
   // destination address. AsyncUDPSocket does not set these by default.
@@ -98,7 +143,8 @@ void PicoQuicSocketHandler::start(const folly::SocketAddress& addr) {
   rescheduleTimer();
 
   XLOG(INFO) << "PicoQuicSocketHandler started on "
-             << socket_.address().describe() << " gso=" << gsoSupported_;
+             << socket_.address().describe() << " gso=" << gsoSupported_
+             << " evbRunning=" << evb_->isRunning();
 }
 
 void PicoQuicSocketHandler::stop() {
@@ -132,6 +178,7 @@ bool PicoQuicSocketHandler::shouldOnlyNotify() {
 
 void PicoQuicSocketHandler::onNotifyDataAvailable(
     folly::AsyncUDPSocket& sock) noexcept {
+  XLOG(DBG4) << "onNotifyDataAvailable called";
   struct mmsghdr msgs[kRecvBatchSize];
   struct iovec iovecs[kRecvBatchSize];
   uint8_t bufs[kRecvBatchSize][kMaxPacketSize];
@@ -174,6 +221,10 @@ void PicoQuicSocketHandler::onNotifyDataAvailable(
   if (anyReceived) {
     XLOG(DBG5) << "onNotifyDataAvailable: received " << totalReceived
                << " packets, draining";
+    // Drain pending executor tasks to process coroutine continuations
+    if (drainTasksCallback_) {
+      drainTasksCallback_();
+    }
     drainOutgoing();
     if (pendingClose_) {
       stop();
@@ -184,13 +235,18 @@ void PicoQuicSocketHandler::onNotifyDataAvailable(
 }
 
 void PicoQuicSocketHandler::getReadBuffer(void** /*buf*/,
-                                          size_t* /*len*/) noexcept {}
+                                          size_t* /*len*/) noexcept {
+  XLOG(DBG1) << "getReadBuffer called (should not happen with shouldOnlyNotify)";
+}
 
 void PicoQuicSocketHandler::onDataAvailable(
-    const folly::SocketAddress& /*client*/,
-    size_t /*len*/,
+    const folly::SocketAddress& client,
+    size_t len,
     bool /*truncated*/,
-    OnDataAvailableParams /*params*/) noexcept {}
+    OnDataAvailableParams /*params*/) noexcept {
+  XLOG(DBG1) << "onDataAvailable called from " << client.describe()
+             << " len=" << len << " (should not happen with shouldOnlyNotify)";
+}
 
 void PicoQuicSocketHandler::onReadError(
     const folly::AsyncSocketException& ex) noexcept {
@@ -206,11 +262,75 @@ void PicoQuicSocketHandler::onReadClosed() noexcept {
 // ---------------------------------------------------------------------------
 
 void PicoQuicSocketHandler::timeoutExpired() noexcept {
+  XLOG(DBG4) << "timeoutExpired called";
+  // Poll for incoming data since onNotifyDataAvailable may not trigger
+  pollIncoming();
+  // Drain pending executor tasks to process coroutine continuations
+  if (drainTasksCallback_) {
+    drainTasksCallback_();
+  }
   drainOutgoing();
   if (pendingClose_) {
     stop();
   } else {
     rescheduleTimer();
+  }
+}
+
+void PicoQuicSocketHandler::pollIncoming() {
+  // Quick check if fd is readable
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(fd_, &readfds);
+  struct timeval tv = {0, 0};
+  int ready = select(fd_ + 1, &readfds, nullptr, nullptr, &tv);
+  XLOG(DBG4) << "pollIncoming called, fd=" << fd_ << " select=" << ready
+             << (ready < 0 ? std::string(" errno=") + folly::errnoStr(errno) : "");
+
+  struct mmsghdr msgs[kRecvBatchSize];
+  struct iovec iovecs[kRecvBatchSize];
+  uint8_t bufs[kRecvBatchSize][kMaxPacketSize];
+  sockaddr_storage fromAddrs[kRecvBatchSize];
+  char cmsgBufs[kRecvBatchSize][kCmsgBufSize];
+
+  for (int i = 0; i < kRecvBatchSize; i++) {
+    iovecs[i].iov_base = bufs[i];
+    iovecs[i].iov_len = kMaxPacketSize;
+    msgs[i].msg_hdr.msg_name = &fromAddrs[i];
+    msgs[i].msg_hdr.msg_namelen = sizeof(fromAddrs[i]);
+    msgs[i].msg_hdr.msg_iov = &iovecs[i];
+    msgs[i].msg_hdr.msg_iovlen = 1;
+    msgs[i].msg_hdr.msg_control = cmsgBufs[i];
+    msgs[i].msg_hdr.msg_controllen = kCmsgBufSize;
+    msgs[i].msg_hdr.msg_flags = 0;
+    msgs[i].msg_len = 0;
+  }
+
+  int totalReceived = 0;
+  uint64_t currentTime = picoquic_current_time();
+
+  for (;;) {
+    int n = socket_.recvmmsg(msgs, kRecvBatchSize, MSG_DONTWAIT, nullptr);
+    if (n <= 0) {
+      if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        XLOG(ERR) << "recvmmsg failed: " << folly::errnoStr(errno) << " fd=" << fd_;
+      }
+      break;
+    }
+    XLOG(DBG4) << "recvmmsg returned " << n << " packets";
+    totalReceived += n;
+
+    for (int i = 0; i < n; i++) {
+      parseCmsgsAndDeliver(msgs[i], bufs[i], currentTime);
+      msgs[i].msg_hdr.msg_namelen = sizeof(fromAddrs[i]);
+      msgs[i].msg_hdr.msg_controllen = kCmsgBufSize;
+      msgs[i].msg_hdr.msg_flags = 0;
+      msgs[i].msg_len = 0;
+    }
+  }
+
+  if (totalReceived > 0) {
+    XLOG(DBG4) << "pollIncoming: received " << totalReceived << " packets";
   }
 }
 
@@ -247,6 +367,7 @@ void PicoQuicSocketHandler::errMessageError(
 void PicoQuicSocketHandler::parseCmsgsAndDeliver(const struct mmsghdr& msg,
                                                  const uint8_t* pkt,
                                                  uint64_t currentTime) {
+  XLOG(DBG5) << "parseCmsgsAndDeliver: pktLen=" << msg.msg_len;
   sockaddr_storage addrTo{};
   int ifIndex = 0;
   unsigned char ecn = 0;
@@ -289,6 +410,12 @@ void PicoQuicSocketHandler::parseCmsgsAndDeliver(const struct mmsghdr& msg,
     }
   }
 
+  // Log address info for debugging dual-stack issues
+  auto* fromAddr = reinterpret_cast<const sockaddr_storage*>(msg.msg_hdr.msg_name);
+  XLOG(DBG3) << "parseCmsgsAndDeliver: from.family=" << fromAddr->ss_family
+             << " to.family=" << addrTo.ss_family
+             << " pktLen=" << msg.msg_len;
+
   picoquic_cnx_t* lastCnx = nullptr;
   int ret = picoquic_incoming_packet_ex(
       quic_,
@@ -305,16 +432,16 @@ void PicoQuicSocketHandler::parseCmsgsAndDeliver(const struct mmsghdr& msg,
       currentTime);
 
   if (ret != 0) {
-    XLOG(DBG4) << "picoquic_incoming_packet_ex returned " << ret;
+    XLOG(DBG3) << "picoquic_incoming_packet_ex returned " << ret;
   }
 }
 
 void PicoQuicSocketHandler::drainOutgoing() {
+  XLOG(DBG4) << "drainOutgoing called";
   static constexpr size_t kSendBufSize = kMaxPacketSize * 10;
   uint8_t sendBuf[kSendBufSize];
 
   uint64_t currentTime = picoquic_current_time();
-  int packetsSent = 0;
 
   for (;;) {
     size_t sendLength = 0;
@@ -339,11 +466,8 @@ void PicoQuicSocketHandler::drainOutgoing() {
         &sendMsgSize);
 
     if (ret != 0 || sendLength == 0) {
-      XLOG(DBG5) << "drainOutgoing: done, sent=" << packetsSent;
       break;
     }
-
-    ++packetsSent;
 
     sendPacket(sendBuf, sendLength, addrTo, addrFrom, ifIndex, sendMsgSize);
   }
@@ -431,6 +555,8 @@ void PicoQuicSocketHandler::sendPacket(const uint8_t* data,
 }
 
 void PicoQuicSocketHandler::updateWakeTimeout() {
+  // Drain immediately when new data is queued to avoid latency
+  drainOutgoing();
   cancelTimeout();
   rescheduleTimer();
 }
@@ -440,6 +566,9 @@ void PicoQuicSocketHandler::rescheduleTimer() {
   int64_t rawDelayUs =
       picoquic_get_next_wake_delay(quic_, now, INT64_MAX);
   int64_t delayUs = std::min(rawDelayUs, kMaxWakeDelayUs);
+  XLOG(DBG4) << "rescheduleTimer: rawDelayUs=" << rawDelayUs
+             << " delayUs=" << delayUs
+             << " evbRunning=" << evb_->isRunning();
   if (delayUs <= 0) {
     evb_->add([this] {
       drainOutgoing();

@@ -41,7 +41,8 @@ class MoQPicoQuicEventBaseServer : public MoQPicoServerBase {
       std::string key,
       std::string endpoint,
       folly::Executor::KeepAlive<folly::EventBase> evb,
-      std::string versions = "");
+      std::string versions = "",
+      PicoWebTransportConfig wtConfig = {});
 
   MoQPicoQuicEventBaseServer(const MoQPicoQuicEventBaseServer&) = delete;
   MoQPicoQuicEventBaseServer(MoQPicoQuicEventBaseServer&&) = delete;
@@ -65,6 +66,7 @@ class MoQPicoQuicEventBaseServer : public MoQPicoServerBase {
 
  protected:
   void onWebTransportCreated(PicoQuicWebTransport& wt) noexcept override;
+  void onH3WebTransportCreated(PicoH3WebTransport& wt) noexcept override;
 
  private:
   struct Impl;

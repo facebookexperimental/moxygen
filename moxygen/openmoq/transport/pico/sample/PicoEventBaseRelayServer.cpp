@@ -31,6 +31,24 @@ DEFINE_int32(
     3,
     "Maximum groups per track in cache");
 
+// WebTransport configuration
+DEFINE_bool(
+    enable_webtransport,
+    false,
+    "Enable HTTP/3 WebTransport support for browser clients");
+DEFINE_bool(
+    enable_raw_moq,
+    true,
+    "Enable raw MoQ over QUIC for native clients");
+DEFINE_string(
+    wt_endpoint,
+    "/moq",
+    "WebTransport CONNECT endpoint path");
+DEFINE_int32(
+    wt_max_sessions,
+    100,
+    "Maximum concurrent WebTransport sessions");
+
 namespace {
 using namespace moxygen;
 
@@ -50,9 +68,10 @@ class PicoEventBaseRelayServer : public MoQPicoQuicEventBaseServer {
       const std::string& endpoint,
       folly::Executor::KeepAlive<folly::EventBase> evb,
       const std::string& versions,
+      PicoWebTransportConfig wtConfig,
       std::shared_ptr<MoQRelay> relay)
       : MoQPicoQuicEventBaseServer(
-            cert, key, endpoint, std::move(evb), versions),
+            cert, key, endpoint, std::move(evb), versions, std::move(wtConfig)),
         relay_(std::move(relay)) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
@@ -86,6 +105,13 @@ int main(int argc, char* argv[]) {
       FLAGS_max_cached_tracks, FLAGS_max_cached_groups_per_track);
   std::shared_ptr<PicoEventBaseRelayServer> server;
 
+  // Configure WebTransport
+  PicoWebTransportConfig wtConfig;
+  wtConfig.enableWebTransport = FLAGS_enable_webtransport;
+  wtConfig.enableRawMoQ = FLAGS_enable_raw_moq;
+  wtConfig.wtEndpoint = FLAGS_wt_endpoint;
+  wtConfig.wtMaxSessions = static_cast<uint32_t>(FLAGS_wt_max_sessions);
+
   folly::EventBase evb;
 
   server = std::make_shared<PicoEventBaseRelayServer>(
@@ -94,8 +120,10 @@ int main(int argc, char* argv[]) {
       FLAGS_endpoint,
       folly::getKeepAliveToken(&evb),
       FLAGS_versions,
+      std::move(wtConfig),
       relay);
 
+  // Use :: (IPv6 any) with dual-stack to accept both IPv4 and IPv6
   folly::SocketAddress addr("::", FLAGS_port);
   server->start(addr);
 
