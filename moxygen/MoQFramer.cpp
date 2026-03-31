@@ -4072,7 +4072,14 @@ WriteResult MoQFrameWriter::writeDatagramObject(
       size += 1;
     }
     if (hasExtensions) {
-      writeExtensions(writeBuf, objectHeader.extensions, size, error);
+      // For draft-16+, datagram objects use inline extension KVPs (no length prefix).
+      bool useInlineExtensions = getDraftMajorVersion(*version_) >= 16;
+      writeExtensions(
+          writeBuf,
+          objectHeader.extensions,
+          size,
+          error,
+          /*withLengthPrefix=*/!useInlineExtensions);
     }
     writeVarint(
         writeBuf, folly::to_underlying(objectHeader.status), size, error);
@@ -4100,7 +4107,14 @@ WriteResult MoQFrameWriter::writeDatagramObject(
       size += 1;
     }
     if (hasExtensions) {
-      writeExtensions(writeBuf, objectHeader.extensions, size, error);
+      // For draft-16+, datagram objects use inline extension KVPs (no length prefix).
+      bool useInlineExtensions = getDraftMajorVersion(*version_) >= 16;
+      writeExtensions(
+          writeBuf,
+          objectHeader.extensions,
+          size,
+          error,
+          /*withLengthPrefix=*/!useInlineExtensions);
     }
     writeBuf.append(std::move(objectPayload));
   }
@@ -4294,7 +4308,15 @@ WriteResult MoQFrameWriter::writeStreamObject(
   }
   if (shouldWriteExtensions) {
     // includes FETCH, watch out if we add more types!
-    writeExtensions(writeBuf, objectHeader.extensions, size, error);
+    // For draft-16+, stream objects use inline extension KVPs (no length prefix).
+    // For draft-14/15, extensions have a length prefix.
+    bool useInlineExtensions = getDraftMajorVersion(*version_) >= 16;
+    writeExtensions(
+        writeBuf,
+        objectHeader.extensions,
+        size,
+        error,
+        /*withLengthPrefix=*/!useInlineExtensions);
   }
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
   CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
