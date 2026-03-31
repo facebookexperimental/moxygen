@@ -34,3 +34,8 @@ DeJitterTests
 # IDE / tooling
 .claude/
 .vscode/
+.idea/
+
+# Build artifacts
+build/
+*.tmp*
