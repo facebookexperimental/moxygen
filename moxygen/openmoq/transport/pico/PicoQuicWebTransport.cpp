@@ -759,12 +759,14 @@ void PicoQuicWebTransport::processEgressEvents() {
     } else if (auto *stopSending = std::get_if<
                    proxygen::detail::WtStreamManager::StopSending>(
                    &event)) {
-      int ret =
-          picoquic_stop_sending(cnx_, stopSending->streamId, stopSending->err);
-      if (ret != 0) {
-        XLOG(WARN) << "Failed to stop sending on stream "
-                   << stopSending->streamId << " error=" << stopSending->err
-                   << " picoquic_ret=" << ret;
+      if (cnx_) {
+        int ret =
+            picoquic_stop_sending(cnx_, stopSending->streamId, stopSending->err);
+        if (ret != 0) {
+          XLOG(WARN) << "Failed to stop sending on stream "
+                     << stopSending->streamId << " error=" << stopSending->err
+                     << " picoquic_ret=" << ret;
+        }
       }
     } else if (auto *closeSession = std::get_if<
                    proxygen::detail::WtStreamManager::CloseSession>(
