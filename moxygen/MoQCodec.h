@@ -134,6 +134,7 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::GOAWAY:
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
+      case FrameType::SETUP:
       case FrameType::MAX_REQUEST_ID:
       case FrameType::REQUESTS_BLOCKED:
       case FrameType::FETCH:

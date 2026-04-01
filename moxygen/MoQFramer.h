@@ -433,6 +433,12 @@ TrackRequestParameter getAuthParam(
     uint64_t tokenType = 0,
     std::optional<uint64_t> registerToken = AuthToken::Register);
 
+WriteResult writeSetup(
+    folly::IOBufQueue& writeBuf,
+    const Setup& setup,
+    uint64_t version,
+    bool isClient) noexcept;
+
 WriteResult writeClientSetup(
     folly::IOBufQueue& writeBuf,
     const Setup& clientSetup,
@@ -443,7 +449,7 @@ WriteResult writeServerSetup(
     const Setup& serverSetup,
     uint64_t version) noexcept;
 
-// writeClientSetup and writeServerSetup are the only two functions that
+// writeSetup, writeClientSetup and writeServerSetup are the only functions that
 // are version-agnostic, so we are leaving them out of the MoQFrameWriter.
 class MoQFrameWriter {
  public:

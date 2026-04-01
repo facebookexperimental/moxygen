@@ -184,10 +184,38 @@ class MoQTextClient : public Subscriber,
     }
   }
 
+  // Sync helper: accept an incoming namespace announcement and return a handle
+  // keeping the publishNamespace subscription alive. Called both from the
+  // Subscriber::publishNamespace() coroutine interface (server-initiated) and
+  // from namespaceMsg() (draft 16+ NAMESPACE message on the bidi stream).
+  std::shared_ptr<PublishNamespaceHandle> acceptPublishNamespace(
+      const TrackNamespace& ns,
+      RequestID requestID) {
+    XLOG(INFO) << "acceptPublishNamespace ns=" << ns;
+    auto handle = std::make_shared<PublishNamespaceHandle>(PublishNamespaceOk{
+        .requestID = requestID, .requestSpecificParams = {}});
+    pubNsHandles_.push_back(handle); // keep alive so subscription persists
+    return handle;
+  }
+
   folly::coro::Task<MoQSession::SubscribeNamespaceResult> subscribeNamespace(
       SubscribeNamespace subAnn) {
-    auto res =
-        co_await moqClient_.getSession()->subscribeNamespace(subAnn, nullptr);
+    // Bridge NAMESPACE messages (draft 16+ bidi stream) to
+    // acceptPublishNamespace so the relay will PUBLISH data to us for each
+    // announced namespace.
+    struct NamespaceHandle : Publisher::NamespacePublishHandle {
+      explicit NamespaceHandle(std::weak_ptr<MoQTextClient> client)
+          : client_(std::move(client)) {}
+      void namespaceMsg(const TrackNamespace& suffix) override {
+        if (auto c = client_.lock()) {
+          c->acceptPublishNamespace(suffix, RequestID(0));
+        }
+      }
+      void namespaceDoneMsg(const TrackNamespace&) override {}
+      std::weak_ptr<MoQTextClient> client_;
+    };
+    auto res = co_await moqClient_.getSession()->subscribeNamespace(
+        subAnn, std::make_shared<NamespaceHandle>(weak_from_this()));
     if (res.hasValue()) {
       subscribeNamespaceHandle_ = res.value();
     }
@@ -359,13 +387,8 @@ class MoQTextClient : public Subscriber,
   folly::coro::Task<PublishNamespaceResult> publishNamespace(
       PublishNamespace publishNamespace,
       std::shared_ptr<PublishNamespaceCallback>) override {
-    XLOG(INFO) << "PublishNamespace ns=" << publishNamespace.trackNamespace;
-    // text client doesn't expect server or relay to publishNamespace anything,
-    // but publishNamespace OK anyways
-    return folly::coro::makeTask<PublishNamespaceResult>(
-        std::make_shared<PublishNamespaceHandle>(PublishNamespaceOk{
-            .requestID = publishNamespace.requestID,
-            .requestSpecificParams = {}}));
+    return folly::coro::makeTask<PublishNamespaceResult>(acceptPublishNamespace(
+        publishNamespace.trackNamespace, publishNamespace.requestID));
   }
 
   void goaway(Goaway goaway) override {
@@ -402,6 +425,8 @@ class MoQTextClient : public Subscriber,
   std::shared_ptr<Publisher::SubscribeNamespaceHandle>
       subscribeNamespaceHandle_;
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> subHandles_;
+  // Keeps publishNamespace handles alive so subscriptions are not cancelled.
+  std::vector<std::shared_ptr<PublishNamespaceHandle>> pubNsHandles_;
 };
 } // namespace
 

@@ -46,6 +46,7 @@ constexpr uint64_t kVersionDraft13 = 0xff00000D;
 constexpr uint64_t kVersionDraft14 = 0xff00000E;
 constexpr uint64_t kVersionDraft15 = 0xff00000F;
 constexpr uint64_t kVersionDraft16 = 0xff000010;
+constexpr uint64_t kVersionDraft17 = 0xff000011;
 
 constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
 

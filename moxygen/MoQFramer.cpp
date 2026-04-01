@@ -3502,31 +3502,36 @@ bool includeSetupParam(uint64_t version, SetupKey key) {
       key == SetupKey::AUTHORIZATION_TOKEN;
 }
 
-WriteResult writeClientSetup(
+WriteResult writeSetup(
     folly::IOBufQueue& writeBuf,
-    const Setup& clientSetup,
-    uint64_t version) noexcept {
+    const Setup& setup,
+    uint64_t version,
+    bool isClient) noexcept {
   size_t size = 0;
   bool error = false;
 
-  FrameType frameType = FrameType::CLIENT_SETUP;
+  FrameType frameType;
+  if (getDraftMajorVersion(version) >= 17) {
+    frameType = FrameType::SETUP;
+  } else {
+    frameType = isClient ? FrameType::CLIENT_SETUP : FrameType::SERVER_SETUP;
+  }
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
+  // Pre-ALPN: write version(s) to wire
   if (getDraftMajorVersion(version) < 15) {
     XCHECK_EQ(getDraftMajorVersion(version), 14u)
         << "Legacy mode only supports draft-14, got draft-"
         << getDraftMajorVersion(version);
-    // Only write version array in non-alpn mode, hardcode draft-14
-    writeVarint(writeBuf, 1, size, error);
+    if (isClient) {
+      writeVarint(writeBuf, 1, size, error); // version count
+    }
     writeVarint(writeBuf, kVersionDraft14, size, error);
-  } else {
-    XLOG(DBG3)
-        << "Skipped writing versions to wire for alpn ClientSetup message";
   }
 
   // Collect params that should be included
   std::vector<Parameter> filteredParams;
-  for (const auto& param : clientSetup.params) {
+  for (const auto& param : setup.params) {
     if (includeSetupParam(version, SetupKey(param.key))) {
       filteredParams.push_back(param);
     }
@@ -3560,61 +3565,18 @@ WriteResult writeClientSetup(
   return size;
 }
 
+WriteResult writeClientSetup(
+    folly::IOBufQueue& writeBuf,
+    const Setup& clientSetup,
+    uint64_t version) noexcept {
+  return writeSetup(writeBuf, clientSetup, version, /*isClient=*/true);
+}
+
 WriteResult writeServerSetup(
     folly::IOBufQueue& writeBuf,
     const Setup& serverSetup,
     uint64_t version) noexcept {
-  size_t size = 0;
-  bool error = false;
-
-  FrameType frameType = FrameType::SERVER_SETUP;
-  auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
-
-  // Only write selected version in non-alpn mode
-  if (getDraftMajorVersion(version) < 15) {
-    XCHECK_EQ(getDraftMajorVersion(version), 14u)
-        << "Legacy mode only supports draft-14, got draft-"
-        << getDraftMajorVersion(version);
-    writeVarint(writeBuf, kVersionDraft14, size, error);
-  } else {
-    XLOG(DBG3)
-        << "Skipped writing version to wire for alpn ServerSetup message";
-  }
-
-  // Collect params that should be included
-  std::vector<Parameter> filteredParams;
-  for (const auto& param : serverSetup.params) {
-    if (includeSetupParam(version, SetupKey(param.key))) {
-      filteredParams.push_back(param);
-    }
-  }
-
-  // Sort params by key for delta encoding (v16+)
-  if (getDraftMajorVersion(version) >= 16) {
-    filteredParams = sortParamsByKey(std::move(filteredParams));
-  }
-
-  writeVarint(writeBuf, filteredParams.size(), size, error);
-
-  uint64_t previousKey = 0;
-  for (const auto& param : filteredParams) {
-    auto keyToWrite = param.key;
-    if (getDraftMajorVersion(version) >= 16) {
-      keyToWrite = param.key - previousKey;
-      previousKey = param.key;
-    }
-    writeVarint(writeBuf, keyToWrite, size, error);
-    if ((param.key & 0x01) == 0) {
-      writeVarint(writeBuf, param.asUint64, size, error);
-    } else {
-      writeFixedString(writeBuf, param.asString, size, error);
-    }
-  }
-  writeSize(sizePtr, size, error, version);
-  if (error) {
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  return size;
+  return writeSetup(writeBuf, serverSetup, version, /*isClient=*/false);
 }
 
 WriteResult MoQFrameWriter::writeSubgroupHeader(

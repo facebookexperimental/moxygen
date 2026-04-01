@@ -970,6 +970,58 @@ TEST_P(MoQCodecTest, NamespaceDoneFrame) {
   subscribeNamespaceCodec_.onIngress(subNsWriteBuf.move(), true);
 }
 
+// SETUP (0x2F00) frame type tests for draft 17+
+TEST(MoQCodecTest, ServerCodecParsesSetupAsClientSetup) {
+  // Server codec receives SETUP frame -> should dispatch as onClientSetup
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup setup;
+  setup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+  writeClientSetup(writeBuf, setup, kVersionDraft17);
+
+  MoQControlCodec serverCodec(MoQControlCodec::Direction::SERVER, nullptr);
+  serverCodec.initializeVersion(kVersionDraft17);
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  serverCodec.setCallback(&callback);
+
+  EXPECT_CALL(callback, onClientSetup(testing::_));
+  serverCodec.onIngress(writeBuf.move(), false);
+}
+
+TEST(MoQCodecTest, ClientCodecParsesSetupAsServerSetup) {
+  // Client codec receives SETUP frame -> should dispatch as onServerSetup
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup setup;
+  writeServerSetup(writeBuf, setup, kVersionDraft17);
+
+  MoQControlCodec clientCodec(MoQControlCodec::Direction::CLIENT, nullptr);
+  clientCodec.initializeVersion(kVersionDraft17);
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  clientCodec.setCallback(&callback);
+
+  EXPECT_CALL(callback, onServerSetup(testing::_));
+  clientCodec.onIngress(writeBuf.move(), false);
+}
+
+TEST(MoQCodecTest, DuplicateSetupFrameIsError) {
+  // Two SETUP frames -> second should be a protocol violation
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup setup;
+  writeServerSetup(writeBuf, setup, kVersionDraft17);
+  auto firstSetup = writeBuf.front()->clone();
+
+  MoQControlCodec clientCodec(MoQControlCodec::Direction::CLIENT, nullptr);
+  clientCodec.initializeVersion(kVersionDraft17);
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  clientCodec.setCallback(&callback);
+
+  EXPECT_CALL(callback, onServerSetup(testing::_));
+  clientCodec.onIngress(writeBuf.move(), false);
+
+  EXPECT_CALL(callback, onConnectionError(testing::_));
+  clientCodec.onIngress(firstSetup->clone(), false);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
