@@ -445,11 +445,49 @@ MoQForwarder::beginSubgroup(
     Priority priority,
     bool containsLastInGroup) {
   updateLargest(groupID, 0);
+  SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
+
+  // Check if a SubgroupForwarder already exists for this (group, subgroup).
+  // This can happen if a publisher opens multiple streams with the same
+  // group/subgroup (e.g., after a network issue or client bug).
+  // Reset any active downstream consumers and replace the forwarder.
+  // If no consumers were active (all already stop_sending'd), return CANCELLED
+  // to propagate the signal back to the publisher.
+  auto existingIt = subgroups_.find(subgroupIdentifier);
+  if (existingIt != subgroups_.end()) {
+    bool anyReset = false;
+    for (auto& [sess, sub] : subscribers_) {
+      auto it = sub->subgroups.find(subgroupIdentifier);
+      if (it != sub->subgroups.end() && it->second) {
+        it->second->reset(ResetStreamErrorCode::CANCELLED);
+        sub->subgroups.erase(it);
+        anyReset = true;
+      }
+    }
+    existingIt->second->detach();
+    subgroups_.erase(existingIt);
+    if (!anyReset) {
+      XLOG(WARN) << "beginSubgroup: duplicate group=" << groupID
+                 << " subgroup=" << subgroupID
+                 << " - no active consumers, returning CANCELLED";
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::CANCELLED,
+          "duplicate subgroup, no active consumers"));
+    }
+    XLOG(WARN) << "beginSubgroup: duplicate group=" << groupID
+               << " subgroup=" << subgroupID
+               << " - resetting active consumers";
+  }
+
   auto subgroupForwarder =
       std::make_shared<SubgroupForwarder>(*this, groupID, subgroupID, priority);
-  SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
   auto res = forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
+      return;
+    }
+    // Skip if tombstoned - subscriber already sent stop_sending for this
+    // subgroup and should not receive it again.
+    if (sub->subgroups.count(subgroupIdentifier)) {
       return;
     }
     auto sgRes = sub->trackConsumer->beginSubgroup(
