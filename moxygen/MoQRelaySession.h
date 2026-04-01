@@ -11,17 +11,17 @@
 
 namespace moxygen {
 
-class SeparateStreamSubNsReply : public SeparateStreamSubNsReplyBase {
+class SeparateStreamSubNsReply : public SubNSReply {
  public:
   SeparateStreamSubNsReply(
       MoQFrameWriter& moqFrameWriter,
-      folly::IOBufQueue& writeBuf,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle)
-      : SeparateStreamSubNsReplyBase(moqFrameWriter, writeBuf, writeHandle) {}
+      std::shared_ptr<ReplyContext> replyContext)
+      : SubNSReply(moqFrameWriter, std::move(replyContext)) {}
 
   ~SeparateStreamSubNsReply() = default;
 
   WriteResult ok(const SubscribeNamespaceOk&) override;
+  WriteResult error(const SubscribeNamespaceError&) override;
   WriteResult namespaceMsg(const Namespace&) override;
   WriteResult namespaceDoneMsg(const NamespaceDone&) override;
 
@@ -30,6 +30,9 @@ class SeparateStreamSubNsReply : public SeparateStreamSubNsReplyBase {
 
   folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
   bool pendingFin_{false};
+  bool okSent_{false};
+  bool namespaceFrameSent_{false};
+  bool errorSent_{false};
 };
 
 /**
@@ -80,10 +83,9 @@ class MoQRelaySession : public MoQSession {
       std::shared_ptr<SubNSReply> subNsReply) override;
 
   std::shared_ptr<SubNSReply> getSubNsReply(
-      folly::IOBufQueue& bufQueue,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle) override {
+      std::shared_ptr<ReplyContext> replyContext) override {
     return std::make_shared<SeparateStreamSubNsReply>(
-        moqFrameWriter_, bufQueue, writeHandle);
+        moqFrameWriter_, std::move(replyContext));
   }
 
  private:

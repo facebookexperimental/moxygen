@@ -1267,10 +1267,31 @@ WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
     // We already sent an ERROR; protocol doesn't allow OK after that.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(writeBuf_, subNsOk);
-  writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(
+      replyContext_->writeBuf(), subNsOk);
+  replyContext_->flush();
   okSent_ = true;
   flushPendingMessages();
+  return res;
+}
+
+WriteResult SeparateStreamSubNsReply::error(
+    const SubscribeNamespaceError& subNsError) {
+  if (okSent_) {
+    // We already sent OK (SubscribeNamespaceOk) on this stream.
+    // After that, the stream should only carry NAMESPACE/NAMESPACE_DONE.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (namespaceFrameSent_) {
+    // We already sent at least one NAMESPACE frame.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeRequestError(
+      replyContext_->writeBuf(),
+      subNsError,
+      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  replyContext_->flush();
+  errorSent_ = true;
   return res;
 }
 
@@ -1279,12 +1300,12 @@ WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
     // No NAMESPACE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeNamespace(writeBuf_, msg);
+  auto res = moqFrameWriter_.writeNamespace(replyContext_->writeBuf(), msg);
   namespaceFrameSent_ = true;
   if (okSent_) {
-    writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+    replyContext_->flush();
   } else {
-    pendingBuf_.append(writeBuf_.move());
+    pendingBuf_.append(replyContext_->writeBuf().move());
   }
   return res;
 }
@@ -1295,11 +1316,11 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
     // No NAMESPACE_DONE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeNamespaceDone(writeBuf_, msg);
+  auto res = moqFrameWriter_.writeNamespaceDone(replyContext_->writeBuf(), msg);
   if (okSent_) {
-    writeHandle_->writeStreamData(writeBuf_.move(), true /* fin */, nullptr);
+    replyContext_->flush(/*fin=*/true);
   } else {
-    pendingBuf_.append(writeBuf_.move());
+    pendingBuf_.append(replyContext_->writeBuf().move());
     pendingFin_ = true;
   }
   return res;
@@ -1314,7 +1335,8 @@ void SeparateStreamSubNsReply::flushPendingMessages() {
     return;
   }
   if (!pendingBuf_.empty()) {
-    writeHandle_->writeStreamData(pendingBuf_.move(), pendingFin_, nullptr);
+    replyContext_->writeBuf().append(pendingBuf_.move());
+    replyContext_->flush(/*fin=*/pendingFin_);
   }
 }
 

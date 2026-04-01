@@ -51,18 +51,40 @@ struct MoQSettings {
       std::chrono::seconds(2)};
 };
 
+// Generic write destination for request responses.
+// Abstracts control stream vs bidi stream writing.
+class ReplyContext {
+ public:
+  explicit ReplyContext(folly::CancellationToken token)
+      : cancelToken_(std::move(token)) {}
+  virtual ~ReplyContext() = default;
+
+  // Get the buffer to serialize frames into
+  virtual folly::IOBufQueue& writeBuf() = 0;
+
+  // Flush serialized data to the transport, optionally with FIN
+  virtual void flush(bool fin = false) = 0;
+
+  bool cancelled() const {
+    return cancelToken_.isCancellationRequested();
+  }
+
+ protected:
+  folly::CancellationToken cancelToken_;
+};
+
 class SubNSReply {
  public:
-  explicit SubNSReply(MoQFrameWriter& moqFrameWriter)
-      : moqFrameWriter_(moqFrameWriter) {}
+  SubNSReply(
+      MoQFrameWriter& moqFrameWriter,
+      std::shared_ptr<ReplyContext> replyContext)
+      : moqFrameWriter_(moqFrameWriter),
+        replyContext_(std::move(replyContext)) {}
 
   virtual ~SubNSReply() = default;
 
-  virtual WriteResult ok(const SubscribeNamespaceOk&) {
-    XLOG(FATAL) << "Unimplemented";
-    folly::assume_unreachable();
-  }
-  virtual WriteResult error(const SubscribeNamespaceError&) = 0;
+  virtual WriteResult ok(const SubscribeNamespaceOk&);
+  virtual WriteResult error(const SubscribeNamespaceError&);
   virtual WriteResult namespaceMsg(const Namespace&) {
     XLOG(FATAL) << "Unimplemented";
     folly::assume_unreachable();
@@ -74,28 +96,7 @@ class SubNSReply {
 
  protected:
   MoQFrameWriter& moqFrameWriter_;
-};
-
-class SeparateStreamSubNsReplyBase : public SubNSReply {
- public:
-  SeparateStreamSubNsReplyBase(
-      MoQFrameWriter& moqFrameWriter,
-      folly::IOBufQueue& writeBuf,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle)
-      : SubNSReply(moqFrameWriter),
-        writeBuf_(writeBuf),
-        writeHandle_(writeHandle) {}
-
-  ~SeparateStreamSubNsReplyBase() override = default;
-
-  WriteResult error(const SubscribeNamespaceError&) override;
-
- protected:
-  folly::IOBufQueue& writeBuf_;
-  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
-  bool okSent_{false};
-  bool namespaceFrameSent_{false};
-  bool errorSent_{false};
+  std::shared_ptr<ReplyContext> replyContext_;
 };
 
 class MoQSession : public Subscriber,
@@ -188,10 +189,9 @@ class MoQSession : public Subscriber,
   }
 
   virtual std::shared_ptr<SubNSReply> getSubNsReply(
-      folly::IOBufQueue& bufQueue,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle) {
-    return std::make_shared<SeparateStreamSubNsReplyBase>(
-        moqFrameWriter_, bufQueue, writeHandle);
+      std::shared_ptr<ReplyContext> replyContext) {
+    return std::make_shared<SubNSReply>(
+        moqFrameWriter_, std::move(replyContext));
   }
 
   [[nodiscard]] MoQExecutor* getExecutor() const {
@@ -582,6 +582,9 @@ class MoQSession : public Subscriber,
  protected:
   // Protected members and methods for MoQRelaySession subclass access
 
+  // Returns the shared ReplyContext for the control stream
+  std::shared_ptr<ReplyContext> controlStreamReplyContext();
+
   void requestUpdate(const RequestUpdate& reqUpdate);
 
   folly::coro::Task<void> controlReadLoop(
@@ -598,8 +601,9 @@ class MoQSession : public Subscriber,
   // Control channel state
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
+  std::shared_ptr<ReplyContext> controlStreamReplyContext_;
 
-  std::shared_ptr<MoQControlCodec> controlCodec_;
+  std::unique_ptr<MoQControlCodec> controlCodec_;
 
   // Track management maps
   folly::F14FastMap<
