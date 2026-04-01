@@ -116,13 +116,19 @@ class MoQRelaySession : public MoQSession {
   void unsubscribeNamespace(const UnsubscribeNamespace& unsubAnn);
 
   folly::coro::Task<void> handlePublishNamespace(
-      PublishNamespace publishNamespace);
-  void publishNamespaceOk(const PublishNamespaceOk& annOk);
+      PublishNamespace publishNamespace,
+      std::shared_ptr<ReplyContext> replyContext);
+  void publishNamespaceOk(
+      const PublishNamespaceOk& annOk,
+      ReplyContext& replyContext);
   void publishNamespaceCancel(const PublishNamespaceCancel& annCan);
   void publishNamespaceDone(const PublishNamespaceDone& publishNamespaceDone);
 
   // Override all incoming publishNamespace message handlers
   void onPublishNamespace(PublishNamespace ann) override;
+  void onPublishNamespaceImpl(
+      PublishNamespace ann,
+      std::shared_ptr<ReplyContext> replyContext) override;
   void onPublishNamespaceCancel(
       PublishNamespaceCancel publishNamespaceCancel) override;
   void onPublishNamespaceDone(PublishNamespaceDone unAnn) override;

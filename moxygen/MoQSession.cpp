@@ -1277,8 +1277,10 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     resetAllSubgroups(code);
     auto session = std::exchange(session_, nullptr);
     if (!subscriptionHandle_) {
+      XCHECK(replyContext_);
       session->subscribeError(
-          {pubDone.requestID, SubscribeErrorCode::INTERNAL_ERROR, "terminate"});
+          {pubDone.requestID, SubscribeErrorCode::INTERNAL_ERROR, "terminate"},
+          *replyContext_);
     } else {
       subscriptionHandle_.reset();
       session->sendPublishDone(pubDone);
@@ -3313,6 +3315,12 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
 }
 
 void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
+  onSubscribeImpl(std::move(subscribeRequest), controlStreamReplyContext());
+}
+
+void MoQSession::onSubscribeImpl(
+    SubscribeRequest subscribeRequest,
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " ftn=" << subscribeRequest.fullTrackName
              << " sess=" << this;
   const auto requestID = subscribeRequest.requestID;
@@ -3330,7 +3338,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     subscribeError(
         {subscribeRequest.requestID,
          SubscribeErrorCode::GOING_AWAY,
-         "Session received GOAWAY"});
+         "Session received GOAWAY"},
+        *replyContext);
     return;
   }
   if (!publishHandler_) {
@@ -3338,7 +3347,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     subscribeError(
         {subscribeRequest.requestID,
          SubscribeErrorCode::INTERNAL_ERROR,
-         "No publisher callback set"});
+         "No publisher callback set"},
+        *replyContext);
     return;
   }
 
@@ -3355,7 +3365,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     subscribeError(
         {subscribeRequest.requestID,
          SubscribeErrorCode::INTERNAL_ERROR,
-         "dup sub ID"});
+         "dup sub ID"},
+        *replyContext);
     return;
   }
   // TODO: Check for duplicate alias
@@ -3381,6 +3392,7 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       moqSettings_.bufferingThresholds.perSubscription,
       forward,
       deliveryTimeout);
+  trackPublisher->setReplyContext(replyContext);
   if (logger_) {
     trackPublisher->setLogger(logger_);
   }
@@ -3395,7 +3407,8 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
     subscribeError(
         {subscribeRequest.requestID,
          SubscribeErrorCode::DUPLICATE_SUBSCRIPTION,
-         "duplicate subscription"});
+         "duplicate subscription"},
+        *replyContext);
     return;
   }
 
@@ -3406,13 +3419,16 @@ void MoQSession::onSubscribe(SubscribeRequest subscribeRequest) {
       co_withCancellation(
           cancellationSource_.getToken(),
           handleSubscribe(
-              std::move(subscribeRequest), std::move(trackPublisher))))
+              std::move(subscribeRequest),
+              std::move(trackPublisher),
+              std::move(replyContext))))
       .start();
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribe(
     SubscribeRequest sub,
-    std::shared_ptr<TrackPublisherImpl> trackPublisher) {
+    std::shared_ptr<TrackPublisherImpl> trackPublisher,
+    std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
@@ -3437,7 +3453,8 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     subscribeError(
         {requestID,
          SubscribeErrorCode::INTERNAL_ERROR,
-         subscribeResult.exception().what().toStdString()});
+         subscribeResult.exception().what().toStdString()},
+        *replyContext);
     co_return;
   }
   if (subscribeResult->hasError()) {
@@ -3445,7 +3462,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
                << subscribeResult->error().reasonPhrase;
     auto subErr = std::move(subscribeResult->error());
     subErr.requestID = requestID; // In case app got it wrong
-    subscribeError(subErr);
+    subscribeError(subErr, *replyContext);
   } else {
     auto subHandle = std::move(subscribeResult->value());
     auto subOk = subHandle->subscribeOk();
@@ -3455,7 +3472,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     trackPublisher->subscribeOkSent(subOk);
 
     // TODO: verify TrackAlias is unique
-    sendSubscribeOk(subOk);
+    sendSubscribeOk(subOk, *replyContext);
     trackPublisher->setSubscriptionHandle(std::move(subHandle));
   }
 }
@@ -3883,6 +3900,12 @@ class MoQSession::ReceiverSubscriptionHandle
 };
 
 void MoQSession::onPublish(PublishRequest publish) {
+  onPublishImpl(std::move(publish), controlStreamReplyContext());
+}
+
+void MoQSession::onPublishImpl(
+    PublishRequest publish,
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << publish.requestID << " sess=" << this;
   if (logger_) {
     logger_->logPublish(
@@ -3898,7 +3921,8 @@ void MoQSession::onPublish(PublishRequest publish) {
         PublishError{
             publish.requestID,
             PublishErrorCode::GOING_AWAY,
-            "Session received GOAWAY"});
+            "Session received GOAWAY"},
+        *replyContext);
     return;
   }
 
@@ -3908,7 +3932,8 @@ void MoQSession::onPublish(PublishRequest publish) {
         PublishError{
             publish.requestID,
             PublishErrorCode::NOT_SUPPORTED,
-            "Not a subscriber"});
+            "Not a subscriber"},
+        *replyContext);
     return;
   }
 
@@ -3921,7 +3946,8 @@ void MoQSession::onPublish(PublishRequest publish) {
         PublishError{
             publish.requestID,
             PublishErrorCode::DUPLICATE_SUBSCRIPTION,
-            "duplicate subscription"});
+            "duplicate subscription"},
+        *replyContext);
     return;
   }
 
@@ -3933,13 +3959,17 @@ void MoQSession::onPublish(PublishRequest publish) {
       exec_.get(),
       co_withCancellation(
           cancellationSource_.getToken(),
-          handlePublish(std::move(publish), std::move(publishHandle))))
+          handlePublish(
+              std::move(publish),
+              std::move(publishHandle),
+              std::move(replyContext))))
       .start();
 }
 
 folly::coro::Task<void> MoQSession::handlePublish(
     PublishRequest publish,
-    std::shared_ptr<Publisher::SubscriptionHandle> publishHandle) {
+    std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
+    std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
@@ -3993,7 +4023,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
         // publish request (requestID), not the republish's requestID.
         auto pubOk = replyResult->value();
         pubOk.requestID = requestID;
-        publishOk(pubOk);
+        publishOk(pubOk, *replyContext);
         deliverBufferedData(alias);
         co_return;
       }
@@ -4002,7 +4032,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
     XLOG(ERR) << "Exception in Subscriber publish callback ex=" << ex.what();
     publishErr.reasonPhrase = ex.what();
   }
-  publishError(publishErr);
+  publishError(publishErr, *replyContext);
 }
 
 void MoQSession::onPublishDone(PublishDone publishDone) {
@@ -4087,6 +4117,12 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
 }
 
 void MoQSession::onFetch(Fetch fetch) {
+  onFetchImpl(std::move(fetch), controlStreamReplyContext());
+}
+
+void MoQSession::onFetchImpl(
+    Fetch fetch,
+    std::shared_ptr<ReplyContext> replyContext) {
   auto [standalone, joining] = fetchType(fetch);
   auto logStr = (standalone)
       ? fetch.fullTrackName.describe()
@@ -4107,7 +4143,8 @@ void MoQSession::onFetch(Fetch fetch) {
     fetchError(
         {fetch.requestID,
          FetchErrorCode::GOING_AWAY,
-         "Session received GOAWAY"});
+         "Session received GOAWAY"},
+        *replyContext);
     return;
   }
   if (!publishHandler_) {
@@ -4115,7 +4152,8 @@ void MoQSession::onFetch(Fetch fetch) {
     fetchError(
         {fetch.requestID,
          FetchErrorCode::INTERNAL_ERROR,
-         "No publisher callback set"});
+         "No publisher callback set"},
+        *replyContext);
     return;
   }
   if (standalone) {
@@ -4128,7 +4166,8 @@ void MoQSession::onFetch(Fetch fetch) {
         fetchError(
             {fetch.requestID,
              FetchErrorCode::INVALID_RANGE,
-             "End must be after start"});
+             "End must be after start"},
+            *replyContext);
         return;
       }
     }
@@ -4141,7 +4180,8 @@ void MoQSession::onFetch(Fetch fetch) {
       fetchError(
           {fetch.requestID,
            FetchErrorCode::INTERNAL_ERROR,
-           "Unknown joining requestID"});
+           "Unknown joining requestID"},
+          *replyContext);
       return;
     }
     fetch.fullTrackName = joinIt->second->fullTrackName();
@@ -4151,7 +4191,9 @@ void MoQSession::onFetch(Fetch fetch) {
     XLOG(ERR) << "Duplicate subscribe ID=" << fetch.requestID
               << " sess=" << this;
     // message error
-    fetchError({fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "dup sub ID"});
+    fetchError(
+        {fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "dup sub ID"},
+        *replyContext);
     return;
   }
   auto fetchPublisher = std::make_shared<FetchPublisherImpl>(
@@ -4169,20 +4211,26 @@ void MoQSession::onFetch(Fetch fetch) {
       exec_.get(),
       co_withCancellation(
           cancellationSource_.getToken(),
-          handleFetch(std::move(fetch), std::move(fetchPublisher))))
+          handleFetch(
+              std::move(fetch),
+              std::move(fetchPublisher),
+              std::move(replyContext))))
       .start();
 }
 
 folly::coro::Task<void> MoQSession::handleFetch(
     Fetch fetch,
-    std::shared_ptr<FetchPublisherImpl> fetchPublisher) {
+    std::shared_ptr<FetchPublisherImpl> fetchPublisher,
+    std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto requestID = fetch.requestID;
   if (!fetchPublisher->getStreamPublisher()) {
     XLOG(ERR) << "Fetch Publisher killed sess=" << this;
-    fetchError({requestID, FetchErrorCode::INTERNAL_ERROR, "Fetch Failed"});
+    fetchError(
+        {requestID, FetchErrorCode::INTERNAL_ERROR, "Fetch Failed"},
+        *replyContext);
     co_return;
   }
   auto fetchResult = co_await co_awaitTry(co_withCancellation(
@@ -4206,7 +4254,8 @@ folly::coro::Task<void> MoQSession::handleFetch(
     fetchError(
         {requestID,
          FetchErrorCode::INTERNAL_ERROR,
-         fetchResult.exception().what().toStdString()});
+         fetchResult.exception().what().toStdString()},
+        *replyContext);
     co_return;
   }
   if (fetchResult->hasError()) {
@@ -4214,12 +4263,12 @@ folly::coro::Task<void> MoQSession::handleFetch(
                << fetchResult->error().reasonPhrase;
     auto fetchErr = std::move(fetchResult->error());
     fetchErr.requestID = requestID; // In case app got it wrong
-    fetchError(fetchErr);
+    fetchError(fetchErr, *replyContext);
   } else if (!fetchPublisher->isCancelled()) {
     auto fetchHandle = std::move(fetchResult->value());
     auto fetchOkMsg = fetchHandle->fetchOk();
     fetchOkMsg.requestID = requestID;
-    fetchOk(fetchOkMsg);
+    fetchOk(fetchOkMsg, *replyContext);
     fetchPublisher->setFetchHandle(std::move(fetchHandle));
   } // else, no need to fetchError, state has been removed on both sides
     // already
@@ -4277,6 +4326,12 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
 }
 
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
+  onTrackStatusImpl(std::move(trackStatus), controlStreamReplyContext());
+}
+
+void MoQSession::onTrackStatusImpl(
+    TrackStatus trackStatus,
+    std::shared_ptr<ReplyContext> replyContext) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << " sess=" << this;
@@ -4295,7 +4350,8 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
     trackStatusError(
         {trackStatus.requestID,
          TrackStatusErrorCode::GOING_AWAY,
-         "Session received GOAWAY"});
+         "Session received GOAWAY"},
+        *replyContext);
     return;
   }
   if (!publishHandler_) {
@@ -4303,18 +4359,21 @@ void MoQSession::onTrackStatus(TrackStatus trackStatus) {
     trackStatusError(
         {trackStatus.requestID,
          TrackStatusErrorCode::INTERNAL_ERROR,
-         "No publisher callback set"});
+         "No publisher callback set"},
+        *replyContext);
   } else {
     co_withExecutor(
         exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(),
-            handleTrackStatus(std::move(trackStatus))))
+            handleTrackStatus(std::move(trackStatus), std::move(replyContext))))
         .start();
   }
 }
 
-folly::coro::Task<void> MoQSession::handleTrackStatus(TrackStatus trackStatus) {
+folly::coro::Task<void> MoQSession::handleTrackStatus(
+    TrackStatus trackStatus,
+    std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
@@ -4325,26 +4384,31 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(TrackStatus trackStatus) {
     trackStatusError(
         {trackStatus.requestID,
          TrackStatusErrorCode::INTERNAL_ERROR,
-         trackStatusResult.exception().what().toStdString()});
+         trackStatusResult.exception().what().toStdString()},
+        *replyContext);
+    retireRequestID(/*signalWriteLoop=*/false);
+    co_return;
   }
   if (trackStatusResult->hasError()) {
     XLOG(DBG1) << "Application track status error err="
                << trackStatusResult->error().reasonPhrase;
     auto trackStatusErr = std::move(trackStatusResult->error());
     trackStatusErr.requestID = trackStatus.requestID;
-    trackStatusError(trackStatusErr);
+    trackStatusError(trackStatusErr, *replyContext);
   } else {
     auto trackStatOk = std::move(trackStatusResult->value());
     trackStatOk.requestID = trackStatus.requestID;
     trackStatOk.fullTrackName = trackStatus.fullTrackName;
-    trackStatusOk(trackStatOk);
+    trackStatusOk(trackStatOk, *replyContext);
   }
   retireRequestID(/*signalWriteLoop=*/false);
 }
 
-void MoQSession::trackStatusOk(const TrackStatusOk& trackStatusOk) {
-  auto res =
-      moqFrameWriter_.writeTrackStatusOk(controlWriteBuf_, trackStatusOk);
+void MoQSession::trackStatusOk(
+    const TrackStatusOk& trackStatusOk,
+    ReplyContext& replyContext) {
+  auto res = moqFrameWriter_.writeTrackStatusOk(
+      replyContext.writeBuf(), trackStatusOk);
 
   if (logger_) {
     logger_->logTrackStatusOk(trackStatusOk);
@@ -4353,13 +4417,15 @@ void MoQSession::trackStatusOk(const TrackStatusOk& trackStatusOk) {
   if (!res) {
     XLOG(ERR) << "trackStatusOk failed sess=" << this;
   } else {
-    controlWriteEvent_.signal();
+    replyContext.flush();
   }
 }
 
-void MoQSession::trackStatusError(const TrackStatusError& trackStatusError) {
-  auto res =
-      moqFrameWriter_.writeTrackStatusError(controlWriteBuf_, trackStatusError);
+void MoQSession::trackStatusError(
+    const TrackStatusError& trackStatusError,
+    ReplyContext& replyContext) {
+  auto res = moqFrameWriter_.writeTrackStatusError(
+      replyContext.writeBuf(), trackStatusError);
 
   if (logger_) {
     logger_->logTrackStatusError(trackStatusError);
@@ -4368,7 +4434,7 @@ void MoQSession::trackStatusError(const TrackStatusError& trackStatusError) {
   if (!res) {
     XLOG(ERR) << "trackStatusError failed sess=" << this;
   } else {
-    controlWriteEvent_.signal();
+    replyContext.flush();
   }
 }
 
@@ -4659,7 +4725,7 @@ Subscriber::PublishResult MoQSession::publish(
       std::move(replyTask)};
 }
 
-void MoQSession::publishOk(const PublishOk& pubOk) {
+void MoQSession::publishOk(const PublishOk& pubOk, ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << pubOk.requestID << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishOk);
 
@@ -4667,15 +4733,17 @@ void MoQSession::publishOk(const PublishOk& pubOk) {
     logger_->logPublishOk(pubOk, ControlMessageType::CREATED);
   }
 
-  auto res = moqFrameWriter_.writePublishOk(controlWriteBuf_, pubOk);
+  auto res = moqFrameWriter_.writePublishOk(replyContext.writeBuf(), pubOk);
   if (!res) {
     XLOG(ERR) << "writePublishOk failed sess=" << this;
     return;
   }
-  controlWriteEvent_.signal();
+  replyContext.flush();
 }
 
-void MoQSession::publishError(const PublishError& publishError) {
+void MoQSession::publishError(
+    const PublishError& publishError,
+    ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << publishError.requestID
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
@@ -4684,12 +4752,12 @@ void MoQSession::publishError(const PublishError& publishError) {
     logger_->logPublishError(publishError, ControlMessageType::CREATED);
   }
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, publishError, FrameType::PUBLISH_ERROR);
+      replyContext.writeBuf(), publishError, FrameType::PUBLISH_ERROR);
   if (!res) {
     XLOG(ERR) << "writePublishError failed sess=" << this;
     return;
   }
-  controlWriteEvent_.signal();
+  replyContext.flush();
 
   auto aliasRes = reqIdToTrackAlias_.find(publishError.requestID);
   if (aliasRes == reqIdToTrackAlias_.end()) {
@@ -4787,10 +4855,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   }
 }
 
-void MoQSession::sendSubscribeOk(const SubscribeOk& subOk) {
+void MoQSession::sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeSuccess);
-  auto res = moqFrameWriter_.writeSubscribeOk(controlWriteBuf_, subOk);
+  auto res = moqFrameWriter_.writeSubscribeOk(ctx.writeBuf(), subOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
     return;
@@ -4800,21 +4868,18 @@ void MoQSession::sendSubscribeOk(const SubscribeOk& subOk) {
     logger_->logSubscribeOk(subOk);
   }
 
-  controlWriteEvent_.signal();
+  ctx.flush();
 }
 
-void MoQSession::subscribeError(const SubscribeError& subErr) {
+void MoQSession::subscribeError(
+    const SubscribeError& subErr,
+    ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onSubscribeError, subErr.errorCode);
-  auto it = pubTracks_.find(subErr.requestID);
-  if (it == pubTracks_.end()) {
-    XLOG(ERR) << "Invalid Subscribe OK, id=" << subErr.requestID;
-    return;
-  }
-  pubTracks_.erase(it);
+  pubTracks_.erase(subErr.requestID);
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, subErr, FrameType::SUBSCRIBE_ERROR);
+      ctx.writeBuf(), subErr, FrameType::SUBSCRIBE_ERROR);
   retireRequestID(/*signalWriteLoop=*/false);
   if (!res) {
     XLOG(ERR) << "writeSubscribeError failed sess=" << this;
@@ -4825,7 +4890,7 @@ void MoQSession::subscribeError(const SubscribeError& subErr) {
     logger_->logSubscribeError(subErr);
   }
 
-  controlWriteEvent_.signal();
+  ctx.flush();
 }
 
 void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
@@ -4879,9 +4944,14 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
               << " sess=" << this;
     return;
   }
-  pubTracks_.erase(it);
-
-  auto res = moqFrameWriter_.writePublishDone(controlWriteBuf_, pubDone);
+  auto* ctx = it->second->replyContext();
+  SCOPE_EXIT {
+    pubTracks_.erase(it);
+  };
+  if (!ctx) {
+    return;
+  }
+  auto res = moqFrameWriter_.writePublishDone(ctx->writeBuf(), pubDone);
   if (!res) {
     XLOG(ERR) << "writePublishDone failed sess=" << this;
     return;
@@ -4890,7 +4960,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   if (logger_) {
     logger_->logPublishDone(pubDone);
   }
-  controlWriteEvent_.signal();
+  ctx->flush();
   retireRequestID(/*signalWriteLoop=*/false);
 }
 
@@ -5155,10 +5225,10 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   }
 }
 
-void MoQSession::fetchOk(const FetchOk& fetchOk) {
+void MoQSession::fetchOk(const FetchOk& fetchOk, ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onFetchSuccess);
-  auto res = moqFrameWriter_.writeFetchOk(controlWriteBuf_, fetchOk);
+  auto res = moqFrameWriter_.writeFetchOk(replyContext.writeBuf(), fetchOk);
   if (!res) {
     XLOG(ERR) << "writeFetchOk failed sess=" << this;
     return;
@@ -5166,10 +5236,10 @@ void MoQSession::fetchOk(const FetchOk& fetchOk) {
   if (logger_) {
     logger_->logFetchOk(fetchOk);
   }
-  controlWriteEvent_.signal();
+  replyContext.flush();
 }
 
-void MoQSession::fetchError(const FetchError& fetchErr) {
+void MoQSession::fetchError(const FetchError& fetchErr, ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onFetchError, fetchErr.errorCode);
@@ -5178,19 +5248,14 @@ void MoQSession::fetchError(const FetchError& fetchErr) {
     logger_->logFetchError(fetchErr);
   }
 
-  if (pubTracks_.erase(fetchErr.requestID) == 0) {
-    // fetchError is called sometimes before adding publisher state, so this
-    // is not an error
-    XLOG(DBG1) << "fetchErr for invalid id=" << fetchErr.requestID
-               << " sess=" << this;
-  }
+  pubTracks_.erase(fetchErr.requestID);
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, fetchErr, FrameType::FETCH_ERROR);
+      ctx.writeBuf(), fetchErr, FrameType::FETCH_ERROR);
   if (!res) {
     XLOG(ERR) << "writeFetchError failed sess=" << this;
     return;
   }
-  controlWriteEvent_.signal();
+  ctx.flush();
 }
 
 void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
@@ -5621,6 +5686,13 @@ void MoQSession::aliasifyAuthTokens(
 // PublishNamespace callback methods - default implementations for simple
 // clients
 void MoQSession::onPublishNamespace(PublishNamespace publishNamespace) {
+  onPublishNamespaceImpl(
+      std::move(publishNamespace), controlStreamReplyContext());
+}
+
+void MoQSession::onPublishNamespaceImpl(
+    PublishNamespace publishNamespace,
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " ns=" << publishNamespace.trackNamespace
              << " - sending NOT_SUPPORTED error, sess=" << this;
   if (receivedGoaway_) {
@@ -5630,14 +5702,16 @@ void MoQSession::onPublishNamespace(PublishNamespace publishNamespace) {
         PublishNamespaceError{
             publishNamespace.requestID,
             PublishNamespaceErrorCode::GOING_AWAY,
-            "Session received GOAWAY"});
+            "Session received GOAWAY"},
+        *replyContext);
     return;
   }
   publishNamespaceError(
       PublishNamespaceError{
           publishNamespace.requestID,
           PublishNamespaceErrorCode::NOT_SUPPORTED,
-          "PublishNamespace not supported by simple client"});
+          "PublishNamespace not supported by simple client"},
+      *replyContext);
 }
 
 void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
@@ -5777,7 +5851,8 @@ void MoQSession::onUnsubscribeNamespace(
 
 // PublishNamespace response methods
 void MoQSession::publishNamespaceError(
-    const PublishNamespaceError& publishNamespaceError) {
+    const PublishNamespaceError& publishNamespaceError,
+    ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << publishNamespaceError.requestID.value
              << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(
@@ -5785,7 +5860,7 @@ void MoQSession::publishNamespaceError(
       onPublishNamespaceError,
       publishNamespaceError.errorCode);
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_,
+      replyContext.writeBuf(),
       publishNamespaceError,
       FrameType::PUBLISH_NAMESPACE_ERROR);
   if (!res) {
@@ -5795,7 +5870,7 @@ void MoQSession::publishNamespaceError(
   if (logger_) {
     logger_->logPublishNamespaceError(publishNamespaceError);
   }
-  controlWriteEvent_.signal();
+  replyContext.flush();
 }
 
 void MoQSession::subscribeNamespaceError(
