@@ -2701,13 +2701,9 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
     std::optional<RequestID> requestID_;
   };
 
-  auto moQSubNsReceiverCodec = std::make_shared<MoQSubNsReceiverCodec>(nullptr);
-  moQSubNsReceiverCodec->initializeVersion(*negotiatedVersion_);
-  // Point at the session-wide receive token cache so that auth-token aliases
-  // registered on the control stream are visible here, and vice versa.
-  moQSubNsReceiverCodec->setTokenCache(&receiveTokenCache_);
   SubNsCb cb(this, bh.writeHandle);
-  moQSubNsReceiverCodec->setCallback(&cb);
+  auto moQSubNsReceiverCodec = makeBidiCodec(
+      &cb, {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
 
   // TODO: Could perhaps return controlReadLoop instead of awaiting
   co_await controlReadLoop(
@@ -5868,6 +5864,17 @@ void MoQSession::setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
 void MoQSession::setSubscribeHandler(
     std::shared_ptr<Subscriber> subscribeHandler) {
   subscribeHandler_ = std::move(subscribeHandler);
+}
+
+std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
+    MoQControlCodec::ControlCallback* callback,
+    const std::vector<FrameType>& allowedFrames,
+    std::optional<RequestID> requestID) {
+  auto codec =
+      std::make_unique<MoQBidiStreamCodec>(callback, allowedFrames, requestID);
+  codec->initializeVersion(*negotiatedVersion_);
+  codec->setTokenCache(&receiveTokenCache_);
+  return codec;
 }
 
 std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
