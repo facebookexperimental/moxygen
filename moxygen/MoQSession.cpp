@@ -2271,10 +2271,7 @@ void MoQSession::start() {
         exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(),
-            controlReadLoop(
-                controlStream.readHandle,
-                std::move(streamData),
-                controlCodec_.get())))
+            controlReadLoop(controlStream.readHandle, std::move(streamData))))
         .start();
   }
 }
@@ -2602,15 +2599,59 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   controlWriteEvent_.signal();
 }
 
+std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
+    MoQControlCodec::ControlCallback* callback,
+    const std::vector<FrameType>& allowedFrames,
+    std::optional<RequestID> requestID) {
+  auto codec =
+      std::make_unique<MoQBidiStreamCodec>(callback, allowedFrames, requestID);
+  codec->initializeVersion(*negotiatedVersion_);
+  codec->setTokenCache(&receiveTokenCache_);
+  return codec;
+}
+
+void MoQSession::BidiRequestCallback::onConnectionError(ErrorCode error) {
+  XLOG(ERR) << "Parse error=" << folly::to_underlying(error);
+  session_->close(error);
+}
+
+void MoQSession::BidiRequestCallback::onRequestUpdate(
+    RequestUpdate requestUpdate) {
+  session_->onRequestUpdate(std::move(requestUpdate));
+}
+
+bool MoQSession::BidiRequestCallback::handleFirstFrame(RequestID reqId) {
+  if (requestID_) {
+    XLOG(ERR) << "Received duplicate request on bidi stream";
+    session_->close(ErrorCode::PROTOCOL_VIOLATION);
+    return false;
+  }
+  requestID_ = reqId;
+  replyContext_ = std::make_shared<BidiStreamReplyContext>(
+      writeHandle_, session_->cancellationSource_.getToken());
+  return true;
+}
+
+void MoQSession::BidiRequestCallback::onSubscribeNamespace(
+    SubscribeNamespace subNs) {
+  if (handleFirstFrame(subNs.requestID)) {
+    auto subNsReply = session_->getSubNsReply(replyContext_);
+    session_->onSubscribeNamespaceImpl(subNs, std::move(subNsReply));
+  }
+}
+
 folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle,
     proxygen::WebTransport::StreamData initialData,
-    MoQControlCodec* controlCodec) {
+    std::unique_ptr<MoQControlCodec> codec,
+    std::unique_ptr<BidiRequestCallback> bidiCallback,
+    folly::Function<void(RequestID)> onStreamClosed) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
   });
   co_await folly::coro::co_safe_point;
+  auto* controlCodec = codec ? codec.get() : controlCodec_.get();
   auto streamId = readHandle->getID();
   controlCodec->setStreamId(streamId);
 
@@ -2649,76 +2690,9 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     XLOG_IF(DBG3, fin) << "End of stream id=" << streamId << " sess=" << this;
   }
   // TODO: close session on control exit
-}
-
-folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
-    proxygen::WebTransport::BidiStreamHandle bh,
-    proxygen::WebTransport::StreamData initialData) {
-  XLOG(DBG1) << __func__ << " sess=" << this;
-
-  class SubNsCb : public MoQControlCodec::ControlCallback {
-   public:
-    SubNsCb(
-        MoQSession* session,
-        proxygen::WebTransport::StreamWriteHandle* writeHandle)
-        : session_(session), writeHandle_(writeHandle) {}
-
-    void onSubscribeNamespace(SubscribeNamespace subscribeNamespace) override {
-      if (receivedSubscribeNamespace_) {
-        XLOG(ERR) << "Received more than one SubscribeNamespace message";
-        session_->close(ErrorCode::PROTOCOL_VIOLATION);
-        return;
-      }
-      receivedSubscribeNamespace_ = true;
-      requestID_ = subscribeNamespace.requestID;
-
-      auto replyContext = std::make_shared<BidiStreamReplyContext>(
-          writeHandle_, session_->cancellationSource_.getToken());
-      auto subNsReply = session_->getSubNsReply(std::move(replyContext));
-      session_->onSubscribeNamespaceImpl(
-          subscribeNamespace, std::move(subNsReply));
-    }
-
-    void onRequestUpdate(RequestUpdate requestUpdate) override {
-      session_->onRequestUpdate(std::move(requestUpdate));
-    }
-
-    void onConnectionError(ErrorCode error) override {
-      XLOG(ERR) << "Parse error=" << folly::to_underlying(error);
-      session_->close(error);
-    }
-
-    bool receivedSubscribeNamespace() const {
-      return receivedSubscribeNamespace_;
-    }
-
-    std::optional<RequestID> requestID() const {
-      return requestID_;
-    }
-
-   private:
-    MoQSession* session_;
-    proxygen::WebTransport::StreamWriteHandle* writeHandle_;
-    bool receivedSubscribeNamespace_{false};
-    std::optional<RequestID> requestID_;
-  };
-
-  SubNsCb cb(this, bh.writeHandle);
-  auto moQSubNsReceiverCodec = makeBidiCodec(
-      &cb, {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
-
-  // TODO: Could perhaps return controlReadLoop instead of awaiting
-  co_await controlReadLoop(
-      bh.readHandle, std::move(initialData), moQSubNsReceiverCodec.get());
-
-  // If the peer closes the SUBSCRIBE_NAMESPACE stream (FIN) or resets it
-  // (draft16+), treat it as an unsubscribe
-  auto token = co_await folly::coro::co_current_cancellation_token;
-  if (!token.isCancellationRequested() && cb.receivedSubscribeNamespace() &&
-      cb.requestID()) {
-    UnsubscribeNamespace unsub;
-    unsub.requestID = cb.requestID().value();
-    onUnsubscribeNamespace(std::move(unsub));
+  if (onStreamClosed && bidiCallback && !token.isCancellationRequested() &&
+      bidiCallback->requestID()) {
+    onStreamClosed(*bidiCallback->requestID());
   }
 }
 
@@ -5359,8 +5333,7 @@ void MoQSession::handleClientSetup(
         exec_.get(),
         co_withCancellation(
             cancellationSource_.getToken(),
-            controlReadLoop(
-                bh.readHandle, std::move(initialData), controlCodec_.get())))
+            controlReadLoop(bh.readHandle, std::move(initialData))))
         .start();
     auto mergeToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), bh.writeHandle->getCancelToken());
@@ -5369,6 +5342,21 @@ void MoQSession::handleClientSetup(
         co_withCancellation(
             std::move(mergeToken), controlWriteLoop(bh.writeHandle)))
         .start();
+  }
+}
+
+std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
+    FrameType frameType) {
+  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+  switch (frameType) {
+    case FrameType::SUBSCRIBE_NAMESPACE:
+      return BidiStreamConfig{
+          {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE},
+          [this](RequestID id) {
+            onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
+          }};
+    default:
+      return std::nullopt;
   }
 }
 
@@ -5406,18 +5394,27 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     if (*frameType == FrameType::CLIENT_SETUP) {
       // Process the frame as a CLIENT_SETUP
       handleClientSetup(bh, std::move(accumulatedData));
-    } else if (*frameType == FrameType::SUBSCRIBE_NAMESPACE) {
+    } else {
+      auto config = getBidiStreamConfig(*frameType);
+      if (!config) {
+        XLOG(ERR) << "Unexpected frame type on bidi stream: "
+                  << static_cast<uint64_t>(*frameType) << " sess=" << this;
+        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+        co_return;
+      }
+      auto cb = std::make_unique<BidiRequestCallback>(this, bh.writeHandle);
+      auto* cbPtr = cb.get();
       co_withExecutor(
           exec_.get(),
           co_withCancellation(
               cancellationSource_.getToken(),
-              subscribeNamespaceReceiverReadLoop(
-                  std::move(bh), std::move(accumulatedData))))
+              controlReadLoop(
+                  bh.readHandle,
+                  std::move(accumulatedData),
+                  makeBidiCodec(cbPtr, config->allowedFrames),
+                  std::move(cb),
+                  std::move(config->onStreamClosed))))
           .start();
-    } else {
-      XLOG(ERR) << "Unexpected frame type on bidi stream: "
-                << folly::to_underlying(*frameType) << " sess=" << this;
-      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     }
   }
 }
@@ -5939,17 +5936,6 @@ void MoQSession::setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
 void MoQSession::setSubscribeHandler(
     std::shared_ptr<Subscriber> subscribeHandler) {
   subscribeHandler_ = std::move(subscribeHandler);
-}
-
-std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
-    MoQControlCodec::ControlCallback* callback,
-    const std::vector<FrameType>& allowedFrames,
-    std::optional<RequestID> requestID) {
-  auto codec =
-      std::make_unique<MoQBidiStreamCodec>(callback, allowedFrames, requestID);
-  codec->initializeVersion(*negotiatedVersion_);
-  codec->setTokenCache(&receiveTokenCache_);
-  return codec;
 }
 
 std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
