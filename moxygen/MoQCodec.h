@@ -185,7 +185,7 @@ class MoQControlCodec : public MoQCodec {
 };
 
 // Generic bidi stream codec parameterized by allowed frame types.
-// Replaces MoQSubNsReceiverCodec and MoQSubNsSenderCodec.
+// Replaces MoQSubNsReceiverCodec.
 class MoQBidiStreamCodec : public MoQControlCodec {
  public:
   explicit MoQBidiStreamCodec(
@@ -224,7 +224,6 @@ class MoQBidiStreamCodec : public MoQControlCodec {
 };
 
 using MoQSubNsReceiverCodec = MoQBidiStreamCodec;
-using MoQSubNsSenderCodec = MoQBidiStreamCodec;
 
 class MoQObjectStreamCodec : public MoQCodec {
  public:
