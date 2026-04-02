@@ -51,18 +51,40 @@ struct MoQSettings {
       std::chrono::seconds(2)};
 };
 
+// Generic write destination for request responses.
+// Abstracts control stream vs bidi stream writing.
+class ReplyContext {
+ public:
+  explicit ReplyContext(folly::CancellationToken token)
+      : cancelToken_(std::move(token)) {}
+  virtual ~ReplyContext() = default;
+
+  // Get the buffer to serialize frames into
+  virtual folly::IOBufQueue& writeBuf() = 0;
+
+  // Flush serialized data to the transport, optionally with FIN
+  virtual void flush(bool fin = false) = 0;
+
+  bool cancelled() const {
+    return cancelToken_.isCancellationRequested();
+  }
+
+ protected:
+  folly::CancellationToken cancelToken_;
+};
+
 class SubNSReply {
  public:
-  explicit SubNSReply(MoQFrameWriter& moqFrameWriter)
-      : moqFrameWriter_(moqFrameWriter) {}
+  SubNSReply(
+      MoQFrameWriter& moqFrameWriter,
+      std::shared_ptr<ReplyContext> replyContext)
+      : moqFrameWriter_(moqFrameWriter),
+        replyContext_(std::move(replyContext)) {}
 
   virtual ~SubNSReply() = default;
 
-  virtual WriteResult ok(const SubscribeNamespaceOk&) {
-    XLOG(FATAL) << "Unimplemented";
-    folly::assume_unreachable();
-  }
-  virtual WriteResult error(const SubscribeNamespaceError&) = 0;
+  virtual WriteResult ok(const SubscribeNamespaceOk&);
+  virtual WriteResult error(const SubscribeNamespaceError&);
   virtual WriteResult namespaceMsg(const Namespace&) {
     XLOG(FATAL) << "Unimplemented";
     folly::assume_unreachable();
@@ -74,28 +96,7 @@ class SubNSReply {
 
  protected:
   MoQFrameWriter& moqFrameWriter_;
-};
-
-class SeparateStreamSubNsReplyBase : public SubNSReply {
- public:
-  SeparateStreamSubNsReplyBase(
-      MoQFrameWriter& moqFrameWriter,
-      folly::IOBufQueue& writeBuf,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle)
-      : SubNSReply(moqFrameWriter),
-        writeBuf_(writeBuf),
-        writeHandle_(writeHandle) {}
-
-  ~SeparateStreamSubNsReplyBase() override = default;
-
-  WriteResult error(const SubscribeNamespaceError&) override;
-
- protected:
-  folly::IOBufQueue& writeBuf_;
-  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
-  bool okSent_{false};
-  bool namespaceFrameSent_{false};
-  bool errorSent_{false};
+  std::shared_ptr<ReplyContext> replyContext_;
 };
 
 class MoQSession : public Subscriber,
@@ -188,10 +189,9 @@ class MoQSession : public Subscriber,
   }
 
   virtual std::shared_ptr<SubNSReply> getSubNsReply(
-      folly::IOBufQueue& bufQueue,
-      proxygen::WebTransport::StreamWriteHandle* writeHandle) {
-    return std::make_shared<SeparateStreamSubNsReplyBase>(
-        moqFrameWriter_, bufQueue, writeHandle);
+      std::shared_ptr<ReplyContext> replyContext) {
+    return std::make_shared<SubNSReply>(
+        moqFrameWriter_, std::move(replyContext));
   }
 
   [[nodiscard]] MoQExecutor* getExecutor() const {
@@ -409,6 +409,14 @@ class MoQSession : public Subscriber,
       return session_ ? session_->getTransportInfo() : quic::TransportInfo();
     }
 
+    void setReplyContext(std::shared_ptr<ReplyContext> ctx) {
+      replyContext_ = std::move(ctx);
+    }
+
+    ReplyContext* replyContext() const {
+      return replyContext_.get();
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -420,6 +428,7 @@ class MoQSession : public Subscriber,
     uint64_t bytesBuffered_{0};
     uint64_t bytesBufferedThreshold_{0};
     std::optional<uint8_t> publisherPriority_;
+    std::shared_ptr<ReplyContext> replyContext_;
   };
 
   void onNewUniStream(
@@ -435,6 +444,12 @@ class MoQSession : public Subscriber,
   // This is only called for draft >= 16.
   folly::coro::Task<void> bidiStreamDemuxer(
       proxygen::WebTransport::BidiStreamHandle bh) noexcept;
+
+  struct BidiStreamConfig {
+    std::vector<FrameType> allowedFrames;
+    folly::Function<void(RequestID)> onStreamClosed;
+  };
+  std::optional<BidiStreamConfig> getBidiStreamConfig(FrameType frameType);
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
   void onSessionEnd(folly::Optional<uint32_t> err) noexcept override {
     XLOG(DBG1) << __func__ << "err="
@@ -470,6 +485,46 @@ class MoQSession : public Subscriber,
       const TrackRequestParameters& params,
       uint64_t version);
 
+  // Single callback class for all bidi stream request types.
+  // Overrides all onXxx methods; the codec's allowedFrames filter ensures
+  // only the matching one fires.
+  class BidiRequestCallback : public MoQControlCodec::ControlCallback {
+   public:
+    BidiRequestCallback(
+        MoQSession* session,
+        proxygen::WebTransport::StreamWriteHandle* writeHandle)
+        : session_(session), writeHandle_(writeHandle) {}
+
+    void onConnectionError(ErrorCode error) override;
+    void onRequestUpdate(RequestUpdate requestUpdate) override;
+    void onSubscribeNamespace(SubscribeNamespace subNs) override;
+
+    std::optional<RequestID> requestID() const {
+      return requestID_;
+    }
+
+   private:
+    bool handleFirstFrame(RequestID reqId);
+
+    MoQSession* session_;
+    proxygen::WebTransport::StreamWriteHandle* writeHandle_;
+    std::optional<RequestID> requestID_;
+    std::shared_ptr<ReplyContext> replyContext_;
+  };
+
+  // Send a serialized request frame. Depending on draft version, creates a
+  // bidi stream and starts a read loop for responses. Otherwise, appends to
+  // the control stream buffer and signals. Returns the bidi write handle on
+  // success (nullptr for control stream path), or error string on failure.
+  folly::Expected<proxygen::WebTransport::StreamWriteHandle*, std::string>
+  sendRequest(
+      folly::IOBufQueue& writeBuf,
+      const std::vector<FrameType>& allowedResponses,
+      RequestID requestID,
+      uint64_t minBidiDraftVersion = 17,
+      std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
+          nullptr);
+
  private:
   static const folly::RequestToken& sessionRequestToken();
 
@@ -480,22 +535,25 @@ class MoQSession : public Subscriber,
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
 
-  folly::coro::Task<void> subscribeNamespaceReceiverReadLoop(
-      proxygen::WebTransport::BidiStreamHandle bh,
-      proxygen::WebTransport::StreamData initialData);
-
   class TrackPublisherImpl;
   class FetchPublisherImpl;
 
-  folly::coro::Task<void> handleTrackStatus(TrackStatus trackStatus);
-  void trackStatusOk(const TrackStatusOk& trackStatusOk);
-  void trackStatusError(const TrackStatusError& trackStatusError);
+  folly::coro::Task<void> handleTrackStatus(
+      TrackStatus trackStatus,
+      std::shared_ptr<ReplyContext> replyContext);
+  void trackStatusOk(
+      const TrackStatusOk& trackStatusOk,
+      ReplyContext& replyContext);
+  void trackStatusError(
+      const TrackStatusError& trackStatusError,
+      ReplyContext& replyContext);
 
   folly::coro::Task<void> handleSubscribe(
       SubscribeRequest sub,
-      std::shared_ptr<TrackPublisherImpl> trackPublisher);
-  void sendSubscribeOk(const SubscribeOk& subOk);
-  void subscribeError(const SubscribeError& subErr);
+      std::shared_ptr<TrackPublisherImpl> trackPublisher,
+      std::shared_ptr<ReplyContext> replyContext);
+  void sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& replyContext);
+  void subscribeError(const SubscribeError& subErr, ReplyContext& replyContext);
   void unsubscribe(const Unsubscribe& unsubscribe);
   // Backward compatibility forwarders
   void subscribeUpdate(const SubscribeUpdate& subUpdate) {
@@ -513,16 +571,20 @@ class MoQSession : public Subscriber,
 
   folly::coro::Task<void> handleFetch(
       Fetch fetch,
-      std::shared_ptr<FetchPublisherImpl> fetchPublisher);
-  void fetchOk(const FetchOk& fetchOk);
-  void fetchError(const FetchError& fetchError);
+      std::shared_ptr<FetchPublisherImpl> fetchPublisher,
+      std::shared_ptr<ReplyContext> replyContext);
+  void fetchOk(const FetchOk& fetchOk, ReplyContext& replyContext);
+  void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
   void fetchCancel(const FetchCancel& fetchCancel);
 
   folly::coro::Task<void> handlePublish(
       PublishRequest publish,
-      std::shared_ptr<Publisher::SubscriptionHandle> publishHandle);
-  void publishOk(const PublishOk& pubOk);
-  void publishError(const PublishError& publishError);
+      std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
+      std::shared_ptr<ReplyContext> replyContext);
+  void publishOk(const PublishOk& pubOk, ReplyContext& replyContext);
+  void publishError(
+      const PublishError& publishError,
+      ReplyContext& replyContext);
 
   class ReceiverSubscriptionHandle;
   class ReceiverFetchHandle;
@@ -582,12 +644,39 @@ class MoQSession : public Subscriber,
  protected:
   // Protected members and methods for MoQRelaySession subclass access
 
+  // Returns the shared ReplyContext for the control stream
+  std::shared_ptr<ReplyContext> controlStreamReplyContext();
+
+  // Impl methods - take ReplyContext so bidi stream callbacks can call them
+  void onSubscribeImpl(
+      SubscribeRequest subscribeRequest,
+      std::shared_ptr<ReplyContext> replyContext);
+  void onFetchImpl(Fetch fetch, std::shared_ptr<ReplyContext> replyContext);
+  void onTrackStatusImpl(
+      TrackStatus trackStatus,
+      std::shared_ptr<ReplyContext> replyContext);
+  void onPublishImpl(
+      PublishRequest publish,
+      std::shared_ptr<ReplyContext> replyContext);
+  virtual void onPublishNamespaceImpl(
+      PublishNamespace publishNamespace,
+      std::shared_ptr<ReplyContext> replyContext);
+
   void requestUpdate(const RequestUpdate& reqUpdate);
 
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle,
       proxygen::WebTransport::StreamData initialData,
-      MoQControlCodec* controlCodec);
+      std::unique_ptr<MoQControlCodec> codec = nullptr,
+      std::unique_ptr<BidiRequestCallback> bidiCallback = nullptr,
+      folly::Function<void(RequestID)> onStreamClosed = nullptr,
+      std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
+          nullptr);
+
+  std::unique_ptr<MoQControlCodec> makeBidiCodec(
+      MoQControlCodec::ControlCallback* callback,
+      const std::vector<FrameType>& allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt);
 
   // Core session state
   MoQControlCodec::Direction dir_;
@@ -598,8 +687,9 @@ class MoQSession : public Subscriber,
   // Control channel state
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
+  std::shared_ptr<ReplyContext> controlStreamReplyContext_;
 
-  std::shared_ptr<MoQControlCodec> controlCodec_;
+  std::unique_ptr<MoQControlCodec> controlCodec_;
 
   // Track management maps
   folly::F14FastMap<
@@ -641,7 +731,8 @@ class MoQSession : public Subscriber,
   // PublishNamespace response methods - available for responding to
   // incoming publishNamespaces
   void publishNamespaceError(
-      const PublishNamespaceError& publishNamespaceError);
+      const PublishNamespaceError& publishNamespaceError,
+      ReplyContext& replyContext);
   void subscribeNamespaceError(
       const SubscribeNamespaceError& subscribeNamespaceError,
       std::shared_ptr<SubNSReply>&& subNsReply);

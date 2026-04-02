@@ -207,7 +207,12 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
       &clientControlCodecCallback_};
 
   testing::NiceMock<MockMoQCodecCallback> subNsCodecCallback_;
-  MoQSubNsSenderCodec subscribeNamespaceCodec_{&subNsCodecCallback_};
+  MoQBidiStreamCodec subscribeNamespaceCodec_{
+      &subNsCodecCallback_,
+      {FrameType::NAMESPACE,
+       FrameType::NAMESPACE_DONE,
+       FrameType::REQUEST_OK,
+       FrameType::REQUEST_ERROR}};
 };
 
 TEST_P(MoQCodecTest, All) {
