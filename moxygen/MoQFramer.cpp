@@ -484,6 +484,11 @@ folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
+    if (filterSize > 0) {
+      XLOG(DBG4) << "parseVariableParam: subscription filter did not consume"
+                 << " all declared bytes, remaining=" << filterSize;
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
     length -= lenRes->first;
     p.asSubscriptionFilter = res.value();
   }
@@ -594,6 +599,11 @@ folly::Expected<folly::Unit, ErrorCode> parseParams(
       if (!largestLocation) {
         XLOG(DBG4) << "parseParams: returning error from parseAbsoluteLocation";
         return folly::makeUnexpected(largestLocation.error());
+      }
+      if (objSize > 0) {
+        XLOG(DBG4) << "parseParams: LARGEST_OBJECT did not consume"
+                   << " all declared bytes, remaining=" << objSize;
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
       length -= lenRes->first;
       res = Parameter(key, largestLocation.value());
