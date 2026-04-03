@@ -129,6 +129,10 @@ class MoQRelaySession::SubscribeNamespaceHandle
 
   void unsubscribeNamespace() override {
     if (session_) {
+      if (session_->isClosed()) {
+        session_.reset();
+        return;
+      }
       if (bidiStreamHandle_.writeHandle) {
         // Draft 16+: Close the bidi stream with a FIN
         MOQ_SUBSCRIBER_STATS(
@@ -1297,10 +1301,10 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
   }
   auto res = moqFrameWriter_.writeNamespaceDone(writeBuf_, msg);
   if (okSent_) {
-    writeHandle_->writeStreamData(writeBuf_.move(), true /* fin */, nullptr);
+    writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
   } else {
     pendingBuf_.append(writeBuf_.move());
-    pendingFin_ = true;
+    pendingFin_ = false;
   }
   return res;
 }

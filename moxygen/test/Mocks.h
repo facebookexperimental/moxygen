@@ -326,6 +326,12 @@ class MockPublishNamespaceCallback
       (override));
 };
 
+class MockNamespacePublishHandle : public Publisher::NamespacePublishHandle {
+ public:
+  MOCK_METHOD(void, namespaceMsg, (const TrackNamespace&), (override));
+  MOCK_METHOD(void, namespaceDoneMsg, (const TrackNamespace&), (override));
+};
+
 class MockPublisher : public Publisher {
  public:
   MOCK_METHOD(

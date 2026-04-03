@@ -20,7 +20,8 @@ proxygen::HTTPMessage getWebTransportConnectRequest(
   proxygen::HTTPMessage req;
   req.setHTTPVersion(1, 1);
   req.setSecure(true);
-  req.getHeaders().set(proxygen::HTTP_HEADER_HOST, url.getHost());
+  req.getHeaders().set(
+      proxygen::HTTP_HEADER_HOST, url.getHostAndPortOmitDefault());
   req.getHeaders().add("Sec-Webtransport-Http3-Draft02", "1");
   req.setURL(url.makeRelativeURL());
   req.setMethod(proxygen::HTTPMethod::CONNECT);
