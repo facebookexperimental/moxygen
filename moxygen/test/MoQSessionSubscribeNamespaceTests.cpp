@@ -45,13 +45,37 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceAfterSessionClosed) {
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          testing::Invoke(
+              [](auto /*subAnn*/, auto /*handler*/)
+                  -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+                co_return std::make_shared<MockSubscribeNamespaceHandle>(
+                    SubscribeNamespaceOk(
+                        {.requestID = RequestID(0),
+                         .requestSpecificParams = {}}));
+              }));
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeNamespaceSuccess());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeNamespaceSuccess());
+  auto subscribeNamespaceResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  EXPECT_FALSE(subscribeNamespaceResult.hasError());
+
+  // Close the session first, then unsubscribe - should not crash
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  EXPECT_NO_THROW(subscribeNamespaceResult.value()->unsubscribeNamespace());
+}
 CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   co_await setupMoQSession();
 
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto subAnn, auto handler)
+              [](auto subAnn, auto /*handler*/)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 SubscribeNamespaceError subAnnError{
                     subAnn.requestID,

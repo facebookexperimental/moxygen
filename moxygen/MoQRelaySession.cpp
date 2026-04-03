@@ -129,6 +129,10 @@ class MoQRelaySession::SubscribeNamespaceHandle
 
   void unsubscribeNamespace() override {
     if (session_) {
+      if (session_->isClosed()) {
+        session_.reset();
+        return;
+      }
       if (bidiStreamHandle_.writeHandle) {
         // Draft 16+: Close the bidi stream with a FIN
         MOQ_SUBSCRIBER_STATS(
