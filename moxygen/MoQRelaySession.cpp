@@ -1301,10 +1301,10 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
   }
   auto res = moqFrameWriter_.writeNamespaceDone(writeBuf_, msg);
   if (okSent_) {
-    writeHandle_->writeStreamData(writeBuf_.move(), true /* fin */, nullptr);
+    writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
   } else {
     pendingBuf_.append(writeBuf_.move());
-    pendingFin_ = true;
+    pendingFin_ = false;
   }
   return res;
 }
