@@ -30,6 +30,7 @@ target_link_libraries(
   moxygen_relay_moq_forwarder
   moxygen_relay_moq_relay_client
   moxygen_util_signal_handler
+  Folly::folly_futures_core
 )
 
 install(
