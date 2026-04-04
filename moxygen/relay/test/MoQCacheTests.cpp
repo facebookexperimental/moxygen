@@ -2366,6 +2366,41 @@ TEST_F(MoQCacheTest, TestClearMaxCacheDuration) {
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 4}));
 }
 
+TEST_F(MoQCacheTest, TestDefaultMaxCacheDurationExpiration) {
+  // Default TTL applies to tracks without a per-track duration set.
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  cache_.setDefaultMaxCacheDuration(std::chrono::milliseconds(1000));
+  populateCacheRange({0, 0}, {0, 5});
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  // Advance past the default TTL
+  currentTime += std::chrono::milliseconds(1001);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+}
+
+TEST_F(MoQCacheTest, TestPerTrackDurationOverridesDefault) {
+  // A per-track duration takes precedence over the default.
+  // default=500ms, per-track=2000ms: objects should survive past 500ms.
+  auto currentTime = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&currentTime]() { return currentTime; });
+
+  cache_.setDefaultMaxCacheDuration(std::chrono::milliseconds(500));
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(2000));
+  populateCacheRange({0, 0}, {0, 5});
+
+  // Past the default TTL but within the per-track TTL
+  currentTime += std::chrono::milliseconds(501);
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  // Past the per-track TTL
+  currentTime += std::chrono::milliseconds(1500);
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+}
+
 // Regression test: SubgroupWriteback does not propagate cache errors to the
 // inner SubgroupConsumer. When an upstream subgroup stream delivers an object
 // that hits a cache error (e.g., payload mismatch with an already-cached
