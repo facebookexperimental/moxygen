@@ -2,6 +2,7 @@
 # Used by all variants (native server, evb server, evb client).
 moxygen_add_library(openmoq_pico_base
   SRCS
+    PicoWebTransportBase.cpp
     PicoQuicWebTransport.cpp
   EXPORTED_DEPS
     proxygen::proxygen_http_webtransport
@@ -73,3 +74,4 @@ moxygen_add_library(openmoq_pico_evb_client_transport
 if(BUILD_SAMPLES)
   add_subdirectory(sample)
 endif()
+
