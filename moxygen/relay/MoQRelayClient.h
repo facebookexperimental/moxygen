@@ -79,8 +79,10 @@ class MoQRelayClient {
         }
       }
       if (isPublisher) {
+        auto cancelToken = moqClient_->moqSession_->getCancelToken();
         while (moqClient_->moqSession_) {
-          co_await folly::coro::sleep(std::chrono::seconds(30));
+          co_await folly::coro::co_withCancellation(
+              cancelToken, folly::coro::sleep(std::chrono::seconds(30)));
           if (!moqClient_->moqSession_) {
             break;
           }
@@ -100,7 +102,7 @@ class MoQRelayClient {
   }
 
   std::shared_ptr<MoQSession> getSession() const {
-    return moqClient_->moqSession_;
+    return moqClient_ ? moqClient_->moqSession_ : nullptr;
   }
 
   MoQExecutor* getEventBase() const {
@@ -119,14 +121,7 @@ class MoQRelayClient {
     if (moqClient_ && moqClient_->logger_) {
       moqClient_->logger_->outputLogs();
     }
-    if (moqClient_ && moqClient_->moqSession_) {
-      // Break strong references held by the session to the Publisher/Subscriber
-      moqClient_->moqSession_->setPublishHandler(nullptr);
-      moqClient_->moqSession_->setSubscribeHandler(nullptr);
-      // Close the session cleanly after relay run has stopped
-      moqClient_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
-      moqClient_->moqSession_.reset();
-    }
+    moqClient_.reset();
   }
 
  private:
