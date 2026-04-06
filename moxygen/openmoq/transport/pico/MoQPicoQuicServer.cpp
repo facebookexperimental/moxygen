@@ -20,15 +20,18 @@ struct MoQPicoQuicServer::Impl {
   std::shared_ptr<PicoQuicExecutor> ownedExecutor_;
 };
 
-MoQPicoQuicServer::MoQPicoQuicServer(std::string cert,
-                                     std::string key,
-                                     std::string endpoint,
-                                     std::string versions)
+MoQPicoQuicServer::MoQPicoQuicServer(
+    std::string cert,
+    std::string key,
+    std::string endpoint,
+    std::string versions,
+    PicoWebTransportConfig wtConfig)
     : MoQPicoServerBase(
           std::move(cert),
           std::move(key),
           std::move(endpoint),
-          std::move(versions)),
+          std::move(versions),
+          std::move(wtConfig)),
       impl_(std::make_unique<Impl>()) {}
 
 MoQPicoQuicServer::~MoQPicoQuicServer() {

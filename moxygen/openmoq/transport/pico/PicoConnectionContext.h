@@ -6,7 +6,10 @@
 
 #pragma once
 
+#include <h3zero_common.h>
+#include <moxygen/openmoq/transport/pico/PicoH3WebTransport.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicWebTransport.h>
+#include <pico_webtransport.h>
 #include <picoquic.h>
 #include <memory>
 
@@ -41,7 +44,11 @@ inline int dispatchConnectionEvent(
     return -1;
   }
   int ret = ctx->webTransport->handlePicoEvent(
-      cnx, stream_id, bytes, length, static_cast<int>(fin_or_event),
+      cnx,
+      stream_id,
+      bytes,
+      length,
+      static_cast<int>(fin_or_event),
       v_stream_ctx);
   switch (fin_or_event) {
     case picoquic_callback_close:
@@ -53,6 +60,46 @@ inline int dispatchConnectionEvent(
     default:
       return ret;
   }
+}
+
+// Per-session callback context for H3 WebTransport, stored in
+// streamCtx->path_callback_ctx once a WT session is established. Mirrors
+// PicoConnectionContext for the QUIC path: magic distinguishes this struct
+// from any other pointer during teardown.
+struct PicoH3SessionContext {
+  static constexpr uint32_t kMagic = 0xC0EC0002;
+  uint32_t magic{kMagic};
+  std::shared_ptr<PicoH3WebTransport> webTransport;
+  std::shared_ptr<MoQSession> moqSession; // keepalive
+};
+
+// Dispatches an H3 WebTransport event to the appropriate PicoH3WebTransport.
+// streamCtx->path_callback_ctx must hold a valid PicoH3SessionContext.
+// When handleWtEvent returns kDeleteCtx (last stream freed after deregister),
+// deletes the session context and returns 0 to h3zero.
+inline int dispatchH3Event(
+    picoquic_cnx_t* cnx,
+    uint8_t* bytes,
+    size_t length,
+    int event,
+    h3zero_stream_ctx_t* streamCtx) {
+  if (!streamCtx) {
+    return 0;
+  }
+  auto* sessionCtx =
+      static_cast<PicoH3SessionContext*>(streamCtx->path_callback_ctx);
+  if (!sessionCtx || sessionCtx->magic != PicoH3SessionContext::kMagic) {
+    return 0;
+  }
+  int ret = sessionCtx->webTransport->handleWtEvent(
+      cnx, bytes, length, event, streamCtx);
+  if (ret == PicoH3WebTransport::kDeleteCtx) {
+    sessionCtx->magic = 0xDEADBEEF;
+    delete sessionCtx;
+    streamCtx->path_callback_ctx = nullptr;
+    return 0;
+  }
+  return ret;
 }
 
 } // namespace moxygen

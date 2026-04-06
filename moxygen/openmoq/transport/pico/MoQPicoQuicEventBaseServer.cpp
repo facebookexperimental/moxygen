@@ -8,7 +8,7 @@
 #include <folly/logging/xlog.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicSocketHandler.h>
-#include <moxygen/openmoq/transport/pico/PicoQuicWebTransport.h>
+#include <moxygen/openmoq/transport/pico/PicoWebTransportBase.h>
 #include <picoquic.h>
 
 namespace moxygen {
@@ -23,12 +23,14 @@ MoQPicoQuicEventBaseServer::MoQPicoQuicEventBaseServer(
     std::string key,
     std::string endpoint,
     folly::Executor::KeepAlive<folly::EventBase> evb,
-    std::string versions)
+    std::string versions,
+    PicoWebTransportConfig wtConfig)
     : MoQPicoServerBase(
           std::move(cert),
           std::move(key),
           std::move(endpoint),
-          std::move(versions)),
+          std::move(versions),
+          std::move(wtConfig)),
       impl_(std::make_unique<Impl>()),
       evb_(std::move(evb)) {}
 
@@ -52,13 +54,12 @@ void MoQPicoQuicEventBaseServer::start(const folly::SocketAddress& addr) {
 
   XLOG(INFO) << "Starting MoQPicoQuicEventBaseServer on " << addr.describe();
 
-  impl_->handler =
-      std::make_unique<PicoQuicSocketHandler>(evb_.get(), quic_);
+  impl_->handler = std::make_unique<PicoQuicSocketHandler>(evb_.get(), quic_);
   impl_->handler->start(addr);
 }
 
 void MoQPicoQuicEventBaseServer::onWebTransportCreated(
-    PicoQuicWebTransport& wt) noexcept {
+    PicoWebTransportBase& wt) noexcept {
   wt.setUpdateWakeTimeoutCallback(
       [handler = impl_->handler.get()] { handler->updateWakeTimeout(); });
 }

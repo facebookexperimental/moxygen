@@ -13,6 +13,15 @@ moxygen_add_library(openmoq_pico_base
     Folly::folly_string
     picoquic::picoquic-core
 )
+# PicoConnectionContext.h includes PicoH3WebTransport.h which needs h3zero.
+# Propagate picohttp include path to all consumers via BUILD_INTERFACE
+# (avoids CMake policy error for build-dir paths in INTERFACE_INCLUDE_DIRECTORIES).
+if(TARGET picohttp-core)
+  target_include_directories(openmoq_pico_base PUBLIC
+    $<BUILD_INTERFACE:${picoquic_SOURCE_DIR}/picohttp>)
+  target_link_libraries(openmoq_pico_base PUBLIC
+    $<TARGET_FILE:picohttp-core>)
+endif()
 
 # Shared server base: ALPN selection, picoCallback, per-connection context,
 # onNewConnectionImpl. Used by both the thread-based and EventBase servers.
@@ -21,6 +30,7 @@ moxygen_add_library(openmoq_pico_server_base
     MoQPicoServerBase.cpp
   EXPORTED_DEPS
     openmoq_pico_base
+    openmoq_pico_h3_webtransport
     moxygen_moq_server_base
     moxygen_events_moq_executor
     Folly::folly_function
@@ -35,12 +45,6 @@ moxygen_add_library(openmoq_pico_h3_webtransport
   EXPORTED_DEPS
     openmoq_pico_base
 )
-if(TARGET picohttp-core)
-  target_include_directories(openmoq_pico_h3_webtransport PRIVATE
-    ${picoquic_SOURCE_DIR}/picohttp)
-  target_link_libraries(openmoq_pico_h3_webtransport PRIVATE
-    $<TARGET_FILE:picohttp-core>)
-endif()
 
 # Thread-based server: picoquic runs its own network thread via
 # picoquic_start_network_thread; bridged to moxygen via PicoQuicExecutor.

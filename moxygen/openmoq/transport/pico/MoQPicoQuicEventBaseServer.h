@@ -9,9 +9,9 @@
 #include <folly/Executor.h>
 #include <folly/SocketAddress.h>
 #include <folly/io/async/EventBase.h>
-#include <memory>
 #include <moxygen/events/MoQExecutor.h>
 #include <moxygen/openmoq/transport/pico/MoQPicoServerBase.h>
+#include <memory>
 #include <string>
 
 namespace moxygen {
@@ -41,14 +41,14 @@ class MoQPicoQuicEventBaseServer : public MoQPicoServerBase {
       std::string key,
       std::string endpoint,
       folly::Executor::KeepAlive<folly::EventBase> evb,
-      std::string versions = "");
+      std::string versions = "",
+      PicoWebTransportConfig wtConfig = {});
 
   MoQPicoQuicEventBaseServer(const MoQPicoQuicEventBaseServer&) = delete;
   MoQPicoQuicEventBaseServer(MoQPicoQuicEventBaseServer&&) = delete;
-  MoQPicoQuicEventBaseServer& operator=(
-      const MoQPicoQuicEventBaseServer&) = delete;
-  MoQPicoQuicEventBaseServer& operator=(
-      MoQPicoQuicEventBaseServer&&) = delete;
+  MoQPicoQuicEventBaseServer& operator=(const MoQPicoQuicEventBaseServer&) =
+      delete;
+  MoQPicoQuicEventBaseServer& operator=(MoQPicoQuicEventBaseServer&&) = delete;
   ~MoQPicoQuicEventBaseServer() override;
 
   /**
@@ -64,7 +64,7 @@ class MoQPicoQuicEventBaseServer : public MoQPicoServerBase {
   void stop() override;
 
  protected:
-  void onWebTransportCreated(PicoQuicWebTransport& wt) noexcept override;
+  void onWebTransportCreated(PicoWebTransportBase& wt) noexcept override;
 
  private:
   struct Impl;
