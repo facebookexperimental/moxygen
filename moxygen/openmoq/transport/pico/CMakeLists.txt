@@ -26,6 +26,22 @@ moxygen_add_library(openmoq_pico_server_base
     Folly::folly_function
 )
 
+# HTTP/3 WebTransport adapter for picoquic (h3 ALPN, browser clients).
+# Depends on picohttp/h3zero; linked separately to avoid exporting picohttp
+# as a public dependency of openmoq_pico_server_base.
+moxygen_add_library(openmoq_pico_h3_webtransport
+  SRCS
+    PicoH3WebTransport.cpp
+  EXPORTED_DEPS
+    openmoq_pico_base
+)
+if(TARGET picohttp-core)
+  target_include_directories(openmoq_pico_h3_webtransport PRIVATE
+    ${picoquic_SOURCE_DIR}/picohttp)
+  target_link_libraries(openmoq_pico_h3_webtransport PRIVATE
+    $<TARGET_FILE:picohttp-core>)
+endif()
+
 # Thread-based server: picoquic runs its own network thread via
 # picoquic_start_network_thread; bridged to moxygen via PicoQuicExecutor.
 moxygen_add_library(openmoq_pico_server_transport
