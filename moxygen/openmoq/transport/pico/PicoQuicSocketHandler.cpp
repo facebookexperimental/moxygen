@@ -42,12 +42,15 @@ constexpr size_t kMaxPacketSize = 1500;
 constexpr size_t kCmsgBufSize =
     CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint8_t));
 // Max wake delay passed to picoquic (200 ms in microseconds).
+// This is does not impact loop latency, whenever the wake delay shrinks, we
+// reschedule
 constexpr int64_t kMaxWakeDelayUs = 200'000;
 
 } // namespace
 
-PicoQuicSocketHandler::PicoQuicSocketHandler(folly::EventBase* evb,
-                                             picoquic_quic_t* quic)
+PicoQuicSocketHandler::PicoQuicSocketHandler(
+    folly::EventBase* evb,
+    picoquic_quic_t* quic)
     : folly::AsyncTimeout(evb), socket_(evb), quic_(quic), evb_(evb) {}
 
 PicoQuicSocketHandler::~PicoQuicSocketHandler() {
@@ -55,16 +58,29 @@ PicoQuicSocketHandler::~PicoQuicSocketHandler() {
 }
 
 void PicoQuicSocketHandler::start(const folly::SocketAddress& addr) {
+  XLOG(DBG1) << "PicoQuicSocketHandler::start called, addr=" << addr.describe();
+
+  if (addr.getFamily() == AF_INET6) {
+    // Enable dual-stack (accept both IPv4 and IPv6) by setting IPV6_V6ONLY=0
+    // before bind. AsyncUDPSocket supports this via init() +
+    // applyOptions(PRE_BIND).
+    socket_.init(addr.getFamily());
+    socket_.applyOptions(
+        {{folly::SocketOptionKey{IPPROTO_IPV6, IPV6_V6ONLY}, 0}},
+        folly::SocketOptionKey::ApplyPos::PRE_BIND);
+    XLOG(DBG3) << "Dual-stack enabled (IPV6_V6ONLY=0)";
+  }
   socket_.bind(addr);
   fd_ = socket_.getNetworkSocket().toFd();
   localPort_ = socket_.address().getPort();
+  XLOG(DBG4) << "Socket bound, fd=" << fd_ << " localPort=" << localPort_;
 
   // Enable IP_PKTINFO / IPV6_RECVPKTINFO so recvmsg delivers the local
   // destination address. AsyncUDPSocket does not set these by default.
   int one = 1;
   if (addr.getFamily() == AF_INET6) {
-    if (::setsockopt(fd_, IPPROTO_IPV6, IPV6_RECVPKTINFO, &one,
-                     sizeof(one)) < 0) {
+    if (::setsockopt(fd_, IPPROTO_IPV6, IPV6_RECVPKTINFO, &one, sizeof(one)) <
+        0) {
       XLOG(WARN) << "setsockopt IPV6_RECVPKTINFO failed: "
                  << folly::errnoStr(errno);
     }
@@ -76,8 +92,7 @@ void PicoQuicSocketHandler::start(const folly::SocketAddress& addr) {
     }
 #else
     if (::setsockopt(fd_, IPPROTO_IP, IP_PKTINFO, &one, sizeof(one)) < 0) {
-      XLOG(WARN) << "setsockopt IP_PKTINFO failed: "
-                 << folly::errnoStr(errno);
+      XLOG(WARN) << "setsockopt IP_PKTINFO failed: " << folly::errnoStr(errno);
     }
 #endif
   }
@@ -183,14 +198,21 @@ void PicoQuicSocketHandler::onNotifyDataAvailable(
   }
 }
 
-void PicoQuicSocketHandler::getReadBuffer(void** /*buf*/,
-                                          size_t* /*len*/) noexcept {}
+void PicoQuicSocketHandler::getReadBuffer(
+    void** /*buf*/,
+    size_t* /*len*/) noexcept {
+  XLOG(WARN)
+      << "getReadBuffer called (should not happen with shouldOnlyNotify)";
+}
 
 void PicoQuicSocketHandler::onDataAvailable(
     const folly::SocketAddress& /*client*/,
     size_t /*len*/,
     bool /*truncated*/,
-    OnDataAvailableParams /*params*/) noexcept {}
+    OnDataAvailableParams /*params*/) noexcept {
+  XLOG(WARN)
+      << "onDataAvailable called (should not happen with shouldOnlyNotify)";
+}
 
 void PicoQuicSocketHandler::onReadError(
     const folly::AsyncSocketException& ex) noexcept {
@@ -225,8 +247,7 @@ void PicoQuicSocketHandler::errMessage(const cmsghdr& cmsg) noexcept {
     const auto* ee =
         reinterpret_cast<const struct sock_extended_err*>(CMSG_DATA(&cmsg));
     XLOG(WARN) << "ICMP error from peer: origin=" << (int)ee->ee_origin
-               << " type=" << (int)ee->ee_type
-               << " code=" << (int)ee->ee_code
+               << " type=" << (int)ee->ee_type << " code=" << (int)ee->ee_code
                << " errno=" << (int)ee->ee_errno;
     // TODO: call picoquic_notify_destination_unreachable(cnx, ...) to let
     // picoquic fail the path immediately.  Requires a cnx lookup by peer
@@ -244,9 +265,11 @@ void PicoQuicSocketHandler::errMessageError(
 // I/O helpers
 // ---------------------------------------------------------------------------
 
-void PicoQuicSocketHandler::parseCmsgsAndDeliver(const struct mmsghdr& msg,
-                                                 const uint8_t* pkt,
-                                                 uint64_t currentTime) {
+void PicoQuicSocketHandler::parseCmsgsAndDeliver(
+    const struct mmsghdr& msg,
+    const uint8_t* pkt,
+    uint64_t currentTime) {
+  XLOG(DBG5) << "parseCmsgsAndDeliver: pktLen=" << msg.msg_len;
   sockaddr_storage addrTo{};
   int ifIndex = 0;
   unsigned char ecn = 0;
@@ -271,13 +294,12 @@ void PicoQuicSocketHandler::parseCmsgsAndDeliver(const struct mmsghdr& msg,
         ifIndex = static_cast<int>(pki->ipi_ifindex);
       } else
 #endif
-      if (cmsg->cmsg_type == IP_TOS || cmsg->cmsg_type == IP_RECVTOS) {
+          if (cmsg->cmsg_type == IP_TOS || cmsg->cmsg_type == IP_RECVTOS) {
         ecn = *reinterpret_cast<unsigned char*>(CMSG_DATA(cmsg));
       }
     } else if (cmsg->cmsg_level == IPPROTO_IPV6) {
       if (cmsg->cmsg_type == IPV6_PKTINFO) {
-        auto* pki6 =
-            reinterpret_cast<struct in6_pktinfo*>(CMSG_DATA(cmsg));
+        auto* pki6 = reinterpret_cast<struct in6_pktinfo*>(CMSG_DATA(cmsg));
         auto* dst = reinterpret_cast<sockaddr_in6*>(&addrTo);
         dst->sin6_family = AF_INET6;
         dst->sin6_port = htons(localPort_);
@@ -289,15 +311,19 @@ void PicoQuicSocketHandler::parseCmsgsAndDeliver(const struct mmsghdr& msg,
     }
   }
 
+  // Log address info for debugging dual-stack issues
+  auto* fromAddr =
+      reinterpret_cast<const sockaddr_storage*>(msg.msg_hdr.msg_name);
+  XLOG(DBG6) << "parseCmsgsAndDeliver: from.family=" << fromAddr->ss_family
+             << " to.family=" << addrTo.ss_family << " pktLen=" << msg.msg_len;
+
   picoquic_cnx_t* lastCnx = nullptr;
   int ret = picoquic_incoming_packet_ex(
       quic_,
       const_cast<uint8_t*>(pkt),
       static_cast<size_t>(msg.msg_len),
-      reinterpret_cast<sockaddr*>(
-          const_cast<sockaddr_storage*>(
-              reinterpret_cast<const sockaddr_storage*>(
-                  msg.msg_hdr.msg_name))),
+      reinterpret_cast<sockaddr*>(const_cast<sockaddr_storage*>(
+          reinterpret_cast<const sockaddr_storage*>(msg.msg_hdr.msg_name))),
       reinterpret_cast<sockaddr*>(&addrTo),
       ifIndex,
       ecn,
@@ -349,14 +375,15 @@ void PicoQuicSocketHandler::drainOutgoing() {
   }
 }
 
-void PicoQuicSocketHandler::sendPacket(const uint8_t* data,
-                                       size_t length,
-                                       const sockaddr_storage& addrTo,
-                                       const sockaddr_storage& addrFrom,
-                                       int ifIndex,
-                                       size_t sendMsgSize) {
-  char cmsgBuf[CMSG_SPACE(sizeof(struct in6_pktinfo)) +
-               CMSG_SPACE(sizeof(uint16_t))];
+void PicoQuicSocketHandler::sendPacket(
+    const uint8_t* data,
+    size_t length,
+    const sockaddr_storage& addrTo,
+    const sockaddr_storage& addrFrom,
+    int ifIndex,
+    size_t sendMsgSize) {
+  char cmsgBuf
+      [CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint16_t))];
 
   struct iovec iov;
   iov.iov_base = const_cast<uint8_t*>(data);
@@ -365,7 +392,7 @@ void PicoQuicSocketHandler::sendPacket(const uint8_t* data,
   struct msghdr msg{};
   msg.msg_name = const_cast<sockaddr_storage*>(&addrTo);
   msg.msg_namelen = (addrTo.ss_family == AF_INET6) ? sizeof(sockaddr_in6)
-                                                    : sizeof(sockaddr_in);
+                                                   : sizeof(sockaddr_in);
   msg.msg_iov = &iov;
   msg.msg_iovlen = 1;
   msg.msg_control = cmsgBuf;
@@ -431,14 +458,18 @@ void PicoQuicSocketHandler::sendPacket(const uint8_t* data,
 }
 
 void PicoQuicSocketHandler::updateWakeTimeout() {
+  // Called via WakeTimeGuard when picoquic's next wake time decreases (e.g.
+  // after marking a stream or datagram active). Cancel the current timer and
+  // reschedule: rescheduleTimer will call evb_->add() for delay<=0, which is
+  // effectively immediate since the EVB passes 0 to epoll when tasks are
+  // pending.
   cancelTimeout();
   rescheduleTimer();
 }
 
 void PicoQuicSocketHandler::rescheduleTimer() {
   uint64_t now = picoquic_current_time();
-  int64_t rawDelayUs =
-      picoquic_get_next_wake_delay(quic_, now, INT64_MAX);
+  int64_t rawDelayUs = picoquic_get_next_wake_delay(quic_, now, INT64_MAX);
   int64_t delayUs = std::min(rawDelayUs, kMaxWakeDelayUs);
   if (delayUs <= 0) {
     evb_->add([this] {
