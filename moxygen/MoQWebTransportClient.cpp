@@ -110,18 +110,10 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
     const std::vector<std::string>& alpns) noexcept {
   proxygen::WebTransport* wt = nullptr;
 
-  std::vector<std::string> protocolList =
+  std::vector<std::string> wtProtocols =
       alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
   XLOG(DBG1) << "MoQWebTransportClient: WT ALPNs: "
-             << folly::join(", ", protocolList);
-
-  // Filter out legacy ALPN — not used for WebTransport protocol negotiation
-  std::vector<std::string> wtProtocols;
-  for (const auto& p : protocolList) {
-    if (!isLegacyAlpn(p)) {
-      wtProtocols.push_back(p);
-    }
-  }
+             << folly::join(", ", wtProtocols);
 
   // Establish H3 connection
   auto session = co_await connectH3WithWebtransport(
