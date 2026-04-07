@@ -73,6 +73,8 @@ class MoQCacheTest : public ::testing::Test {
     // Individual tests can override these limits as needed
     cache_.setMaxCachedTracks(0);
     cache_.setMaxCachedGroupsPerTrack(0);
+    cache_.setMaxCachedBytes(0);
+    cache_.setMinEvictionBytes(0);
 
     // Set up test timeout (5 seconds)
     setupTestTimeout();
@@ -2542,6 +2544,131 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchSavesExtensionsToTrack) {
   EXPECT_EQ(
       fetchExtensions.getIntExtension(kDeliveryTimeoutExtensionType), 3000);
   EXPECT_EQ(fetchExtensions.getIntExtension(0xCAFE'0000), 99);
+}
+
+// ============================================================================
+// Byte Limit Tests
+// ============================================================================
+
+CO_TEST_F(MoQCacheTest, TestByteLimitEvictsLRUGroup) {
+  // 3 groups, 1 object each, 100 bytes each = 300 bytes total
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset(); // make track evictable
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+
+  // Limit to 250 bytes: oldest group (0) evicted, groups 1 & 2 remain (200b)
+  cache_.setMaxCachedBytes(250);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+  // Track still exists — only one group was evicted, not the whole track
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestByteLimitNoEvictLiveTrack) {
+  // Live track (active subscribe) must not be evicted even when over limit
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  // sub1 stays alive — track1 is live and non-evictable
+
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub2.reset(); // track2 is evictable
+
+  // Both tracks have 100 bytes each = 200 bytes total
+  // Limit to 150: track2 should be evicted, track1 (live) must survive
+  cache_.setMaxCachedBytes(150);
+
+  EXPECT_TRUE(cache_.hasTrack(track1));
+  EXPECT_FALSE(cache_.hasTrack(track2));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestSetMaxCachedBytesTriggersEviction) {
+  // Populate 3 groups, then retroactively apply a byte limit
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+
+  // Limit to 150: evicts groups 0 and 1 (oldest), leaving group 2 (100 bytes)
+  cache_.setMaxCachedBytes(150);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestBytesTrackedAcrossStreamingObject) {
+  // Verify byte tracking accumulates correctly via objectPayload() chunks.
+  // Write a 200-byte object in two 100-byte chunks, then apply a byte limit.
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  {
+    // Block scope: subConsumer destructor adds group 0 back to groupLRU_
+    auto sub = writeback->beginSubgroup(0, 0, 0);
+    EXPECT_TRUE(sub.hasValue());
+    auto subConsumer = sub.value();
+    EXPECT_TRUE(subConsumer->beginObject(0, 200, makeBuf(100), {}).hasValue());
+    EXPECT_TRUE(subConsumer->objectPayload(makeBuf(100), true).hasValue());
+    // Group 0 now has 200 bytes tracked
+  } // subConsumer destroyed → group 0 re-added to groupLRU_
+
+  writeback.reset(); // make track evictable → added to trackLRU_
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  // Limit to 150 bytes — group 0 (200 bytes) must be evicted
+  cache_.setMaxCachedBytes(150);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestMinEvictionBytesLowWatermark) {
+  // 5 groups × 100 bytes = 500 bytes total.
+  // Limit = 450, minEvictionBytes = 150 → target = 450-150 = 300.
+  //
+  // Without minEvictionBytes: evict until ≤450 → evict group 0 (→400). Stop.
+  //   Groups 1–4 survive.
+  // With minEvictionBytes=150:  evict until ≤300 → evict group 0 (→400>300),
+  //   evict group 1 (→300≤300). Stop. Groups 2–4 survive.
+  cache_.setMinEvictionBytes(150);
+
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(4, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  cache_.setMaxCachedBytes(450);
+
+  // Two oldest groups evicted (not just one) because of the low watermark
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {3, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {4, 0}));
+  co_return;
 }
 
 } // namespace moxygen::test

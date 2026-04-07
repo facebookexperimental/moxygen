@@ -23,6 +23,8 @@ namespace moxygen {
 // Default cache size limits
 constexpr size_t kDefaultMaxCachedTracks = 100;
 constexpr size_t kDefaultMaxCachedGroupsPerTrack = 3;
+constexpr size_t kDefaultMaxCachedBytes = 10 * 1024 * 1024; // 10 MB
+constexpr size_t kDefaultMinEvictionBytes = 100 * 1024;     // 100 KB
 
 class MoQCache {
  public:
@@ -31,9 +33,13 @@ class MoQCache {
 
   explicit MoQCache(
       size_t maxCachedTracks = kDefaultMaxCachedTracks,
-      size_t maxCachedGroupsPerTrack = kDefaultMaxCachedGroupsPerTrack)
+      size_t maxCachedGroupsPerTrack = kDefaultMaxCachedGroupsPerTrack,
+      size_t maxCachedBytes = kDefaultMaxCachedBytes,
+      size_t minEvictionBytes = kDefaultMinEvictionBytes)
       : maxCachedTracks_(maxCachedTracks),
         maxCachedGroupsPerTrack_(maxCachedGroupsPerTrack),
+        maxCachedBytes_(maxCachedBytes),
+        minEvictionBytes_(minEvictionBytes),
         clock_([]() { return SteadyClock::now(); }) {}
 
   // Returns a filter for a subscribe that writes objects to the cache and
@@ -56,6 +62,7 @@ class MoQCache {
   void clear() {
     cache_.clear();
     trackLRU_.clear();
+    totalCachedBytes_ = 0;
   }
 
   bool hasTrack(const FullTrackName& ftn) const {
@@ -83,6 +90,15 @@ class MoQCache {
            !trackLRU_.empty()) {
       evictOldestTrackIfNeeded();
     }
+  }
+
+  void setMaxCachedBytes(size_t maxBytes) {
+    maxCachedBytes_ = maxBytes;
+    evictForByteLimitIfNeeded();
+  }
+
+  void setMinEvictionBytes(size_t minBytes) {
+    minEvictionBytes_ = minBytes;
   }
 
   void setMaxCachedGroupsPerTrack(size_t maxGroups) {
@@ -129,6 +145,7 @@ class MoQCache {
         ObjectStatus inStatus,
         Extensions inExtensions,
         Payload inPayload,
+        size_t inPayloadSize,
         bool inComplete,
         bool inForwardingPreferenceIsDatagram = false,
         TimePoint inCachedAt = TimePoint::min())
@@ -136,6 +153,7 @@ class MoQCache {
           status(inStatus),
           extensions(std::move(inExtensions)),
           payload(std::move(inPayload)),
+          payloadSize(inPayloadSize),
           complete(inComplete),
           forwardingPreferenceIsDatagram(inForwardingPreferenceIsDatagram),
           cachedAt(inCachedAt) {}
@@ -144,6 +162,7 @@ class MoQCache {
     ObjectStatus status;
     Extensions extensions;
     Payload payload;
+    size_t payloadSize; // Cached byte count — avoids recomputing chain length
     bool complete{false};
     bool forwardingPreferenceIsDatagram{false};
     TimePoint cachedAt;
@@ -163,6 +182,8 @@ class MoQCache {
     // Track seen Prior Group ID Gap value for validation
     // (all objects in a group must have the same gap value)
     std::optional<uint64_t> seenPriorGroupIdGap;
+    // Total payload bytes across all objects in this group
+    size_t totalBytes{0};
     // LRU iterator - present if group is evictable (not in active fetch)
     folly::Optional<std::list<uint64_t>::iterator> lruIter_;
 
@@ -268,6 +289,9 @@ class MoQCache {
   // Cache size limits
   size_t maxCachedTracks_;
   size_t maxCachedGroupsPerTrack_;
+  size_t maxCachedBytes_;
+  size_t minEvictionBytes_;
+  size_t totalCachedBytes_{0};
 
   // Default max cache duration applied to tracks without a per-track duration.
   // std::nullopt means objects do not expire by default.
@@ -315,6 +339,19 @@ class MoQCache {
   void evictTrack(const FullTrackName& ftn);
   void evictOldestGroupsIfNeeded(CacheTrack& track);
   void evictGroup(CacheTrack& track, uint64_t groupID);
+  bool evictForByteLimitIfNeeded();
+
+  // Wraps cacheObject() + byte accounting + eviction check
+  folly::Expected<folly::Unit, MoQPublishError> cacheObjectAndUpdateBytes(
+      CacheGroup& group,
+      uint64_t subgroup,
+      uint64_t objectID,
+      ObjectStatus status,
+      const Extensions& extensions,
+      Payload payload,
+      bool complete,
+      bool forwardingPreferenceIsDatagram,
+      TimePoint now);
 };
 
 } // namespace moxygen
