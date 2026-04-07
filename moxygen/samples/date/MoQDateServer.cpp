@@ -6,6 +6,7 @@
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
+#include <folly/futures/ThreadWheelTimekeeper.h>
 #include <moxygen/MoQClient.h>
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQServer.h>
@@ -89,7 +90,9 @@ class DatePublisher : public Publisher {
       : mode_(mode),
         ns_(std::move(ns)),
         deliveryTimeout_(deliveryTimeout),
-        forwarder_(dateTrackName()) {}
+        forwarder_(dateTrackName()) {
+    forwarder_.setLargest(nowLocation());
+  }
 
   folly::coro::Task<PublishRequest> callPublish(
       MoQRelayClient* relayClient,
@@ -123,12 +126,6 @@ class DatePublisher : public Publisher {
       co_return req;
     }
     auto consumer = publishResponse.value().consumer;
-    // Begin a subgroup on consumer
-    auto subConsumer = consumer->beginSubgroup(0, 0, 128);
-    if (subConsumer.hasError()) {
-      XLOG(ERR) << "Subgroup error: " << subConsumer.error().what();
-      co_return req;
-    }
 
     // Transform PubReq to SubReq
     SubscribeRequest subReq = {
@@ -141,16 +138,11 @@ class DatePublisher : public Publisher {
     // Add as a subscriber to forwarder
     forwarder_.addSubscriber(session, subReq, consumer);
 
-    if (!loopRunning_) {
-      loopRunning_ = true;
-      publishDateLoop(subConsumer.value()).scheduleOn(executor.get()).start();
+    if (!publisherEvb_) {
+      publisherEvb_ = executor.get();
     }
 
     co_return req;
-  }
-
-  void stopPublishLoop() {
-    loopCancelSource_.requestCancellation();
   }
 
   void removeSubscriber(
@@ -173,13 +165,6 @@ class DatePublisher : public Publisher {
     return {minute, second + 1};
   }
 
-  AbsoluteLocation updateLargest() {
-    if (!loopRunning_) {
-      forwarder_.setLargest(nowLocation());
-    }
-    return *forwarder_.largest();
-  }
-
   folly::coro::Task<TrackStatusResult> trackStatus(
       TrackStatus trackStatus) override {
     XLOG(DBG1) << __func__ << trackStatus.fullTrackName;
@@ -190,12 +175,11 @@ class DatePublisher : public Publisher {
               TrackStatusErrorCode::TRACK_NOT_EXIST,
               "The requested track does not exist"});
     }
-    auto largest = updateLargest();
     co_return TrackStatusOk{
         .requestID = trackStatus.requestID,
         .expires = std::chrono::milliseconds(0),
         .groupOrder = GroupOrder::OldestFirst,
-        .largest = largest,
+        .largest = *forwarder_.largest(),
         .fullTrackName = trackStatus.fullTrackName,
         .statusCode = TrackStatusCode(0)};
   }
@@ -214,7 +198,7 @@ class DatePublisher : public Publisher {
               SubscribeErrorCode::TRACK_NOT_EXIST,
               "unexpected subscribe"});
     }
-    auto largest = updateLargest();
+    auto largest = *forwarder_.largest();
     if (subReq.locType == LocationType::AbsoluteRange &&
         subReq.endGroup < largest.group) {
       co_return folly::makeUnexpected(
@@ -227,9 +211,8 @@ class DatePublisher : public Publisher {
     auto alias = TrackAlias(subReq.requestID.value);
     consumer->setTrackAlias(alias);
     auto session = MoQSession::getRequestSession();
-    if (!loopRunning_) {
-      loopRunning_ = true;
-      co_withExecutor(session->getExecutor(), publishDateLoop()).start();
+    if (!publisherEvb_) {
+      publisherEvb_ = session->getExecutor();
     }
 
     auto subscriber = forwarder_.addSubscriber(
@@ -268,7 +251,7 @@ class DatePublisher : public Publisher {
               FetchErrorCode::TRACK_NOT_EXIST,
               "unexpected fetch"});
     }
-    auto largest = updateLargest();
+    auto largest = *forwarder_.largest();
     auto [standalone, joining] = fetchType(fetch);
     StandaloneFetch sf;
     if (joining) {
@@ -407,40 +390,37 @@ class DatePublisher : public Publisher {
     }
   }
 
-  folly::coro::Task<void> publishDateLoop(
-      std::shared_ptr<SubgroupConsumer> subConsumer = nullptr) {
-    auto cancelToken = co_await folly::coro::co_current_cancellation_token;
-    std::shared_ptr<SubgroupConsumer> subgroupPublisher;
-    uint64_t currentMinute = now().first;
-    if (subConsumer) {
-      subgroupPublisher = subConsumer;
+  // Called each second from the clock loop running on the main evb.
+  // Fires publishOnce on publisherEvb_ and returns immediately.
+  void tick() {
+    if (!publisherEvb_) {
+      return;
     }
-    while (!cancelToken.isCancellationRequested() &&
-           !loopCancelSource_.isCancellationRequested()) {
-      auto [minute, second] = now();
-      if (forwarder_.empty()) {
-        forwarder_.setLargest(nowLocation());
-        // Reset subgroupPublisher when crossing minute boundary
-        // Otherwise we try to use the same subgroup publisher and publish does
-        // not happen
-        if (minute != currentMinute) {
-          subgroupPublisher.reset();
-          currentMinute = minute;
-        }
-      } else {
-        switch (mode_) {
-          case Mode::STREAM_PER_GROUP:
-            subgroupPublisher = publishDate(subgroupPublisher, minute, second);
-            break;
-          case Mode::STREAM_PER_OBJECT:
-            publishDate(minute, second);
-            break;
-          case Mode::DATAGRAM:
-            publishDategram(minute, second);
-            break;
-        }
-      }
-      co_await folly::coro::sleep(std::chrono::seconds(1));
+    co_withExecutor(publisherEvb_, publishOnce()).start();
+  }
+
+  // Runs on publisherEvb_. Publishes one second of date data to all
+  // subscribers.
+  folly::coro::Task<void> publishOnce() {
+    auto [minute, second] = now();
+    if (minute != currentMinute_) {
+      subgroupPub_.reset();
+      currentMinute_ = minute;
+    }
+    if (forwarder_.empty()) {
+      forwarder_.setLargest(nowLocation());
+      co_return;
+    }
+    switch (mode_) {
+      case Mode::STREAM_PER_GROUP:
+        subgroupPub_ = publishDate(subgroupPub_, minute, second);
+        break;
+      case Mode::STREAM_PER_OBJECT:
+        publishDate(minute, second);
+        break;
+      case Mode::DATAGRAM:
+        publishDategram(minute, second);
+        break;
     }
   }
 
@@ -524,8 +504,9 @@ class DatePublisher : public Publisher {
   std::string ns_;
   int deliveryTimeout_;
   MoQForwarder forwarder_;
-  bool loopRunning_{false};
-  folly::CancellationSource loopCancelSource_;
+  folly::Executor* publisherEvb_{nullptr};
+  std::shared_ptr<SubgroupConsumer> subgroupPub_;
+  uint64_t currentMinute_{0};
 };
 
 // MoQDateServer - Wrapper for MoQServer to manage DatePublisher
@@ -690,16 +671,34 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  moxygen::SignalHandler handler(
-      &evb, [&publisher, &server, &relayClient](int) {
-        publisher->stopPublishLoop();
-        if (relayClient) {
-          relayClient->shutdown();
-        }
-        server->stop();
-      });
+  // Clock loop: runs on the main evb so the sleep continuation always targets
+  // a live executor. tick() hops to the publisher's session evb for fan-out.
+  folly::CancellationSource cancelSrc;
+  co_withExecutor(
+      &evb,
+      folly::coro::co_invoke(
+          [&publisher, cancelSrc, &evb]() -> folly::coro::Task<void> {
+            folly::EventBaseThreadTimekeeper timekeeper(evb);
+            while (!cancelSrc.isCancellationRequested()) {
+              publisher->tick();
+              co_await folly::coro::co_withCancellation(
+                  cancelSrc.getToken(),
+                  folly::coro::sleep(std::chrono::seconds(1), &timekeeper));
+            }
+          }))
+      .start();
 
-  evb.loopForever();
+  auto* relayClientPtr = relayClient.get();
+  moxygen::SignalHandler handler(&evb, [&cancelSrc, relayClientPtr](int) {
+    cancelSrc.requestCancellation();
+    if (relayClientPtr) {
+      relayClientPtr->getEventBase()->add(
+          [relayClientPtr] { relayClientPtr->shutdown(); });
+    }
+  });
 
+  evb.loop();
+  server->stop();
+  XLOG(DBG2) << "Exiting";
   return 0;
 }
