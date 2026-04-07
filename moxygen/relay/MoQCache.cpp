@@ -1376,9 +1376,11 @@ std::optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
                << current.object << "}";
     return std::nullopt;
   }
-  if (track.maxCacheDuration) {
+  auto effectiveDuration = track.maxCacheDuration ? track.maxCacheDuration
+                                                  : defaultMaxCacheDuration_;
+  if (effectiveDuration) {
     auto age = now - objIt->second->cachedAt;
-    if (age > *track.maxCacheDuration) {
+    if (age > *effectiveDuration) {
       XLOG(DBG1) << "object expired for {" << current.group << ","
                  << current.object << "}";
       group->objects.erase(objIt);

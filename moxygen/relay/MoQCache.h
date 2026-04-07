@@ -101,6 +101,17 @@ class MoQCache {
       std::chrono::milliseconds duration);
   void clearMaxCacheDuration(const FullTrackName& ftn);
 
+  // Sets the default max cache duration applied to all tracks that do not have
+  // a per-track duration set via setMaxCacheDuration(). Pass std::nullopt to
+  // remove the default (objects never expire by default).
+  void setDefaultMaxCacheDuration(
+      std::optional<std::chrono::milliseconds> duration) {
+    defaultMaxCacheDuration_ = duration;
+  }
+  std::optional<std::chrono::milliseconds> getDefaultMaxCacheDuration() const {
+    return defaultMaxCacheDuration_;
+  }
+
   void setTrackExtensions(const FullTrackName& ftn, Extensions extensions);
 
   TimePoint now() const {
@@ -257,6 +268,10 @@ class MoQCache {
   // Cache size limits
   size_t maxCachedTracks_;
   size_t maxCachedGroupsPerTrack_;
+
+  // Default max cache duration applied to tracks without a per-track duration.
+  // std::nullopt means objects do not expire by default.
+  std::optional<std::chrono::milliseconds> defaultMaxCacheDuration_;
 
   // Injectable clock for testing
   std::function<TimePoint()> clock_;
