@@ -274,7 +274,7 @@ void PicoH3WebTransport::onStreamData(
       // Parse WebTransport capsules
       picowt_capsule_t capsule = {};
       int ret = picowt_receive_capsule(
-          cnx_, controlStreamCtx_, bytes, bytes + length, &capsule);
+          cnx_, bytes, bytes + length, &capsule);
       if (ret != 0) {
         XLOG(ERR) << "Failed to parse WebTransport capsule: " << ret
                   << ", tearing down session";
