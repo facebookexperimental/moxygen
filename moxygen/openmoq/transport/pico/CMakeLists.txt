@@ -19,8 +19,7 @@ moxygen_add_library(openmoq_pico_base
 if(TARGET picohttp-core)
   target_include_directories(openmoq_pico_base PUBLIC
     $<BUILD_INTERFACE:${picoquic_SOURCE_DIR}/picohttp>)
-  target_link_libraries(openmoq_pico_base PUBLIC
-    $<TARGET_FILE:picohttp-core>)
+  target_link_libraries(openmoq_pico_base PUBLIC picoquic::picohttp-core)
 endif()
 
 # Shared server base: ALPN selection, picoCallback, per-connection context,
