@@ -8,6 +8,7 @@
 
 #include <folly/container/F14Map.h>
 #include <moxygen/MoQServerBase.h>
+#include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
 #include <memory>
 #include <string>
 
@@ -66,6 +67,15 @@ class MoQPicoServerBase : public MoQServerBase {
     return wtConfig_;
   }
 
+  /**
+   * Register a stats callback. Must be called before the server starts
+   * accepting connections. The callback receives transport events
+   * (connection lifecycle, path quality deltas) on the server's EventBase.
+   */
+  void setPicoQuicStatsCallback(std::shared_ptr<PicoQuicStatsCallback> cb) {
+    statsCallback_ = std::move(cb);
+  }
+
  protected:
   /**
    * Creates and configures the picoquic_quic_t context:
@@ -103,6 +113,9 @@ class MoQPicoServerBase : public MoQServerBase {
   virtual void onWebTransportCreated(PicoWebTransportBase& /*wt*/) noexcept {}
 
  private:
+  // Registered stats callback — null if no stats are being collected.
+  std::shared_ptr<PicoQuicStatsCallback> statsCallback_;
+
   // Called from picoCallback via MoQPicoServerBaseCallbacks (friend).
   // Takes void* to keep picoquic_cnx_t out of this header.
   void onNewConnectionImpl(void* cnx);

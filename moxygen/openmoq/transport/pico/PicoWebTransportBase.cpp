@@ -105,6 +105,9 @@ PicoWebTransportBase::createUniStream() {
     return folly::makeUnexpected(ErrorCode::STREAM_CREATION_ERROR);
   }
 
+  if (statsCallback_) {
+    statsCallback_->onStreamCreated();
+  }
   return handle;
 }
 
@@ -130,6 +133,9 @@ PicoWebTransportBase::createBidiStream() {
     return folly::makeUnexpected(ErrorCode::STREAM_CREATION_ERROR);
   }
 
+  if (statsCallback_) {
+    statsCallback_->onStreamCreated();
+  }
   return handle;
 }
 
@@ -303,6 +309,9 @@ void PicoWebTransportBase::IngressCallback::onNewPeerStream(
   // Track this stream and notify the handler later in onStreamDataCommon.
   XLOG(DBG2) << "onNewPeerStream: " << streamId;
   parent_->pendingStreamNotifications_.insert(streamId);
+  if (parent_->statsCallback_) {
+    parent_->statsCallback_->onStreamCreated();
+  }
 }
 
 // Egress event processing
@@ -455,6 +464,9 @@ void PicoWebTransportBase::onStreamDataCommon(
     bool fin) {
   XLOG(DBG5) << "onStreamDataCommon: stream=" << streamId
              << " length=" << length << " fin=" << fin;
+  if (fin && statsCallback_) {
+    statsCallback_->onStreamClosed();
+  }
 
   auto* readHandle = streamManager_->getOrCreateIngressHandle(streamId);
   if (!readHandle) {
@@ -507,6 +519,9 @@ void PicoWebTransportBase::onStreamResetCommon(
     uint64_t errorCode) {
   XLOG(DBG2) << "onStreamResetCommon: stream=" << streamId
              << " error=" << errorCode;
+  if (statsCallback_) {
+    statsCallback_->onStreamReset();
+  }
   proxygen::detail::WtStreamManager::ResetStream reset{streamId, errorCode, 0};
   streamManager_->onResetStream(reset);
 }

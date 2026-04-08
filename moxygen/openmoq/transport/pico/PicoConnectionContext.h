@@ -8,6 +8,7 @@
 
 #include <h3zero_common.h>
 #include <moxygen/openmoq/transport/pico/PicoH3WebTransport.h>
+#include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicWebTransport.h>
 #include <pico_webtransport.h>
 #include <picoquic.h>
@@ -27,6 +28,21 @@ struct PicoConnectionContext {
   std::shared_ptr<PicoQuicWebTransport> webTransport;
   // Keepalive: holds the session alive until this ctx is deleted on close.
   std::shared_ptr<MoQSession> moqSession;
+
+  // Optional stats callback. Set by MoQPicoServerBase::onNewConnectionImpl
+  // when a PicoQuicStatsCallback is registered. Null if no stats are wired.
+  // Lifetime: the callback object outlives this context (owned by the server).
+  PicoQuicStatsCallback* statsCallback{nullptr};
+
+  // Previous path quality snapshot for computing deltas. Zero-initialized;
+  // updated by picoCallback on each picoquic_callback_path_quality_changed.
+  picoquic_path_quality_t prevPathQuality{};
+
+  ~PicoConnectionContext() {
+    if (statsCallback) {
+      statsCallback->onConnectionClosed();
+    }
+  }
 };
 
 // Handles the post-connection section of a picoquic callback. Routes close
@@ -55,7 +71,7 @@ inline int dispatchConnectionEvent(
     case picoquic_callback_application_close:
     case picoquic_callback_stateless_reset:
       ctx->magic = 0xDEADBEEF;
-      delete ctx;
+      delete ctx; // onConnectionClosed fires in ~PicoConnectionContext
       return 0;
     default:
       return ret;

@@ -8,6 +8,7 @@
 
 #include <folly/SocketAddress.h>
 #include <folly/container/F14Set.h>
+#include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <proxygen/lib/http/webtransport/WtStreamManager.h>
 #include <quic/priority/HTTPPriorityQueue.h>
@@ -58,6 +59,15 @@ class PicoWebTransportBase : public proxygen::WebTransport {
    */
   void setUpdateWakeTimeoutCallback(std::function<void()> cb) {
     updateWakeTimeoutCallback_ = std::move(cb);
+  }
+
+  /**
+   * Set the stats callback for transport-level events. Called directly when
+   * a locally-initiated stream is created (createUniStream / createBidiStream).
+   * Non-owning: the callback object must outlive this WebTransport instance.
+   */
+  void setStatsCallback(PicoQuicStatsCallback* cb) {
+    statsCallback_ = cb;
   }
 
   // proxygen::WebTransport interface - implemented in base class
@@ -245,6 +255,7 @@ class PicoWebTransportBase : public proxygen::WebTransport {
   folly::F14FastSet<uint64_t> pendingStreamNotifications_;
 
   std::function<void()> updateWakeTimeoutCallback_;
+  PicoQuicStatsCallback* statsCallback_{nullptr};
 
  private:
   // WtStreamManager callbacks

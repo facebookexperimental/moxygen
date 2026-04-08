@@ -230,6 +230,30 @@ static int picoCallback(
     return 0;
   }
 
+  // Intercept path quality changes for stats accumulation.
+  // Neither PicoQuicWebTransport nor PicoH3WebTransport uses this event, so
+  // we consume it here and do not forward to dispatchConnectionEvent.
+  // Note: for picoquic_callback_path_quality_changed, stream_id carries the
+  // unique_path_id of the path whose quality changed.
+  if (fin_or_event == picoquic_callback_path_quality_changed &&
+      ctx->statsCallback) {
+    picoquic_path_quality_t cur{};
+    if (picoquic_get_path_quality(cnx, stream_id, &cur) == 0) {
+      const auto& prev = ctx->prevPathQuality;
+      PicoQuicStatsCallback::PathQualityDelta d{};
+      d.packetsSent = cur.sent - prev.sent;
+      d.packetsLost = cur.lost - prev.lost;
+      d.bytesSent = cur.bytes_sent - prev.bytes_sent;
+      d.bytesReceived = cur.bytes_received - prev.bytes_received;
+      d.timerLosses = cur.timer_losses - prev.timer_losses;
+      d.spuriousLosses = cur.spurious_losses - prev.spurious_losses;
+      d.cwndBlocked = (cur.cwin > 0 && cur.bytes_in_transit >= cur.cwin);
+      ctx->statsCallback->onPathQualityDelta(d);
+      ctx->prevPathQuality = cur;
+    }
+    return 0;
+  }
+
   XLOG(DBG6) << "Forwarding event " << fin_or_event << " to Pico*WebTransport";
   return dispatchConnectionEvent(
       ctx, cnx, stream_id, bytes, length, fin_or_event, v_stream_ctx);
@@ -391,6 +415,12 @@ void MoQPicoServerBase::onNewConnectionImpl(void* vcnx) {
 
   auto* ctx = new PicoConnectionContext{
       .webTransport = webTransport, .moqSession = moqSession};
+
+  if (statsCallback_) {
+    statsCallback_->onConnectionCreated();
+    ctx->statsCallback = statsCallback_.get();
+    webTransport->setStatsCallback(statsCallback_.get());
+  }
 
   XLOG(DBG4) << "Setting connection callback context";
   picoquic_set_callback(cnx, picoCallback, ctx);
