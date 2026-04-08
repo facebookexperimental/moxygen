@@ -42,7 +42,7 @@ struct MoQPicoServerBaseCallbacks {
     picohttp_server_parameters_t serverParams = {};
     serverParams.web_folder = nullptr;
     serverParams.path_table = server->wtPathTable_.get();
-    serverParams.path_table_nb = 1;
+    serverParams.path_table_nb = server->wtConfig_.wtEndpoints.size();
 
     auto* h3Ctx = h3zero_callback_create_context(&serverParams);
     if (h3Ctx) {
@@ -425,7 +425,8 @@ bool MoQPicoServerBase::createQuicContext() {
     }
     // Enable WebTransport transport parameters
     picowt_set_default_transport_parameters(quic_);
-    XLOG(DBG1) << "WebTransport enabled on endpoint: " << wtConfig_.wtEndpoint;
+    XLOG(DBG1) << "WebTransport enabled on " << wtConfig_.wtEndpoints.size()
+               << " endpoint(s): " << folly::join(", ", wtConfig_.wtEndpoints);
   }
 
   return true;
@@ -491,33 +492,23 @@ void MoQPicoServerBase::onNewConnectionImpl(void* vcnx) {
 }
 
 bool MoQPicoServerBase::initH3Zero() {
-  // Create path table for WebTransport endpoint
-  // We need to keep this alive for the lifetime of the server
-  // TODO: Support multiple endpoints by changing wtEndpoint to vector and
-  // sizing this array accordingly. For now, single endpoint suffices.
-  wtPathTable_ = std::make_unique<picohttp_server_path_item_t[]>(2);
+  // Build path table from wtEndpoints. wtPathTable_ must outlive the server;
+  // h3zero holds raw pointers into it for the lifetime of each connection.
+  const auto& endpoints = wtConfig_.wtEndpoints;
+  wtPathTable_ =
+      std::make_unique<picohttp_server_path_item_t[]>(endpoints.size() + 1);
 
-  // Configure the WebTransport endpoint path
-  // The callback will be invoked when a CONNECT request is received
-  // Note: This does exact path matching; consider wildcard support for
-  // path-based routing (e.g., /moq/relay-name).
-  wtPathTable_[0].path = wtConfig_.wtEndpoint.c_str();
-  wtPathTable_[0].path_length = wtConfig_.wtEndpoint.size();
-  wtPathTable_[0].path_callback = wtPathCallback;
-  wtPathTable_[0].path_app_ctx = this;
+  for (size_t i = 0; i < endpoints.size(); ++i) {
+    wtPathTable_[i].path = endpoints[i].c_str();
+    wtPathTable_[i].path_length = endpoints[i].size();
+    wtPathTable_[i].path_callback = wtPathCallback;
+    wtPathTable_[i].path_app_ctx = this;
+  }
+  // Null terminator
+  wtPathTable_[endpoints.size()] = {};
 
-  // Null terminator for path table
-  wtPathTable_[1].path = nullptr;
-  wtPathTable_[1].path_length = 0;
-  wtPathTable_[1].path_callback = nullptr;
-  wtPathTable_[1].path_app_ctx = nullptr;
-
-  // Note: We create per-connection h3zero contexts in getOrCreateH3Ctx()
-  // using these same path table settings. The wtPathTable_ is shared
-  // read-only across all connections.
-
-  XLOG(DBG1) << "h3zero initialized with WebTransport endpoint: "
-             << wtConfig_.wtEndpoint;
+  XLOG(DBG1) << "h3zero initialized with " << endpoints.size()
+             << " WebTransport endpoint(s): " << folly::join(", ", endpoints);
 
   return true;
 }

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace moxygen {
 
@@ -18,8 +19,11 @@ struct PicoWebTransportConfig {
   bool enableWebTransport{false}; // Enable HTTP/3 WebTransport support
   bool enableQuicTransport{
       true}; // Enable QUIC for non-browser clients (default)
-  std::string wtEndpoint{"/moq"}; // WebTransport CONNECT endpoint path
-  uint32_t wtMaxSessions{100};    // Max concurrent WebTransport sessions
+  // WebTransport CONNECT endpoint paths. h3zero matches each path with
+  // prefix-up-to-'?' semantics: "/moq" matches "/moq" or "/moq?..." but NOT
+  // "/moq/relay". Register each path that clients will CONNECT to explicitly.
+  std::vector<std::string> wtEndpoints{{"/moq"}};
+  uint32_t wtMaxSessions{100}; // Max concurrent WebTransport sessions
 };
 
 /**

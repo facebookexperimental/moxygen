@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
   PicoWebTransportConfig wtConfig;
   wtConfig.enableWebTransport = FLAGS_enable_webtransport;
   wtConfig.enableQuicTransport = FLAGS_enable_quic_transport;
-  wtConfig.wtEndpoint = FLAGS_wt_endpoint;
+  wtConfig.wtEndpoints = {FLAGS_wt_endpoint};
   wtConfig.wtMaxSessions = static_cast<uint32_t>(FLAGS_wt_max_sessions);
 
   auto server = std::make_shared<PicoRelayServer>(
