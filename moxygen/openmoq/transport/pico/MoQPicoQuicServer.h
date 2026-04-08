@@ -30,6 +30,7 @@ class MoQPicoQuicServer : public MoQPicoServerBase {
       std::string key,
       std::string endpoint,
       std::string versions = "",
+      PicoTransportConfig transportConfig = {},
       PicoWebTransportConfig wtConfig = {});
 
   MoQPicoQuicServer(const MoQPicoQuicServer&) = delete;

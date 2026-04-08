@@ -25,12 +25,14 @@ MoQPicoQuicServer::MoQPicoQuicServer(
     std::string key,
     std::string endpoint,
     std::string versions,
+    PicoTransportConfig transportConfig,
     PicoWebTransportConfig wtConfig)
     : MoQPicoServerBase(
           std::move(cert),
           std::move(key),
           std::move(endpoint),
           std::move(versions),
+          std::move(transportConfig),
           std::move(wtConfig)),
       impl_(std::make_unique<Impl>()) {}
 

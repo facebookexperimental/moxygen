@@ -16,7 +16,6 @@
 #include <moxygen/openmoq/transport/pico/PicoProtocolDispatcher.h>
 #include <pico_webtransport.h>
 #include <picoquic.h>
-#include <picoquic_bbr.h>
 
 namespace moxygen {
 
@@ -311,11 +310,13 @@ MoQPicoServerBase::MoQPicoServerBase(
     std::string key,
     std::string endpoint,
     std::string versions,
+    PicoTransportConfig transportConfig,
     PicoWebTransportConfig wtConfig)
     : MoQServerBase(std::move(endpoint)),
       cert_(std::move(cert)),
       key_(std::move(key)),
       versions_(std::move(versions)),
+      transportConfig_(std::move(transportConfig)),
       wtConfig_(std::move(wtConfig)) {}
 
 MoQPicoServerBase::~MoQPicoServerBase() {
@@ -353,7 +354,67 @@ bool MoQPicoServerBase::createQuicContext() {
 
   picoquic_set_alpn_select_fn_v2(quic_, alpnSelectCallback);
   picoquic_set_cookie_mode(quic_, 2);
-  picoquic_set_default_congestion_algorithm(quic_, picoquic_bbr_algorithm);
+  if (picoquic_get_congestion_algorithm(transportConfig_.ccAlgo.c_str()) ==
+      nullptr) {
+    XLOG(WARN) << "Unknown congestion control algorithm '"
+               << transportConfig_.ccAlgo
+               << "'; valid names: bbr, bbr1, newreno, cubic, dcubic, fast, "
+                  "prague, c4. Falling back to default(newreno).";
+  }
+  picoquic_set_default_congestion_algorithm_by_name(
+      quic_, transportConfig_.ccAlgo.c_str());
+
+  // Flow control windows and stream limits
+  picoquic_set_default_tp_value(
+      quic_, picoquic_tp_initial_max_data, transportConfig_.maxData);
+  picoquic_set_default_tp_value(
+      quic_,
+      picoquic_tp_initial_max_stream_data_bidi_local,
+      transportConfig_.maxStreamData);
+  picoquic_set_default_tp_value(
+      quic_,
+      picoquic_tp_initial_max_stream_data_bidi_remote,
+      transportConfig_.maxStreamData);
+  picoquic_set_default_tp_value(
+      quic_,
+      picoquic_tp_initial_max_stream_data_uni,
+      transportConfig_.maxStreamData);
+  picoquic_set_default_tp_value(
+      quic_,
+      picoquic_tp_initial_max_streams_bidi,
+      transportConfig_.maxBidiStreams);
+  picoquic_set_default_tp_value(
+      quic_,
+      picoquic_tp_initial_max_streams_uni,
+      transportConfig_.maxUniStreams);
+
+  // Datagram and ACK delay transport parameters
+  // MoQ requires datagrams; 0 disables them, which is invalid.
+  if (transportConfig_.maxDatagramFrameSize == 0) {
+    constexpr uint32_t kDefaultMaxDatagramFrameSize = 1280;
+    XLOG(WARN) << "maxDatagramFrameSize=0 disables datagrams, which MoQ "
+                  "requires; overriding to "
+               << kDefaultMaxDatagramFrameSize;
+    transportConfig_.maxDatagramFrameSize = kDefaultMaxDatagramFrameSize;
+  }
+  picoquic_set_default_tp_value(
+      quic_,
+      picoquic_tp_max_datagram_frame_size,
+      transportConfig_.maxDatagramFrameSize);
+  picoquic_set_default_tp_value(
+      quic_, picoquic_tp_max_ack_delay, transportConfig_.maxAckDelayUs);
+  picoquic_set_default_tp_value(
+      quic_, picoquic_tp_min_ack_delay, transportConfig_.minAckDelayUs);
+
+  // Idle and handshake timeouts
+  picoquic_set_default_idle_timeout(quic_, transportConfig_.idleTimeoutMs);
+  picoquic_set_default_handshake_timeout(
+      quic_, (transportConfig_.idleTimeoutMs * 1000) / 2);
+
+  // Stream and datagram priorities
+  picoquic_set_default_priority(quic_, transportConfig_.defaultStreamPriority);
+  picoquic_set_default_datagram_priority(
+      quic_, transportConfig_.defaultDatagramPriority);
 
   // Initialize h3zero for WebTransport if enabled
   if (wtConfig_.enableWebTransport) {

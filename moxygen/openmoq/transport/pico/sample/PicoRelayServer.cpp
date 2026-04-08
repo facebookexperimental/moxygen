@@ -66,7 +66,13 @@ class PicoRelayServer : public MoQPicoQuicServer {
       const std::string& versions,
       PicoWebTransportConfig wtConfig,
       std::shared_ptr<MoQRelay> relay)
-      : MoQPicoQuicServer(cert, key, endpoint, versions, std::move(wtConfig)),
+      : MoQPicoQuicServer(
+            cert,
+            key,
+            endpoint,
+            versions,
+            {},
+            std::move(wtConfig)),
         relay_(std::move(relay)) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {

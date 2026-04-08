@@ -70,6 +70,7 @@ class PicoEventBaseRelayServer : public MoQPicoQuicEventBaseServer {
             endpoint,
             std::move(evb),
             versions,
+            {},
             std::move(wtConfig)),
         relay_(std::move(relay)) {}
 

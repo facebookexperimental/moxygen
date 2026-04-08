@@ -42,6 +42,7 @@ class MoQPicoQuicEventBaseServer : public MoQPicoServerBase {
       std::string endpoint,
       folly::Executor::KeepAlive<folly::EventBase> evb,
       std::string versions = "",
+      PicoTransportConfig transportConfig = {},
       PicoWebTransportConfig wtConfig = {});
 
   MoQPicoQuicEventBaseServer(const MoQPicoQuicEventBaseServer&) = delete;

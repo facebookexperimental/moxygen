@@ -9,6 +9,7 @@
 #include <folly/container/F14Map.h>
 #include <moxygen/MoQServerBase.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
+#include <moxygen/openmoq/transport/pico/PicoTransportConfig.h>
 #include <memory>
 #include <string>
 
@@ -25,17 +26,6 @@ namespace moxygen {
 class MoQExecutor;
 class PicoWebTransportBase;
 class PicoH3WebTransport;
-
-/**
- * WebTransport configuration for picoquic server.
- */
-struct PicoWebTransportConfig {
-  bool enableWebTransport{false}; // Enable HTTP/3 WebTransport support
-  bool enableQuicTransport{
-      true}; // Enable QUIC for non-browser clients (default)
-  std::string wtEndpoint{"/moq"}; // WebTransport CONNECT endpoint path
-  uint32_t wtMaxSessions{100};    // Max concurrent WebTransport sessions
-};
 
 /**
  * MoQPicoServerBase - shared picoquic machinery for MOQT servers.
@@ -57,6 +47,7 @@ class MoQPicoServerBase : public MoQServerBase {
       std::string key,
       std::string endpoint,
       std::string versions = "",
+      PicoTransportConfig transportConfig = {},
       PicoWebTransportConfig wtConfig = {});
   ~MoQPicoServerBase() override;
 
@@ -93,6 +84,7 @@ class MoQPicoServerBase : public MoQServerBase {
   std::string cert_;
   std::string key_;
   std::string versions_;
+  PicoTransportConfig transportConfig_;
   PicoWebTransportConfig wtConfig_;
   picoquic_quic_t* quic_{nullptr};
   // Shared ownership so it can be passed directly to createSession().
