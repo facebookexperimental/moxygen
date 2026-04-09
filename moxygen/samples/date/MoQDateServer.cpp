@@ -60,24 +60,6 @@ static const Extensions kExtensions{
     {} // empty immutable extensions
 };
 
-class DateSubscriptionHandle : public Publisher::SubscriptionHandle {
- public:
-  explicit DateSubscriptionHandle() : Publisher::SubscriptionHandle() {}
-
-  // To Be Implemented
-  void unsubscribe() override {}
-
-  // To Be Implemented
-  folly::coro::Task<RequestUpdateResult> requestUpdate(
-      RequestUpdate reqUpdate) override {
-    co_return folly::makeUnexpected(
-        RequestError{
-            reqUpdate.requestID,
-            RequestErrorCode::NOT_SUPPORTED,
-            "Request update not implemented"});
-  }
-};
-
 // DatePublisher - Publisher logic with no server dependencies
 class DatePublisher : public Publisher {
  public:
@@ -117,30 +99,31 @@ class DatePublisher : public Publisher {
     // Use relayClient to publish to relayServer
     auto session = relayClient->getSession();
 
-    // Create a default handle
-    auto handle = std::make_shared<DateSubscriptionHandle>();
+    // MoQForwarder::Subscriber is itself a SubscriptionHandle, so add it to
+    // the forwarder first and pass it directly as the handle to publish().
+    auto subscriber = forwarder_.addSubscriber(session, req.forward);
 
-    auto publishResponse = session->publish(req, handle);
+    auto publishResponse = session->publish(req, subscriber);
     if (!publishResponse.hasValue()) {
       XLOG(ERR) << "Publish error: " << publishResponse.error().reasonPhrase;
       co_return req;
     }
-    auto consumer = publishResponse.value().consumer;
-
-    // Transform PubReq to SubReq
-    SubscribeRequest subReq = {
-        .requestID = req.requestID,
-        .fullTrackName = req.fullTrackName,
-        .groupOrder = req.groupOrder,
-        .forward = req.forward,
-        .locType = LocationType::LargestObject};
-
-    // Add as a subscriber to forwarder
-    forwarder_.addSubscriber(session, subReq, consumer);
+    subscriber->trackConsumer = std::move(publishResponse.value().consumer);
 
     if (!publisherEvb_) {
       publisherEvb_ = executor.get();
     }
+
+    auto pubResult = co_await co_awaitTry(std::move(publishResponse.value().reply));
+    if (pubResult.hasException()) {
+      XLOG(ERR) << "Publish failed: " << pubResult.exception().what();
+      co_return req;
+    }
+    if (pubResult.value().hasError()) {
+      XLOG(ERR) << "Publish failed: " << pubResult.value().error().reasonPhrase;
+      co_return req;
+    }
+    subscriber->onPublishOk(pubResult.value().value());
 
     co_return req;
   }
