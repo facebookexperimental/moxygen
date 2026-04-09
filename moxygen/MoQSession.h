@@ -135,7 +135,9 @@ class MoQSession : public Subscriber,
   class MoQSessionCloseCallback {
    public:
     virtual ~MoQSessionCloseCallback() = default;
-    virtual void onMoQSessionClosed() {
+    virtual void onMoQSessionClosed(
+        SessionCloseErrorCode /* error */,
+        folly::Optional<uint32_t> /* wtError */) {
       XLOG(DBG1) << __func__ << " sess=" << this;
     }
   };
@@ -231,7 +233,9 @@ class MoQSession : public Subscriber,
 
   void start();
   void drain();
-  void close(SessionCloseErrorCode error);
+  void close(
+      SessionCloseErrorCode error,
+      folly::Optional<uint32_t> wtError = folly::none);
 
   void goaway(Goaway goaway) override;
 
@@ -441,7 +445,7 @@ class MoQSession : public Subscriber,
                << (err ? folly::to<std::string>(*err) : std::string("none"))
                << " sess=" << this;
     // The peer closed us, but we can close with NO_ERROR
-    close(SessionCloseErrorCode::NO_ERROR);
+    close(SessionCloseErrorCode::NO_ERROR, err);
   }
   void onSessionDrain() noexcept override {
     XLOG(DBG1) << __func__ << " sess=" << this;

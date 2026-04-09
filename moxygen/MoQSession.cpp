@@ -2276,7 +2276,9 @@ void MoQSession::checkForCloseOnDrain() {
   }
 }
 
-void MoQSession::close(SessionCloseErrorCode error) {
+void MoQSession::close(
+    SessionCloseErrorCode error,
+    folly::Optional<uint32_t> wtError) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (closed_) {
     return;
@@ -2284,7 +2286,7 @@ void MoQSession::close(SessionCloseErrorCode error) {
   closed_ = true;
   if (closeCallback_) {
     XLOG(DBG1) << "Calling close callback";
-    closeCallback_->onMoQSessionClosed();
+    closeCallback_->onMoQSessionClosed(error, wtError);
   }
   if (auto wt = std::exchange(wt_, nullptr)) {
     // TODO: The error code should be propagated to
