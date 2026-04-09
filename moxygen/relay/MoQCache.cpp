@@ -145,6 +145,8 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
     TimePoint now) {
   XLOG(DBG1) << "caching objID=" << objectID << " status=" << (uint32_t)status
              << " complete=" << uint32_t(complete);
+  // Compute new payload size once before the move
+  size_t newPayloadSize = payload ? payload->computeChainDataLength() : 0;
   auto it = objects.find(objectID);
   if (it != objects.end()) {
     auto& cachedObject = it->second;
@@ -160,8 +162,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
         ((!payload && cachedObject->payload) ||
          (payload && !cachedObject->payload) ||
          (payload && cachedObject->payload &&
-          payload->computeChainDataLength() !=
-              cachedObject->payload->computeChainDataLength()))) {
+          newPayloadSize != cachedObject->payloadSize))) {
       XLOG(ERR) << "Payload mismatch; objID=" << objectID;
       return folly::makeUnexpected(
           MoQPublishError(MoQPublishError::API_ERROR, "payload mismatch"));
@@ -176,17 +177,21 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
     cachedObject->status = status;
     cachedObject->extensions = extensions;
     cachedObject->payload = std::move(payload);
+    cachedObject->payloadSize = newPayloadSize;
     cachedObject->complete = complete;
     cachedObject->cachedAt = now;
   } else {
-    objects[objectID] = std::make_unique<CacheEntry>(
+    auto entry = std::make_unique<CacheEntry>(
         subgroup,
         status,
         extensions,
         std::move(payload),
+        newPayloadSize,
         complete,
         forwardingPreferenceIsDatagram,
         now);
+    totalBytes += newPayloadSize;
+    objects[objectID] = std::move(entry);
   }
   if (objectID >= maxCachedObject) {
     maxCachedObject = objectID;
@@ -202,7 +207,11 @@ void MoQCache::CacheGroup::cacheMissingStatus(
     ObjectStatus status) {
   XLOG(DBG1) << "caching missing objID=" << objectID;
   static constexpr auto kInvalidSubgroup = std::numeric_limits<uint64_t>::max();
-  // can't have status or payload mismatch
+  // Always called with nullptr payload, so newPayloadSize == 0 and totalBytes
+  // will not increase. It also never decreases: callers in processGapExtensions
+  // guard against overwriting any existing object that has a real payload
+  // (GROUP_NOT_EXIST is only written to fresh gap groups; OBJECT_NOT_EXIST is
+  // only written to object IDs that are not yet in the cache).
   // Use TimePoint::max() so gaps never expire
   cacheObject(
       kInvalidSubgroup,
@@ -432,7 +441,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       return res;
     }
     auto cPayload = payload ? payload->clone() : nullptr;
-    auto cacheRes = cacheGroup_.cacheObject(
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        cacheGroup_,
         subgroup_,
         objID,
         ObjectStatus::NORMAL,
@@ -467,7 +477,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
-    auto cacheRes = cacheGroup_.cacheObject(
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        cacheGroup_,
         subgroup_,
         objectID,
         ObjectStatus::NORMAL,
@@ -489,7 +500,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     currentObject_ = objectID;
     currentLength_ = length;
     if (initialPayload) {
-      currentLength_ -= initialPayload->computeChainDataLength();
+      size_t initBytes = initialPayload->computeChainDataLength();
+      XCHECK_GE(currentLength_, initBytes);
+      currentLength_ -= initBytes;
     }
     return consumer_->beginObject(
         objectID, length, std::move(initialPayload), std::move(extensions));
@@ -499,15 +512,21 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       Payload payload,
       bool finSubgroup) override {
     auto& object = cacheGroup_.objects[currentObject_];
+    size_t addedBytes = payload->computeChainDataLength();
     if (object->payload) {
       object->payload->appendChain(payload->clone());
     } else {
       object->payload = payload->clone();
     }
-    currentLength_ -= payload->computeChainDataLength();
+    XCHECK_GE(currentLength_, addedBytes);
+    currentLength_ -= addedBytes;
     if (currentLength_ == 0) {
       object->complete = true;
     }
+    object->payloadSize += addedBytes;
+    cacheGroup_.totalBytes += addedBytes;
+    cache_.totalCachedBytes_ += addedBytes;
+    cache_.evictForByteLimitIfNeeded();
     return consumer_->objectPayload(std::move(payload), finSubgroup);
   }
 
@@ -518,7 +537,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
-    auto cacheRes = cacheGroup_.cacheObject(
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        cacheGroup_,
         subgroup_,
         endOfGroupObjectID,
         ObjectStatus::END_OF_GROUP,
@@ -541,7 +561,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return res;
     }
-    auto cacheRes = cacheGroup_.cacheObject(
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        cacheGroup_,
         subgroup_,
         endOfTrackObjectID,
         ObjectStatus::END_OF_TRACK,
@@ -646,16 +667,16 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     if (!res) {
       return res;
     }
-    auto cacheRes = track_.getOrCreateGroup(header.group, &cache_)
-                        .cacheObject(
-                            header.subgroup,
-                            header.id,
-                            header.status,
-                            header.extensions,
-                            payload ? payload->clone() : nullptr,
-                            true,
-                            false,
-                            cache_.now());
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        track_.getOrCreateGroup(header.group, &cache_),
+        header.subgroup,
+        header.id,
+        header.status,
+        header.extensions,
+        payload ? payload->clone() : nullptr,
+        true,
+        false,
+        cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -677,16 +698,16 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     if (!res) {
       return res;
     }
-    auto cacheRes = track_.getOrCreateGroup(header.group, &cache_)
-                        .cacheObject(
-                            header.subgroup,
-                            header.id,
-                            header.status,
-                            header.extensions,
-                            payload ? payload->clone() : nullptr,
-                            true,
-                            true /* forwardingPreferenceIsDatagram */,
-                            cache_.now());
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        track_.getOrCreateGroup(header.group, &cache_),
+        header.subgroup,
+        header.id,
+        header.status,
+        header.extensions,
+        payload ? payload->clone() : nullptr,
+        true,
+        true /* forwardingPreferenceIsDatagram */,
+        cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
     }
@@ -884,7 +905,9 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     }
     currentLength_ = len;
     if (initPayload) {
-      currentLength_ -= initPayload->computeChainDataLength();
+      size_t initBytes = initPayload->computeChainDataLength();
+      XCHECK_GE(currentLength_, initBytes);
+      currentLength_ -= initBytes;
     }
     return consumer_->beginObject(
         gID, sgID, objID, len, std::move(initPayload), std::move(ext));
@@ -895,15 +918,21 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       bool finFetch) override {
     auto& group = fetchRangeIt_.track->getOrCreateGroup(fetchRangeIt_->group);
     auto& object = group.objects[fetchRangeIt_->object];
+    size_t addedBytes = payload->computeChainDataLength();
     if (object->payload) {
       object->payload->appendChain(payload->clone());
     } else {
       object->payload = payload->clone();
     }
-    currentLength_ -= payload->computeChainDataLength();
+    XCHECK_GE(currentLength_, addedBytes);
+    currentLength_ -= addedBytes;
     if (currentLength_ == 0) {
       object->complete = true;
     }
+    object->payloadSize += addedBytes;
+    group.totalBytes += addedBytes;
+    cache_.totalCachedBytes_ += addedBytes;
+    cache_.evictForByteLimitIfNeeded();
     if (finFetch) {
       cacheMissing(end_);
       updateInProgress();
@@ -1043,7 +1072,8 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       bool finFetch,
       bool forwardingPreferenceIsDatagram = false) {
     auto& group = fetchRangeIt_.track->getOrCreateGroup(groupID);
-    auto cacheRes = group.cacheObject(
+    auto cacheRes = cache_.cacheObjectAndUpdateBytes(
+        group,
         subgroupID,
         objectID,
         status,
@@ -1376,9 +1406,11 @@ std::optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
                << current.object << "}";
     return std::nullopt;
   }
-  if (track.maxCacheDuration) {
+  auto effectiveDuration = track.maxCacheDuration ? track.maxCacheDuration
+                                                  : defaultMaxCacheDuration_;
+  if (effectiveDuration) {
     auto age = now - objIt->second->cachedAt;
-    if (age > *track.maxCacheDuration) {
+    if (age > *effectiveDuration) {
       XLOG(DBG1) << "object expired for {" << current.group << ","
                  << current.object << "}";
       group->objects.erase(objIt);
@@ -1824,6 +1856,12 @@ void MoQCache::evictTrack(const FullTrackName& ftn) {
     trackLRU_.erase(*track.lruIter_);
   }
 
+  // Subtract bytes for all groups in the track
+  for (auto& [gid, group] : track.groups) {
+    XCHECK_GE(totalCachedBytes_, group->totalBytes);
+    totalCachedBytes_ -= group->totalBytes;
+  }
+
   // Remove from cache
   cache_.erase(it);
   XLOG(DBG1) << "Evicted track: " << ftn;
@@ -1862,9 +1900,96 @@ void MoQCache::evictGroup(CacheTrack& track, uint64_t groupID) {
     track.groupLRU.erase(*group.lruIter_);
   }
 
+  // Subtract group's bytes from the cache total
+  XCHECK_GE(totalCachedBytes_, group.totalBytes);
+  totalCachedBytes_ -= group.totalBytes;
+
   // Remove from groups map
   track.groups.erase(it);
   XLOG(DBG1) << "Evicted group: " << groupID;
+}
+
+bool MoQCache::evictForByteLimitIfNeeded() {
+  if (maxCachedBytes_ == 0 || totalCachedBytes_ <= maxCachedBytes_) {
+    return true;
+  }
+  // Evict down to the low watermark to avoid thrashing
+  size_t targetBytes = minEvictionBytes_ < maxCachedBytes_
+      ? maxCachedBytes_ - minEvictionBytes_
+      : 0;
+  while (totalCachedBytes_ > targetBytes && !trackLRU_.empty()) {
+    const FullTrackName& oldestTrackName = trackLRU_.back();
+    auto it = cache_.find(oldestTrackName);
+    if (it == cache_.end()) {
+      trackLRU_.pop_back();
+      continue;
+    }
+    auto& track = *it->second;
+    if (!track.groupLRU.empty()) {
+      // Evict oldest evictable group from the LRU track
+      uint64_t oldestGroupID = track.groupLRU.back();
+      XLOG(DBG1) << "Evicting group " << oldestGroupID << " from track "
+                 << oldestTrackName
+                 << " for byte limit (bytes: " << totalCachedBytes_
+                 << " > limit: " << maxCachedBytes_ << ")";
+      evictGroup(track, oldestGroupID);
+      // If track now has no groups, evict the empty shell
+      if (track.groups.empty()) {
+        evictTrack(oldestTrackName);
+      }
+    } else if (track.groups.empty()) {
+      // Empty shell track — safe to evict
+      XLOG(DBG1) << "Evicting empty track for byte limit: " << oldestTrackName;
+      evictTrack(oldestTrackName);
+    } else {
+      // Should be unreachable: if a track is in trackLRU_ it is evictable
+      // (canEvict() == true), which means no active fetches or subscribes,
+      // so all its groups should be in groupLRU.
+      XLOG(DFATAL) << "LRU track " << oldestTrackName
+                   << " has groups but empty groupLRU";
+      break;
+    }
+  }
+  if (totalCachedBytes_ > maxCachedBytes_) {
+    XLOG(DBG1) << "Cannot reduce cache below byte limit, all tracks have "
+                  "active operations. Bytes: "
+               << totalCachedBytes_ << ", limit: " << maxCachedBytes_;
+    return false;
+  }
+  return true;
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQCache::cacheObjectAndUpdateBytes(
+    CacheGroup& group,
+    uint64_t subgroup,
+    uint64_t objectID,
+    ObjectStatus status,
+    const Extensions& extensions,
+    Payload payload,
+    bool complete,
+    bool forwardingPreferenceIsDatagram,
+    TimePoint now) {
+  size_t oldGroupBytes = group.totalBytes;
+  auto res = group.cacheObject(
+      subgroup,
+      objectID,
+      status,
+      extensions,
+      std::move(payload),
+      complete,
+      forwardingPreferenceIsDatagram,
+      now);
+  if (res.hasValue()) {
+    if (group.totalBytes >= oldGroupBytes) {
+      totalCachedBytes_ += group.totalBytes - oldGroupBytes;
+    } else {
+      XCHECK_GE(totalCachedBytes_, oldGroupBytes - group.totalBytes);
+      totalCachedBytes_ -= oldGroupBytes - group.totalBytes;
+    }
+    evictForByteLimitIfNeeded();
+  }
+  return res;
 }
 
 } // namespace moxygen
