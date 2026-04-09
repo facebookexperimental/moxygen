@@ -2881,4 +2881,42 @@ TEST_F(MoQRelayTest, DuplicateSubgroupSkipsTombstonedSubscriber) {
   removeSession(subB);
 }
 
+// Standalone tests for MoQForwarder counter APIs (no relay needed)
+TEST(MoQForwarderCounterTest, InitialCountersAndSubscriberCount) {
+  MoQForwarder fwd(kTestTrackName);
+
+  EXPECT_EQ(fwd.subscriberCount(), 0u);
+  EXPECT_EQ(fwd.totalObjectsReceived(), 0u);
+  EXPECT_EQ(fwd.totalGroupsReceived(), 0u);
+
+  // beginSubgroup returns CANCELLED when there are no subscribers: intentional
+  // back-pressure so the publisher stops sending.
+  auto sg_res = fwd.beginSubgroup(0, 0, kDefaultPriority);
+  EXPECT_FALSE(sg_res.hasValue());
+  EXPECT_EQ(sg_res.error().code, MoQPublishError::CANCELLED);
+
+  // Counters are unaffected by the failed beginSubgroup
+  EXPECT_EQ(fwd.totalObjectsReceived(), 0u);
+  EXPECT_EQ(fwd.totalGroupsReceived(), 0u);
+}
+
+TEST(MoQForwarderCounterTest, ObjectStreamAndDatagramCounted) {
+  MoQForwarder fwd(kTestTrackName);
+
+  // objectStream: group 0, object 0
+  fwd.objectStream(ObjectHeader(0, 0, 0), makeBuf());
+  EXPECT_EQ(fwd.totalObjectsReceived(), 1u);
+  EXPECT_EQ(fwd.totalGroupsReceived(), 1u);
+
+  // datagram: same group 0, object 1 (no new group)
+  fwd.datagram(ObjectHeader(0, 0, 1), makeBuf());
+  EXPECT_EQ(fwd.totalObjectsReceived(), 2u);
+  EXPECT_EQ(fwd.totalGroupsReceived(), 1u);
+
+  // datagram: group 1 (new group)
+  fwd.datagram(ObjectHeader(1, 0, 0), makeBuf());
+  EXPECT_EQ(fwd.totalObjectsReceived(), 3u);
+  EXPECT_EQ(fwd.totalGroupsReceived(), 2u);
+}
+
 } // namespace moxygen::test
