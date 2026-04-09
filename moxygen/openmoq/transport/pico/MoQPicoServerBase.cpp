@@ -568,6 +568,14 @@ int MoQPicoServerBase::onWebTransportConnectImpl(
   auto moqSession = createSession(webTransport, executor_);
   webTransport->setHandler(moqSession.get());
 
+  // Set path from the HTTP/3 CONNECT request. Authority is not set because
+  // h3zero_header_parts_t does not expose the :authority pseudo-header.
+  const auto& hdr = streamCtx->ps.stream_state.header;
+  if (hdr.path && hdr.path_length > 0) {
+    moqSession->setPath(
+        std::string(reinterpret_cast<const char*>(hdr.path), hdr.path_length));
+  }
+
   // Negotiate MOQT version via WebTransport protocol negotiation.
   // The client sends wt-available-protocols, we select from our supported
   // versions. Note: picowt_select_wt_protocol expects ALPN format (e.g.
