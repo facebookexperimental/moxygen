@@ -2808,7 +2808,6 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     }
 
     subscribeState_ = std::move(subscribeState);
-    session_->onSubscriptionStreamOpenedByPeer();
     auto callback = subscribeState_->getSubscribeCallback();
     if (!callback) {
       // This cannot happen in a PUBLISH_DONE flow, because
@@ -3076,12 +3075,6 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
   }
 
   void endOfSubgroup(bool deliverCallback = false) {
-    if (subgroupCallback_) {
-      CHECK(session_) << "session_ is NULL in ObjectStreamCallback";
-      // We only want to call this for SUBSCRIBEs and not FETCHes, which is
-      // why we condition on subgroupCallback_
-      session_->onSubscriptionStreamClosedByPeer();
-    }
     if (deliverCallback && !isCancelled()) {
       if (fetchState_) {
         fetchState_->getFetchCallback()->endOfFetch();
@@ -3116,8 +3109,12 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   auto id = readHandle->getID();
   auto rhToken = readHandle->getCancelToken();
   XLOG(DBG1) << __func__ << " id=" << id << " sess=" << this;
-  auto g = folly::makeGuard([func = __func__, this, id] {
+  bool isSubscriptionStream = false;
+  auto g = folly::makeGuard([func = __func__, this, id, &isSubscriptionStream] {
     XLOG(DBG1) << "exit " << func << " id=" << id << " sess=" << this;
+    if (isSubscriptionStream) {
+      onSubscriptionStreamClosedByPeer();
+    }
   });
 
   // Add cancellation callback to null out readHandle on cancellation
@@ -3168,7 +3165,8 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
                          &deferredGroup,
                          &deferredSubgroup,
                          &deferredPriority,
-                         &deferredOptions](
+                         &deferredOptions,
+                         &isSubscriptionStream](
                             TrackAlias alias,
                             uint64_t group,
                             uint64_t subgroup,
@@ -3190,6 +3188,10 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
     } else {
       // SubscribeTrackReceiveState lifecycle now controls read loop
       token = state->getCancelToken();
+    }
+    if (!isSubscriptionStream && state->getSubscribeCallback()) {
+      isSubscriptionStream = true;
+      onSubscriptionStreamOpenedByPeer();
     }
     return state;
   };
