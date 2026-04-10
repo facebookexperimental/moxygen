@@ -1912,7 +1912,7 @@ class MoQSession::SubscribeTrackReceiveState
     cancelStreamCountTimeout();
     if (pendingPublishDone_) {
       if (callback_) {
-        XLOG(DBG0)
+        XLOG(DBG4)
             << "deliverPublishDoneAndRemove: Delivering PUBLISH_DONE to app; statusCode="
             << folly::to_underlying(pendingPublishDone_->statusCode)
             << " alias=" << alias_ << " requestID=" << requestID_;
@@ -2599,8 +2599,8 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     auto streamData =
         co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
     if (streamData.hasException()) {
-      XLOG(ERR) << folly::exceptionStr(streamData.exception())
-                << " id=" << streamId << " sess=" << this;
+      XLOG(DBG4) << folly::exceptionStr(streamData.exception())
+                 << " id=" << streamId << " sess=" << this;
       break;
     }
     if (!token.isCancellationRequested() &&
