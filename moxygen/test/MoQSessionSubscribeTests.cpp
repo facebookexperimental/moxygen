@@ -525,6 +525,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKAfterSubgroup) {
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
         EXPECT_CALL(
             *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
         pub->setTrackAlias(TrackAlias(nextAlias_.value++));
         auto pubResult = pub->objectStream(
             ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10));
@@ -641,6 +645,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKArrivesOneByteAtATime) {
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
         EXPECT_CALL(
             *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
         co_await folly::coro::co_reschedule_on_current_executor;
 
@@ -687,6 +695,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
         EXPECT_CALL(
             *clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
             .Times(0);
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+            .Times(0);
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
         sgp->object(0, moxygen::test::makeBuf(10));
         return folly::coro::co_invoke([]() -> TaskSubscribeResult {
@@ -731,6 +742,9 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
         trackConsumer = pub;
         EXPECT_CALL(
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+        EXPECT_CALL(
+            *clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+            .Times(0);
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
         sgp->object(0, moxygen::test::makeBuf(10));
         streamBaton.post();
@@ -1045,4 +1059,51 @@ CO_TEST_P_X(MoQSessionTest, CloseWhileHandleSubscribePending) {
   // publishHandler_.
   co_await folly::coro::co_reschedule_on_current_executor;
   co_await folly::coro::co_reschedule_on_current_executor;
+}
+
+// Verify that if the beginSubgroup callback returns an error, the stream
+// counter is still balanced: opened once (when alias resolves) and closed once
+// (when the loop exits on ERROR_TERMINATE).
+CO_TEST_P_X(MoQSessionTest, BeginSubgroupCallbackError) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  folly::coro::Baton streamSent;
+
+  expectSubscribe(
+      [this, &trackConsumer, &streamSent](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub, &streamSent] {
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
+          sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
+          streamSent.post();
+        });
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed());
+
+  // Client's beginSubgroup callback returns an error — simulates the app
+  // rejecting the incoming subgroup.
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(
+          testing::Return(
+              folly::makeUnexpected(
+                  MoQPublishError(MoQPublishError::CANCELLED, "rejected"))));
+
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  co_await streamSent;
+  expectPublishDone();
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

@@ -340,6 +340,10 @@ void MoQSessionTest::expectFetch(
 
 void MoQSessionTest::expectFetchSuccess() {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+      .Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+      .Times(0);
 }
 
 std::shared_ptr<moxygen::MockSubscriberStats>

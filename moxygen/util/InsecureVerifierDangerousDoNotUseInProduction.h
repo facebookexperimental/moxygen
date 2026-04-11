@@ -27,9 +27,10 @@ class InsecureVerifierDangerousDoNotUseInProduction
     return fizz::Status::Success;
   }
 
-  std::vector<fizz::Extension> getCertificateRequestExtensions()
-      const override {
-    return std::vector<fizz::Extension>();
+  fizz::Status getCertificateRequestExtensions(
+      std::vector<fizz::Extension>& /* ret */,
+      fizz::Error& /* err */) const override {
+    return fizz::Status::Success;
   }
 };
 

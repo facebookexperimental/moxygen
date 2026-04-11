@@ -78,6 +78,10 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
         fetchBaton.post();
         return folly::unit;
       });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+      .Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+      .Times(0);
   auto res = co_await clientSession_->join(
       getSubscribe(kTestTrackName),
       subscribeCallback_,
@@ -150,6 +154,10 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
           return folly::unit;
         });
   }
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+      .Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+      .Times(0);
   auto res = co_await clientSession_->join(
       getSubscribe(kTestTrackName),
       subscribeCallback_,
@@ -423,6 +431,10 @@ CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
       .WillOnce(testing::Return(folly::unit));
   EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::INTERNAL_ERROR));
 
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+      .Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+      .Times(0);
   auto res = co_await clientSession_->fetch(
       getFetch(kLocationMin, kLocationMax), fetchCallback_);
   EXPECT_FALSE(res.hasError());
@@ -469,6 +481,10 @@ CO_TEST_P_X(MoQSessionTest, FetchCallbackErrorTerminatesStream) {
   // FetchConsumer to properly clean up the stream state.
   EXPECT_CALL(*fetchCallback_, reset(_)).Times(1);
 
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+      .Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+      .Times(0);
   auto fetch = getFetch(AbsoluteLocation{0, 0}, AbsoluteLocation{0, 2});
   auto res = co_await clientSession_->fetch(fetch, fetchCallback_);
   EXPECT_FALSE(res.hasError());
