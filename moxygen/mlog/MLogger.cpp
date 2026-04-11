@@ -993,9 +993,9 @@ void MLogger::logSubgroupObjectCreated(
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload->length();
+  baseMsg.objectPayloadLength = payload ? payload->length() : 0;
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
-  baseMsg.objectPayload = payload->clone();
+  baseMsg.objectPayload = payload ? payload->clone() : nullptr;
   addSubgroupObjectCreatedLog(std::move(baseMsg));
 }
 
@@ -1049,9 +1049,9 @@ void MLogger::logFetchObjectCreated(
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload->length();
+  baseMsg.objectPayloadLength = payload ? payload->length() : 0;
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
-  baseMsg.objectPayload = payload->clone();
+  baseMsg.objectPayload = payload ? payload->clone() : nullptr;
   addFetchObjectCreatedLog(std::move(baseMsg));
 }
 

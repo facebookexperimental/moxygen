@@ -754,12 +754,13 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
   header_.status = ObjectStatus::NORMAL;
 
   if (logger_) {
+    auto payloadClone = payload ? payload->clone() : nullptr;
     if (streamType_ != StreamType::FETCH_HEADER) {
       logger_->logSubgroupObjectCreated(
-          writeHandle_->getID(), trackAlias_, header_, payload->clone());
+          writeHandle_->getID(), trackAlias_, header_, std::move(payloadClone));
     } else {
       logger_->logFetchObjectCreated(
-          writeHandle_->getID(), header_, payload->clone());
+          writeHandle_->getID(), header_, std::move(payloadClone));
     }
   }
 
