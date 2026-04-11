@@ -388,4 +388,62 @@ CO_TEST_P_X(MoQSessionTest, RequestUpdateAfterClose) {
   co_await folly::coro::co_reschedule_on_current_executor;
 }
 
+// Regression test: when a REQUEST_UPDATE is queued on the executor but
+// publishDone resets subscriptionHandle_ before it runs, handleRequestUpdate
+// must not dereference the null handle.  Unlike RequestUpdateAfterClose, the
+// session stays open — the cancellation token is NOT cancelled — so
+// co_safe_point alone does not protect against this.
+CO_TEST_P_X(MoQSessionTest, RequestUpdateAfterPublishDone) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+
+  // Queue a REQUEST_UPDATE — the coroutine is enqueued via .start() but
+  // won't run until we yield.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  RequestUpdate update;
+  update.existingRequestID = subscribeRequest.requestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.priority = kDefaultPriority + 1;
+  update.forward = true;
+  cb->onRequestUpdate(std::move(update));
+
+  // Now send publishDone from the server's publisher.  This synchronously
+  // resets subscriptionHandle_ (MoQSession.cpp TrackPublisherImpl::publishDone)
+  // WITHOUT cancelling the session's cancellation token.
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+
+  // requestUpdateCalled must NOT be invoked — subscriptionHandle_ is null.
+  // Without the null-check fix, this crashes with SIGSEGV.
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(0);
+
+  // Yield to let the queued handleRequestUpdate coroutine drain
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Session is still alive (not closed) — verify we can still close cleanly
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 } // namespace
