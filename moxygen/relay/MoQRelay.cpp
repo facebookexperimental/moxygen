@@ -986,12 +986,12 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
     if (subscriptionIt != subscriptions_.end()) {
       upstreamSession = subscriptionIt->second.upstream;
-    } else {
-      // no such namespace has been published
+    }
+    if (!upstreamSession) {
       co_return folly::makeUnexpected(FetchError(
           {fetch.requestID,
            FetchErrorCode::TRACK_NOT_EXIST,
-           "no such namespace"}));
+           "no upstream for fetch"}));
     }
   }
   if (session.get() == upstreamSession.get()) {
