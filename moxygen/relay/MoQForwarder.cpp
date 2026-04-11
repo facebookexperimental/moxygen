@@ -286,7 +286,9 @@ void MoQForwarder::drainSubscriber(
 
   // Forward the publishDone message WITHOUT resetting subgroups
   pubDone.requestID = subscriber.requestID;
-  subscriber.trackConsumer->publishDone(std::move(pubDone));
+  if (subscriber.trackConsumer) {
+    subscriber.trackConsumer->publishDone(std::move(pubDone));
+  }
 
   // If no open subgroups, delegate to removeSubscriberIt for cleanup
   if (subscriber.subgroups.empty()) {
@@ -340,7 +342,7 @@ void MoQForwarder::removeSubscriberIt(
       subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
     }
   }
-  if (pubDone) {
+  if (pubDone && subscriber.trackConsumer) {
     pubDone->requestID = subscriber.requestID;
     subscriber.trackConsumer->publishDone(std::move(*pubDone));
   }

@@ -2959,4 +2959,58 @@ TEST_F(MoQRelayTest, PublishReplacesSubscribeDrainsOldAndServesNew) {
   removeSession(subscriberSession);
 }
 
+// Test: publishDone on a forwarder with a forward-only subscriber (null
+// trackConsumer) should not crash. Forward-only subscribers are created by
+// addSubscriber(session, forward) which sets trackConsumer to nullptr.
+// drainSubscriber unconditionally calls subscriber.trackConsumer->publishDone()
+// which crashes on null.
+TEST_F(MoQRelayTest, PublishDoneWithForwardOnlySubscriber) {
+  auto session = createMockSession();
+
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+
+  // Add a forward-only subscriber (null trackConsumer)
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(subscriber->trackConsumer, nullptr);
+
+  // publishDone should not crash despite null trackConsumer
+  auto res = forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "publisher ended"});
+  EXPECT_TRUE(res.hasValue());
+
+  // The subscriber should have been removed
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: removeSubscriber with a PublishDone value on a forward-only subscriber
+// (null trackConsumer) should not crash.
+TEST_F(MoQRelayTest, RemoveForwardOnlySubscriberWithPublishDone) {
+  auto session = createMockSession();
+
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+
+  // Add a forward-only subscriber (null trackConsumer)
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(subscriber->trackConsumer, nullptr);
+
+  // removeSubscriber with pubDone should not crash
+  forwarder->removeSubscriber(
+      session,
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "session disconnect"},
+      "test");
+  EXPECT_TRUE(forwarder->empty());
+}
+
 } // namespace moxygen::test
