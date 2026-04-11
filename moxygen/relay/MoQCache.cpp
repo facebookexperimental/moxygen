@@ -612,7 +612,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
         ftn_(ftn) {
     // Track becomes non-evictable (remove from LRU)
     cache_.removeTrackFromLRU(track_);
-    track_.isLive = true;
+    track_.liveWritebackCount++;
   }
   SubscribeWriteback() = delete;
   SubscribeWriteback(const SubscribeWriteback&) = delete;
@@ -621,7 +621,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
   SubscribeWriteback& operator=(SubscribeWriteback&&) = delete;
 
   ~SubscribeWriteback() override {
-    track_.isLive = false;
+    XCHECK_GT(track_.liveWritebackCount, 0u);
+    track_.liveWritebackCount--;
     // Track may become evictable (add back to LRU if still in cache)
     cache_.onTrackBecameEvictable(ftn_);
   }
@@ -1168,7 +1169,8 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     // or END_OF_TRACK
   }
   if (track->largestGroupAndObject &&
-      (track->isLive || last <= *track->largestGroupAndObject)) {
+      (track->liveWritebackCount > 0 ||
+       last <= *track->largestGroupAndObject)) {
     // we can immediately return fetch OK
     XLOG(DBG1) << "Live track or known past data, return FetchOK";
     AbsoluteLocation largestInFetch = standalone->end;
