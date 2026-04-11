@@ -2772,4 +2772,48 @@ TEST_F(MoQCacheTest, ExpiredObjectByteAccounting) {
   EXPECT_TRUE(cache_.hasCachedObject(trackB, {0, 0}));
 }
 
+// Test: re-caching an incomplete object with a larger complete payload must
+// update totalBytes. Without the fix, totalCachedBytes_ stays at the initial
+// (smaller) size, causing the cache to undercount memory usage.
+TEST_F(MoQCacheTest, RecacheIncompleteObjectByteAccounting) {
+  // Create track B FIRST so it's oldest in LRU (evicted first)
+  FullTrackName trackB{TrackNamespace{{"b"}}, "t"};
+  auto writebackB = cache_.getSubscribeWriteback(trackB, trackConsumer_);
+  writebackB->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writebackB.reset(); // enters LRU first → oldest
+
+  // Create track A SECOND (newer in LRU)
+  // Step 1: Cache an incomplete object with 50-byte initial payload
+  auto writeback1 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subRes = writeback1->beginSubgroup(0, 0, kDefaultPriority);
+  ASSERT_TRUE(subRes.hasValue());
+  auto subConsumer = std::move(subRes.value());
+  auto boRes = subConsumer->beginObject(0, 200, makeBuf(50), noExtensions());
+  EXPECT_TRUE(boRes.hasValue());
+  // Release subgroup and writeback without completing the object
+  subConsumer.reset();
+  writeback1.reset();
+
+  // Step 2: Re-cache the same object as complete with 200-byte payload via a
+  // new writeback. This triggers the overwrite path in cacheObject where
+  // payloadSize changes from 50 to 200 but totalBytes is not updated.
+  auto writeback2 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto osRes =
+      writeback2->objectStream(ObjectHeader(0, 0, 0, 0, 200), makeBuf(200));
+  EXPECT_TRUE(osRes.hasValue());
+  writeback2.reset(); // enters LRU second → newer
+
+  // Without fix: totalCachedBytes_ = 50 (track A, stale) + 100 (track B) = 150
+  // With fix:    totalCachedBytes_ = 200 (track A, correct) + 100 (track B) =
+  // 300 Set byte limit to 250 — only correct accounting triggers eviction.
+  cache_.setMaxCachedBytes(250);
+
+  // With correct accounting (300 > 250), oldest LRU track (track B) is evicted.
+  // Without fix (150 < 250), no eviction occurs — both tracks survive.
+  EXPECT_FALSE(cache_.hasTrack(trackB));
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+}
+
 } // namespace moxygen::test
