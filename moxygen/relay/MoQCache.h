@@ -207,7 +207,7 @@ class MoQCache {
 
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
-    bool isLive{false};
+    size_t liveWritebackCount{0};
     bool endOfTrack{false};
     std::optional<AbsoluteLocation> largestGroupAndObject;
     FetchInProgressSet fetchInProgress;
@@ -237,7 +237,7 @@ class MoQCache {
 
     // Returns true if track can be evicted (not live, no active fetches)
     bool canEvict() const {
-      return !isLive && activeFetchCount == 0;
+      return liveWritebackCount == 0 && activeFetchCount == 0;
     }
   };
 
