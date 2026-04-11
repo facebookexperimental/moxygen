@@ -161,6 +161,7 @@ class MoQCacheTest : public ::testing::Test {
                   upstreamFetchHandle_);
             })
         .RetiresOnSaturation();
+    // @lint-ignore ASTGREP std::move required — SemiFuture copy ctor is deleted
     return std::move(future);
   }
 
@@ -2814,6 +2815,38 @@ TEST_F(MoQCacheTest, RecacheIncompleteObjectByteAccounting) {
   // Without fix (150 < 250), no eviction occurs — both tracks survive.
   EXPECT_FALSE(cache_.hasTrack(trackB));
   EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+}
+
+// Test: clear() with an active SubscribeWriteback must not crash when the
+// writeback is later destroyed. Without the fix, SubscribeWriteback holds a
+// bare CacheTrack& which becomes dangling after clear() destroys the map entry.
+TEST_F(MoQCacheTest, ClearWithActiveSubscribeWriteback) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  // Cache an object so the track has data
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+
+  // clear() destroys the CacheTrack shared_ptr in the map.
+  // Without the fix, writeback holds a dangling CacheTrack&.
+  cache_.clear();
+
+  // Releasing the writeback triggers ~SubscribeWriteback which accesses
+  // track_.liveWritebackCount — crash without fix.
+  writeback.reset();
+}
+
+// Test: clear() with an active SubgroupWriteback must not crash.
+TEST_F(MoQCacheTest, ClearWithActiveSubgroupWriteback) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subRes = writeback->beginSubgroup(0, 0, kDefaultPriority);
+  ASSERT_TRUE(subRes.hasValue());
+  auto subConsumer = std::move(subRes.value());
+
+  cache_.clear();
+
+  // Releasing SubgroupWriteback triggers ~SubgroupWriteback which accesses
+  // cacheGroup_ and cacheTrack_ — crash without fix.
+  subConsumer.reset();
+  writeback.reset();
 }
 
 } // namespace moxygen::test

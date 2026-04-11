@@ -409,14 +409,16 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       uint64_t group,
       uint64_t subgroup,
       std::shared_ptr<SubgroupConsumer> consumer,
-      CacheTrack& cacheTrack,
-      CacheGroup& cacheGroup,
+      std::shared_ptr<CacheTrack> cacheTrackPtr,
+      std::shared_ptr<CacheGroup> cacheGroupPtr,
       MoQCache& cache)
       : group_(group),
         subgroup_(subgroup),
         consumer_(std::move(consumer)),
-        cacheTrack_(cacheTrack),
-        cacheGroup_(cacheGroup),
+        cacheTrackPtr_(std::move(cacheTrackPtr)),
+        cacheTrack_(*cacheTrackPtr_),
+        cacheGroupPtr_(std::move(cacheGroupPtr)),
+        cacheGroup_(*cacheGroupPtr_),
         cache_(cache) {
     cache_.removeGroupFromLRU(cacheGroup_, cacheTrack_);
   }
@@ -437,6 +439,10 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       Payload payload,
       Extensions ext,
       bool finSub) override {
+    if (cacheTrack_.evicted) {
+      return consumer_->object(
+          objID, std::move(payload), std::move(ext), finSub);
+    }
     auto res = cacheTrack_.updateLargest({group_, objID});
     if (!res) {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
@@ -474,6 +480,10 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       uint64_t length,
       Payload initialPayload,
       Extensions extensions) override {
+    if (cacheTrack_.evicted) {
+      return consumer_->beginObject(
+          objectID, length, std::move(initialPayload), std::move(extensions));
+    }
     auto res = cacheTrack_.updateLargest({group_, objectID});
     if (!res) {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
@@ -513,6 +523,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finSubgroup) override {
+    if (cacheTrack_.evicted) {
+      return consumer_->objectPayload(std::move(payload), finSubgroup);
+    }
     auto& object = cacheGroup_.objects[currentObject_];
     size_t addedBytes = payload->computeChainDataLength();
     if (object->payload) {
@@ -534,6 +547,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
       uint64_t endOfGroupObjectID) override {
+    if (cacheTrack_.evicted) {
+      return consumer_->endOfGroup(endOfGroupObjectID);
+    }
     auto res = cacheTrack_.updateLargest({group_, endOfGroupObjectID});
     if (!res) {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
@@ -558,6 +574,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
       uint64_t endOfTrackObjectID) override {
+    if (cacheTrack_.evicted) {
+      return consumer_->endOfTrackAndGroup(endOfTrackObjectID);
+    }
     auto res = cacheTrack_.updateLargest({group_, endOfTrackObjectID}, true);
     if (!res) {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
@@ -592,7 +611,9 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   uint64_t group_;
   uint64_t subgroup_;
   std::shared_ptr<SubgroupConsumer> consumer_;
+  std::shared_ptr<CacheTrack> cacheTrackPtr_; // Prevent UAF if cache cleared
   CacheTrack& cacheTrack_;
+  std::shared_ptr<CacheGroup> cacheGroupPtr_; // Prevent UAF if cache cleared
   CacheGroup& cacheGroup_;
   MoQCache& cache_;
   uint64_t currentObject_{0};
@@ -605,11 +626,12 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
  public:
   SubscribeWriteback(
       std::shared_ptr<TrackConsumer> consumer,
-      CacheTrack& track,
+      std::shared_ptr<CacheTrack> trackPtr,
       MoQCache& cache,
       const FullTrackName& ftn)
       : consumer_(std::move(consumer)),
-        track_(track),
+        trackPtr_(std::move(trackPtr)),
+        track_(*trackPtr_),
         cache_(cache),
         ftn_(ftn) {
     // Track becomes non-evictable (remove from LRU)
@@ -642,13 +664,14 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       bool /*containsLastInGroup*/ = false) override {
     // TODO: Handle containsLastInGroup parameter when caching
     auto res = consumer_->beginSubgroup(groupID, subgroupID, priority);
-    if (res.hasValue()) {
+    if (res.hasValue() && !track_.evicted) {
+      track_.getOrCreateGroup(groupID, &cache_);
       return std::make_shared<SubgroupWriteback>(
           groupID,
           subgroupID,
           std::move(res.value()),
-          track_,
-          track_.getOrCreateGroup(groupID, &cache_),
+          trackPtr_,
+          trackPtr_->groups[groupID],
           cache_);
     } else {
       return res;
@@ -664,6 +687,9 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       const ObjectHeader& header,
       Payload payload,
       bool /*lastInGroup*/ = false) override {
+    if (track_.evicted) {
+      return consumer_->objectStream(header, std::move(payload));
+    }
     // TODO: Handle lastInGroup parameter when caching
     auto res = track_.updateLargest(
         {header.group, header.id}, isEndOfTrack(header.status));
@@ -695,6 +721,9 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       const ObjectHeader& header,
       Payload payload,
       bool /*lastInGroup*/ = false) override {
+    if (track_.evicted) {
+      return consumer_->datagram(header, std::move(payload));
+    }
     // TODO: Handle lastInGroup parameter when caching
     auto res = track_.updateLargest(
         {header.group, header.id}, isEndOfTrack(header.status));
@@ -729,6 +758,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
 
  private:
   std::shared_ptr<TrackConsumer> consumer_;
+  std::shared_ptr<CacheTrack> trackPtr_; // Prevent UAF if cache cleared
   CacheTrack& track_;
   MoQCache& cache_;
   FullTrackName ftn_;
@@ -1122,7 +1152,7 @@ std::shared_ptr<TrackConsumer> MoQCache::getSubscribeWriteback(
     trackIt = cache_.emplace(ftn, std::make_shared<CacheTrack>()).first;
   }
   return std::make_shared<SubscribeWriteback>(
-      std::move(consumer), *trackIt->second, *this, ftn);
+      std::move(consumer), trackIt->second, *this, ftn);
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
