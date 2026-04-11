@@ -430,13 +430,19 @@ Subscriber::PublishResult MoQRelay::publish(
     XLOG(DBG1) << "New publisher for existing subscription";
     nodePtr->publishes.erase(pub.fullTrackName.trackName);
     it->second.handle->unsubscribe();
-    it->second.forwarder->publishDone(
+    // Move the forwarder out and erase the entry BEFORE calling publishDone.
+    // publishDone iterates subscribers via forEachSubscriber; if a subscriber
+    // has no open subgroups, drainSubscriber → onEmpty fires. If the entry
+    // still existed, onEmpty would erase it (destroying the forwarder) while
+    // forEachSubscriber is still iterating → use-after-free.
+    auto forwarder = std::move(it->second.forwarder);
+    XLOG(DBG4) << "Erasing subscription to " << it->first;
+    subscriptions_.erase(it);
+    forwarder->publishDone(
         {RequestID(0),
          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
          0, // filled in by session
          "upstream disconnect"});
-    XLOG(DBG4) << "Erasing subscription to " << it->first;
-    subscriptions_.erase(it);
   }
   auto res = nodePtr->publishes.emplace(pub.fullTrackName.trackName, session);
   XCHECK(res.second) << "Duplicate publish";
