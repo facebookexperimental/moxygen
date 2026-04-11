@@ -4306,6 +4306,8 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(TrackStatus trackStatus) {
         {trackStatus.requestID,
          TrackStatusErrorCode::INTERNAL_ERROR,
          trackStatusResult.exception().what().toStdString()});
+    retireRequestID(/*signalWriteLoop=*/false);
+    co_return;
   }
   if (trackStatusResult->hasError()) {
     XLOG(DBG1) << "Application track status error err="
