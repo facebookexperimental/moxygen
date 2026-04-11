@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include "moxygen/mlog/MLogger.h"
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 using namespace moxygen;
@@ -978,6 +979,45 @@ CO_TEST_P_X(MoQSessionTest, ObjectCallbackErrorResetsSubgroupConsumer) {
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
 
   co_await resetBaton;
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+namespace {
+class NullLogger : public MLogger {
+ public:
+  NullLogger() : MLogger(VantagePoint::SERVER) {}
+  void outputLogs() override {}
+};
+} // namespace
+
+// Test: publishing an object with null payload when a logger is set must not
+// crash. objectImpl calls payload->clone() inside the logger block without
+// checking for null.
+CO_TEST_P_X(MoQSessionTest, NullPayloadWithLogger) {
+  co_await setupMoQSession();
+  // Set a logger on the server session so the logging code path is exercised
+  serverSession_->setLogger(std::make_shared<NullLogger>());
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub, sub] {
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      // Publish object with null payload — crashes in objectImpl logging
+      sgp->object(0, nullptr, noExtensions(), true);
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

@@ -161,6 +161,7 @@ class MoQCacheTest : public ::testing::Test {
                   upstreamFetchHandle_);
             })
         .RetiresOnSaturation();
+    // @lint-ignore ASTGREP std::move required — SemiFuture copy ctor is deleted
     return std::move(future);
   }
 
@@ -2669,6 +2670,183 @@ CO_TEST_F(MoQCacheTest, TestMinEvictionBytesLowWatermark) {
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {3, 0}));
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {4, 0}));
   co_return;
+}
+
+// Regression test: two SubscribeWritebacks for the same track (simulating an
+// upstream reconnect). When the old writeback is destroyed, the track must
+// remain non-evictable because the new writeback is still active.
+// Previously isLive was a bool (not a refcount), so the old destructor
+// incorrectly made the track evictable, leading to use-after-free.
+TEST_F(MoQCacheTest, OldWritebackDestructorCausesUseAfterFree) {
+  // Use a small track limit so eviction is triggered easily
+  cache_.setMaxCachedTracks(1);
+
+  // Create the first SubscribeWriteback for kTestTrackName.
+  // This increments liveWritebackCount and removes the track from LRU.
+  auto writeback1 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Write some data through writeback1 so the track is populated
+  writeback1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+
+  // Simulate upstream reconnect: create a second SubscribeWriteback for the
+  // same track, while the old one is still alive. This is what happens when
+  // the relay re-subscribes to a track on a new upstream session while the old
+  // session's TrackPublisherImpl still holds the old writeback.
+  auto writeback2 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Destroy the old writeback (simulates old session cleanup).
+  // This decrements liveWritebackCount to 1; track stays non-evictable.
+  writeback1.reset();
+
+  // Creating a writeback for a different track would have evicted our track
+  // when isLive was a bool. With a refcount, the track stays pinned.
+  FullTrackName otherTrack{TrackNamespace{{"other"}}, "track"};
+  auto writeback3 = cache_.getSubscribeWriteback(otherTrack, trackConsumer_);
+
+  // The original track must still be in the cache (not evicted)
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+  // Both tracks coexist (temporarily exceeding maxCachedTracks)
+  EXPECT_EQ(cache_.size(), 2);
+
+  // writeback2 still holds a valid CacheTrack& reference because
+  // liveWritebackCount > 0 prevented eviction.
+  auto res = writeback2->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_TRUE(res.hasValue());
+
+  // Data written through both writebacks is cached
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+
+  // After releasing writeback2, the track becomes evictable
+  writeback2.reset();
+  // Now creating another track for the other name should evict kTestTrackName
+  FullTrackName thirdTrack{TrackNamespace{{"third"}}, "track"};
+  auto writeback4 = cache_.getSubscribeWriteback(thirdTrack, trackConsumer_);
+  EXPECT_FALSE(cache_.hasTrack(kTestTrackName));
+}
+
+// Test: expired objects erased by getCachedObjectMaybe must update byte
+// accounting. Without the fix, totalCachedBytes_ is inflated by the leaked
+// bytes, causing premature eviction of unrelated tracks with real data.
+TEST_F(MoQCacheTest, ExpiredObjectByteAccounting) {
+  // Create track B FIRST so it's oldest in LRU (evicted first)
+  FullTrackName trackB{TrackNamespace{{"b"}}, "t"};
+  auto writebackB = cache_.getSubscribeWriteback(trackB, trackConsumer_);
+  writebackB->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writebackB.reset(); // enters LRU first → oldest
+
+  // Create track A SECOND (newer in LRU)
+  FullTrackName trackA{TrackNamespace{{"a"}}, "t"};
+  auto writebackA = cache_.getSubscribeWriteback(trackA, trackConsumer_);
+  writebackA->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writebackA.reset(); // enters LRU second → newer
+
+  // Both tracks cached, total = 200 bytes
+  EXPECT_TRUE(cache_.hasTrack(trackA));
+  EXPECT_TRUE(cache_.hasTrack(trackB));
+
+  // Set per-track cache duration on track A only, and advance clock past expiry
+  auto testClock = MoQCache::SteadyClock::now();
+  cache_.setClockForTesting([&testClock]() { return testClock; });
+  cache_.setMaxCacheDuration(trackA, std::chrono::milliseconds(1));
+  testClock += std::chrono::milliseconds(100);
+
+  // Trigger expiry erasure on track A's object — leaks 100 bytes in
+  // accounting (totalCachedBytes_ stays 200, should drop to 100)
+  EXPECT_FALSE(cache_.hasCachedObject(trackA, {0, 0}));
+
+  // Track B's object should still be valid (no per-track duration set)
+  EXPECT_TRUE(cache_.hasCachedObject(trackB, {0, 0}));
+
+  // Set byte limit to 150 — real data is only track B's 100 bytes, which
+  // fits. But with leaked accounting (totalCachedBytes_=200), the cache
+  // thinks it's over the limit and evicts the oldest LRU track (track B)
+  // — destroying real data.
+  cache_.setMaxCachedBytes(150);
+
+  // Track B has real data (100 bytes) and should NOT be evicted.
+  // Without the fix, track B is evicted because totalCachedBytes_ (200)
+  // exceeds the 150 byte limit.
+  EXPECT_TRUE(cache_.hasTrack(trackB));
+  EXPECT_TRUE(cache_.hasCachedObject(trackB, {0, 0}));
+}
+
+// Test: re-caching an incomplete object with a larger complete payload must
+// update totalBytes. Without the fix, totalCachedBytes_ stays at the initial
+// (smaller) size, causing the cache to undercount memory usage.
+TEST_F(MoQCacheTest, RecacheIncompleteObjectByteAccounting) {
+  // Create track B FIRST so it's oldest in LRU (evicted first)
+  FullTrackName trackB{TrackNamespace{{"b"}}, "t"};
+  auto writebackB = cache_.getSubscribeWriteback(trackB, trackConsumer_);
+  writebackB->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writebackB.reset(); // enters LRU first → oldest
+
+  // Create track A SECOND (newer in LRU)
+  // Step 1: Cache an incomplete object with 50-byte initial payload
+  auto writeback1 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subRes = writeback1->beginSubgroup(0, 0, kDefaultPriority);
+  ASSERT_TRUE(subRes.hasValue());
+  auto subConsumer = std::move(subRes.value());
+  auto boRes = subConsumer->beginObject(0, 200, makeBuf(50), noExtensions());
+  EXPECT_TRUE(boRes.hasValue());
+  // Release subgroup and writeback without completing the object
+  subConsumer.reset();
+  writeback1.reset();
+
+  // Step 2: Re-cache the same object as complete with 200-byte payload via a
+  // new writeback. This triggers the overwrite path in cacheObject where
+  // payloadSize changes from 50 to 200 but totalBytes is not updated.
+  auto writeback2 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto osRes =
+      writeback2->objectStream(ObjectHeader(0, 0, 0, 0, 200), makeBuf(200));
+  EXPECT_TRUE(osRes.hasValue());
+  writeback2.reset(); // enters LRU second → newer
+
+  // Without fix: totalCachedBytes_ = 50 (track A, stale) + 100 (track B) = 150
+  // With fix:    totalCachedBytes_ = 200 (track A, correct) + 100 (track B) =
+  // 300 Set byte limit to 250 — only correct accounting triggers eviction.
+  cache_.setMaxCachedBytes(250);
+
+  // With correct accounting (300 > 250), oldest LRU track (track B) is evicted.
+  // Without fix (150 < 250), no eviction occurs — both tracks survive.
+  EXPECT_FALSE(cache_.hasTrack(trackB));
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+}
+
+// Test: clear() with an active SubscribeWriteback must not crash when the
+// writeback is later destroyed. Without the fix, SubscribeWriteback holds a
+// bare CacheTrack& which becomes dangling after clear() destroys the map entry.
+TEST_F(MoQCacheTest, ClearWithActiveSubscribeWriteback) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  // Cache an object so the track has data
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+
+  // clear() destroys the CacheTrack shared_ptr in the map.
+  // Without the fix, writeback holds a dangling CacheTrack&.
+  cache_.clear();
+
+  // Releasing the writeback triggers ~SubscribeWriteback which accesses
+  // track_.liveWritebackCount — crash without fix.
+  writeback.reset();
+}
+
+// Test: clear() with an active SubgroupWriteback must not crash.
+TEST_F(MoQCacheTest, ClearWithActiveSubgroupWriteback) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subRes = writeback->beginSubgroup(0, 0, kDefaultPriority);
+  ASSERT_TRUE(subRes.hasValue());
+  auto subConsumer = std::move(subRes.value());
+
+  cache_.clear();
+
+  // Releasing SubgroupWriteback triggers ~SubgroupWriteback which accesses
+  // cacheGroup_ and cacheTrack_ — crash without fix.
+  subConsumer.reset();
+  writeback.reset();
 }
 
 } // namespace moxygen::test

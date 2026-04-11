@@ -430,13 +430,19 @@ Subscriber::PublishResult MoQRelay::publish(
     XLOG(DBG1) << "New publisher for existing subscription";
     nodePtr->publishes.erase(pub.fullTrackName.trackName);
     it->second.handle->unsubscribe();
-    it->second.forwarder->publishDone(
+    // Move the forwarder out and erase the entry BEFORE calling publishDone.
+    // publishDone iterates subscribers via forEachSubscriber; if a subscriber
+    // has no open subgroups, drainSubscriber → onEmpty fires. If the entry
+    // still existed, onEmpty would erase it (destroying the forwarder) while
+    // forEachSubscriber is still iterating → use-after-free.
+    auto forwarder = std::move(it->second.forwarder);
+    XLOG(DBG4) << "Erasing subscription to " << it->first;
+    subscriptions_.erase(it);
+    forwarder->publishDone(
         {RequestID(0),
          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
          0, // filled in by session
          "upstream disconnect"});
-    XLOG(DBG4) << "Erasing subscription to " << it->first;
-    subscriptions_.erase(it);
   }
   auto res = nodePtr->publishes.emplace(pub.fullTrackName.trackName, session);
   XCHECK(res.second) << "Duplicate publish";
@@ -980,12 +986,12 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
     if (subscriptionIt != subscriptions_.end()) {
       upstreamSession = subscriptionIt->second.upstream;
-    } else {
-      // no such namespace has been published
+    }
+    if (!upstreamSession) {
       co_return folly::makeUnexpected(FetchError(
           {fetch.requestID,
            FetchErrorCode::TRACK_NOT_EXIST,
-           "no such namespace"}));
+           "no upstream for fetch"}));
     }
   }
   if (session.get() == upstreamSession.get()) {
@@ -1116,6 +1122,12 @@ void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
   auto& subscription = subscriptionIt->second;
   if (!subscription.promise.isFulfilled()) {
     // Ignore: it's the first subscriber, forward update not needed
+    return;
+  }
+  if (!subscription.handle) {
+    // Publisher terminated (onPublishDone cleared handle/upstream)
+    XLOG(DBG4) << "Ignoring forward change for " << subscriptionIt->first
+               << " - publisher terminated";
     return;
   }
   XLOG(INFO) << "Updating forward for " << subscriptionIt->first
