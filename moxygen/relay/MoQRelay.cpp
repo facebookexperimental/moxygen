@@ -1124,6 +1124,12 @@ void MoQRelay::forwardChanged(MoQForwarder* forwarder) {
     // Ignore: it's the first subscriber, forward update not needed
     return;
   }
+  if (!subscription.handle) {
+    // Publisher terminated (onPublishDone cleared handle/upstream)
+    XLOG(DBG4) << "Ignoring forward change for " << subscriptionIt->first
+               << " - publisher terminated";
+    return;
+  }
   XLOG(INFO) << "Updating forward for " << subscriptionIt->first
              << " numForwardingSubs=" << forwarder->numForwardingSubscribers();
 
