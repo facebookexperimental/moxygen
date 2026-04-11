@@ -1264,8 +1264,12 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     // found the object, first fetch missing range, if any
     XLOG(DBG1) << "object cache HIT for {" << current.group << ","
                << current.object << "}";
-    // TODO: once we support eviction, this object may need to be
-    // shared_ptr
+    // NOTE: This raw CacheEntry* is safe despite the fetchUpstream call below
+    // because: (1) FetchWriteback removes this track from trackLRU_, so
+    // evictForByteLimitIfNeeded() cannot touch it, and (2) FetchWriteback's
+    // cacheImpl calls getOrCreateGroup() without the cache pointer, so
+    // evictOldestGroupsIfNeeded() is never invoked. If either invariant
+    // changes, pin the group here: auto pin = track->groups[current.group];
     if (fetchStart) {
       auto intervals = getFetchIntervals(
           fetchRangeIt.minLocation,
