@@ -187,6 +187,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
+  subscriber->pinned = true;
   subscribers_.emplace(sessionPtr, subscriber);
   if (subReq.forward) {
     addForwardingSubscriber();

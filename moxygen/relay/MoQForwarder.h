@@ -140,12 +140,22 @@ class MoQForwarder : public TrackConsumer {
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
     MoQForwarder& forwarder;
+    bool isPinned() const {
+      return pinned;
+    }
+
     bool shouldForward;
+    bool pinned{false};
     bool receivedPublishDone_{false};
   };
 
   [[nodiscard]] bool empty() const {
     return subscribers_.empty();
+  }
+
+  std::shared_ptr<Subscriber> getSubscriber(MoQSession* session) const {
+    auto it = subscribers_.find(session);
+    return it != subscribers_.end() ? it->second : nullptr;
   }
 
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
