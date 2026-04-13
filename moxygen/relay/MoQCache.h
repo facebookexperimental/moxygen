@@ -60,6 +60,9 @@ class MoQCache {
       std::shared_ptr<Publisher> upstream);
 
   void clear() {
+    for (auto& [ftn, track] : cache_) {
+      track->evicted = true;
+    }
     cache_.clear();
     trackLRU_.clear();
     totalCachedBytes_ = 0;
@@ -222,6 +225,8 @@ class MoQCache {
     std::optional<std::chrono::milliseconds> maxCacheDuration;
     // Track-level extensions to include in FetchOk
     Extensions extensions;
+    // Set by clear() — writebacks skip caching when true
+    bool evicted{false};
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
