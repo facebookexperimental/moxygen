@@ -2671,6 +2671,61 @@ CO_TEST_F(MoQCacheTest, TestMinEvictionBytesLowWatermark) {
   co_return;
 }
 
+// Regression test: two SubscribeWritebacks for the same track (simulating an
+// upstream reconnect). When the old writeback is destroyed, the track must
+// remain non-evictable because the new writeback is still active.
+// Previously isLive was a bool (not a refcount), so the old destructor
+// incorrectly made the track evictable, leading to use-after-free.
+TEST_F(MoQCacheTest, OldWritebackDestructorCausesUseAfterFree) {
+  // Use a small track limit so eviction is triggered easily
+  cache_.setMaxCachedTracks(1);
+
+  // Create the first SubscribeWriteback for kTestTrackName.
+  // This increments liveWritebackCount and removes the track from LRU.
+  auto writeback1 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Write some data through writeback1 so the track is populated
+  writeback1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+
+  // Simulate upstream reconnect: create a second SubscribeWriteback for the
+  // same track, while the old one is still alive. This is what happens when
+  // the relay re-subscribes to a track on a new upstream session while the old
+  // session's TrackPublisherImpl still holds the old writeback.
+  auto writeback2 =
+      cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  // Destroy the old writeback (simulates old session cleanup).
+  // This decrements liveWritebackCount to 1; track stays non-evictable.
+  writeback1.reset();
+
+  // Creating a writeback for a different track would have evicted our track
+  // when isLive was a bool. With a refcount, the track stays pinned.
+  FullTrackName otherTrack{TrackNamespace{{"other"}}, "track"};
+  auto writeback3 = cache_.getSubscribeWriteback(otherTrack, trackConsumer_);
+
+  // The original track must still be in the cache (not evicted)
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+  // Both tracks coexist (temporarily exceeding maxCachedTracks)
+  EXPECT_EQ(cache_.size(), 2);
+
+  // writeback2 still holds a valid CacheTrack& reference because
+  // liveWritebackCount > 0 prevented eviction.
+  auto res = writeback2->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_TRUE(res.hasValue());
+
+  // Data written through both writebacks is cached
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+
+  // After releasing writeback2, the track becomes evictable
+  writeback2.reset();
+  // Now creating another track for the other name should evict kTestTrackName
+  FullTrackName thirdTrack{TrackNamespace{{"third"}}, "track"};
+  auto writeback4 = cache_.getSubscribeWriteback(thirdTrack, trackConsumer_);
+  EXPECT_FALSE(cache_.hasTrack(kTestTrackName));
+}
+
 // Test: expired objects erased by getCachedObjectMaybe must update byte
 // accounting. Without the fix, totalCachedBytes_ is inflated by the leaked
 // bytes, causing premature eviction of unrelated tracks with real data.
