@@ -60,6 +60,9 @@ class MoQCache {
       std::shared_ptr<Publisher> upstream);
 
   void clear() {
+    for (auto& [ftn, track] : cache_) {
+      track->evicted = true;
+    }
     cache_.clear();
     trackLRU_.clear();
     totalCachedBytes_ = 0;
@@ -230,7 +233,7 @@ class MoQCache {
 
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
-    bool isLive{false};
+    size_t liveWritebackCount{0};
     bool endOfTrack{false};
     std::optional<AbsoluteLocation> largestGroupAndObject;
     FetchInProgressSet fetchInProgress;
@@ -245,7 +248,9 @@ class MoQCache {
     std::optional<std::chrono::milliseconds> maxCacheDuration;
     // Track-level extensions to include in FetchOk
     Extensions extensions;
-    // Time of the most recently cached object in this track
+    // Set by clear() — writebacks skip caching when true
+    bool evicted{false};
+    // Time of the most recent object write into this track
     TimePoint lastWrite{TimePoint::min()};
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
@@ -262,7 +267,7 @@ class MoQCache {
 
     // Returns true if track can be evicted (not live, no active fetches)
     bool canEvict() const {
-      return !isLive && activeFetchCount == 0;
+      return liveWritebackCount == 0 && activeFetchCount == 0;
     }
   };
 
