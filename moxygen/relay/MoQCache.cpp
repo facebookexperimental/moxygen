@@ -1413,6 +1413,9 @@ std::optional<MoQCache::CacheEntry*> MoQCache::getCachedObjectMaybe(
     if (age > *effectiveDuration) {
       XLOG(DBG1) << "object expired for {" << current.group << ","
                  << current.object << "}";
+      auto expiredBytes = objIt->second->payloadSize;
+      group->totalBytes -= expiredBytes;
+      totalCachedBytes_ -= expiredBytes;
       group->objects.erase(objIt);
       return std::nullopt;
     }
