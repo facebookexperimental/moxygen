@@ -1170,8 +1170,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         session_->cancellationSource_.getToken(),
         subscriptionHandle_->requestUpdate(std::move(requestUpdate))));
 
-    // Re-check after the await — handle may have been reset concurrently.
-    if (!subscriptionHandle_) {
+    // Re-check after the await — handle or session may have been reset
+    // by terminatePublish while this coroutine was suspended.
+    if (!subscriptionHandle_ || !session_) {
       co_return;
     }
 
@@ -1428,6 +1429,10 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     auto updateResult = co_await co_awaitTry(co_withCancellation(
         session_->cancellationSource_.getToken(),
         handle_->requestUpdate(std::move(requestUpdate))));
+
+    if (!session_) {
+      co_return;
+    }
 
     // Only send responses for v15+
     if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
