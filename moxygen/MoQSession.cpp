@@ -5406,7 +5406,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
     return;
   }
   auto alias = objHeader.trackAlias;
-  auto state = getSubscribeTrackReceiveState(alias).get();
+  auto statePtr = getSubscribeTrackReceiveState(alias);
+  auto* state = statePtr.get();
   if (!state) {
     constexpr size_t kMaxBufferedTracks = 10;
     constexpr size_t kMaxBufferedDatagramsPerTrack = 30;
