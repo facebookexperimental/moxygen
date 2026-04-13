@@ -2161,12 +2161,14 @@ MoQSession::~MoQSession() {
 }
 
 void MoQSession::cleanup() {
-  // TODO: Are these loops safe since they may (should?) delete elements
   while (!pubTracks_.empty()) {
-    auto pubTrack = pubTracks_.begin();
-    pubTrack->second->terminatePublish(
+    auto it = pubTracks_.begin();
+    auto requestID = it->first;
+    auto pubTrack = std::move(it->second);
+    pubTracks_.erase(it);
+    pubTrack->terminatePublish(
         PublishDone(
-            {pubTrack->first,
+            {requestID,
              PublishDoneStatusCode::SESSION_CLOSED,
              0,
              "Session Closed"}),
