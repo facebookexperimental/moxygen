@@ -1129,6 +1129,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   folly::coro::Task<void> handleRequestUpdate(RequestUpdate requestUpdate) {
     co_await folly::coro::co_safe_point;
+
+    // subscriptionHandle_ may have been reset by publishDone(),
+    // unsubscribe(), or terminatePublish() while this coroutine was queued.
+    if (!subscriptionHandle_) {
+      co_return;
+    }
+
     folly::RequestContextScopeGuard guard;
     session_->setRequestSession();
 
@@ -1161,6 +1168,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     auto updateResult = co_await co_awaitTry(co_withCancellation(
         session_->cancellationSource_.getToken(),
         subscriptionHandle_->requestUpdate(std::move(requestUpdate))));
+
+    // Re-check after the await — handle may have been reset concurrently.
+    if (!subscriptionHandle_) {
+      co_return;
+    }
 
     // Only send responses for v15+
     if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
