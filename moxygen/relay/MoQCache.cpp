@@ -176,8 +176,10 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
     }
     cachedObject->status = status;
     cachedObject->extensions = extensions;
+    totalBytes -= cachedObject->payloadSize;
     cachedObject->payload = std::move(payload);
     cachedObject->payloadSize = newPayloadSize;
+    totalBytes += newPayloadSize;
     cachedObject->complete = complete;
     cachedObject->cachedAt = now;
   } else {
