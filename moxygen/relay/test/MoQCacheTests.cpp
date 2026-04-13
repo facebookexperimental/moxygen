@@ -2848,4 +2848,92 @@ TEST_F(MoQCacheTest, ClearWithActiveSubgroupWriteback) {
   subConsumer.reset();
   writeback.reset();
 }
+
+// Test: FetchWriteback methods must check evicted flag. If clear() is called
+// while a FetchWriteback is active, continuing to send objects should NOT
+// write to cache structures or inflate totalCachedBytes_.
+CO_TEST_F(MoQCacheTest, FetchWritebackSkipsCacheAfterEviction) {
+  // Start a fetch that triggers an upstream fetch (cache miss).
+  // The upstream fetch callback stores the FetchWriteback in
+  // upstreamFetchConsumer_ but does NOT immediately send data.
+  expectUpstreamFetch({0, 0}, {0, 10}, false, AbsoluteLocation{0, 10});
+  // Set up expectations for the downstream consumer — it should still receive
+  // the forwarded objects even though caching is skipped.
+  EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, object(0, 0, 1, _, _, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // Evict everything — the FetchWriteback still holds a shared_ptr to the
+  // CacheTrack so the track object stays alive with evicted=true.
+  cache_.clear();
+
+  // Send objects through the upstream fetch consumer (the FetchWriteback).
+  // Without the fix, cacheImpl/objectPayload write to the evicted track and
+  // inflate totalCachedBytes_ above 0.
+  upstreamFetchConsumer_->object(0, 0, 0, makeBuf(100));
+  upstreamFetchConsumer_->object(0, 0, 1, makeBuf(100));
+  upstreamFetchConsumer_->endOfFetch();
+
+  // Populate a new track with real data.
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  auto writeback = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  // Set a byte limit that comfortably fits track2's 100 bytes.
+  // Without the fix, totalCachedBytes_ is inflated by the 200 orphaned bytes,
+  // so the cache thinks it has 300 bytes and evicts track2.
+  cache_.setMaxCachedBytes(200);
+  EXPECT_TRUE(cache_.hasTrack(track2));
+}
+
+// Test: FetchWriteback::objectPayload must check evicted flag. If clear() is
+// called between beginObject and objectPayload, the payload must not be
+// written to cache structures.
+CO_TEST_F(MoQCacheTest, FetchWritebackObjectPayloadSkipsCacheAfterEviction) {
+  // Start a fetch that triggers an upstream fetch.
+  expectUpstreamFetch({0, 0}, {0, 1}, false, AbsoluteLocation{0, 1});
+  EXPECT_CALL(*consumer_, beginObject(0, 0, 0, 300, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, objectPayload(_, false))
+      .Times(2)
+      .WillRepeatedly(Return(ObjectPublishStatus::DONE));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // Begin a multi-payload object before eviction — only send a small initial
+  // payload so the bulk arrives after clear().
+  upstreamFetchConsumer_->beginObject(0, 0, 0, 300, makeBuf(50));
+
+  // Evict everything while the multi-payload object is in flight.
+  cache_.clear();
+
+  // Send two large payloads after eviction — without the fix, each call to
+  // objectPayload writes to evicted cache structures and inflates
+  // totalCachedBytes_ (adding 250 orphaned bytes).
+  upstreamFetchConsumer_->objectPayload(makeBuf(100), false);
+  upstreamFetchConsumer_->objectPayload(makeBuf(150), false);
+  upstreamFetchConsumer_->endOfFetch();
+
+  // Populate a new track with real data (100 bytes).
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+  auto writeback = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  // Byte limit of 200 comfortably fits track2's 100 bytes.
+  // Without the fix, totalCachedBytes_ = 250 (orphaned) + 100 (track2) = 350,
+  // which exceeds 200 and wrongly evicts track2.
+  cache_.setMaxCachedBytes(200);
+  EXPECT_TRUE(cache_.hasTrack(track2));
+}
 } // namespace moxygen::test

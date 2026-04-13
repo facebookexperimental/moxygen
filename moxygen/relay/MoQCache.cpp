@@ -885,6 +885,16 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       Extensions ext,
       bool fin,
       bool forwardingPreferenceIsDatagram = false) override {
+    if (fetchRangeIt_.track->evicted) {
+      return consumer_->object(
+          gID,
+          sgID,
+          objID,
+          std::move(payload),
+          std::move(ext),
+          fin && proxyFin_,
+          forwardingPreferenceIsDatagram);
+    }
     constexpr auto kNormal = ObjectStatus::NORMAL;
     auto res = cacheImpl(
         gID,
@@ -925,6 +935,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       uint64_t len,
       Payload initPayload,
       Extensions ext) override {
+    if (fetchRangeIt_.track->evicted) {
+      return consumer_->beginObject(
+          gID, sgID, objID, len, std::move(initPayload), std::move(ext));
+    }
     constexpr auto kNormal = ObjectStatus::NORMAL;
     auto payload = initPayload ? initPayload->clone() : nullptr;
     auto res = cacheImpl(
@@ -949,6 +963,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finFetch) override {
+    if (fetchRangeIt_.track->evicted) {
+      return consumer_->objectPayload(
+          std::move(payload), finFetch && proxyFin_);
+    }
     auto& group = fetchRangeIt_.track->getOrCreateGroup(fetchRangeIt_->group);
     auto& object = group.objects[fetchRangeIt_->object];
     size_t addedBytes = payload->computeChainDataLength();
@@ -975,6 +993,9 @@ class MoQCache::FetchWriteback : public FetchConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError>
   endOfGroup(uint64_t gID, uint64_t sgID, uint64_t objID, bool fin) override {
+    if (fetchRangeIt_.track->evicted) {
+      return consumer_->endOfGroup(gID, sgID, objID, fin && proxyFin_);
+    }
     constexpr auto kEndOfGroup = ObjectStatus::END_OF_GROUP;
     auto res = cacheImpl(
         gID, sgID, objID, kEndOfGroup, noExtensions(), nullptr, true, fin);
@@ -986,6 +1007,9 @@ class MoQCache::FetchWriteback : public FetchConsumer {
 
   folly::Expected<folly::Unit, MoQPublishError>
   endOfTrackAndGroup(uint64_t gID, uint64_t sgID, uint64_t objID) override {
+    if (fetchRangeIt_.track->evicted) {
+      return consumer_->endOfTrackAndGroup(gID, sgID, objID);
+    }
     constexpr auto kEndOfTrack = ObjectStatus::END_OF_TRACK;
     auto res = cacheImpl(
         gID, sgID, objID, kEndOfTrack, noExtensions(), nullptr, true, true);
