@@ -754,12 +754,13 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
   header_.status = ObjectStatus::NORMAL;
 
   if (logger_) {
+    auto payloadClone = payload ? payload->clone() : nullptr;
     if (streamType_ != StreamType::FETCH_HEADER) {
       logger_->logSubgroupObjectCreated(
-          writeHandle_->getID(), trackAlias_, header_, payload->clone());
+          writeHandle_->getID(), trackAlias_, header_, std::move(payloadClone));
     } else {
       logger_->logFetchObjectCreated(
-          writeHandle_->getID(), header_, payload->clone());
+          writeHandle_->getID(), header_, std::move(payloadClone));
     }
   }
 
@@ -1129,6 +1130,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   folly::coro::Task<void> handleRequestUpdate(RequestUpdate requestUpdate) {
     co_await folly::coro::co_safe_point;
+
+    // subscriptionHandle_ may have been reset by publishDone(),
+    // unsubscribe(), or terminatePublish() while this coroutine was queued.
+    if (!subscriptionHandle_) {
+      co_return;
+    }
+
     folly::RequestContextScopeGuard guard;
     session_->setRequestSession();
 
@@ -1161,6 +1169,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     auto updateResult = co_await co_awaitTry(co_withCancellation(
         session_->cancellationSource_.getToken(),
         subscriptionHandle_->requestUpdate(std::move(requestUpdate))));
+
+    // Re-check after the await — handle or session may have been reset
+    // by terminatePublish while this coroutine was suspended.
+    if (!subscriptionHandle_ || !session_) {
+      co_return;
+    }
 
     // Only send responses for v15+
     if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
@@ -1415,6 +1429,10 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     auto updateResult = co_await co_awaitTry(co_withCancellation(
         session_->cancellationSource_.getToken(),
         handle_->requestUpdate(std::move(requestUpdate))));
+
+    if (!session_) {
+      co_return;
+    }
 
     // Only send responses for v15+
     if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
@@ -2148,12 +2166,14 @@ MoQSession::~MoQSession() {
 }
 
 void MoQSession::cleanup() {
-  // TODO: Are these loops safe since they may (should?) delete elements
   while (!pubTracks_.empty()) {
-    auto pubTrack = pubTracks_.begin();
-    pubTrack->second->terminatePublish(
+    auto it = pubTracks_.begin();
+    auto requestID = it->first;
+    auto pubTrack = std::move(it->second);
+    pubTracks_.erase(it);
+    pubTrack->terminatePublish(
         PublishDone(
-            {pubTrack->first,
+            {requestID,
              PublishDoneStatusCode::SESSION_CLOSED,
              0,
              "Session Closed"}),
@@ -5388,7 +5408,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
     return;
   }
   auto alias = objHeader.trackAlias;
-  auto state = getSubscribeTrackReceiveState(alias).get();
+  auto statePtr = getSubscribeTrackReceiveState(alias);
+  auto* state = statePtr.get();
   if (!state) {
     constexpr size_t kMaxBufferedTracks = 10;
     constexpr size_t kMaxBufferedDatagramsPerTrack = 30;

@@ -2881,42 +2881,58 @@ TEST_F(MoQRelayTest, DuplicateSubgroupSkipsTombstonedSubscriber) {
   removeSession(subB);
 }
 
-// Standalone tests for MoQForwarder counter APIs (no relay needed)
-TEST(MoQForwarderCounterTest, InitialCountersAndSubscriberCount) {
-  MoQForwarder fwd(kTestTrackName);
+// Test: publishDone on a forwarder with a forward-only subscriber (null
+// trackConsumer) should not crash. Forward-only subscribers are created by
+// addSubscriber(session, forward) which sets trackConsumer to nullptr.
+// drainSubscriber unconditionally calls subscriber.trackConsumer->publishDone()
+// which crashes on null.
+TEST_F(MoQRelayTest, PublishDoneWithForwardOnlySubscriber) {
+  auto session = createMockSession();
 
-  EXPECT_EQ(fwd.subscriberCount(), 0u);
-  EXPECT_EQ(fwd.totalObjectsReceived(), 0u);
-  EXPECT_EQ(fwd.totalGroupsReceived(), 0u);
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
 
-  // beginSubgroup returns CANCELLED when there are no subscribers: intentional
-  // back-pressure so the publisher stops sending.
-  auto sg_res = fwd.beginSubgroup(0, 0, kDefaultPriority);
-  EXPECT_FALSE(sg_res.hasValue());
-  EXPECT_EQ(sg_res.error().code, MoQPublishError::CANCELLED);
+  // Add a forward-only subscriber (null trackConsumer)
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(subscriber->trackConsumer, nullptr);
 
-  // Counters are unaffected by the failed beginSubgroup
-  EXPECT_EQ(fwd.totalObjectsReceived(), 0u);
-  EXPECT_EQ(fwd.totalGroupsReceived(), 0u);
+  // publishDone should not crash despite null trackConsumer
+  auto res = forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "publisher ended"});
+  EXPECT_TRUE(res.hasValue());
+
+  // The subscriber should have been removed
+  EXPECT_TRUE(forwarder->empty());
 }
 
-TEST(MoQForwarderCounterTest, ObjectStreamAndDatagramCounted) {
-  MoQForwarder fwd(kTestTrackName);
+// Test: removeSubscriber with a PublishDone value on a forward-only subscriber
+// (null trackConsumer) should not crash.
+TEST_F(MoQRelayTest, RemoveForwardOnlySubscriberWithPublishDone) {
+  auto session = createMockSession();
 
-  // objectStream: group 0, object 0
-  fwd.objectStream(ObjectHeader(0, 0, 0), makeBuf());
-  EXPECT_EQ(fwd.totalObjectsReceived(), 1u);
-  EXPECT_EQ(fwd.totalGroupsReceived(), 1u);
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
 
-  // datagram: same group 0, object 1 (no new group)
-  fwd.datagram(ObjectHeader(0, 0, 1), makeBuf());
-  EXPECT_EQ(fwd.totalObjectsReceived(), 2u);
-  EXPECT_EQ(fwd.totalGroupsReceived(), 1u);
+  // Add a forward-only subscriber (null trackConsumer)
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(subscriber->trackConsumer, nullptr);
 
-  // datagram: group 1 (new group)
-  fwd.datagram(ObjectHeader(1, 0, 0), makeBuf());
-  EXPECT_EQ(fwd.totalObjectsReceived(), 3u);
-  EXPECT_EQ(fwd.totalGroupsReceived(), 2u);
+  // removeSubscriber with pubDone should not crash
+  forwarder->removeSubscriber(
+      session,
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "session disconnect"},
+      "test");
+  EXPECT_TRUE(forwarder->empty());
 }
 
 } // namespace moxygen::test

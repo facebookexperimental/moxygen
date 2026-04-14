@@ -388,4 +388,159 @@ CO_TEST_P_X(MoQSessionTest, RequestUpdateAfterClose) {
   co_await folly::coro::co_reschedule_on_current_executor;
 }
 
+// Regression test: when a REQUEST_UPDATE is queued on the executor but
+// publishDone resets subscriptionHandle_ before it runs, handleRequestUpdate
+// must not dereference the null handle.  Unlike RequestUpdateAfterClose, the
+// session stays open — the cancellation token is NOT cancelled — so
+// co_safe_point alone does not protect against this.
+CO_TEST_P_X(MoQSessionTest, RequestUpdateAfterPublishDone) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+
+  // Queue a REQUEST_UPDATE — the coroutine is enqueued via .start() but
+  // won't run until we yield.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  RequestUpdate update;
+  update.existingRequestID = subscribeRequest.requestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.priority = kDefaultPriority + 1;
+  update.forward = true;
+  cb->onRequestUpdate(std::move(update));
+
+  // Now send publishDone from the server's publisher.  This synchronously
+  // resets subscriptionHandle_ (MoQSession.cpp TrackPublisherImpl::publishDone)
+  // WITHOUT cancelling the session's cancellation token.
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+
+  // requestUpdateCalled must NOT be invoked — subscriptionHandle_ is null.
+  // Without the null-check fix, this crashes with SIGSEGV.
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(0);
+
+  // Yield to let the queued handleRequestUpdate coroutine drain
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Session is still alive (not closed) — verify we can still close cleanly
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// =============================================================================
+// FETCH REQUEST_UPDATE tests
+// =============================================================================
+
+// A FetchHandle whose requestUpdate suspends on a baton, allowing the test to
+// interleave session teardown between the co_await and resume.
+class SuspendingFetchHandle : public MockFetchHandle {
+ public:
+  using MockFetchHandle::MockFetchHandle;
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    co_await baton_;
+    co_return RequestOk{.requestID = update.requestID};
+  }
+
+  folly::coro::Baton baton_;
+};
+
+// Regression test: FetchPublisherImpl::onRequestUpdate dereferences session_
+// after co_await without a null check.  If terminatePublish (via cleanup)
+// runs while requestUpdate is suspended, session_ is nulled but handle_ is
+// not, so there is no existing guard.
+CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNullSessionAfterAwait) {
+  // This test only applies to v16+ which supports fetch REQUEST_UPDATE.
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 16) {
+    co_return;
+  }
+
+  co_await setupMoQSession();
+  std::shared_ptr<SuspendingFetchHandle> suspendingHandle;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer;
+
+  // Server accepts the fetch with a SuspendingFetchHandle.
+  // Do NOT end the fetch — keep the FetchPublisherImpl alive in pubTracks_.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess())
+      .RetiresOnSaturation();
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            suspendingHandle = std::make_shared<SuspendingFetchHandle>(FetchOk{
+                fetch.requestID,
+                GroupOrder::OldestFirst,
+                /*endOfTrack=*/false,
+                AbsoluteLocation{0, 10}});
+            co_return suspendingHandle;
+          })
+      .RetiresOnSaturation();
+
+  // Client sends fetch.
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  EXPECT_FALSE(fetchRes.hasError());
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+
+  // Send a REQUEST_UPDATE for the fetch.  handleFetchRequestUpdate starts a
+  // detached coroutine that calls handle_->requestUpdate(), which suspends
+  // on baton_.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  RequestUpdate update;
+  update.existingRequestID = fetchRes.value()->fetchOk().requestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.priority = kDefaultPriority + 1;
+  cb->onRequestUpdate(std::move(update));
+
+  // Yield so the detached coroutine reaches the co_await inside
+  // SuspendingFetchHandle::requestUpdate.
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Close the server session while requestUpdate is suspended.  cleanup()
+  // erases from pubTracks_, then calls terminatePublish on FetchPublisherImpl
+  // which does reset() -> streamPublisher_->reset() -> onStreamComplete ->
+  // fetchComplete -> session_ = null.  The cancellation token is also
+  // triggered, but co_awaitTry catches the OperationCancelled — execution
+  // continues to the dereference of session_ without a null check.
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+  // Post the baton — the coroutine resumes.  Without the fix, this crashes
+  // with SIGSEGV on session_->getNegotiatedVersion().
+  suspendingHandle->baton_.post();
+
+  // Yield to let the resumed coroutine drain.
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  heldFetchConsumer.reset();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 } // namespace
