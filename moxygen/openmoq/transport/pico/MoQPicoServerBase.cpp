@@ -352,6 +352,9 @@ bool MoQPicoServerBase::createQuicContext() {
     return false;
   }
 
+  picoquic_register_all_congestion_control_algorithms();
+  XLOG(INFO) << "Registered picoquic congestion control algorithms for name lookup";
+
   picoquic_set_alpn_select_fn_v2(quic_, alpnSelectCallback);
   picoquic_set_cookie_mode(quic_, 2);
   if (picoquic_get_congestion_algorithm(transportConfig_.ccAlgo.c_str()) ==
