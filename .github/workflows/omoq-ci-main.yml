@@ -95,10 +95,7 @@ jobs:
             "${ASAN_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
 
       - name: Build
-        # Cap parallel jobs to avoid OOM during the link phase (publish
-        # build OOMed at -j8 on the 16 GB Linode runner during MoQTests
-        # link). -j6 keeps most throughput while leaving headroom.
-        run: cmake --build _build -j6
+        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
 
       - name: Test
         env:
