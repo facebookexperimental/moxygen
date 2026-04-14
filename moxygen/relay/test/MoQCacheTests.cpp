@@ -421,6 +421,21 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHit) {
       co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 10}));
+
+  // Verify cache stat APIs: 10 objects × 100 bytes each in 1 group
+  EXPECT_EQ(cache_.totalCachedBytes(), 1000u);
+  auto stats = cache_.getTrackStats();
+  EXPECT_EQ(stats.size(), 1u);
+  if (!stats.empty()) {
+    EXPECT_EQ(stats[0].name, kTestTrackName);
+    EXPECT_FALSE(stats[0].endOfTrack);
+    EXPECT_EQ(stats[0].groups.size(), 1u);
+    if (!stats[0].groups.empty()) {
+      EXPECT_EQ(stats[0].groups[0].groupId, 0u);
+      EXPECT_EQ(stats[0].groups[0].objects, 10u);
+    }
+    EXPECT_GT(stats[0].lastWrite.time_since_epoch().count(), 0);
+  }
 }
 CO_TEST_F(MoQCacheTest, TestFetchAllHitEOG) {
   populateCacheRange({0, 0}, {0, 11}, 10, 1, 1, true);

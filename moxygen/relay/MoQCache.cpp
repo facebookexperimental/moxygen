@@ -451,6 +451,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     auto cPayload = payload ? payload->clone() : nullptr;
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         objID,
         ObjectStatus::NORMAL,
@@ -491,6 +492,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         objectID,
         ObjectStatus::NORMAL,
@@ -557,6 +559,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         endOfGroupObjectID,
         ObjectStatus::END_OF_GROUP,
@@ -584,6 +587,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         endOfTrackObjectID,
         ObjectStatus::END_OF_TRACK,
@@ -698,6 +702,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         track_.getOrCreateGroup(header.group, &cache_),
+        track_,
         header.subgroup,
         header.id,
         header.status,
@@ -732,6 +737,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         track_.getOrCreateGroup(header.group, &cache_),
+        track_,
         header.subgroup,
         header.id,
         header.status,
@@ -1131,6 +1137,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     auto& group = fetchRangeIt_.track->getOrCreateGroup(groupID);
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         group,
+        *fetchRangeIt_.track,
         subgroupID,
         objectID,
         status,
@@ -2027,6 +2034,7 @@ bool MoQCache::evictForByteLimitIfNeeded() {
 folly::Expected<folly::Unit, MoQPublishError>
 MoQCache::cacheObjectAndUpdateBytes(
     CacheGroup& group,
+    CacheTrack& track,
     uint64_t subgroup,
     uint64_t objectID,
     ObjectStatus status,
@@ -2052,9 +2060,33 @@ MoQCache::cacheObjectAndUpdateBytes(
       XCHECK_GE(totalCachedBytes_, oldGroupBytes - group.totalBytes);
       totalCachedBytes_ -= oldGroupBytes - group.totalBytes;
     }
+    track.lastWrite = now;
     evictForByteLimitIfNeeded();
   }
   return res;
+}
+
+std::vector<MoQCache::TrackStats> MoQCache::getTrackStats() const {
+  std::vector<TrackStats> result;
+  result.reserve(cache_.size());
+  for (const auto& [ftn, track] : cache_) {
+    TrackStats ts;
+    ts.name = ftn;
+    ts.endOfTrack = track->endOfTrack;
+    ts.lastWrite = track->lastWrite;
+    ts.groups.reserve(track->groups.size());
+    for (const auto& [groupId, group] : track->groups) {
+      ts.groups.push_back({groupId, group->objects.size()});
+    }
+    std::sort(
+        ts.groups.begin(),
+        ts.groups.end(),
+        [](const GroupStats& a, const GroupStats& b) {
+          return a.groupId < b.groupId;
+        });
+    result.push_back(std::move(ts));
+  }
+  return result;
 }
 
 } // namespace moxygen

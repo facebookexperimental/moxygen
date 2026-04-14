@@ -15,6 +15,7 @@ install_ubuntu() {
         cmake \
         ninja-build \
         git \
+        pkg-config \
         libssl-dev \
         libunwind-dev \
         libgoogle-glog-dev \

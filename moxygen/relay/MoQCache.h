@@ -141,6 +141,29 @@ class MoQCache {
     clock_ = std::move(clock);
   }
 
+  // Returns total payload bytes currently held in the cache.
+  size_t totalCachedBytes() const {
+    return totalCachedBytes_;
+  }
+
+  // Per-group stats for getTrackStats().
+  struct GroupStats {
+    uint64_t groupId;
+    size_t objects;
+  };
+
+  // Per-track stats for getTrackStats().
+  struct TrackStats {
+    FullTrackName name;
+    bool endOfTrack;
+    TimePoint lastWrite;
+    std::vector<GroupStats> groups; // sorted by groupId ascending
+  };
+
+  // Returns a snapshot of all cached tracks and their group/object counts.
+  // Groups within each track are returned in ascending groupId order.
+  std::vector<TrackStats> getTrackStats() const;
+
   // Entry for single cached object
   struct CacheEntry {
     CacheEntry(
@@ -227,6 +250,8 @@ class MoQCache {
     Extensions extensions;
     // Set by clear() — writebacks skip caching when true
     bool evicted{false};
+    // Time of the most recent object write into this track
+    TimePoint lastWrite{TimePoint::min()};
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
@@ -346,9 +371,10 @@ class MoQCache {
   void evictGroup(CacheTrack& track, uint64_t groupID);
   bool evictForByteLimitIfNeeded();
 
-  // Wraps cacheObject() + byte accounting + eviction check
+  // Wraps cacheObject() + byte accounting + eviction check + lastWrite update
   folly::Expected<folly::Unit, MoQPublishError> cacheObjectAndUpdateBytes(
       CacheGroup& group,
+      CacheTrack& track,
       uint64_t subgroup,
       uint64_t objectID,
       ObjectStatus status,
