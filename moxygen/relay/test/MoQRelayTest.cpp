@@ -2935,4 +2935,61 @@ TEST_F(MoQRelayTest, RemoveForwardOnlySubscriberWithPublishDone) {
   EXPECT_TRUE(forwarder->empty());
 }
 
+// Test: forwardChanged must not crash when called after the publisher has
+// terminated (onPublishDone clears handle/upstream). We trigger forwardChanged
+// via Subscriber::requestUpdate changing forward from true→false (1→0
+// transition). The subscriber survives drain because it has an open subgroup.
+TEST_F(MoQRelayTest, ForwardChangedAfterPublisherTermination) {
+  auto publisherSession = createMockSession();
+  auto subSession = createMockSession();
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+
+  // Subscriber with forward=true (default)
+  auto consumer = createMockConsumer();
+  auto handle =
+      subscribeToTrack(subSession, kTestTrackName, consumer, RequestID(0));
+  ASSERT_NE(handle, nullptr);
+
+  // Begin a subgroup so the subscriber has open subgroups and survives drain
+  auto sg = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(sg);
+      });
+  auto subgroupRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+
+  // Publisher terminates — onPublishDone clears handle/upstream.
+  // forwarder->publishDone sets draining and calls drainSubscriber, but the
+  // subscriber has an open subgroup so it stays (receivedPublishDone_=true).
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  publishConsumer->publishDone(
+      {RequestID(0),
+       PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+       0,
+       "publisher ended"});
+
+  // Subscriber sends requestUpdate changing forward from true→false.
+  // This calls removeForwardingSubscriber → forwardingSubscribers_ 1→0 →
+  // forwardChanged on relay callback. forwardChanged accesses
+  // subscription.upstream which was nulled by onPublishDone → crash.
+  RequestUpdate update;
+  update.requestID = RequestID(0);
+  update.forward = false;
+  auto task = handle->requestUpdate(std::move(update));
+  auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+  EXPECT_TRUE(res.hasValue());
+
+  // Clean up: reset the subgroup so subscriber can be fully removed
+  EXPECT_CALL(*sg, reset(_)).Times(1);
+  subgroupRes.value()->reset(ResetStreamErrorCode::CANCELLED);
+
+  removeSession(publisherSession);
+  removeSession(subSession);
+}
+
 } // namespace moxygen::test
