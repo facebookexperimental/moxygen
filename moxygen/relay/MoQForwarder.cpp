@@ -187,6 +187,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
+  subscriber->pinned = true;
   subscribers_.emplace(sessionPtr, subscriber);
   if (subReq.forward) {
     addForwardingSubscriber();
@@ -516,6 +517,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::objectStream(
     Payload payload,
     bool lastInGroup) {
   updateLargest(header.group, header.id);
+  countReceivedObject(header.group);
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -532,6 +534,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
     Payload payload,
     bool lastInGroup) {
   updateLargest(header.group, header.id);
+  countReceivedObject(header.group);
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -766,6 +769,15 @@ void MoQForwarder::SubgroupForwarder::updateLargest(
     uint64_t object) {
   if (forwarder_) {
     forwarder_->updateLargest(group, object);
+    forwarder_->countReceivedObject(group);
+  }
+}
+
+void MoQForwarder::countReceivedObject(uint64_t groupID) {
+  totalObjectsReceived_++;
+  if (groupID != lastGroupSeen_) {
+    lastGroupSeen_ = groupID;
+    totalGroupsReceived_++;
   }
 }
 
