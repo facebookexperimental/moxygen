@@ -115,6 +115,7 @@ class PicoQuicSocketHandler
   picoquic_quic_t* quic_; // non-owning
   folly::EventBase* evb_; // non-owning
   int fd_{-1};
+  int socketFamily_{AF_UNSPEC}; // AF_INET or AF_INET6, set in start()
   bool gsoSupported_{false};
   uint16_t localPort_{0}; // actual bound port, for addrTo in parseCmsgsAndDeliver
 };

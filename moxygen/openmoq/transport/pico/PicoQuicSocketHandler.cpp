@@ -46,6 +46,23 @@ constexpr size_t kCmsgBufSize =
 // reschedule
 constexpr int64_t kMaxWakeDelayUs = 200'000;
 
+// Convert an AF_INET sockaddr_storage to its IPv4-mapped AF_INET6 equivalent.
+// Needed when sending over a dual-stack AF_INET6 socket to an IPv4 peer:
+// picoquic normalises IPv4-mapped addresses to AF_INET internally, but
+// sendmsg on an AF_INET6 fd requires AF_INET6 (IPv4-mapped) addresses.
+sockaddr_storage toMappedV6(const sockaddr_storage& in) {
+  sockaddr_storage out{};
+  const auto* src = reinterpret_cast<const sockaddr_in*>(&in);
+  auto* dst = reinterpret_cast<sockaddr_in6*>(&out);
+  dst->sin6_family = AF_INET6;
+  dst->sin6_port = src->sin_port;
+  // ::ffff:x.x.x.x
+  dst->sin6_addr.s6_addr[10] = 0xff;
+  dst->sin6_addr.s6_addr[11] = 0xff;
+  memcpy(&dst->sin6_addr.s6_addr[12], &src->sin_addr, 4);
+  return out;
+}
+
 } // namespace
 
 PicoQuicSocketHandler::PicoQuicSocketHandler(
@@ -72,6 +89,7 @@ void PicoQuicSocketHandler::start(const folly::SocketAddress& addr) {
   }
   socket_.bind(addr);
   fd_ = socket_.getNetworkSocket().toFd();
+  socketFamily_ = addr.getFamily();
   localPort_ = socket_.address().getPort();
   XLOG(DBG4) << "Socket bound, fd=" << fd_ << " localPort=" << localPort_;
 
@@ -382,6 +400,19 @@ void PicoQuicSocketHandler::sendPacket(
     const sockaddr_storage& addrFrom,
     int ifIndex,
     size_t sendMsgSize) {
+  // picoquic normalises IPv4-mapped peer addresses to AF_INET internally.
+  // On a dual-stack AF_INET6 socket, sendmsg requires AF_INET6 (IPv4-mapped)
+  // addresses — IP-level cmsg options (IP_PKTINFO) are rejected on an
+  // AF_INET6 fd.  Promote both addresses for this packet when needed.
+  sockaddr_storage effectiveTo = addrTo;
+  sockaddr_storage effectiveFrom = addrFrom;
+  if (socketFamily_ == AF_INET6 && addrTo.ss_family == AF_INET) {
+    effectiveTo = toMappedV6(addrTo);
+    if (addrFrom.ss_family == AF_INET) {
+      effectiveFrom = toMappedV6(addrFrom);
+    }
+  }
+
   char cmsgBuf
       [CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint16_t))];
 
@@ -390,9 +421,9 @@ void PicoQuicSocketHandler::sendPacket(
   iov.iov_len = length;
 
   struct msghdr msg{};
-  msg.msg_name = const_cast<sockaddr_storage*>(&addrTo);
-  msg.msg_namelen = (addrTo.ss_family == AF_INET6) ? sizeof(sockaddr_in6)
-                                                   : sizeof(sockaddr_in);
+  msg.msg_name = const_cast<sockaddr_storage*>(&effectiveTo);
+  msg.msg_namelen = (effectiveTo.ss_family == AF_INET6) ? sizeof(sockaddr_in6)
+                                                        : sizeof(sockaddr_in);
   msg.msg_iov = &iov;
   msg.msg_iovlen = 1;
   msg.msg_control = cmsgBuf;
@@ -401,24 +432,24 @@ void PicoQuicSocketHandler::sendPacket(
   struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
   size_t controlLen = 0;
 
-  // Only set pktinfo if addrFrom is valid — matches picoquic sockloop behavior.
-  if (addrFrom.ss_family == AF_INET6) {
+  // Only set pktinfo if effectiveFrom is valid — matches picoquic sockloop behavior.
+  if (effectiveFrom.ss_family == AF_INET6) {
     cmsg->cmsg_level = IPPROTO_IPV6;
     cmsg->cmsg_type = IPV6_PKTINFO;
     cmsg->cmsg_len = CMSG_LEN(sizeof(struct in6_pktinfo));
     auto* pki6 = reinterpret_cast<struct in6_pktinfo*>(CMSG_DATA(cmsg));
     pki6->ipi6_addr =
-        reinterpret_cast<const sockaddr_in6*>(&addrFrom)->sin6_addr;
+        reinterpret_cast<const sockaddr_in6*>(&effectiveFrom)->sin6_addr;
     pki6->ipi6_ifindex = static_cast<unsigned>(ifIndex);
     controlLen += CMSG_SPACE(sizeof(struct in6_pktinfo));
-  } else if (addrFrom.ss_family == AF_INET) {
+  } else if (effectiveFrom.ss_family == AF_INET) {
 #ifdef MOXYGEN_USE_IP_RECVDSTADDR
     // macOS/BSD: use IP_SENDSRCADDR (struct in_addr, no ifindex).
     cmsg->cmsg_level = IPPROTO_IP;
     cmsg->cmsg_type = IP_SENDSRCADDR;
     cmsg->cmsg_len = CMSG_LEN(sizeof(struct in_addr));
     *reinterpret_cast<struct in_addr*>(CMSG_DATA(cmsg)) =
-        reinterpret_cast<const sockaddr_in*>(&addrFrom)->sin_addr;
+        reinterpret_cast<const sockaddr_in*>(&effectiveFrom)->sin_addr;
     controlLen += CMSG_SPACE(sizeof(struct in_addr));
 #else
     cmsg->cmsg_level = IPPROTO_IP;
@@ -426,7 +457,7 @@ void PicoQuicSocketHandler::sendPacket(
     cmsg->cmsg_len = CMSG_LEN(sizeof(struct in_pktinfo));
     auto* pki = reinterpret_cast<struct in_pktinfo*>(CMSG_DATA(cmsg));
     pki->ipi_spec_dst =
-        reinterpret_cast<const sockaddr_in*>(&addrFrom)->sin_addr;
+        reinterpret_cast<const sockaddr_in*>(&effectiveFrom)->sin_addr;
     pki->ipi_ifindex = static_cast<unsigned long>(ifIndex);
     controlLen += CMSG_SPACE(sizeof(struct in_pktinfo));
 #endif
@@ -453,7 +484,7 @@ void PicoQuicSocketHandler::sendPacket(
   ssize_t sent = ::sendmsg(fd_, &msg, 0);
   if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
     XLOG(WARN) << "sendmsg failed: " << folly::errnoStr(errno)
-               << " addrFrom.family=" << addrFrom.ss_family;
+               << " effectiveFrom.family=" << effectiveFrom.ss_family;
   }
 }
 
