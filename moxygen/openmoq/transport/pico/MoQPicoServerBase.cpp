@@ -31,13 +31,9 @@ struct MoQPicoServerBaseCallbacks {
   static const PicoWebTransportConfig& getWTConfig(MoQPicoServerBase* server) {
     return server->wtConfig_;
   }
-  static h3zero_callback_ctx_t* getOrCreateH3Ctx(
+  static h3zero_callback_ctx_t* createH3Ctx(
       MoQPicoServerBase* server,
       picoquic_cnx_t* cnx) {
-    auto it = server->h3Contexts_.find(cnx);
-    if (it != server->h3Contexts_.end()) {
-      return it->second;
-    }
     // Create per-connection h3zero context using same params as template
     picohttp_server_parameters_t serverParams = {};
     serverParams.web_folder = nullptr;
@@ -51,18 +47,9 @@ struct MoQPicoServerBaseCallbacks {
       // h3zero enforces this in the WT layer; we use it for flow control.
       h3Ctx->settings.webtransport_max_sessions =
           server->wtConfig_.wtMaxSessions;
-      server->h3Contexts_[cnx] = h3Ctx;
       XLOG(DBG1) << "Created per-connection h3Ctx for cnx=" << (void*)cnx;
     }
     return h3Ctx;
-  }
-  static void removeH3Ctx(MoQPicoServerBase* server, picoquic_cnx_t* cnx) {
-    auto it = server->h3Contexts_.find(cnx);
-    if (it != server->h3Contexts_.end()) {
-      XLOG(DBG1) << "Removing per-connection h3Ctx for cnx=" << (void*)cnx;
-      h3zero_callback_delete_context(cnx, it->second);
-      server->h3Contexts_.erase(it);
-    }
   }
   static int onWebTransportConnect(
       MoQPicoServerBase* server,
@@ -170,8 +157,10 @@ static int picoCallback(
     }
 
     if (*protocol == PicoProtocolType::WebTransportH3) {
-      // Create per-connection h3zero context and switch to h3zero_callback
-      auto* h3Ctx = MoQPicoServerBaseCallbacks::getOrCreateH3Ctx(server, cnx);
+      // Create per-connection h3zero context and switch to h3zero_callback.
+      // h3zero takes ownership and frees it via h3zero_callback_delete_context
+      // when the connection closes.
+      auto* h3Ctx = MoQPicoServerBaseCallbacks::createH3Ctx(server, cnx);
       if (!h3Ctx) {
         XLOG(ERR) << "Failed to create h3Ctx for WebTransport connection";
         return PICOQUIC_ERROR_UNEXPECTED_ERROR;
@@ -353,7 +342,8 @@ bool MoQPicoServerBase::createQuicContext() {
   }
 
   picoquic_register_all_congestion_control_algorithms();
-  XLOG(INFO) << "Registered picoquic congestion control algorithms for name lookup";
+  XLOG(INFO)
+      << "Registered picoquic congestion control algorithms for name lookup";
 
   picoquic_set_alpn_select_fn_v2(quic_, alpnSelectCallback);
   picoquic_set_cookie_mode(quic_, 2);
@@ -517,13 +507,9 @@ bool MoQPicoServerBase::initH3Zero() {
 }
 
 void MoQPicoServerBase::destroyH3Zero() {
-  // h3Contexts_ entries have been handed to h3zero via picoquic_set_callback.
-  // h3zero owns each context and frees it when the connection closes
-  // (picoquic_callback_close → h3zero_callback_delete_context). Calling
-  // h3zero_callback_delete_context here would double-free already-closed
-  // connections. Just clear the map and let destroyQuicContext/picoquic_free
-  // drive the remaining close callbacks.
-  h3Contexts_.clear();
+  // h3Ctx entries are owned by h3zero (via picoquic_set_callback) and freed
+  // when each connection closes (h3zero_callback_delete_context). Let
+  // destroyQuicContext/picoquic_free drive the remaining close callbacks.
   wtPathTable_.reset();
 }
 
@@ -554,13 +540,14 @@ int MoQPicoServerBase::onWebTransportConnectImpl(
   XLOG(DBG1) << "Accepting WebTransport session from "
              << peerSockAddr.describe();
 
-  // Get per-connection h3zero context
-  auto h3CtxIt = h3Contexts_.find(cnx);
-  if (h3CtxIt == h3Contexts_.end()) {
+  // Get per-connection h3zero context — after almost_ready hands off to
+  // h3zero_callback, the connection callback context is h3Ctx directly.
+  auto* h3Ctx =
+      static_cast<h3zero_callback_ctx_t*>(picoquic_get_callback_context(cnx));
+  if (!h3Ctx) {
     XLOG(ERR) << "No h3Ctx found for cnx=" << (void*)cnx;
     return -1;
   }
-  auto* h3Ctx = h3CtxIt->second;
 
   // Create PicoH3WebTransport adapter
   auto webTransport = std::make_shared<PicoH3WebTransport>(

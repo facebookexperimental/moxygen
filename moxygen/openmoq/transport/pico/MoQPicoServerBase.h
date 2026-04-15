@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <folly/container/F14Map.h>
 #include <moxygen/MoQServerBase.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
 #include <moxygen/openmoq/transport/pico/PicoTransportConfig.h>
@@ -92,10 +91,6 @@ class MoQPicoServerBase : public MoQServerBase {
   // MoQPicoQuicEventBaseServer stores MoQFollyExecutorImpl with a no-op
   // deleter (caller retains ownership).
   std::shared_ptr<MoQExecutor> executor_;
-
-  // Per-connection h3zero contexts (stream prefixes are per-context, not
-  // global)
-  folly::F14FastMap<picoquic_cnx_t*, h3zero_callback_ctx_t*> h3Contexts_;
 
   /**
    * Called after any WebTransport adapter is created (PicoQuicWebTransport or
