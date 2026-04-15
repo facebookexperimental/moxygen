@@ -37,6 +37,9 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
   onNewSession(clientSession);
   clientSession->start();
 
+  // Keep the server alive through the co_await so the terminateClientSession
+  // virtual dispatch is safe even if the caller's shared_ptr has been dropped.
+  auto self = shared_from_this();
   // The clientSession will cancel this token when the app calls close() or
   // the underlying transport invokes onSessionEnd
   folly::coro::Baton baton;

@@ -60,8 +60,7 @@ class PerfFetchHandle : public Publisher::FetchHandle {
 };
 
 class MoQPerfServer : public moxygen::Publisher,
-                      public moxygen::MoQServer,
-                      public std::enable_shared_from_this<MoQPerfServer> {
+                      public moxygen::MoQServer {
  public:
   MoQPerfServer(std::string cert, std::string key);
 

@@ -17,7 +17,8 @@ namespace moxygen {
 /**
  * MoQServerBase - Base class for MoQ servers
  */
-class MoQServerBase : public MoQSession::ServerSetupCallback {
+class MoQServerBase : public MoQSession::ServerSetupCallback,
+                      public std::enable_shared_from_this<MoQServerBase> {
  public:
   explicit MoQServerBase(std::string endpoint);
 
