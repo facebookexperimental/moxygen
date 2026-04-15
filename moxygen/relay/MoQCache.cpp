@@ -1916,13 +1916,16 @@ bool MoQCache::evictOldestTrackIfNeeded() {
   return true;
 }
 
-void MoQCache::evictTrack(const FullTrackName& ftn) {
+size_t MoQCache::evictTrack(const FullTrackName& ftn) {
   auto it = cache_.find(ftn);
   if (it == cache_.end()) {
-    return;
+    return 0;
   }
 
   auto& track = *it->second;
+  // Stamp evicted before erasing so any in-flight SubscribeWriteback/
+  // FetchReadback objects discover the flag and stop caching.
+  track.evicted = true;
   // Remove from LRU if present
   if (track.lruIter_.hasValue()) {
     trackLRU_.erase(*track.lruIter_);
@@ -1937,6 +1940,35 @@ void MoQCache::evictTrack(const FullTrackName& ftn) {
   // Remove from cache
   cache_.erase(it);
   XLOG(DBG1) << "Evicted track: " << ftn;
+  return 1;
+}
+
+size_t MoQCache::purge(const TrackNamespace& ns) {
+  // Snapshot to avoid iterator invalidation when evictTrack() modifies cache_.
+  std::vector<FullTrackName> matching;
+  for (auto& [ftn, _] : cache_) {
+    if (ftn.trackNamespace == ns) {
+      matching.push_back(ftn);
+    }
+  }
+  size_t count = 0;
+  for (auto& trackName : matching) {
+    count += evictTrack(trackName);
+  }
+  return count;
+}
+
+size_t MoQCache::purge() {
+  // Snapshot keys to avoid iterator invalidation during eviction.
+  std::vector<FullTrackName> all;
+  all.reserve(cache_.size());
+  for (auto& [ftn, _] : cache_) {
+    all.push_back(ftn);
+  }
+  for (auto& trackName : all) {
+    evictTrack(trackName);
+  }
+  return all.size();
 }
 
 void MoQCache::evictOldestGroupsIfNeeded(CacheTrack& track) {

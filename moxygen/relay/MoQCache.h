@@ -68,6 +68,18 @@ class MoQCache {
     totalCachedBytes_ = 0;
   }
 
+  // Force-evicts a specific track unconditionally. Returns 1 if found, 0 if
+  // not.
+  size_t purge(const FullTrackName& ftn) {
+    return evictTrack(ftn);
+  }
+
+  // Force-evicts all tracks in the given namespace unconditionally.
+  size_t purge(const TrackNamespace& ns);
+
+  // Force-evicts all cached tracks unconditionally.
+  size_t purge();
+
   bool hasTrack(const FullTrackName& ftn) const {
     return cache_.contains(ftn);
   }
@@ -366,7 +378,7 @@ class MoQCache {
 
   // Eviction methods
   bool evictOldestTrackIfNeeded();
-  void evictTrack(const FullTrackName& ftn);
+  size_t evictTrack(const FullTrackName& ftn);
   void evictOldestGroupsIfNeeded(CacheTrack& track);
   void evictGroup(CacheTrack& track, uint64_t groupID);
   bool evictForByteLimitIfNeeded();
