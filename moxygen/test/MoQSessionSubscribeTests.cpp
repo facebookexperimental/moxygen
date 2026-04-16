@@ -806,6 +806,9 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeWithinPublishDone) {
   auto subscribeHandler = res.value();
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onPublishDone(PublishDoneStatusCode::TRACK_ENDED));
 
   EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Invoke([&](const auto&) {
@@ -1020,6 +1023,9 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinPublishDoneHandler) {
   // When publishDone is delivered, immediately call unsubscribe() from
   // handler
   folly::coro::Baton publishDoneInvoked;
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onPublishDone(PublishDoneStatusCode::TRACK_ENDED));
   EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Invoke([&](const auto&) {
         subscribeHandle->unsubscribe();
@@ -1106,4 +1112,32 @@ CO_TEST_P_X(MoQSessionTest, BeginSubgroupCallbackError) {
       getTrackEndedPublishDone(subscribeRequest.requestID));
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Regression test: the onPublishDone subscriber stat must fire when the
+// subscription ends due to session closure, even if the publisher never
+// sent a PUBLISH_DONE frame (abandoned publisher).
+CO_TEST_P_X(MoQSessionTest, OnPublishDoneStatFiredOnAbandonedPublisher) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    // Publisher accepts the subscription but intentionally never calls
+    // publishDone, simulating an abandoned / improperly-closed publisher.
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  // When the session closes the client synthesizes a SESSION_CLOSED
+  // publishDone for every active subscription via the subscribeError path.
+  // The stat must fire here even though no PUBLISH_DONE frame was received.
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onPublishDone(PublishDoneStatusCode::SESSION_CLOSED));
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
