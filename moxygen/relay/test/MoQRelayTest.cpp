@@ -2935,4 +2935,70 @@ TEST_F(MoQRelayTest, RemoveForwardOnlySubscriberWithPublishDone) {
   EXPECT_TRUE(forwarder->empty());
 }
 
+// onPublishOk must update forwardingSubscribers_ (not just shouldForward) so
+// that forwardChanged fires and the publisher receives a corrective
+// REQUEST_UPDATE when the peer says fwd=false.
+TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
+  auto session = createMockSession();
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+
+  struct ForwardCallback : MoQForwarder::Callback {
+    void onEmpty(MoQForwarder*) override {}
+    void forwardChanged(MoQForwarder* f) override {
+      calls.push_back(f->numForwardingSubscribers());
+    }
+    std::vector<uint64_t> calls;
+  };
+  auto cb = std::make_shared<ForwardCallback>();
+  forwarder->setCallback(cb);
+
+  // Adding a forwarding subscriber fires forwardChanged (0->1).
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+  ASSERT_EQ(cb->calls.size(), 1u);
+  EXPECT_EQ(cb->calls[0], 1u);
+  cb->calls.clear();
+
+  // onPublishOk(fwd=false) must decrement the count and fire forwardChanged.
+  PublishOk pubOkFalse{
+      RequestID(0),
+      /*forward=*/false,
+      0,
+      GroupOrder::OldestFirst,
+      LocationType::AbsoluteStart,
+      AbsoluteLocation{0, 0},
+      std::nullopt,
+      TrackRequestParameters(FrameType::PUBLISH_OK)};
+  subscriber->onPublishOk(pubOkFalse);
+
+  EXPECT_FALSE(subscriber->shouldForward);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0u)
+      << "forwardingSubscribers_ must be decremented by onPublishOk(fwd=false)";
+  ASSERT_EQ(cb->calls.size(), 1u)
+      << "forwardChanged must fire when count drops to 0";
+  EXPECT_EQ(cb->calls[0], 0u);
+  cb->calls.clear();
+
+  // onPublishOk(fwd=true) must increment and fire forwardChanged again.
+  PublishOk pubOkTrue{
+      RequestID(0),
+      /*forward=*/true,
+      0,
+      GroupOrder::OldestFirst,
+      LocationType::AbsoluteStart,
+      AbsoluteLocation{0, 0},
+      std::nullopt,
+      TrackRequestParameters(FrameType::PUBLISH_OK)};
+  subscriber->onPublishOk(pubOkTrue);
+
+  EXPECT_TRUE(subscriber->shouldForward);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u)
+      << "forwardingSubscribers_ must be incremented by onPublishOk(fwd=true)";
+  ASSERT_EQ(cb->calls.size(), 1u)
+      << "forwardChanged must fire when count rises to 1";
+  EXPECT_EQ(cb->calls[0], 1u);
+}
+
 } // namespace moxygen::test

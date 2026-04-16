@@ -147,6 +147,12 @@ class MoQForwarder : public TrackConsumer {
     bool shouldForward;
     bool pinned{false};
     bool receivedPublishDone_{false};
+
+   private:
+    // Updates shouldForward and keeps forwardingSubscribers_ in sync,
+    // firing forwardChanged when the count crosses zero.  Shared by
+    // onPublishOk and requestUpdate.
+    void updateForwardState(bool newForward);
   };
 
   [[nodiscard]] bool empty() const {
