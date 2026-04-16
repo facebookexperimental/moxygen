@@ -187,11 +187,15 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
-  subscribers_.emplace(sessionPtr, subscriber);
-  if (subReq.forward) {
+  // If the session already has a subscriber (e.g. from a prior
+  // addSubscriber(session, forward) call), emplace is a no-op. Return the
+  // existing in-map entry and only increment the forwarding count when a new
+  // entry was actually inserted.
+  auto [it, inserted] = subscribers_.emplace(sessionPtr, subscriber);
+  if (inserted && subReq.forward) {
     addForwardingSubscriber();
   }
-  return subscriber;
+  return it->second;
 }
 
 std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
@@ -216,11 +220,11 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       SubscribeRange{{0, 0}, kLocationMax},
       nullptr,
       forward);
-  subscribers_.emplace(sessionPtr, subscriber);
-  if (forward) {
+  auto [it, inserted] = subscribers_.emplace(sessionPtr, subscriber);
+  if (inserted && forward) {
     addForwardingSubscriber();
   }
-  return subscriber;
+  return it->second;
 }
 
 folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
