@@ -129,6 +129,7 @@ else
   # Create as pre-release so it doesn't show as "Latest release"
   # shellcheck disable=SC2086
   gh release create "$TAG" \
+    --target "$SHA" \
     --title "Latest build ($SHORT_SHA)" \
     --prerelease \
     --notes "$(cat <<EOF
