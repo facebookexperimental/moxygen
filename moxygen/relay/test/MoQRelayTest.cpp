@@ -2935,4 +2935,63 @@ TEST_F(MoQRelayTest, RemoveForwardOnlySubscriberWithPublishDone) {
   EXPECT_TRUE(forwarder->empty());
 }
 
+// A late-joining subscriber must receive containsLastInGroup=true when the
+// original beginSubgroup had it set. Previously SubgroupForwarder always
+// passed containsLastInGroup=false (defaulted) in the late-joiner path.
+//
+// Timeline: publish → early sub → beginSubgroup(containsLastInGroup=true) →
+//   object(0) [early only] → late sub → object(1) [both; late gets beginSubgroup
+//   with correct containsLastInGroup=true]
+TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
+  auto publisherSession = createMockSession();
+  auto earlySubscriber = createMockSession();
+  auto lateSubscriber = createMockSession();
+
+  auto earlyConsumer = createMockConsumer();
+  auto lateConsumer = createMockConsumer();
+
+  // Early subscriber gets beginSubgroup for group 0 with containsLastInGroup=true
+  auto earlySubgroupConsumer = createMockSubgroupConsumer();
+  EXPECT_CALL(*earlyConsumer, beginSubgroup(0, 0, _, /*containsLastInGroup=*/true))
+      .WillOnce(Return(
+          folly::makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+              earlySubgroupConsumer)));
+
+  // Late subscriber must also see containsLastInGroup=true (not the false default)
+  auto lateSubgroupConsumer = createMockSubgroupConsumer();
+  EXPECT_CALL(*lateConsumer, beginSubgroup(0, 0, _, /*containsLastInGroup=*/true))
+      .WillOnce(Return(
+          folly::makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+              lateSubgroupConsumer)));
+
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  subscribeToTrack(earlySubscriber, kTestTrackName, earlyConsumer, RequestID(1));
+
+  // Publisher opens subgroup with containsLastInGroup=true
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0, /*containsLastInGroup=*/true);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto sg = *sgRes;
+
+  // Object 0 goes only to the early subscriber; advances largest_ to {0,0}
+  EXPECT_CALL(*earlySubgroupConsumer, object(0, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(sg->object(0, folly::IOBuf::copyBuffer("hi"), {}, false).hasValue());
+
+  // Late subscriber joins; range starts at {0,1} (LargestObject after {0,0})
+  subscribeToTrack(lateSubscriber, kTestTrackName, lateConsumer, RequestID(2));
+
+  // Object 1: early gets it on existing subgroup, late triggers late-joiner path
+  // (beginSubgroup with containsLastInGroup from SubgroupForwarder)
+  EXPECT_CALL(*earlySubgroupConsumer, object(1, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*lateSubgroupConsumer, object(1, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(sg->object(1, folly::IOBuf::copyBuffer("world"), {}, false).hasValue());
+
+  EXPECT_TRUE(sg->endOfSubgroup().hasValue());
+  removeSession(publisherSession);
+  removeSession(earlySubscriber);
+  removeSession(lateSubscriber);
+}
+
 } // namespace moxygen::test
