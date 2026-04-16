@@ -1922,6 +1922,7 @@ size_t MoQCache::evictTrack(const FullTrackName& ftn) {
     return 0;
   }
 
+  XLOG(DBG1) << "Evicting track: " << ftn;
   auto& track = *it->second;
   // Stamp evicted before erasing so any in-flight SubscribeWriteback/
   // FetchReadback objects discover the flag and stop caching.
@@ -1939,7 +1940,6 @@ size_t MoQCache::evictTrack(const FullTrackName& ftn) {
 
   // Remove from cache
   cache_.erase(it);
-  XLOG(DBG1) << "Evicted track: " << ftn;
   return 1;
 }
 
