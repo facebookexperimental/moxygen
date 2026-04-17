@@ -3057,4 +3057,82 @@ TEST_F(MoQRelayTest, FetchAfterPublisherTermination) {
   removeSession(fetchSession);
 }
 
+// ============================================================
+// Publish Replaces Subscribe Tests
+// ============================================================
+
+// Regression test: When a PUBLISH replaces a subscribe-path subscription, the
+// old forwarder's subscribers must receive publishDone, and the new
+// publish-path subscription must be fully functional (accepting data from the
+// new publisher).
+TEST_F(MoQRelayTest, PublishReplacesSubscribeDrainsOldAndServesNew) {
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+
+  // Set up upstream subscribe that succeeds
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(1);
+  upstreamOk.expires = std::chrono::milliseconds(0);
+  upstreamOk.groupOrder = GroupOrder::OldestFirst;
+
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([upstreamOk](const auto& /*req*/, auto /*consumer*/) {
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+
+  // Subscribe to the track (creates subscribe-path subscription)
+  auto oldConsumer = createMockConsumer();
+  bool publishDoneReceived = false;
+  EXPECT_CALL(*oldConsumer, publishDone(_))
+      .WillOnce([&publishDoneReceived](const PublishDone&) {
+        publishDoneReceived = true;
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+  auto handle = subscribeToTrack(
+      subscriberSession,
+      kTestTrackName,
+      oldConsumer,
+      RequestID(1),
+      /*addToState=*/false);
+  ASSERT_NE(handle, nullptr);
+
+  // PUBLISH arrives for the same track — replaces subscribe-path subscription
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  ASSERT_NE(publishConsumer, nullptr);
+
+  // Old subscriber must have been drained
+  EXPECT_TRUE(publishDoneReceived)
+      << "Old subscribe-path subscriber should receive publishDone";
+
+  // New publish-path subscription should be functional: subscribe a new
+  // downstream consumer and verify it receives data from the publisher
+  auto newConsumer = createMockConsumer();
+  auto sg = createMockSubgroupConsumer();
+  EXPECT_CALL(*newConsumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+  EXPECT_CALL(*sg, endOfSubgroup()).WillOnce(Return(folly::unit));
+
+  subscribeToTrack(
+      subscriberSession, kTestTrackName, newConsumer, RequestID(2));
+
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  EXPECT_TRUE(sgRes.value()->endOfSubgroup().hasValue());
+
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
+}
+
 } // namespace moxygen::test
