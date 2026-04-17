@@ -699,9 +699,9 @@ MoQRelay::subscribeNamespace(
             doSubscribeUpdate(subscriptionIt->second.handle, subNs.forward))
             .start();
       }
-      auto maybeNegotiatedVersion = session->getNegotiatedVersion();
-      CHECK(maybeNegotiatedVersion.has_value());
-      if (getDraftMajorVersion(*maybeNegotiatedVersion) <= 15 ||
+      auto maybeVersion = session->getNegotiatedVersion();
+      CHECK(maybeVersion.has_value());
+      if (getDraftMajorVersion(*maybeVersion) <= 15 ||
           (subNs.options == SubscribeNamespaceOptions::BOTH ||
            subNs.options == SubscribeNamespaceOptions::PUBLISH)) {
         if (publishSession != session) {
