@@ -2615,7 +2615,9 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
 
   bool fin = false;
   auto token = co_await folly::coro::co_current_cancellation_token;
-  while (!fin && !token.isCancellationRequested()) {
+  auto rhToken = readHandle->getCancelToken();
+  while (!fin && !token.isCancellationRequested() &&
+         !rhToken.isCancellationRequested()) {
     auto streamData =
         co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
     if (streamData.hasException()) {

@@ -68,6 +68,18 @@ class MoQCache {
     totalCachedBytes_ = 0;
   }
 
+  // Force-evicts a specific track unconditionally. Returns 1 if found, 0 if
+  // not.
+  size_t purge(const FullTrackName& ftn) {
+    return evictTrack(ftn);
+  }
+
+  // Force-evicts all tracks in the given namespace unconditionally.
+  size_t purge(const TrackNamespace& ns);
+
+  // Force-evicts all cached tracks unconditionally.
+  size_t purge();
+
   bool hasTrack(const FullTrackName& ftn) const {
     return cache_.contains(ftn);
   }
@@ -140,6 +152,29 @@ class MoQCache {
   void setClockForTesting(std::function<TimePoint()> clock) {
     clock_ = std::move(clock);
   }
+
+  // Returns total payload bytes currently held in the cache.
+  size_t totalCachedBytes() const {
+    return totalCachedBytes_;
+  }
+
+  // Per-group stats for getTrackStats().
+  struct GroupStats {
+    uint64_t groupId;
+    size_t objects;
+  };
+
+  // Per-track stats for getTrackStats().
+  struct TrackStats {
+    FullTrackName name;
+    bool endOfTrack;
+    TimePoint lastWrite;
+    std::vector<GroupStats> groups; // sorted by groupId ascending
+  };
+
+  // Returns a snapshot of all cached tracks and their group/object counts.
+  // Groups within each track are returned in ascending groupId order.
+  std::vector<TrackStats> getTrackStats() const;
 
   // Entry for single cached object
   struct CacheEntry {
@@ -227,6 +262,8 @@ class MoQCache {
     Extensions extensions;
     // Set by clear() — writebacks skip caching when true
     bool evicted{false};
+    // Time of the most recent object write into this track
+    TimePoint lastWrite{TimePoint::min()};
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
@@ -341,14 +378,15 @@ class MoQCache {
 
   // Eviction methods
   bool evictOldestTrackIfNeeded();
-  void evictTrack(const FullTrackName& ftn);
+  size_t evictTrack(const FullTrackName& ftn);
   void evictOldestGroupsIfNeeded(CacheTrack& track);
   void evictGroup(CacheTrack& track, uint64_t groupID);
   bool evictForByteLimitIfNeeded();
 
-  // Wraps cacheObject() + byte accounting + eviction check
+  // Wraps cacheObject() + byte accounting + eviction check + lastWrite update
   folly::Expected<folly::Unit, MoQPublishError> cacheObjectAndUpdateBytes(
       CacheGroup& group,
+      CacheTrack& track,
       uint64_t subgroup,
       uint64_t objectID,
       ObjectStatus status,

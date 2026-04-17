@@ -187,6 +187,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
+  subscriber->pinned = true;
   subscribers_.emplace(sessionPtr, subscriber);
   if (subReq.forward) {
     addForwardingSubscriber();
@@ -516,6 +517,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::objectStream(
     Payload payload,
     bool lastInGroup) {
   updateLargest(header.group, header.id);
+  countReceivedObject(header.group);
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -532,6 +534,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
     Payload payload,
     bool lastInGroup) {
   updateLargest(header.group, header.id);
+  countReceivedObject(header.group);
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -669,6 +672,16 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
   }
 }
 
+void MoQForwarder::Subscriber::updateForwardState(bool newForward) {
+  auto wasForwarding = shouldForward;
+  shouldForward = newForward;
+  if (shouldForward && !wasForwarding) {
+    forwarder.addForwardingSubscriber();
+  } else if (wasForwarding && !shouldForward) {
+    forwarder.removeForwardingSubscriber();
+  }
+}
+
 void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
   // Update subscriber range from PUBLISH_OK
   std::optional<AbsoluteLocation> end;
@@ -678,8 +691,7 @@ void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
   range =
       toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder.largest());
 
-  // Update forward flag
-  shouldForward = pubOk.forward;
+  updateForwardState(pubOk.forward);
 
   // Handle NEW_GROUP_REQUEST forwarding if present
   forwarder.tryProcessNewGroupRequest(pubOk.params);
@@ -716,16 +728,9 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
     range.end = newEnd;
   }
 
-  auto wasForwarding = shouldForward;
   // Only update forward state if explicitly provided (per draft 15+)
   if (requestUpdate.forward.has_value()) {
-    shouldForward = *requestUpdate.forward;
-  }
-
-  if (shouldForward && !wasForwarding) {
-    forwarder.addForwardingSubscriber();
-  } else if (wasForwarding && !shouldForward) {
-    forwarder.removeForwardingSubscriber();
+    updateForwardState(*requestUpdate.forward);
   }
 
   // Only update new group request if provided
@@ -766,6 +771,15 @@ void MoQForwarder::SubgroupForwarder::updateLargest(
     uint64_t object) {
   if (forwarder_) {
     forwarder_->updateLargest(group, object);
+    forwarder_->countReceivedObject(group);
+  }
+}
+
+void MoQForwarder::countReceivedObject(uint64_t groupID) {
+  totalObjectsReceived_++;
+  if (groupID != lastGroupSeen_) {
+    lastGroupSeen_ = groupID;
+    totalGroupsReceived_++;
   }
 }
 
