@@ -151,12 +151,11 @@ jobs:
             container: debian:bookworm
             cache_opts: "-v /home/github-runner/.cache/moxygen-publish-bookworm-amd64:/cache"
 
-          # bookworm-arm64 disabled — no current consumers
-          # - name: bookworm-arm64
-          #   runner: ubuntu-22.04-arm
-          #   artifact: moxygen-bookworm-arm64.tar.gz
-          #   debug_artifact: moxygen-bookworm-arm64-dbg.tar.gz
-          #   container: debian:bookworm
+          - name: bookworm-arm64
+            runner: ubuntu-22.04-arm
+            artifact: moxygen-bookworm-arm64.tar.gz
+            debug_artifact: moxygen-bookworm-arm64-dbg.tar.gz
+            container: debian:bookworm
 
     name: publish (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
