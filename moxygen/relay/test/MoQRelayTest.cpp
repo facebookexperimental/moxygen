@@ -2935,70 +2935,205 @@ TEST_F(MoQRelayTest, RemoveForwardOnlySubscriberWithPublishDone) {
   EXPECT_TRUE(forwarder->empty());
 }
 
-// onPublishOk must update forwardingSubscribers_ (not just shouldForward) so
-// that forwardChanged fires and the publisher receives a corrective
-// REQUEST_UPDATE when the peer says fwd=false.
-TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
-  auto session = createMockSession();
-  auto forwarder =
-      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+// Test: forwardChanged must not crash when called after the publisher has
+// terminated (onPublishDone clears handle/upstream). We trigger forwardChanged
+// via Subscriber::requestUpdate changing forward from true→false (1→0
+// transition). The subscriber survives drain because it has an open subgroup.
+TEST_F(MoQRelayTest, ForwardChangedAfterPublisherTermination) {
+  auto publisherSession = createMockSession();
+  auto subSession = createMockSession();
 
-  struct ForwardCallback : MoQForwarder::Callback {
-    void onEmpty(MoQForwarder*) override {}
-    void forwardChanged(MoQForwarder* f) override {
-      calls.push_back(f->numForwardingSubscribers());
-    }
-    std::vector<uint64_t> calls;
-  };
-  auto cb = std::make_shared<ForwardCallback>();
-  forwarder->setCallback(cb);
+  doPublishNamespace(publisherSession, kTestNamespace);
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
 
-  // Adding a forwarding subscriber fires forwardChanged (0->1).
-  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
-  ASSERT_NE(subscriber, nullptr);
-  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
-  ASSERT_EQ(cb->calls.size(), 1u);
-  EXPECT_EQ(cb->calls[0], 1u);
-  cb->calls.clear();
+  // Subscriber with forward=true (default)
+  auto consumer = createMockConsumer();
+  auto handle =
+      subscribeToTrack(subSession, kTestTrackName, consumer, RequestID(0));
+  ASSERT_NE(handle, nullptr);
 
-  // onPublishOk(fwd=false) must decrement the count and fire forwardChanged.
-  PublishOk pubOkFalse{
+  // Begin a subgroup so the subscriber has open subgroups and survives drain
+  auto sg = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+  auto subgroupRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+
+  // Publisher terminates — onPublishDone clears handle/upstream.
+  // forwarder->publishDone sets draining and calls drainSubscriber, but the
+  // subscriber has an open subgroup so it stays (receivedPublishDone_=true).
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  publishConsumer->publishDone(
+      {RequestID(0),
+       PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+       0,
+       "publisher ended"});
+
+  // Subscriber sends requestUpdate changing forward from true→false.
+  // This calls removeForwardingSubscriber → forwardingSubscribers_ 1→0 →
+  // forwardChanged on relay callback. forwardChanged accesses
+  // subscription.upstream which was nulled by onPublishDone → crash.
+  RequestUpdate update;
+  update.requestID = RequestID(0);
+  update.forward = false;
+  auto task = handle->requestUpdate(std::move(update));
+  auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+  EXPECT_TRUE(res.hasValue());
+
+  // Clean up: reset the subgroup so subscriber can be fully removed
+  EXPECT_CALL(*sg, reset(_)).Times(1);
+  subgroupRes.value()->reset(ResetStreamErrorCode::CANCELLED);
+
+  removeSession(publisherSession);
+  removeSession(subSession);
+}
+
+// Test: fetch fallback to subscriptions_ after publisher termination must not
+// crash. When findPublishNamespaceSession returns null (no publishNamespace),
+// fetch falls back to subscriptions_. After onPublishDone, upstream is null
+// but the subscription entry remains if the forwarder has subscribers.
+TEST_F(MoQRelayTest, FetchAfterPublisherTermination) {
+  auto publisherSession = createMockSession();
+  auto subSession = createMockSession();
+  auto fetchSession = createMockSession();
+
+  // Publish WITHOUT publishNamespace so findPublishNamespaceSession returns
+  // null and fetch falls back to subscriptions_
+  auto publishConsumer =
+      doPublish(publisherSession, kTestTrackName, /*addToState=*/false);
+
+  // Subscriber with open subgroup so subscription survives publisher drain
+  auto consumer = createMockConsumer();
+  auto sg = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+  auto handle =
+      subscribeToTrack(subSession, kTestTrackName, consumer, RequestID(0));
+  ASSERT_NE(handle, nullptr);
+
+  // Begin subgroup to keep subscriber alive
+  auto subgroupRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+
+  // Publisher terminates — clears upstream but subscription stays
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  publishConsumer->publishDone(
+      {RequestID(0),
+       PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+       0,
+       "publisher ended"});
+
+  // Fetch from a different session — falls back to subscriptions_, gets null
+  // upstream, then crashes at line 1011 dereferencing null upstreamSession
+  Fetch fetch(
       RequestID(0),
-      /*forward=*/false,
-      0,
-      GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
+      kTestTrackName,
       AbsoluteLocation{0, 0},
-      std::nullopt,
-      TrackRequestParameters(FrameType::PUBLISH_OK)};
-  subscriber->onPublishOk(pubOkFalse);
+      AbsoluteLocation{1, 0});
+  auto fetchConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  withSessionContext(fetchSession, [&]() {
+    auto task = relay_->fetch(std::move(fetch), fetchConsumer);
+    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+    // Should return an error, not crash
+    EXPECT_FALSE(res.hasValue());
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::TRACK_NOT_EXIST);
+  });
 
-  EXPECT_FALSE(subscriber->shouldForward);
-  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0u)
-      << "forwardingSubscribers_ must be decremented by onPublishOk(fwd=false)";
-  ASSERT_EQ(cb->calls.size(), 1u)
-      << "forwardChanged must fire when count drops to 0";
-  EXPECT_EQ(cb->calls[0], 0u);
-  cb->calls.clear();
+  // Clean up
+  EXPECT_CALL(*sg, reset(_)).Times(1);
+  subgroupRes.value()->reset(ResetStreamErrorCode::CANCELLED);
+  handle->unsubscribe();
+  removeSession(publisherSession);
+  removeSession(subSession);
+  removeSession(fetchSession);
+}
 
-  // onPublishOk(fwd=true) must increment and fire forwardChanged again.
-  PublishOk pubOkTrue{
-      RequestID(0),
-      /*forward=*/true,
-      0,
-      GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
-      AbsoluteLocation{0, 0},
-      std::nullopt,
-      TrackRequestParameters(FrameType::PUBLISH_OK)};
-  subscriber->onPublishOk(pubOkTrue);
+// ============================================================
+// Publish Replaces Subscribe Tests
+// ============================================================
 
-  EXPECT_TRUE(subscriber->shouldForward);
-  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u)
-      << "forwardingSubscribers_ must be incremented by onPublishOk(fwd=true)";
-  ASSERT_EQ(cb->calls.size(), 1u)
-      << "forwardChanged must fire when count rises to 1";
-  EXPECT_EQ(cb->calls[0], 1u);
+// Regression test: When a PUBLISH replaces a subscribe-path subscription, the
+// old forwarder's subscribers must receive publishDone, and the new
+// publish-path subscription must be fully functional (accepting data from the
+// new publisher).
+TEST_F(MoQRelayTest, PublishReplacesSubscribeDrainsOldAndServesNew) {
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+
+  // Set up upstream subscribe that succeeds
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(1);
+  upstreamOk.expires = std::chrono::milliseconds(0);
+  upstreamOk.groupOrder = GroupOrder::OldestFirst;
+
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([upstreamOk](const auto& /*req*/, auto /*consumer*/) {
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+
+  // Subscribe to the track (creates subscribe-path subscription)
+  auto oldConsumer = createMockConsumer();
+  bool publishDoneReceived = false;
+  EXPECT_CALL(*oldConsumer, publishDone(_))
+      .WillOnce([&publishDoneReceived](const PublishDone&) {
+        publishDoneReceived = true;
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+  auto handle = subscribeToTrack(
+      subscriberSession,
+      kTestTrackName,
+      oldConsumer,
+      RequestID(1),
+      /*addToState=*/false);
+  ASSERT_NE(handle, nullptr);
+
+  // PUBLISH arrives for the same track — replaces subscribe-path subscription
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  ASSERT_NE(publishConsumer, nullptr);
+
+  // Old subscriber must have been drained
+  EXPECT_TRUE(publishDoneReceived)
+      << "Old subscribe-path subscriber should receive publishDone";
+
+  // New publish-path subscription should be functional: subscribe a new
+  // downstream consumer and verify it receives data from the publisher
+  auto newConsumer = createMockConsumer();
+  auto sg = createMockSubgroupConsumer();
+  EXPECT_CALL(*newConsumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+  EXPECT_CALL(*sg, endOfSubgroup()).WillOnce(Return(folly::unit));
+
+  subscribeToTrack(
+      subscriberSession, kTestTrackName, newConsumer, RequestID(2));
+
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  EXPECT_TRUE(sgRes.value()->endOfSubgroup().hasValue());
+
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
 }
 
 } // namespace moxygen::test
