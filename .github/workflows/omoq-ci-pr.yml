@@ -75,7 +75,15 @@ jobs:
             "${ASAN_FLAGS[@]}"
 
       - name: Build
-        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+        # asan debug on the 16 GB Linode runner OOMs under -j$(nproc)
+        # during test compilation (cc1plus killed). Match the publish-job
+        # cap of -j6 to leave memory headroom.
+        run: |
+          if [ "${{ matrix.name }}" = "asan debug" ]; then
+            cmake --build _build -j6
+          else
+            cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+          fi
 
       - name: Test
         env:
