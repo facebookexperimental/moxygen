@@ -3997,6 +3997,148 @@ TEST_P(MoQFramerV16PlusTest, CalculateExtensionVectorSizeMatchesWritten) {
   EXPECT_EQ(obj.extensions.size(), 3);
 }
 
+// Test TRACK_FILTER parameter parsing and writing for SubscribeNamespace (v16+)
+TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithTrackFilter) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = RequestID(42);
+  subscribeNamespace.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"conference", "room1"});
+  subscribeNamespace.options = SubscribeNamespaceOptions::PUBLISH;
+  subscribeNamespace.forward = true;
+
+  // Add TRACK_FILTER parameter: propType=0x10 (audio level), maxSelected=5
+  TrackFilter trackFilter{0x10, 5};
+  Parameter trackFilterParam(
+      folly::to_underlying(TrackRequestParamKey::TRACK_FILTER), trackFilter);
+  subscribeNamespace.params.insertParam(trackFilterParam);
+
+  auto writeResult =
+      writer_.writeSubscribeNamespace(writeBuf, subscribeNamespace);
+  ASSERT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+
+  auto parseResult =
+      parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
+  ASSERT_TRUE(parseResult.hasValue());
+
+  EXPECT_EQ(parseResult->requestID, subscribeNamespace.requestID);
+  EXPECT_EQ(
+      parseResult->trackNamespacePrefix,
+      subscribeNamespace.trackNamespacePrefix);
+  EXPECT_EQ(parseResult->forward, subscribeNamespace.forward);
+  EXPECT_EQ(parseResult->options, SubscribeNamespaceOptions::PUBLISH);
+
+  // Check TRACK_FILTER was parsed correctly
+  ASSERT_EQ(parseResult->params.size(), 1);
+  auto& parsedParam = parseResult->params.at(0);
+  EXPECT_EQ(
+      parsedParam.key, folly::to_underlying(TrackRequestParamKey::TRACK_FILTER));
+  EXPECT_EQ(parsedParam.asTrackFilter.propertyType, 0x10);
+  EXPECT_EQ(parsedParam.asTrackFilter.maxSelected, 5);
+}
+
+// Test extractTrackFilter utility function (v16+)
+TEST_P(MoQFramerV16PlusTest, ExtractTrackFilter) {
+  std::vector<Parameter> params;
+
+  // Add a TRACK_FILTER parameter
+  TrackFilter trackFilter{0x22, 10};
+  Parameter trackFilterParam(
+      folly::to_underlying(TrackRequestParamKey::TRACK_FILTER), trackFilter);
+  params.push_back(trackFilterParam);
+
+  // Add another random parameter
+  Parameter otherParam(
+      folly::to_underlying(TrackRequestParamKey::FORWARD), uint64_t{1});
+  params.push_back(otherParam);
+
+  // Extract should find the track filter
+  auto extracted = parser_.extractTrackFilter(params);
+  ASSERT_TRUE(extracted.has_value());
+  EXPECT_EQ(extracted->propertyType, 0x22);
+  EXPECT_EQ(extracted->maxSelected, 10);
+}
+
+// Test extractTrackFilter returns nullopt when not present (v16+)
+TEST_P(MoQFramerV16PlusTest, ExtractTrackFilterNotPresent) {
+  std::vector<Parameter> params;
+
+  // Add a non-TRACK_FILTER parameter
+  Parameter otherParam(
+      folly::to_underlying(TrackRequestParamKey::FORWARD), uint64_t{1});
+  params.push_back(otherParam);
+
+  // Extract should return nullopt
+  auto extracted = parser_.extractTrackFilter(params);
+  EXPECT_FALSE(extracted.has_value());
+}
+
+// Test TRACK_FILTER with large values (v16+)
+TEST_P(MoQFramerV16PlusTest, TrackFilterLargeValues) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  SubscribeNamespace subscribeNamespace;
+  subscribeNamespace.requestID = RequestID(1);
+  subscribeNamespace.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"ns"});
+  subscribeNamespace.options = SubscribeNamespaceOptions::BOTH;
+  subscribeNamespace.forward = true;
+
+  // Use large varint values
+  TrackFilter trackFilter{0x3FFFFFFFFFFF, 15};
+  Parameter trackFilterParam(
+      folly::to_underlying(TrackRequestParamKey::TRACK_FILTER), trackFilter);
+  subscribeNamespace.params.insertParam(trackFilterParam);
+
+  auto writeResult =
+      writer_.writeSubscribeNamespace(writeBuf, subscribeNamespace);
+  ASSERT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(
+      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+
+  auto parseResult =
+      parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
+  ASSERT_TRUE(parseResult.hasValue());
+
+  // Check TRACK_FILTER with large propType was parsed correctly
+  ASSERT_EQ(parseResult->params.size(), 1);
+  auto& parsedParam = parseResult->params.at(0);
+  EXPECT_EQ(parsedParam.asTrackFilter.propertyType, 0x3FFFFFFFFFFF);
+  EXPECT_EQ(parsedParam.asTrackFilter.maxSelected, 15);
+}
+
+// Test TrackFilter struct equality operator
+TEST(TrackFilterTest, Equality) {
+  TrackFilter a{0x10, 5};
+  TrackFilter b{0x10, 5};
+  TrackFilter c{0x10, 6};
+  TrackFilter d{0x20, 5};
+
+  EXPECT_EQ(a, b);
+  EXPECT_NE(a, c);
+  EXPECT_NE(a, d);
+}
+
+// Test TrackFilter default constructor
+TEST(TrackFilterTest, DefaultConstructor) {
+  TrackFilter filter;
+  EXPECT_EQ(filter.propertyType, 0);
+  EXPECT_EQ(filter.maxSelected, 0);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,
@@ -4050,6 +4192,24 @@ TEST_F(ParametersIsParamAllowedTest, ParamNotAllowedForFrameType) {
   Parameters params(FrameType::FETCH);
   EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
   EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::EXPIRES));
+}
+
+TEST_F(ParametersIsParamAllowedTest, TrackFilterAllowedOnlyForSubscribeNamespace) {
+  // TRACK_FILTER should only be allowed for SUBSCRIBE_NAMESPACE
+  Parameters paramsSubNs(FrameType::SUBSCRIBE_NAMESPACE);
+  EXPECT_TRUE(paramsSubNs.isParamAllowed(TrackRequestParamKey::TRACK_FILTER));
+
+  // Not allowed for other frame types
+  Parameters paramsSubscribe(FrameType::SUBSCRIBE);
+  EXPECT_FALSE(
+      paramsSubscribe.isParamAllowed(TrackRequestParamKey::TRACK_FILTER));
+
+  Parameters paramsFetch(FrameType::FETCH);
+  EXPECT_FALSE(paramsFetch.isParamAllowed(TrackRequestParamKey::TRACK_FILTER));
+
+  Parameters paramsPublishOk(FrameType::PUBLISH_OK);
+  EXPECT_FALSE(
+      paramsPublishOk.isParamAllowed(TrackRequestParamKey::TRACK_FILTER));
 }
 
 TEST_F(ParametersIsParamAllowedTest, ParamAllowedForAllFrameTypes) {
