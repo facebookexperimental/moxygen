@@ -45,7 +45,7 @@ jobs:
       - name: Fix workspace ownership (self-hosted)
         if: ${{ contains(toJSON(matrix.runner), 'linode') }}
         run: |
-          sudo rm -rf "$GITHUB_WORKSPACE/_build" "$GITHUB_WORKSPACE/install"
+          sudo rm -rf "$GITHUB_WORKSPACE/_build" "$GITHUB_WORKSPACE/_install"
           sudo chown -R $(id -u):$(id -g) "$GITHUB_WORKSPACE"
 
       - uses: actions/checkout@v4
@@ -95,12 +95,10 @@ jobs:
             "${ASAN_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
 
       - name: Build
-        # asan debug on the 16 GB Linode runner OOMs under -j$(nproc)
-        # during test compilation (cc1plus killed). Match the publish-job
-        # cap of -j6 to leave memory headroom.
+        # Linode (asan debug): -j(n-2) reserves 2 cores for co-resident workloads.
         run: |
           if [ "${{ matrix.name }}" = "asan debug" ]; then
-            cmake --build _build -j6
+            cmake --build _build -j$(( $(getconf _NPROCESSORS_ONLN) - 2 ))
           else
             cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
           fi
@@ -217,10 +215,13 @@ jobs:
             "${EXTRA_FLAGS[@]}"
 
       - name: Build
-        # Cap parallel jobs to avoid OOM during the link phase (publish
-        # build OOMed at -j8 on the 16 GB Linode runner during MoQTests
-        # link). -j6 keeps most throughput while leaving headroom.
-        run: cmake --build _build -j6
+        # Linode: -j(n-2) reserves cores for co-resident workloads (e.g. relay).
+        run: |
+          if echo '${{ toJSON(matrix.runner) }}' | grep -q linode; then
+            cmake --build _build -j$(( $(getconf _NPROCESSORS_ONLN) - 2 ))
+          else
+            cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+          fi
 
       - name: Install
         run: cmake --install _build
