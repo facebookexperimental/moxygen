@@ -2590,20 +2590,25 @@ CO_TEST_F(MoQCacheTest, TestByteLimitEvictsLRUGroup) {
 }
 
 CO_TEST_F(MoQCacheTest, TestByteLimitNoEvictLiveTrack) {
-  // Live track (active subscribe) must not be evicted even when over limit
+  // The live track's shell must not be evicted even when over limit.
+  // Groups are evicted in global LRU order (oldest first); the non-live
+  // track is written first so its group is evicted before the live track's.
   FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
   FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
 
-  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
-  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
-  // sub1 stays alive — track1 is live and non-evictable
-
+  // track2 written first → its group is oldest in globalGroupLRU_
   auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
   sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
   sub2.reset(); // track2 is evictable
 
-  // Both tracks have 100 bytes each = 200 bytes total
-  // Limit to 150: track2 should be evicted, track1 (live) must survive
+  // track1 written second → its group is newer in globalGroupLRU_
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  // sub1 stays alive — track1 is live
+
+  // Both tracks have 100 bytes each = 200 bytes total.
+  // Limit to 150: track2's group (oldest) is evicted first, leaving 100b.
+  // track2 shell is then evicted (empty + canEvict()), track1 survives.
   cache_.setMaxCachedBytes(150);
 
   EXPECT_TRUE(cache_.hasTrack(track1));
@@ -2684,6 +2689,145 @@ CO_TEST_F(MoQCacheTest, TestMinEvictionBytesLowWatermark) {
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {3, 0}));
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {4, 0}));
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestByteLimitEvictsGroupsFromLiveTrack) {
+  // Single live track with 3 groups × 100b = 300b. trackLRU_ is empty because
+  // the track is live. The global group LRU must be used to shed old groups.
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  // writeback stays alive — track is live
+
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+
+  // Limit to 250b: oldest group (0) evicted, 200b remaining ≤ 250b.
+  cache_.setMaxCachedBytes(250);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+  // Track shell must survive — live writeback still needs it.
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+  EXPECT_EQ(cache_.totalCachedBytes(), 200u);
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestByteLimitLiveTrackMultipleGroupsEvicted) {
+  // Live track, 5 groups × 100b = 500b. minEvictionBytes=150 → targetBytes=300.
+  // Second pass must evict groups 0 and 1 to reach 300b.
+  cache_.setMinEvictionBytes(150);
+
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(4, 0, 0, 0, 100), makeBuf(100));
+  // writeback alive — track stays live
+
+  cache_.setMaxCachedBytes(450);
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {2, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {3, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {4, 0}));
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+  EXPECT_EQ(cache_.totalCachedBytes(), 300u);
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestByteLimitLiveTrackWithActiveSubgroupNotEvicted) {
+  // Group 0 is complete (in globalGroupLRU_, evictable).
+  // Group 1 has an active SubgroupWriteback (NOT in globalGroupLRU_, must not
+  // be evicted). Limit 150b: only group 0 can be evicted → 100b remaining.
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+
+  // Open a SubgroupWriteback for group 1 — removes group 1 from globalGroupLRU_.
+  auto subRes = writeback->beginSubgroup(1, 0, 0);
+  EXPECT_TRUE(subRes.hasValue());
+  auto subConsumer = std::move(subRes.value());
+  // Write a complete object so hasCachedObject can find it.
+  EXPECT_TRUE(subConsumer->object(0, makeBuf(100), {}, false).hasValue());
+  // subConsumer still alive → group 1 NOT in globalGroupLRU_
+
+  cache_.setMaxCachedBytes(150);
+
+  // Group 0 (in globalGroupLRU_) must be evicted.
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  // Group 1 is actively being written — must survive.
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+  EXPECT_TRUE(cache_.hasTrack(kTestTrackName));
+  EXPECT_EQ(cache_.totalCachedBytes(), 100u);
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestByteLimitEvictsAcrossLiveAndNonLiveTracks) {
+  // One non-live track (written first, group is older) and one live track.
+  // Byte limit forces eviction: the non-live track's group is evicted first
+  // (globally oldest), its empty shell is cleaned up, live track survives.
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+
+  // track1 non-live, written first → its group is oldest in globalGroupLRU_
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub1.reset();
+
+  // track2 live, written second → its group is newer
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  // sub2 alive — track2 is live
+
+  // 200b total, limit 150b: evict track1's group (oldest) → 100b ≤ 150b.
+  // track1 is empty + canEvict() → evict shell too.
+  cache_.setMaxCachedBytes(150);
+
+  EXPECT_FALSE(cache_.hasTrack(track1));
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_TRUE(cache_.hasCachedObject(track2, {0, 0}));
+  EXPECT_EQ(cache_.totalCachedBytes(), 100u);
+  co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestTrackEvictionCleansGlobalGroupLRU) {
+  // Regression: evictTrack() must remove all groups from globalGroupLRU_ so
+  // that a subsequent byte-limit eviction does not encounter stale entries.
+  //
+  // Setup: maxCachedTracks=1. Write track1 (100b) then release it so it is
+  // evictable. Writing track2 triggers evictOldestTrackIfNeeded which evicts
+  // track1 — including its group from globalGroupLRU_. Then tighten the byte
+  // limit to force eviction of track2's group and verify counts stay correct.
+  FullTrackName track1{TrackNamespace{{"ns"}}, "track1"};
+  FullTrackName track2{TrackNamespace{{"ns"}}, "track2"};
+
+  cache_.setMaxCachedTracks(1);
+
+  auto sub1 = cache_.getSubscribeWriteback(track1, trackConsumer_);
+  sub1->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  sub1.reset(); // track1 evictable; its group is in globalGroupLRU_
+
+  // Writing track2 exceeds the track limit and evicts track1.
+  auto sub2 = cache_.getSubscribeWriteback(track2, trackConsumer_);
+  sub2->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+
+  EXPECT_FALSE(cache_.hasTrack(track1));
+  EXPECT_TRUE(cache_.hasTrack(track2));
+  EXPECT_EQ(cache_.totalCachedBytes(), 100u);
+
+  // Now evict track2's group via byte limit. globalGroupLRU_ must only contain
+  // track2's group — no stale entry for track1.
+  sub2.reset(); // make track2 evictable so its shell can be cleaned up too
+  cache_.setMaxCachedBytes(50);
+
+  EXPECT_FALSE(cache_.hasTrack(track2));
+  EXPECT_EQ(cache_.totalCachedBytes(), 0u);
   co_return;
 }
 

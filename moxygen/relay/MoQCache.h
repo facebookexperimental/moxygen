@@ -222,8 +222,13 @@ class MoQCache {
     std::optional<uint64_t> seenPriorGroupIdGap;
     // Total payload bytes across all objects in this group
     size_t totalBytes{0};
-    // LRU iterator - present if group is evictable (not in active fetch)
+    // Per-track LRU iterator - present if group is evictable (not in active
+    // SubgroupWriteback). Used by evictOldestGroupsIfNeeded().
     folly::Optional<std::list<uint64_t>::iterator> lruIter_;
+    // Global LRU iterator - present if group is evictable.
+    // Used by evictForByteLimitIfNeeded().
+    folly::Optional<std::list<std::pair<FullTrackName, uint64_t>>::iterator>
+        globalLruIter_;
 
     folly::Expected<folly::Unit, MoQPublishError> cacheObject(
         uint64_t subgroup,
@@ -268,7 +273,10 @@ class MoQCache {
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
         bool endOfTrack = false);
-    CacheGroup& getOrCreateGroup(uint64_t groupID, MoQCache* cache = nullptr);
+    CacheGroup& getOrCreateGroup(
+        uint64_t groupID,
+        MoQCache* cache = nullptr,
+        const FullTrackName* ftn = nullptr);
 
     // Process Prior Group ID Gap and Prior Object ID Gap extensions
     // and cache the missing groups/objects accordingly
@@ -327,6 +335,9 @@ class MoQCache {
 
   // LRU list of evictable tracks (oldest at back)
   std::list<FullTrackName> trackLRU_;
+  // Global LRU of evictable groups across all tracks (oldest at back).
+  // Entry: {FullTrackName, groupID}. Used by evictForByteLimitIfNeeded().
+  std::list<std::pair<FullTrackName, uint64_t>> globalGroupLRU_;
 
   // Cache size limits
   size_t maxCachedTracks_;
@@ -372,7 +383,11 @@ class MoQCache {
   void onTrackBecameEvictable(const FullTrackName& ftn);
 
   // Group LRU management helpers
-  void addGroupToLRU(uint64_t groupID, CacheGroup& group, CacheTrack& track);
+  void addGroupToLRU(
+      const FullTrackName& ftn,
+      uint64_t groupID,
+      CacheGroup& group,
+      CacheTrack& track);
   void removeGroupFromLRU(CacheGroup& group, CacheTrack& track);
   bool canEvictGroup(uint64_t groupID, CacheTrack& track);
 
