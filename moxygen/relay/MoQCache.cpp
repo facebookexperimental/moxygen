@@ -15,6 +15,9 @@
 namespace {
 using namespace moxygen;
 
+constexpr uint64_t kFetchYieldInterval = 1000;
+constexpr uint64_t kFetchMaxMissIterations = 100'000;
+
 // Splits one contiguous cache miss region into multiple intervals
 // Depending on whether we are fetching asc or desc
 // For asc, no split. Desc cases may or may not need splitting
@@ -1298,6 +1301,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   auto cachedNow = now();
   FetchRangeIterator fetchRangeIt(
       standalone->start, standalone->end, fetch.groupOrder, track);
+  uint64_t missIterCount = 0;
   while (!token.isCancellationRequested() &&
          (*fetchRangeIt) != fetchRangeIt.end()) {
     auto current = *fetchRangeIt;
@@ -1318,10 +1322,25 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       if (!fetchStart) {
         fetchStart = current;
       }
+      if (++missIterCount > kFetchMaxMissIterations) {
+        XLOG(ERR) << "fetchImpl exceeded max miss iterations ("
+                  << kFetchMaxMissIterations << ") at {" << current.group
+                  << "," << current.object << "}, aborting fetch";
+        consumer->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+        co_return folly::makeUnexpected(FetchError{
+            fetch.requestID,
+            FetchErrorCode::INTERNAL_ERROR,
+            "fetch loop exceeded max miss iterations"});
+      }
+      if (missIterCount % kFetchYieldInterval == 0) {
+        co_await folly::coro::co_reschedule_on_current_executor;
+        cachedNow = now();
+      }
       fetchRangeIt.next();
       continue;
     }
 
+    missIterCount = 0;
     // found the object, first fetch missing range, if any
     XLOG(DBG1) << "object cache HIT for {" << current.group << ","
                << current.object << "}";
