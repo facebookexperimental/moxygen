@@ -101,7 +101,10 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
         XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
                    << " " << callsite;
         auto res = sub->trackConsumer->beginSubgroup(
-            identifier_.group, identifier_.subgroup, priority_);
+            identifier_.group,
+            identifier_.subgroup,
+            priority_,
+            containsLastInGroup_);
         if (res.hasError()) {
           forwarder_->removeSubscriberOnError(*sub, res.error(), callsite);
         } else {
@@ -484,8 +487,8 @@ MoQForwarder::beginSubgroup(
                << " subgroup=" << subgroupID << " - resetting active consumers";
   }
 
-  auto subgroupForwarder =
-      std::make_shared<SubgroupForwarder>(*this, groupID, subgroupID, priority);
+  auto subgroupForwarder = std::make_shared<SubgroupForwarder>(
+      *this, groupID, subgroupID, priority, containsLastInGroup);
   auto res = forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -756,10 +759,12 @@ MoQForwarder::SubgroupForwarder::SubgroupForwarder(
     MoQForwarder& forwarder,
     uint64_t group,
     uint64_t subgroup,
-    Priority priority)
+    Priority priority,
+    bool containsLastInGroup)
     : forwarder_(&forwarder),
       identifier_{group, subgroup},
-      priority_(priority) {}
+      priority_(priority),
+      containsLastInGroup_(containsLastInGroup) {}
 
 void MoQForwarder::SubgroupForwarder::detach() {
   forwarder_ = nullptr;

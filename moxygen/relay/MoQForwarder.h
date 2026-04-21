@@ -224,6 +224,7 @@ class MoQForwarder : public TrackConsumer {
     MoQForwarder* forwarder_;
     SubgroupIdentifier identifier_;
     Priority priority_;
+    bool containsLastInGroup_{false};
 
     template <typename Fn>
     folly::Expected<folly::Unit, MoQPublishError> forEachSubscriberSubgroup(
@@ -254,7 +255,8 @@ class MoQForwarder : public TrackConsumer {
         MoQForwarder& forwarder,
         uint64_t group,
         uint64_t subgroup,
-        Priority priority);
+        Priority priority,
+        bool containsLastInGroup = false);
 
     // Detach from the owning MoQForwarder (called from MoQForwarder destructor)
     void detach();
