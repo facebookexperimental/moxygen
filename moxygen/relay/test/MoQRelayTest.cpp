@@ -3136,4 +3136,81 @@ TEST_F(MoQRelayTest, PublishReplacesSubscribeDrainsOldAndServesNew) {
   removeSession(subscriberSession);
 }
 
+// ---------------------------------------------------------------------------
+// MoQForwarder double-add tests
+//
+// When addSubscriber(session, subReq, consumer) is called for a session that
+// already has a subscriber in the forwarder (e.g. from a prior
+// addSubscriber(session, forward) call), the emplace into subscribers_ is a
+// no-op. Before the fix:
+//   - A new orphaned subscriber (not in the map) was returned.
+//   - addForwardingSubscriber() was called unconditionally, inflating the
+//   count.
+// After the fix:
+//   - The existing in-map subscriber is returned.
+//   - addForwardingSubscriber() is guarded by whether insertion actually
+//   occurred.
+// ---------------------------------------------------------------------------
+
+// Calling addSubscriber(subReq, consumer) for a session that was previously
+// added via addSubscriber(forward) must return the in-map subscriber (not an
+// orphan) and must not inflate the forwarding count.
+TEST_F(
+    MoQRelayTest,
+    ForwarderDoubleAdd_ReturnsExistingSubscriberAndNoCountInflation) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName, std::nullopt);
+
+  // First add via the publishToSession path.
+  auto first = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(first, nullptr);
+  EXPECT_FALSE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  // Second add via the direct-subscribe path — same session, already in map.
+  SubscribeRequest subReq;
+  subReq.fullTrackName = kTestTrackName;
+  subReq.requestID = RequestID(1);
+  subReq.forward = true;
+  auto consumer = createMockConsumer();
+
+  auto second = forwarder->addSubscriber(session, subReq, std::move(consumer));
+  ASSERT_NE(second, nullptr);
+
+  // Must return the existing in-map entry, not a new orphaned subscriber.
+  EXPECT_EQ(first.get(), second.get());
+
+  // Forwarding count must not be inflated — still 1, not 2.
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  // Exactly one subscriber is in the map — one removal empties the forwarder.
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
+}
+
+// Calling addSubscriber(session, forward) twice for the same session must
+// return the in-map subscriber and must not inflate the forwarding count.
+TEST_F(
+    MoQRelayTest,
+    ForwarderDoubleAdd_ForwardOverload_ReturnsExistingSubscriberAndNoCountInflation) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName, std::nullopt);
+
+  auto first = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(first, nullptr);
+  EXPECT_FALSE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  auto second = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(second, nullptr);
+
+  EXPECT_EQ(first.get(), second.get());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
+}
+
 } // namespace moxygen::test
