@@ -142,15 +142,21 @@ class MoQServer : public MoQServerBase {
     void onWebTransportBidiStream(
         proxygen::HTTPCodec::StreamID,
         proxygen::WebTransport::BidiStreamHandle handle) noexcept override {
-      clientSession_->onNewBidiStream(handle);
+      if (clientSession_) {
+        clientSession_->onNewBidiStream(handle);
+      }
     }
     void onWebTransportUniStream(
         proxygen::HTTPCodec::StreamID,
         proxygen::WebTransport::StreamReadHandle* handle) noexcept override {
-      clientSession_->onNewUniStream(handle);
+      if (clientSession_) {
+        clientSession_->onNewUniStream(handle);
+      }
     }
     void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override {
-      clientSession_->onDatagram(std::move(datagram));
+      if (clientSession_) {
+        clientSession_->onDatagram(std::move(datagram));
+      }
     }
 
    private:
