@@ -10,6 +10,7 @@
 #include <proxygen/lib/http/session/HQSession.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
+#include <proxygen/lib/http/webtransport/QuicWtSession.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 
 #include <utility>
@@ -23,7 +24,8 @@ MoQServer::MoQServer(
     std::string cert,
     std::string key,
     std::string endpoint,
-    std::optional<quic::TransportSettings> transportSettings)
+    std::optional<quic::TransportSettings> transportSettings,
+    std::function<bool()> useQuicWtSession)
     : MoQServer(
           quic::samples::createFizzServerContext(
               []() {
@@ -36,13 +38,17 @@ MoQServer::MoQServer(
               cert,
               key),
           std::move(endpoint),
-          std::move(transportSettings)) {}
+          std::move(transportSettings),
+          std::move(useQuicWtSession)) {}
 
 MoQServer::MoQServer(
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
     std::string endpoint,
-    std::optional<quic::TransportSettings> transportSettings)
-    : MoQServerBase(std::move(endpoint)), fizzContext_(std::move(fizzContext)) {
+    std::optional<quic::TransportSettings> transportSettings,
+    std::function<bool()> useQuicWtSession)
+    : MoQServerBase(std::move(endpoint)),
+      fizzContext_(std::move(fizzContext)),
+      useQuicWtSession_(std::move(useQuicWtSession)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
   if (transportSettings) {
@@ -154,10 +160,15 @@ void MoQServer::createMoQQuicSession(
   auto localAddress = quicSocket->getLocalAddress();
 
   auto qevb = quicSocket->getEventBase();
-  auto quicWebTransport =
-      std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
-  auto qWtPtr = quicWebTransport.get();
-  std::shared_ptr<proxygen::WebTransport> wt(std::move(quicWebTransport));
+  const bool useQuicWtSession = useQuicWtSession_ && useQuicWtSession_();
+  std::shared_ptr<proxygen::WebTransport> wt;
+  if (useQuicWtSession) {
+    wt = std::make_shared<proxygen::QuicWtSession>(
+        std::move(quicSocket), /*wtHandler=*/nullptr);
+  } else {
+    wt = std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
+  }
+  auto* wtPtr = wt.get();
   auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
                  ->getBackingEventBase();
   auto moqSession = createSession(std::move(wt), getOrCreateExecutor(evb));
@@ -180,7 +191,12 @@ void MoQServer::createMoQQuicSession(
     moqSession->validateAndSetVersionFromAlpn(*alpn);
   }
 
-  qWtPtr->setHandler(moqSession.get());
+  if (useQuicWtSession) {
+    static_cast<proxygen::QuicWtSession*>(wtPtr)->setHandler(moqSession.get());
+  } else {
+    static_cast<proxygen::QuicWebTransport*>(wtPtr)->setHandler(
+        moqSession.get());
+  }
   // the handleClientSession coro this session moqSession
   co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
 }

@@ -28,12 +28,14 @@ class MoQServer : public MoQServerBase {
       std::string cert,
       std::string key,
       std::string endpoint,
-      std::optional<quic::TransportSettings> transportSettings = std::nullopt);
+      std::optional<quic::TransportSettings> transportSettings = std::nullopt,
+      std::function<bool()> useQuicWtSession = {});
 
   MoQServer(
       std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
       std::string endpoint,
-      std::optional<quic::TransportSettings> transportSettings = std::nullopt);
+      std::optional<quic::TransportSettings> transportSettings = std::nullopt,
+      std::function<bool()> useQuicWtSession = {});
 
   void start(const folly::SocketAddress& addr) override {
     start(addr, {});
@@ -173,6 +175,7 @@ class MoQServer : public MoQServerBase {
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
+  std::function<bool()> useQuicWtSession_;
 
   friend class Handler;
 };
