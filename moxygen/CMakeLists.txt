@@ -120,6 +120,7 @@ moxygen_add_library(moxygen_moq_server
     proxygen::proxygen_hq_server
     proxygen::proxygen_http_session_hq_session
     proxygen::proxygen_http_webtransport_httpwebtransport
+    proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
     Folly::folly_init_init
     Folly::folly_io_async_async_base

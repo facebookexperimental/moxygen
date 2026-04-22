@@ -101,7 +101,10 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
         XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
                    << " " << callsite;
         auto res = sub->trackConsumer->beginSubgroup(
-            identifier_.group, identifier_.subgroup, priority_);
+            identifier_.group,
+            identifier_.subgroup,
+            priority_,
+            containsLastInGroup_);
         if (res.hasError()) {
           forwarder_->removeSubscriberOnError(*sub, res.error(), callsite);
         } else {
@@ -187,12 +190,15 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
-  subscriber->pinned = true;
-  subscribers_.emplace(sessionPtr, subscriber);
-  if (subReq.forward) {
+  // If the session already has a subscriber (e.g. from a prior
+  // addSubscriber(session, forward) call), emplace is a no-op. Return the
+  // existing in-map entry and only increment the forwarding count when a new
+  // entry was actually inserted.
+  auto [it, inserted] = subscribers_.emplace(sessionPtr, subscriber);
+  if (inserted && subReq.forward) {
     addForwardingSubscriber();
   }
-  return subscriber;
+  return it->second;
 }
 
 std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
@@ -217,11 +223,11 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       SubscribeRange{{0, 0}, kLocationMax},
       nullptr,
       forward);
-  subscribers_.emplace(sessionPtr, subscriber);
-  if (forward) {
+  auto [it, inserted] = subscribers_.emplace(sessionPtr, subscriber);
+  if (inserted && forward) {
     addForwardingSubscriber();
   }
-  return subscriber;
+  return it->second;
 }
 
 folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
@@ -481,8 +487,8 @@ MoQForwarder::beginSubgroup(
                << " subgroup=" << subgroupID << " - resetting active consumers";
   }
 
-  auto subgroupForwarder =
-      std::make_shared<SubgroupForwarder>(*this, groupID, subgroupID, priority);
+  auto subgroupForwarder = std::make_shared<SubgroupForwarder>(
+      *this, groupID, subgroupID, priority, containsLastInGroup);
   auto res = forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -757,10 +763,12 @@ MoQForwarder::SubgroupForwarder::SubgroupForwarder(
     MoQForwarder& forwarder,
     uint64_t group,
     uint64_t subgroup,
-    Priority priority)
+    Priority priority,
+    bool containsLastInGroup)
     : forwarder_(&forwarder),
       identifier_{group, subgroup},
-      priority_(priority) {}
+      priority_(priority),
+      containsLastInGroup_(containsLastInGroup) {}
 
 void MoQForwarder::SubgroupForwarder::detach() {
   forwarder_ = nullptr;

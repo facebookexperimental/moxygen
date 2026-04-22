@@ -3136,4 +3136,150 @@ TEST_F(MoQRelayTest, PublishReplacesSubscribeDrainsOldAndServesNew) {
   removeSession(subscriberSession);
 }
 
+// ---------------------------------------------------------------------------
+// MoQForwarder double-add tests
+//
+// When addSubscriber(session, subReq, consumer) is called for a session that
+// already has a subscriber in the forwarder (e.g. from a prior
+// addSubscriber(session, forward) call), the emplace into subscribers_ is a
+// no-op. Before the fix:
+//   - A new orphaned subscriber (not in the map) was returned.
+//   - addForwardingSubscriber() was called unconditionally, inflating the
+//   count.
+// After the fix:
+//   - The existing in-map subscriber is returned.
+//   - addForwardingSubscriber() is guarded by whether insertion actually
+//   occurred.
+// ---------------------------------------------------------------------------
+
+// Calling addSubscriber(subReq, consumer) for a session that was previously
+// added via addSubscriber(forward) must return the in-map subscriber (not an
+// orphan) and must not inflate the forwarding count.
+TEST_F(
+    MoQRelayTest,
+    ForwarderDoubleAdd_ReturnsExistingSubscriberAndNoCountInflation) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName, std::nullopt);
+
+  // First add via the publishToSession path.
+  auto first = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(first, nullptr);
+  EXPECT_FALSE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  // Second add via the direct-subscribe path — same session, already in map.
+  SubscribeRequest subReq;
+  subReq.fullTrackName = kTestTrackName;
+  subReq.requestID = RequestID(1);
+  subReq.forward = true;
+  auto consumer = createMockConsumer();
+
+  auto second = forwarder->addSubscriber(session, subReq, std::move(consumer));
+  ASSERT_NE(second, nullptr);
+
+  // Must return the existing in-map entry, not a new orphaned subscriber.
+  EXPECT_EQ(first.get(), second.get());
+
+  // Forwarding count must not be inflated — still 1, not 2.
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  // Exactly one subscriber is in the map — one removal empties the forwarder.
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
+}
+
+// Calling addSubscriber(session, forward) twice for the same session must
+// return the in-map subscriber and must not inflate the forwarding count.
+TEST_F(
+    MoQRelayTest,
+    ForwarderDoubleAdd_ForwardOverload_ReturnsExistingSubscriberAndNoCountInflation) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName, std::nullopt);
+
+  auto first = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(first, nullptr);
+  EXPECT_FALSE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  auto second = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(second, nullptr);
+
+  EXPECT_EQ(first.get(), second.get());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
+}
+
+// A late-joining subscriber must receive containsLastInGroup=true when the
+// original beginSubgroup had it set. Previously SubgroupForwarder always
+// passed containsLastInGroup=false (defaulted) in the late-joiner path.
+//
+// Timeline: publish → early sub → beginSubgroup(containsLastInGroup=true) →
+//   object(0) [early only] → late sub → object(1) [both; late gets
+//   beginSubgroup with correct containsLastInGroup=true]
+TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
+  auto publisherSession = createMockSession();
+  auto earlySubscriber = createMockSession();
+  auto lateSubscriber = createMockSession();
+
+  auto earlyConsumer = createMockConsumer();
+  auto lateConsumer = createMockConsumer();
+
+  // Early subscriber gets beginSubgroup for group 0 with
+  // containsLastInGroup=true
+  auto earlySubgroupConsumer = createMockSubgroupConsumer();
+  EXPECT_CALL(
+      *earlyConsumer, beginSubgroup(0, 0, _, /*containsLastInGroup=*/true))
+      .WillOnce(Return(
+          folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  earlySubgroupConsumer)));
+
+  // Late subscriber must also see containsLastInGroup=true (not the false
+  // default)
+  auto lateSubgroupConsumer = createMockSubgroupConsumer();
+  EXPECT_CALL(
+      *lateConsumer, beginSubgroup(0, 0, _, /*containsLastInGroup=*/true))
+      .WillOnce(Return(
+          folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  lateSubgroupConsumer)));
+
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  subscribeToTrack(
+      earlySubscriber, kTestTrackName, earlyConsumer, RequestID(1));
+
+  // Publisher opens subgroup with containsLastInGroup=true
+  auto sgRes =
+      publishConsumer->beginSubgroup(0, 0, 0, /*containsLastInGroup=*/true);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto sg = *sgRes;
+
+  // Object 0 goes only to the early subscriber; advances largest_ to {0,0}
+  EXPECT_CALL(*earlySubgroupConsumer, object(0, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(
+      sg->object(0, folly::IOBuf::copyBuffer("hi"), {}, false).hasValue());
+
+  // Late subscriber joins; range starts at {0,1} (LargestObject after {0,0})
+  subscribeToTrack(lateSubscriber, kTestTrackName, lateConsumer, RequestID(2));
+
+  // Object 1: early gets it on existing subgroup, late triggers late-joiner
+  // path (beginSubgroup with containsLastInGroup from SubgroupForwarder)
+  EXPECT_CALL(*earlySubgroupConsumer, object(1, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*lateSubgroupConsumer, object(1, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(
+      sg->object(1, folly::IOBuf::copyBuffer("world"), {}, false).hasValue());
+
+  EXPECT_TRUE(sg->endOfSubgroup().hasValue());
+  removeSession(publisherSession);
+  removeSession(earlySubscriber);
+  removeSession(lateSubscriber);
+}
+
 } // namespace moxygen::test
