@@ -87,10 +87,7 @@ MoQServer::MoQServer(
   for (const auto& alpn : fizzContext_->getSupportedAlpns()) {
     if (alpn != "h3") {
       quicAlpns.push_back(alpn);
-      // WT protocols exclude legacy ALPNs like moq-00
-      if (!isLegacyAlpn(alpn)) {
-        wtMoqtProtocols_.push_back(alpn);
-      }
+      wtMoqtProtocols_.push_back(alpn);
     }
   }
 
