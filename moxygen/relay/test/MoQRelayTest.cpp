@@ -330,6 +330,82 @@ class MoQRelayTest : public ::testing::Test {
     return sg;
   }
 
+  // Publish a track with a caller-supplied handle so tests can set expectations
+  // on requestUpdateCalled.
+  std::shared_ptr<TrackConsumer> doPublishWithHandle(
+      std::shared_ptr<MoQSession> session,
+      const FullTrackName& trackName,
+      std::shared_ptr<Publisher::SubscriptionHandle> handle) {
+    return withSessionContext(session, [&]() -> std::shared_ptr<TrackConsumer> {
+      PublishRequest pub;
+      pub.fullTrackName = trackName;
+      auto res = relay_->publish(std::move(pub), std::move(handle));
+      EXPECT_TRUE(res.hasValue());
+      if (!res.hasValue()) {
+        return nullptr;
+      }
+      auto consumer = res->consumer;
+      getOrCreateMockState(session)->publishConsumers.push_back(consumer);
+      return consumer;
+    });
+  }
+
+  // Subscribe to a namespace with an explicit forward flag.
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle>
+  doSubscribeNamespaceWithForward(
+      std::shared_ptr<MoQSession> session,
+      const TrackNamespace& nsPrefix,
+      bool forward) {
+    SubscribeNamespace subNs;
+    subNs.trackNamespacePrefix = nsPrefix;
+    subNs.forward = forward;
+    return withSessionContext(session, [&]() {
+      auto task = relay_->subscribeNamespace(std::move(subNs), nullptr);
+      auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      if (!res.hasValue()) {
+        return std::shared_ptr<Publisher::SubscribeNamespaceHandle>(nullptr);
+      }
+      getOrCreateMockState(session)->subscribeNamespaceHandles.push_back(*res);
+      return *res;
+    });
+  }
+
+  // Set up session->publish() to succeed with a mock consumer and immediate
+  // PublishOk.
+  void setupPublishSucceeds(std::shared_ptr<MockMoQSession> session) {
+    ON_CALL(*session, publish(_, _))
+        .WillByDefault(Invoke(
+            [this](PublishRequest pub, auto) -> Subscriber::PublishResult {
+              PublishOk ok{
+                  pub.requestID,
+                  /*forward=*/pub.forward,
+                  /*priority=*/128,
+                  GroupOrder::Default,
+                  LocationType::LargestObject,
+                  /*start=*/kLocationMin,
+                  /*endGroup=*/std::make_optional(uint64_t(0))};
+              return Subscriber::PublishConsumerAndReplyTask{
+                  createMockConsumer(),
+                  folly::coro::makeTask<
+                      folly::Expected<PublishOk, PublishError>>(std::move(ok))};
+            }));
+  }
+
+  // Build a NiceMock SubscriptionHandle suitable for publish() calls.
+  std::shared_ptr<NiceMock<MockSubscriptionHandle>> makePublishHandle() {
+    SubscribeOk ok;
+    ok.requestID = RequestID(0);
+    ok.trackAlias = TrackAlias(0);
+    ok.expires = std::chrono::milliseconds(0);
+    ok.groupOrder = GroupOrder::Default;
+    auto handle =
+        std::make_shared<NiceMock<MockSubscriptionHandle>>(std::move(ok));
+    ON_CALL(*handle, requestUpdateResult())
+        .WillByDefault(Return(folly::makeExpected<RequestError>(RequestOk{})));
+    return handle;
+  }
+
   std::shared_ptr<TestMoQExecutor> exec_;
   std::shared_ptr<MoQRelay> relay_;
 };
@@ -3280,6 +3356,204 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
   removeSession(publisherSession);
   removeSession(earlySubscriber);
   removeSession(lateSubscriber);
+}
+
+// onPublishOk must update forwardingSubscribers_ (not just shouldForward) so
+// that forwardChanged fires and the publisher receives a corrective
+// REQUEST_UPDATE when the peer says fwd=false.
+TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
+  auto session = createMockSession();
+  auto forwarder =
+      std::make_shared<MoQForwarder>(kTestTrackName, AbsoluteLocation{0, 0});
+
+  struct ForwardCallback : MoQForwarder::Callback {
+    void onEmpty(MoQForwarder*) override {}
+    void forwardChanged(MoQForwarder* f) override {
+      calls.push_back(f->numForwardingSubscribers());
+    }
+    std::vector<uint64_t> calls;
+  };
+  auto cb = std::make_shared<ForwardCallback>();
+  forwarder->setCallback(cb);
+
+  // Adding a forwarding subscriber fires forwardChanged (0->1).
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+  ASSERT_EQ(cb->calls.size(), 1u);
+  EXPECT_EQ(cb->calls[0], 1u);
+  cb->calls.clear();
+
+  // onPublishOk(fwd=false) must decrement the count and fire forwardChanged.
+  PublishOk pubOkFalse{
+      RequestID(0),
+      /*forward=*/false,
+      0,
+      GroupOrder::OldestFirst,
+      LocationType::AbsoluteStart,
+      AbsoluteLocation{0, 0},
+      std::nullopt,
+      TrackRequestParameters(FrameType::PUBLISH_OK)};
+  subscriber->onPublishOk(pubOkFalse);
+
+  EXPECT_FALSE(subscriber->shouldForward);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0u)
+      << "forwardingSubscribers_ must be decremented by onPublishOk(fwd=false)";
+  ASSERT_EQ(cb->calls.size(), 1u)
+      << "forwardChanged must fire when count drops to 0";
+  EXPECT_EQ(cb->calls[0], 0u);
+  cb->calls.clear();
+
+  // onPublishOk(fwd=true) must increment and fire forwardChanged again.
+  PublishOk pubOkTrue{
+      RequestID(0),
+      /*forward=*/true,
+      0,
+      GroupOrder::OldestFirst,
+      LocationType::AbsoluteStart,
+      AbsoluteLocation{0, 0},
+      std::nullopt,
+      TrackRequestParameters(FrameType::PUBLISH_OK)};
+  subscriber->onPublishOk(pubOkTrue);
+
+  EXPECT_TRUE(subscriber->shouldForward);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u)
+      << "forwardingSubscribers_ must be incremented by onPublishOk(fwd=true)";
+  ASSERT_EQ(cb->calls.size(), 1u)
+      << "forwardChanged must fire when count rises to 1";
+  EXPECT_EQ(cb->calls[0], 1u);
+}
+
+// When a subscriber with forward=true joins a namespace whose track forwarder
+// is empty, the relay should fire exactly one REQUEST_UPDATE(forward=true) —
+// from forwardChanged(), not a redundant explicit doSubscribeUpdate.
+TEST_F(MoQRelayTest, SubscribeNsForwardTrueEmptyForwarderSingleRequestUpdate) {
+  auto pubSession = createMockSession();
+  doPublishNamespace(pubSession, kTestNamespace);
+  auto mockHandle = makePublishHandle();
+  doPublishWithHandle(pubSession, kTestTrackName, mockHandle);
+
+  EXPECT_CALL(*mockHandle, requestUpdateCalled(_))
+      .Times(1)
+      .WillOnce([](const RequestUpdate& u) {
+        ASSERT_TRUE(u.forward.has_value());
+        EXPECT_TRUE(*u.forward);
+      });
+
+  auto subSession = createMockSession();
+  setupPublishSucceeds(subSession);
+  doSubscribeNamespaceWithForward(subSession, kTestNamespace, /*forward=*/true);
+
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(mockHandle.get()));
+
+  removeSession(subSession);
+  removeSession(pubSession);
+  for (int i = 0; i < 3; i++) {
+    exec_->drive();
+  }
+}
+
+// When a subscriber with forward=false joins a namespace whose track forwarder
+// is empty, the relay should not send any REQUEST_UPDATE — the upstream is
+// already at forward=false (set by publish() which found no subscribers).
+TEST_F(MoQRelayTest, SubscribeNsForwardFalseEmptyForwarderNoRequestUpdate) {
+  auto pubSession = createMockSession();
+  doPublishNamespace(pubSession, kTestNamespace);
+  auto mockHandle = makePublishHandle();
+  doPublishWithHandle(pubSession, kTestTrackName, mockHandle);
+
+  EXPECT_CALL(*mockHandle, requestUpdateCalled(_)).Times(0);
+
+  auto subSession = createMockSession();
+  setupPublishSucceeds(subSession);
+  doSubscribeNamespaceWithForward(
+      subSession, kTestNamespace, /*forward=*/false);
+
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(mockHandle.get()));
+
+  removeSession(subSession);
+  removeSession(pubSession);
+  for (int i = 0; i < 3; i++) {
+    exec_->drive();
+  }
+}
+
+// When a second subscriber with forward=true joins an existing subscription
+// (causing a 0->1 forwarding transition), the relay should fire exactly one
+// REQUEST_UPDATE — from forwardChanged(), not a redundant explicit block.
+TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
+  auto pubSession = createMockSession();
+  doPublishNamespace(pubSession, kTestNamespace);
+  auto mockHandle = makePublishHandle();
+  doPublishWithHandle(pubSession, kTestTrackName, mockHandle);
+
+  // S1 joins with forward=false — no REQUEST_UPDATE expected.
+  auto s1 = createMockSession();
+  setupPublishSucceeds(s1);
+  {
+    SubscribeRequest sub;
+    sub.fullTrackName = kTestTrackName;
+    sub.requestID = RequestID(1);
+    sub.locType = LocationType::LargestObject;
+    sub.forward = false;
+    withSessionContext(s1, [&]() {
+      auto res = folly::coro::blockingWait(
+          relay_->subscribe(std::move(sub), createMockConsumer()), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      if (res.hasValue()) {
+        getOrCreateMockState(s1)->subscribeHandles.push_back(*res);
+      }
+    });
+  }
+  for (int i = 0; i < 3; i++) {
+    exec_->drive();
+  }
+
+  // Expect exactly one REQUEST_UPDATE(forward=true) when S2 joins.
+  EXPECT_CALL(*mockHandle, requestUpdateCalled(_))
+      .Times(1)
+      .WillOnce([](const RequestUpdate& u) {
+        ASSERT_TRUE(u.forward.has_value());
+        EXPECT_TRUE(*u.forward);
+      });
+
+  auto s2 = createMockSession();
+  setupPublishSucceeds(s2);
+  {
+    SubscribeRequest sub;
+    sub.fullTrackName = kTestTrackName;
+    sub.requestID = RequestID(2);
+    sub.locType = LocationType::LargestObject;
+    sub.forward = true;
+    withSessionContext(s2, [&]() {
+      auto res = folly::coro::blockingWait(
+          relay_->subscribe(std::move(sub), createMockConsumer()), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      if (res.hasValue()) {
+        getOrCreateMockState(s2)->subscribeHandles.push_back(*res);
+      }
+    });
+  }
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(mockHandle.get()));
+
+  removeSession(s2);
+  removeSession(s1);
+  removeSession(pubSession);
+  for (int i = 0; i < 3; i++) {
+    exec_->drive();
+  }
 }
 
 } // namespace moxygen::test

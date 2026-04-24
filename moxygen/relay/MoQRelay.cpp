@@ -692,13 +692,6 @@ MoQRelay::subscribeNamespace(
         continue;
       }
       auto& forwarder = subscriptionIt->second.forwarder;
-      if (forwarder->empty()) {
-        // Use forward value from this namespace subscription
-        co_withExecutor(
-            exec,
-            doSubscribeUpdate(subscriptionIt->second.handle, subNs.forward))
-            .start();
-      }
       auto maybeVersion = session->getNegotiatedVersion();
       CHECK(maybeVersion.has_value());
       if (getDraftMajorVersion(*maybeVersion) <= 15 ||
@@ -913,8 +906,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
               "Range in the past, use FETCH"});
       // start may be in the past, it will get adjusted forward to largest
     }
-    bool forwarding =
-        subscriptionIt->second.forwarder->numForwardingSubscribers() > 0;
     auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
         std::move(session), subReq, std::move(consumer));
     if (!subscriber) {
@@ -927,14 +918,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
               "failed to add subscriber"});
     }
     XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
-    if (!forwarding &&
-        subscriptionIt->second.forwarder->numForwardingSubscribers() > 0) {
-      auto exec = subscriptionIt->second.upstream->getExecutor();
-      co_withExecutor(
-          exec,
-          doSubscribeUpdate(subscriptionIt->second.handle, /*forward=*/true))
-          .start();
-    }
 
     forwarder->tryProcessNewGroupRequest(subReq.params);
     co_return subscriber;
