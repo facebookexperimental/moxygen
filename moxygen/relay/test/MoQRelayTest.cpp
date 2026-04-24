@@ -1652,18 +1652,13 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
   auto subscriberSession = createMockSession();
 
   auto mockConsumer = createMockConsumer();
-  std::shared_ptr<NiceMock<MockSubgroupConsumer>> sg;
 
   EXPECT_CALL(*mockConsumer, beginSubgroup(_, _, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
-        sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
-        ON_CALL(*sg, beginObject(_, _, _, _))
-            .WillByDefault(
-                Return(folly::makeExpected<MoQPublishError>(folly::unit)));
-        ON_CALL(*sg, objectPayload(_, _))
-            .WillByDefault(
-                Return(folly::makeExpected<MoQPublishError>(
-                    ObjectPublishStatus::IN_PROGRESS)));
+      .WillOnce([this](uint64_t, uint64_t, uint8_t, bool) {
+        auto sg = createMockSubgroupConsumer();
+        // Assert the continuation reaches this sg. Without the fix the
+        // forwarder skips it on range.start and this expectation fails.
+        EXPECT_CALL(*sg, objectPayload(_, _)).Times(1);
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -1689,7 +1684,6 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
       subgroup
           ->beginObject(kObjectID, kObjectLength, std::move(initial), {})
           .hasValue());
-  ASSERT_NE(sg, nullptr);
 
   // Late PUBLISH_OK with LargestObject: range.start becomes largest.object + 1.
   PublishOk pubOk{
@@ -1704,15 +1698,13 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
   subscriber->onPublishOk(pubOk);
   EXPECT_EQ(subscriber->range.start.object, kObjectID + 1);
 
-  // The object 5 continuation must still reach sg; without the fix the
-  // forwarder skips sg on range.start and leaves it with a partial object.
-  EXPECT_CALL(*sg, objectPayload(_, _)).Times(1);
-
   auto continuation =
       folly::IOBuf::copyBuffer(std::string(kObjectLength - kInitialLength, 'b'));
   ASSERT_TRUE(
       subgroup->objectPayload(std::move(continuation), /*finStream=*/false)
           .hasValue());
+
+  ASSERT_TRUE(subgroup->endOfSubgroup().hasValue());
 
   removeSession(publisherSession);
   removeSession(subscriberSession);
