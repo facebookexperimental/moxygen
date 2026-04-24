@@ -596,6 +596,11 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamData initialData,
       MoQControlCodec* controlCodec);
 
+  std::unique_ptr<MoQControlCodec> makeBidiCodec(
+      MoQControlCodec::ControlCallback* callback,
+      const std::vector<FrameType>& allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt);
+
   // Core session state
   MoQControlCodec::Direction dir_;
   folly::MaybeManagedPtr<proxygen::WebTransport> wt_;

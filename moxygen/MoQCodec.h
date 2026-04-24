@@ -112,6 +112,10 @@ class MoQControlCodec : public MoQCodec {
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
  protected:
+  virtual std::optional<RequestID> getStreamRequestID() const {
+    return std::nullopt;
+  }
+
   virtual bool checkFrameAllowed(FrameType f) {
     switch (f) {
       case FrameType::SUBSCRIBE:
@@ -180,22 +184,47 @@ class MoQControlCodec : public MoQCodec {
       size_t& remainingLength);
 };
 
-class MoQSubNsReceiverCodec : public MoQControlCodec {
+// Generic bidi stream codec parameterized by allowed frame types.
+// Replaces MoQSubNsReceiverCodec and MoQSubNsSenderCodec.
+class MoQBidiStreamCodec : public MoQControlCodec {
  public:
-  // The direction doesn't really matter, so I'm just setting it
-  // to SERVER for now.
-  explicit MoQSubNsReceiverCodec(ControlCallback* callback)
-      : MoQControlCodec(Direction::SERVER, callback) {
-    // Bypass the setup gating in MoQControlCodec::parseFrame().
+  explicit MoQBidiStreamCodec(
+      ControlCallback* callback,
+      std::initializer_list<FrameType> allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt)
+      : MoQControlCodec(Direction::SERVER, callback),
+        allowedFrames_(allowedFrames),
+        requestID_(requestID) {
+    seenSetup_ = true;
+  }
+
+  explicit MoQBidiStreamCodec(
+      ControlCallback* callback,
+      const std::vector<FrameType>& allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt)
+      : MoQControlCodec(Direction::SERVER, callback),
+        allowedFrames_(allowedFrames),
+        requestID_(requestID) {
     seenSetup_ = true;
   }
 
  protected:
   bool checkFrameAllowed(FrameType f) override {
-    return f == FrameType::SUBSCRIBE_NAMESPACE ||
-        f == FrameType::REQUEST_UPDATE;
+    return std::find(allowedFrames_.begin(), allowedFrames_.end(), f) !=
+        allowedFrames_.end();
   }
+
+  std::optional<RequestID> getStreamRequestID() const override {
+    return requestID_;
+  }
+
+ private:
+  std::vector<FrameType> allowedFrames_;
+  std::optional<RequestID> requestID_;
 };
+
+using MoQSubNsReceiverCodec = MoQBidiStreamCodec;
+using MoQSubNsSenderCodec = MoQBidiStreamCodec;
 
 class MoQObjectStreamCodec : public MoQCodec {
  public:
@@ -261,31 +290,6 @@ class MoQObjectStreamCodec : public MoQCodec {
   StreamType streamType_{StreamType::SUBGROUP_HEADER_SG};
   SubgroupOptions subgroupOptions_;
   ObjectCallback* callback_;
-};
-
-// Parses incoming NAMESPACE, NAMESPACE_DONE, REQUEST_OK, and REQUEST_ERROR
-// frames and calls the appropriate callback method.
-class MoQSubNsSenderCodec : public MoQControlCodec {
- public:
-  // The direction doesn't really matter, so I'm just setting it
-  // to SERVER for now.
-  explicit MoQSubNsSenderCodec(ControlCallback* callback)
-      : MoQControlCodec(Direction::SERVER, callback) {
-    seenSetup_ = true;
-  }
-
- protected:
-  bool checkFrameAllowed(FrameType f) override {
-    switch (f) {
-      case FrameType::NAMESPACE:
-      case FrameType::NAMESPACE_DONE:
-      case FrameType::REQUEST_OK:
-      case FrameType::REQUEST_ERROR:
-        return true;
-      default:
-        return false;
-    }
-  }
 };
 
 } // namespace moxygen

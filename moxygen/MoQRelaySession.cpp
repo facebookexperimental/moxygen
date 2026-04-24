@@ -992,15 +992,19 @@ folly::coro::Task<void> MoQRelaySession::subscribeNamespaceSenderReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle,
     std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle) {
   SubNsStreamCallback subNsStreamCallback(this, namespacePublishHandle);
-  MoQSubNsSenderCodec subNsCodec(&subNsStreamCallback);
-  subNsCodec.initializeVersion(*negotiatedVersion_);
+  auto subNsCodec = makeBidiCodec(
+      &subNsStreamCallback,
+      {FrameType::NAMESPACE,
+       FrameType::NAMESPACE_DONE,
+       FrameType::REQUEST_OK,
+       FrameType::REQUEST_ERROR});
 
   // TODO: Hold state inside controlReadLoop so we don't need two coroutines
   // here with a tail co_await.
   co_await controlReadLoop(
       readHandle,
       proxygen::WebTransport::StreamData{nullptr, false},
-      &subNsCodec);
+      subNsCodec.get());
 }
 
 void MoQRelaySession::unsubscribeNamespace(
