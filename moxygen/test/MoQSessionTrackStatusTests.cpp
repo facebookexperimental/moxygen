@@ -28,6 +28,28 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
   EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, TrackStatusExceptionReleasesRequestID) {
+  co_await setupMoQSession();
+  auto initialMaxRequestID = serverSession_->maxRequestID();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
+  // Publisher throws an exception — handleTrackStatus must not crash and
+  // must still retire the request ID.
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .WillOnce(
+          testing::Invoke(
+              [](TrackStatus)
+                  -> folly::coro::Task<Publisher::TrackStatusResult> {
+                co_yield folly::coro::co_error(
+                    std::runtime_error("trackStatus exploded"));
+              }));
+  auto res = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_TRUE(res.hasError());
+  co_await folly::coro::co_reschedule_on_current_executor;
+  // The server should have retired the request ID despite the exception.
+  EXPECT_GT(serverSession_->maxRequestID(), initialMaxRequestID);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());

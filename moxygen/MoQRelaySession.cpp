@@ -715,6 +715,12 @@ void MoQRelaySession::publishNamespaceDone(const PublishNamespaceDone& unann) {
 
 // PublishNamespace subscriber methods
 void MoQRelaySession::onPublishNamespace(PublishNamespace ann) {
+  onPublishNamespaceImpl(std::move(ann), controlStreamReplyContext());
+}
+
+void MoQRelaySession::onPublishNamespaceImpl(
+    PublishNamespace ann,
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
 
   if (logger_) {
@@ -732,19 +738,21 @@ void MoQRelaySession::onPublishNamespace(PublishNamespace ann) {
         PublishNamespaceError{
             ann.requestID,
             PublishNamespaceErrorCode::NOT_SUPPORTED,
-            "Not a subscriber"});
+            "Not a subscriber"},
+        *replyContext);
     return;
   }
   co_withExecutor(
       exec_.get(),
       co_withCancellation(
           cancellationSource_.getToken(),
-          handlePublishNamespace(std::move(ann))))
+          handlePublishNamespace(std::move(ann), std::move(replyContext))))
       .start();
 }
 
 folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
-    PublishNamespace publishNamespace) {
+    PublishNamespace publishNamespace,
+    std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
@@ -760,7 +768,8 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
         PublishNamespaceError{
             publishNamespace.requestID,
             PublishNamespaceErrorCode::INTERNAL_ERROR,
-            publishNamespaceResult.exception().what().toStdString()});
+            publishNamespaceResult.exception().what().toStdString()},
+        *replyContext);
     co_return;
   }
   if (publishNamespaceResult->hasError()) {
@@ -769,11 +778,11 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
     auto annErr = std::move(publishNamespaceResult->error());
     annErr.requestID = publishNamespace.requestID; // In case app got it wrong
     // trackNamespace removed from unified RequestError
-    publishNamespaceError(annErr);
+    publishNamespaceError(annErr, *replyContext);
   } else {
     auto handle = std::move(publishNamespaceResult->value());
     auto publishNamespaceOkMsg = handle->publishNamespaceOk();
-    publishNamespaceOk(publishNamespaceOkMsg);
+    publishNamespaceOk(publishNamespaceOkMsg, *replyContext);
     publishNamespaceHandles_[publishNamespace.requestID] = std::move(handle);
     if (getDraftMajorVersion(*getNegotiatedVersion()) < 16) {
       // Legacy: also store NS->RequestID mapping for lookups
@@ -783,7 +792,9 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
   }
 }
 
-void MoQRelaySession::publishNamespaceOk(const PublishNamespaceOk& annOk) {
+void MoQRelaySession::publishNamespaceOk(
+    const PublishNamespaceOk& annOk,
+    ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << annOk.requestID << " sess=" << this;
 
   if (logger_) {
@@ -791,12 +802,13 @@ void MoQRelaySession::publishNamespaceOk(const PublishNamespaceOk& annOk) {
   }
 
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishNamespaceSuccess);
-  auto res = moqFrameWriter_.writePublishNamespaceOk(controlWriteBuf_, annOk);
+  auto res =
+      moqFrameWriter_.writePublishNamespaceOk(replyContext.writeBuf(), annOk);
   if (!res) {
     XLOG(ERR) << "writePublishNamespaceOk failed sess=" << this;
     return;
   }
-  controlWriteEvent_.signal();
+  replyContext.flush();
 }
 
 void MoQRelaySession::publishNamespaceCancel(
