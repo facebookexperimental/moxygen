@@ -448,6 +448,12 @@ class MoQSession : public Subscriber,
   // This is only called for draft >= 16.
   folly::coro::Task<void> bidiStreamDemuxer(
       proxygen::WebTransport::BidiStreamHandle bh) noexcept;
+
+  struct BidiStreamConfig {
+    std::vector<FrameType> allowedFrames;
+    folly::Function<void(RequestID)> onStreamClosed;
+  };
+  std::optional<BidiStreamConfig> getBidiStreamConfig(FrameType frameType);
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
   void onSessionEnd(folly::Optional<uint32_t> err) noexcept override {
     XLOG(DBG1) << __func__ << "err="
@@ -483,6 +489,33 @@ class MoQSession : public Subscriber,
       const TrackRequestParameters& params,
       uint64_t version);
 
+  // Single callback class for all bidi stream request types.
+  // Overrides all onXxx methods; the codec's allowedFrames filter ensures
+  // only the matching one fires.
+  class BidiRequestCallback : public MoQControlCodec::ControlCallback {
+   public:
+    BidiRequestCallback(
+        MoQSession* session,
+        proxygen::WebTransport::StreamWriteHandle* writeHandle)
+        : session_(session), writeHandle_(writeHandle) {}
+
+    void onConnectionError(ErrorCode error) override;
+    void onRequestUpdate(RequestUpdate requestUpdate) override;
+    void onSubscribeNamespace(SubscribeNamespace subNs) override;
+
+    std::optional<RequestID> requestID() const {
+      return requestID_;
+    }
+
+   private:
+    bool handleFirstFrame(RequestID reqId);
+
+    MoQSession* session_;
+    proxygen::WebTransport::StreamWriteHandle* writeHandle_;
+    std::optional<RequestID> requestID_;
+    std::shared_ptr<ReplyContext> replyContext_;
+  };
+
  private:
   static const folly::RequestToken& sessionRequestToken();
 
@@ -492,10 +525,6 @@ class MoQSession : public Subscriber,
   folly::coro::Task<void> unidirectionalReadLoop(
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
-
-  folly::coro::Task<void> subscribeNamespaceReceiverReadLoop(
-      proxygen::WebTransport::BidiStreamHandle bh,
-      proxygen::WebTransport::StreamData initialData);
 
   class TrackPublisherImpl;
   class FetchPublisherImpl;
@@ -629,7 +658,9 @@ class MoQSession : public Subscriber,
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle,
       proxygen::WebTransport::StreamData initialData,
-      MoQControlCodec* controlCodec);
+      std::unique_ptr<MoQControlCodec> codec = nullptr,
+      std::unique_ptr<BidiRequestCallback> bidiCallback = nullptr,
+      folly::Function<void(RequestID)> onStreamClosed = nullptr);
 
   std::unique_ptr<MoQControlCodec> makeBidiCodec(
       MoQControlCodec::ControlCallback* callback,
