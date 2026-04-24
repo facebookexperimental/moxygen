@@ -194,6 +194,14 @@ class MoQForwarder : public TrackConsumer {
 
   bool checkRange(const Subscriber& sub);
 
+  // Checks only the past-end branch of range validation. Used when
+  // delivering to an already-open SubgroupConsumer: once beginObject has
+  // committed to a subscriber, the object's continuation must still reach
+  // its consumer so partial-object state is not orphaned, but if largest_
+  // has advanced past range.end the subscription is complete and the
+  // subscriber is retired. See moxygen#168.
+  bool checkPastEnd(const Subscriber& sub);
+
   void removeSubscriberOnError(
       const Subscriber& sub,
       const MoQPublishError& err,
