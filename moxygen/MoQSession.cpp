@@ -2667,7 +2667,8 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamData initialData,
     std::unique_ptr<MoQControlCodec> codec,
     std::unique_ptr<BidiRequestCallback> bidiCallback,
-    folly::Function<void(RequestID)> onStreamClosed) {
+    folly::Function<void(RequestID)> onStreamClosed,
+    std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
@@ -2716,6 +2717,42 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       bidiCallback->requestID()) {
     onStreamClosed(*bidiCallback->requestID());
   }
+}
+
+folly::Expected<proxygen::WebTransport::StreamWriteHandle*, std::string>
+MoQSession::sendRequest(
+    folly::IOBufQueue& writeBuf,
+    const std::vector<FrameType>& allowedResponses,
+    RequestID requestID,
+    uint64_t minBidiDraftVersion,
+    std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback) {
+  if (getDraftMajorVersion(*negotiatedVersion_) >= minBidiDraftVersion) {
+    auto bidiStream = wt_->createBidiStream();
+    if (!bidiStream) {
+      XLOG(ERR) << "Failed to create bidi stream sess=" << this;
+      return folly::makeUnexpected(std::string("Failed to create bidi stream"));
+    }
+    bidiStream->writeHandle->writeStreamData(
+        writeBuf.move(), /*fin=*/false, nullptr);
+    auto* cb = senderCallback ? senderCallback.get() : this;
+    auto codec = makeBidiCodec(cb, allowedResponses, requestID);
+    co_withExecutor(
+        exec_.get(),
+        co_withCancellation(
+            cancellationSource_.getToken(),
+            controlReadLoop(
+                bidiStream->readHandle,
+                proxygen::WebTransport::StreamData{nullptr, false},
+                std::move(codec),
+                nullptr,
+                nullptr,
+                std::move(senderCallback))))
+        .start();
+    return bidiStream->writeHandle;
+  }
+  controlWriteBuf_.append(writeBuf.move());
+  controlWriteEvent_.signal();
+  return nullptr;
 }
 
 std::shared_ptr<MoQSession::SubscribeTrackReceiveState>
