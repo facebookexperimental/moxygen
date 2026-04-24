@@ -413,6 +413,14 @@ class MoQSession : public Subscriber,
       return session_ ? session_->getTransportInfo() : quic::TransportInfo();
     }
 
+    void setReplyContext(std::shared_ptr<ReplyContext> ctx) {
+      replyContext_ = std::move(ctx);
+    }
+
+    ReplyContext* replyContext() const {
+      return replyContext_.get();
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -424,6 +432,7 @@ class MoQSession : public Subscriber,
     uint64_t bytesBuffered_{0};
     uint64_t bytesBufferedThreshold_{0};
     std::optional<uint8_t> publisherPriority_;
+    std::shared_ptr<ReplyContext> replyContext_;
   };
 
   void onNewUniStream(
@@ -491,15 +500,22 @@ class MoQSession : public Subscriber,
   class TrackPublisherImpl;
   class FetchPublisherImpl;
 
-  folly::coro::Task<void> handleTrackStatus(TrackStatus trackStatus);
-  void trackStatusOk(const TrackStatusOk& trackStatusOk);
-  void trackStatusError(const TrackStatusError& trackStatusError);
+  folly::coro::Task<void> handleTrackStatus(
+      TrackStatus trackStatus,
+      std::shared_ptr<ReplyContext> replyContext);
+  void trackStatusOk(
+      const TrackStatusOk& trackStatusOk,
+      ReplyContext& replyContext);
+  void trackStatusError(
+      const TrackStatusError& trackStatusError,
+      ReplyContext& replyContext);
 
   folly::coro::Task<void> handleSubscribe(
       SubscribeRequest sub,
-      std::shared_ptr<TrackPublisherImpl> trackPublisher);
-  void sendSubscribeOk(const SubscribeOk& subOk);
-  void subscribeError(const SubscribeError& subErr);
+      std::shared_ptr<TrackPublisherImpl> trackPublisher,
+      std::shared_ptr<ReplyContext> replyContext);
+  void sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& replyContext);
+  void subscribeError(const SubscribeError& subErr, ReplyContext& replyContext);
   void unsubscribe(const Unsubscribe& unsubscribe);
   // Backward compatibility forwarders
   void subscribeUpdate(const SubscribeUpdate& subUpdate) {
@@ -517,16 +533,20 @@ class MoQSession : public Subscriber,
 
   folly::coro::Task<void> handleFetch(
       Fetch fetch,
-      std::shared_ptr<FetchPublisherImpl> fetchPublisher);
-  void fetchOk(const FetchOk& fetchOk);
-  void fetchError(const FetchError& fetchError);
+      std::shared_ptr<FetchPublisherImpl> fetchPublisher,
+      std::shared_ptr<ReplyContext> replyContext);
+  void fetchOk(const FetchOk& fetchOk, ReplyContext& replyContext);
+  void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
   void fetchCancel(const FetchCancel& fetchCancel);
 
   folly::coro::Task<void> handlePublish(
       PublishRequest publish,
-      std::shared_ptr<Publisher::SubscriptionHandle> publishHandle);
-  void publishOk(const PublishOk& pubOk);
-  void publishError(const PublishError& publishError);
+      std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
+      std::shared_ptr<ReplyContext> replyContext);
+  void publishOk(const PublishOk& pubOk, ReplyContext& replyContext);
+  void publishError(
+      const PublishError& publishError,
+      ReplyContext& replyContext);
 
   class ReceiverSubscriptionHandle;
   class ReceiverFetchHandle;
@@ -588,6 +608,21 @@ class MoQSession : public Subscriber,
 
   // Returns the shared ReplyContext for the control stream
   std::shared_ptr<ReplyContext> controlStreamReplyContext();
+
+  // Impl methods - take ReplyContext so bidi stream callbacks can call them
+  void onSubscribeImpl(
+      SubscribeRequest subscribeRequest,
+      std::shared_ptr<ReplyContext> replyContext);
+  void onFetchImpl(Fetch fetch, std::shared_ptr<ReplyContext> replyContext);
+  void onTrackStatusImpl(
+      TrackStatus trackStatus,
+      std::shared_ptr<ReplyContext> replyContext);
+  void onPublishImpl(
+      PublishRequest publish,
+      std::shared_ptr<ReplyContext> replyContext);
+  virtual void onPublishNamespaceImpl(
+      PublishNamespace publishNamespace,
+      std::shared_ptr<ReplyContext> replyContext);
 
   void requestUpdate(const RequestUpdate& reqUpdate);
 
@@ -654,7 +689,8 @@ class MoQSession : public Subscriber,
   // PublishNamespace response methods - available for responding to
   // incoming publishNamespaces
   void publishNamespaceError(
-      const PublishNamespaceError& publishNamespaceError);
+      const PublishNamespaceError& publishNamespaceError,
+      ReplyContext& replyContext);
   void subscribeNamespaceError(
       const SubscribeNamespaceError& subscribeNamespaceError,
       std::shared_ptr<SubNSReply>&& subNsReply);
