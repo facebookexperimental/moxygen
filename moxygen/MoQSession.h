@@ -516,6 +516,19 @@ class MoQSession : public Subscriber,
     std::shared_ptr<ReplyContext> replyContext_;
   };
 
+  // Send a serialized request frame. Depending on draft version, creates a
+  // bidi stream and starts a read loop for responses. Otherwise, appends to
+  // the control stream buffer and signals. Returns the bidi write handle on
+  // success (nullptr for control stream path), or error string on failure.
+  folly::Expected<proxygen::WebTransport::StreamWriteHandle*, std::string>
+  sendRequest(
+      folly::IOBufQueue& writeBuf,
+      const std::vector<FrameType>& allowedResponses,
+      RequestID requestID,
+      uint64_t minBidiDraftVersion = 17,
+      std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
+          nullptr);
+
  private:
   static const folly::RequestToken& sessionRequestToken();
 
@@ -660,7 +673,9 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamData initialData,
       std::unique_ptr<MoQControlCodec> codec = nullptr,
       std::unique_ptr<BidiRequestCallback> bidiCallback = nullptr,
-      folly::Function<void(RequestID)> onStreamClosed = nullptr);
+      folly::Function<void(RequestID)> onStreamClosed = nullptr,
+      std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
+          nullptr);
 
   std::unique_ptr<MoQControlCodec> makeBidiCodec(
       MoQControlCodec::ControlCallback* callback,
