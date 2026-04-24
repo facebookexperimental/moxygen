@@ -994,25 +994,57 @@ StreamPublisherImpl::ensureWriteHandle() {
 
 namespace moxygen {
 
-class ControlStreamSubNsReply : public SubNSReply {
+namespace {
+
+class BidiStreamReplyContext : public ReplyContext {
  public:
-  ControlStreamSubNsReply(
-      MoQFrameWriter& moqFrameWriter,
+  BidiStreamReplyContext(
+      proxygen::WebTransport::StreamWriteHandle* writeHandle,
+      folly::CancellationToken token)
+      : ReplyContext(std::move(token)), writeHandle_(writeHandle) {}
+
+  folly::IOBufQueue& writeBuf() override {
+    return writeBuf_;
+  }
+  void flush(bool fin = false) override {
+    if (!cancelled()) {
+      writeHandle_->writeStreamData(writeBuf_.move(), fin, nullptr);
+    } else {
+      writeBuf_.move(); // discard
+    }
+  }
+
+ private:
+  folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
+  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
+};
+
+class ControlStreamReplyContext : public ReplyContext {
+ public:
+  ControlStreamReplyContext(
       folly::IOBufQueue& controlWriteBuf,
-      moxygen::TimedBaton& controlWriteEvent)
-      : SubNSReply(moqFrameWriter),
+      moxygen::TimedBaton& controlWriteEvent,
+      folly::CancellationToken token)
+      : ReplyContext(std::move(token)),
         controlWriteBuf_(controlWriteBuf),
         controlWriteEvent_(controlWriteEvent) {}
 
-  ~ControlStreamSubNsReply() override = default;
-
-  WriteResult ok(const SubscribeNamespaceOk&) override;
-  WriteResult error(const SubscribeNamespaceError&) override;
+  folly::IOBufQueue& writeBuf() override {
+    return controlWriteBuf_;
+  }
+  void flush(bool fin = false) override {
+    XCHECK(!fin) << "Cannot FIN control stream";
+    if (!cancelled()) {
+      controlWriteEvent_.signal();
+    }
+  }
 
  private:
   folly::IOBufQueue& controlWriteBuf_;
   moxygen::TimedBaton& controlWriteEvent_;
 };
+
+} // namespace
 
 class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
                                        public TrackConsumer {
@@ -2140,7 +2172,7 @@ MoQSession::MoQSession(
     : dir_(MoQControlCodec::Direction::CLIENT),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
-      controlCodec_(std::make_shared<MoQControlCodec>(dir_, this)),
+      controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
       nextRequestID_(0),
 
       nextExpectedPeerRequestID_(1) {}
@@ -2152,7 +2184,7 @@ MoQSession::MoQSession(
     : dir_(MoQControlCodec::Direction::SERVER),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
-      controlCodec_(std::make_shared<MoQControlCodec>(dir_, this)),
+      controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
       nextRequestID_(1),
       nextExpectedPeerRequestID_(0),
       serverSetupCallback_(&serverSetupCallback) {}
@@ -2648,11 +2680,8 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
    public:
     SubNsCb(
         MoQSession* session,
-        proxygen::WebTransport::BidiStreamHandle bidiStreamHandle,
-        folly::IOBufQueue& bufQueue)
-        : session_(session),
-          bidiStreamHandle_(bidiStreamHandle),
-          bufQueue_(bufQueue) {}
+        proxygen::WebTransport::StreamWriteHandle* writeHandle)
+        : session_(session), writeHandle_(writeHandle) {}
 
     void onSubscribeNamespace(SubscribeNamespace subscribeNamespace) override {
       if (receivedSubscribeNamespace_) {
@@ -2663,8 +2692,9 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
       receivedSubscribeNamespace_ = true;
       requestID_ = subscribeNamespace.requestID;
 
-      auto subNsReply =
-          session_->getSubNsReply(bufQueue_, bidiStreamHandle_.writeHandle);
+      auto replyContext = std::make_shared<BidiStreamReplyContext>(
+          writeHandle_, session_->cancellationSource_.getToken());
+      auto subNsReply = session_->getSubNsReply(std::move(replyContext));
       session_->onSubscribeNamespaceImpl(
           subscribeNamespace, std::move(subNsReply));
     }
@@ -2688,19 +2718,17 @@ folly::coro::Task<void> MoQSession::subscribeNamespaceReceiverReadLoop(
 
    private:
     MoQSession* session_;
-    proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
-    folly::IOBufQueue& bufQueue_;
+    proxygen::WebTransport::StreamWriteHandle* writeHandle_;
     bool receivedSubscribeNamespace_{false};
     std::optional<RequestID> requestID_;
   };
 
-  folly::IOBufQueue bufQueue;
   auto moQSubNsReceiverCodec = std::make_shared<MoQSubNsReceiverCodec>(nullptr);
   moQSubNsReceiverCodec->initializeVersion(*negotiatedVersion_);
   // Point at the session-wide receive token cache so that auth-token aliases
   // registered on the control stream are visible here, and vice versa.
   moQSubNsReceiverCodec->setTokenCache(&receiveTokenCache_);
-  SubNsCb cb(this, bh, bufQueue);
+  SubNsCb cb(this, bh.writeHandle);
   moQSubNsReceiverCodec->setCallback(&cb);
 
   // TODO: Could perhaps return controlReadLoop instead of awaiting
@@ -5713,8 +5741,8 @@ void MoQSession::onPublishNamespaceCancel(
 }
 
 void MoQSession::onSubscribeNamespace(SubscribeNamespace subscribeNamespace) {
-  auto subNsReply = std::make_shared<ControlStreamSubNsReply>(
-      moqFrameWriter_, controlWriteBuf_, controlWriteEvent_);
+  auto subNsReply = std::make_shared<SubNSReply>(
+      moqFrameWriter_, controlStreamReplyContext());
   onSubscribeNamespaceImpl(subscribeNamespace, std::move(subNsReply));
 }
 
@@ -5869,6 +5897,14 @@ void MoQSession::setSubscribeHandler(
   subscribeHandler_ = std::move(subscribeHandler);
 }
 
+std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
+  if (!controlStreamReplyContext_) {
+    controlStreamReplyContext_ = std::make_shared<ControlStreamReplyContext>(
+        controlWriteBuf_, controlWriteEvent_, cancellationSource_.getToken());
+  }
+  return controlStreamReplyContext_;
+}
+
 void MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
   auto version = getVersionFromAlpn(std::string_view(alpn));
   if (version) {
@@ -5876,36 +5912,19 @@ void MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
   }
 }
 
-WriteResult ControlStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
-  auto res =
-      moqFrameWriter_.writeSubscribeNamespaceOk(controlWriteBuf_, subNsOk);
-  controlWriteEvent_.signal();
+WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {
+  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(
+      replyContext_->writeBuf(), subNsOk);
+  replyContext_->flush();
   return res;
 }
 
-WriteResult ControlStreamSubNsReply::error(
-    const SubscribeNamespaceError& subNsError) {
+WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
   auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, subNsError, FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-  controlWriteEvent_.signal();
-  return res;
-}
-
-WriteResult SeparateStreamSubNsReplyBase::error(
-    const SubscribeNamespaceError& subNsError) {
-  if (okSent_) {
-    // We already sent OK (SubscribeNamespaceOk) on this stream.
-    // After that, the stream should only carry NAMESPACE/NAMESPACE_DONE.
-    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
-  }
-  if (namespaceFrameSent_) {
-    // We already sent at least one NAMESPACE frame.
-    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
-  }
-  auto res = moqFrameWriter_.writeRequestError(
-      writeBuf_, subNsError, FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-  writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
-  errorSent_ = true;
+      replyContext_->writeBuf(),
+      subNsError,
+      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  replyContext_->flush();
   return res;
 }
 
