@@ -48,6 +48,4 @@ moxygen_add_library(moxygen_flv_parser_flv_writer
     Folly::folly_io_iobuf
 )
 
-if(BUILD_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
