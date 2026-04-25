@@ -650,7 +650,8 @@ folly::coro::Task<void> MoQTestServer::doRelaySetup(
   co_await relayClient_->setupMoQSession(
       std::chrono::milliseconds(connectTimeout),
       std::chrono::milliseconds(transactionTimeout),
-      /*publishHandler=*/shared_from_this(),
+      /*publishHandler=*/
+      std::static_pointer_cast<MoQTestServer>(shared_from_this()),
       /*subscribeHandler=*/nullptr,
       quic::TransportSettings(),
       getMoqtProtocols(versions_, true));

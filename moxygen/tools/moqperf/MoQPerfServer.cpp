@@ -55,7 +55,8 @@ folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
 }
 
 void MoQPerfServer::onNewSession(std::shared_ptr<MoQSession> clientSession) {
-  clientSession->setPublishHandler(shared_from_this());
+  clientSession->setPublishHandler(
+      std::static_pointer_cast<MoQPerfServer>(shared_from_this()));
 }
 
 folly::coro::Task<void> MoQPerfServer::writeLoop(

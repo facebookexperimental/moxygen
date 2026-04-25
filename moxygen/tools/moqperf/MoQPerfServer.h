@@ -59,9 +59,7 @@ class PerfFetchHandle : public Publisher::FetchHandle {
   folly::CancellationSource* cancellationSource_;
 };
 
-class MoQPerfServer : public moxygen::Publisher,
-                      public moxygen::MoQServer,
-                      public std::enable_shared_from_this<MoQPerfServer> {
+class MoQPerfServer : public moxygen::Publisher, public moxygen::MoQServer {
  public:
   MoQPerfServer(std::string cert, std::string key);
 

@@ -514,6 +514,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::REQUEST_UPDATE: {
       auto res = moqFrameParser_.parseRequestUpdate(cursor, curFrameLength_);
       if (res) {
+        if (auto rid = getStreamRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onRequestUpdate(std::move(res.value()));
         }
@@ -558,6 +561,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestError(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
+        if (auto rid = getStreamRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onRequestError(std::move(res.value()), curFrameType_);
         }
@@ -687,6 +693,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestOk(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
+        if (auto rid = getStreamRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onRequestOk(std::move(res.value()), curFrameType_);
         }

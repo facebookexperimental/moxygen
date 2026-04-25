@@ -114,11 +114,11 @@ class MoQRelaySession::SubscribeNamespaceHandle
       std::shared_ptr<MoQRelaySession> session,
       TrackNamespace trackNamespacePrefix,
       SubscribeNamespaceOk subAnnOk,
-      proxygen::WebTransport::BidiStreamHandle bidiStreamHandle = {})
+      proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle = nullptr)
       : Publisher::SubscribeNamespaceHandle(std::move(subAnnOk)),
         trackNamespacePrefix_(std::move(trackNamespacePrefix)),
         session_(std::move(session)),
-        bidiStreamHandle_(bidiStreamHandle) {}
+        bidiWriteHandle_(bidiWriteHandle) {}
   SubscribeNamespaceHandle(const SubscribeNamespaceHandle&) = delete;
   SubscribeNamespaceHandle& operator=(const SubscribeNamespaceHandle&) = delete;
   SubscribeNamespaceHandle(SubscribeNamespaceHandle&&) = delete;
@@ -133,21 +133,18 @@ class MoQRelaySession::SubscribeNamespaceHandle
         session_.reset();
         return;
       }
-      if (bidiStreamHandle_.writeHandle) {
+      if (bidiWriteHandle_) {
         // Draft 16+: Close the bidi stream with a FIN
         MOQ_SUBSCRIBER_STATS(
             session_->subscriberStatsCallback_, onUnsubscribeNamespace);
-        auto res = bidiStreamHandle_.writeHandle->writeStreamData(
-            nullptr, /*fin*/ true, nullptr);
+        auto res =
+            bidiWriteHandle_->writeStreamData(nullptr, /*fin*/ true, nullptr);
         if (!res) {
           XLOG(ERR)
               << "writeStreamData(fin=true) for SUBSCRIBE_NAMESPACE failed error="
               << uint64_t(res.error());
         }
-        if (bidiStreamHandle_.readHandle) {
-          bidiStreamHandle_.readHandle->stopSending(0);
-        }
-        bidiStreamHandle_ = {};
+        bidiWriteHandle_ = nullptr;
       } else {
         // Draft <=15: Send UnsubscribeNamespace on the control stream
         UnsubscribeNamespace msg;
@@ -174,7 +171,7 @@ class MoQRelaySession::SubscribeNamespaceHandle
  private:
   TrackNamespace trackNamespacePrefix_;
   std::shared_ptr<MoQRelaySession> session_;
-  proxygen::WebTransport::BidiStreamHandle bidiStreamHandle_;
+  proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle_{nullptr};
 };
 
 // MoQRelayPendingRequestState - extends base PendingRequestState with
@@ -715,6 +712,12 @@ void MoQRelaySession::publishNamespaceDone(const PublishNamespaceDone& unann) {
 
 // PublishNamespace subscriber methods
 void MoQRelaySession::onPublishNamespace(PublishNamespace ann) {
+  onPublishNamespaceImpl(std::move(ann), controlStreamReplyContext());
+}
+
+void MoQRelaySession::onPublishNamespaceImpl(
+    PublishNamespace ann,
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace << " sess=" << this;
 
   if (logger_) {
@@ -732,19 +735,21 @@ void MoQRelaySession::onPublishNamespace(PublishNamespace ann) {
         PublishNamespaceError{
             ann.requestID,
             PublishNamespaceErrorCode::NOT_SUPPORTED,
-            "Not a subscriber"});
+            "Not a subscriber"},
+        *replyContext);
     return;
   }
   co_withExecutor(
       exec_.get(),
       co_withCancellation(
           cancellationSource_.getToken(),
-          handlePublishNamespace(std::move(ann))))
+          handlePublishNamespace(std::move(ann), std::move(replyContext))))
       .start();
 }
 
 folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
-    PublishNamespace publishNamespace) {
+    PublishNamespace publishNamespace,
+    std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
@@ -760,7 +765,8 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
         PublishNamespaceError{
             publishNamespace.requestID,
             PublishNamespaceErrorCode::INTERNAL_ERROR,
-            publishNamespaceResult.exception().what().toStdString()});
+            publishNamespaceResult.exception().what().toStdString()},
+        *replyContext);
     co_return;
   }
   if (publishNamespaceResult->hasError()) {
@@ -769,11 +775,11 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
     auto annErr = std::move(publishNamespaceResult->error());
     annErr.requestID = publishNamespace.requestID; // In case app got it wrong
     // trackNamespace removed from unified RequestError
-    publishNamespaceError(annErr);
+    publishNamespaceError(annErr, *replyContext);
   } else {
     auto handle = std::move(publishNamespaceResult->value());
     auto publishNamespaceOkMsg = handle->publishNamespaceOk();
-    publishNamespaceOk(publishNamespaceOkMsg);
+    publishNamespaceOk(publishNamespaceOkMsg, *replyContext);
     publishNamespaceHandles_[publishNamespace.requestID] = std::move(handle);
     if (getDraftMajorVersion(*getNegotiatedVersion()) < 16) {
       // Legacy: also store NS->RequestID mapping for lookups
@@ -783,7 +789,9 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
   }
 }
 
-void MoQRelaySession::publishNamespaceOk(const PublishNamespaceOk& annOk) {
+void MoQRelaySession::publishNamespaceOk(
+    const PublishNamespaceOk& annOk,
+    ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << annOk.requestID << " sess=" << this;
 
   if (logger_) {
@@ -791,12 +799,13 @@ void MoQRelaySession::publishNamespaceOk(const PublishNamespaceOk& annOk) {
   }
 
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishNamespaceSuccess);
-  auto res = moqFrameWriter_.writePublishNamespaceOk(controlWriteBuf_, annOk);
+  auto res =
+      moqFrameWriter_.writePublishNamespaceOk(replyContext.writeBuf(), annOk);
   if (!res) {
     XLOG(ERR) << "writePublishNamespaceOk failed sess=" << this;
     return;
   }
-  controlWriteEvent_.signal();
+  replyContext.flush();
 }
 
 void MoQRelaySession::publishNamespaceCancel(
@@ -914,41 +923,29 @@ MoQRelaySession::subscribeNamespace(
   aliasifyAuthTokens(sa.params);
   sa.requestID = getNextRequestID();
 
-  proxygen::WebTransport::BidiStreamHandle subNsBidiStreamHandle;
-  if (getDraftMajorVersion(*negotiatedVersion_) <= 15) {
-    auto res = moqFrameWriter_.writeSubscribeNamespace(controlWriteBuf_, sa);
-    if (!res) {
-      XLOG(ERR) << "writeSubscribeNamespace failed sess=" << this;
-      co_return folly::makeUnexpected(SubscribeNamespaceError(
-          {RequestID(0),
-           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-           "local write failed"}));
-    }
-    controlWriteEvent_.signal();
-  } else {
-    folly::IOBufQueue buf;
-    auto res = moqFrameWriter_.writeSubscribeNamespace(buf, sa);
-    if (!res) {
-      XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
-      co_return folly::makeUnexpected(SubscribeNamespaceError(
-          {RequestID(0),
-           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-           "local write failed"}));
-    }
-    // Create a bidirectional stream and write the SUBSCRIBE_NAMESPACE frame
-    auto subNsStream = wt_->createBidiStream();
-    if (!subNsStream) {
-      XLOG(ERR) << "Failed to get control stream sess=" << this;
-      wt_->closeSession();
-      co_return folly::makeUnexpected(SubscribeNamespaceError(
-          {RequestID(0),
-           SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-           "failed to create local bidi stream"}));
-    }
-
-    subNsBidiStreamHandle = *subNsStream;
-    subNsBidiStreamHandle.writeHandle->writeStreamData(
-        buf.move(), /*fin*/ false, nullptr);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubscribeNamespace(buf, sa);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeNamespace failed sess=" << this;
+    co_return folly::makeUnexpected(SubscribeNamespaceError(
+        {RequestID(0),
+         SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+         "local write failed"}));
+  }
+  auto sendResult = sendRequest(
+      buf,
+      {FrameType::NAMESPACE,
+       FrameType::NAMESPACE_DONE,
+       FrameType::REQUEST_OK,
+       FrameType::REQUEST_ERROR},
+      sa.requestID,
+      /*minBidiDraftVersion=*/16,
+      std::make_unique<SubNsStreamCallback>(this, namespacePublishHandle));
+  if (sendResult.hasError()) {
+    co_return folly::makeUnexpected(SubscribeNamespaceError(
+        {RequestID(0),
+         SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+         std::move(sendResult.error())}));
   }
 
   if (logger_) {
@@ -960,16 +957,6 @@ MoQRelaySession::subscribeNamespace(
       sa.requestID,
       MoQRelayPendingRequestState::makeSubscribeNamespace(
           std::move(contract.first)));
-
-  if (getDraftMajorVersion(*negotiatedVersion_) >= 16) {
-    co_withExecutor(
-        exec_.get(),
-        co_withCancellation(
-            cancellationSource_.getToken(),
-            subscribeNamespaceSenderReadLoop(
-                subNsBidiStreamHandle.readHandle, namespacePublishHandle)))
-        .start();
-  }
 
   auto subAnnResult = co_await std::move(contract.second);
   if (subAnnResult.hasError()) {
@@ -984,23 +971,8 @@ MoQRelaySession::subscribeNamespace(
         std::static_pointer_cast<MoQRelaySession>(shared_from_this()),
         trackNamespace,
         std::move(subAnnResult.value()),
-        subNsBidiStreamHandle);
+        sendResult.value());
   }
-}
-
-folly::coro::Task<void> MoQRelaySession::subscribeNamespaceSenderReadLoop(
-    proxygen::WebTransport::StreamReadHandle* readHandle,
-    std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle) {
-  SubNsStreamCallback subNsStreamCallback(this, namespacePublishHandle);
-  MoQSubNsSenderCodec subNsCodec(&subNsStreamCallback);
-  subNsCodec.initializeVersion(*negotiatedVersion_);
-
-  // TODO: Hold state inside controlReadLoop so we don't need two coroutines
-  // here with a tail co_await.
-  co_await controlReadLoop(
-      readHandle,
-      proxygen::WebTransport::StreamData{nullptr, false},
-      &subNsCodec);
 }
 
 void MoQRelaySession::unsubscribeNamespace(
@@ -1271,10 +1243,31 @@ WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
     // We already sent an ERROR; protocol doesn't allow OK after that.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(writeBuf_, subNsOk);
-  writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(
+      replyContext_->writeBuf(), subNsOk);
+  replyContext_->flush();
   okSent_ = true;
   flushPendingMessages();
+  return res;
+}
+
+WriteResult SeparateStreamSubNsReply::error(
+    const SubscribeNamespaceError& subNsError) {
+  if (okSent_) {
+    // We already sent OK (SubscribeNamespaceOk) on this stream.
+    // After that, the stream should only carry NAMESPACE/NAMESPACE_DONE.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (namespaceFrameSent_) {
+    // We already sent at least one NAMESPACE frame.
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeRequestError(
+      replyContext_->writeBuf(),
+      subNsError,
+      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
+  replyContext_->flush();
+  errorSent_ = true;
   return res;
 }
 
@@ -1283,12 +1276,12 @@ WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
     // No NAMESPACE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeNamespace(writeBuf_, msg);
+  auto res = moqFrameWriter_.writeNamespace(replyContext_->writeBuf(), msg);
   namespaceFrameSent_ = true;
   if (okSent_) {
-    writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+    replyContext_->flush();
   } else {
-    pendingBuf_.append(writeBuf_.move());
+    pendingBuf_.append(replyContext_->writeBuf().move());
   }
   return res;
 }
@@ -1299,11 +1292,11 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
     // No NAMESPACE_DONE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeNamespaceDone(writeBuf_, msg);
+  auto res = moqFrameWriter_.writeNamespaceDone(replyContext_->writeBuf(), msg);
   if (okSent_) {
-    writeHandle_->writeStreamData(writeBuf_.move(), false /* fin */, nullptr);
+    replyContext_->flush(/*fin=*/false);
   } else {
-    pendingBuf_.append(writeBuf_.move());
+    pendingBuf_.append(replyContext_->writeBuf().move());
     pendingFin_ = false;
   }
   return res;
@@ -1318,7 +1311,8 @@ void SeparateStreamSubNsReply::flushPendingMessages() {
     return;
   }
   if (!pendingBuf_.empty()) {
-    writeHandle_->writeStreamData(pendingBuf_.move(), pendingFin_, nullptr);
+    replyContext_->writeBuf().append(pendingBuf_.move());
+    replyContext_->flush(/*fin=*/pendingFin_);
   }
 }
 

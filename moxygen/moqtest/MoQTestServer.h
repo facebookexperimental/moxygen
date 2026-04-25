@@ -54,9 +54,7 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
   folly::CancellationSource cancelSource_;
 };
 
-class MoQTestServer : public moxygen::Publisher,
-                      public moxygen::MoQServer,
-                      public std::enable_shared_from_this<MoQTestServer> {
+class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
  public:
   MoQTestServer(
       const std::string& cert = "",
@@ -66,7 +64,8 @@ class MoQTestServer : public moxygen::Publisher,
   //  Override onNewSession to set publisher handler to be this object
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {
-    clientSession->setPublishHandler(shared_from_this());
+    clientSession->setPublishHandler(
+        std::static_pointer_cast<MoQTestServer>(shared_from_this()));
     // Use server-level logger if set, otherwise try factory
     if (auto logger = createLogger()) {
       clientSession->setLogger(std::move(logger));
