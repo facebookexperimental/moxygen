@@ -15,6 +15,9 @@
 namespace {
 using namespace moxygen;
 
+constexpr uint64_t kFetchYieldInterval = 1000;
+constexpr uint64_t kFetchMaxMissIterations = 100'000;
+
 // Splits one contiguous cache miss region into multiple intervals
 // Depending on whether we are fetching asc or desc
 // For asc, no split. Desc cases may or may not need splitting
@@ -289,7 +292,8 @@ MoQCache::CacheTrack::updateLargest(AbsoluteLocation current, bool eot) {
 
 MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(
     uint64_t groupID,
-    MoQCache* cache) {
+    MoQCache* cache,
+    const FullTrackName* ftn) {
   auto it = groups.find(groupID);
   if (it == groups.end()) {
     // New group - try to evict old groups if needed
@@ -298,8 +302,8 @@ MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(
     }
     it = groups.emplace(groupID, std::make_shared<CacheGroup>()).first;
     // New group starts in LRU (evictable)
-    if (cache) {
-      cache->addGroupToLRU(groupID, *it->second, *this);
+    if (cache && ftn) {
+      cache->addGroupToLRU(*ftn, groupID, *it->second, *this);
     }
   }
   return *it->second;
@@ -411,7 +415,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       std::shared_ptr<SubgroupConsumer> consumer,
       std::shared_ptr<CacheTrack> cacheTrackPtr,
       std::shared_ptr<CacheGroup> cacheGroupPtr,
-      MoQCache& cache)
+      MoQCache& cache,
+      FullTrackName ftn)
       : group_(group),
         subgroup_(subgroup),
         consumer_(std::move(consumer)),
@@ -419,7 +424,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         cacheTrack_(*cacheTrackPtr_),
         cacheGroupPtr_(std::move(cacheGroupPtr)),
         cacheGroup_(*cacheGroupPtr_),
-        cache_(cache) {
+        cache_(cache),
+        ftn_(std::move(ftn)) {
     cache_.removeGroupFromLRU(cacheGroup_, cacheTrack_);
   }
   SubgroupWriteback() = delete;
@@ -431,7 +437,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   ~SubgroupWriteback() override {
     // TODO: If the publisher writes many groups concurrently, all are pinned
     // and none can be evicted, potentially using a lot of memory.
-    cache_.addGroupToLRU(group_, cacheGroup_, cacheTrack_);
+    cache_.addGroupToLRU(ftn_, group_, cacheGroup_, cacheTrack_);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> object(
@@ -451,6 +457,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     auto cPayload = payload ? payload->clone() : nullptr;
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         objID,
         ObjectStatus::NORMAL,
@@ -491,6 +498,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         objectID,
         ObjectStatus::NORMAL,
@@ -557,6 +565,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         endOfGroupObjectID,
         ObjectStatus::END_OF_GROUP,
@@ -584,6 +593,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         cacheGroup_,
+        cacheTrack_,
         subgroup_,
         endOfTrackObjectID,
         ObjectStatus::END_OF_TRACK,
@@ -616,6 +626,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   std::shared_ptr<CacheGroup> cacheGroupPtr_; // Prevent UAF if cache cleared
   CacheGroup& cacheGroup_;
   MoQCache& cache_;
+  FullTrackName ftn_;
   uint64_t currentObject_{0};
   uint64_t currentLength_{0};
 };
@@ -665,14 +676,15 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     // TODO: Handle containsLastInGroup parameter when caching
     auto res = consumer_->beginSubgroup(groupID, subgroupID, priority);
     if (res.hasValue() && !track_.evicted) {
-      track_.getOrCreateGroup(groupID, &cache_);
+      track_.getOrCreateGroup(groupID, &cache_, &ftn_);
       return std::make_shared<SubgroupWriteback>(
           groupID,
           subgroupID,
           std::move(res.value()),
           trackPtr_,
           trackPtr_->groups[groupID],
-          cache_);
+          cache_,
+          ftn_);
     } else {
       return res;
     }
@@ -697,7 +709,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       return res;
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
-        track_.getOrCreateGroup(header.group, &cache_),
+        track_.getOrCreateGroup(header.group, &cache_, &ftn_),
+        track_,
         header.subgroup,
         header.id,
         header.status,
@@ -731,7 +744,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       return res;
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
-        track_.getOrCreateGroup(header.group, &cache_),
+        track_.getOrCreateGroup(header.group, &cache_, &ftn_),
+        track_,
         header.subgroup,
         header.id,
         header.status,
@@ -1131,6 +1145,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     auto& group = fetchRangeIt_.track->getOrCreateGroup(groupID);
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         group,
+        *fetchRangeIt_.track,
         subgroupID,
         objectID,
         status,
@@ -1291,6 +1306,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   auto cachedNow = now();
   FetchRangeIterator fetchRangeIt(
       standalone->start, standalone->end, fetch.groupOrder, track);
+  uint64_t missIterCount = 0;
   while (!token.isCancellationRequested() &&
          (*fetchRangeIt) != fetchRangeIt.end()) {
     auto current = *fetchRangeIt;
@@ -1311,10 +1327,25 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       if (!fetchStart) {
         fetchStart = current;
       }
+      if (++missIterCount > kFetchMaxMissIterations) {
+        XLOG(ERR) << "fetchImpl exceeded max miss iterations ("
+                  << kFetchMaxMissIterations << ") at {" << current.group
+                  << "," << current.object << "}, aborting fetch";
+        consumer->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+        co_return folly::makeUnexpected(FetchError{
+            fetch.requestID,
+            FetchErrorCode::INTERNAL_ERROR,
+            "fetch loop exceeded max miss iterations"});
+      }
+      if (missIterCount % kFetchYieldInterval == 0) {
+        co_await folly::coro::co_reschedule_on_current_executor;
+        cachedNow = now();
+      }
       fetchRangeIt.next();
       continue;
     }
 
+    missIterCount = 0;
     // found the object, first fetch missing range, if any
     XLOG(DBG1) << "object cache HIT for {" << current.group << ","
                << current.object << "}";
@@ -1855,15 +1886,18 @@ void MoQCache::onTrackBecameEvictable(const FullTrackName& ftn) {
 // ============================================================================
 
 void MoQCache::addGroupToLRU(
+    const FullTrackName& ftn,
     uint64_t groupID,
     CacheGroup& group,
     CacheTrack& track) {
   if (group.lruIter_.hasValue()) {
-    // Already in LRU
+    // Already in per-track LRU
     return;
   }
   track.groupLRU.push_front(groupID);
   group.lruIter_ = track.groupLRU.begin();
+  globalGroupLRU_.push_front({ftn, groupID});
+  group.globalLruIter_ = globalGroupLRU_.begin();
   XLOG(DBG2) << "Added group " << groupID << " to LRU";
 }
 
@@ -1874,6 +1908,10 @@ void MoQCache::removeGroupFromLRU(CacheGroup& group, CacheTrack& track) {
   }
   track.groupLRU.erase(*group.lruIter_);
   group.lruIter_.reset();
+  if (group.globalLruIter_.hasValue()) {
+    globalGroupLRU_.erase(*group.globalLruIter_);
+    group.globalLruIter_.reset();
+  }
   XLOG(DBG2) << "Removed group from LRU";
 }
 
@@ -1909,27 +1947,59 @@ bool MoQCache::evictOldestTrackIfNeeded() {
   return true;
 }
 
-void MoQCache::evictTrack(const FullTrackName& ftn) {
+size_t MoQCache::evictTrack(const FullTrackName& ftn) {
   auto it = cache_.find(ftn);
   if (it == cache_.end()) {
-    return;
+    return 0;
   }
 
+  XLOG(DBG1) << "Evicting track: " << ftn;
   auto& track = *it->second;
+  // Stamp evicted before erasing so any in-flight SubscribeWriteback/
+  // FetchReadback objects discover the flag and stop caching.
+  track.evicted = true;
   // Remove from LRU if present
   if (track.lruIter_.hasValue()) {
     trackLRU_.erase(*track.lruIter_);
   }
 
-  // Subtract bytes for all groups in the track
-  for (auto& [gid, group] : track.groups) {
-    XCHECK_GE(totalCachedBytes_, group->totalBytes);
-    totalCachedBytes_ -= group->totalBytes;
+  // Evict each group to clean up per-track and global LRUs and byte accounting.
+  // evictGroup() erases from track.groups, so re-read begin() each iteration.
+  while (!track.groups.empty()) {
+    evictGroup(track, track.groups.begin()->first);
   }
 
   // Remove from cache
   cache_.erase(it);
-  XLOG(DBG1) << "Evicted track: " << ftn;
+  return 1;
+}
+
+size_t MoQCache::purge(const TrackNamespace& ns) {
+  // Snapshot to avoid iterator invalidation when evictTrack() modifies cache_.
+  std::vector<FullTrackName> matching;
+  for (auto& [ftn, _] : cache_) {
+    if (ftn.trackNamespace == ns) {
+      matching.push_back(ftn);
+    }
+  }
+  size_t count = 0;
+  for (auto& trackName : matching) {
+    count += evictTrack(trackName);
+  }
+  return count;
+}
+
+size_t MoQCache::purge() {
+  // Snapshot keys to avoid iterator invalidation during eviction.
+  std::vector<FullTrackName> all;
+  all.reserve(cache_.size());
+  for (auto& [ftn, _] : cache_) {
+    all.push_back(ftn);
+  }
+  for (auto& trackName : all) {
+    evictTrack(trackName);
+  }
+  return all.size();
 }
 
 void MoQCache::evictOldestGroupsIfNeeded(CacheTrack& track) {
@@ -1960,9 +2030,12 @@ void MoQCache::evictGroup(CacheTrack& track, uint64_t groupID) {
   }
 
   auto& group = *it->second;
-  // Remove from LRU if present
+  // Remove from per-track and global LRUs if present
   if (group.lruIter_.hasValue()) {
     track.groupLRU.erase(*group.lruIter_);
+  }
+  if (group.globalLruIter_.hasValue()) {
+    globalGroupLRU_.erase(*group.globalLruIter_);
   }
 
   // Subtract group's bytes from the cache total
@@ -1982,42 +2055,36 @@ bool MoQCache::evictForByteLimitIfNeeded() {
   size_t targetBytes = minEvictionBytes_ < maxCachedBytes_
       ? maxCachedBytes_ - minEvictionBytes_
       : 0;
-  while (totalCachedBytes_ > targetBytes && !trackLRU_.empty()) {
-    const FullTrackName& oldestTrackName = trackLRU_.back();
-    auto it = cache_.find(oldestTrackName);
-    if (it == cache_.end()) {
-      trackLRU_.pop_back();
+
+  // Evict oldest evictable groups globally (covers both live and non-live
+  // tracks). After evicting a group from a non-live (fully evictable) track
+  // that becomes empty, also evict the empty track shell.
+  while (totalCachedBytes_ > targetBytes && !globalGroupLRU_.empty()) {
+    const auto& [ftn, groupID] = globalGroupLRU_.back();
+    auto trackIt = cache_.find(ftn);
+    if (trackIt == cache_.end()) {
+      // Stale entry — should not happen since evictTrack now calls evictGroup
+      // for every group, but guard defensively against future code paths.
+      XLOG(DFATAL) << "globalGroupLRU_ has stale entry for evicted track: "
+                   << ftn;
+      globalGroupLRU_.pop_back();
       continue;
     }
-    auto& track = *it->second;
-    if (!track.groupLRU.empty()) {
-      // Evict oldest evictable group from the LRU track
-      uint64_t oldestGroupID = track.groupLRU.back();
-      XLOG(DBG1) << "Evicting group " << oldestGroupID << " from track "
-                 << oldestTrackName
-                 << " for byte limit (bytes: " << totalCachedBytes_
-                 << " > limit: " << maxCachedBytes_ << ")";
-      evictGroup(track, oldestGroupID);
-      // If track now has no groups, evict the empty shell
-      if (track.groups.empty()) {
-        evictTrack(oldestTrackName);
-      }
-    } else if (track.groups.empty()) {
-      // Empty shell track — safe to evict
-      XLOG(DBG1) << "Evicting empty track for byte limit: " << oldestTrackName;
-      evictTrack(oldestTrackName);
-    } else {
-      // Should be unreachable: if a track is in trackLRU_ it is evictable
-      // (canEvict() == true), which means no active fetches or subscribes,
-      // so all its groups should be in groupLRU.
-      XLOG(DFATAL) << "LRU track " << oldestTrackName
-                   << " has groups but empty groupLRU";
-      break;
+    auto& track = *trackIt->second;
+    XLOG(DBG1) << "Evicting group " << groupID << " from track " << ftn
+               << " for byte limit (bytes: " << totalCachedBytes_
+               << " > limit: " << maxCachedBytes_ << ")";
+    // evictGroup() erases the globalGroupLRU_ node, invalidating ftn/groupID.
+    // Use trackIt->first for any post-eviction access to the track name.
+    evictGroup(track, groupID);
+    if (track.groups.empty() && track.canEvict()) {
+      evictTrack(trackIt->first);
     }
   }
+
   if (totalCachedBytes_ > maxCachedBytes_) {
-    XLOG(DBG1) << "Cannot reduce cache below byte limit, all tracks have "
-                  "active operations. Bytes: "
+    XLOG(DBG1) << "Cannot reduce cache below byte limit, all evictable "
+                  "groups are actively being written. Bytes: "
                << totalCachedBytes_ << ", limit: " << maxCachedBytes_;
     return false;
   }
@@ -2027,6 +2094,7 @@ bool MoQCache::evictForByteLimitIfNeeded() {
 folly::Expected<folly::Unit, MoQPublishError>
 MoQCache::cacheObjectAndUpdateBytes(
     CacheGroup& group,
+    CacheTrack& track,
     uint64_t subgroup,
     uint64_t objectID,
     ObjectStatus status,
@@ -2052,9 +2120,33 @@ MoQCache::cacheObjectAndUpdateBytes(
       XCHECK_GE(totalCachedBytes_, oldGroupBytes - group.totalBytes);
       totalCachedBytes_ -= oldGroupBytes - group.totalBytes;
     }
+    track.lastWrite = now;
     evictForByteLimitIfNeeded();
   }
   return res;
+}
+
+std::vector<MoQCache::TrackStats> MoQCache::getTrackStats() const {
+  std::vector<TrackStats> result;
+  result.reserve(cache_.size());
+  for (const auto& [ftn, track] : cache_) {
+    TrackStats ts;
+    ts.name = ftn;
+    ts.endOfTrack = track->endOfTrack;
+    ts.lastWrite = track->lastWrite;
+    ts.groups.reserve(track->groups.size());
+    for (const auto& [groupId, group] : track->groups) {
+      ts.groups.push_back({groupId, group->objects.size()});
+    }
+    std::sort(
+        ts.groups.begin(),
+        ts.groups.end(),
+        [](const GroupStats& a, const GroupStats& b) {
+          return a.groupId < b.groupId;
+        });
+    result.push_back(std::move(ts));
+  }
+  return result;
 }
 
 } // namespace moxygen
