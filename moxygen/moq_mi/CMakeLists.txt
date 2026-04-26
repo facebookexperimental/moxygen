@@ -16,6 +16,4 @@ moxygen_add_library(moxygen_moq_mi
     Folly::folly_io_iobuf
 )
 
-if(BUILD_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)

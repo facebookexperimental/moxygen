@@ -9,6 +9,4 @@ moxygen_add_library(moxygen_dejitter
     Folly::folly_logging_logging
 )
 
-if(BUILD_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
