@@ -586,9 +586,8 @@ int MoQPicoServerBase::onWebTransportConnectImpl(
     XLOG(DBG1) << "WebTransport selected protocol: " << selectedProto;
     moqSession->validateAndSetVersionFromAlpn(selectedProto);
   } else {
-    XLOG(ERR)
-        << "No compatible WT protocol - client didn't offer matching version";
-    return -1;
+    // No WT subprotocol negotiated; fall back to in-band ClientSetup.
+    XLOG(DBG1) << "WT subprotocol not negotiated; using in-band ClientSetup";
   }
 
   // Store session context on the control stream. Data streams inherit it via
