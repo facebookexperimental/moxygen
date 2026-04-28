@@ -139,7 +139,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   receivingType_ = ReceivingType::SUBSCRIBE;
   initializeExpecteds(params);
 
-  // Subscribe to the reciever
+  // Subscribe to the receiver
   auto res = co_await moqClient_->moqSession_->subscribe(sub, subReceiver_);
   moqClient_->moqSession_->drain();
 
