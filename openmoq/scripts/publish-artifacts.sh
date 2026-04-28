@@ -18,6 +18,7 @@ set -euo pipefail
 ARTIFACTS_DIR=""
 SHA=""
 TAG="snapshot-latest"
+BRANCH="main"
 REPO=""  # defaults to current repo if empty
 DRY_RUN=false
 
@@ -30,6 +31,8 @@ Usage: $(basename "$0") --artifacts-dir DIR --sha SHA [OPTIONS]
 Options:
   --artifacts-dir DIR   Directory containing .tar.gz artifact files
   --sha SHA             Full commit SHA for the release
+  --tag TAG             Pre-release tag name (default: snapshot-latest)
+  --branch BRANCH       Source branch name for release notes (default: main)
   --repo OWNER/REPO     GitHub repository (default: current repo from gh)
   --dry-run             Show what would be done without creating the release
   -h, --help            Show this help
@@ -41,6 +44,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --artifacts-dir) ARTIFACTS_DIR="$2"; shift 2 ;;
     --sha)           SHA="$2"; shift 2 ;;
+    --tag)           TAG="$2"; shift 2 ;;
+    --branch)        BRANCH="$2"; shift 2 ;;
     --repo)          REPO="$2"; shift 2 ;;
     --dry-run)       DRY_RUN=true; shift ;;
     -h|--help)       usage 0 ;;
@@ -130,15 +135,15 @@ else
   # shellcheck disable=SC2086
   gh release create "$TAG" \
     --target "$SHA" \
-    --title "Latest build ($SHORT_SHA)" \
+    --title "Latest build — ${BRANCH} (${SHORT_SHA})" \
     --prerelease \
     --notes "$(cat <<EOF
-Rolling snapshot of the latest build from \`main\`.
+Rolling snapshot of the latest build from \`${BRANCH}\`.
 
 **Commit:** \`${SHA}\`
 **Built:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-This pre-release is automatically replaced on every push to \`main\`.
+This pre-release is automatically replaced on every push to \`${BRANCH}\`.
 
 Each platform has two tarballs:
 - \`moxygen-<platform>.tar.gz\` — stripped release build

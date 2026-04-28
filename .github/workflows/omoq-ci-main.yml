@@ -1,7 +1,11 @@
 name: ci main
 
-# Full pipeline on push to main: build/test, publish BUNDLE_DEPS artifacts,
-# release snapshot, notify. PRs use omoq-ci-pr.yml (build/test only).
+# Full pipeline on push to main or release/** branches: build/test, publish
+# BUNDLE_DEPS artifacts, release snapshot, notify. PRs use omoq-ci-pr.yml
+# (build/test only).
+#
+# main           → snapshot-latest pre-release
+# release/<lbl>  → snapshot-<lbl>-latest pre-release (independent namespace)
 #
 # Job graph:
 #
@@ -10,7 +14,7 @@ name: ci main
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -121,7 +125,7 @@ jobs:
         run: cmake --install _build
 
   # ════════════════════════════════════════════════════════════════════════════
-  # Publish: BUNDLE_DEPS artifact builds (main only, needs verify to pass)
+  # Publish: BUNDLE_DEPS artifact builds (needs verify to pass)
   # ════════════════════════════════════════════════════════════════════════════
 
   publish:
@@ -248,12 +252,16 @@ jobs:
           retention-days: 90
 
   # ════════════════════════════════════════════════════════════════════════════
-  # Release: create/update snapshot-latest pre-release (main only, all green)
+  # Release: create/update branch-derived snapshot pre-release (all green)
+  #   main           → snapshot-latest
+  #   release/<lbl>  → snapshot-<lbl>-latest
   # ════════════════════════════════════════════════════════════════════════════
 
   release:
     needs: [build, publish]
     runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -262,16 +270,32 @@ jobs:
         with:
           path: artifacts/
 
+      - name: Compute release tag
+        id: tag
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [ "$BRANCH" = "main" ]; then
+            TAG="snapshot-latest"
+          else
+            # release/nab-demo → snapshot-nab-demo-latest
+            LABEL="${BRANCH#release/}"
+            TAG="snapshot-${LABEL}-latest"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG (branch: $BRANCH)"
+
       - name: Publish snapshot
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash openmoq/scripts/publish-artifacts.sh \
             --artifacts-dir artifacts/ \
-            --sha "$GITHUB_SHA"
+            --sha "$GITHUB_SHA" \
+            --tag "${{ steps.tag.outputs.tag }}" \
+            --branch "${{ github.ref_name }}"
 
   # ════════════════════════════════════════════════════════════════════════════
-  # Notify: aggregate status (main only, runs after everything)
+  # Notify: aggregate status (runs after everything)
   # ════════════════════════════════════════════════════════════════════════════
 
   notify:
@@ -279,9 +303,9 @@ jobs:
     if: always()
     runs-on: ubuntu-22.04
     steps:
-      # ── Dispatch submodule update to moqx (on successful release) ──
+      # ── Dispatch submodule update to moqx (only from main) ──
       - name: Generate moqx app token
-        if: needs.release.result == 'success'
+        if: needs.release.result == 'success' && github.ref_name == 'main'
         id: moqx-token
         uses: actions/create-github-app-token@v2
         with:
@@ -290,7 +314,7 @@ jobs:
           repositories: moqx
 
       - name: Dispatch moxygen sync to moqx
-        if: needs.release.result == 'success'
+        if: needs.release.result == 'success' && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ steps.moqx-token.outputs.token }}
         run: |
@@ -328,7 +352,7 @@ jobs:
           STATUS="verify:${VER} publish:${PUB} release:${REL}"
 
           if [ "${{ needs.release.result }}" = "success" ]; then
-            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/snapshot-latest"
+            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.release.outputs.tag }}"
             TEXT=":white_check_mark: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — ${STATUS}  <${RUN_URL}|#${{ github.run_number }}> artifacts: <${REL_URL}|view>"
           else
             TEXT=":x: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — ${STATUS}  <${RUN_URL}|#${{ github.run_number }}>"
@@ -355,7 +379,7 @@ jobs:
           STATUS="verify:${VER} publish:${PUB} release:${REL}"
 
           if [ "${{ needs.release.result }}" = "success" ]; then
-            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/snapshot-latest"
+            REL_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.release.outputs.tag }}"
             SUBJECT="[moxygen] published ${{ github.ref_name }} ${SHORT}"
             BODY="Repository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nCommit: ${GITHUB_SHA}\nStatus: ${STATUS}\nArtifacts: ${REL_URL}\nRun: ${RUN_URL}"
           else
