@@ -7,7 +7,7 @@
 moxygen_add_library(moxygen_moq_versions
   SRCS
     MoQVersions.cpp
-  EXPORTED_DEPS
+  DEPS
     Folly::folly_conv
     Folly::folly_string
 )
@@ -15,19 +15,23 @@ moxygen_add_library(moxygen_moq_versions
 moxygen_add_library(moxygen_moq_types
   SRCS
     MoQTypes.cpp
-  EXPORTED_DEPS
+  DEPS
     Folly::folly_container_f14_hash
     Folly::folly_conv
+    Folly::folly_logging_logging
+    Folly::folly_string
+  EXPORTED_DEPS
     Folly::folly_expected
     Folly::folly_hash_hash
     Folly::folly_io_iobuf
-    Folly::folly_logging_logging
-    Folly::folly_string
 )
 
 moxygen_add_library(moxygen_moq_framer
   SRCS
     MoQFramer.cpp
+  DEPS
+    Folly::folly_lang_bits
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_moq_token_cache
     moxygen_moq_types
@@ -36,16 +40,15 @@ moxygen_add_library(moxygen_moq_framer
     mvfst::mvfst_exception
     mvfst::mvfst_folly_utils
     Folly::folly_io_iobuf
-    Folly::folly_lang_bits
-    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moq_codec
   SRCS
     MoQCodec.cpp
+  DEPS
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_moq_framer
-    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moq_location
@@ -57,8 +60,13 @@ moxygen_add_library(moxygen_moq_location
 moxygen_add_library(moxygen_moq
   SRCS
     MoQSession.cpp
-  EXPORTED_DEPS
+  DEPS
     moxygen_events_moq_delivery_timeout_manager
+    mvfst::mvfst_common_circular_deque
+    mvfst::mvfst_priority_http_priority_queue
+    Folly::folly_coro_collect
+    Folly::folly_coro_future_util
+  EXPORTED_DEPS
     moxygen_events_moq_delivery_timer
     moxygen_events_moq_executor
     moxygen_mlog_mlogger
@@ -67,11 +75,7 @@ moxygen_add_library(moxygen_moq
     moxygen_moq_types
     moxygen_stats_moq_stats
     proxygen::proxygen_http_webtransport
-    mvfst::mvfst_common_circular_deque
-    mvfst::mvfst_priority_http_priority_queue
     Folly::folly_container_f14_hash
-    Folly::folly_coro_collect
-    Folly::folly_coro_future_util
     Folly::folly_coro_promise
     Folly::folly_coro_task
     Folly::folly_coro_timeout
@@ -82,13 +86,14 @@ moxygen_add_library(moxygen_moq
 moxygen_add_library(moxygen_moq_relay_session
   SRCS
     MoQRelaySession.cpp
-  EXPORTED_DEPS
-    moxygen_moq
-    Folly::folly_container_f14_hash
+  DEPS
     Folly::folly_coro_collect
     Folly::folly_coro_future_util
     Folly::folly_cpp_attributes
     Folly::folly_logging_logging
+  EXPORTED_DEPS
+    moxygen_moq
+    Folly::folly_container_f14_hash
 )
 
 moxygen_add_library(moxygen_moq_publish_error)
@@ -103,29 +108,31 @@ moxygen_add_library(moxygen_moq_consumers
 moxygen_add_library(moxygen_moq_server_base
   SRCS
     MoQServerBase.cpp
+  DEPS
+    Folly::folly_coro_baton
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_mlog_mlogger_factory
     moxygen_moq
-    Folly::folly_coro_baton
-    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moq_server
   SRCS
     MoQServer.cpp
-  EXPORTED_DEPS
+  DEPS
     moxygen_events_moq_folly_executor_impl
-    moxygen_moq
-    moxygen_moq_server_base
-    proxygen::proxygen_hq_server
     proxygen::proxygen_http_session_hq_session
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
+    Folly::folly_string
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_moq_server_base
+    proxygen::proxygen_hq_server
     Folly::folly_init_init
     Folly::folly_io_async_async_base
     Folly::folly_io_async_event_base_manager
-    Folly::folly_string
 )
 
 moxygen_add_library(moxygen_moq_early_data_handler
@@ -140,6 +147,9 @@ moxygen_add_library(moxygen_moq_early_data_handler
 moxygen_add_library(moxygen_moqclient_base
   SRCS
     MoQClientBase.cpp
+  DEPS
+    Folly::folly_coro_error
+    Folly::folly_string
   EXPORTED_DEPS
     moxygen_mlog_mlogger
     moxygen_moq
@@ -149,18 +159,17 @@ moxygen_add_library(moxygen_moqclient_base
     mvfst::mvfst_client
     mvfst::mvfst_state_transport_settings
     fizz::fizz
-    Folly::folly_coro_error
     Folly::folly_coro_promise
-    Folly::folly_string
 )
 
 moxygen_add_library(moxygen_moqclient
   SRCS
     MoQClient.cpp
-  EXPORTED_DEPS
+  DEPS
     moxygen_events_moq_folly_executor_impl
-    moxygen_moqclient_base
     moxygen_util_quic_connector
+  EXPORTED_DEPS
+    moxygen_moqclient_base
     proxygen::proxygen_utils_parse_url
     Folly::folly_coro_task
 )
@@ -168,24 +177,26 @@ moxygen_add_library(moxygen_moqclient
 moxygen_add_library(moxygen_moq_webtransport_client
   SRCS
     MoQWebTransportClient.cpp
-  EXPORTED_DEPS
-    moxygen_events_moq_folly_executor_impl
+  DEPS
     moxygen_moq_framer
-    moxygen_moqclient
     proxygen::proxygen_http_hq_connector
-    proxygen::proxygen_http_session_http_transaction
     proxygen::proxygen_http_session_quic_protocol_info
     proxygen::proxygen_http_webtransport_httpwebtransport
     Folly::folly_string
+  EXPORTED_DEPS
+    moxygen_events_moq_folly_executor_impl
+    moxygen_moqclient
+    proxygen::proxygen_http_session_http_transaction
 )
 
 moxygen_add_library(moxygen_moq_token_cache
   SRCS
     MoQTokenCache.cpp
+  DEPS
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     Folly::folly_container_f14_hash
     Folly::folly_expected
-    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moq_obj_receiver
