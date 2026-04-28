@@ -1,0 +1,24 @@
+[manifest]
+name = picoquic
+
+[git]
+repo_url = https://github.com/afrind/picoquic.git
+branch = fix-picotls-brotli
+
+[build]
+builder = cmake
+subdir = .
+
+[cmake.defines]
+PICOQUIC_FETCH_PTLS = ON
+
+[cmake.defines.test=on]
+BUILD_TESTING = ON
+
+[cmake.defines.test=off]
+BUILD_TESTING = OFF
+
+[dependencies]
+openssl
+
+[shipit.pathmap]
