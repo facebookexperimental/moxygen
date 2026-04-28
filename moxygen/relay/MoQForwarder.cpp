@@ -59,19 +59,20 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::CANCELLED, "Forwarder detached"));
   }
+  if (!forwarder_->largest_) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "No subscribers"));
+  }
   bool anyForwarded = false;
   forwarder_->forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (!forwarder_->largest_) {
-      return;
-    }
     auto subgroupConsumerIt = sub->subgroups.find(identifier_);
     if (subgroupConsumerIt != sub->subgroups.end()) {
-      // Entry exists: once we committed a beginObject to this consumer, its
-      // object continuation must still reach it. Bypass the "future" branch
-      // of checkRange so that a late-arriving range.start mutation (e.g. via
-      // onPublishOk with LocationType::LargestObject) cannot strand the
-      // consumer mid-object. Still honor past-end so finished subscriptions
-      // are retired. See moxygen#168.
+      // For an existing consumer, only past-end retires it; range.start may
+      // have advanced after beginObject (e.g. LargestObject onPublishOk) but
+      // the in-flight object must still reach the consumer.
+      // TODO: advancing range.start while a subgroup is open can leave gaps
+      // in the subgroup (a MOQT violation). Open subgroups should be reset
+      // when start advances past their first object.
       if (forwarder_->checkPastEnd(*sub)) {
         return;
       }
@@ -394,21 +395,9 @@ bool MoQForwarder::checkRange(const Subscriber& sub) {
   if (*largest_ < sub.range.start) {
     // future
     return false;
-  } else if (*largest_ > sub.range.end) {
-    // now past, send publishDone
-    // TOOD: maybe this is too early for a relay.
-    XLOG(DBG4) << "removeSubscriber from checkRange";
-    removeSubscriber(
-        sub.session,
-        PublishDone{
-            sub.requestID,
-            PublishDoneStatusCode::SUBSCRIPTION_ENDED,
-            0, // filled in by session
-            ""},
-        "checkRange");
-    return false;
   }
-  return true;
+  // TOOD: maybe sending publishDone here is too early for a relay.
+  return !checkPastEnd(sub);
 }
 
 bool MoQForwarder::checkPastEnd(const Subscriber& sub) {

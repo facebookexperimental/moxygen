@@ -1653,12 +1653,25 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
 
   auto mockConsumer = createMockConsumer();
 
+  constexpr uint64_t kObjectID = 5;
+  constexpr uint64_t kObjectLength = 100;
+  constexpr uint64_t kInitialLength = 20;
+  std::string downstreamPayload;
+
   EXPECT_CALL(*mockConsumer, beginSubgroup(_, _, _, _))
-      .WillOnce([this](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
         auto sg = createMockSubgroupConsumer();
-        // Assert the continuation reaches this sg. Without the fix the
-        // forwarder skips it on range.start and this expectation fails.
-        EXPECT_CALL(*sg, objectPayload(_, _)).Times(1);
+        EXPECT_CALL(*sg, beginObject(kObjectID, kObjectLength, _, _))
+            .WillOnce([&](uint64_t, uint64_t, Payload p, Extensions) {
+              downstreamPayload += p->moveToFbString().toStdString();
+              return folly::makeExpected<MoQPublishError>(folly::unit);
+            });
+        EXPECT_CALL(*sg, objectPayload(_, _))
+            .WillOnce([&](Payload p, bool) {
+              downstreamPayload += p->moveToFbString().toStdString();
+              return folly::makeExpected<MoQPublishError>(
+                  ObjectPublishStatus::IN_PROGRESS);
+            });
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -1676,9 +1689,6 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
   ASSERT_TRUE(subgroupRes.hasValue());
   auto subgroup = *subgroupRes;
 
-  constexpr uint64_t kObjectID = 5;
-  constexpr uint64_t kObjectLength = 100;
-  constexpr uint64_t kInitialLength = 20;
   auto initial = folly::IOBuf::copyBuffer(std::string(kInitialLength, 'a'));
   ASSERT_TRUE(
       subgroup
@@ -1705,6 +1715,11 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
           .hasValue());
 
   ASSERT_TRUE(subgroup->endOfSubgroup().hasValue());
+
+  EXPECT_EQ(
+      downstreamPayload,
+      std::string(kInitialLength, 'a') +
+          std::string(kObjectLength - kInitialLength, 'b'));
 
   removeSession(publisherSession);
   removeSession(subscriberSession);
