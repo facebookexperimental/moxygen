@@ -27,9 +27,10 @@ moxygen_add_library(moxygen_mlog_mlogger
 moxygen_add_library(moxygen_mlog_file_mlogger
   SRCS
     FileMLogger.cpp
+  DEPS
+    Folly::folly_json_dynamic
   EXPORTED_DEPS
     moxygen_mlog_mlogger
-    Folly::folly_json_dynamic
 )
 
 moxygen_add_library(moxygen_mlog_mlog_events
