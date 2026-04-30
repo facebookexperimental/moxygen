@@ -12,8 +12,6 @@
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/MoQFramer.h>
 #include <moxygen/Publisher.h>
-#include <moxygen/util/BidiIterator.h>
-#include <moxygen/util/FetchIntervalSet.h>
 #include <moxygen/util/LocationIntervalSet.h>
 #include <chrono>
 #include <functional>
@@ -207,12 +205,14 @@ class MoQCache {
         TimePoint now);
   };
 
-  // Entry for a track
-  using FetchInProgressSet = FetchIntervalSet<FetchWriteback*>;
-  using InProgressFetchEntry =
-      std::pair<uint64_t, FetchInProgressSet::IntervalList::iterator>;
-  // Type alias for the complex BidiIterator type used in FetchWriteback
-  using InProgressFetchesIter = BidiIterator<std::vector<InProgressFetchEntry>>;
+  // Map from fetch range start to (end, writeback). Supports O(log n)
+  // range queries to find if a position is being fetched upstream.
+  struct FetchInProgressEntry {
+    AbsoluteLocation end;
+    AbsoluteLocation progress;
+    FetchWriteback* writeback{};
+  };
+  using FetchesInProgressMap = std::map<AbsoluteLocation, FetchInProgressEntry>;
 
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
@@ -221,14 +221,12 @@ class MoQCache {
     size_t liveWritebackCount{0};
     bool endOfTrack{false};
     std::optional<AbsoluteLocation> largestGroupAndObject;
-    FetchInProgressSet fetchInProgress;
+    FetchesInProgressMap fetchesInProgress;
     // LRU iterator - present if track is evictable (not live, no active
     // fetches)
     folly::Optional<std::list<FullTrackName>::iterator> lruIter_;
     // Group LRU list for this track
     std::list<uint64_t> groupLRU;
-    // Count of active fetch intervals (for O(1) canEvict check)
-    size_t activeFetchCount{0};
     // Optional max cache duration for this track
     std::optional<std::chrono::milliseconds> maxCacheDuration;
     // Track-level extensions to include in FetchOk
@@ -239,7 +237,10 @@ class MoQCache {
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
         bool endOfTrack = false);
-    CacheGroup& getOrCreateGroup(uint64_t groupID, MoQCache* cache = nullptr);
+    CacheGroup& getOrCreateGroup(uint64_t groupID);
+    // Same as getOrCreateGroup but, when creating, evicts old groups to honor
+    // the per-track group limit and inserts the new group into the LRU.
+    CacheGroup& getOrCreateGroupWithEviction(uint64_t groupID, MoQCache& cache);
 
     // Process Prior Group ID Gap and Prior Object ID Gap extensions
     // and mark the NonExistent groups/objects accordingly
@@ -248,9 +249,12 @@ class MoQCache {
         uint64_t objectID,
         const Extensions& objectExtensions);
 
+    // Find the unprocessed FetchWriteback covering a location, or nullptr
+    FetchWriteback* findFetchInProgress(AbsoluteLocation loc);
+
     // Returns true if track can be evicted (not live, no active fetches)
     bool canEvict() const {
-      return liveWritebackCount == 0 && activeFetchCount == 0;
+      return liveWritebackCount == 0 && fetchesInProgress.empty();
     }
 
     // Insert a known-non-existent range into both gaps and cachedContent.
@@ -364,7 +368,6 @@ class MoQCache {
   // Group LRU management helpers
   void addGroupToLRU(uint64_t groupID, CacheGroup& group, CacheTrack& track);
   void removeGroupFromLRU(CacheGroup& group, CacheTrack& track);
-  bool canEvictGroup(uint64_t groupID, CacheTrack& track);
 
   // Eviction methods
   bool evictOldestTrackIfNeeded();

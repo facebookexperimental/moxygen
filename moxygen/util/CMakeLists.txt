@@ -23,14 +23,6 @@ moxygen_add_library(moxygen_util_quic_connector
     Folly::folly_network_address
 )
 
-moxygen_add_library(moxygen_util_fetch_interval_set
-  EXPORTED_DEPS
-    moxygen_moq_framer
-    Folly::folly_container_f14_hash
-)
-
-moxygen_add_library(moxygen_util_bidi_iterator)
-
 moxygen_add_library(moxygen_util_insecure_verifier_dangerous_do_not_use_in_production
   EXPORTED_DEPS
     fizz::fizz
