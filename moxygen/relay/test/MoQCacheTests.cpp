@@ -54,6 +54,139 @@ Fetch getFetch(
   return Fetch{0, ftn, start, end, kDefaultPriority, order};
 }
 
+// Wrapper that tracks terminal events and verifies exactly one occurs per fetch
+class TerminalTrackingFetchConsumer : public FetchConsumer {
+ public:
+  explicit TerminalTrackingFetchConsumer(std::shared_ptr<FetchConsumer> inner)
+      : inner_(std::move(inner)) {}
+
+  void verify() {
+    if (streamOpened_) {
+      EXPECT_EQ(terminalCount_, 1)
+          << "Expected exactly one terminal event (finFetch=true, endOfFetch, "
+             "endOfTrackAndGroup, or reset), got "
+          << terminalCount_;
+    }
+    // Reset for next fetch
+    streamOpened_ = false;
+    terminalCount_ = 0;
+  }
+
+ private:
+  void markStreamOpened() {
+    if (!streamOpened_) {
+      // New fetch starting - verify previous fetch completed properly
+      if (terminalCount_ > 0) {
+        // Had a previous fetch that terminated, verify and reset
+        verify();
+      }
+      streamOpened_ = true;
+    }
+  }
+
+ public:
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions = noExtensions(),
+      bool finFetch = false,
+      bool forwardingPreferenceIsDatagram = false) override {
+    markStreamOpened();
+    if (finFetch) {
+      terminalCount_++;
+      streamOpened_ = false; // Mark stream closed so next fetch triggers verify
+    }
+    return inner_->object(
+        groupID,
+        subgroupID,
+        objectID,
+        std::move(payload),
+        std::move(extensions),
+        finFetch,
+        forwardingPreferenceIsDatagram);
+  }
+
+  void checkpoint() override {
+    markStreamOpened();
+    inner_->checkpoint();
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions = noExtensions()) override {
+    markStreamOpened();
+    return inner_->beginObject(
+        groupID,
+        subgroupID,
+        objectID,
+        length,
+        std::move(initialPayload),
+        std::move(extensions));
+  }
+
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finFetch = false) override {
+    markStreamOpened();
+    if (finFetch) {
+      terminalCount_++;
+      streamOpened_ = false; // Mark stream closed so next fetch triggers verify
+    }
+    return inner_->objectPayload(std::move(payload), finFetch);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      bool finFetch = false) override {
+    markStreamOpened();
+    if (finFetch) {
+      terminalCount_++;
+      streamOpened_ = false; // Mark stream closed so next fetch triggers verify
+    }
+    return inner_->endOfGroup(groupID, subgroupID, objectID, finFetch);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID) override {
+    markStreamOpened();
+    terminalCount_++;
+    streamOpened_ = false; // Mark stream closed so next fetch triggers verify
+    return inner_->endOfTrackAndGroup(groupID, subgroupID, objectID);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
+    terminalCount_++;
+    streamOpened_ = false; // Mark stream closed so next fetch triggers verify
+    return inner_->endOfFetch();
+  }
+
+  void reset(ResetStreamErrorCode error) override {
+    terminalCount_++;
+    streamOpened_ = false; // Mark stream closed so next fetch triggers verify
+    inner_->reset(error);
+  }
+
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return inner_->awaitReadyToConsume();
+  }
+
+ private:
+  std::shared_ptr<FetchConsumer> inner_;
+  bool streamOpened_ = false;
+  int terminalCount_ = 0;
+};
+
 class MoQCacheTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -78,6 +211,8 @@ class MoQCacheTest : public ::testing::Test {
 
     // Set up test timeout (5 seconds)
     setupTestTimeout();
+    trackingConsumer_ =
+        std::make_shared<TerminalTrackingFetchConsumer>(consumer_);
   }
 
   void setupTestTimeout() {
@@ -130,6 +265,9 @@ class MoQCacheTest : public ::testing::Test {
     }
     // Cancel timeout by destroying the thread
     timeoutThread_.reset();
+    if (trackingConsumer_) {
+      trackingConsumer_->verify();
+    }
   }
 
   folly::SemiFuture<std::shared_ptr<FetchConsumer>> expectUpstreamFetch(
@@ -408,6 +546,7 @@ class MoQCacheTest : public ::testing::Test {
   std::shared_ptr<moxygen::FetchConsumer> upstreamFetchConsumer_;
   std::shared_ptr<moxygen::MockFetchConsumer> consumer_{
       std::make_shared<StrictMock<moxygen::MockFetchConsumer>>()};
+  std::shared_ptr<TerminalTrackingFetchConsumer> trackingConsumer_;
   std::shared_ptr<NiceMock<moxygen::MockTrackConsumer>> trackConsumer_{
       std::make_shared<NiceMock<moxygen::MockTrackConsumer>>()};
   std::unique_ptr<folly::ScopedEventBaseThread> timeoutThread_;
@@ -417,16 +556,16 @@ class MoQCacheTest : public ::testing::Test {
 CO_TEST_F(MoQCacheTest, TestFetchAllHit) {
   populateCacheRange({0, 0}, {0, 10});
   expectFetchObjects({0, 0}, {0, 10}, false);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 10}));
 }
 CO_TEST_F(MoQCacheTest, TestFetchAllHitEOG) {
   populateCacheRange({0, 0}, {0, 11}, 10, 1, 1, true);
   expectFetchObjects({0, 0}, {0, 11}, false, 10, 1, 1, true);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 0}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 0}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 0}));
 }
@@ -435,8 +574,8 @@ CO_TEST_F(MoQCacheTest, TestFetchMissUpstreamError) {
   // Test case for fetch with complete cache miss when no track is present
   expectUpstreamFetch(
       FetchError{0, FetchErrorCode::TRACK_NOT_EXIST, "not exist"});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasError());
 }
 
@@ -447,16 +586,16 @@ CO_TEST_F(MoQCacheTest, TestFetchMissTailUpstreamError) {
       FetchError{0, FetchErrorCode::TRACK_NOT_EXIST, "not exist"});
   expectFetchObjects({0, 0}, {0, 1}, false);
   EXPECT_CALL(*consumer_, reset(_));
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasError());
 }
 
 CO_TEST_F(MoQCacheTest, TestFetchMissNoTrackUpstreamCompleteHit) {
   // Test case for fetch when no track is present, full range served by upstream
   expectUpstreamFetch({0, 0}, {0, 10}, 0, AbsoluteLocation{1, 0});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {0, 10}, true);
   serveCacheRangeFromUpstream({0, 0}, {0, 10});
@@ -466,8 +605,8 @@ CO_TEST_F(MoQCacheTest, TestFetchMissUpstreamCompleteHit) {
   // Test case for fetch when track is present, but no overlap
   populateCacheRange({0, 0}, {0, 1});
   expectUpstreamFetch({0, 1}, {0, 10}, 0, AbsoluteLocation{1, 0});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 1}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 1}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 1}, {0, 10}, true);
   serveCacheRangeFromUpstream({0, 1}, {0, 10});
@@ -477,8 +616,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginning) {
   populateCacheRange({0, 0}, {0, 5});
   expectFetchObjects({0, 0}, {0, 10}, true);
   expectUpstreamFetch({0, 5}, {0, 10}, 0, AbsoluteLocation{0, 10});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 10}));
   serveCacheRangeFromUpstream({0, 5}, {0, 10});
@@ -488,8 +627,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitEnd) {
   populateCacheRange({0, 5}, {0, 10});
   expectFetchObjects({0, 0}, {0, 10}, false);
   expectUpstreamFetch({0, 0}, {0, 5}, 0, AbsoluteLocation{0, 9});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 10}));
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -502,8 +641,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningEnd) {
   populateCacheRange({0, 9}, {0, 10});
   expectFetchObjects({0, 0}, {0, 10}, false);
   expectUpstreamFetch({0, 2}, {0, 6}, 0, AbsoluteLocation{0, 6});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 10}));
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -518,8 +657,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningWholeGroup) {
   populateCacheRange({0, 0}, {0, 10});
   expectFetchObjects({0, 0}, {0, 11}, true, 10, 1, 1, true);
   expectUpstreamFetch({0, 10}, {0, 0}, 0, AbsoluteLocation{0, 10});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 0}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 0}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 10}));
   serveCacheRangeFromUpstream({0, 10}, {0, 11}, 10, 1, 1, true);
@@ -529,8 +668,8 @@ CO_TEST_F(MoQCacheTest, TestFetchWriteback) {
   // Test case for fetch + writeback
 
   expectUpstreamFetch({0, 0}, {0, 10}, 0, AbsoluteLocation{1, 0});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {0, 10}, true);
   serveCacheRangeFromUpstream({0, 0}, {0, 10});
@@ -538,15 +677,16 @@ CO_TEST_F(MoQCacheTest, TestFetchWriteback) {
   co_await folly::coro::co_reschedule_on_current_executor;
 
   expectFetchObjects({0, 0}, {0, 10}, false);
-  res = co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
 }
 
 CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExist) {
   // Test case for fetch populating OBJECT_NOT_EXIST, GROUP_NOT_EXIST
   expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{1, 0});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {2, 10}, true, 10, 2, 2);
   serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 2, 2);
@@ -554,7 +694,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExist) {
   co_await folly::coro::co_reschedule_on_current_executor;
 
   expectFetchObjects({0, 0}, {2, 10}, false, 10, 2, 2);
-  res = co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   co_return;
 }
@@ -564,8 +705,8 @@ CO_TEST_F(MoQCacheTest, TestFetchOnLiveTrackNoObjects) {
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
 
   expectUpstreamFetch({0, 0}, {0, 10}, 0, AbsoluteLocation{1, 0});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {0, 10}, true);
   serveCacheRangeFromUpstream({0, 0}, {0, 10});
@@ -578,8 +719,8 @@ CO_TEST_F(MoQCacheTest, TestFetchOnLiveTrackPastLargest) {
   populateCacheRange({0, 0}, {0, 1});
   auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
 
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 1}));
   expectFetchObjects({0, 0}, {0, 1}, false);
@@ -596,8 +737,8 @@ CO_TEST_F(MoQCacheTest, TestFetchEndBeyondEndOfTrack) {
   EXPECT_CALL(*consumer_, endOfTrackAndGroup(0, 0, 5))
       .WillOnce(Return(folly::unit));
 
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_TRUE(res.value()->fetchOk().endOfTrack);
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
@@ -613,7 +754,7 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgress) {
   expectFetchObjects({0, 0}, {0, 10}, false, 10, 1, 1, false, consumer2);
 
   auto [res1, res2] = co_await folly::coro::collectAll(
-      cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_),
       cache_.fetch(getFetch({0, 0}, {0, 10}), consumer2, upstream_));
   EXPECT_TRUE(res1.hasValue());
   EXPECT_TRUE(res2.hasValue());
@@ -642,7 +783,7 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgressMultiple) {
   expectFetchObjects({0, 0}, {0, 10}, true, 10, 1, 1, false, consumer2);
 
   auto [res1, res2] = co_await folly::coro::collectAll(
-      cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_),
       cache_.fetch(getFetch({0, 0}, {0, 10}), consumer2, upstream_));
   EXPECT_TRUE(res1.hasValue());
   EXPECT_TRUE(res2.hasValue());
@@ -663,7 +804,7 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgressMiddle) {
   expectFetchObjects({0, 5}, {0, 6}, false, 10, 1, 1, false, consumer2);
 
   auto [res1, res2] = co_await folly::coro::collectAll(
-      cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_),
       cache_.fetch(getFetch({0, 5}, {0, 6}), consumer2, upstream_));
   EXPECT_TRUE(res1.hasValue());
   EXPECT_TRUE(res2.hasValue());
@@ -688,7 +829,7 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgressError) {
   EXPECT_CALL(*consumer_, reset(_));
   EXPECT_CALL(*consumer2, reset(_));
   auto [res1, res2] = co_await folly::coro::collectAll(
-      cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_),
       cache_.fetch(getFetch({0, 0}, {0, 10}), consumer2, upstream_));
   EXPECT_TRUE(res1.hasValue());
   EXPECT_TRUE(res2.hasValue());
@@ -713,7 +854,7 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgressErrorNeedsFetchOK) {
   EXPECT_CALL(*consumer_, reset(_));
   EXPECT_CALL(*consumer2, reset(_));
   auto [res1, res2] = co_await folly::coro::collectAll(
-      cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_),
       cache_.fetch(getFetch({0, 0}, {0, 10}), consumer2, upstream_));
   EXPECT_TRUE(res1.hasError());
   EXPECT_TRUE(res2.hasError());
@@ -739,8 +880,8 @@ CO_TEST_F(MoQCacheTest, TestConsumerObjectBlocked) {
     });
     expectFetchObjects({0, 1}, {0, 2}, false);
   }
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
 }
@@ -757,8 +898,8 @@ CO_TEST_F(MoQCacheTest, TestAwaitFails) {
     return folly::makeUnexpected(MoQPublishError(MoQPublishError::CANCELLED));
   });
   EXPECT_CALL(*consumer_, reset(_));
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasError());
 }
 
@@ -771,8 +912,8 @@ CO_TEST_F(MoQCacheTest, TestConsumerObjectFailsForAnotherReason) {
             MoQPublishError(MoQPublishError::CANCELLED));
       });
   EXPECT_CALL(*consumer_, reset(_));
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasError());
 }
 
@@ -796,8 +937,8 @@ CO_TEST_F(MoQCacheTest, TestFetchCancel) {
       });
 
   expectFetchObjects({0, 0}, {0, 1}, false);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
 
   EXPECT_CALL(*consumer_, reset(_));
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -830,8 +971,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExistObjectsAndGroups) {
   // With gap skipping in next(), the last object gets fin=true
   EXPECT_CALL(*consumer_, endOfGroup(0, 0, 1, true))
       .WillOnce(Return(folly::unit));
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {1, 0}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {1, 0}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
@@ -923,8 +1064,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchPartialWriteAndReset) {
   EXPECT_CALL(*consumer_, reset(_));
 
   // Perform the fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
 
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -933,7 +1074,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchPartialWriteAndReset) {
   expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 1});
   expectFetchObjects({0, 0}, {0, 1}, true);
 
-  res = co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 1}));
 
@@ -963,8 +1105,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesObjectWithGap) {
       *consumer_, object(0, 0, 2, HasChainDataLengthOf(100), _, true, _))
       .WillOnce(Return(folly::unit));
   // Perform the fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 1}, {0, 3}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 1}, {0, 3}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
 }
@@ -991,8 +1133,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupWithGap) {
       *consumer_, object(2, 0, 0, HasChainDataLengthOf(100), _, true, _))
       .WillOnce(Return(folly::unit));
   // Perform the fetch
-  auto res =
-      co_await cache_.fetch(getFetch({1, 0}, {2, 1}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {2, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 0}));
 }
@@ -1016,8 +1158,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesEndOfTrack) {
   EXPECT_CALL(*consumer_, endOfTrackAndGroup(2, 0, 0))
       .WillOnce(Return(folly::unit));
   // Perform the fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 1}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 0}));
 }
@@ -1042,8 +1184,8 @@ CO_TEST_F(MoQCacheTest, TestPopulateObjectUsingBeginObjectAndObjectPayload) {
 
   // Verify that the object was populated correctly
   expectFetchObjects({0, 0}, {0, 1}, false);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 1}));
 }
@@ -1074,8 +1216,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchUsingBeginObjectAndObjectPayload) {
   EXPECT_CALL(*consumer_, objectPayload(_, true))
       .WillOnce(Return(ObjectPublishStatus::DONE));
   // Perform the fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 0}));
 }
@@ -1101,8 +1243,8 @@ CO_TEST_F(MoQCacheTest, TestObjectPayloadMarksRemainingAsNonexistent) {
       .WillOnce(Return(ObjectPublishStatus::DONE));
 
   // Perform the fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 0}));
 
@@ -1110,8 +1252,8 @@ CO_TEST_F(MoQCacheTest, TestObjectPayloadMarksRemainingAsNonexistent) {
   // (no upstream call, just endOfFetch)
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
 
-  auto res2 =
-      co_await cache_.fetch(getFetch({0, 1}, {0, 2}), consumer_, upstream_);
+  auto res2 = co_await cache_.fetch(
+      getFetch({0, 1}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res2.hasValue());
   EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
 }
@@ -1128,8 +1270,8 @@ CO_TEST_F(MoQCacheTest, TestPopulateCacheWithBeginSubgroupAndFetch) {
 
   // Verify that the objects were populated correctly
   expectFetchObjects({0, 1}, {0, 2}, false);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 2}));
 }
@@ -1145,16 +1287,16 @@ CO_TEST_F(MoQCacheTest, TestPartialCacheMissBeginningNoObjectsUpstream) {
   expectFetchObjects({0, 6}, {0, 9}, false);
 
   // Perform the first fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 9}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 9}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 9}));
 
   // Second fetch: fetch only {0,0} to {0,5} - no upstream call, no objects
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
 
-  auto res2 =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 5}), consumer_, upstream_);
+  auto res2 = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 5}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res2.hasValue());
   EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
 }
@@ -1171,8 +1313,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsTail) {
   expectFetchObjects({0, 0}, {0, 10}, true);
 
   // Perform the first fetch
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 5}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 5}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 5}));
 
@@ -1180,8 +1322,8 @@ CO_TEST_F(MoQCacheTest, TestUpstreamReturnsNoObjectsTail) {
   // No upstream call, no objects served
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
 
-  auto res2 =
-      co_await cache_.fetch(getFetch({1, 0}, {2, 5}), consumer_, upstream_);
+  auto res2 = co_await cache_.fetch(
+      getFetch({1, 0}, {2, 5}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res2.hasValue());
   EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{2, 5}));
 }
@@ -1196,16 +1338,16 @@ CO_TEST_F(MoQCacheTest, TestFullCacheMissNoObjectsUpstream) {
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
 
   // Perform the fetch - should return FetchOk (not error)
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 5}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 5}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
 
   // Second fetch: same range should be served from cache (all NOT_EXIST)
   EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
 
-  auto res2 =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 5}), consumer_, upstream_);
+  auto res2 = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 5}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res2.hasValue());
   EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
 }
@@ -1218,8 +1360,8 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHitAcrossGroups) {
   populateCacheRange({0, 0}, {2, 10}, 10, 1, 1, true);
   // Expect all objects to be served from cache, no upstream
   expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 10}));
 }
@@ -1228,8 +1370,8 @@ CO_TEST_F(MoQCacheTest, TestFetchAllMissAcrossGroups) {
   // Test case for fetch when track is present, but no overlap
   // populateCacheRange({0, 0}, {0, 1});
   expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {2, 10}, true, 10, 1, 1, true);
   serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 1, 1, true);
@@ -1239,8 +1381,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningAcrossGroups) {
   populateCacheRange({0, 0}, {1, 5}, 10, 1, 1, true);
   expectUpstreamFetch({1, 5}, {2, 6}, 0, AbsoluteLocation{2, 6});
   expectFetchObjects({0, 0}, {1, 5}, false, 10, 1, 1, true);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 6}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 6}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 6}));
   expectFetchObjects({1, 5}, {2, 6}, true, 10, 1, 1, true);
@@ -1251,8 +1393,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitEndAcrossGroups) {
   populateCacheRange({1, 5}, {2, 10}, 10, 1, 1, true);
   expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
   expectUpstreamFetch({0, 0}, {1, 5}, 0, AbsoluteLocation{2, 9});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 10}));
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -1266,8 +1408,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitMiddleAcrossGroups) {
   // Upstream needed for [0,10-2,0)
   expectFetchObjects({0, 0}, {2, 5}, false, 10, 1, 1, true);
   expectUpstreamFetch({0, 8}, {2, 2}, 0, AbsoluteLocation{2, 2});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 5}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 5}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 5}));
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -1280,8 +1422,8 @@ CO_TEST_F(MoQCacheTest, TestFetchMissSingleGroupBoundary) {
   // Upstream needed for [0,5-1,3)
   expectFetchObjects({0, 0}, {1, 3}, true);
   expectUpstreamFetch({0, 5}, {1, 3}, 0, AbsoluteLocation{1, 3});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {1, 3}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {1, 3}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 3}));
   serveCacheRangeFromUpstream({0, 5}, {1, 3});
@@ -1294,8 +1436,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningEndAcrossGroups) {
   populateCacheRange({2, 9}, {2, 10});
   expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
   expectUpstreamFetch({0, 2}, {1, 6}, 0, AbsoluteLocation{1, 6});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 10}));
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -1311,8 +1453,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningWholeGroupAcrossGroups) {
   populateCacheRange({0, 0}, {1, 10}, 10, 1, 1, true);
   expectFetchObjects({0, 0}, {2, 0}, true, 10, 1, 1, true);
   expectUpstreamFetch({1, 10}, {2, 0}, 0, AbsoluteLocation{1, 10});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 0}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 0}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 10}));
   serveCacheRangeFromUpstream({1, 10}, {2, 0}, 10, 1, 1, true);
@@ -1322,8 +1464,8 @@ CO_TEST_F(MoQCacheTest, TestFetchMissNoTrackUpstreamCompleteHitAcrossGroups) {
   // Test case for fetch when no track is present, full range served by upstream
   // across groups
   expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {2, 10}, true, 10, 1, 1, true);
   serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 1, 1, true);
@@ -1333,8 +1475,8 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHitEOGAcrossGroups) {
   // Test case for fetch all hit with end of group across multiple groups
   populateCacheRange({0, 0}, {2, 11}, 10, 1, 1, true);
   expectFetchObjects({0, 0}, {2, 11}, false, 10, 1, 1, true);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 0}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 0}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 0}));
 }
@@ -1342,8 +1484,8 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHitEOGAcrossGroups) {
 CO_TEST_F(MoQCacheTest, TestFetchWritebackAcrossGroups) {
   // Test case for fetch + writeback across groups
   expectUpstreamFetch({0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10});
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjects({0, 0}, {2, 10}, true, 10, 1, 1, true);
   serveCacheRangeFromUpstream({0, 0}, {2, 10}, 10, 1, 1, true);
@@ -1351,7 +1493,8 @@ CO_TEST_F(MoQCacheTest, TestFetchWritebackAcrossGroups) {
   co_await folly::coro::co_reschedule_on_current_executor;
 
   expectFetchObjects({0, 0}, {2, 10}, false, 10, 1, 1, true);
-  res = co_await cache_.fetch(getFetch({0, 0}, {2, 10}), consumer_, upstream_);
+  res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
 }
 
@@ -1360,8 +1503,8 @@ CO_TEST_F(MoQCacheTest, TestFetchRangeExactlyAtGroupBoundary) {
   populateCacheRange({0, 0}, {2, 0}, 10, 1, 1, true);
 
   expectFetchObjects({0, 0}, {2, 0}, false, 10, 1, 1, true);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {1, 0}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {1, 0}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
@@ -1370,7 +1513,9 @@ CO_TEST_F(MoQCacheTest, TestFetchAllMissAcrossGroupsDesc) {
   expectUpstreamFetch(
       {0, 0}, {2, 10}, 0, AbsoluteLocation{2, 10}, GroupOrder::NewestFirst);
   auto res = co_await cache_.fetch(
-      getFetch({0, 0}, {2, 10}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({0, 0}, {2, 10}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   expectFetchObjectsDescending({0, 0}, {2, 10}, true, 10, 1, 1, true);
   serveCacheRangeFromUpstreamDescending({0, 0}, {2, 10}, 10, 1, 1, true);
@@ -1395,7 +1540,9 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningAcrossGroupsDesc) {
             });
       });
   auto res = co_await cache_.fetch(
-      getFetch({0, 0}, {2, 6}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({0, 0}, {2, 6}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 6}));
 }
@@ -1412,7 +1559,9 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialHitBeginningGroupBoundaryDesc) {
         expectFetchObjects({0, 0}, {1, 0}, false, 10, 1, 1, true);
       });
   auto res = co_await cache_.fetch(
-      getFetch({0, 0}, {2, 6}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({0, 0}, {2, 6}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 6}));
 }
@@ -1429,7 +1578,9 @@ CO_TEST_F(MoQCacheTest, TestFetchMissTailGroupDesc) {
       });
   expectFetchObjects({3, 0}, {3, 5}, false, 10, 1, 1, true);
   auto res = co_await cache_.fetch(
-      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
 }
@@ -1456,7 +1607,9 @@ CO_TEST_F(MoQCacheTest, TestFetchMissTailObjectsDesc) {
       });
   expectFetchObjects({3, 0}, {3, 5}, false, 10, 1, 1, false);
   auto res = co_await cache_.fetch(
-      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
 }
@@ -1485,7 +1638,9 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialMissTailObjectsDesc) {
       });
   expectFetchObjects({3, 0}, {3, 5}, false, 10, 1, 1, false);
   auto res = co_await cache_.fetch(
-      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({1, 0}, {3, 5}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
 }
@@ -1705,7 +1860,9 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialMissThreeUpstreamFetchesDesc) {
       });
   expectFetchObjects({5, 0}, {5, 5}, false, 10, 1, 1, false);
   auto res = co_await cache_.fetch(
-      getFetch({1, 3}, {5, 8}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({1, 3}, {5, 8}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{5, 8}));
 }
@@ -1732,7 +1889,9 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialMissTwoUpstreamFetchesTailDesc) {
       });
   expectFetchObjects({4, 0}, {4, 3}, false, 10, 1, 1, false);
   auto res = co_await cache_.fetch(
-      getFetch({1, 3}, {4, 8}, GroupOrder::NewestFirst), consumer_, upstream_);
+      getFetch({1, 3}, {4, 8}, GroupOrder::NewestFirst),
+      trackingConsumer_,
+      upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{4, 8}));
 }
@@ -1753,8 +1912,8 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialMissTwoUpstreamFetchesTail) {
               serveCacheRangeFromUpstream({0, 7}, {0, 9}, 10, 1, 1, true);
             });
       });
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 9}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 9}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 9}));
 }
@@ -1973,8 +2132,8 @@ CO_TEST_F(MoQCacheTest, TestLargeGroupGap) {
 
   // Fetch {0, 0} - should be a cache hit
   expectFetchObjects({0, 0}, {0, 1}, false);
-  auto res =
-      co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
 
   // Fetch a group in the middle of the gap - should return immediately
