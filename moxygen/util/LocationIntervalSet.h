@@ -31,6 +31,15 @@ namespace moxygen {
  */
 class LocationIntervalSet {
  public:
+  LocationIntervalSet() = default;
+
+  // Non-copyable / non-movable: lastModified_ is an iterator into intervals_
+  // and would dangle across copy or move.
+  LocationIntervalSet(const LocationIntervalSet&) = delete;
+  LocationIntervalSet& operator=(const LocationIntervalSet&) = delete;
+  LocationIntervalSet(LocationIntervalSet&&) = delete;
+  LocationIntervalSet& operator=(LocationIntervalSet&&) = delete;
+
   /**
    * Insert an interval [start, end] (inclusive on both ends).
    * Automatically merges with overlapping or adjacent intervals.
@@ -100,6 +109,7 @@ class LocationIntervalSet {
    */
   void clear() {
     intervals_.clear();
+    invalidateLastModified();
   }
 
   /**
@@ -112,10 +122,15 @@ class LocationIntervalSet {
  private:
   using MapType = std::map<AbsoluteLocation, AbsoluteLocation>;
   MapType::const_iterator findContaining(AbsoluteLocation loc) const;
+  void invalidateLastModified() {
+    lastModified_ = intervals_.end();
+  }
 
   // Map from interval start to interval end (inclusive).
   // Invariant: intervals are disjoint and non-adjacent.
   MapType intervals_;
+  // Cached iterator for fast-path consecutive inserts
+  MapType::iterator lastModified_{intervals_.end()};
 };
 
 } // namespace moxygen
