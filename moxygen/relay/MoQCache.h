@@ -209,9 +209,10 @@ class MoQCache {
 
   // Entry for a track
   using FetchInProgressSet = FetchIntervalSet<FetchWriteback*>;
+  using InProgressFetchEntry =
+      std::pair<uint64_t, FetchInProgressSet::IntervalList::iterator>;
   // Type alias for the complex BidiIterator type used in FetchWriteback
-  using InProgressFetchesIter =
-      BidiIterator<std::vector<FetchInProgressSet::IntervalList::iterator>>;
+  using InProgressFetchesIter = BidiIterator<std::vector<InProgressFetchEntry>>;
 
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
