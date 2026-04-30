@@ -233,3 +233,41 @@ TEST_F(LocationIntervalSetTest, InsertSuperInterval) {
   EXPECT_EQ(set_.size(), 1);
   EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 20}));
 }
+
+// Tests for AbsoluteLocation helper methods
+
+TEST(AbsoluteLocationTest, PrevGroupEnd) {
+  // Normal case: group > 0
+  auto result = AbsoluteLocation{5, 10}.prevGroupEnd();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->group, 4);
+  EXPECT_EQ(result->object, kEightByteLimit);
+
+  // Edge case: group == 0 (no previous group)
+  result = AbsoluteLocation{0, 10}.prevGroupEnd();
+  EXPECT_FALSE(result.has_value());
+
+  // Object value doesn't affect result
+  result = AbsoluteLocation{3, 0}.prevGroupEnd();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->group, 2);
+  EXPECT_EQ(result->object, kEightByteLimit);
+}
+
+TEST(AbsoluteLocationTest, PrevInGroup) {
+  // Normal case: object > 0
+  auto result = AbsoluteLocation{5, 10}.prevInGroup();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->group, 5);
+  EXPECT_EQ(result->object, 9);
+
+  // Edge case: object == 0 (no previous in group)
+  result = AbsoluteLocation{5, 0}.prevInGroup();
+  EXPECT_FALSE(result.has_value());
+
+  // Group 0, object > 0
+  result = AbsoluteLocation{0, 5}.prevInGroup();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->group, 0);
+  EXPECT_EQ(result->object, 4);
+}

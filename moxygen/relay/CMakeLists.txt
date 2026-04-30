@@ -19,6 +19,7 @@ moxygen_add_library(moxygen_relay_moq_cache
   SRCS
     MoQCache.cpp
   EXPORTED_DEPS
+    moxygen_util_location_interval_set
     moxygen_moq
     moxygen_moq_consumers
     moxygen_moq_framer
