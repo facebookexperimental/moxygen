@@ -404,6 +404,28 @@ struct AbsoluteLocation {
     }
     return AbsoluteLocation{group - 1, 0};
   }
+
+  /**
+   * Get the last location in the previous group {group-1, MAX}.
+   * Returns nullopt if group is 0.
+   */
+  std::optional<AbsoluteLocation> prevGroupEnd() const {
+    if (group == 0) {
+      return std::nullopt;
+    }
+    return AbsoluteLocation{group - 1, kEightByteLimit};
+  }
+
+  /**
+   * Get the previous object within the same group.
+   * Returns nullopt if object is 0.
+   */
+  std::optional<AbsoluteLocation> prevInGroup() const {
+    if (object == 0) {
+      return std::nullopt;
+    }
+    return AbsoluteLocation{group, object - 1};
+  }
 };
 
 constexpr AbsoluteLocation kLocationMin;
