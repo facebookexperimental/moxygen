@@ -16,6 +16,31 @@ void LocationIntervalSet::insert(AbsoluteLocation start, AbsoluteLocation end) {
     return;
   }
 
+  // Fast path: new range starts immediately after the last modified interval.
+  if (lastModified_ != intervals_.end()) {
+    auto posAfterLastEnd = lastModified_->second.next();
+    if (posAfterLastEnd && start == *posAfterLastEnd) {
+      if (end > lastModified_->second) {
+        lastModified_->second = end;
+      }
+      // Absorb any following intervals that the extension overlaps or touches.
+      auto nextInterval = std::next(lastModified_);
+      while (nextInterval != intervals_.end()) {
+        auto posAfterNewEnd = lastModified_->second.next();
+        bool touches = lastModified_->second >= nextInterval->first ||
+            (posAfterNewEnd && *posAfterNewEnd >= nextInterval->first);
+        if (!touches) {
+          break;
+        }
+        if (nextInterval->second > lastModified_->second) {
+          lastModified_->second = nextInterval->second;
+        }
+        nextInterval = intervals_.erase(nextInterval);
+      }
+      return;
+    }
+  }
+
   auto mergeStart = start;
   auto mergeEnd = end;
 
@@ -45,13 +70,14 @@ void LocationIntervalSet::insert(AbsoluteLocation start, AbsoluteLocation end) {
     it = intervals_.erase(it);
   }
 
-  intervals_[mergeStart] = mergeEnd;
+  lastModified_ = intervals_.emplace(mergeStart, mergeEnd).first;
 }
 
 void LocationIntervalSet::remove(AbsoluteLocation start, AbsoluteLocation end) {
   if (end < start || intervals_.empty()) {
     return;
   }
+  invalidateLastModified();
 
   auto it = intervals_.lower_bound(start);
 

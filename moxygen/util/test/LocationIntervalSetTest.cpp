@@ -234,6 +234,103 @@ TEST_F(LocationIntervalSetTest, InsertSuperInterval) {
   EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 20}));
 }
 
+// Tests for consecutive insert fast path
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInserts) {
+  set_.insert({0, 0}, {0, 0});
+  set_.insert({0, 1}, {0, 1});
+  set_.insert({0, 2}, {0, 2});
+  set_.insert({0, 3}, {0, 3});
+
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 3}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInsertsBridgeGap) {
+  set_.insert({0, 0}, {0, 2});
+  set_.insert({0, 5}, {0, 7});
+  // Now insert {0,3} which extends the first interval
+  set_.insert({0, 3}, {0, 3});
+  EXPECT_EQ(set_.size(), 2);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 3}));
+
+  // Insert {0,4} which bridges the two intervals
+  set_.insert({0, 4}, {0, 4});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 7}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInsertAfterRemove) {
+  set_.insert({0, 0}, {0, 5});
+  set_.remove({0, 3}, {0, 3});
+  // lastModified_ invalidated by remove; insert goes through slow path
+  // and merges {0,6} with adjacent [{0,4},{0,5}]
+  set_.insert({0, 6}, {0, 6});
+  EXPECT_EQ(set_.size(), 2);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 2}));
+  EXPECT_EQ(set_.findIntervalEnd({0, 4}), (AbsoluteLocation{0, 6}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInsertAfterClear) {
+  set_.insert({0, 0}, {0, 5});
+  set_.clear();
+  set_.insert({0, 0}, {0, 0});
+  set_.insert({0, 1}, {0, 1});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 1}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInsertsCrossGroup) {
+  set_.insert({0, kEightByteLimit}, {0, kEightByteLimit});
+  set_.insert({1, 0}, {1, 0});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(
+      set_.findIntervalEnd({0, kEightByteLimit}), (AbsoluteLocation{1, 0}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInsertSpansMultipleIntervals) {
+  // Regression: fast path must absorb every interval the extension covers,
+  // not just one.
+  set_.insert({0, 4}, {0, 4});
+  set_.insert({0, 6}, {0, 6});
+  set_.insert({0, 8}, {0, 8});
+  set_.insert({0, 0}, {0, 2});  // slow path; lastModified_ -> [0,2]
+  set_.insert({0, 3}, {0, 10}); // fast path; should swallow [4,4],[6,6],[8,8]
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 10}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveRangeInsertViaFastPath) {
+  // Fast path with a multi-position range (start == lastEnd.next(), end >
+  // start)
+  set_.insert({0, 0}, {0, 2});
+  set_.insert({0, 3}, {0, 7}); // fast path, range insert
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 7}));
+}
+
+TEST_F(LocationIntervalSetTest, ConsecutiveInsertChainedBridges) {
+  // After fast-path bridging erases nextInterval, lastModified_ must remain
+  // valid for the next insert.
+  set_.insert({0, 4}, {0, 4});
+  set_.insert({0, 6}, {0, 6});
+  set_.insert({0, 0}, {0, 2}); // slow path; lastModified_ -> [0,2]
+  set_.insert({0, 3}, {0, 3}); // fast path bridges [4,4] -> [0,4]
+  EXPECT_EQ(set_.size(), 2);
+  set_.insert({0, 5}, {0, 5}); // fast path bridges [6,6] -> [0,6]
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 6}));
+}
+
+TEST_F(LocationIntervalSetTest, NonConsecutiveInsertAfterFastPath) {
+  set_.insert({0, 0}, {0, 0});
+  set_.insert({0, 1}, {0, 1});   // fast path
+  set_.insert({0, 10}, {0, 10}); // non-consecutive, falls through to slow path
+  EXPECT_EQ(set_.size(), 2);
+  EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 1}));
+  EXPECT_EQ(set_.findIntervalEnd({0, 10}), (AbsoluteLocation{0, 10}));
+}
+
 // Tests for remove()
 
 TEST_F(LocationIntervalSetTest, RemoveFromEmpty) {
