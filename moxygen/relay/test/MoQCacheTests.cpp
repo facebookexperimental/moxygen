@@ -627,10 +627,12 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgressMultiple) {
     InSequence enforceOrder;
     expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{1, 0})
         .via(exec)
-        .thenTry([this](auto) { serveCacheRangeFromUpstream({0, 0}, {0, 1}); });
+        .thenTry([this](const auto&) {
+          serveCacheRangeFromUpstream({0, 0}, {0, 1});
+        });
     expectUpstreamFetch({0, 2}, {0, 10}, 0, AbsoluteLocation{1, 0})
         .via(exec)
-        .thenTry([this, exec](auto) {
+        .thenTry([this, exec](const auto&) {
           upstreamFetchConsumer_->object(0, 0, 2, makeBuf(100));
           exec->add([this] { serveCacheRangeFromUpstream({0, 3}, {0, 10}); });
         });
@@ -652,7 +654,7 @@ CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgressMiddle) {
   auto exec = co_await folly::coro::co_current_executor;
   expectUpstreamFetch({0, 0}, {0, 10}, 0, AbsoluteLocation{1, 0})
       .via(co_await folly::coro::co_current_executor)
-      .thenTry([this, exec](auto) {
+      .thenTry([this, exec](const auto&) {
         serveCacheRangeFromUpstream({0, 0}, {0, 6}, 10, 1, 1, false, false);
         exec->add([this] { serveCacheRangeFromUpstream({0, 6}, {0, 10}); });
       });
@@ -780,7 +782,7 @@ CO_TEST_F(MoQCacheTest, TestFetchCancel) {
   auto exec = co_await folly::coro::co_current_executor;
   expectUpstreamFetch({0, 1}, {0, 10}, 0, AbsoluteLocation{1, 0})
       .via(exec)
-      .thenTry([this, exec](auto) {
+      .thenTry([this, exec](const auto&) {
         // Simulate a delay before serving the range
         EXPECT_CALL(*upstreamFetchHandle_, fetchCancel()).WillOnce([this] {
           upstreamFetchConsumer_->reset(ResetStreamErrorCode::CANCELLED);
@@ -2009,6 +2011,127 @@ CO_TEST_F(MoQCacheTest, TestLargeGroupGap) {
   EXPECT_TRUE(res.hasValue());
 }
 
+CO_TEST_F(MoQCacheTest, TestFetchInProgressKeyAdvancesOnGroupBoundary) {
+  // 1. Send fetch for groups 0-4 (nothing pre-cached, all upstream)
+  // 2. Upstream delivers groups 0-3 (group 0 evicted due to limit)
+  // 3. Send fetch for group 0 - not blocked, goes straight to upstream
+  // 4. First upstream delivers group 4 + endOfFetch (completes)
+  cache_.setMaxCachedGroupsPerTrack(3);
+  auto exec = co_await folly::coro::co_current_executor;
+
+  {
+    InSequence enforceOrder;
+    // First upstream fetch covers groups 0-5
+    expectUpstreamFetch({0, 0}, {6, 0}, 0, AbsoluteLocation{6, 0})
+        .via(exec)
+        .thenTry([this, exec](const auto&) {
+          // Deliver groups 0-4 synchronously. Group 0 is evicted when
+          // group 4 is created (4 > limit 3). The second fetch's waiter
+          // can't run until thenTry completes (single thread).
+          serveCacheRangeFromUpstream(
+              {0, 0}, {5, 0}, 10, 1, 1, true, /*endOfFetch=*/false);
+          // Capture first consumer before second upstream overwrites it
+          auto firstConsumer = upstreamFetchConsumer_;
+          exec->add([firstConsumer] {
+            firstConsumer->object(
+                5, 0, 0, folly::IOBuf::copyBuffer(std::string(100, 'x')));
+            firstConsumer->endOfGroup(5, 0, 1);
+            firstConsumer->endOfFetch();
+          });
+        });
+    // Second upstream: group 0 re-fetched after eviction
+    expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 1})
+        .via(exec)
+        .thenTry([this](const auto&) {
+          serveCacheRangeFromUpstream({0, 0}, {0, 1});
+        });
+  }
+
+  // consumer_ receives all objects from first upstream (groups 0-4)
+  EXPECT_CALL(*consumer_, object(_, _, _, _, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  // consumer2 receives group 0 from second upstream
+  auto consumer2 = std::make_shared<StrictMock<moxygen::MockFetchConsumer>>();
+  EXPECT_CALL(*consumer2, object(0, _, 0, _, _, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer2, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto [res1, res2] = co_await folly::coro::collectAll(
+      cache_.fetch(getFetch({0, 0}, {6, 0}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 1}), consumer2, upstream_));
+  EXPECT_TRUE(res1.hasValue());
+  EXPECT_TRUE(res2.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchInProgressKeyAdvancesWithCachedData) {
+  // Same scenario as TestFetchInProgressKeyAdvancesOnGroupBoundary but
+  // with pre-cached data so the second fetch enters through the
+  // "Live track or known past data" path in fetch().
+  cache_.setMaxCachedGroupsPerTrack(3);
+  populateCacheRange({5, 0}, {5, 1});
+  auto exec = co_await folly::coro::co_current_executor;
+
+  {
+    InSequence enforceOrder;
+    // First upstream: groups 0-4 (group 5 already cached)
+    expectUpstreamFetch({0, 0}, {4, 0}, 0, AbsoluteLocation{4, 0})
+        .via(exec)
+        .thenTry([this, exec](const auto&) {
+          serveCacheRangeFromUpstream(
+              {0, 0}, {5, 0}, 10, 1, 1, true, /*endOfFetch=*/false);
+          auto firstConsumer = upstreamFetchConsumer_;
+          exec->add([firstConsumer] { firstConsumer->endOfFetch(); });
+        });
+    // Second upstream: group 0 re-fetched after eviction
+    expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 1})
+        .via(exec)
+        .thenTry([this](const auto&) {
+          serveCacheRangeFromUpstream({0, 0}, {0, 1});
+        });
+  }
+
+  // consumer_ receives groups 0-5 (objects + EOGs from upstream,
+  // group 5 from cache with fin=true)
+  EXPECT_CALL(*consumer_, object(_, _, _, _, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+
+  // consumer2 receives group 0 from second upstream
+  auto consumer2 = std::make_shared<StrictMock<moxygen::MockFetchConsumer>>();
+  EXPECT_CALL(*consumer2, object(0, _, 0, _, _, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer2, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto [res1, res2] = co_await folly::coro::collectAll(
+      cache_.fetch(getFetch({0, 0}, {5, 1}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {0, 1}), consumer2, upstream_));
+  EXPECT_TRUE(res1.hasValue());
+  EXPECT_TRUE(res2.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestFetchWritebackHugeGroupRangeBoundedTime) {
+  // Regression: the previous per-group FetchIntervalSet inserted one entry
+  // per group covered by the upstream fetch. A 2^60-group range hung the
+  // FetchWriteback constructor. The map-based design must construct in
+  // bounded time.
+  constexpr uint64_t kFarGroup = 1ULL << 60;
+
+  expectUpstreamFetch(
+      {0, 0}, {kFarGroup, 1}, false, AbsoluteLocation{kFarGroup, 1})
+      .via(co_await folly::coro::co_current_executor)
+      .thenTry([this](const auto&) { upstreamFetchConsumer_->endOfFetch(); });
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {kFarGroup, 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
 CO_TEST_F(MoQCacheTest, TestSparseCacheSkipUncachedAsc) {
   // Verify that fetching across a sparse cache with no gap info completes
   // in bounded time. Without skipUncached, the miss path would iterate
@@ -2852,6 +2975,157 @@ CO_TEST_F(MoQCacheTest, TestGroupNotEvictedDuringActiveWrite) {
   EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
 
   co_return;
+}
+
+CO_TEST_F(MoQCacheTest, TestGroupNotEvictedDuringActiveFetch) {
+  // Verify that a group being actively fetched into cannot be evicted
+  // when a concurrent subscribe writeback adds enough groups to trigger
+  // group eviction.
+  cache_.setMaxCachedGroupsPerTrack(2);
+  auto exec = co_await folly::coro::co_current_executor;
+
+  // Pre-cache objects {0, 0} and {0, 2} via subscribe writeback,
+  // leaving {0, 1} as a cache miss within the known range.
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(0, 0, 2, 0, 100), makeBuf(100));
+
+  // Set up upstream fetch for the miss at {0, 1}. When established,
+  // add groups via subscribe writeback to trigger group eviction,
+  // then complete the upstream fetch.
+  folly::coro::Baton fetchDone;
+  expectUpstreamFetch({0, 1}, {0, 2}, false, AbsoluteLocation{0, 2})
+      .via(exec)
+      .thenTry([this, &writeback, &fetchDone](const auto&) {
+        // Add groups 1, 2, 3. With limit=2, creating group 3 triggers
+        // eviction. Without the fix, group 0 is in the LRU and gets
+        // evicted while the fetch is actively writing into it.
+        writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+        writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+        writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+
+        // Group 0 should still be cached since the fetch pins it
+        EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+        // Complete the upstream fetch
+        upstreamFetchConsumer_->object(0, 0, 1, makeBuf(100));
+        upstreamFetchConsumer_->endOfFetch();
+        fetchDone.post();
+      });
+
+  {
+    InSequence seq;
+    EXPECT_CALL(*consumer_, object(0, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(0, _, 1, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    // {0, 2} served from cache with fin=true (last object in range)
+    EXPECT_CALL(*consumer_, object(0, _, 2, _, _, true, _))
+        .WillOnce(Return(folly::unit));
+  }
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 3}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await fetchDone;
+  writeback.reset();
+}
+
+CO_TEST_F(MoQCacheTest, TestFreshlyCreatedGroupNotEvictedDuringFetch) {
+  // Like TestGroupNotEvictedDuringActiveFetch but starts cold: the fetch's
+  // start group does not exist when FetchWriteback is constructed, so it
+  // gets created later by onObject and added to the LRU. A concurrent
+  // writeback that triggers group eviction must NOT evict the freshly
+  // created group while the fetch is still writing into it.
+  cache_.setMaxCachedGroupsPerTrack(2);
+  auto exec = co_await folly::coro::co_current_executor;
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  folly::coro::Baton fetchDone;
+  expectUpstreamFetch({0, 0}, {0, 2}, false, AbsoluteLocation{0, 2})
+      .via(exec)
+      .thenTry([this, &writeback, &fetchDone](const auto&) {
+        // Deliver first object — creates group 0 in the cache and adds
+        // it to the LRU.
+        upstreamFetchConsumer_->object(0, 0, 0, makeBuf(100));
+
+        // Concurrent writeback adds groups 1, 2, 3. With limit=2, the
+        // third insert (group 3) triggers eviction. Group 0 is the
+        // oldest LRU entry; without pinning it gets evicted while the
+        // fetch is still actively writing into it.
+        writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+        writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+        writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+
+        // The fetch is still in progress on group 0 — it must remain.
+        EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+        upstreamFetchConsumer_->object(0, 0, 1, makeBuf(100));
+        upstreamFetchConsumer_->endOfFetch();
+        fetchDone.post();
+      });
+
+  EXPECT_CALL(*consumer_, object(_, _, _, _, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 2}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await fetchDone;
+  writeback.reset();
+}
+
+CO_TEST_F(MoQCacheTest, TestGroupNotEvictedAfterCrossingGroupBoundary) {
+  // After updateInProgress re-keys to a new group, the new map key points
+  // at a group that doesn't exist yet — same hole as the start-group case.
+  // When onObject creates the new group and a concurrent writeback
+  // triggers eviction, the actively-being-written new group must not be
+  // evicted.
+  cache_.setMaxCachedGroupsPerTrack(2);
+  auto exec = co_await folly::coro::co_current_executor;
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  folly::coro::Baton fetchDone;
+  expectUpstreamFetch({0, 0}, {1, 1}, false, AbsoluteLocation{1, 1})
+      .via(exec)
+      .thenTry([this, &writeback, &fetchDone](const auto&) {
+        // Drive the fetch through the start of group 0 then across the
+        // boundary into group 1. updateInProgress re-keys the entry to
+        // {1, 0}; onObject for {1, 0} then creates group 1 and adds it
+        // to the LRU.
+        upstreamFetchConsumer_->object(0, 0, 0, makeBuf(100));
+        upstreamFetchConsumer_->endOfGroup(0, 0, 1);
+        upstreamFetchConsumer_->object(1, 0, 0, makeBuf(100));
+
+        // Concurrent writeback adds groups 2, 3, 4. With limit=2, the
+        // third insert (group 4) triggers eviction. groupLRU at this
+        // point contains [3, 2, 1, 0] (front=newest); evicting back
+        // removes group 0, then if size still > limit, group 1 — which
+        // is being actively written by the fetch — also gets evicted
+        // unless pinned.
+        writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+        writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+        writeback->datagram(ObjectHeader(4, 0, 0, 0, 100), makeBuf(100));
+
+        // Group 1 is being actively written by the fetch — must remain.
+        EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+
+        upstreamFetchConsumer_->endOfFetch();
+        fetchDone.post();
+      });
+
+  EXPECT_CALL(*consumer_, object(_, _, _, _, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfGroup(_, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {1, 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await fetchDone;
+  writeback.reset();
 }
 
 CO_TEST_F(MoQCacheTest, TestEvictTrackWithSmallCache) {
