@@ -2047,6 +2047,188 @@ CO_TEST_F(MoQCacheTest, TestDescendingGapNearGroupZero) {
   EXPECT_TRUE(res.hasValue());
 }
 
+// Regression: DESC getGapRanges range #1 used to extend to {topGroup, MAX}
+// instead of clamping to fetchEnd, so a cold DESC fetch could mark positions
+// above fetchEnd.object as nonexistent and suppress later upstream fetches.
+CO_TEST_F(MoQCacheTest, TestDescendingFetchDoesNotMarkTopGroupTailAsGap) {
+  auto firstConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*firstConsumer, object(_, _, _, _, _, _, _))
+      .WillByDefault(Return(folly::unit));
+  ON_CALL(*firstConsumer, endOfFetch()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*upstream_, fetch(_, _))
+      .WillOnce([this](Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+        auto [standalone, joining] = fetchType(fetch);
+        EXPECT_EQ(standalone->start, (AbsoluteLocation{3, 3}));
+        EXPECT_EQ(standalone->end, (AbsoluteLocation{5, 10}));
+        EXPECT_EQ(fetch.groupOrder, GroupOrder::NewestFirst);
+        auto res =
+            consumer->object(3, 0, 3, makeBuf(100), noExtensions(), true);
+        EXPECT_FALSE(res.hasError());
+        res = consumer->endOfFetch();
+        EXPECT_FALSE(res.hasError());
+        upstreamFetchHandle_ =
+            std::make_shared<moxygen::MockFetchHandle>(FetchOk{
+                0,
+                GroupOrder::NewestFirst,
+                false,
+                AbsoluteLocation{3, 3},
+            });
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            upstreamFetchHandle_);
+      })
+      .RetiresOnSaturation();
+
+  auto res = co_await cache_.fetch(
+      getFetch({3, 3}, {5, 10}, GroupOrder::NewestFirst),
+      firstConsumer,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // {5, 20} was outside the original fetch range; cache must reach upstream.
+  auto laterConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*laterConsumer, endOfFetch()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*upstream_, fetch(_, _))
+      .WillOnce([this](Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+        auto [standalone, joining] = fetchType(fetch);
+        EXPECT_EQ(standalone->start, (AbsoluteLocation{5, 20}));
+        EXPECT_EQ(standalone->end, (AbsoluteLocation{5, 21}));
+        EXPECT_EQ(fetch.groupOrder, GroupOrder::OldestFirst);
+        auto res = consumer->endOfFetch();
+        EXPECT_FALSE(res.hasError());
+        upstreamFetchHandle_ =
+            std::make_shared<moxygen::MockFetchHandle>(FetchOk{
+                0,
+                GroupOrder::OldestFirst,
+                false,
+                AbsoluteLocation{5, 20},
+            });
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            upstreamFetchHandle_);
+      })
+      .RetiresOnSaturation();
+
+  res = co_await cache_.fetch(
+      getFetch({5, 20}, {5, 21}, GroupOrder::OldestFirst),
+      laterConsumer,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+// Regression: DESC getGapRanges range #3 used to start at {bottomGroup, 0}
+// instead of clamping to fetchStart.object, shadowing positions below the
+// requested lower bound.
+CO_TEST_F(MoQCacheTest, TestDescendingFetchDoesNotMarkBottomGroupHeadAsGap) {
+  auto firstConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*firstConsumer, object(_, _, _, _, _, _, _))
+      .WillByDefault(Return(folly::unit));
+  ON_CALL(*firstConsumer, endOfFetch()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*upstream_, fetch(_, _))
+      .WillOnce([this](Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+        auto [standalone, joining] = fetchType(fetch);
+        EXPECT_EQ(standalone->start, (AbsoluteLocation{3, 5}));
+        EXPECT_EQ(standalone->end, (AbsoluteLocation{5, 10}));
+        EXPECT_EQ(fetch.groupOrder, GroupOrder::NewestFirst);
+        auto res =
+            consumer->object(3, 0, 5, makeBuf(100), noExtensions(), true);
+        EXPECT_FALSE(res.hasError());
+        res = consumer->endOfFetch();
+        EXPECT_FALSE(res.hasError());
+        upstreamFetchHandle_ =
+            std::make_shared<moxygen::MockFetchHandle>(FetchOk{
+                0,
+                GroupOrder::NewestFirst,
+                false,
+                AbsoluteLocation{3, 5},
+            });
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            upstreamFetchHandle_);
+      })
+      .RetiresOnSaturation();
+
+  auto res = co_await cache_.fetch(
+      getFetch({3, 5}, {5, 10}, GroupOrder::NewestFirst),
+      firstConsumer,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // {3, 1} was below fetchStart.object=5; cache must reach upstream.
+  auto laterConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*laterConsumer, endOfFetch()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*upstream_, fetch(_, _))
+      .WillOnce([this](Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+        auto [standalone, joining] = fetchType(fetch);
+        EXPECT_EQ(standalone->start, (AbsoluteLocation{3, 1}));
+        EXPECT_EQ(standalone->end, (AbsoluteLocation{3, 2}));
+        auto res = consumer->endOfFetch();
+        EXPECT_FALSE(res.hasError());
+        upstreamFetchHandle_ =
+            std::make_shared<moxygen::MockFetchHandle>(FetchOk{
+                0,
+                GroupOrder::OldestFirst,
+                false,
+                AbsoluteLocation{3, 1},
+            });
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            upstreamFetchHandle_);
+      })
+      .RetiresOnSaturation();
+
+  res = co_await cache_.fetch(
+      getFetch({3, 1}, {3, 2}, GroupOrder::OldestFirst),
+      laterConsumer,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+// Regression: DESC finFetch tail-marked against raw end_ (the user's highest
+// endpoint) instead of the iterator's order-aware end. Combined with the
+// off-by-one in cacheImpl, this could shadow the just-cached object.
+CO_TEST_F(MoQCacheTest, TestDescendingFetchDoesNotGapCachedObject) {
+  auto firstConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*firstConsumer, object(_, _, _, _, _, _, _))
+      .WillByDefault(Return(folly::unit));
+  ON_CALL(*firstConsumer, endOfFetch()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*upstream_, fetch(_, _))
+      .WillOnce([this](Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+        auto [standalone, joining] = fetchType(fetch);
+        EXPECT_EQ(standalone->start, (AbsoluteLocation{3, 3}));
+        EXPECT_EQ(standalone->end, (AbsoluteLocation{5, 10}));
+        EXPECT_EQ(fetch.groupOrder, GroupOrder::NewestFirst);
+        auto res =
+            consumer->object(3, 0, 3, makeBuf(100), noExtensions(), true);
+        EXPECT_FALSE(res.hasError());
+        res = consumer->endOfFetch();
+        EXPECT_FALSE(res.hasError());
+        upstreamFetchHandle_ =
+            std::make_shared<moxygen::MockFetchHandle>(FetchOk{
+                0,
+                GroupOrder::NewestFirst,
+                false,
+                AbsoluteLocation{3, 3},
+            });
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            upstreamFetchHandle_);
+      })
+      .RetiresOnSaturation();
+
+  auto res = co_await cache_.fetch(
+      getFetch({3, 3}, {5, 10}, GroupOrder::NewestFirst),
+      firstConsumer,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // The cached object at {3, 3} must remain servable from cache.
+  auto serveConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*serveConsumer, endOfFetch()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*serveConsumer, object(3, 0, 3, _, _, true, _))
+      .WillOnce(Return(folly::unit));
+  res = co_await cache_.fetch(
+      getFetch({3, 3}, {3, 4}, GroupOrder::OldestFirst),
+      serveConsumer,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
 TEST_F(MoQCacheTest, TestForwardingPreferenceMismatchIsMalformedTrack) {
   // If an object is cached with one forwarding preference and we try to cache
   // the same object with a different forwarding preference, it should fail

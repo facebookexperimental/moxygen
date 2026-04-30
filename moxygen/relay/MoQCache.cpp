@@ -131,8 +131,16 @@ bool exists(ObjectStatus status) {
 // Helper to compute gap ranges for markNonExistentTo.
 // Returns vector of (start, end) intervals to mark as gaps.
 // Handles both ascending and descending iteration orders.
-std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>>
-getGapRanges(AbsoluteLocation start, AbsoluteLocation end, GroupOrder order) {
+//
+// fetchStart/fetchEnd are the user's original fetch range (inclusive start,
+// exclusive end), used to clamp DESC top-group and bottom-group ranges so we
+// never mark positions outside the requested range as non-existent.
+std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>> getGapRanges(
+    AbsoluteLocation start,
+    AbsoluteLocation end,
+    GroupOrder order,
+    AbsoluteLocation fetchStart,
+    AbsoluteLocation fetchEnd) {
   std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>> ranges;
 
   // Check if range is empty based on iteration order
@@ -167,10 +175,13 @@ getGapRanges(AbsoluteLocation start, AbsoluteLocation end, GroupOrder order) {
   // Descending: groups are iterated in reverse, but objects within groups
   // are still ascending. This may require up to 3 ranges.
 
-  // 1. Rest of current group (start group in iteration, but higher group
-  // number)
-  ranges.emplace_back(
-      start, AbsoluteLocation{start.group, kLocationMax.object});
+  // 1. Rest of start.group, clamped to fetchEnd when start.group is the
+  // fetch's top group. start <= startGroupEnd is guaranteed by the
+  // same-group early return above and the invariant start <= fetchEnd-1.
+  AbsoluteLocation startGroupEnd = (start.group == fetchEnd.group)
+      ? *fetchEnd.prevInGroup()
+      : AbsoluteLocation{start.group, kLocationMax.object};
+  ranges.emplace_back(start, startGroupEnd);
 
   // 2. Intermediate groups (between start.group-1 and end.group+1)
   // start.group > end.group guaranteed (descending, different groups),
@@ -182,10 +193,16 @@ getGapRanges(AbsoluteLocation start, AbsoluteLocation end, GroupOrder order) {
     ranges.emplace_back(*endNextGroup, *startPrevGroupEnd);
   } // else the groups were consecutive
 
-  // 3. Partial target group (lower group number, objects before target.object)
-  if (auto prev = end.prevInGroup()) {
-    ranges.emplace_back(AbsoluteLocation{end.group, 0}, *prev);
-  } // else end.object == 0, no partial group to cover
+  // 3. Partial end.group, clamped to fetchStart when end.group is the fetch's
+  // bottom group. endGroupStart < end skips both end.object == 0 (no partial
+  // group) and end == fetchStart (iterator at its terminal position), and
+  // proves end.prevInGroup() is non-empty.
+  AbsoluteLocation endGroupStart = (end.group == fetchStart.group)
+      ? fetchStart
+      : AbsoluteLocation{end.group, 0};
+  if (endGroupStart < end) {
+    ranges.emplace_back(endGroupStart, *end.prevInGroup());
+  }
 
   return ranges;
 }
@@ -1102,7 +1119,11 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     cache_.totalCachedBytes_ += addedBytes;
     cache_.evictForByteLimitIfNeeded();
     if (finFetch) {
-      markNonExistentTo(end_);
+      // Iterator still ON the just-completed object; step past it before
+      // tail-marking so the gap range doesn't overlap it. Use the iterator's
+      // order-aware end (DESC: lowest position; ASC: end_).
+      fetchRangeIt_.next();
+      markNonExistentTo(fetchRangeIt_.end());
       updateInProgress();
     }
     return consumer_->objectPayload(std::move(payload), finFetch && proxyFin_);
@@ -1225,7 +1246,12 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       return;
     }
 
-    auto ranges = getGapRanges(*fetchRangeIt_, target, fetchRangeIt_.order);
+    auto ranges = getGapRanges(
+        *fetchRangeIt_,
+        target,
+        fetchRangeIt_.order,
+        fetchRangeIt_.minLocation,
+        fetchRangeIt_.maxLocation);
     for (const auto& [start, end] : ranges) {
       fetchRangeIt_.track->gaps.insert(start, end);
     }
@@ -1274,7 +1300,10 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       fetchRangeIt_.next();
       updateInProgress();
       if (finFetch) {
-        markNonExistentTo(end_);
+        // Use the iterator's order-aware end. In DESC, end_ is the user's
+        // highest endpoint (the wrong direction); fetchRangeIt_.end()
+        // returns the iteration end (the lowest position).
+        markNonExistentTo(fetchRangeIt_.end());
         complete_.post();
       }
     }
