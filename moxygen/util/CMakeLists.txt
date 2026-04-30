@@ -41,3 +41,12 @@ moxygen_add_library(moxygen_util_signal_handler
     Folly::folly_io_async_async_signal_handler
     Folly::folly_logging_logging
 )
+
+moxygen_add_library(moxygen_util_location_interval_set
+  SRCS
+    LocationIntervalSet.cpp
+  EXPORTED_DEPS
+    moxygen_moq_framer
+)
+
+add_subdirectory(test)

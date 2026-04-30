@@ -121,3 +121,45 @@ TEST(Location, Compare) {
   EXPECT_TRUE(loc2 < loc3);
   EXPECT_TRUE(loc3 > loc2);
 }
+
+TEST(Location, Next) {
+  // Normal increment
+  EXPECT_EQ((AbsoluteLocation{0, 0}.next()), (AbsoluteLocation{0, 1}));
+  EXPECT_EQ((AbsoluteLocation{5, 100}.next()), (AbsoluteLocation{5, 101}));
+
+  // Object overflow -> next group
+  EXPECT_EQ(
+      (AbsoluteLocation{5, kEightByteLimit}.next()), (AbsoluteLocation{6, 0}));
+
+  // Max location has no successor
+  EXPECT_FALSE(kLocationMax.next().has_value());
+}
+
+TEST(Location, Prev) {
+  // Normal decrement
+  EXPECT_EQ((AbsoluteLocation{0, 1}.prev()), (AbsoluteLocation{0, 0}));
+  EXPECT_EQ((AbsoluteLocation{5, 100}.prev()), (AbsoluteLocation{5, 99}));
+
+  // Object underflow -> previous group
+  EXPECT_EQ(
+      (AbsoluteLocation{5, 0}.prev()), (AbsoluteLocation{4, kEightByteLimit}));
+
+  // Min location has no predecessor
+  EXPECT_FALSE(kLocationMin.prev().has_value());
+}
+
+TEST(Location, NextInGroup) {
+  EXPECT_EQ((AbsoluteLocation{5, 10}.nextInGroup()), (AbsoluteLocation{5, 11}));
+  EXPECT_FALSE(
+      (AbsoluteLocation{5, kEightByteLimit}.nextInGroup().has_value()));
+}
+
+TEST(Location, NextGroup) {
+  EXPECT_EQ((AbsoluteLocation{5, 10}.nextGroup()), (AbsoluteLocation{6, 0}));
+  EXPECT_FALSE((AbsoluteLocation{kEightByteLimit, 0}.nextGroup().has_value()));
+}
+
+TEST(Location, PrevGroup) {
+  EXPECT_EQ((AbsoluteLocation{5, 10}.prevGroup()), (AbsoluteLocation{4, 0}));
+  EXPECT_FALSE((AbsoluteLocation{0, 10}.prevGroup().has_value()));
+}
