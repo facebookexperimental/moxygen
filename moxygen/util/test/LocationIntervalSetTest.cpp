@@ -234,6 +234,211 @@ TEST_F(LocationIntervalSetTest, InsertSuperInterval) {
   EXPECT_EQ(set_.findIntervalEnd({0, 0}), (AbsoluteLocation{0, 20}));
 }
 
+// Tests for remove()
+
+TEST_F(LocationIntervalSetTest, RemoveFromEmpty) {
+  set_.remove({0, 0}, {0, 10});
+  EXPECT_TRUE(set_.empty());
+}
+
+TEST_F(LocationIntervalSetTest, RemoveNoOverlap) {
+  set_.insert({0, 5}, {0, 10});
+  set_.remove({0, 15}, {0, 20});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_TRUE(set_.contains({0, 7}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveEntireInterval) {
+  set_.insert({0, 5}, {0, 10});
+  set_.remove({0, 5}, {0, 10});
+  EXPECT_TRUE(set_.empty());
+}
+
+TEST_F(LocationIntervalSetTest, RemoveSuperset) {
+  set_.insert({0, 5}, {0, 10});
+  set_.remove({0, 0}, {0, 20});
+  EXPECT_TRUE(set_.empty());
+}
+
+TEST_F(LocationIntervalSetTest, RemoveTrimHead) {
+  set_.insert({0, 5}, {0, 10});
+  set_.remove({0, 5}, {0, 7});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_FALSE(set_.contains({0, 7}));
+  EXPECT_TRUE(set_.contains({0, 8}));
+  EXPECT_TRUE(set_.contains({0, 10}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveTrimTail) {
+  set_.insert({0, 5}, {0, 10});
+  set_.remove({0, 8}, {0, 10});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_TRUE(set_.contains({0, 5}));
+  EXPECT_TRUE(set_.contains({0, 7}));
+  EXPECT_FALSE(set_.contains({0, 8}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveSplitInterval) {
+  set_.insert({0, 0}, {0, 20});
+  set_.remove({0, 5}, {0, 10});
+  EXPECT_EQ(set_.size(), 2);
+  EXPECT_TRUE(set_.contains({0, 0}));
+  EXPECT_TRUE(set_.contains({0, 4}));
+  EXPECT_FALSE(set_.contains({0, 5}));
+  EXPECT_FALSE(set_.contains({0, 10}));
+  EXPECT_TRUE(set_.contains({0, 11}));
+  EXPECT_TRUE(set_.contains({0, 20}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveSpanMultiple) {
+  set_.insert({0, 0}, {0, 5});
+  set_.insert({0, 10}, {0, 15});
+  set_.insert({0, 20}, {0, 25});
+  set_.remove({0, 3}, {0, 22});
+  EXPECT_EQ(set_.size(), 2);
+  EXPECT_TRUE(set_.contains({0, 0}));
+  EXPECT_TRUE(set_.contains({0, 2}));
+  EXPECT_FALSE(set_.contains({0, 3}));
+  EXPECT_FALSE(set_.contains({0, 22}));
+  EXPECT_TRUE(set_.contains({0, 23}));
+  EXPECT_TRUE(set_.contains({0, 25}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveAtZero) {
+  set_.insert({0, 0}, {0, 10});
+  set_.remove({0, 0}, {0, 5});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_FALSE(set_.contains({0, 0}));
+  EXPECT_TRUE(set_.contains({0, 6}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveAtMax) {
+  set_.insert({0, kEightByteLimit - 5}, {0, kEightByteLimit});
+  set_.remove({0, kEightByteLimit - 2}, {0, kEightByteLimit});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_TRUE(set_.contains({0, kEightByteLimit - 5}));
+  EXPECT_TRUE(set_.contains({0, kEightByteLimit - 3}));
+  EXPECT_FALSE(set_.contains({0, kEightByteLimit - 2}));
+}
+
+TEST_F(LocationIntervalSetTest, RemoveSinglePoint) {
+  set_.insert({0, 0}, {0, 10});
+  set_.remove({0, 5}, {0, 5});
+  EXPECT_EQ(set_.size(), 2);
+  EXPECT_TRUE(set_.contains({0, 4}));
+  EXPECT_FALSE(set_.contains({0, 5}));
+  EXPECT_TRUE(set_.contains({0, 6}));
+}
+
+// Tests for findNextInterval()
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalBeforeAll) {
+  set_.insert({0, 10}, {0, 20});
+  auto result = set_.findNextInterval({0, 0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 10}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 20}));
+}
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalInsideCurrent) {
+  set_.insert({0, 0}, {0, 10});
+  set_.insert({0, 20}, {0, 30});
+  auto result = set_.findNextInterval({0, 5});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 20}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 30}));
+}
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalBetween) {
+  set_.insert({0, 0}, {0, 5});
+  set_.insert({0, 20}, {0, 30});
+  auto result = set_.findNextInterval({0, 10});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 20}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 30}));
+}
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalAfterAll) {
+  set_.insert({0, 0}, {0, 10});
+  auto result = set_.findNextInterval({0, 15});
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalAtEndOfCurrent) {
+  set_.insert({0, 0}, {0, 10});
+  set_.insert({0, 20}, {0, 30});
+  auto result = set_.findNextInterval({0, 10});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 20}));
+}
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalEmpty) {
+  auto result = set_.findNextInterval({0, 0});
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(LocationIntervalSetTest, FindNextIntervalAtLocStart) {
+  set_.insert({0, 5}, {0, 10});
+  auto result = set_.findNextInterval({0, 4});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 5}));
+}
+
+// Tests for findPrevInterval()
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalAfterAll) {
+  set_.insert({0, 0}, {0, 10});
+  auto result = set_.findPrevInterval({0, 20});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 0}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 10}));
+}
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalInsideCurrent) {
+  set_.insert({0, 0}, {0, 10});
+  set_.insert({0, 20}, {0, 30});
+  auto result = set_.findPrevInterval({0, 25});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 0}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 10}));
+}
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalBetween) {
+  set_.insert({0, 0}, {0, 5});
+  set_.insert({0, 20}, {0, 30});
+  auto result = set_.findPrevInterval({0, 10});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 0}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 5}));
+}
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalBeforeAll) {
+  set_.insert({0, 10}, {0, 20});
+  auto result = set_.findPrevInterval({0, 5});
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalEmpty) {
+  auto result = set_.findPrevInterval({0, 0});
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalAtStartOfFirst) {
+  set_.insert({0, 0}, {0, 10});
+  auto result = set_.findPrevInterval({0, 0});
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(LocationIntervalSetTest, FindPrevIntervalMultiple) {
+  set_.insert({0, 0}, {0, 5});
+  set_.insert({0, 10}, {0, 15});
+  set_.insert({0, 20}, {0, 25});
+  auto result = set_.findPrevInterval({0, 22});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 10}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 15}));
+}
+
 // Tests for AbsoluteLocation helper methods
 
 TEST(AbsoluteLocationTest, PrevGroupEnd) {

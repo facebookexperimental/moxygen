@@ -45,6 +45,8 @@ moxygen_add_library(moxygen_util_signal_handler
 moxygen_add_library(moxygen_util_location_interval_set
   SRCS
     LocationIntervalSet.cpp
+  DEPS
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_moq_framer
 )
