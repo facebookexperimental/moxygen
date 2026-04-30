@@ -343,6 +343,67 @@ struct AbsoluteLocation {
   }
 
   std::string describe() const;
+
+  /**
+   * Get the successor location (next position in lexicographic order).
+   * Returns nullopt if this is kLocationMax.
+   */
+  std::optional<AbsoluteLocation> next() const {
+    if (group == kEightByteLimit && object == kEightByteLimit) {
+      return std::nullopt;
+    }
+    if (object == kEightByteLimit) {
+      return AbsoluteLocation{group + 1, 0};
+    }
+    return AbsoluteLocation{group, object + 1};
+  }
+
+  /**
+   * Get the predecessor location.
+   * Returns nullopt if this is kLocationMin.
+   */
+  std::optional<AbsoluteLocation> prev() const {
+    if (group == 0 && object == 0) {
+      return std::nullopt;
+    }
+    if (object == 0) {
+      return AbsoluteLocation{group - 1, kEightByteLimit};
+    }
+    return AbsoluteLocation{group, object - 1};
+  }
+
+  /**
+   * Get the next object within the same group.
+   * Returns nullopt if object is at max.
+   */
+  std::optional<AbsoluteLocation> nextInGroup() const {
+    if (object == kEightByteLimit) {
+      return std::nullopt;
+    }
+    return AbsoluteLocation{group, object + 1};
+  }
+
+  /**
+   * Get the start of the next group {group+1, 0}.
+   * Returns nullopt if group is at max.
+   */
+  std::optional<AbsoluteLocation> nextGroup() const {
+    if (group == kEightByteLimit) {
+      return std::nullopt;
+    }
+    return AbsoluteLocation{group + 1, 0};
+  }
+
+  /**
+   * Get the start of the previous group {group-1, 0}.
+   * Returns nullopt if group is 0.
+   */
+  std::optional<AbsoluteLocation> prevGroup() const {
+    if (group == 0) {
+      return std::nullopt;
+    }
+    return AbsoluteLocation{group - 1, 0};
+  }
 };
 
 constexpr AbsoluteLocation kLocationMin;
