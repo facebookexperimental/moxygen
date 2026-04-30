@@ -74,7 +74,7 @@ std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>> getFetchIntervals(
       intervals.emplace_back(missLocation, hitLocation);
     } else {
       intervals.emplace_back(
-          missLocation, AbsoluteLocation{missLocation.group + 1, 0});
+          missLocation, missLocation.nextGroup().value_or(end));
     }
     return intervals;
   }
@@ -85,7 +85,7 @@ std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>> getFetchIntervals(
   // and then find the start interval
   AbsoluteLocation intervalEnd = missLocation;
   // For missLocation, end is either full group or where fetch ends
-  intervalEnd = {missLocation.group + 1, 0};
+  intervalEnd = missLocation.nextGroup().value_or(end);
   if (missLocation.group == end.group) {
     // If we are in the end group, fetch till end and not whole group
     intervalEnd = end;
@@ -1390,9 +1390,14 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
   if (last.object > 0) {
     last.object--;
   } else {
-    // if end is 1,0, that means all of group 1
+    // {N, 0} means "all of group N" — inclusive last is {N, MAX}
     last.object = kLocationMax.object;
-    standalone->end.group++;
+    auto nextGrp = standalone->end.nextGroup();
+    if (!nextGrp) {
+      XLOG(ERR) << "Fetch end group=" << standalone->end.group
+                << " at max, using kLocationMax as exclusive end";
+    }
+    standalone->end = nextGrp.value_or(kLocationMax);
     // TODO: handle case where track.largestGroupAndObject is an END_OF_GROUP
     // or END_OF_TRACK
   }
@@ -1405,12 +1410,16 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     bool isEndOfTrack = false;
     if (standalone->end > *track->largestGroupAndObject) {
       standalone->end = *track->largestGroupAndObject;
-      standalone->end.object++;
+      auto next = standalone->end.next();
+      XCHECK(next) << "largestGroupAndObject.next() must be valid";
+      standalone->end = *next;
       largestInFetch = standalone->end;
       isEndOfTrack = track->endOfTrack;
       // fetchImpl range exclusive of end
     } else if (largestInFetch.object == 0) {
-      largestInFetch.group--;
+      auto pg = largestInFetch.prevGroup();
+      XCHECK(pg) << "largestInFetch.group must be > 0 when object == 0";
+      largestInFetch = *pg;
     }
     auto fetchHandle = std::make_shared<FetchHandle>(FetchOk{
         fetch.requestID,
@@ -1623,7 +1632,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     XLOG(DBG1) << "Fetch completed entirely from cache";
     if (servedOneObject) {
       if (standalone->end.object == 0) {
-        standalone->end.group--;
+        auto pg = standalone->end.prevGroup();
+        XCHECK(pg) << "standalone->end.group must be > 0 when object == 0";
+        standalone->end = *pg;
       }
       bool endOfTrack = false;
       if (track->endOfTrack &&
@@ -1700,7 +1711,9 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
              << fetchEnd.object << "}";
   auto adjFetchEnd = fetchEnd;
   if (adjFetchEnd.object == 0) {
-    adjFetchEnd.group--;
+    auto pg = adjFetchEnd.prevGroup();
+    XCHECK(pg) << "fetchEnd={0,0} should not reach fetchUpstream";
+    adjFetchEnd = *pg;
   }
   FetchRangeIterator fetchRangeIt(
       fetchStart, fetchEnd, fetch.groupOrder, track);
