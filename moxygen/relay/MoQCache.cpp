@@ -97,8 +97,13 @@ std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>> getFetchIntervals(
   uint64_t numIntermediateGroups = missLocation.group - hitLocation.group - 1;
   if (numIntermediateGroups > 0) {
     if (missLocation.object == 0) {
-      // Coalesce with existing intervals
-      intervals.back().first.group = missLocation.group - numIntermediateGroups;
+      // Coalesce with existing intervals, clamping to `start` so the
+      // sentinel hitLocation={0,0} (used by skipUncached when no prior
+      // cached content exists) doesn't extend the interval below
+      // minLocation.
+      intervals.back().first = std::max(
+          start,
+          AbsoluteLocation{missLocation.group - numIntermediateGroups, 0});
     } else {
       // create a new interval with intermediate groups
       AbsoluteLocation intEnd = {missLocation.group, 0};
@@ -111,7 +116,16 @@ std::vector<std::pair<AbsoluteLocation, AbsoluteLocation>> getFetchIntervals(
   }
 
   if (hitLocation.object != 0) {
-    intervals.emplace_back(start, hitLocation);
+    // Fetch the beginning of the hit group, up to the first cached object.
+    // Clamp to the fetch start if the hit is in the first group.
+    AbsoluteLocation lastStart = {hitLocation.group, 0};
+    if (start.group == hitLocation.group) {
+      lastStart = start;
+    }
+    // Skip if start is already at the cache hit (no gap to fill).
+    if (lastStart < hitLocation) {
+      intervals.emplace_back(lastStart, hitLocation);
+    }
   }
 
   return intervals;
@@ -298,11 +312,11 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
   if (status == ObjectStatus::END_OF_GROUP ||
       status == ObjectStatus::END_OF_TRACK) {
     if (auto next = AbsoluteLocation{groupID, objectID}.nextInGroup()) {
-      track.gaps.insert(*next, {groupID, kLocationMax.object});
+      track.insertGap(*next, {groupID, kLocationMax.object});
     }
     if (status == ObjectStatus::END_OF_TRACK) {
       if (auto nextGrp = AbsoluteLocation{groupID, 0}.nextGroup()) {
-        track.gaps.insert(*nextGrp, kLocationMax);
+        track.insertGap(*nextGrp, kLocationMax);
       }
     }
     endOfGroup = true;
@@ -361,6 +375,9 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
         now);
     totalBytes += newPayloadSize;
     objects[objectID] = std::move(entry);
+  }
+  if (complete) {
+    track.cachedContent.insert({groupID, objectID});
   }
   if (objectID >= maxCachedObject) {
     maxCachedObject = objectID;
@@ -500,7 +517,7 @@ MoQCache::CacheTrack::processGapExtensions(
 
         // Mark groups in the gap as known (non-existent) via
         // LocationIntervalSet
-        gaps.insert({groupID - gap, 0}, {groupID - 1, kLocationMax.object});
+        insertGap({groupID - gap, 0}, {groupID - 1, kLocationMax.object});
       }
     }
   }
@@ -540,7 +557,7 @@ MoQCache::CacheTrack::processGapExtensions(
       }
 
       // Mark objects in the gap as known (non-existent) via LocationIntervalSet
-      gaps.insert({groupID, objectID - gap}, {groupID, objectID - 1});
+      insertGap({groupID, objectID - gap}, {groupID, objectID - 1});
     }
   }
 
@@ -674,6 +691,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     currentLength_ -= addedBytes;
     if (currentLength_ == 0) {
       object->complete = true;
+      cacheTrack_.cachedContent.insert({group_, currentObject_});
     }
     object->payloadSize += addedBytes;
     cacheGroup_.totalBytes += addedBytes;
@@ -1113,6 +1131,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     currentLength_ -= addedBytes;
     if (currentLength_ == 0) {
       object->complete = true;
+      fetchRangeIt_.track->cachedContent.insert(*fetchRangeIt_);
     }
     object->payloadSize += addedBytes;
     group.totalBytes += addedBytes;
@@ -1253,7 +1272,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
         fetchRangeIt_.minLocation,
         fetchRangeIt_.maxLocation);
     for (const auto& [start, end] : ranges) {
-      fetchRangeIt_.track->gaps.insert(start, end);
+      fetchRangeIt_.track->insertGap(start, end);
     }
 
     // Advance iterator directly to target
@@ -1460,24 +1479,35 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       }
     }
 
+    // Call getCachedObjectMaybe first: it realizes TTL by clearing
+    // expired entries from cachedContent, avoiding a phantom flush.
     auto* cachedObject = getCachedObjectMaybe(*track, current, cachedNow);
-    if (!cachedObject) {
+    if (!cachedObject && !track->gaps.contains(current)) {
       if (!fetchStart) {
         fetchStart = current;
       }
-      fetchRangeIt.next();
+      // Jump to the next known boundary (cached object or gap) so the
+      // upstream fetch range stays bounded without O(n) iteration.
+      fetchRangeIt.skipUncached();
       continue;
     }
 
-    XLOG(DBG1) << "object cache HIT for {" << current.group << ","
-               << current.object << "}";
-    // NOTE: This raw CacheEntry* is safe despite the fetchUpstream call below
-    // because: (1) FetchWriteback removes this track from trackLRU_, so
-    // evictForByteLimitIfNeeded() cannot touch it, and (2) FetchWriteback's
-    // cacheImpl calls getOrCreateGroup() without the cache pointer, so
-    // evictOldestGroupsIfNeeded() is never invoked. If either invariant
-    // changes, pin the group here: auto pin = track->groups[current.group];
+    // For hits, pin the group so evictOldestGroupsIfNeeded (triggered
+    // by FetchWriteback's cacheImpl during the await below) can't free
+    // the CacheEntry* we're about to publish. Skip for gap boundaries:
+    // no object to keep alive, and the gap's group may not exist, so
+    // groups[current.group] would auto-insert a null entry.
+    auto pin = cachedObject ? track->groups[current.group] : nullptr;
+    // Boundary (hit or gap): flush any accumulated upstream miss range
+    // so the upstream fetch doesn't span the boundary. A well-formed
+    // upstream cannot transition this position from exists -> not-exists
+    // during the await (writeback rejects out-of-range data and
+    // gap/EOG over a served object), so the pre-await hit/gap decision
+    // stays authoritative.
     if (fetchStart) {
+      XLOG(DBG1) << "flushing accumulated upstream miss at boundary {"
+                 << current.group << "," << current.object << "} ("
+                 << (cachedObject ? "hit" : "gap") << ")";
       auto intervals = getFetchIntervals(
           fetchRangeIt.minLocation,
           fetchRangeIt.maxLocation,
@@ -1486,7 +1516,6 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
           fetchRangeIt.order,
           false);
       for (auto& interval : intervals) {
-        // Call the helper function
         auto res = co_await fetchUpstream(
             fetchHandle,
             interval.first,
@@ -1503,7 +1532,15 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       }
       fetchStart.reset();
     }
-    XLOG(DBG1) << "Publish object from cache";
+
+    if (!cachedObject) {
+      // Gap boundary: skip past it and keep going.
+      fetchRangeIt.skipGaps();
+      continue;
+    }
+
+    XLOG(DBG1) << "publish HIT for {" << current.group << "," << current.object
+               << "}";
     auto* object = cachedObject;
     fetchRangeIt.next();
     lastObject = (*fetchRangeIt) == fetchRangeIt.end();
@@ -1633,6 +1670,7 @@ MoQCache::CacheEntry* MoQCache::getCachedObjectMaybe(
       auto expiredBytes = objIt->second->payloadSize;
       group->totalBytes -= expiredBytes;
       totalCachedBytes_ -= expiredBytes;
+      track.cachedContent.remove(current, current);
       group->objects.erase(objIt);
       return nullptr;
     }
@@ -1969,6 +2007,80 @@ void MoQCache::FetchRangeIterator::skipGaps() {
   }
 }
 
+void MoQCache::FetchRangeIterator::skipUncached() {
+  if (!isValid_ || current_ == end_) {
+    return;
+  }
+
+  if (track->cachedContent.contains(current_)) {
+    return;
+  }
+
+  if (order != GroupOrder::NewestFirst) {
+    // Ascending: find next cached interval after current position
+    auto nextInt = track->cachedContent.findNextInterval(current_);
+    if (!nextInt || nextInt->first >= end_) {
+      current_ = end_;
+      return;
+    }
+    current_ = nextInt->first;
+  } else {
+    // Descending: groups iterate high-to-low, objects within groups
+    // low-to-high. First check if there's more cached content later in
+    // the current group.
+    auto nextInGroup = track->cachedContent.findNextInterval(current_);
+    if (nextInGroup && nextInGroup->first.group == current_.group) {
+      current_ = nextInGroup->first;
+      return;
+    }
+    // Otherwise jump to a lower group with cached content.
+    auto target = findPrevGroupCachedPosition();
+    if (!target) {
+      current_ = {0, 0};
+      isValid_ = false;
+      return;
+    }
+    current_ = *target;
+  }
+}
+
+std::optional<AbsoluteLocation>
+MoQCache::FetchRangeIterator::findPrevGroupCachedPosition() const {
+  // Query from the end of the previous group. This avoids finding
+  // intervals in the current group (already consumed) or cross-group
+  // intervals whose end is in the current group.
+  auto prevGE = current_.prevGroupEnd();
+  if (!prevGE) {
+    return std::nullopt;
+  }
+  auto prev = track->cachedContent.findInterval(*prevGE);
+  if (!prev) {
+    prev = track->cachedContent.findPrevInterval(*prevGE);
+  }
+  // prev->second < minLocation rejects the case where the only cached
+  // content in minLocation.group sits below minLocation — without this,
+  // target gets clamped to minLocation, contains() returns false, and
+  // findNextInterval(target) returns nullopt, tripping the XCHECK below.
+  if (!prev || prev->second < minLocation) {
+    return std::nullopt;
+  }
+  // prev->second.group can exceed prevGE->group when findInterval returned
+  // a cross-group interval (e.g. {2,MAX}-{3,0}). Clamp to the previous
+  // group so we don't revisit the current group.
+  auto targetGroup = std::min(prev->second.group, prevGE->group);
+  AbsoluteLocation target = {targetGroup, 0};
+  if (target < minLocation) {
+    target = minLocation;
+  }
+  // Find the first cached object in this group.
+  if (!track->cachedContent.contains(target)) {
+    auto nextInt = track->cachedContent.findNextInterval(target);
+    XCHECK(nextInt && nextInt->first.group == targetGroup);
+    target = nextInt->first;
+  }
+  return target;
+}
+
 /*
 Semantics of finding group end are tricky becasue they depend of whether we are
 asc or desc and also on, if this is some intermediate group, fetchEnd group (for
@@ -2206,6 +2318,9 @@ void MoQCache::evictGroup(CacheTrack& track, uint64_t groupID) {
   if (group.lruIter_.hasValue()) {
     track.groupLRU.erase(*group.lruIter_);
   }
+
+  // Remove from cachedContent
+  track.cachedContent.remove({groupID, 0}, {groupID, kLocationMax.object});
 
   // Subtract group's bytes from the cache total
   XCHECK_GE(totalCachedBytes_, group.totalBytes);

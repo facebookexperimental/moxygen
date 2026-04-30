@@ -217,6 +217,7 @@ class MoQCache {
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
     LocationIntervalSet gaps;
+    LocationIntervalSet cachedContent;
     size_t liveWritebackCount{0};
     bool endOfTrack{false};
     std::optional<AbsoluteLocation> largestGroupAndObject;
@@ -251,6 +252,14 @@ class MoQCache {
     bool canEvict() const {
       return liveWritebackCount == 0 && activeFetchCount == 0;
     }
+
+    // Insert a known-non-existent range into both gaps and cachedContent.
+    // The two sets must stay aligned: cachedContent doubles as the union
+    // (real objects + known gaps) used by skipUncached().
+    void insertGap(AbsoluteLocation start, AbsoluteLocation end) {
+      gaps.insert(start, end);
+      cachedContent.insert(start, end);
+    }
   };
 
   // Group-order-aware iterator for traversing groups (objects within groups
@@ -265,7 +274,8 @@ class MoQCache {
 
     AbsoluteLocation end();
     void next();
-    void skipGaps(); // Skip over any gaps at current position
+    void skipGaps();     // Skip over any gaps at current position
+    void skipUncached(); // Skip to next cached content position
     void advanceTo(const AbsoluteLocation& loc);
     const AbsoluteLocation& operator*() const;
     const AbsoluteLocation* operator->() const;
@@ -290,6 +300,10 @@ class MoQCache {
         uint64_t groupId,
         uint64_t& cachedGroupId_,
         std::shared_ptr<CacheGroup>& cachedGroupPtr_) const;
+    // Descending-mode helper: find the next cached position by jumping
+    // to a lower group. Returns nullopt if no such position exists in
+    // [minLocation, current_.group).
+    std::optional<AbsoluteLocation> findPrevGroupCachedPosition() const;
   };
 
   folly::F14FastMap<

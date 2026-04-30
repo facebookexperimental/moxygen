@@ -1488,6 +1488,184 @@ CO_TEST_F(MoQCacheTest, TestFetchPartialMissTailObjectsDesc) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{3, 5}));
 }
 
+CO_TEST_F(MoQCacheTest, TestSkipUncachedDescCrossGroupInterval) {
+  // Cache objects {2, MAX} and {3, 0}. These are adjacent in
+  // LocationIntervalSet, so cachedContent merges them into a single
+  // cross-group interval {2,MAX}-{3,0}. Also cache group 5.
+  // Descending fetch from {1,0} to {5,1}: after serving group 5,
+  // group 4 is a miss. skipUncached must find cached content at group 3
+  // (the high end of the cross-group interval), not group 2.
+  constexpr auto kMax = kEightByteLimit;
+
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(2, 0, kMax, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(5, 0, 0, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  auto exec = co_await folly::coro::co_current_executor;
+
+  {
+    InSequence fetchOrder;
+    // First upstream: group 4 (miss between groups 5 and 3)
+    expectUpstreamFetch(
+        {4, 0}, {4, 0}, false, AbsoluteLocation{4, 0}, GroupOrder::NewestFirst)
+        .via(exec)
+        .thenTry([this, exec](const auto&) {
+          upstreamFetchConsumer_->object(4, 0, 0, makeBuf(100));
+          upstreamFetchConsumer_->endOfFetch();
+          // Second upstream: rest of group 3 (objects after cached {3,0})
+          expectUpstreamFetch(
+              {3, 1},
+              {3, 0},
+              false,
+              AbsoluteLocation{4, 0},
+              GroupOrder::NewestFirst)
+              .via(exec)
+              .thenTry([this, exec](const auto&) {
+                upstreamFetchConsumer_->endOfFetch();
+                // Third upstream: group 2 objects before cached {2,MAX}
+                expectUpstreamFetch(
+                    {2, 0},
+                    {2, kMax},
+                    false,
+                    AbsoluteLocation{4, 0},
+                    GroupOrder::NewestFirst)
+                    .via(exec)
+                    .thenTry([this, exec](const auto&) {
+                      upstreamFetchConsumer_->endOfFetch();
+                      // Fourth upstream: tail fetch for group 1
+                      expectUpstreamFetch(
+                          {1, 0},
+                          {1, 0},
+                          false,
+                          AbsoluteLocation{4, 0},
+                          GroupOrder::NewestFirst)
+                          .via(exec)
+                          .thenTry([this](const auto&) {
+                            upstreamFetchConsumer_->endOfFetch();
+                          });
+                    });
+              });
+        });
+  }
+
+  {
+    InSequence seq;
+    // Group 5 from cache
+    EXPECT_CALL(*consumer_, object(5, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    // Group 4 from upstream
+    EXPECT_CALL(*consumer_, object(4, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    // Group 3 from cache (cross-group interval high end)
+    EXPECT_CALL(*consumer_, object(3, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    // Group 2 object MAX from cache (cross-group interval low end)
+    EXPECT_CALL(*consumer_, object(2, _, kMax, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  }
+
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {5, 1}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedDescThreeGroupSpan) {
+  // cachedContent has a single interval spanning 3 groups: priorGroupGap=2
+  // on {3,0} marks groups 1-2 as gap, which merges with the {3,0} hit
+  // into one cachedContent interval (1,0)-(3,0). A separate hit at {5,0}
+  // sits above the spanning interval.
+  //
+  // Desc fetch {1,0}-{5,1} exercises:
+  //   - findPrevGroupCachedPosition jumping from group-4 miss into the
+  //     spanning interval at its high end ({3,0}), correctly clamped via
+  //     min(prev->second.group, prevGE->group) (would otherwise revisit
+  //     group 3 incorrectly).
+  //   - second descent landing on the gap portion of the spanning
+  //     interval ({2,0}) and gap-fence-flushing the group-3 tail.
+  ObjectHeader gapHeader(3, 0, 0, 0, 100);
+  gapHeader.extensions = makeGroupGapExtensions(2);
+
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  wb->datagram(gapHeader, makeBuf(100));
+  wb->datagram(ObjectHeader(5, 0, 0, 0, 100), makeBuf(100));
+  wb.reset();
+
+  auto exec = co_await folly::coro::co_current_executor;
+
+  {
+    InSequence fetchOrder;
+    // 1) group 4 entirely (miss between {5,0} and the spanning interval)
+    expectUpstreamFetch(
+        {4, 0}, {4, 0}, false, AbsoluteLocation{4, 0}, GroupOrder::NewestFirst)
+        .via(exec)
+        .thenTry([this, exec](const auto&) {
+          upstreamFetchConsumer_->endOfFetch();
+          // 2) group 3 tail above {3,0}, gap-fenced at the gap portion
+          //    of the spanning interval
+          expectUpstreamFetch(
+              {3, 1},
+              {3, 0},
+              false,
+              AbsoluteLocation{4, 0},
+              GroupOrder::NewestFirst)
+              .via(exec)
+              .thenTry([this](const auto&) {
+                upstreamFetchConsumer_->endOfFetch();
+              });
+        });
+  }
+
+  {
+    InSequence seq;
+    EXPECT_CALL(*consumer_, object(5, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(3, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  }
+
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {5, 1}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedDescMinLocationMidGroup) {
+  // Regression test for findPrevGroupCachedPosition: minLocation has a
+  // non-zero object and the only cached content in minLocation.group lies
+  // entirely below minLocation. Without the prev->second < minLocation
+  // early return, the function would clamp target to minLocation, fail
+  // contains(target), and XCHECK because findNextInterval(target) returns
+  // nullopt (the only interval in the group is below minLocation).
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  // (3, 5) — only cached content in group 3, and below minLocation (3, 7).
+  wb->datagram(ObjectHeader(3, 0, 5, 0, 100), makeBuf(100));
+  // (5, 0) — separate hit at the top of the fetch range.
+  wb->datagram(ObjectHeader(5, 0, 0, 0, 100), makeBuf(100));
+  wb.reset();
+
+  // Tail upstream MUST be clamped to minLocation {3,7}. Without the
+  // clamp, the upstream range extends down to group 1, which causes
+  // FetchWriteback's markNonExistentTo to scribble gaps over the cached
+  // (3,5) object — a heap corruption that only crashes under macOS's
+  // strict allocator (silently survives on Linux glibc malloc).
+  auto exec = co_await folly::coro::co_current_executor;
+  expectUpstreamFetch(
+      {3, 7}, {4, 0}, false, AbsoluteLocation{5, 0}, GroupOrder::NewestFirst)
+      .via(exec)
+      .thenTry([](auto&& tryConsumer) { tryConsumer.value()->endOfFetch(); });
+
+  EXPECT_CALL(*consumer_, object(5, _, 0, _, _, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+
+  auto res = co_await cache_.fetch(
+      getFetch({3, 7}, {5, 1}, GroupOrder::NewestFirst), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchPartialMissThreeUpstreamFetchesDesc) {
   populateCacheRange({5, 0}, {5, 5});
   populateCacheRange({1, 7}, {2, 0}, 10, 1, 1, true);
@@ -1828,6 +2006,270 @@ CO_TEST_F(MoQCacheTest, TestLargeGroupGap) {
           {kLargeGroup / 2, 0}, {kLargeGroup / 2, 1}, GroupOrder::NewestFirst),
       descGapConsumer,
       upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSparseCacheSkipUncachedAsc) {
+  // Verify that fetching across a sparse cache with no gap info completes
+  // in bounded time. Without skipUncached, the miss path would iterate
+  // ~2^60 positions one at a time.
+  constexpr uint64_t kFarObject = 1ULL << 60;
+
+  // Cache two objects far apart in the same group
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(0, 0, kFarObject, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  // Fetch the entire range. skipUncached should jump from {0,1} to
+  // {0, kFarObject} in O(log n).
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*consumer_, object(0, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(0, _, kFarObject, _, _, true, _))
+        .WillOnce(Return(folly::unit));
+  }
+  // Upstream fetch covers the miss range — returns no objects
+  expectUpstreamFetch(
+      FetchOk{0, GroupOrder::OldestFirst, false, {0, kFarObject}});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, kFarObject + 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSparseCacheSkipUncachedDesc) {
+  // Same-group descending test with large object gap. Objects within a
+  // group still iterate low-to-high even in descending mode.
+  constexpr uint64_t kFarObject = 1ULL << 60;
+
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(0, 0, kFarObject, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*consumer_, object(0, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(0, _, kFarObject, _, _, true, _))
+        .WillOnce(Return(folly::unit));
+  }
+  expectUpstreamFetch(
+      FetchOk{0, GroupOrder::NewestFirst, false, {0, kFarObject}});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, kFarObject + 1}, GroupOrder::NewestFirst),
+      consumer_,
+      upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedAscMultiGroup) {
+  // Cache distinct single objects across two groups. Ascending fetch
+  // should skipUncached from group 0 to {1,0}, then from {1,1} to {3,0},
+  // then end with a tail fetch. Upstream end is decremented when its
+  // object is 0 (cache adjusts the upstream fetch end).
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  wb->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  wb->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  wb.reset();
+
+  auto exec = co_await folly::coro::co_current_executor;
+
+  {
+    InSequence fetchOrder;
+    // 1) gap before group 1: interval ({0,0},{1,0}) → upstream end {0,0}
+    expectUpstreamFetch({0, 0}, {0, 0}, false, AbsoluteLocation{0, 0})
+        .via(exec)
+        .thenTry([this, exec](const auto&) {
+          upstreamFetchConsumer_->endOfFetch();
+          // 2) gap between group 1 and group 3: interval ({1,1},{3,0}) →
+          //    upstream end {2,0}
+          expectUpstreamFetch({1, 1}, {2, 0}, false, AbsoluteLocation{2, 0})
+              .via(exec)
+              .thenTry([this, exec](const auto&) {
+                upstreamFetchConsumer_->endOfFetch();
+                // 3) tail past group 3
+                expectUpstreamFetch(
+                    {3, 1}, {3, 5}, false, AbsoluteLocation{3, 5})
+                    .via(exec)
+                    .thenTry([this](const auto&) {
+                      upstreamFetchConsumer_->endOfFetch();
+                    });
+              });
+        });
+  }
+
+  {
+    InSequence seq;
+    EXPECT_CALL(*consumer_, object(1, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(3, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  }
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {3, 5}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedGapFenceAsc) {
+  // A known gap inside an otherwise-uncached range should split the
+  // upstream miss into two fetches that don't span the gap. Cache {0,5}
+  // and {3,0}, where {3,0} carries Prior Group ID Gap=2 marking groups
+  // 1 and 2 as known-empty. Fetch {0,0}-{3,5} ascending should produce
+  // three upstream fetches: leading miss before {0,5}, gap-fenced miss
+  // {0,6}-{0,MAX}, then the tail past {3,0}. Without the gap fence the
+  // middle fetch would extend through groups 1-2.
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  wb->datagram(ObjectHeader(0, 0, 5, 0, 100), makeBuf(100));
+  ObjectHeader gapHeader(3, 0, 0, 0, 100);
+  gapHeader.extensions = makeGroupGapExtensions(2);
+  wb->datagram(gapHeader, makeBuf(100));
+  wb.reset();
+
+  auto exec = co_await folly::coro::co_current_executor;
+
+  {
+    InSequence fetchOrder;
+    // 1) leading miss before {0,5}
+    expectUpstreamFetch({0, 0}, {0, 5}, false, AbsoluteLocation{0, 4})
+        .via(exec)
+        .thenTry([this, exec](const auto&) {
+          upstreamFetchConsumer_->endOfFetch();
+          // 2) gap-fenced miss: ends at {1,0} → upstream end {0,0}
+          expectUpstreamFetch({0, 6}, {0, 0}, false, AbsoluteLocation{0, 0})
+              .via(exec)
+              .thenTry([this, exec](const auto&) {
+                upstreamFetchConsumer_->endOfFetch();
+                // 3) tail past group 3
+                expectUpstreamFetch(
+                    {3, 1}, {3, 5}, false, AbsoluteLocation{3, 5})
+                    .via(exec)
+                    .thenTry([this](const auto&) {
+                      upstreamFetchConsumer_->endOfFetch();
+                    });
+              });
+        });
+  }
+
+  {
+    InSequence seq;
+    EXPECT_CALL(*consumer_, object(0, _, 5, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(3, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  }
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {3, 5}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedAfterTTLExpiration) {
+  // Cache two objects far apart in the same group, then expire both via TTL.
+  // skipUncached must not get stuck on positions that have been removed
+  // from cachedContent during expiry; the entire range should reach
+  // upstream as one tail fetch.
+  constexpr uint64_t kFarObject = 1ULL << 60;
+
+  // Shared_ptr keeps the time alive past the test coroutine; the fetch
+  // takes the "live track" fast path and fires fetchImpl asynchronously.
+  auto currentTime =
+      std::make_shared<MoQCache::TimePoint>(MoQCache::SteadyClock::now());
+  cache_.setClockForTesting([currentTime]() { return *currentTime; });
+  cache_.setMaxCacheDuration(kTestTrackName, std::chrono::milliseconds(1000));
+
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  wb->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  wb->datagram(ObjectHeader(0, 0, kFarObject, 0, 100), makeBuf(100));
+  wb.reset();
+
+  // Advance past TTL — both objects expire on next access
+  *currentTime += std::chrono::milliseconds(1001);
+
+  // Single upstream tail covers the entire range — every position is a miss
+  expectUpstreamFetch(
+      FetchOk{0, GroupOrder::OldestFirst, false, {0, kFarObject}});
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, kFarObject + 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedAfterGroupEviction) {
+  // Trigger group eviction; verify skipUncached doesn't get stuck on
+  // positions for an evicted group (would infinite-loop if cachedContent
+  // retained stale entries — contains() would keep returning true and
+  // skipGaps() would not advance).
+  cache_.setMaxCachedGroupsPerTrack(2);
+
+  // Cache 3 groups under one writeback — no eviction triggered yet because
+  // evictOldestGroupsIfNeeded runs *before* the new group is emplaced.
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  wb->datagram(ObjectHeader(10, 0, 0, 0, 100), makeBuf(100));
+  wb->datagram(ObjectHeader(20, 0, 0, 0, 100), makeBuf(100));
+  wb->datagram(ObjectHeader(30, 0, 0, 0, 100), makeBuf(100));
+  wb.reset();
+
+  // A new group in a second writeback triggers eviction of group 10
+  // (oldest in LRU).
+  wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  wb->datagram(ObjectHeader(40, 0, 0, 0, 100), makeBuf(100));
+  wb.reset();
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {10, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {20, 0}));
+
+  // Fetch only the evicted group's range. skipUncached must terminate
+  // (next cached interval starts at {20,0} which is past end_).
+  expectUpstreamFetch(FetchOk{0, GroupOrder::OldestFirst, false, {10, 0}});
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  auto res =
+      co_await cache_.fetch(getFetch({10, 0}, {10, 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_F(MoQCacheTest, TestSkipUncachedAfterStreamingCompletion) {
+  // BUG REPRODUCER: SubgroupWriteback::objectPayload sets
+  // object->complete = true directly when the streamed payload finishes
+  // (currentLength_ reaches 0) without inserting into cachedContent.
+  // skipUncached then can't see the streamed-complete object and skips
+  // past it, sending an over-broad upstream fetch that re-fetches the
+  // already-cached data.
+  constexpr uint64_t kFarObject = 1ULL << 60;
+
+  auto wb = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  // Datagram-complete at {0, 0} — goes through cacheObject and is
+  // recorded in cachedContent.
+  wb->datagram(ObjectHeader(0, 0, 0, 0, 100), makeBuf(100));
+  // Stream-complete at {0, kFar}: beginObject(length=200, payload=100) is
+  // incomplete; objectPayload(payload=100) flips complete to true.
+  auto sg = wb->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(sg->beginObject(kFarObject, 200, makeBuf(100), {}).hasValue());
+  EXPECT_TRUE(sg->objectPayload(makeBuf(100), false).hasValue());
+  sg.reset();
+  wb.reset();
+
+  // Sanity: both objects are in the cache and complete.
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, kFarObject}));
+
+  // Fetch the full range. With the fix, skipUncached jumps to {0, kFar}
+  // and we see two cache hits with one upstream fetch in the gap.
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*consumer_, object(0, _, 0, _, _, _, _))
+        .WillOnce(Return(folly::unit));
+    EXPECT_CALL(*consumer_, object(0, _, kFarObject, _, _, true, _))
+        .WillOnce(Return(folly::unit));
+  }
+  expectUpstreamFetch(
+      FetchOk{0, GroupOrder::OldestFirst, false, {0, kFarObject}});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, kFarObject + 1}), consumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
 }
 
