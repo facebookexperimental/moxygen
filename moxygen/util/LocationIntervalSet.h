@@ -63,6 +63,32 @@ class LocationIntervalSet {
       AbsoluteLocation loc) const;
 
   /**
+   * Remove the interval [start, end] (inclusive on both ends).
+   * Handles partial overlaps by trimming or splitting existing intervals.
+   * Runs in O(log n + k), where k is the number of intervals overlapping
+   * [start, end].
+   */
+  void remove(AbsoluteLocation start, AbsoluteLocation end);
+
+  /**
+   * Find the next interval after loc: if loc lies inside an interval, returns
+   * the interval immediately after it; otherwise returns the first interval
+   * whose start is >= loc. Returns nullopt if no such interval exists.
+   * Runs in O(log n).
+   */
+  std::optional<std::pair<AbsoluteLocation, AbsoluteLocation>> findNextInterval(
+      AbsoluteLocation loc) const;
+
+  /**
+   * Find the previous interval before loc: if loc lies inside an interval,
+   * returns the interval immediately before it; otherwise returns the last
+   * interval whose start is <= loc. Returns nullopt if no such interval
+   * exists. Runs in O(log n).
+   */
+  std::optional<std::pair<AbsoluteLocation, AbsoluteLocation>> findPrevInterval(
+      AbsoluteLocation loc) const;
+
+  /**
    * Check if the set is empty.
    */
   bool empty() const {
