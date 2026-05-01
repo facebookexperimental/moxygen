@@ -12,11 +12,9 @@
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/MoQFramer.h>
 #include <moxygen/Publisher.h>
-#include <moxygen/util/BidiIterator.h>
-#include <moxygen/util/FetchIntervalSet.h>
+#include <moxygen/util/LocationIntervalSet.h>
 #include <chrono>
 #include <functional>
-#include <limits>
 
 namespace moxygen {
 
@@ -94,7 +92,7 @@ class MoQCache {
     if (it == cache_.end()) {
       return false;
     }
-    return getCachedObjectMaybe(*it->second, obj, now()).has_value();
+    return getCachedObjectMaybe(*it->second, obj, now()) != nullptr;
   }
 
   // Setters for testing - update cache limits and evict if necessary
@@ -211,10 +209,14 @@ class MoQCache {
   class SubgroupWriteback;
   class FetchWriteback;
   class FetchHandle;
+  struct CacheTrack; // Forward declaration for CacheGroup::cacheObject
 
   // Entry for a group
   struct CacheGroup {
     folly::F14FastMap<uint64_t, std::unique_ptr<CacheEntry>> objects;
+    // TODO: may be redundant now that FetchRangeIterator::skipGaps() uses gap
+    // data to advance past group boundaries. Consider removing along with
+    // findGroupEndMaybe.
     uint64_t maxCachedObject{0};
     bool endOfGroup{false};
     // Track seen Prior Group ID Gap value for validation
@@ -231,6 +233,8 @@ class MoQCache {
         globalLruIter_;
 
     folly::Expected<folly::Unit, MoQPublishError> cacheObject(
+        CacheTrack& track,
+        uint64_t groupID,
         uint64_t subgroup,
         uint64_t objectID,
         ObjectStatus status,
@@ -239,28 +243,30 @@ class MoQCache {
         bool complete,
         bool forwardingPreferenceIsDatagram,
         TimePoint now);
-    void cacheMissingStatus(uint64_t objectID, ObjectStatus status);
   };
 
-  // Entry for a track
-  using FetchInProgressSet = FetchIntervalSet<FetchWriteback*>;
-  // Type alias for the complex BidiIterator type used in FetchWriteback
-  using InProgressFetchesIter =
-      BidiIterator<std::vector<FetchInProgressSet::IntervalList::iterator>>;
+  // Map from fetch range start to (end, writeback). Supports O(log n)
+  // range queries to find if a position is being fetched upstream.
+  struct FetchInProgressEntry {
+    AbsoluteLocation end;
+    AbsoluteLocation progress;
+    FetchWriteback* writeback{};
+  };
+  using FetchesInProgressMap = std::map<AbsoluteLocation, FetchInProgressEntry>;
 
   struct CacheTrack {
     folly::F14FastMap<uint64_t, std::shared_ptr<CacheGroup>> groups;
+    LocationIntervalSet gaps;
+    LocationIntervalSet cachedContent;
     size_t liveWritebackCount{0};
     bool endOfTrack{false};
     std::optional<AbsoluteLocation> largestGroupAndObject;
-    FetchInProgressSet fetchInProgress;
+    FetchesInProgressMap fetchesInProgress;
     // LRU iterator - present if track is evictable (not live, no active
     // fetches)
     folly::Optional<std::list<FullTrackName>::iterator> lruIter_;
     // Group LRU list for this track
     std::list<uint64_t> groupLRU;
-    // Count of active fetch intervals (for O(1) canEvict check)
-    size_t activeFetchCount{0};
     // Optional max cache duration for this track
     std::optional<std::chrono::milliseconds> maxCacheDuration;
     // Track-level extensions to include in FetchOk
@@ -273,26 +279,40 @@ class MoQCache {
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
         bool endOfTrack = false);
-    CacheGroup& getOrCreateGroup(
+    CacheGroup& getOrCreateGroup(uint64_t groupID);
+    // Same as getOrCreateGroup but, when creating, evicts old groups to honor
+    // the per-track group limit and inserts the new group into the LRU.
+    CacheGroup& getOrCreateGroupWithEviction(
         uint64_t groupID,
-        MoQCache* cache = nullptr,
-        const FullTrackName* ftn = nullptr);
+        MoQCache& cache,
+        const FullTrackName& ftn);
 
     // Process Prior Group ID Gap and Prior Object ID Gap extensions
-    // and cache the missing groups/objects accordingly
+    // and mark the NonExistent groups/objects accordingly
     folly::Expected<folly::Unit, MoQPublishError> processGapExtensions(
         uint64_t groupID,
         uint64_t objectID,
         const Extensions& objectExtensions);
 
+    // Find the unprocessed FetchWriteback covering a location, or nullptr
+    FetchWriteback* findFetchInProgress(AbsoluteLocation loc);
+
     // Returns true if track can be evicted (not live, no active fetches)
     bool canEvict() const {
-      return liveWritebackCount == 0 && activeFetchCount == 0;
+      return liveWritebackCount == 0 && fetchesInProgress.empty();
+    }
+
+    // Insert a known-non-existent range into both gaps and cachedContent.
+    // The two sets must stay aligned: cachedContent doubles as the union
+    // (real objects + known gaps) used by skipUncached().
+    void insertGap(AbsoluteLocation start, AbsoluteLocation end) {
+      gaps.insert(start, end);
+      cachedContent.insert(start, end);
     }
   };
 
   // Group-order-aware iterator for traversing groups (objects within groups
-  // always ascending)
+  // always ascending). Automatically skips over gaps.
   class FetchRangeIterator {
    public:
     FetchRangeIterator(
@@ -303,6 +323,9 @@ class MoQCache {
 
     AbsoluteLocation end();
     void next();
+    void skipGaps();     // Skip over any gaps at current position
+    void skipUncached(); // Skip to next cached content position
+    void advanceTo(const AbsoluteLocation& loc);
     const AbsoluteLocation& operator*() const;
     const AbsoluteLocation* operator->() const;
     void invalidate();
@@ -314,17 +337,22 @@ class MoQCache {
     std::shared_ptr<CacheTrack> track;
 
    private:
+    void advanceOne(); // Single step without gap skipping
     AbsoluteLocation current_;
     AbsoluteLocation end_;
     bool isValid_ = true;
-    mutable uint64_t cachedGroupId_{std::numeric_limits<uint64_t>::max()};
+    mutable uint64_t cachedGroupId_{kLocationMax.group};
     mutable std::shared_ptr<CacheGroup> cachedGroupPtr_{nullptr};
-    mutable uint64_t cachedEndGroupId_{std::numeric_limits<uint64_t>::max()};
+    mutable uint64_t cachedEndGroupId_{kLocationMax.group};
     mutable std::shared_ptr<CacheGroup> cachedEndGroupPtr_{nullptr};
     std::optional<uint64_t> findGroupEndMaybe(
         uint64_t groupId,
         uint64_t& cachedGroupId_,
         std::shared_ptr<CacheGroup>& cachedGroupPtr_) const;
+    // Descending-mode helper: find the next cached position by jumping
+    // to a lower group. Returns nullopt if no such position exists in
+    // [minLocation, current_.group).
+    std::optional<AbsoluteLocation> findPrevGroupCachedPosition() const;
   };
 
   folly::F14FastMap<
@@ -353,7 +381,10 @@ class MoQCache {
   // Injectable clock for testing
   std::function<TimePoint()> clock_;
 
-  std::optional<MoQCache::CacheEntry*>
+  // Returns:
+  // Returns valid CacheEntry* on cache hit, nullptr on miss.
+  // Caller (fetchImpl) is responsible for gap-skipping via FetchRangeIterator.
+  CacheEntry*
   getCachedObjectMaybe(CacheTrack& track, AbsoluteLocation obj, TimePoint now);
 
   folly::coro::Task<Publisher::FetchResult> fetchImpl(
@@ -389,7 +420,6 @@ class MoQCache {
       CacheGroup& group,
       CacheTrack& track);
   void removeGroupFromLRU(CacheGroup& group, CacheTrack& track);
-  bool canEvictGroup(uint64_t groupID, CacheTrack& track);
 
   // Eviction methods
   bool evictOldestTrackIfNeeded();
@@ -402,6 +432,7 @@ class MoQCache {
   folly::Expected<folly::Unit, MoQPublishError> cacheObjectAndUpdateBytes(
       CacheGroup& group,
       CacheTrack& track,
+      uint64_t groupID,
       uint64_t subgroup,
       uint64_t objectID,
       ObjectStatus status,

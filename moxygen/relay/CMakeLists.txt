@@ -19,11 +19,10 @@ moxygen_add_library(moxygen_relay_moq_cache
   SRCS
     MoQCache.cpp
   EXPORTED_DEPS
+    moxygen_util_location_interval_set
     moxygen_moq
     moxygen_moq_consumers
     moxygen_moq_framer
-    moxygen_util_bidi_iterator
-    moxygen_util_fetch_interval_set
     Folly::folly_container_f14_hash
     Folly::folly_coro_baton
     Folly::folly_coro_task
