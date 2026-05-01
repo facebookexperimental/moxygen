@@ -89,7 +89,18 @@ if [[ "$OS" == "Darwin" ]]; then
     fi
     strip -S "$lib" 2>/dev/null && STRIPPED=$((STRIPPED + 1)) || true
   done < <(find "$INSTALL_PREFIX" \( -name '*.a' -o -name '*.dylib' \) -type f -print0)
-  echo "    macOS: stripped $STRIPPED libraries"
+  # Executables under bin/ — same treatment.
+  if [[ -d "$INSTALL_PREFIX/bin" ]]; then
+    while IFS= read -r -d '' exe; do
+      if [[ -n "$DEBUG_DIR" ]]; then
+        REL="${exe#$INSTALL_PREFIX/}"
+        mkdir -p "$DEBUG_DIR/$(dirname "$REL")"
+        cp "$exe" "$DEBUG_DIR/${REL}.debug" 2>/dev/null || true
+      fi
+      strip -S "$exe" 2>/dev/null && STRIPPED=$((STRIPPED + 1)) || true
+    done < <(find "$INSTALL_PREFIX/bin" -type f -perm -u+x -print0)
+  fi
+  echo "    macOS: stripped $STRIPPED files"
 
 elif [[ "$OS" == "Linux" ]]; then
   while IFS= read -r -d '' lib; do
@@ -107,7 +118,25 @@ elif [[ "$OS" == "Linux" ]]; then
       STRIPPED=$((STRIPPED + 1))
     fi
   done < <(find "$INSTALL_PREFIX" \( -name '*.a' -o -name '*.so' -o -name '*.so.*' \) -type f -print0)
-  echo "    Linux: stripped $STRIPPED libraries"
+  # Executables under bin/ — same treatment as libs.
+  # Walks bin/ explicitly (executables typically have no extension, so the
+  # lib find above misses them — that's the bug fix).
+  if [[ -d "$INSTALL_PREFIX/bin" ]]; then
+    while IFS= read -r -d '' exe; do
+      if [[ -n "$DEBUG_DIR" ]]; then
+        REL="${exe#$INSTALL_PREFIX/}"
+        mkdir -p "$DEBUG_DIR/$(dirname "$REL")"
+        objcopy --only-keep-debug "$exe" "$DEBUG_DIR/${REL}.debug" 2>/dev/null || true
+      fi
+      if strip --strip-debug "$exe" 2>/dev/null; then
+        if [[ -n "$DEBUG_DIR" && -f "$DEBUG_DIR/${REL}.debug" ]]; then
+          objcopy --add-gnu-debuglink="$DEBUG_DIR/${REL}.debug" "$exe" 2>/dev/null || true
+        fi
+        STRIPPED=$((STRIPPED + 1))
+      fi
+    done < <(find "$INSTALL_PREFIX/bin" -type f -perm -u+x -print0)
+  fi
+  echo "    Linux: stripped $STRIPPED files"
 
 else
   echo "    Warning: unknown OS '$OS', skipping strip" >&2
