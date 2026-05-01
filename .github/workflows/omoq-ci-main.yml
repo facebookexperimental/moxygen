@@ -134,28 +134,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux RelWithDebInfo entries: keep frame pointers preserved so
-          # signal-handler stack unwinding (folly::symbolizer) and post-mortem
-          # debugging via the -dbg sidecar work reliably under -O2.
           - name: ubuntu-22.04-amd64
             runner: ubuntu-22.04
-            build_type: RelWithDebInfo
-            cxx_flags: "-fno-omit-frame-pointer -fasynchronous-unwind-tables"
             artifact: moxygen-ubuntu-22.04-amd64.tar.gz
             debug_artifact: moxygen-ubuntu-22.04-amd64-dbg.tar.gz
             container: ""
 
           - name: macos-15-arm64
             runner: macos-15
-            build_type: RelWithDebInfo
             artifact: moxygen-macos-15-arm64.tar.gz
             debug_artifact: moxygen-macos-15-arm64-dbg.tar.gz
             container: ""
 
           - name: bookworm-amd64
             runner: [self-hosted, linode]
-            build_type: RelWithDebInfo
-            cxx_flags: "-fno-omit-frame-pointer -fasynchronous-unwind-tables"
             artifact: moxygen-bookworm-amd64.tar.gz
             debug_artifact: moxygen-bookworm-amd64-dbg.tar.gz
             container: debian:bookworm
@@ -163,35 +155,9 @@ jobs:
 
           - name: bookworm-arm64
             runner: ubuntu-22.04-arm
-            build_type: RelWithDebInfo
-            cxx_flags: "-fno-omit-frame-pointer -fasynchronous-unwind-tables"
             artifact: moxygen-bookworm-arm64.tar.gz
             debug_artifact: moxygen-bookworm-arm64-dbg.tar.gz
             container: debian:bookworm
-
-          # ── Portable Linux production tarballs ──
-          # Release build on jammy base, statically linked for cross-distro
-          # compatibility. cxx_flags pin the ISA baseline:
-          #   x86-64-v2 = SSE4.2+POPCNT (≈ all cloud x86 since 2015)
-          #   armv8-a   = base ARMv8.0 (covers Graviton 1-4, Ampere, Apple M,
-          #               RPi 3/4/5, Rockchip RK3399 + RK3588 / Orange Pi)
-          - name: linux-amd64
-            runner: ubuntu-22.04
-            build_type: Release
-            cxx_flags: "-march=x86-64-v2"
-            static_syslibs: "ON"
-            artifact: moxygen-linux-amd64.tar.gz
-            debug_artifact: moxygen-linux-amd64-symbols.tar.gz
-            container: ""
-
-          - name: linux-arm64
-            runner: ubuntu-22.04-arm
-            build_type: Release
-            cxx_flags: "-march=armv8-a"
-            static_syslibs: "ON"
-            artifact: moxygen-linux-arm64.tar.gz
-            debug_artifact: moxygen-linux-arm64-symbols.tar.gz
-            container: ""
 
     name: publish (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
@@ -242,32 +208,10 @@ jobs:
             # Self-hosted without container: use home dir
             EXTRA_FLAGS+=(-DFETCHCONTENT_BASE_DIR="$HOME/.cache/moxygen-publish-${{ matrix.name }}/_deps")
           fi
-          # Build up combined C/CXX flags. matrix.cxx_flags is applied
-          # uniformly (any entry can request flags). matrix.static_syslibs
-          # additionally triggers the portable-tarball treatment: static-link
-          # the SONAME-churning system libs, disable libunwind (Ubuntu's
-          # libunwind.a is non-PIC, blocks PIE link), and disable LTO link-
-          # time codegen (Debian/Ubuntu fat-LTO system .a files would otherwise
-          # clash with -O3 -march + PIE producing R_AARCH64_ADR_PREL_PG_HI21
-          # against __stack_chk_guard).
-          COMBINED_FLAGS="${{ matrix.cxx_flags }}"
-          if [ "${{ matrix.static_syslibs }}" = "ON" ]; then
-            EXTRA_FLAGS+=(-DBUNDLE_DEPS_STATIC_SYSLIBS=ON)
-            EXTRA_FLAGS+=(-DCMAKE_DISABLE_FIND_PACKAGE_LibUnwind=TRUE)
-            COMBINED_FLAGS="$COMBINED_FLAGS -fno-lto"
-            EXTRA_FLAGS+=(-DCMAKE_EXE_LINKER_FLAGS="-fno-lto")
-            EXTRA_FLAGS+=(-DCMAKE_SHARED_LINKER_FLAGS="-fno-lto")
-          fi
-          if [ -n "$COMBINED_FLAGS" ]; then
-            EXTRA_FLAGS+=(-DCMAKE_C_FLAGS="$COMBINED_FLAGS")
-            EXTRA_FLAGS+=(-DCMAKE_CXX_FLAGS="$COMBINED_FLAGS")
-          fi
           cmake -B _build -S standalone -G Ninja \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DBUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DBUILD_TESTING=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUNDLE_DEPS=ON \
