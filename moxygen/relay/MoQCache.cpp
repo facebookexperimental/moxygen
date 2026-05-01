@@ -454,13 +454,14 @@ MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroup(uint64_t groupID) {
 
 MoQCache::CacheGroup& MoQCache::CacheTrack::getOrCreateGroupWithEviction(
     uint64_t groupID,
-    MoQCache& cache) {
+    MoQCache& cache,
+    const FullTrackName& ftn) {
   auto it = groups.find(groupID);
   if (it == groups.end()) {
     cache.evictOldestGroupsIfNeeded(*this);
     it = groups.emplace(groupID, std::make_shared<CacheGroup>()).first;
     // New group starts in LRU (evictable)
-    cache.addGroupToLRU(groupID, *it->second, *this);
+    cache.addGroupToLRU(ftn, groupID, *it->second, *this);
   }
   return *it->second;
 }
@@ -839,7 +840,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
     }
     auto res = consumer_->beginSubgroup(groupID, subgroupID, priority);
     if (res.hasValue() && !track_.evicted) {
-      track_.getOrCreateGroupWithEviction(groupID, cache_);
+      track_.getOrCreateGroupWithEviction(groupID, cache_, ftn_);
       return std::make_shared<SubgroupWriteback>(
           groupID,
           subgroupID,
@@ -872,7 +873,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       return res;
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
-        track_.getOrCreateGroupWithEviction(header.group, cache_),
+        track_.getOrCreateGroupWithEviction(header.group, cache_, ftn_),
         track_,
         header.group,
         header.subgroup,
@@ -903,7 +904,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       return res;
     }
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
-        track_.getOrCreateGroupWithEviction(header.group, cache_),
+        track_.getOrCreateGroupWithEviction(header.group, cache_, ftn_),
         track_,
         header.group,
         header.subgroup,
@@ -1098,7 +1099,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
           std::move(payload), finFetch && proxyFin_);
     }
     auto& group = fetchRangeIt_.track->getOrCreateGroupWithEviction(
-        fetchRangeIt_->group, cache_);
+        fetchRangeIt_->group, cache_, ftn_);
     auto& object = group.objects[fetchRangeIt_->object];
     size_t addedBytes = payload->computeChainDataLength();
     if (object->payload) {
@@ -1245,7 +1246,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     fetchRangeIt_.track->fetchesInProgress.erase(fetchInProgressIt_);
     fetchInProgressIt_ = fetchRangeIt_.track->fetchesInProgress.end();
     if (pinnedGroup_) {
-      cache_.addGroupToLRU(groupID, *pinnedGroup_, *fetchRangeIt_.track);
+      cache_.addGroupToLRU(ftn_, groupID, *pinnedGroup_, *fetchRangeIt_.track);
       pinnedGroup_.reset();
     }
   }
@@ -1297,7 +1298,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
       bool finFetch,
       bool forwardingPreferenceIsDatagram = false) {
     auto& group =
-        fetchRangeIt_.track->getOrCreateGroupWithEviction(groupID, cache_);
+        fetchRangeIt_.track->getOrCreateGroupWithEviction(groupID, cache_, ftn_);
     auto cacheRes = cache_.cacheObjectAndUpdateBytes(
         group,
         *fetchRangeIt_.track,

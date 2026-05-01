@@ -282,7 +282,10 @@ class MoQCache {
     CacheGroup& getOrCreateGroup(uint64_t groupID);
     // Same as getOrCreateGroup but, when creating, evicts old groups to honor
     // the per-track group limit and inserts the new group into the LRU.
-    CacheGroup& getOrCreateGroupWithEviction(uint64_t groupID, MoQCache& cache);
+    CacheGroup& getOrCreateGroupWithEviction(
+        uint64_t groupID,
+        MoQCache& cache,
+        const FullTrackName& ftn);
 
     // Process Prior Group ID Gap and Prior Object ID Gap extensions
     // and mark the NonExistent groups/objects accordingly
