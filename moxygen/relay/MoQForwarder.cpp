@@ -67,12 +67,13 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
   forwarder_->forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     auto subgroupConsumerIt = sub->subgroups.find(identifier_);
     if (subgroupConsumerIt != sub->subgroups.end()) {
-      // For an existing consumer, only past-end retires it; range.start may
-      // have advanced after beginObject (e.g. LargestObject onPublishOk) but
-      // the in-flight object must still reach the consumer.
-      // TODO: advancing range.start while a subgroup is open can leave gaps
-      // in the subgroup (a MOQT violation). Open subgroups should be reset
-      // when start advances past their first object.
+      // For an existing consumer, only past-end retires it. If range.start
+      // advanced within this subgroup (e.g. LargestObject onPublishOk), we
+      // still deliver all objects: within a subgroup, later objects depend on
+      // earlier ones so delivering more than the subscriber asked is correct.
+      // TODO: if range.start advanced past this subgroup's group entirely
+      // (e.g. via SubscribeUpdate), we should reset the open subgroup rather
+      // than continuing to deliver to it.
       if (forwarder_->checkPastEnd(*sub)) {
         return;
       }
