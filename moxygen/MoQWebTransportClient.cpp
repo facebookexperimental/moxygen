@@ -77,7 +77,6 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
   fizzContext->setSupportedAlpns({"h3"});
   hqConnector.setH3Settings(
       {{proxygen::SettingsId::ENABLE_CONNECT_PROTOCOL, 1},
-       {proxygen::SettingsId::_HQ_DATAGRAM_DRAFT_8, 1},
        {proxygen::SettingsId::_HQ_DATAGRAM, 1},
        {proxygen::SettingsId::_HQ_DATAGRAM_RFC, 1},
        {proxygen::SettingsId::ENABLE_WEBTRANSPORT, 1}});
