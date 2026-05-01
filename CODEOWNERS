@@ -1,0 +1,8 @@
+# CODEOWNERS — auto-requests reviews from the openmoq merge group.
+#
+# Branch protection requires one approving review (from any user with write
+# access) and restricts the merge button to the users listed below. Code
+# owners are auto-tagged for review when a PR opens, but the approving
+# review may come from any qualified reviewer.
+
+* @afrind @akash-a-n @gmarzot @michalhosna @mondain @Oxyd @peterchave @suhasHere @TimEvens
