@@ -18,6 +18,17 @@ moxygen_add_test(TARGET MoQCacheTests
     Folly::folly_io_async_scoped_event_base_thread
 )
 
+moxygen_add_test(TARGET MoQForwarderTest
+  PREFIX "MoQForwarder"
+  SOURCES
+    MoQForwarderTest.cpp
+  DEPENDS
+    moxygen_relay_moq_forwarder
+    moqtestutils
+    testmain
+    Folly::folly_coro_gtest_helpers
+)
+
 moxygen_add_test(TARGET MoQRelayTest
   PREFIX "MoQRelay"
   SOURCES
