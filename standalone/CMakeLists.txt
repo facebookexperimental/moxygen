@@ -83,6 +83,7 @@ read_rev_hash("facebookincubator" "fizz" FIZZ_REV)
 read_rev_hash("facebook" "wangle" WANGLE_REV)
 read_rev_hash("facebook" "mvfst" MVFST_REV)
 read_rev_hash("facebook" "proxygen" PROXYGEN_REV)
+read_rev_hash("openmoq" "picoquic" PICOQUIC_REV)
 
 # =============================================================================
 # System Dependencies (must be pre-installed)
@@ -271,9 +272,12 @@ FetchContent_Declare(proxygen
 )
 
 if(BUILD_PICOQUIC)
+    # Pinned to a SHA on openmoq/picoquic main; auto-bumped by
+    # .github/workflows/omoq-picoquic-bump.yml (opens a PR when the pin
+    # falls behind openmoq/picoquic main; CI gates the merge).
     FetchContent_Declare(picoquic
-        GIT_REPOSITORY https://github.com/afrind/picoquic.git
-        GIT_TAG openmoq-main
+        GIT_REPOSITORY https://github.com/openmoq/picoquic.git
+        GIT_TAG ${PICOQUIC_REV}
     )
 endif()
 

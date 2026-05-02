@@ -15,6 +15,7 @@ on:
     types: [completed]
     branches:
       - sync/**
+      - sync-picoquic/**
 
 permissions:
   contents: write
@@ -23,7 +24,7 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-22.04
-    if: startsWith(github.event.workflow_run.head_branch, 'sync/')
+    if: startsWith(github.event.workflow_run.head_branch, 'sync/') || startsWith(github.event.workflow_run.head_branch, 'sync-picoquic/')
     steps:
       - name: Find sync PR
         id: find-pr

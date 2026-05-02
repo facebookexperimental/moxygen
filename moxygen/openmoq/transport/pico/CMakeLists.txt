@@ -11,8 +11,24 @@ moxygen_add_library(openmoq_pico_base
     Folly::folly_logging_logging
     Folly::folly_network_address
     Folly::folly_string
-    picoquic::picoquic-core
 )
+# Upstream picoquic master added picoquic_set_qlog() calls inside
+# picoquic/sockloop.c (picoquic-core), but the symbol is defined in
+# loglib/qlog_fns.c (picoquic-log) — which already PUBLIC-links
+# picoquic-core. Cyclic static dep. GNU ld processes the link line
+# left-to-right and won't rescan, so wrap the pair in --start-group/
+# --end-group on Linux via $<LINK_GROUP:RESCAN,...> (cmake 3.24+,
+# dedupe-safe). ld64 (macOS) rescans by default.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(openmoq_pico_base PUBLIC
+    "$<LINK_GROUP:RESCAN,picoquic::picoquic-core,picoquic-log>"
+  )
+else()
+  target_link_libraries(openmoq_pico_base PUBLIC
+    picoquic::picoquic-core
+    picoquic-log
+  )
+endif()
 # PicoConnectionContext.h includes PicoH3WebTransport.h which needs h3zero.
 # Propagate picohttp include path to all consumers via BUILD_INTERFACE
 # (avoids CMake policy error for build-dir paths in INTERFACE_INCLUDE_DIRECTORIES).
