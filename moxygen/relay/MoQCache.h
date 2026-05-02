@@ -66,6 +66,18 @@ class MoQCache {
     totalCachedBytes_ = 0;
   }
 
+  // Force-evicts a specific track unconditionally. Returns 1 if found, 0 if
+  // not.
+  size_t purge(const FullTrackName& ftn) {
+    return evictTrack(ftn);
+  }
+
+  // Force-evicts all tracks in the given namespace unconditionally.
+  size_t purge(const TrackNamespace& ns);
+
+  // Force-evicts all cached tracks unconditionally.
+  size_t purge();
+
   bool hasTrack(const FullTrackName& ftn) const {
     return cache_.contains(ftn);
   }
@@ -139,6 +151,29 @@ class MoQCache {
     clock_ = std::move(clock);
   }
 
+  // Returns total payload bytes currently held in the cache.
+  size_t totalCachedBytes() const {
+    return totalCachedBytes_;
+  }
+
+  // Per-group stats for getTrackStats().
+  struct GroupStats {
+    uint64_t groupId;
+    size_t objects;
+  };
+
+  // Per-track stats for getTrackStats().
+  struct TrackStats {
+    FullTrackName name;
+    bool endOfTrack;
+    TimePoint lastWrite;
+    std::vector<GroupStats> groups; // sorted by groupId ascending
+  };
+
+  // Returns a snapshot of all cached tracks and their group/object counts.
+  // Groups within each track are returned in ascending groupId order.
+  std::vector<TrackStats> getTrackStats() const;
+
   // Entry for single cached object
   struct CacheEntry {
     CacheEntry(
@@ -189,8 +224,13 @@ class MoQCache {
     std::optional<uint64_t> seenPriorGroupIdGap;
     // Total payload bytes across all objects in this group
     size_t totalBytes{0};
-    // LRU iterator - present if group is evictable (not in active fetch)
+    // Per-track LRU iterator - present if group is evictable (not in active
+    // SubgroupWriteback). Used by evictOldestGroupsIfNeeded().
     folly::Optional<std::list<uint64_t>::iterator> lruIter_;
+    // Global LRU iterator - present if group is evictable.
+    // Used by evictForByteLimitIfNeeded().
+    folly::Optional<std::list<std::pair<FullTrackName, uint64_t>>::iterator>
+        globalLruIter_;
 
     folly::Expected<folly::Unit, MoQPublishError> cacheObject(
         CacheTrack& track,
@@ -233,6 +273,8 @@ class MoQCache {
     Extensions extensions;
     // Set by clear() — writebacks skip caching when true
     bool evicted{false};
+    // Time of the most recent object write into this track
+    TimePoint lastWrite{TimePoint::min()};
 
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
@@ -240,7 +282,10 @@ class MoQCache {
     CacheGroup& getOrCreateGroup(uint64_t groupID);
     // Same as getOrCreateGroup but, when creating, evicts old groups to honor
     // the per-track group limit and inserts the new group into the LRU.
-    CacheGroup& getOrCreateGroupWithEviction(uint64_t groupID, MoQCache& cache);
+    CacheGroup& getOrCreateGroupWithEviction(
+        uint64_t groupID,
+        MoQCache& cache,
+        const FullTrackName& ftn);
 
     // Process Prior Group ID Gap and Prior Object ID Gap extensions
     // and mark the NonExistent groups/objects accordingly
@@ -318,6 +363,9 @@ class MoQCache {
 
   // LRU list of evictable tracks (oldest at back)
   std::list<FullTrackName> trackLRU_;
+  // Global LRU of evictable groups across all tracks (oldest at back).
+  // Entry: {FullTrackName, groupID}. Used by evictForByteLimitIfNeeded().
+  std::list<std::pair<FullTrackName, uint64_t>> globalGroupLRU_;
 
   // Cache size limits
   size_t maxCachedTracks_;
@@ -366,17 +414,21 @@ class MoQCache {
   void onTrackBecameEvictable(const FullTrackName& ftn);
 
   // Group LRU management helpers
-  void addGroupToLRU(uint64_t groupID, CacheGroup& group, CacheTrack& track);
+  void addGroupToLRU(
+      const FullTrackName& ftn,
+      uint64_t groupID,
+      CacheGroup& group,
+      CacheTrack& track);
   void removeGroupFromLRU(CacheGroup& group, CacheTrack& track);
 
   // Eviction methods
   bool evictOldestTrackIfNeeded();
-  void evictTrack(const FullTrackName& ftn);
+  size_t evictTrack(const FullTrackName& ftn);
   void evictOldestGroupsIfNeeded(CacheTrack& track);
   void evictGroup(CacheTrack& track, uint64_t groupID);
   bool evictForByteLimitIfNeeded();
 
-  // Wraps cacheObject() + byte accounting + eviction check
+  // Wraps cacheObject() + byte accounting + eviction check + lastWrite update
   folly::Expected<folly::Unit, MoQPublishError> cacheObjectAndUpdateBytes(
       CacheGroup& group,
       CacheTrack& track,
