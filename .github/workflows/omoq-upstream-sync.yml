@@ -1,7 +1,14 @@
 name: upstream sync
 
-# Mirrors upstream to `origin/upstream` branch, creates sync/<sha> PR branches
-# for merging into `main`. One PR at a time — blocks if one is pending.
+# Picks the newest green-CI commit from upstream and opens a sync/<sha>
+# PR against main. One PR at a time — blocks if one is pending.
+#
+# We rely on origin/main as the source of truth for "what we've integrated":
+# git merge-base --is-ancestor <upstream-sha> origin/main works because the
+# auto-merge workflow uses --merge mode (preserves upstream SHA as a parent
+# of the sync-PR merge commit). Do NOT change auto-merge to squash/rebase
+# without restoring an explicit origin/upstream watermark.
+#
 # See: https://github.com/openmoq/moqx/blob/main/design/GITHUB_WORKFLOW.md
 
 on:
@@ -104,7 +111,6 @@ jobs:
         run: |
           git remote add upstream https://github.com/facebookexperimental/moxygen.git || true
           git fetch upstream main
-          git fetch origin upstream
 
           COMMITS=$(gh api 'repos/facebookexperimental/moxygen/commits?per_page=20' \
             --jq '.[].sha')
@@ -118,9 +124,10 @@ jobs:
           for SHA in $COMMITS; do
             SHORT="${SHA:0:12}"
 
-            # Skip if already on our upstream mirror
-            if git merge-base --is-ancestor "$SHA" origin/upstream 2>/dev/null; then
-              echo "  $SHORT: already on upstream mirror (stopping scan)"
+            # Skip if already integrated into origin/main. Sync PRs are
+            # --merge-mode so the upstream SHA is reachable via parent chain.
+            if git merge-base --is-ancestor "$SHA" origin/main 2>/dev/null; then
+              echo "  $SHORT: already integrated into origin/main (stopping scan)"
               break
             fi
 
@@ -204,53 +211,22 @@ jobs:
               \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
             }"
 
-      - name: Advance upstream mirror
-        if: steps.blocking.outputs.blocked == 'false' && steps.upstream.outputs.advanced == 'true'
-        run: |
-          UPSTREAM_SHA="${{ steps.upstream.outputs.upstream_sha }}"
-
-          # Verify fast-forward (upstream should never rewrite history)
-          if ! git merge-base --is-ancestor origin/upstream "$UPSTREAM_SHA"; then
-            echo "::error::Upstream is not a fast-forward from current upstream branch."
-            exit 1
-          fi
-
-          git push origin "$UPSTREAM_SHA:refs/heads/upstream"
-          echo "Advanced upstream mirror to ${{ steps.upstream.outputs.short_sha }}"
-
       # ══════════════════════════════════════════════════════════
-      # PHASE C: Ensure merge PR exists (if not blocked)
+      # PHASE C: Create sync PR (if not blocked and we found a target)
       # ══════════════════════════════════════════════════════════
-
-      - name: Check if merge is needed
-        if: steps.blocking.outputs.blocked == 'false'
-        id: merge
-        run: |
-          git fetch origin upstream main
-          if git merge-base --is-ancestor origin/upstream origin/main; then
-            echo "main already contains all upstream commits. Nothing to merge."
-            echo "needs_merge=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Upstream commits need merging into main."
-            echo "needs_merge=true" >> "$GITHUB_OUTPUT"
-
-            # Determine the SHA for the sync branch name
-            SYNC_SHA=$(git rev-parse --short=12 origin/upstream)
-            echo "sync_sha=$SYNC_SHA" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Create sync branch and PR
-        if: steps.blocking.outputs.blocked == 'false' && steps.merge.outputs.needs_merge == 'true'
+        if: steps.blocking.outputs.blocked == 'false' && steps.upstream.outputs.advanced == 'true'
         id: new_pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          SYNC_SHA="${{ steps.merge.outputs.sync_sha }}"
-          FULL_SHA=$(git rev-parse origin/upstream)
+          FULL_SHA="${{ steps.upstream.outputs.upstream_sha }}"
+          SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
           BRANCH="sync/$SYNC_SHA"
 
-          # Create sync branch from upstream mirror HEAD
-          git push origin "origin/upstream:refs/heads/$BRANCH"
+          # Create sync branch directly from the chosen upstream SHA
+          git push origin "$FULL_SHA:refs/heads/$BRANCH"
           echo "Created branch $BRANCH"
 
           # Pre-merge main into sync branch to resolve expected conflicts
@@ -302,7 +278,7 @@ jobs:
         run: |
           PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
-          SYNC_SHA="${{ steps.merge.outputs.sync_sha }}"
+          SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
           TEXT=":warning: *${{ github.repository }}* sync \`${SYNC_SHA}\` has merge conflicts — PR <${PR_URL}|#${PR_NUM}> needs manual resolution"
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
@@ -318,8 +294,8 @@ jobs:
         run: |
           PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
-          SYNC_SHA="${{ steps.merge.outputs.sync_sha }}"
-          FULL_SHA=$(git rev-parse origin/upstream)
+          SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
+          FULL_SHA="${{ steps.upstream.outputs.upstream_sha }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           SUBJECT="[moxygen] sync ${SYNC_SHA} has merge conflicts"
           BODY="Automated upstream sync created a PR with merge conflicts that could not be auto-resolved.\n\nPR: ${PR_URL}\nUpstream commit: ${FULL_SHA}\nRun: ${RUN_URL}\n\nManual conflict resolution required."
@@ -333,7 +309,7 @@ jobs:
 
       # ── Approve and enable auto-merge ──
       - name: Approve PR
-        if: steps.blocking.outputs.blocked == 'false' && steps.merge.outputs.needs_merge == 'true'
+        if: steps.blocking.outputs.blocked == 'false' && steps.upstream.outputs.advanced == 'true'
         env:
           GH_TOKEN: ${{ secrets.OMOQ_SYNC_TOKEN }}
         run: |
