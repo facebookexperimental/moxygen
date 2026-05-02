@@ -21,12 +21,12 @@ moxygen_add_library(openmoq_pico_base
 # dedupe-safe). ld64 (macOS) rescans by default.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(openmoq_pico_base PUBLIC
-    "$<LINK_GROUP:RESCAN,picoquic::picoquic-core,picoquic-log>"
+    "$<LINK_GROUP:RESCAN,picoquic::picoquic-core,picoquic::picoquic-log>"
   )
 else()
   target_link_libraries(openmoq_pico_base PUBLIC
     picoquic::picoquic-core
-    picoquic-log
+    picoquic::picoquic-log
   )
 endif()
 # PicoConnectionContext.h includes PicoH3WebTransport.h which needs h3zero.
