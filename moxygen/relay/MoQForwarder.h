@@ -204,6 +204,11 @@ class MoQForwarder : public TrackConsumer {
 
   bool checkRange(const Subscriber& sub);
 
+  // Returns true if largest_ has advanced past sub.range.end. As a side
+  // effect this also publishDone's the subscriber; that retirement
+  // probably belongs elsewhere (TODO).
+  bool checkPastEnd(const Subscriber& sub);
+
   void removeSubscriberOnError(
       const Subscriber& sub,
       const MoQPublishError& err,
