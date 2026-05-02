@@ -1843,6 +1843,10 @@ class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
   MoQFrameParser parser_;
   MoQFrameWriter writer_;
 
+  bool deltaEncoding() const {
+    return getDraftMajorVersion(GetParam()) >= 16;
+  }
+
   // Creates the following extensions (encoded back-to-back):
   // {type = 20, value = 100, immutable}
   // {type = 21, value = binary(0xAB,0xCD,0xEF), immutable}
@@ -1856,7 +1860,7 @@ class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
 
     // Extension type 21 (odd => length + bytes), binary value
     static uint8_t testData[] = {0xAB, 0xCD, 0xEF};
-    writeVarintTo(immutableBuf, 21);                 // type
+    writeVarintTo(immutableBuf, deltaEncoding() ? 21 - 20 : 21); // type
     writeVarintTo(immutableBuf, sizeof(testData));   // length
     immutableBuf.append(testData, sizeof(testData)); // data
 
@@ -1868,25 +1872,33 @@ class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
   // type = kImmutableExtensionType (odd) and an arbitrary byte value. This is
   // invalid when parsed as nested immutable extensions (parseImmutable=false).
   std::unique_ptr<folly::IOBuf> createImmutableExtensionsBufMalformed() {
-    // Start with the valid immutable extensions blob
-    auto base = createImmutableExtensionsBuf();
-
     // Append an additional immutable-extensions container entry with arbitrary
     // 1-byte payload. This makes the nested immutable blob malformed for our
     // parser (immutable container found while already parsing immutable).
     folly::IOBufQueue q{folly::IOBufQueue::cacheChainLength()};
 
-    if (base) {
-      q.append(std::move(base));
+    if (deltaEncoding()) {
+      // Different path to support delta encoding.
+      writeVarintTo(q, 2); // type
+      writeVarintTo(q, 1); // value
+      writeVarintTo(q, kImmutableExtensionType - 2); // nested
+      writeVarintTo(q, 1);                           // length
+      static const uint8_t kArbitrary = 0xAA;
+      q.append(&kArbitrary, 1);
+    } else {
+      auto base = createImmutableExtensionsBuf();
+      if (base) {
+        q.append(std::move(base));
+      }
+
+      // Write type = kImmutableExtensionType (odd)
+      writeVarintTo(q, kImmutableExtensionType);
+
+      // Write length = 1, then one arbitrary byte value 0xAA
+      writeVarintTo(q, 1); // length
+      static const uint8_t kArbitrary = 0xAA;
+      q.append(&kArbitrary, 1);
     }
-
-    // Write type = kImmutableExtensionType (odd)
-    writeVarintTo(q, kImmutableExtensionType);
-
-    // Write length = 1, then one arbitrary byte value 0xAA
-    writeVarintTo(q, 1); // length
-    static const uint8_t kArbitrary = 0xAA;
-    q.append(&kArbitrary, 1);
 
     return q.move();
   }
@@ -1906,14 +1918,14 @@ class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
     // 2) type = kImmutableExtensionType (odd => length + bytes), value =
     //    output of createImmutableExtensionsBuf()
     auto imm = createImmutableExtensionsBuf();
-    writeVarintTo(buf, kImmutableExtensionType);                 // type
+    writeVarintTo(buf, deltaEncoding() ? kImmutableExtensionType - 10 : kImmutableExtensionType); // type
     writeVarintTo(buf, imm ? imm->computeChainDataLength() : 0); // length
     if (imm) {
       buf.append(std::move(imm)); // payload
     }
 
     // 3) type = 30 (even => integer value follows), value = 999
-    writeVarintTo(buf, 30);  // type
+    writeVarintTo(buf, deltaEncoding() ? 30 - kImmutableExtensionType : 30); // type
     writeVarintTo(buf, 999); // value
 
     return buf.move();
@@ -1932,14 +1944,14 @@ class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
     // 2) type = kImmutableExtensionType (odd => length + bytes), value =
     //    output of createImmutableExtensionsBufMalformed()
     auto imm = createImmutableExtensionsBufMalformed();
-    writeVarintTo(buf, kImmutableExtensionType);                 // type
+    writeVarintTo(buf, deltaEncoding() ? kImmutableExtensionType - 10 : kImmutableExtensionType); // type
     writeVarintTo(buf, imm ? imm->computeChainDataLength() : 0); // length
     if (imm) {
       buf.append(std::move(imm)); // payload
     }
 
     // 3) type = 30 (even => integer value follows), value = 999
-    writeVarintTo(buf, 30);  // type
+    writeVarintTo(buf, deltaEncoding() ? 30 - kImmutableExtensionType : 30); // type
     writeVarintTo(buf, 999); // value
 
     return buf.move();
@@ -2025,9 +2037,11 @@ TEST_P(MoQImmutableExtensionsTest, WriteImmutableExtensionsDraft) {
 
   static const uint8_t kTestBinary[] = {0xAB, 0xCD, 0xEF};
   std::vector<Extension> immutableExts = {
+      Extension{2, 2},
       Extension{20, 100},
       Extension{
-          21, folly::IOBuf::copyBuffer(kTestBinary, sizeof(kTestBinary))}};
+          21, folly::IOBuf::copyBuffer(kTestBinary, sizeof(kTestBinary))},
+      Extension{32, 32}};
 
   Extensions extensions(mutableExts, immutableExts);
 
@@ -2056,8 +2070,8 @@ TEST_P(MoQImmutableExtensionsTest, WriteImmutableExtensionsDraft) {
   EXPECT_TRUE(parseResult.hasValue()) << "Parsing should succeed";
 
   // Verify both mutable and immutable extensions are present
-  EXPECT_EQ(obj.extensions.size(), 4)
-      << "Should have 4 total extensions (2 mutable + 2 immutable)";
+  EXPECT_EQ(obj.extensions.size(), 6)
+      << "Should have 6 total extensions (2 mutable + 4 immutable)";
   EXPECT_THAT(
       obj.extensions.getMutableExtensions(), testing::ContainerEq(mutableExts));
   EXPECT_THAT(
@@ -2114,7 +2128,7 @@ TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
 INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
-    ::testing::Values(kVersionDraft14, kVersionDraft15));
+    ::testing::Values(kVersionDraft14, kVersionDraft15, kVersionDraft16));
 
 TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};

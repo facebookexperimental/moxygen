@@ -3239,6 +3239,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtension(
             << " extLen=" << extLen->first;
         return folly::makeUnexpected(parseInnerResult.error());
       }
+      // Reset delta encoding state post-immutable.
+      previousExtensionType_ = kImmutableExtensionType;
       // Advance the outer cursor past the immutable container payload and
       // consume the bytes from the local length tracker
       cursor.skip(extLen->first);
@@ -3728,75 +3730,106 @@ void MoQFrameWriter::writeExtensions(
     size_t& size,
     bool& error,
     bool withLengthPrefix) const noexcept {
-  // Calculate total extension length (mutable + immutable blob if present)
-  auto mutableExtLen =
-      calculateExtensionVectorSize(extensions.getMutableExtensions(), error);
-  if (error) {
-    return;
-  }
-
-  size_t immutableBlobLen = 0;
-  size_t immutableExtensionsSize = 0; // Store calculated size for reuse
-  if (getDraftMajorVersion(*version_) >= 14 &&
-      !extensions.getImmutableExtensions().empty()) {
-    // Calculate size of immutable extensions blob:
-    // - Type (kImmutableExtensionType)
-    // - Length
-    // - Key-value pairs data
-    immutableExtensionsSize = calculateExtensionVectorSize(
+  // Get immutable length, if any.
+  const bool hasImmutableBlob = getDraftMajorVersion(*version_) >= 14 &&
+      !extensions.getImmutableExtensions().empty();
+  size_t immutableBodySize = 0;
+  if (hasImmutableBlob) {
+    immutableBodySize = calculateExtensionVectorSize(
         extensions.getImmutableExtensions(), error);
     if (error) {
       return;
     }
-
-    auto maybeTypeSize = quic::getQuicIntegerSize(kImmutableExtensionType);
-    if (maybeTypeSize.hasError()) {
-      error = true;
-      return;
-    }
-
-    auto maybeLengthSize = quic::getQuicIntegerSize(immutableExtensionsSize);
-    if (maybeLengthSize.hasError()) {
-      error = true;
-      return;
-    }
-
-    immutableBlobLen =
-        *maybeTypeSize + *maybeLengthSize + immutableExtensionsSize;
   }
 
-  auto totalExtLen = mutableExtLen + immutableBlobLen;
-  if (withLengthPrefix) {
-    writeVarint(writeBuf, totalExtLen, size, error);
+  folly::IOBufQueue blockBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t blockSize = 0;
+
+  auto writeImmutableContainer = [&](uint64_t typeToWrite) {
+    writeVarint(blockBuf, typeToWrite, blockSize, error);
     if (error) {
       return;
     }
-  }
-
-  // Write mutable extensions first
-  writeKeyValuePairs(writeBuf, extensions.getMutableExtensions(), size, error);
-  if (error) {
-    return;
-  }
-
-  // Write immutable extensions blob if present
-  if (getDraftMajorVersion(*version_) >= 14 &&
-      !extensions.getImmutableExtensions().empty()) {
-    writeVarint(writeBuf, kImmutableExtensionType, size, error);
+    writeVarint(blockBuf, immutableBodySize, blockSize, error);
     if (error) {
       return;
     }
-
-    // Use the previously calculated size (no need to recalculate)
-    writeVarint(writeBuf, immutableExtensionsSize, size, error);
-    if (error) {
-      return;
-    }
-
-    // Write the immutable extensions as key-value pairs
     writeKeyValuePairs(
-        writeBuf, extensions.getImmutableExtensions(), size, error);
+        blockBuf, extensions.getImmutableExtensions(), blockSize, error);
+  };
+
+  if (getDraftMajorVersion(*version_) >= 16) {
+    auto sortedMutable =
+        sortExtensionsByType(extensions.getMutableExtensions());
+    uint64_t previousType = 0;
+    bool containerPlaced = false;
+    for (const auto& ext : sortedMutable) {
+      // Do we need to prepend immutable before going further?
+      if (hasImmutableBlob && !containerPlaced &&
+          ext.type > kImmutableExtensionType) {
+        writeImmutableContainer(kImmutableExtensionType - previousType);
+        if (error) {
+          return;
+        }
+        previousType = kImmutableExtensionType;
+        containerPlaced = true;
+      }
+
+      // Write the current mutable extension.
+      writeVarint(blockBuf, ext.type - previousType, blockSize, error);
+      if (error) {
+        return;
+      }
+      previousType = ext.type;
+      if (ext.isOddType()) {
+        auto dataLen =
+            ext.arrayValue ? ext.arrayValue->computeChainDataLength() : 0;
+        writeVarint(blockBuf, dataLen, blockSize, error);
+        if (error) {
+          return;
+        }
+        if (ext.arrayValue) {
+          blockBuf.append(ext.arrayValue->clone());
+          blockSize += dataLen;
+        }
+      } else {
+        writeVarint(blockBuf, ext.intValue, blockSize, error);
+        if (error) {
+          return;
+        }
+      }
+    }
+
+    // Otherwise, immutable is at the end.
+    if (hasImmutableBlob && !containerPlaced) {
+      writeImmutableContainer(kImmutableExtensionType - previousType);
+      if (error) {
+        return;
+      }
+    }
+  } else {
+    // v<16: no delta encoding, mutable extensions then immutable.
+    writeKeyValuePairs(
+        blockBuf, extensions.getMutableExtensions(), blockSize, error);
+    if (error) {
+      return;
+    }
+    if (hasImmutableBlob) {
+      writeImmutableContainer(kImmutableExtensionType);
+      if (error) {
+        return;
+      }
+    }
   }
+
+  if (withLengthPrefix) {
+    writeVarint(writeBuf, blockSize, size, error);
+    if (error) {
+      return;
+    }
+  }
+  writeBuf.append(blockBuf.move());
+  size += blockSize;
 }
 
 size_t MoQFrameWriter::calculateExtensionVectorSize(
