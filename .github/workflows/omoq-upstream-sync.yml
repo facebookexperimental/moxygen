@@ -1,0 +1,357 @@
+name: upstream sync
+
+# Picks the newest green-CI commit from upstream and opens a sync/<sha>
+# PR against main. One PR at a time — blocks if one is pending.
+#
+# We rely on origin/main as the source of truth for "what we've integrated":
+# git merge-base --is-ancestor <upstream-sha> origin/main works because the
+# auto-merge workflow uses --merge mode (preserves upstream SHA as a parent
+# of the sync-PR merge commit). Do NOT change auto-merge to squash/rebase
+# without restoring an explicit origin/upstream watermark.
+#
+# See: https://github.com/openmoq/moqx/blob/main/design/GITHUB_WORKFLOW.md
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # Daily at 02:00 ET (07:00 UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    steps:
+      # ── Generate GitHub App token (bot identity for PRs) ──
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      # ══════════════════════════════════════════════════════════
+      # PHASE A: Check for blocking sync PR
+      # ══════════════════════════════════════════════════════════
+
+      - name: Check for open sync PR
+        id: blocking
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Look for any open PR from a sync/* branch targeting main
+          PR=$(gh api "repos/${{ github.repository }}/pulls?state=open&base=main" \
+            --jq '[.[] | select(.head.ref | startswith("sync/"))] | .[0] // empty')
+
+          if [ -n "$PR" ]; then
+            PR_NUM=$(echo "$PR" | jq -r '.number')
+            PR_REF=$(echo "$PR" | jq -r '.head.ref')
+            echo "::warning::Sync blocked — open PR #$PR_NUM ($PR_REF) pending."
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            echo "pr_num=$PR_NUM" >> "$GITHUB_OUTPUT"
+            echo "pr_ref=$PR_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "No open sync PR. Proceeding."
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify blocked (Slack)
+        if: steps.blocking.outputs.blocked == 'true'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          PR_NUM="${{ steps.blocking.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          TEXT=":pause_button: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — upstream sync paused: PR <${PR_URL}|#${PR_NUM}> pending"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify blocked (email)
+        if: steps.blocking.outputs.blocked == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          PR_NUM="${{ steps.blocking.outputs.pr_num }}"
+          PR_REF="${{ steps.blocking.outputs.pr_ref }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] sync paused — PR #${PR_NUM} pending"
+          BODY="Upstream sync blocked by open PR.\n\nPR: ${PR_URL}\nBranch: ${PR_REF}\nRun: ${RUN_URL}"
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
+
+      # ══════════════════════════════════════════════════════════
+      # PHASE B: Advance upstream mirror (if not blocked)
+      # ══════════════════════════════════════════════════════════
+
+      - name: Find newest green upstream commit
+        if: steps.blocking.outputs.blocked == 'false'
+        id: upstream
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git remote add upstream https://github.com/facebookexperimental/moxygen.git || true
+          git fetch upstream main
+
+          COMMITS=$(gh api 'repos/facebookexperimental/moxygen/commits?per_page=20' \
+            --jq '.[].sha')
+
+          echo "Scanning up to 20 recent upstream commits..."
+          UPSTREAM_SHA=""
+          NEW_COUNT=0
+          FAIL_COUNT=0
+          LATEST_NEW_SHA=""
+
+          for SHA in $COMMITS; do
+            SHORT="${SHA:0:12}"
+
+            # Skip if already integrated into origin/main. Sync PRs are
+            # --merge-mode so the upstream SHA is reachable via parent chain.
+            if git merge-base --is-ancestor "$SHA" origin/main 2>/dev/null; then
+              echo "  $SHORT: already integrated into origin/main (stopping scan)"
+              break
+            fi
+
+            NEW_COUNT=$((NEW_COUNT + 1))
+            [ -z "$LATEST_NEW_SHA" ] && LATEST_NEW_SHA="$SHA"
+
+            # Check build status
+            STATE=$(gh api "repos/facebookexperimental/moxygen/commits/$SHA/check-suites" \
+              -q '[.check_suites[] | select(.app.name=="GitHub Actions")] |
+                  if length == 0 then "failure"
+                  elif any(.status == "queued" or .status == "in_progress") then "pending"
+                  elif all(.conclusion == "success") then "success"
+                  else "failure" end')
+
+            echo "  $SHORT: $STATE"
+
+            if [ "$STATE" = "success" ]; then
+              UPSTREAM_SHA="$SHA"
+              break
+            fi
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+          done
+
+          if [ -z "$UPSTREAM_SHA" ]; then
+            echo "No new qualifying upstream commit found."
+            echo "advanced=false" >> "$GITHUB_OUTPUT"
+          else
+            SHORT_SHA="${UPSTREAM_SHA:0:12}"
+            echo ""
+            echo "Selected upstream commit: $SHORT_SHA"
+            echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+            echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+            echo "advanced=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "new_count=$NEW_COUNT" >> "$GITHUB_OUTPUT"
+          echo "fail_count=$FAIL_COUNT" >> "$GITHUB_OUTPUT"
+          echo "latest_new_sha=$LATEST_NEW_SHA" >> "$GITHUB_OUTPUT"
+
+          # Flag if all new commits are failing
+          if [ "$NEW_COUNT" -gt 0 ] && [ "$FAIL_COUNT" -eq "$NEW_COUNT" ]; then
+            echo "all_failing=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::All $NEW_COUNT new upstream commits have failing CI"
+          else
+            echo "all_failing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify upstream CI broken (Slack)
+        if: steps.upstream.outputs.all_failing == 'true'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          LATEST="${{ steps.upstream.outputs.latest_new_sha }}"
+          LATEST_SHORT="${LATEST:0:7}"
+          ACTIONS_URL="https://github.com/facebookexperimental/moxygen/actions"
+          TEXT=":warning: *${{ github.repository }}* upstream CI failing — ${{ steps.upstream.outputs.fail_count }} of ${{ steps.upstream.outputs.new_count }} recent commits red \`${LATEST_SHORT}\` <${ACTIONS_URL}|view>"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify upstream CI broken (email)
+        if: steps.upstream.outputs.all_failing == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          LATEST="${{ steps.upstream.outputs.latest_new_sha }}"
+          LATEST_SHORT="${LATEST:0:7}"
+          ACTIONS_URL="https://github.com/facebookexperimental/moxygen/actions"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] upstream CI failing — ${{ steps.upstream.outputs.fail_count }} of ${{ steps.upstream.outputs.new_count }} commits red"
+          BODY="Upstream CI is failing. All ${{ steps.upstream.outputs.new_count }} new commits since our mirror have broken GitHub Actions.\n\nLatest: ${LATEST}\nUpstream actions: ${ACTIONS_URL}\nSync run: ${RUN_URL}"
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
+
+      # ══════════════════════════════════════════════════════════
+      # PHASE C: Create sync PR (if not blocked and we found a target)
+      # ══════════════════════════════════════════════════════════
+
+      - name: Create sync branch and PR
+        if: steps.blocking.outputs.blocked == 'false' && steps.upstream.outputs.advanced == 'true'
+        id: new_pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          FULL_SHA="${{ steps.upstream.outputs.upstream_sha }}"
+          SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
+          BRANCH="sync/$SYNC_SHA"
+
+          # Create sync branch directly from the chosen upstream SHA
+          git push origin "$FULL_SHA:refs/heads/$BRANCH"
+          echo "Created branch $BRANCH"
+
+          # Pre-merge main into sync branch to resolve expected conflicts
+          # (github_hashes files diverge every sync; upstream version wins)
+          git config user.email "omoq-sync-bot[bot]@users.noreply.github.com"
+          git config user.name "omoq-sync-bot[bot]"
+          git fetch origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          if ! git merge origin/main -X ours --no-edit; then
+            echo "::error::Merge conflicts could not be auto-resolved."
+            echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+            git merge --abort
+            git checkout main
+          else
+            echo "Pre-merged main into sync branch (conflicts auto-resolved)"
+            git push origin "$BRANCH"
+            echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+            git checkout main
+          fi
+
+          PR_NUM=$(gh api repos/${{ github.repository }}/pulls \
+            -f title="sync: upstream moxygen $SYNC_SHA" \
+            -f body="$(cat <<EOF
+          Automated upstream sync.
+
+          - **Upstream commit:** [\`${SYNC_SHA}\`](https://github.com/facebookexperimental/moxygen/commit/$FULL_SHA)
+          - **Upstream status:** success (green)
+          - **Merge type:** git merge (sync/$SYNC_SHA → main)
+
+          The verify workflow will validate the standalone build. On success, this PR auto-merges.
+          Devs can push conflict-resolution commits to \`$BRANCH\` if needed.
+
+          Created by \`omoq-upstream-sync\` workflow.
+          EOF
+          )" \
+            -f head="$BRANCH" \
+            -f base="main" \
+            --jq '.number')
+
+          echo "Created sync PR #$PR_NUM"
+          echo "pr_num=$PR_NUM" >> "$GITHUB_OUTPUT"
+
+      # ── Notify merge conflicts ──
+      - name: Notify conflicts (Slack)
+        if: steps.new_pr.outputs.has_conflicts == 'true'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
+          TEXT=":warning: *${{ github.repository }}* sync \`${SYNC_SHA}\` has merge conflicts — PR <${PR_URL}|#${PR_NUM}> needs manual resolution"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify conflicts (email)
+        if: steps.new_pr.outputs.has_conflicts == 'true'
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUM}"
+          SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
+          FULL_SHA="${{ steps.upstream.outputs.upstream_sha }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] sync ${SYNC_SHA} has merge conflicts"
+          BODY="Automated upstream sync created a PR with merge conflicts that could not be auto-resolved.\n\nPR: ${PR_URL}\nUpstream commit: ${FULL_SHA}\nRun: ${RUN_URL}\n\nManual conflict resolution required."
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
+
+      # ── Approve and enable auto-merge ──
+      - name: Approve PR
+        if: steps.blocking.outputs.blocked == 'false' && steps.upstream.outputs.advanced == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.OMOQ_SYNC_TOKEN }}
+        run: |
+          PR_NUM="${{ steps.new_pr.outputs.pr_num }}"
+          [ -z "$PR_NUM" ] && { echo "::warning::No PR number"; exit 0; }
+
+          echo "Approving PR #$PR_NUM..."
+          gh api repos/${{ github.repository }}/pulls/$PR_NUM/reviews \
+            -f event=APPROVE \
+            -f body="Auto-approved by upstream sync workflow." \
+            --jq '.state'
+
+      # ── Notifications (failures only) ──
+      - name: Notify Slack (sync failure)
+        if: failure()
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT=":warning: *${{ github.repository }}* \`${{ github.ref_name }}\` \`${SHORT}\` — upstream sync failed: Run <${RUN_URL}|#${{ github.run_number }}>"
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "{\"text\": \"${TEXT}\"}"
+
+      - name: Notify email (sync failure)
+        if: failure()
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OMOQ_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OMOQ_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          UPSTREAM="${{ steps.upstream.outputs.upstream_sha || 'unknown' }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="[moxygen] upstream sync FAILED"
+          BODY="Upstream sync workflow failed.\n\nUpstream SHA: ${UPSTREAM}\nRun: ${RUN_URL}"
+          aws ses send-email \
+            --from "noreply@ci.openmoq.org" \
+            --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
+            --message "{
+              \"Subject\": {\"Data\": \"${SUBJECT}\"},
+              \"Body\": {\"Text\": {\"Data\": \"${BODY}\"}}
+            }"
