@@ -96,7 +96,10 @@ moxygen_add_library(moxygen_moq_relay_session
     Folly::folly_container_f14_hash
 )
 
-moxygen_add_library(moxygen_moq_publish_error)
+moxygen_add_library(moxygen_moq_publish_error
+  EXPORTED_DEPS
+    fmt::fmt
+)
 
 moxygen_add_library(moxygen_moq_consumers
   EXPORTED_DEPS
