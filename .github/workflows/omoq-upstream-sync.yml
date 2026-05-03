@@ -13,7 +13,12 @@ name: upstream sync
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # Daily at 02:00 ET (07:00 UTC)
+    # Second stage of the openmoq sync cron cascade (UTC; ET shifts under DST):
+    #   04:35  picoquic upstream-sync     (private-octopus → openmoq/picoquic)
+    #   05:35  moxygen  upstream-sync     (this workflow — facebookexperimental → openmoq/moxygen)
+    #   05:45  moxygen  picoquic-pin sync (openmoq/picoquic → moxygen picoquic-rev.txt)
+    #   09:05  moqx     moxygen-submodule sync (openmoq/moxygen → moqx deps/moxygen)
+    - cron: '35 5 * * *'
   workflow_dispatch:
 
 permissions:

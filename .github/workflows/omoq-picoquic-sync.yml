@@ -1,16 +1,21 @@
-name: picoquic bump
+name: picoquic sync
 
-# Watches openmoq/picoquic main and opens a PR bumping
+# Watches openmoq/picoquic main and opens a PR syncing
 # build/deps/github_hashes/openmoq/picoquic-rev.txt when the pin falls
 # behind. CI gates the merge — same auto-merge wiring as upstream sync.
 #
-# To halt automatic bumps on a release branch, just don't run this
+# To halt automatic syncs on a release branch, just don't run this
 # workflow on that branch (cron is on default branch only) and don't
 # merge any sync-picoquic/* PRs that get opened.
 
 on:
   schedule:
-    - cron: '30 9 * * *'   # Daily at 04:30 ET (09:30 UTC) — offset from upstream-sync (07:00) and picoquic-side sync (08:15)
+    # Third stage of the openmoq sync cron cascade (UTC; ET shifts under DST):
+    #   04:35  picoquic upstream-sync     (private-octopus → openmoq/picoquic)
+    #   05:35  moxygen  upstream-sync     (facebookexperimental → openmoq/moxygen)
+    #   05:45  moxygen  picoquic-pin sync (this workflow — openmoq/picoquic → moxygen picoquic-rev.txt)
+    #   09:05  moqx     moxygen-submodule sync (openmoq/moxygen → moqx deps/moxygen)
+    - cron: '45 5 * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,7 +23,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  bump:
+  sync:
     runs-on: ubuntu-22.04
     steps:
       - name: Generate app token
@@ -34,8 +39,8 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      # ── Block if an existing bump PR is open ─────────────────────────────
-      - name: Check for open picoquic-bump PR
+      # ── Block if an existing picoquic sync PR is open ────────────────────
+      - name: Check for open picoquic sync PR
         id: blocking
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -45,7 +50,7 @@ jobs:
           if [ -n "$PR" ]; then
             PR_NUM=$(echo "$PR" | jq -r '.number')
             PR_REF=$(echo "$PR" | jq -r '.head.ref')
-            echo "::warning::Bump blocked — open PR #$PR_NUM ($PR_REF) pending."
+            echo "::warning::Sync blocked — open PR #$PR_NUM ($PR_REF) pending."
             echo "blocked=true" >> "$GITHUB_OUTPUT"
           else
             echo "blocked=false" >> "$GITHUB_OUTPUT"
@@ -67,17 +72,17 @@ jobs:
 
           if [ "$CURRENT_SHA" = "$NEW_SHA" ]; then
             echo "Pin is up to date. Nothing to do."
-            echo "needs_bump=false" >> "$GITHUB_OUTPUT"
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
           else
-            echo "needs_bump=true" >> "$GITHUB_OUTPUT"
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
             echo "current_sha=$CURRENT_SHA" >> "$GITHUB_OUTPUT"
             echo "new_sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
             echo "short_sha=${NEW_SHA:0:12}" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Create bump branch + PR ──────────────────────────────────────────
-      - name: Create bump branch and PR
-        if: steps.blocking.outputs.blocked == 'false' && steps.compare.outputs.needs_bump == 'true'
+      # ── Create sync branch + PR ──────────────────────────────────────────
+      - name: Create sync branch and PR
+        if: steps.blocking.outputs.blocked == 'false' && steps.compare.outputs.needs_sync == 'true'
         id: new_pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -94,13 +99,13 @@ jobs:
 
           echo "Subproject commit $NEW_SHA" > build/deps/github_hashes/openmoq/picoquic-rev.txt
           git add build/deps/github_hashes/openmoq/picoquic-rev.txt
-          git commit -m "deps: bump openmoq/picoquic pin to $SHORT_SHA"
+          git commit -m "sync: openmoq/picoquic pin to $SHORT_SHA"
           git push origin "$BRANCH"
 
           PR_NUM=$(gh api repos/${{ github.repository }}/pulls \
-            -f title="deps: bump openmoq/picoquic pin to $SHORT_SHA" \
+            -f title="sync: openmoq/picoquic pin to $SHORT_SHA" \
             -f body="$(cat <<EOF
-          Automated picoquic pin bump.
+          Automated picoquic pin sync.
 
           - **From:** [\`${CURRENT_SHORT}\`](https://github.com/openmoq/picoquic/commit/$CURRENT_SHA)
           - **To:** [\`${SHORT_SHA}\`](https://github.com/openmoq/picoquic/commit/$NEW_SHA)
@@ -108,21 +113,21 @@ jobs:
 
           The PR CI workflow validates the standalone build against the new pin. On success, this PR auto-merges.
 
-          To halt picoquic auto-bumps temporarily, close this PR — the file holds the pin until a future bump PR is merged.
+          To halt picoquic auto-sync temporarily, close this PR — the file holds the pin until a future sync PR is merged.
 
-          Created by \`omoq-picoquic-bump\` workflow.
+          Created by \`omoq-picoquic-sync\` workflow.
           EOF
           )" \
             -f head="$BRANCH" \
             -f base="main" \
             --jq '.number')
 
-          echo "Created bump PR #$PR_NUM"
+          echo "Created sync PR #$PR_NUM"
           echo "pr_num=$PR_NUM" >> "$GITHUB_OUTPUT"
 
       # ── Approve so auto-merge can proceed ────────────────────────────────
       - name: Approve PR
-        if: steps.blocking.outputs.blocked == 'false' && steps.compare.outputs.needs_bump == 'true'
+        if: steps.blocking.outputs.blocked == 'false' && steps.compare.outputs.needs_sync == 'true'
         env:
           GH_TOKEN: ${{ secrets.OMOQ_SYNC_TOKEN }}
         run: |
@@ -130,23 +135,23 @@ jobs:
           [ -z "$PR_NUM" ] && { echo "::warning::No PR number"; exit 0; }
           gh api repos/${{ github.repository }}/pulls/$PR_NUM/reviews \
             -f event=APPROVE \
-            -f body="Auto-approved by picoquic-bump workflow." \
+            -f body="Auto-approved by picoquic-sync workflow." \
             --jq '.state'
 
       # ── Failure notifications ────────────────────────────────────────────
-      - name: Notify Slack (bump failure)
+      - name: Notify Slack (sync failure)
         if: failure()
         continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.OMOQ_SLACK_WEBHOOK_URL }}
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          TEXT=":warning: *${{ github.repository }}* — picoquic bump workflow failed: Run <${RUN_URL}|#${{ github.run_number }}>"
+          TEXT=":warning: *${{ github.repository }}* — picoquic sync workflow failed: Run <${RUN_URL}|#${{ github.run_number }}>"
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             --data "{\"text\": \"${TEXT}\"}"
 
-      - name: Notify email (bump failure)
+      - name: Notify email (sync failure)
         if: failure()
         continue-on-error: true
         env:
@@ -155,8 +160,8 @@ jobs:
           AWS_DEFAULT_REGION: us-east-1
         run: |
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          SUBJECT="[moxygen] picoquic bump FAILED"
-          BODY="picoquic bump workflow failed.\n\nRun: ${RUN_URL}"
+          SUBJECT="[moxygen] picoquic sync FAILED"
+          BODY="picoquic sync workflow failed.\n\nRun: ${RUN_URL}"
           aws ses send-email \
             --from "noreply@ci.openmoq.org" \
             --destination '{"ToAddresses":["github-notifications@openmoq.org"]}' \
