@@ -59,9 +59,13 @@ class PicoQuicStatsCallback {
     uint64_t packetsLost{0};
     uint64_t bytesSent{0};
     uint64_t bytesReceived{0};
-    uint64_t timerLosses{0};    // losses detected by RTO timer
-    uint64_t spuriousLosses{0}; // packets later acknowledged (false losses)
+    uint64_t timerLosses{0};    // losses detected by RTO timer (triggers retransmit)
+    uint64_t spuriousLosses{0}; // packets later acknowledged (false losses, no retransmit)
     bool cwndBlocked{false};    // bytes_in_transit >= cwin at this sample point
+    // Point-in-time samples (current values, not deltas)
+    uint64_t smoothedRttUs{0};      // smoothed RTT in microseconds
+    uint64_t receiveBytesPerSec{0}; // receive rate estimate in bytes/second
+    uint64_t bytesInTransit{0};     // bytes currently in flight
   };
   virtual void onPathQualityDelta(const PathQualityDelta& delta) = 0;
 };

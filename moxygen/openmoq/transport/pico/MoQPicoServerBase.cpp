@@ -236,6 +236,9 @@ static int picoCallback(
       d.timerLosses = cur.timer_losses - prev.timer_losses;
       d.spuriousLosses = cur.spurious_losses - prev.spurious_losses;
       d.cwndBlocked = (cur.cwin > 0 && cur.bytes_in_transit >= cur.cwin);
+      d.smoothedRttUs = cur.rtt;
+      d.receiveBytesPerSec = cur.receive_rate_estimate;
+      d.bytesInTransit = cur.bytes_in_transit;
       ctx->statsCallback->onPathQualityDelta(d);
       ctx->prevPathQuality = cur;
     }
@@ -408,6 +411,11 @@ bool MoQPicoServerBase::createQuicContext() {
   picoquic_set_default_priority(quic_, transportConfig_.defaultStreamPriority);
   picoquic_set_default_datagram_priority(
       quic_, transportConfig_.defaultDatagramPriority);
+
+  // Enable path quality change callbacks for all connections.
+  // Fires picoquic_callback_path_quality_changed when pacing rate changes by
+  // >100 KB/s or RTT changes by >1 ms.
+  picoquic_default_quality_update(quic_, 100000, 1000);
 
   // Initialize h3zero for WebTransport if enabled
   if (wtConfig_.enableWebTransport) {
