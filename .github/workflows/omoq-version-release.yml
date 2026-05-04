@@ -129,9 +129,16 @@ jobs:
           SNAPSHOT_TAG: ${{ needs.validate.outputs.snapshot_tag }}
           SNAPSHOT_SHA: ${{ needs.validate.outputs.snapshot_sha }}
         run: |
+          # Mark prereleases (1.2.3-rc1) as such so GitHub's "latest"
+          # algorithm correctly excludes them.
+          PRERELEASE_FLAG=()
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE_FLAG=(--prerelease)
+          fi
           gh release create "$TAG" \
             --target "$SNAPSHOT_SHA" \
             --title "moxygen $VERSION" \
+            "${PRERELEASE_FLAG[@]}" \
             --notes "$(cat <<EOF
           **Version:** \`${VERSION}\`
           **Commit:** \`${SNAPSHOT_SHA}\`
@@ -341,14 +348,15 @@ jobs:
           app-id: ${{ secrets.OMOQ_APP_ID }}
           private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
 
-      - name: Mark release as latest
+      - name: Confirm release published
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          # gh release create without --draft already creates a published
-          # release; this step is here so we can flip latest=true after
-          # all assets are up.
-          gh release edit "$TAG" --repo "$REPO" --latest
+          # No --latest flag here. Let GitHub's auto-latest algorithm
+          # pick the highest non-prerelease semver tag. Forcing --latest
+          # would mark a hotfix patch from a release/vM.m branch as
+          # latest even when a newer vM.(m+1) line exists.
           echo "Released: $TAG"
+          gh release view "$TAG" --repo "$REPO" --json isLatest,isPrerelease,name --jq '"isLatest=\(.isLatest) isPrerelease=\(.isPrerelease) name=\(.name)"'
