@@ -57,6 +57,9 @@ void MoQPicoQuicEventBaseServer::start(const folly::SocketAddress& addr) {
   XLOG(INFO) << "Starting MoQPicoQuicEventBaseServer on " << addr.describe();
 
   impl_->handler = std::make_unique<PicoQuicSocketHandler>(evb_.get(), quic_);
+  if (auto* cb = statsCallbackRaw()) {
+    impl_->handler->setStatsCallback(cb);
+  }
   impl_->handler->start(addr);
 }
 

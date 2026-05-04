@@ -8,6 +8,7 @@
 
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/AsyncUDPSocket.h>
+#include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
 
 // Forward declaration — avoids picoquic.h in this header
 typedef struct st_picoquic_quic_t picoquic_quic_t;
@@ -73,6 +74,13 @@ class PicoQuicSocketHandler
     return socket_.address();
   }
 
+  /**
+   * Attach a stats callback. Must be called before start(). Non-owning.
+   */
+  void setStatsCallback(PicoQuicStatsCallback* cb) {
+    statsCallback_ = cb;
+  }
+
  private:
   void pauseRead();
 
@@ -114,6 +122,7 @@ class PicoQuicSocketHandler
   folly::AsyncUDPSocket socket_;
   picoquic_quic_t* quic_; // non-owning
   folly::EventBase* evb_; // non-owning
+  PicoQuicStatsCallback* statsCallback_{nullptr}; // non-owning, optional
   int fd_{-1};
   int socketFamily_{AF_UNSPEC}; // AF_INET or AF_INET6, set in start()
   bool gsoSupported_{false};

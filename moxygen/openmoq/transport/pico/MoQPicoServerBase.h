@@ -68,6 +68,14 @@ class MoQPicoServerBase : public MoQServerBase {
 
  protected:
   /**
+   * Returns the raw stats callback pointer for subclasses that need to wire
+   * it into lower-level I/O handlers (e.g. PicoQuicSocketHandler).
+   */
+  PicoQuicStatsCallback* statsCallbackRaw() const {
+    return statsCallback_.get();
+  }
+
+  /**
    * Creates and configures the picoquic_quic_t context:
    *   picoquic_create + ALPN selection callback + cookie mode + BBR.
    * Sets quic_. executor_ must already be set.

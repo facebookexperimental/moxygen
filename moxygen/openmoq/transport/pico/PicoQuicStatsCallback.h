@@ -68,6 +68,18 @@ class PicoQuicStatsCallback {
     uint64_t bytesInTransit{0};     // bytes currently in flight
   };
   virtual void onPathQualityDelta(const PathQualityDelta& delta) = 0;
+
+  /**
+   * Called from PicoQuicSocketHandler::drainOutgoing after each drain pass
+   * with the number of UDP datagrams actually sent in that pass.
+   */
+  virtual void onPacketsSent(uint64_t /*n*/) {}
+
+  /**
+   * Called from PicoQuicSocketHandler::onNotifyDataAvailable after each
+   * recvmmsg drain loop with the total datagrams received.
+   */
+  virtual void onPacketsReceived(uint64_t /*n*/) {}
 };
 
 } // namespace moxygen

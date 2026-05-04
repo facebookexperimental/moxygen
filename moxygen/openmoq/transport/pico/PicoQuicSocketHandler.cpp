@@ -207,6 +207,9 @@ void PicoQuicSocketHandler::onNotifyDataAvailable(
   if (anyReceived) {
     XLOG(DBG5) << "onNotifyDataAvailable: received " << totalReceived
                << " packets, draining";
+    if (statsCallback_) {
+      statsCallback_->onPacketsReceived(static_cast<uint64_t>(totalReceived));
+    }
     drainOutgoing();
     if (pendingClose_) {
       stop();
@@ -390,6 +393,10 @@ void PicoQuicSocketHandler::drainOutgoing() {
     ++packetsSent;
 
     sendPacket(sendBuf, sendLength, addrTo, addrFrom, ifIndex, sendMsgSize);
+  }
+
+  if (statsCallback_ && packetsSent > 0) {
+    statsCallback_->onPacketsSent(static_cast<uint64_t>(packetsSent));
   }
 }
 
