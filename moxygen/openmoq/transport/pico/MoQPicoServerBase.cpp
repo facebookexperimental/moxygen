@@ -319,7 +319,7 @@ bool MoQPicoServerBase::createQuicContext() {
 
   uint64_t current_time = picoquic_current_time();
   quic_ = picoquic_create(
-      100,
+      1000000,
       cert_.c_str(),
       key_.c_str(),
       nullptr, // cert_store_filename
