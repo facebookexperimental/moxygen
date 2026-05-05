@@ -59,60 +59,71 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::CANCELLED, "Forwarder detached"));
   }
+  if (!forwarder_->largest_) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "No subscribers"));
+  }
   bool anyForwarded = false;
   forwarder_->forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (forwarder_->largest_ && forwarder_->checkRange(*sub)) {
-      auto subgroupConsumerIt = sub->subgroups.find(identifier_);
-      if (subgroupConsumerIt != sub->subgroups.end()) {
-        // Entry exists - check if it's tombstoned (nullptr)
-        if (!subgroupConsumerIt->second) {
-          // Tombstoned - skip this subscriber for this subgroup
-          XLOG(DBG2) << "Skipping tombstoned subgroup for sub=" << sub.get();
-          return;
-        }
-        // Has valid consumer - continue with existing logic
-        if (!sub->checkShouldForward()) {
-          // If we're attempting to send anything on an existing subgroup when
-          // forward == false, then we reset the stream, so that we don't end
-          // up with "holes" in the subgroup. If, at some point in the future,
-          // we set forward = true, then we'll create a new stream for the
-          // subgroup.
-          subgroupConsumerIt->second->reset(
-              ResetStreamErrorCode::INTERNAL_ERROR);
-          closeSubgroupForSubscriber(
-              sub, "SubgroupForwarder::forEachSubscriberSubgroup");
-        } else {
-          anyForwarded = true;
-          fn(sub, subgroupConsumerIt->second);
-        }
+    auto subgroupConsumerIt = sub->subgroups.find(identifier_);
+    if (subgroupConsumerIt != sub->subgroups.end()) {
+      // For an existing consumer, only past-end retires it. If range.start
+      // advanced within this subgroup (e.g. LargestObject onPublishOk), we
+      // still deliver all objects: within a subgroup, later objects depend on
+      // earlier ones so delivering more than the subscriber asked is correct.
+      // TODO: if range.start advanced past this subgroup's group entirely
+      // (e.g. via SubscribeUpdate), we should reset the open subgroup rather
+      // than continuing to deliver to it.
+      if (forwarder_->checkPastEnd(*sub)) {
+        return;
+      }
+      if (!subgroupConsumerIt->second) {
+        // Tombstoned - skip this subscriber for this subgroup
+        XLOG(DBG2) << "Skipping tombstoned subgroup for sub=" << sub.get();
+        return;
+      }
+      if (!sub->checkShouldForward()) {
+        // If we're attempting to send anything on an existing subgroup when
+        // forward == false, then we reset the stream, so that we don't end
+        // up with "holes" in the subgroup. If, at some point in the future,
+        // we set forward = true, then we'll create a new stream for the
+        // subgroup.
+        subgroupConsumerIt->second->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+        closeSubgroupForSubscriber(
+            sub, "SubgroupForwarder::forEachSubscriberSubgroup");
       } else {
-        // Entry doesn't exist - late joiner logic (create new subgroup if
-        // makeNew)
-        if (!sub->checkShouldForward()) {
-          // If shouldForward == false, we shouldn't be creating any
-          // subgroups.
-          return;
-        }
-        if (!makeNew) {
-          XLOG(DBG2) << "skipping creating subgroup for sub=" << sub.get();
-          return;
-        }
-        XCHECK(sub->trackConsumer);
-        XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
-                   << " " << callsite;
-        auto res = sub->trackConsumer->beginSubgroup(
-            identifier_.group,
-            identifier_.subgroup,
-            priority_,
-            containsLastInGroup_);
-        if (res.hasError()) {
-          forwarder_->removeSubscriberOnError(*sub, res.error(), callsite);
-        } else {
-          auto emplaceRes = sub->subgroups.emplace(identifier_, res.value());
-          subgroupConsumerIt = emplaceRes.first;
-          anyForwarded = true;
-          fn(sub, subgroupConsumerIt->second);
-        }
+        anyForwarded = true;
+        fn(sub, subgroupConsumerIt->second);
+      }
+    } else {
+      // No consumer yet: full range check gates new subgroup creation.
+      if (!forwarder_->checkRange(*sub)) {
+        return;
+      }
+      if (!sub->checkShouldForward()) {
+        // If shouldForward == false, we shouldn't be creating any
+        // subgroups.
+        return;
+      }
+      if (!makeNew) {
+        XLOG(DBG2) << "skipping creating subgroup for sub=" << sub.get();
+        return;
+      }
+      XCHECK(sub->trackConsumer);
+      XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
+                 << " " << callsite;
+      auto res = sub->trackConsumer->beginSubgroup(
+          identifier_.group,
+          identifier_.subgroup,
+          priority_,
+          containsLastInGroup_);
+      if (res.hasError()) {
+        forwarder_->removeSubscriberOnError(*sub, res.error(), callsite);
+      } else {
+        auto emplaceRes = sub->subgroups.emplace(identifier_, res.value());
+        subgroupConsumerIt = emplaceRes.first;
+        anyForwarded = true;
+        fn(sub, subgroupConsumerIt->second);
       }
     }
   });
@@ -384,10 +395,15 @@ bool MoQForwarder::checkRange(const Subscriber& sub) {
   if (*largest_ < sub.range.start) {
     // future
     return false;
-  } else if (*largest_ > sub.range.end) {
-    // now past, send publishDone
-    // TOOD: maybe this is too early for a relay.
-    XLOG(DBG4) << "removeSubscriber from checkRange";
+  }
+  // TOOD: maybe sending publishDone here is too early for a relay.
+  return !checkPastEnd(sub);
+}
+
+bool MoQForwarder::checkPastEnd(const Subscriber& sub) {
+  XCHECK(largest_);
+  if (*largest_ > sub.range.end) {
+    XLOG(DBG4) << "removeSubscriber from checkPastEnd";
     removeSubscriber(
         sub.session,
         PublishDone{
@@ -395,10 +411,10 @@ bool MoQForwarder::checkRange(const Subscriber& sub) {
             PublishDoneStatusCode::SUBSCRIPTION_ENDED,
             0, // filled in by session
             ""},
-        "checkRange");
-    return false;
+        "checkPastEnd");
+    return true;
   }
-  return true;
+  return false;
 }
 
 void MoQForwarder::removeSubscriberOnError(
