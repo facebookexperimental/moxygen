@@ -140,7 +140,12 @@ class MoQForwarder : public TrackConsumer {
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
     MoQForwarder& forwarder;
+    bool isPinned() const {
+      return pinned;
+    }
+
     bool shouldForward;
+    bool pinned{false};
     bool receivedPublishDone_{false};
 
    private:
@@ -152,6 +157,11 @@ class MoQForwarder : public TrackConsumer {
 
   [[nodiscard]] bool empty() const {
     return subscribers_.empty();
+  }
+
+  std::shared_ptr<Subscriber> getSubscriber(MoQSession* session) const {
+    auto it = subscribers_.find(session);
+    return it != subscribers_.end() ? it->second : nullptr;
   }
 
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
@@ -193,6 +203,11 @@ class MoQForwarder : public TrackConsumer {
   void updateLargest(uint64_t group, uint64_t object = 0);
 
   bool checkRange(const Subscriber& sub);
+
+  // Returns true if largest_ has advanced past sub.range.end. As a side
+  // effect this also publishDone's the subscriber; that retirement
+  // probably belongs elsewhere (TODO).
+  bool checkPastEnd(const Subscriber& sub);
 
   void removeSubscriberOnError(
       const Subscriber& sub,
@@ -302,6 +317,18 @@ class MoQForwarder : public TrackConsumer {
     return forwardingSubscribers_;
   }
 
+  size_t subscriberCount() const {
+    return subscribers_.size();
+  }
+
+  uint64_t totalGroupsReceived() const {
+    return totalGroupsReceived_;
+  }
+
+  uint64_t totalObjectsReceived() const {
+    return totalObjectsReceived_;
+  }
+
  private:
   static Payload maybeClone(const Payload& payload);
 
@@ -341,7 +368,19 @@ class MoQForwarder : public TrackConsumer {
   // the upstream Largest Group advances (indicating the request was fulfilled).
   std::optional<uint64_t> outstandingNewGroupRequest_{};
   std::shared_ptr<Callback> callback_;
+  // Increments totalObjectsReceived_ and, when the group changes,
+  // totalGroupsReceived_.  Call once per incoming object regardless of delivery
+  // mode (subgroup stream, objectStream, datagram).
+  void countReceivedObject(uint64_t groupID);
+
   uint64_t forwardingSubscribers_{0};
+  uint64_t totalGroupsReceived_{0};
+  uint64_t totalObjectsReceived_{0};
+  // NOTE: counts distinct group transitions, not distinct group IDs.
+  // If subgroups for a group arrive interleaved with another group (e.g. under
+  // NewestFirst delivery or due to retransmission), a group may be counted more
+  // than once.  This is a best-effort counter for diagnostics only.
+  uint64_t lastGroupSeen_{std::numeric_limits<uint64_t>::max()};
   bool draining_{false};
 };
 
