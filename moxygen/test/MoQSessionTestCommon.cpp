@@ -194,16 +194,20 @@ void MoQSessionTest::SetUp() {
               folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
   EXPECT_CALL(*subscribeCallback_, setTrackAlias(_)).Times(testing::AtLeast(0));
 
-  clientSubscriberStatsCallback_ = std::make_shared<MockSubscriberStats>();
+  clientSubscriberStatsCallback_ =
+      std::make_shared<testing::NiceMock<MockSubscriberStats>>();
   clientSession_->setSubscriberStatsCallback(clientSubscriberStatsCallback_);
 
-  clientPublisherStatsCallback_ = std::make_shared<MockPublisherStats>();
+  clientPublisherStatsCallback_ =
+      std::make_shared<testing::NiceMock<MockPublisherStats>>();
   clientSession_->setPublisherStatsCallback(clientPublisherStatsCallback_);
 
-  serverSubscriberStatsCallback_ = std::make_shared<MockSubscriberStats>();
+  serverSubscriberStatsCallback_ =
+      std::make_shared<testing::NiceMock<MockSubscriberStats>>();
   serverSession_->setSubscriberStatsCallback(serverSubscriberStatsCallback_);
 
-  serverPublisherStatsCallback_ = std::make_shared<MockPublisherStats>();
+  serverPublisherStatsCallback_ =
+      std::make_shared<testing::NiceMock<MockPublisherStats>>();
   serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
 
   // For Draft15+, initialize version via ALPN since it's required
@@ -436,7 +440,11 @@ void MoQSessionTest::expectPublishDone(MoQControlCodec::Direction recipient) {
   EXPECT_CALL(
       *getPublisherStatsCallback(oppositeDirection(recipient)),
       onPublishDone(_));
+  EXPECT_CALL(
+      *getPublisherStatsCallback(oppositeDirection(recipient)),
+      onSubscriptionEnd());
   EXPECT_CALL(*getSubscriberStatsCallback(recipient), onPublishDone(_));
+  EXPECT_CALL(*getSubscriberStatsCallback(recipient), onSubscriptionEnd());
   EXPECT_CALL(*subscribeCallback_, publishDone(_)).WillOnce([&] {
     publishDone_.post();
     return folly::unit;

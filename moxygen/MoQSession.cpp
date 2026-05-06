@@ -1968,6 +1968,8 @@ class MoQSession::SubscribeTrackReceiveState
             << "deliverPublishDoneAndRemove: Delivering PUBLISH_DONE to app; statusCode="
             << folly::to_underlying(pendingPublishDone_->statusCode)
             << " alias=" << alias_ << " requestID=" << requestID_;
+        MOQ_SUBSCRIBER_STATS(
+            session_->subscriberStatsCallback_, onSubscriptionEnd);
         auto token = cancelSource_.getToken();
         auto cb = std::exchange(callback_, nullptr);
         cb->publishDone(std::move(*pendingPublishDone_));
@@ -2205,6 +2207,7 @@ void MoQSession::cleanup() {
     auto requestID = it->first;
     auto pubTrack = std::move(it->second);
     pubTracks_.erase(it);
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
     pubTrack->terminatePublish(
         PublishDone(
             {requestID,
@@ -3668,6 +3671,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   } else {
     trackPublisher->unsubscribe();
     if (pubTracks_.erase(unsubscribe.requestID)) {
+      MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
       retireRequestID(/*signalWriteLoop=*/true);
     } // else, the caller invoked publishDone, which isn't needed but fine
   }
@@ -3703,6 +3707,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
     pendingPublishTracks_.erase(trackIt->second->fullTrackName());
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   }
 
   publishPtr->setValue(std::move(publishOk));
@@ -4763,6 +4768,7 @@ Subscriber::PublishResult MoQSession::publish(
 void MoQSession::publishOk(const PublishOk& pubOk, ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << pubOk.requestID << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishOk);
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionBegin);
 
   if (logger_) {
     logger_->logPublishOk(pubOk, ControlMessageType::CREATED);
@@ -4885,6 +4891,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     co_return folly::makeUnexpected(subscribeResult.error());
   } else {
     MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeSuccess);
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionBegin);
     co_return std::make_shared<ReceiverSubscriptionHandle>(
         std::move(subscribeResult.value()), trackAlias, shared_from_this());
   }
@@ -4893,6 +4900,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
 void MoQSession::sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeSuccess);
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   auto res = moqFrameWriter_.writeSubscribeOk(ctx.writeBuf(), subOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
@@ -4951,6 +4959,9 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
              << " sess=" << this;
   // cancel() should send STOP_SENDING on any open streams for this
   // subscription
+  if (trackIt->second->getSubscribeCallback()) {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionEnd);
+  }
   trackIt->second->cancel();
   subTracks_.erase(trackIt);
   reqIdToTrackAlias_.erase(trackAliasIt);
@@ -4979,6 +4990,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
               << " sess=" << this;
     return;
   }
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
   auto* ctx = it->second->replyContext();
   SCOPE_EXIT {
     pubTracks_.erase(it);
