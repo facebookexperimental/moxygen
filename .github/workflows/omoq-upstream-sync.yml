@@ -229,6 +229,22 @@ jobs:
           FULL_SHA="${{ steps.upstream.outputs.upstream_sha }}"
           SYNC_SHA="${{ steps.upstream.outputs.short_sha }}"
           BRANCH="sync/$SYNC_SHA"
+          REPO="${{ github.repository }}"
+
+          # Reclaim orphan branch if it exists with no open PR. PHASE A's
+          # blocking check rejects when an open sync/* PR is pending, so by
+          # this point any pre-existing branch with no open PR is from a
+          # prior closed-without-merge sync attempt — safe to delete.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            EXISTING_PR=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" \
+              --json number --jq '.[0].number // empty' 2>/dev/null || true)
+            if [ -n "$EXISTING_PR" ]; then
+              echo "::error::Branch $BRANCH already used by open PR #$EXISTING_PR — aborting"
+              exit 1
+            fi
+            echo "::warning::Deleting orphan $BRANCH (closed PR or stale push, no open PR)"
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH"
+          fi
 
           # Create sync branch directly from the chosen upstream SHA
           git push origin "$FULL_SHA:refs/heads/$BRANCH"
