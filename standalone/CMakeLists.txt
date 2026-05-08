@@ -68,6 +68,39 @@ read_rev_hash("facebook" "proxygen" PROXYGEN_REV)
 list(APPEND CMAKE_MODULE_PATH
     "${CMAKE_CURRENT_SOURCE_DIR}/../build/fbcode_builder/CMake"
 )
+
+# On macOS, brew installs openssl@3 keg-only. find_package(OpenSSL)
+# searches under brew's opt-symlink (/opt/homebrew/opt/openssl@3 →
+# /opt/homebrew/Cellar/openssl@3/<version>), but find_library() then
+# records the resolved Cellar path in OPENSSL_*_LIBRARY cache vars,
+# which get baked into IMPORTED_LOCATION of exported target configs.
+# After `brew upgrade openssl@3` moves the Cellar version, those baked
+# paths break consumers of the install tree.
+#
+# Pre-populate OPENSSL_ROOT_DIR + the OPENSSL_*_LIBRARY/INCLUDE_DIR cache
+# vars directly with the stable opt-symlink paths so find_package skips
+# its own search and embeds opt-paths brew updates atomically on upgrade.
+if(APPLE)
+    execute_process(COMMAND brew --prefix
+        OUTPUT_VARIABLE _brew_prefix
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    set(_openssl_opt "${_brew_prefix}/opt/openssl@3")
+    if(_brew_prefix AND EXISTS "${_openssl_opt}")
+        if(NOT DEFINED OPENSSL_ROOT_DIR)
+            set(OPENSSL_ROOT_DIR "${_openssl_opt}" CACHE PATH "")
+        endif()
+        if(NOT DEFINED OPENSSL_INCLUDE_DIR)
+            set(OPENSSL_INCLUDE_DIR "${_openssl_opt}/include" CACHE PATH "")
+        endif()
+        if(NOT DEFINED OPENSSL_SSL_LIBRARY)
+            set(OPENSSL_SSL_LIBRARY "${_openssl_opt}/lib/libssl.dylib" CACHE FILEPATH "")
+        endif()
+        if(NOT DEFINED OPENSSL_CRYPTO_LIBRARY)
+            set(OPENSSL_CRYPTO_LIBRARY "${_openssl_opt}/lib/libcrypto.dylib" CACHE FILEPATH "")
+        endif()
+    endif()
+endif()
+
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(gflags CONFIG REQUIRED)
