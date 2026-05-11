@@ -284,13 +284,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     auto r20 = parser_.parseSubgroupObjectHeader(
         cursor, cursor.totalLength(), res->value.objectHeader, options);
     testUnderflowResult(r20);
-    EXPECT_EQ(r20->value.status, ObjectStatus::OBJECT_NOT_EXIST);
-
-    auto r20a = parser_.parseSubgroupObjectHeader(
-        cursor, cursor.totalLength(), res->value.objectHeader, options);
-    testUnderflowResult(r20a);
-    EXPECT_EQ(r20a->value.extensions, Extensions({}, {}));
-    EXPECT_EQ(r20a->value.status, ObjectStatus::END_OF_TRACK);
+    EXPECT_EQ(r20->value.status, ObjectStatus::END_OF_GROUP);
+    // END_OF_GROUP terminates the subgroup - no more objects to parse
 
     skip(cursor, 1);
     auto r21 = parser_.parseFetchHeader(cursor, cursor.totalLength());
@@ -353,7 +348,7 @@ TEST_P(MoQFramerTest, SerializeAndParseAll) {
 }
 
 TEST_P(MoQFramerTest, ParseObjectHeader) {
-  // Test OBJECT_DATAGRAM with ObjectStatus::OBJECT_NOT_EXIST
+  // Test OBJECT_DATAGRAM with ObjectStatus::END_OF_GROUP
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto result = writer_.writeDatagramObject(
       writeBuf,
@@ -362,7 +357,7 @@ TEST_P(MoQFramerTest, ParseObjectHeader) {
        0,             // subgroup
        44,            // id
        55,            // priority
-       ObjectStatus::OBJECT_NOT_EXIST,
+       ObjectStatus::END_OF_GROUP,
        noExtensions(),
        0},
       nullptr);
@@ -379,7 +374,7 @@ TEST_P(MoQFramerTest, ParseObjectHeader) {
   EXPECT_EQ(parseResult->objectHeader.group, 33);
   EXPECT_EQ(parseResult->objectHeader.id, 44);
   EXPECT_EQ(parseResult->objectHeader.priority, 55);
-  EXPECT_EQ(parseResult->objectHeader.status, ObjectStatus::OBJECT_NOT_EXIST);
+  EXPECT_EQ(parseResult->objectHeader.status, ObjectStatus::END_OF_GROUP);
 }
 
 TEST_P(MoQFramerTest, ParseDatagramNormal) {
@@ -618,12 +613,12 @@ ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
 
 TEST_P(MoQFramerTest, testParseDatagramObjectHeader1) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  ObjectHeader obj(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST);
+  ObjectHeader obj(2, 3, 4, 5, ObjectStatus::END_OF_GROUP);
   writer_.writeDatagramObject(writeBuf, TrackAlias(1), obj, nullptr);
 
   auto pobj = testUnderflowDatagramHelper(writeBuf, true, false, 0);
   EXPECT_EQ(pobj.id, 4);
-  EXPECT_EQ(pobj.status, ObjectStatus::OBJECT_NOT_EXIST);
+  EXPECT_EQ(pobj.status, ObjectStatus::END_OF_GROUP);
 }
 
 TEST_P(MoQFramerTest, parseFixedString) {
@@ -760,8 +755,8 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   EXPECT_TRUE(result.hasValue());
   // Update objectID to play nice with delta encoding.
   expectedObjectHeader.id = 45;
-  // Test ObjectStatus::OBJECT_NOT_EXIST
-  expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
+  // Test ObjectStatus::END_OF_GROUP
+  expectedObjectHeader.status = ObjectStatus::END_OF_GROUP;
   expectedObjectHeader.length = 0;
   result = writer_.writeStreamObject(
       writeBuf, streamType, expectedObjectHeader, nullptr);
@@ -800,7 +795,7 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
   EXPECT_EQ(parseResult->value.group, 33);
   EXPECT_EQ(parseResult->value.id, 45);
   EXPECT_EQ(parseResult->value.priority, 55);
-  EXPECT_EQ(parseResult->value.status, ObjectStatus::OBJECT_NOT_EXIST);
+  EXPECT_EQ(parseResult->value.status, ObjectStatus::END_OF_GROUP);
 }
 
 TEST_P(MoQFramerTest, ParseFetchHeader) {
@@ -823,8 +818,8 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
       folly::IOBuf::copyBuffer("EFGH"));
   EXPECT_TRUE(result.hasValue());
 
-  // Test ObjectStatus::OBJECT_NOT_EXIST
-  expectedObjectHeader.status = ObjectStatus::OBJECT_NOT_EXIST;
+  // Test ObjectStatus::END_OF_GROUP
+  expectedObjectHeader.status = ObjectStatus::END_OF_GROUP;
   expectedObjectHeader.length = 0;
   result = writer_.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, expectedObjectHeader, nullptr);
@@ -858,7 +853,7 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
   EXPECT_EQ(obj2.group, 33);
   EXPECT_EQ(obj2.id, 44);
   EXPECT_EQ(obj2.priority, 55);
-  EXPECT_EQ(obj2.status, ObjectStatus::OBJECT_NOT_EXIST);
+  EXPECT_EQ(obj2.status, ObjectStatus::END_OF_GROUP);
 }
 
 TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
@@ -2236,7 +2231,7 @@ TEST_P(MoQFramerTest, FetchObjectWithExtensionsAndNonNormalStatus) {
       3, // subgroup
       4, // id
       5, // priority
-      ObjectStatus::OBJECT_NOT_EXIST,
+      ObjectStatus::END_OF_GROUP,
       Extensions(test::getTestExtensions(), {}));
 
   auto objResult = writer_.writeStreamObject(
@@ -2727,7 +2722,7 @@ TEST(MoQFramerTest, StatusDatagramWithObjectID) {
       33,
       std::nullopt, // object ID not on wire (zero)
       100,
-      ObjectStatus::OBJECT_NOT_EXIST);
+      ObjectStatus::END_OF_GROUP);
   auto serialized = writeBuf.move();
   parseAndCheckDatagram(
       parser,
@@ -2737,7 +2732,7 @@ TEST(MoQFramerTest, StatusDatagramWithObjectID) {
       33,
       0,
       100,
-      ObjectStatus::OBJECT_NOT_EXIST,
+      ObjectStatus::END_OF_GROUP,
       0);
 }
 

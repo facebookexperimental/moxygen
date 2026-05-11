@@ -309,7 +309,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
     const MoQFrameWriter& moqFrameWriter) {
   // writes a subgroup header, object without extensions, object with
-  // extensions, status without extensions, status with extensions
+  // extensions, then a status object (END_OF_GROUP terminates the subgroup)
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(2, 3, 4, 5);
   auto res = moqFrameWriter.writeSubgroupHeader(
@@ -335,25 +335,16 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
       objWithExts,
       folly::IOBuf::copyBuffer("hello world ext"));
   obj.id++;
-  ObjectHeader objNoExts(
+  // END_OF_GROUP terminates the subgroup - no more objects can follow
+  ObjectHeader statusObj(
       obj.group,
       obj.subgroup,
       obj.id,
       obj.priority,
-      ObjectStatus::OBJECT_NOT_EXIST,
+      ObjectStatus::END_OF_GROUP,
       Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, objNoExts, nullptr);
-  obj.id++;
-  ObjectHeader objWithExts2(
-      obj.group,
-      obj.subgroup,
-      obj.id,
-      obj.priority,
-      ObjectStatus::END_OF_TRACK,
-      Extensions({}, {}));
-  res = moqFrameWriter.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, objWithExts2, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, statusObj, nullptr);
   return writeBuf.move();
 }
 

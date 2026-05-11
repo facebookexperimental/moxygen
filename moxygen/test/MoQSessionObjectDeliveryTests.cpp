@@ -164,7 +164,7 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
     pub->datagram(
         ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
     pub->datagram(
-        ObjectHeader(0, 0, 2, 0, ObjectStatus::OBJECT_NOT_EXIST), nullptr);
+        ObjectHeader(0, 0, 2, 0, ObjectStatus::END_OF_TRACK), nullptr);
     pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
@@ -177,7 +177,7 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
         });
     EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
         .WillOnce([&](const auto& header, auto, bool) {
-          EXPECT_EQ(header.status, ObjectStatus::OBJECT_NOT_EXIST);
+          EXPECT_EQ(header.status, ObjectStatus::END_OF_TRACK);
           return folly::unit;
         });
   }

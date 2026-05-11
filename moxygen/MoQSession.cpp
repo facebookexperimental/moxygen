@@ -1657,16 +1657,6 @@ MoQSession::TrackPublisherImpl::objectStream(
           std::move(payload),
           extensions,
           /*finSubgroup=*/true);
-    case ObjectStatus::OBJECT_NOT_EXIST:
-    case ObjectStatus::GROUP_NOT_EXIST: {
-      auto& subgroupPublisherImpl =
-          static_cast<StreamPublisherImpl&>(*subgroup.value());
-      return subgroupPublisherImpl.publishStatus(
-          objHeader.id,
-          objHeader.status,
-          noExtensions(),
-          /*finStream=*/true);
-    }
     case ObjectStatus::END_OF_GROUP:
       return subgroup.value()->endOfGroup(objHeader.id);
     case ObjectStatus::END_OF_TRACK:
@@ -3020,45 +3010,41 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     if (isCancelled()) {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
-    folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    auto toParseResult =
+        [](const folly::Expected<folly::Unit, MoQPublishError>& r) {
+          return r ? MoQCodec::ParseResult::CONTINUE
+                   : MoQCodec::ParseResult::ERROR_TERMINATE;
+        };
     // Handle subscription/fetch consumers
     switch (status) {
-      case ObjectStatus::NORMAL:
-        break;
-      case ObjectStatus::OBJECT_NOT_EXIST:
-        // Object doesn't exist - no action needed, continue
-        break;
-      case ObjectStatus::GROUP_NOT_EXIST:
-        // Group doesn't exist - end subgroup for subscriptions
-        if (!fetchState_) {
-          endOfSubgroup();
-        }
-        break;
       case ObjectStatus::END_OF_GROUP:
         // FetchConsumer::endOfGroup has an optional param
         if (fetchState_) {
-          res = fetchState_->getFetchCallback()->endOfGroup(
+          return toParseResult(fetchState_->getFetchCallback()->endOfGroup(
               group,
               subgroup,
               objectID,
-              /*finFetch=*/false);
+              /*finFetch=*/false));
         } else {
-          res = subgroupCallback_->endOfGroup(objectID);
+          auto r = subgroupCallback_->endOfGroup(objectID);
           endOfSubgroup();
+          return toParseResult(r);
         }
-        break;
-      case ObjectStatus::END_OF_TRACK:
-        res = invokeCallback(
+      case ObjectStatus::END_OF_TRACK: {
+        auto r = invokeCallback(
             &SubgroupConsumer::endOfTrackAndGroup,
             &FetchConsumer::endOfTrackAndGroup,
             group,
             subgroup,
             objectID);
         endOfSubgroup();
+        return toParseResult(r);
+      }
+      case ObjectStatus::NORMAL:
+      default:
         break;
     }
-    return res ? MoQCodec::ParseResult::CONTINUE
-               : MoQCodec::ParseResult::ERROR_TERMINATE;
+    return MoQCodec::ParseResult::CONTINUE;
   }
 
   MoQCodec::ParseResult onEndOfRange(

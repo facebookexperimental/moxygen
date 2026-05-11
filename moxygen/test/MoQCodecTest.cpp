@@ -239,11 +239,11 @@ TEST_P(MoQCodecTest, AllObject) {
           false,
           testing::_))
       .Times(2);
+  // Only 1 status object - END_OF_GROUP terminates the subgroup
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          testing::_, testing::_, testing::_, testing::_, testing::_))
-      .Times(2);
+          testing::_, testing::_, testing::_, testing::_, testing::_));
   objectStreamCodec_.onIngress(std::move(allMsgs), true);
 }
 
@@ -328,7 +328,7 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
       TrackAlias(1),
-      ObjectHeader(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
+      ObjectHeader(2, 3, 4, 5, ObjectStatus::END_OF_GROUP),
       nullptr);
 
   EXPECT_CALL(
@@ -337,8 +337,8 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST));
-  EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::END_OF_GROUP));
+  // onEndOfStream is not called - END_OF_GROUP implies stream end
   // extra coverage of underflow in header
   objectStreamCodec_.onIngress(writeBuf.split(3), false);
   objectStreamCodec_.onIngress(writeBuf.move(), false);
@@ -425,7 +425,7 @@ TEST_P(MoQCodecTest, Fetch) {
   obj.length = 0;
   res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
   obj.id++;
-  obj.status = ObjectStatus::GROUP_NOT_EXIST;
+  obj.status = ObjectStatus::END_OF_GROUP;
   obj.length = 0;
   res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
 
@@ -647,7 +647,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
       writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
   // First object with status - will trigger ERROR_TERMINATE
   ObjectHeader statusObj(2, 3, 4, 5);
-  statusObj.status = ObjectStatus::OBJECT_NOT_EXIST;
+  statusObj.status = ObjectStatus::END_OF_GROUP;
   statusObj.length = 0;
   res = moqFrameWriter_.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, statusObj, nullptr);
@@ -664,7 +664,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::END_OF_GROUP))
       .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
 
   // Second object should NOT be parsed
@@ -781,7 +781,7 @@ TEST_P(MoQCodecTest, CallbackReturnsContinue) {
   EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
 }
 
-// Test zero-length status object followed by normal object
+// Test zero-length NORMAL object followed by normal object
 // This exposes a cursor invalidation bug where trimStart() invalidates the
 // cursor, but when chunkLen == 0, splitAndResetCursor() isn't called,
 // leaving the cursor stale for the next object parse.
@@ -794,12 +794,12 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
       SubgroupIDFormat::Present,
       false);
 
-  // Write a zero-length status object (valid zero-length case)
-  ObjectHeader statusObj(0, 0, 4, 0);
-  statusObj.status = ObjectStatus::OBJECT_NOT_EXIST;
-  statusObj.length = 0;
+  // Write a zero-length NORMAL object
+  ObjectHeader zeroLenObj(0, 0, 4, 0);
+  zeroLenObj.status = ObjectStatus::NORMAL;
+  zeroLenObj.length = 0;
   res = moqFrameWriter_.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER_SG, statusObj, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG, zeroLenObj, nullptr);
 
   // Write another object with non-zero length
   ObjectHeader normalObj(0, 0, 5, 0, 5);
@@ -813,11 +813,10 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
       objectStreamCodecCallback_,
       onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
 
-  // Expect onObjectStatus for the zero-length status object
+  // Expect onObjectBegin for the zero-length NORMAL object (length=0)
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
+      onObjectBegin(2, 3, 4, testing::_, 0, testing::_, true, false, false))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
 
   // Expect onObjectBegin for the normal object (this would crash without the

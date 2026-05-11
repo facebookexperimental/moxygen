@@ -679,8 +679,7 @@ using ServerSetup = Setup;
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,
-  OBJECT_NOT_EXIST = 1,
-  GROUP_NOT_EXIST = 2,
+  // Values 1 and 2 were OBJECT_NOT_EXIST and GROUP_NOT_EXIST, now removed
   END_OF_GROUP = 3,
   END_OF_TRACK = 4,
 };

@@ -75,10 +75,6 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
   switch (objectStatus) {
     case moxygen::ObjectStatus::NORMAL:
       return "NORMAL";
-    case moxygen::ObjectStatus::OBJECT_NOT_EXIST:
-      return "OBJECT_NOT_EXIST";
-    case moxygen::ObjectStatus::GROUP_NOT_EXIST:
-      return "GROUP_NOT_EXIST";
     case moxygen::ObjectStatus::END_OF_GROUP:
       return "END_OF_GROUP";
     case moxygen::ObjectStatus::END_OF_TRACK:
