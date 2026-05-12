@@ -2302,6 +2302,10 @@ void MoQSession::drain() {
 
 void MoQSession::goaway(Goaway goaway) {
   if (!draining_) {
+    if (!moqFrameWriter_.getVersion().has_value()) {
+      close(SessionCloseErrorCode::NO_ERROR);
+      return;
+    }
     if (logger_) {
       logger_->logGoaway(goaway);
     }
