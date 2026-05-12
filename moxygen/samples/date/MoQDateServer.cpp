@@ -567,15 +567,15 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
   auto alpns = getMoqtProtocols(FLAGS_versions, true);
 
   folly::coro::blockingWait(
-      relayClient
-          ->setup(
+      co_withExecutor(
+          workerEvb,
+          relayClient->setup(
               /*publisher=*/publisher,
               /*subscriber=*/nullptr,
               std::chrono::milliseconds(FLAGS_relay_connect_timeout),
               std::chrono::seconds(FLAGS_relay_transaction_timeout),
               quic::TransportSettings(),
-              alpns)
-          .scheduleOn(workerEvb)
+              alpns))
           .start());
 
   relayClient->run(/*publisher=*/publisher, {TrackNamespace(FLAGS_ns, "/")})

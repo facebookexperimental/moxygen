@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/coro/Task.h>
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 using namespace moxygen;
@@ -1022,8 +1023,9 @@ CO_TEST_P_X(MoQSessionTest, PublishDuplicatesPendingSubscribe) {
   ON_CALL(*subscribeConsumer, publishDone(_))
       .WillByDefault(testing::Return(folly::unit));
   auto subscribeSf =
-      clientSession_->subscribe(getSubscribe(ftn), subscribeConsumer)
-          .scheduleOn(&eventBase_)
+      co_withExecutor(
+          &eventBase_,
+          clientSession_->subscribe(getSubscribe(ftn), subscribeConsumer))
           .start();
 
   // Wait for the SUBSCRIBE to be delivered and processed by the server
