@@ -65,6 +65,9 @@ class MoQForwarder : public TrackConsumer {
    public:
     virtual ~Callback() = default;
     virtual void onEmpty(MoQForwarder*) = 0;
+    virtual void forwardChanged(MoQForwarder* fwd, bool /*forward*/) {
+      forwardChanged(fwd);
+    }
     virtual void forwardChanged(MoQForwarder*) {}
     // This fires whenever an unseen NGR is received
     virtual void newGroupRequested(MoQForwarder*, uint64_t /*group*/) {}
