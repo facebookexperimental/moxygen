@@ -54,6 +54,8 @@ class SubscriberState {
   size_t id_;
   uint64_t objectsReceived_{0};
   uint64_t bytesReceived_{0};
+  uint64_t totalLatencyMs_{0};
+  uint64_t latencyObjects_{0};
   bool hasError_{false};
 
  private:
@@ -113,6 +115,14 @@ class MoQPerfTestClient {
     size_t currentSubscribers{0}; // current active count
     uint64_t totalObjects{0};
     uint64_t totalBytes{0};
+    uint64_t totalLatencyMs{0};  // cumulative sum (for final avg)
+    uint64_t latencyObjects{0};  // cumulative count (for final avg)
+    struct IntervalLatency {
+      uint64_t sumMs{0};
+      uint64_t count{0};
+      uint64_t minMs{std::numeric_limits<uint64_t>::max()};
+      uint64_t maxMs{0};
+    } intervalLatency;
     uint32_t totalResets{0};
     uint32_t totalFailures{0};
     uint32_t durationSeconds{0};
@@ -127,6 +137,7 @@ class MoQPerfTestClient {
   void recordTrackRestart();
   void removeSubscriber(size_t id);
   void updateLargestObjectSeen(const AbsoluteLocation& location);
+  void recordLatency(uint64_t latencyMs);
   std::optional<AbsoluteLocation> getLargestObjectSeen() const;
 
  private:
@@ -164,6 +175,14 @@ class MoQPerfTestClient {
   std::atomic<uint32_t> numCompleted_{0};
   std::atomic<uint64_t> cumulativeObjects_{0};
   std::atomic<uint64_t> cumulativeBytes_{0};
+  std::atomic<uint64_t> cumulativeLatencyMs_{0};
+  std::atomic<uint64_t> cumulativeLatencyObjects_{0};
+  // Interval latency — reset on each getResults() call
+  mutable std::atomic<uint64_t> intervalLatencySum_{0};
+  mutable std::atomic<uint64_t> intervalLatencyCount_{0};
+  mutable std::atomic<uint64_t> intervalLatencyMin_{
+      std::numeric_limits<uint64_t>::max()};
+  mutable std::atomic<uint64_t> intervalLatencyMax_{0};
 };
 
 } // namespace moxygen

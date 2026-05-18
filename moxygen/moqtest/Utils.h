@@ -10,6 +10,11 @@
 
 namespace moxygen {
 
+// Fixed extension type for the send timestamp (milliseconds since epoch).
+// Even type => integer extension. Value is large enough to avoid collision with
+// test integer extensions (which use 2 * testIntegerExtension).
+constexpr uint64_t kTimestampExtensionType = 0xC000;
+
 folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
     const MoQTestParameters& track);
 
