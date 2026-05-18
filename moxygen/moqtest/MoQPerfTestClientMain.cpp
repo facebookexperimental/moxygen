@@ -77,10 +77,19 @@ folly::coro::Task<void> aggregateStats(
     uint32_t totalFailures = 0;
     uint32_t totalCompleted = 0;
 
+    uint64_t totalLatencyMs = 0;
+    uint64_t latencyObjects = 0;
+    moxygen::MoQPerfTestClient::TestResults::IntervalLatency ivl;
     for (const auto& client : clients) {
       auto results = client->getResults();
       totalObjects += results.totalObjects;
       totalBytes += results.totalBytes;
+      totalLatencyMs += results.totalLatencyMs;
+      latencyObjects += results.latencyObjects;
+      ivl.sumMs += results.intervalLatency.sumMs;
+      ivl.count += results.intervalLatency.count;
+      ivl.minMs = std::min(ivl.minMs, results.intervalLatency.minMs);
+      ivl.maxMs = std::max(ivl.maxMs, results.intervalLatency.maxMs);
       peakSubscribers += results.subscribersReached;
       currentSubscribers += results.currentSubscribers;
       totalResets += results.totalResets;
@@ -114,12 +123,24 @@ folly::coro::Task<void> aggregateStats(
     double mbps = (intervalBytes * 8.0) / (1024.0 * 1024.0);
     double totalMB = totalBytes / (1024.0 * 1024.0);
 
+    double runAvgLatencyMs =
+        latencyObjects > 0
+        ? static_cast<double>(totalLatencyMs) / static_cast<double>(latencyObjects)
+        : 0.0;
     XLOG(INFO) << "[AGGREGATE] [" << elapsed
                << "s] Subs: " << currentSubscribers
                << " | Obj/s: " << intervalObjects << " | Mbps: " << std::fixed
                << std::setprecision(2) << mbps << " | Total: " << totalObjects
                << " objs, " << std::fixed << std::setprecision(2) << totalMB
                << " MB"
+               << " | Latency(run avg): " << std::fixed << std::setprecision(1)
+               << runAvgLatencyMs << " ms"
+               << " | Latency(interval min/avg/max): "
+               << (ivl.count > 0 ? ivl.minMs : 0) << "/"
+               << std::fixed << std::setprecision(1)
+               << (ivl.count > 0 ? static_cast<double>(ivl.sumMs) /
+                       static_cast<double>(ivl.count) : 0.0)
+               << "/" << (ivl.count > 0 ? ivl.maxMs : 0) << " ms"
                << " | Resets: " << intervalResets << "/s, " << totalResets
                << " total"
                << " | Failures: " << intervalFailures << "/s, " << totalFailures
@@ -227,12 +248,16 @@ int main(int argc, char** argv) {
     XLOG(INFO) << "  Total Bytes: " << sharedStats->totalBytes.load();
     XLOG(INFO) << "  Total Resets: " << sharedStats->totalResets.load();
 
-    // Calculate aggregate throughput across all clients
+    // Calculate aggregate throughput and latency across all clients
     uint64_t totalBytes = 0;
+    uint64_t totalLatencyMs = 0;
+    uint64_t latencyObjects = 0;
 
     for (const auto& client : clients) {
       auto results = client->getResults();
       totalBytes += results.totalBytes;
+      totalLatencyMs += results.totalLatencyMs;
+      latencyObjects += results.latencyObjects;
     }
 
     auto duration = clients[0]->getResults().durationSeconds;
@@ -242,6 +267,13 @@ int main(int argc, char** argv) {
       double mbytes = static_cast<double>(totalBytes) / (1024.0 * 1024.0);
       double throughputMbps = (mbytes * 8.0) / static_cast<double>(duration);
       XLOG(INFO) << "  Throughput: " << throughputMbps << " Mbps";
+    }
+
+    if (latencyObjects > 0) {
+      double avgLatencyMs =
+          static_cast<double>(totalLatencyMs) / static_cast<double>(latencyObjects);
+      XLOG(INFO) << "  Avg Object Latency: " << avgLatencyMs << " ms ("
+                 << latencyObjects << " objects measured)";
     }
 
     if (sharedStats->trackEnded.load()) {
