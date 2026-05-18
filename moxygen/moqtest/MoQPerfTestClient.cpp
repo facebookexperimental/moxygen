@@ -393,7 +393,11 @@ folly::coro::Task<void> MoQPerfTestClient::run() {
     XLOG(INFO) << "Test cancelled";
   }
 
-  // Clear all subscribers to trigger cleanup
+  // Flush active subscriber stats before clearing so getResults() stays accurate
+  for (auto& [id, sub] : subscribers_) {
+    cumulativeObjects_ += sub->objectsReceived_;
+    cumulativeBytes_ += sub->bytesReceived_;
+  }
   subscribers_.clear();
 }
 

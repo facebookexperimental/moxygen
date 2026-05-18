@@ -106,8 +106,10 @@ folly::coro::Task<void> aggregateStats(
     sharedStats->totalResets = totalResets;
 
     // Calculate interval stats
-    uint64_t intervalObjects = totalObjects - lastTotalObjects;
-    uint64_t intervalBytes = totalBytes - lastTotalBytes;
+    uint64_t intervalObjects =
+        totalObjects >= lastTotalObjects ? totalObjects - lastTotalObjects : 0;
+    uint64_t intervalBytes =
+        totalBytes >= lastTotalBytes ? totalBytes - lastTotalBytes : 0;
     uint32_t intervalResets = totalResets - lastTotalResets;
     uint32_t intervalFailures = totalFailures - lastTotalFailures;
 
