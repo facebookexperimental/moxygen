@@ -1314,6 +1314,7 @@ struct RequestOk {
 };
 
 using SubscribeNamespaceOk = RequestOk;
+using SubscribeTracksOk = RequestOk;
 using PublishNamespaceOk = RequestOk;
 using SubscribeUpdateOk = RequestOk;
 
@@ -1333,6 +1334,7 @@ struct RequestError {
 using SubscribeError = RequestError;
 using FetchError = RequestError;
 using SubscribeNamespaceError = RequestError;
+using SubscribeTracksError = RequestError;
 using PublishNamespaceError = RequestError;
 using PublishError = RequestError;
 using TrackStatusError = RequestError;
@@ -1342,6 +1344,7 @@ using SubscribeUpdateError = RequestError;
 using SubscribeErrorCode = RequestErrorCode;
 using FetchErrorCode = RequestErrorCode;
 using SubscribeNamespaceErrorCode = RequestErrorCode;
+using SubscribeTracksErrorCode = RequestErrorCode;
 using PublishNamespaceErrorCode = RequestErrorCode;
 using PublishErrorCode = RequestErrorCode;
 using TrackStatusErrorCode = RequestErrorCode;
