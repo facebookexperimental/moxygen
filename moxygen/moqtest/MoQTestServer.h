@@ -15,25 +15,10 @@
 #include "moxygen/Publisher.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/Types.h"
+#include "moxygen/relay/MoQForwarder.h"
+#include <folly/container/F14Map.h>
 
 namespace moxygen {
-class MoQTestSubscriptionHandle : public Publisher::SubscriptionHandle {
- public:
-  MoQTestSubscriptionHandle(
-      SubscribeOk ok,
-      folly::CancellationSource cancellationSource)
-      : Publisher::SubscriptionHandle(std::move(ok)),
-        cancelSource_(std::move(cancellationSource)) {}
-
-  virtual void unsubscribe() override;
-  using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
-  virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
-      RequestUpdate reqUpdate) override;
-
- private:
-  SubscribeOk subscribeOk_;
-  folly::CancellationSource cancelSource_;
-};
 
 class MoQTestFetchHandle : public Publisher::FetchHandle {
  public:
@@ -56,6 +41,19 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
 
 class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
  public:
+  struct SubKey {
+    MoQSession* session;
+    uint64_t requestID;
+    bool operator==(const SubKey& o) const {
+      return session == o.session && requestID == o.requestID;
+    }
+    struct Hash {
+      size_t operator()(const SubKey& k) const {
+        return folly::hash::hash_combine(k.session, k.requestID);
+      }
+    };
+  };
+
   MoQTestServer(
       const std::string& cert = "",
       const std::string& key = "",
@@ -71,6 +69,8 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       clientSession->setLogger(std::move(logger));
     }
   }
+
+  void removeSubscription(SubKey key);
 
   // Relay client support
   bool startRelayClient(
@@ -138,12 +138,18 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       int32_t connectTimeout,
       int32_t transactionTimeout);
 
+  struct SubscriptionState {
+    std::shared_ptr<MoQForwarder> forwarder;
+    folly::CancellationSource cancelSource;
+  };
+
   // Relay client connection (if using relay mode)
   std::string versions_;
   std::unique_ptr<MoQClient> relayClient_;
   std::shared_ptr<MoQRelaySession> relaySession_;
   std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
+  folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash> activeSubscriptions_;
 };
 
 } // namespace moxygen

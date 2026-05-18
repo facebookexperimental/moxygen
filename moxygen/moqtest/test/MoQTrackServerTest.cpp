@@ -10,6 +10,7 @@
 #include "moxygen/moqtest/MoQTestServer.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/test/Mocks.h"
+#include "moxygen/test/MockMoQSession.h"
 
 namespace {
 
@@ -881,4 +882,78 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
+}
+
+// requestUpdate Testing
+// Verify that the handle returned by subscribe() is a MoQForwarder::Subscriber
+// that properly handles requestUpdate forward=0 (pause) and forward=1 (resume),
+// and that objects published while paused are not delivered to the consumer.
+TEST_F(MoQTrackServerTest, RequestUpdateTogglesForward) {
+  using namespace testing;
+  using namespace moxygen::test;
+
+  auto session = std::make_shared<NiceMock<MockMoQSession>>();
+  ON_CALL(*session, getNegotiatedVersion())
+      .WillByDefault(Return(std::optional<uint64_t>(moxygen::kVersionDraftCurrent)));
+
+  moxygen::TrackNamespace ns{std::vector<std::string>{"moq-test-00"}};
+  auto forwarder = std::make_shared<moxygen::MoQForwarder>(
+      moxygen::FullTrackName{ns, "test"});
+
+  auto mockConsumer = std::make_shared<NiceMock<moxygen::MockTrackConsumer>>();
+  ON_CALL(*mockConsumer, setTrackAlias(_))
+      .WillByDefault(Return(folly::makeExpected<moxygen::MoQPublishError>(folly::unit)));
+  ON_CALL(*mockConsumer, publishDone(_))
+      .WillByDefault(Return(folly::makeExpected<moxygen::MoQPublishError>(folly::unit)));
+
+  moxygen::SubscribeRequest sub;
+  sub.requestID = moxygen::RequestID(1);
+  sub.fullTrackName = forwarder->fullTrackName();
+  sub.locType = moxygen::LocationType::LargestObject;
+  sub.forward = true;
+
+  auto subscriber = forwarder->addSubscriber(session, sub, mockConsumer);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_TRUE(subscriber->shouldForward);
+
+  // forward=0: pause delivery
+  moxygen::RequestUpdate pauseUpdate;
+  pauseUpdate.requestID = moxygen::RequestID(2);
+  pauseUpdate.existingRequestID = sub.requestID;
+  pauseUpdate.forward = false;
+  auto pauseResult =
+      folly::coro::blockingWait(subscriber->requestUpdate(pauseUpdate));
+  ASSERT_TRUE(pauseResult.hasValue()) << "requestUpdate(forward=0) must succeed";
+  EXPECT_FALSE(subscriber->shouldForward);
+
+  // Publish a subgroup while paused — consumer must not be called.
+  EXPECT_CALL(*mockConsumer, beginSubgroup(0, 0, _, _)).Times(0);
+  {
+    auto sgRes = forwarder->beginSubgroup(0, 0, 0);
+    ASSERT_TRUE(sgRes.hasValue());
+    EXPECT_TRUE((*sgRes)->endOfSubgroup().hasValue());
+  }
+
+  // forward=1: resume delivery
+  moxygen::RequestUpdate resumeUpdate;
+  resumeUpdate.requestID = moxygen::RequestID(3);
+  resumeUpdate.existingRequestID = sub.requestID;
+  resumeUpdate.forward = true;
+  auto resumeResult =
+      folly::coro::blockingWait(subscriber->requestUpdate(resumeUpdate));
+  ASSERT_TRUE(resumeResult.hasValue()) << "requestUpdate(forward=1) must succeed";
+  EXPECT_TRUE(subscriber->shouldForward);
+
+  // Publish a subgroup while resumed — consumer must receive it.
+  auto mockSg = std::make_shared<NiceMock<moxygen::MockSubgroupConsumer>>();
+  ON_CALL(*mockSg, endOfSubgroup())
+      .WillByDefault(Return(folly::makeExpected<moxygen::MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*mockConsumer, beginSubgroup(1, 0, _, _))
+      .WillOnce(Return(folly::makeExpected<moxygen::MoQPublishError>(
+          std::shared_ptr<moxygen::SubgroupConsumer>(mockSg))));
+  {
+    auto sgRes = forwarder->beginSubgroup(1, 0, 0);
+    ASSERT_TRUE(sgRes.hasValue());
+    EXPECT_TRUE((*sgRes)->endOfSubgroup().hasValue());
+  }
 }

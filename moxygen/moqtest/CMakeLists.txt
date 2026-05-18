@@ -59,10 +59,34 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
+# moxygen_moq_test_server library (shared by executable and unit tests)
+add_library(moxygen_moq_test_server MoQTestServer.cpp)
+target_include_directories(
+  moxygen_moq_test_server PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+target_compile_options(
+  moxygen_moq_test_server PRIVATE
+  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+target_link_libraries(
+  moxygen_moq_test_server PUBLIC
+  moqtest_utils
+  moxygen_moq_server
+  moxygen_moq_relay_session
+  moxygen_moq_webtransport_client
+  moxygen_relay_moq_forwarder
+)
+
+install(
+    TARGETS moxygen_moq_test_server
+    EXPORT moxygen-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+)
+
 # moqtest_server
 add_executable(
   moqtest_server
-  MoQTestServer.cpp
   MoQTestServerMain.cpp
 )
 set_target_properties(
@@ -71,20 +95,14 @@ set_target_properties(
     BUILD_RPATH ${DEPS_LIBRARIES_DIR}
     INSTALL_RPATH ${DEPS_LIBRARIES_DIR}
 )
-target_include_directories(
-  moqtest_server PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
-)
 target_compile_options(
   moqtest_server PRIVATE
   ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
 )
 target_link_libraries(
   moqtest_server PUBLIC
-  moqtest_utils
+  moxygen_moq_test_server
   moxygen_mlog_file_mlogger
-  moxygen_moq_server
-  moxygen_moq_relay_session
-  moxygen_moq_webtransport_client
   Folly::folly_init_init
 )
 
@@ -130,3 +148,4 @@ install(
 )
 
 add_subdirectory(interop)
+add_subdirectory(test)
