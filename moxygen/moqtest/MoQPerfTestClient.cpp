@@ -8,6 +8,7 @@
 
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
+#include "moxygen/MoQVersions.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
@@ -35,9 +36,11 @@ SubscriberState::SubscriberState(
     size_t id,
     std::shared_ptr<MoQFollyExecutorImpl> executor,
     const proxygen::URL& url,
-    bool useQuicTransport)
+    bool useQuicTransport,
+    std::vector<std::string> alpns)
     : testClient_(client),
       id_(id),
+      alpns_(std::move(alpns)),
       moqExecutor_(std::move(executor)),
       receiver_(
           std::make_shared<ObjectReceiver>(
@@ -88,7 +91,8 @@ folly::coro::Task<void> SubscriberState::connect() {
           quic::TransportSettings ts;
           ts.orderedReadCallbacks = true;
           return ts;
-        }());
+        }(),
+        alpns_);
     XLOG(DBG2) << "Subscriber " << id_ << " connected successfully";
   } catch (const std::exception& ex) {
     XLOG(ERR) << "Subscriber " << id_ << " failed to connect: " << ex.what();
@@ -257,7 +261,8 @@ MoQPerfTestClient::MoQPerfTestClient(
     uint32_t firstObjectSize,
     uint32_t otherObjectSize,
     uint32_t deliveryTimeoutMs,
-    uint32_t objectsPerGroup)
+    uint32_t objectsPerGroup,
+    std::string versions)
     : evb_(evb),
       url_(std::move(url)),
       useQuicTransport_(useQuicTransport),
@@ -265,6 +270,7 @@ MoQPerfTestClient::MoQPerfTestClient(
       maxSubscribersPerSecond_(maxSubscribersPerSecond),
       maxSubscribers_(maxSubscribers),
       deliveryTimeoutMs_(deliveryTimeoutMs),
+      alpns_(getMoqtProtocols(versions, true)),
       sharedExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)) {
   // Initialize MoQ test parameters for moq-test scheme
   params_.forwardingPreference = ForwardingPreference::ONE_SUBGROUP_PER_GROUP;
@@ -381,7 +387,7 @@ folly::coro::Task<void> MoQPerfTestClient::addSubscriber() {
 
   try {
     auto subscriber = std::make_unique<SubscriberState>(
-        *this, id, sharedExecutor_, url_, useQuicTransport_);
+        *this, id, sharedExecutor_, url_, useQuicTransport_, alpns_);
 
     // Connect the subscriber
     co_await subscriber->connect();

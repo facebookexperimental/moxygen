@@ -31,7 +31,8 @@ class SubscriberState {
       size_t id,
       std::shared_ptr<MoQFollyExecutorImpl> executor,
       const proxygen::URL& url,
-      bool useQuicTransport);
+      bool useQuicTransport,
+      std::vector<std::string> alpns);
 
   ~SubscriberState();
 
@@ -81,6 +82,7 @@ class SubscriberState {
   };
 
   Callback callback_{*this};
+  std::vector<std::string> alpns_;
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClientBase> moqClient_;
   std::shared_ptr<ObjectReceiver> receiver_;
@@ -100,7 +102,8 @@ class MoQPerfTestClient {
       uint32_t firstObjectSize,
       uint32_t otherObjectSize,
       uint32_t deliveryTimeoutMs,
-      uint32_t objectsPerGroup);
+      uint32_t objectsPerGroup,
+      std::string versions = "");
 
   ~MoQPerfTestClient() = default;
 
@@ -141,6 +144,7 @@ class MoQPerfTestClient {
   uint32_t maxSubscribersPerSecond_;
   uint32_t maxSubscribers_;
   uint32_t deliveryTimeoutMs_;
+  std::vector<std::string> alpns_;
 
   // Shared executor for all subscribers
   std::shared_ptr<MoQFollyExecutorImpl> sharedExecutor_;

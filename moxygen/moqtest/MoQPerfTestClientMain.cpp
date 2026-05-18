@@ -41,6 +41,10 @@ DEFINE_uint32(
     "Size of other objects in group (P-frame)");
 DEFINE_uint32(delivery_timeout, 500, "Delivery timeout in milliseconds");
 DEFINE_uint32(objects_per_group, 30, "Number of objects per group");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
 
 // Shared stats structure for cross-thread aggregation
 struct SharedStats {
@@ -191,7 +195,8 @@ int main(int argc, char** argv) {
           FLAGS_first_object_size,
           FLAGS_other_object_size,
           FLAGS_delivery_timeout,
-          FLAGS_objects_per_group);
+          FLAGS_objects_per_group,
+          FLAGS_versions);
 
       XLOG(INFO) << "Thread " << i++ << " starting...";
       folly::coro::co_withExecutor(evb.get(), client->run()).start();
