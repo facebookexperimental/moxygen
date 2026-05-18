@@ -5412,9 +5412,16 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
     FrameType frameType) {
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (frameType) {
+    // SUBSCRIBE_NAMESPACE arrives on a fresh bidi stream in draft 16+; the
+    // wire enumerator is LEGACY_SUBSCRIBE_NAMESPACE (0x11) on drafts 16-17 and
+    // SUBSCRIBE_NAMESPACE (0x50) on draft 18+. The bidi codec's allow-list
+    // includes both so the same config serves either.
+    case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
     case FrameType::SUBSCRIBE_NAMESPACE:
       return BidiStreamConfig{
-          {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE},
+          {FrameType::LEGACY_SUBSCRIBE_NAMESPACE,
+           FrameType::SUBSCRIBE_NAMESPACE,
+           FrameType::REQUEST_UPDATE},
           [this](RequestID id) {
             onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
           }};

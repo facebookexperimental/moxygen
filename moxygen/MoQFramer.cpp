@@ -2888,8 +2888,11 @@ MoQFrameParser::parseSubscribeNamespace(
   subscribeNamespace.trackNamespacePrefix =
       TrackNamespace(std::move(res.value()));
 
-  // Draft 16+: Parse Subscribe Options field
-  if (getDraftMajorVersion(*version_) >= 16) {
+  auto majorVersion = getDraftMajorVersion(*version_);
+
+  // The SUBSCRIBE_NAMESPACE message has an "options" field only in drafts
+  // 16 and 17.
+  if (majorVersion >= 16 && majorVersion < 18) {
     auto options = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!options) {
       XLOG(DBG4) << "parseSubscribeNamespace: UNDERFLOW on options";
@@ -2923,13 +2926,57 @@ MoQFrameParser::parseSubscribeNamespace(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
-  // Draft 15+: Extract forward field from request-specific parameters
-  // Default is true; only set to false if FORWARD param is present with value 0
-  if (getDraftMajorVersion(*version_) >= 15) {
+  // FORWARD is only present as a parameter for drafts 15, 16, and 17.
+  if (majorVersion >= 15 && majorVersion < 18) {
     handleForwardParam(subscribeNamespace.forward, requestSpecificParams);
   }
 
   return subscribeNamespace;
+}
+
+folly::Expected<SubscribeTracks, ErrorCode>
+MoQFrameParser::parseSubscribeTracks(folly::io::Cursor& cursor, size_t length)
+    const noexcept {
+  CHECK_GE(getDraftMajorVersion(*version_), 18u)
+      << "SUBSCRIBE_TRACKS is draft 18+ only";
+  SubscribeTracks subscribeTracks;
+
+  auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!requestID) {
+    XLOG(DBG4) << "parseSubscribeTracks: UNDERFLOW on requestID";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= requestID->second;
+  subscribeTracks.requestID = requestID->first;
+
+  auto res = parseNamespaceTuple(cursor, length);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
+  }
+  subscribeTracks.trackNamespacePrefix = TrackNamespace(std::move(res.value()));
+
+  auto numParams = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!numParams) {
+    XLOG(DBG4) << "parseSubscribeTracks: UNDERFLOW on numParams";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numParams->second;
+  std::vector<Parameter> requestSpecificParams;
+  auto res2 = parseTrackRequestParams(
+      cursor,
+      length,
+      numParams->first,
+      subscribeTracks.params,
+      requestSpecificParams);
+  if (!res2) {
+    return folly::makeUnexpected(res2.error());
+  }
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  handleForwardParam(subscribeTracks.forward, requestSpecificParams);
+  return subscribeTracks;
 }
 
 folly::Expected<SubscribeNamespaceOk, ErrorCode>
@@ -5116,16 +5163,22 @@ WriteResult MoQFrameWriter::writeSubscribeNamespace(
     const SubscribeNamespace& subscribeNamespace) const noexcept {
   CHECK(version_.has_value())
       << "Version needs to be set to write subscribeNamespace";
+  auto majorVersion = getDraftMajorVersion(*version_);
   size_t size = 0;
   bool error = false;
-  auto sizePtr =
-      writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_NAMESPACE, error);
+  // Draft 18 renumbered SUBSCRIBE_NAMESPACE on the wire from 0x11 to 0x50;
+  // pick the right wire-level enumerator for the negotiated version. Both
+  // serialise the same struct body.
+  auto wireType = (majorVersion >= 18) ? FrameType::SUBSCRIBE_NAMESPACE
+                                       : FrameType::LEGACY_SUBSCRIBE_NAMESPACE;
+  auto sizePtr = writeFrameHeader(writeBuf, wireType, error);
   writeVarint(writeBuf, subscribeNamespace.requestID.value, size, error);
   writeTrackNamespace(
       writeBuf, subscribeNamespace.trackNamespacePrefix, size, error);
 
-  // Draft 16+: Write Subscribe Options field
-  if (getDraftMajorVersion(*version_) >= 16) {
+  // The SUBSCRIBE_NAMESPACE message has an "options" field only in drafts
+  // 16 and 17.
+  if (majorVersion >= 16 && majorVersion < 18) {
     writeVarint(
         writeBuf,
         folly::to_underlying(subscribeNamespace.options),
@@ -5133,10 +5186,9 @@ WriteResult MoQFrameWriter::writeSubscribeNamespace(
         error);
   }
 
-  // Draft 15+: Write Forward field as a parameter (only if forward == 0,
-  // since 1 is the default)
+  // FORWARD is only present as a parameter for drafts 15, 16, and 17.
   std::vector<Parameter> requestSpecificParams;
-  if (getDraftMajorVersion(*version_) >= 15 && !subscribeNamespace.forward) {
+  if (majorVersion >= 15 && majorVersion < 18 && !subscribeNamespace.forward) {
     Parameter forwardParam;
     forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
     forwardParam.asUint64 = 0;
@@ -5145,6 +5197,39 @@ WriteResult MoQFrameWriter::writeSubscribeNamespace(
 
   writeTrackRequestParams(
       writeBuf, subscribeNamespace.params, requestSpecificParams, size, error);
+  writeSize(sizePtr, size, error, *version_);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writeSubscribeTracks(
+    folly::IOBufQueue& writeBuf,
+    const SubscribeTracks& subscribeTracks) const noexcept {
+  CHECK(version_.has_value())
+      << "Version needs to be set to write subscribeTracks";
+  CHECK_GE(getDraftMajorVersion(*version_), 18u)
+      << "SUBSCRIBE_TRACKS is draft 18+ only";
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_TRACKS, error);
+  writeVarint(writeBuf, subscribeTracks.requestID.value, size, error);
+  writeTrackNamespace(
+      writeBuf, subscribeTracks.trackNamespacePrefix, size, error);
+
+  // Forward is carried as a FORWARD parameter (only emitted when false; the
+  // default is true and is signaled by the parameter's absence).
+  std::vector<Parameter> requestSpecificParams;
+  if (!subscribeTracks.forward) {
+    Parameter forwardParam;
+    forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
+    forwardParam.asUint64 = 0;
+    requestSpecificParams.push_back(forwardParam);
+  }
+
+  writeTrackRequestParams(
+      writeBuf, subscribeTracks.params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

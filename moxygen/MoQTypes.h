@@ -165,7 +165,7 @@ enum class FrameType : uint64_t {
   NAMESPACE_DONE = 0xE,  // Draft 16 and above
   TRACK_STATUS_ERROR = 0xF,
   GOAWAY = 0x10,
-  SUBSCRIBE_NAMESPACE = 0x11,
+  LEGACY_SUBSCRIBE_NAMESPACE = 0x11, // Drafts <= 17
   SUBSCRIBE_NAMESPACE_OK = 0x12,
   SUBSCRIBE_NAMESPACE_ERROR = 0x13,
   UNSUBSCRIBE_NAMESPACE = 0x14,
@@ -180,6 +180,8 @@ enum class FrameType : uint64_t {
   PUBLISH_ERROR = 0x1F,
   CLIENT_SETUP = 0x20,
   SERVER_SETUP = 0x21,
+  SUBSCRIBE_NAMESPACE = 0x50, // Draft 18+
+  SUBSCRIBE_TRACKS = 0x51,    // Draft 18+
   SETUP = 0x2F00,
 };
 
@@ -1274,6 +1276,14 @@ struct SubscribeNamespace {
   TrackRequestParameters params{FrameType::SUBSCRIBE_NAMESPACE};
   SubscribeNamespaceOptions options{
       SubscribeNamespaceOptions::BOTH}; // Only used in draft-16 and above
+};
+
+// Draft 18+ only
+struct SubscribeTracks {
+  RequestID requestID;
+  TrackNamespace trackNamespacePrefix;
+  bool forward{true};
+  TrackRequestParameters params{FrameType::SUBSCRIBE_TRACKS};
 };
 
 // Only used in draft-16 and above

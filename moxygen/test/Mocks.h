@@ -51,6 +51,9 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
       onSubscribeNamespace,
       (SubscribeNamespace subscribeNamespace));
 
+  // Draft 18+
+  MOCK_METHOD(void, onSubscribeTracks, (SubscribeTracks subscribeTracks));
+
   MOCK_METHOD(
       void,
       onUnsubscribeNamespace,

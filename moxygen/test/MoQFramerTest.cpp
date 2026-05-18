@@ -3343,7 +3343,8 @@ TEST_P(MoQFramerV15PlusTest, SubscribeNamespaceForwardFalse) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+      frameType->first,
+      folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
       parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
@@ -3597,7 +3598,8 @@ TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithOptions) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+      frameType->first,
+      folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
       parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
@@ -3631,7 +3633,8 @@ TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithBothOption) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+      frameType->first,
+      folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
       parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
@@ -3665,7 +3668,8 @@ TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithPublishOption) {
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+      frameType->first,
+      folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
       parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
@@ -4018,6 +4022,172 @@ INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     ::testing::Values(kVersionDraft16));
 
+// ===========================================================================
+// Draft 18+ tests: SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS split
+// ===========================================================================
+
+class MoQFramerV18Test : public ::testing::Test {
+ public:
+  void SetUp() override {
+    parser_.initializeVersion(kVersionDraft18);
+    writer_.initializeVersion(kVersionDraft18);
+  }
+
+ protected:
+  MoQFrameParser parser_;
+  MoQFrameWriter writer_;
+
+  size_t frameLength(folly::io::Cursor& cursor) {
+    if (!cursor.canAdvance(2)) {
+      throw std::runtime_error("Cannot read frame length");
+    }
+    size_t res = cursor.readBE<uint16_t>();
+    if (!cursor.canAdvance(res)) {
+      throw std::runtime_error("Frame length exceeds available data");
+    }
+    return res;
+  }
+};
+
+// Draft 18 renumbers SUBSCRIBE_NAMESPACE on the wire from 0x11 to 0x50 and
+// drops the Subscribe Options + Forward fields from the message body.
+TEST_F(MoQFramerV18Test, SubscribeNamespaceUsesNewWireTypeAndOmitsOptions) {
+  SubscribeNamespace req;
+  req.requestID = RequestID(42);
+  req.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"example.com", "meeting=123"});
+  // These pre-18 fields must be ignored on the wire.
+  req.options = SubscribeNamespaceOptions::PUBLISH;
+  req.forward = false;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeSubscribeNamespace(writeBuf, req).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto wireType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(wireType.has_value());
+  EXPECT_EQ(wireType->first, 0x50u);
+
+  auto bodyLen = frameLength(cursor);
+  auto parsed = parser_.parseSubscribeNamespace(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+
+  EXPECT_EQ(parsed->requestID, req.requestID);
+  EXPECT_EQ(parsed->trackNamespacePrefix, req.trackNamespacePrefix);
+  // Defaults are restored on the parse side because the fields aren't on the
+  // wire in draft 18.
+  EXPECT_EQ(parsed->options, SubscribeNamespaceOptions::BOTH);
+  EXPECT_EQ(parsed->forward, true);
+}
+
+TEST_F(MoQFramerV18Test, SubscribeTracksRoundtrip) {
+  SubscribeTracks req;
+  req.requestID = RequestID(7);
+  req.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"example.com", "live"});
+  req.forward = true;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeSubscribeTracks(writeBuf, req).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto wireType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(wireType.has_value());
+  EXPECT_EQ(wireType->first, folly::to_underlying(FrameType::SUBSCRIBE_TRACKS));
+  EXPECT_EQ(wireType->first, 0x51u);
+
+  auto bodyLen = frameLength(cursor);
+  auto parsed = parser_.parseSubscribeTracks(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+
+  EXPECT_EQ(parsed->requestID, req.requestID);
+  EXPECT_EQ(parsed->trackNamespacePrefix, req.trackNamespacePrefix);
+  EXPECT_EQ(parsed->forward, true);
+}
+
+TEST_F(MoQFramerV18Test, SubscribeTracksForwardFalseSerializedAsParameter) {
+  SubscribeTracks req;
+  req.requestID = RequestID(99);
+  req.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"announce-only"});
+  req.forward = false;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeSubscribeTracks(writeBuf, req).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ASSERT_TRUE(quic::follyutils::decodeQuicInteger(cursor).has_value());
+
+  auto bodyLen = frameLength(cursor);
+  auto parsed = parser_.parseSubscribeTracks(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->forward, false);
+}
+
+// Draft 17 must continue to use wire type 0x11 for SUBSCRIBE_NAMESPACE.
+TEST(MoQFramerWireTypeTranslation, Draft17UsesLegacyWireType) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft17);
+  SubscribeNamespace req;
+  req.requestID = RequestID(1);
+  req.trackNamespacePrefix = TrackNamespace(std::vector<std::string>{"x"});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeNamespace(writeBuf, req).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto wireType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(wireType.has_value());
+  EXPECT_EQ(wireType->first, 0x11u);
+}
+
+// Wire-level enumerator values: each FrameType integer IS a wire integer.
+// LEGACY_SUBSCRIBE_NAMESPACE is the v17- wire value (0x11); SUBSCRIBE_NAMESPACE
+// is the v18+ wire value (0x50). The writer picks between them based on the
+// negotiated version; the parser accepts either and dispatches to the same
+// handler.
+TEST(MoQFramerSubscribeNamespaceWireType, EnumValuesMatchSpec) {
+  EXPECT_EQ(folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE), 0x11u);
+  EXPECT_EQ(folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE), 0x50u);
+  EXPECT_EQ(folly::to_underlying(FrameType::SUBSCRIBE_TRACKS), 0x51u);
+}
+
+// On v18, the writer emits the renumbered SUBSCRIBE_NAMESPACE wire type 0x50
+// (covered by SubscribeNamespaceUsesNewWireTypeAndOmitsOptions above) and the
+// parser must continue to accept the legacy 0x11 wire type as input — round
+// tripping a v17-emitted frame through the parser still produces a valid
+// SubscribeNamespace.
+TEST(MoQFramerSubscribeNamespaceWireType, ParserAcceptsLegacyWireType) {
+  MoQFrameWriter v17Writer;
+  v17Writer.initializeVersion(kVersionDraft17);
+  SubscribeNamespace req;
+  req.requestID = RequestID(7);
+  req.trackNamespacePrefix = TrackNamespace(std::vector<std::string>{"foo"});
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(v17Writer.writeSubscribeNamespace(buf, req).hasValue());
+
+  auto serialized = buf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto wireType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(wireType.has_value());
+  EXPECT_EQ(wireType->first, 0x11u);
+
+  MoQFrameParser v17Parser;
+  v17Parser.initializeVersion(kVersionDraft17);
+  ASSERT_TRUE(cursor.canAdvance(2));
+  size_t bodyLen = cursor.readBE<uint16_t>();
+  auto parsed = v17Parser.parseSubscribeNamespace(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->requestID, req.requestID);
+  EXPECT_EQ(parsed->trackNamespacePrefix, req.trackNamespacePrefix);
+}
+
 // Death tests for v16+ PublishNamespaceDone/PublishNamespaceCancel without
 // requestID
 TEST(MoQFramerV16DeathTest, PublishNamespaceDoneWithoutRequestIDDies) {
@@ -4104,6 +4274,25 @@ TEST_F(ParametersIsParamAllowedTest, MultipleParamsMixedResults) {
   EXPECT_FALSE(
       params.isParamAllowed(TrackRequestParamKey::AUTHORIZATION_TOKEN));
   EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::LARGEST_OBJECT));
+}
+
+// Draft 18 dropped FORWARD from SUBSCRIBE_NAMESPACE (split into
+// SUBSCRIBE_TRACKS). Receivers MUST treat its presence in a draft-18
+// SUBSCRIBE_NAMESPACE as PROTOCOL_VIOLATION (§10.2.12, §10.2.1).
+TEST_F(ParametersIsParamAllowedTest, ForwardForbiddenOnSubscribeNamespaceV18) {
+  Parameters paramsV18(FrameType::SUBSCRIBE_NAMESPACE);
+  paramsV18.setMajorVersion(18);
+  EXPECT_FALSE(paramsV18.isParamAllowed(TrackRequestParamKey::FORWARD));
+
+  // SUBSCRIBE_TRACKS still accepts FORWARD on draft 18.
+  Parameters tracksV18(FrameType::SUBSCRIBE_TRACKS);
+  tracksV18.setMajorVersion(18);
+  EXPECT_TRUE(tracksV18.isParamAllowed(TrackRequestParamKey::FORWARD));
+
+  // Pre-18 (draft 17), FORWARD on SUBSCRIBE_NAMESPACE is still allowed.
+  Parameters paramsV17(FrameType::SUBSCRIBE_NAMESPACE);
+  paramsV17.setMajorVersion(17);
+  EXPECT_TRUE(paramsV17.isParamAllowed(TrackRequestParamKey::FORWARD));
 }
 
 class ParameterValidationFlowTest : public ::testing::Test {
