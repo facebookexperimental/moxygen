@@ -19,11 +19,10 @@ DEFINE_int32(
     perf_transaction_timeout,
     1000,
     "transaction timeout in ms for perf test");
-DEFINE_bool(
-    perf_use_legacy_setup,
-    false,
-    "If true, advertise only legacy moq-00 ALPN (forces draft-14 negotiation). "
-    "Default false: advertise moqt-16, moqt-15, and moq-00.");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
 
 // Constants for moq-test scheme parameters
 constexpr uint64_t kStartGroup = 0;
@@ -95,7 +94,7 @@ folly::coro::Task<void> SubscriberState::connect() {
           ts.orderedReadCallbacks = true;
           return ts;
         }(),
-        getDefaultMoqtProtocols(!FLAGS_perf_use_legacy_setup));
+        getMoqtProtocols(FLAGS_versions, true));
     XLOG(DBG2) << "Subscriber " << id_ << " connected successfully";
   } catch (const std::exception& ex) {
     XLOG(ERR) << "Subscriber " << id_ << " failed to connect: " << ex.what();
