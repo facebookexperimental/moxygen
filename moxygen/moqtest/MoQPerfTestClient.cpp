@@ -8,6 +8,7 @@
 
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
+#include "moxygen/MoQVersions.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
@@ -18,6 +19,11 @@ DEFINE_int32(
     perf_transaction_timeout,
     1000,
     "transaction timeout in ms for perf test");
+DEFINE_bool(
+    perf_use_legacy_setup,
+    false,
+    "If true, advertise only legacy moq-00 ALPN (forces draft-14 negotiation). "
+    "Default false: advertise moqt-16, moqt-15, and moq-00.");
 
 // Constants for moq-test scheme parameters
 constexpr uint64_t kStartGroup = 0;
@@ -88,7 +94,8 @@ folly::coro::Task<void> SubscriberState::connect() {
           quic::TransportSettings ts;
           ts.orderedReadCallbacks = true;
           return ts;
-        }());
+        }(),
+        getDefaultMoqtProtocols(!FLAGS_perf_use_legacy_setup));
     XLOG(DBG2) << "Subscriber " << id_ << " connected successfully";
   } catch (const std::exception& ex) {
     XLOG(ERR) << "Subscriber " << id_ << " failed to connect: " << ex.what();
