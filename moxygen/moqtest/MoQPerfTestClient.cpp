@@ -8,8 +8,16 @@
 
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
+#include "moxygen/MoQVersions.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
+
+// Declared at global scope so MoQPerfTestClientMain.cpp can reference
+// FLAGS_versions via DECLARE_string; gflags symbols live in ::fLS::.
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
 
 namespace moxygen {
 
@@ -88,7 +96,8 @@ folly::coro::Task<void> SubscriberState::connect() {
           quic::TransportSettings ts;
           ts.orderedReadCallbacks = true;
           return ts;
-        }());
+        }(),
+        getMoqtProtocols(FLAGS_versions, true));
     XLOG(DBG2) << "Subscriber " << id_ << " connected successfully";
   } catch (const std::exception& ex) {
     XLOG(ERR) << "Subscriber " << id_ << " failed to connect: " << ex.what();
