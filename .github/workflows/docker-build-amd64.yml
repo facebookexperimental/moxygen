@@ -32,6 +32,13 @@ jobs:
             -t ghcr.io/${{ env.IMAGE_NAME }}:latest-amd64 \
             -t ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
 
+      - name: Smoke test amd64 image
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh \
+            ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64 \
+            -c 'ldd /usr/local/bin/moqrelayserver | tee /dev/stderr | grep -q "not found" && exit 1 || exit 0'
+
       - name: Push amd64 image
         if: github.event_name != 'pull_request'
         run: |

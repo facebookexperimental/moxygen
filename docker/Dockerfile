@@ -33,7 +33,7 @@
   #
 
   # Stage 1: Build
-  FROM ubuntu:latest AS builder
+  FROM ubuntu:24.04 AS builder
 
   # Install python3 and sudo (getdeps.py install-system-deps requires sudo)
   RUN apt-get update && apt-get install -y \
@@ -69,18 +69,21 @@
 
   # Stage the binary and getdeps-built shared libs for the runtime image
   RUN INST_DIR=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen) && \
+      GETDEPS_INSTALLED=$(./build/fbcode_builder/getdeps.py show-scratch-dir)/installed && \
       mkdir -p /staging/bin /staging/lib && \
-      cp $INST_DIR/bin/moqrelayserver /staging/bin/
+      cp $INST_DIR/bin/moqrelayserver /staging/bin/ && \
+      find $GETDEPS_INSTALLED -name 'libglog.so*' -exec cp -P {} /staging/lib/ \; && \
+      find $GETDEPS_INSTALLED -name 'libunwind.so*' -exec cp -P {} /staging/lib/ \;
 
   # Stage 2: Runtime
-  FROM ubuntu:latest
+  FROM ubuntu:24.04
 
   RUN apt-get update && apt-get install -y --no-install-recommends \
       libsodium23 \
       libdouble-conversion3 \
-      libevent-2.1-7 \
+      libevent-2.1-7t64 \
       libgflags2.2 \
-      libssl3 \
+      libssl3t64 \
       libsnappy1v5 \
       zlib1g \
       ca-certificates \
