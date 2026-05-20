@@ -12,6 +12,13 @@
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
+// Declared at global scope so MoQPerfTestClientMain.cpp can reference
+// FLAGS_versions via DECLARE_string; gflags symbols live in ::fLS::.
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
+
 namespace moxygen {
 
 DEFINE_int32(perf_connect_timeout, 1000, "connect timeout in ms for perf test");
@@ -19,10 +26,6 @@ DEFINE_int32(
     perf_transaction_timeout,
     1000,
     "transaction timeout in ms for perf test");
-DEFINE_string(
-    versions,
-    "",
-    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
 
 // Constants for moq-test scheme parameters
 constexpr uint64_t kStartGroup = 0;
