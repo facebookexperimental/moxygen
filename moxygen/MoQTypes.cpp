@@ -75,10 +75,6 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
   switch (objectStatus) {
     case moxygen::ObjectStatus::NORMAL:
       return "NORMAL";
-    case moxygen::ObjectStatus::OBJECT_NOT_EXIST:
-      return "OBJECT_NOT_EXIST";
-    case moxygen::ObjectStatus::GROUP_NOT_EXIST:
-      return "GROUP_NOT_EXIST";
     case moxygen::ObjectStatus::END_OF_GROUP:
       return "END_OF_GROUP";
     case moxygen::ObjectStatus::END_OF_TRACK:
@@ -183,6 +179,7 @@ const folly::F14FastSet<FrameType> kAllowedFramesForAuthToken = {
     FrameType::SUBSCRIBE,
     FrameType::SUBSCRIBE_UPDATE,
     FrameType::SUBSCRIBE_NAMESPACE,
+    FrameType::SUBSCRIBE_TRACKS,
     FrameType::PUBLISH_NAMESPACE,
     FrameType::TRACK_STATUS,
     FrameType::FETCH};
@@ -231,7 +228,8 @@ const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
     FrameType::SUBSCRIBE_UPDATE,
     FrameType::PUBLISH,
     FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE_NAMESPACE};
+    FrameType::SUBSCRIBE_NAMESPACE,
+    FrameType::SUBSCRIBE_TRACKS};
 
 const folly::F14FastSet<FrameType> kAllowedFramesForNewGroupRequest = {
     FrameType::SUBSCRIBE,
@@ -293,6 +291,14 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
       default:
         break;
     }
+  }
+
+  // v18+: SUBSCRIBE_NAMESPACE no longer carries FORWARD; it was split out
+  // into SUBSCRIBE_TRACKS.
+  if (majorVersion_.has_value() && *majorVersion_ >= 18 &&
+      key == TrackRequestParamKey::FORWARD &&
+      frameType_ == FrameType::SUBSCRIBE_NAMESPACE) {
+    return false;
   }
 
   auto it = kParamAllowlist.find(key);

@@ -98,6 +98,8 @@ class MoQControlCodec : public MoQCodec {
     virtual void onNamespaceDone(NamespaceDone) {}
     virtual void onTrackStatusError(TrackStatusError) {}
     virtual void onGoaway(Goaway) {}
+    // Draft 18+ only.
+    virtual void onSubscribeTracks(SubscribeTracks) {}
   };
 
   enum class Direction { CLIENT, SERVER };
@@ -146,7 +148,7 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::FETCH_OK:
       case FrameType::FETCH_ERROR:
         return true;
-      case FrameType::SUBSCRIBE_NAMESPACE:
+      case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
       case FrameType::SUBSCRIBE_NAMESPACE_OK:
       case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
       case FrameType::UNSUBSCRIBE_NAMESPACE:
@@ -156,6 +158,13 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::NAMESPACE:
       case FrameType::NAMESPACE_DONE:
         return getDraftMajorVersion(*negotiatedVersion_) < 16;
+      // Draft 18+ only, and never on the control stream. The renumbered
+      // SUBSCRIBE_NAMESPACE wire type (0x50) replaces
+      // LEGACY_SUBSCRIBE_NAMESPACE (0x11) in draft 18 and only ever appears on
+      // a fresh bidi stream.
+      case FrameType::SUBSCRIBE_NAMESPACE:
+      case FrameType::SUBSCRIBE_TRACKS:
+        return false;
     }
     return false;
   }

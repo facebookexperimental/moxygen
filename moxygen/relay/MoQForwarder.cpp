@@ -88,8 +88,7 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
         // up with "holes" in the subgroup. If, at some point in the future,
         // we set forward = true, then we'll create a new stream for the
         // subgroup.
-        subgroupConsumerIt->second->reset(
-            ResetStreamErrorCode::INTERNAL_ERROR);
+        subgroupConsumerIt->second->reset(ResetStreamErrorCode::INTERNAL_ERROR);
         closeSubgroupForSubscriber(
             sub, "SubgroupForwarder::forEachSubscriberSubgroup");
       } else {
@@ -589,13 +588,13 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::publishDone(
 
 void MoQForwarder::addForwardingSubscriber() {
   if (forwardingSubscribers_++ == 0 && callback_) {
-    callback_->forwardChanged(this);
+    callback_->forwardChanged(this, true);
   }
 }
 
 void MoQForwarder::removeForwardingSubscriber() {
   if (--forwardingSubscribers_ == 0 && callback_) {
-    callback_->forwardChanged(this);
+    callback_->forwardChanged(this, false);
   }
 }
 

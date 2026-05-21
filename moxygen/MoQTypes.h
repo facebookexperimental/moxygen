@@ -165,7 +165,7 @@ enum class FrameType : uint64_t {
   NAMESPACE_DONE = 0xE,  // Draft 16 and above
   TRACK_STATUS_ERROR = 0xF,
   GOAWAY = 0x10,
-  SUBSCRIBE_NAMESPACE = 0x11,
+  LEGACY_SUBSCRIBE_NAMESPACE = 0x11, // Drafts <= 17
   SUBSCRIBE_NAMESPACE_OK = 0x12,
   SUBSCRIBE_NAMESPACE_ERROR = 0x13,
   UNSUBSCRIBE_NAMESPACE = 0x14,
@@ -180,6 +180,8 @@ enum class FrameType : uint64_t {
   PUBLISH_ERROR = 0x1F,
   CLIENT_SETUP = 0x20,
   SERVER_SETUP = 0x21,
+  SUBSCRIBE_NAMESPACE = 0x50, // Draft 18+
+  SUBSCRIBE_TRACKS = 0x51,    // Draft 18+
   SETUP = 0x2F00,
 };
 
@@ -713,8 +715,7 @@ using ServerSetup = Setup;
 
 enum class ObjectStatus : uint64_t {
   NORMAL = 0,
-  OBJECT_NOT_EXIST = 1,
-  GROUP_NOT_EXIST = 2,
+  // Values 1 and 2 were OBJECT_NOT_EXIST and GROUP_NOT_EXIST, now removed
   END_OF_GROUP = 3,
   END_OF_TRACK = 4,
 };
@@ -1311,6 +1312,14 @@ struct SubscribeNamespace {
       SubscribeNamespaceOptions::BOTH}; // Only used in draft-16 and above
 };
 
+// Draft 18+ only
+struct SubscribeTracks {
+  RequestID requestID;
+  TrackNamespace trackNamespacePrefix;
+  bool forward{true};
+  TrackRequestParameters params{FrameType::SUBSCRIBE_TRACKS};
+};
+
 // Only used in draft-16 and above
 struct NamespaceDone {
   TrackNamespace trackNamespaceSuffix;
@@ -1339,6 +1348,7 @@ struct RequestOk {
 };
 
 using SubscribeNamespaceOk = RequestOk;
+using SubscribeTracksOk = RequestOk;
 using PublishNamespaceOk = RequestOk;
 using SubscribeUpdateOk = RequestOk;
 
@@ -1358,6 +1368,7 @@ struct RequestError {
 using SubscribeError = RequestError;
 using FetchError = RequestError;
 using SubscribeNamespaceError = RequestError;
+using SubscribeTracksError = RequestError;
 using PublishNamespaceError = RequestError;
 using PublishError = RequestError;
 using TrackStatusError = RequestError;
@@ -1367,6 +1378,7 @@ using SubscribeUpdateError = RequestError;
 using SubscribeErrorCode = RequestErrorCode;
 using FetchErrorCode = RequestErrorCode;
 using SubscribeNamespaceErrorCode = RequestErrorCode;
+using SubscribeTracksErrorCode = RequestErrorCode;
 using PublishNamespaceErrorCode = RequestErrorCode;
 using PublishErrorCode = RequestErrorCode;
 using TrackStatusErrorCode = RequestErrorCode;

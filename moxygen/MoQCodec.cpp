@@ -728,7 +728,21 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::SUBSCRIBE_NAMESPACE: {
+    case FrameType::SUBSCRIBE_TRACKS: {
+      auto res = moqFrameParser_.parseSubscribeTracks(cursor, curFrameLength_);
+      if (res) {
+        if (callback_) {
+          callback_->onSubscribeTracks(std::move(res.value()));
+        }
+      } else {
+        return folly::makeUnexpected(res.error());
+      }
+      break;
+    }
+    case FrameType::SUBSCRIBE_NAMESPACE:
+    case FrameType::LEGACY_SUBSCRIBE_NAMESPACE: {
+      // Both wire types decode into the same SubscribeNamespace struct; the
+      // version-correctness check happens in checkFrameAllowed.
       auto res =
           moqFrameParser_.parseSubscribeNamespace(cursor, curFrameLength_);
       if (res) {

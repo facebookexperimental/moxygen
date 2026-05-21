@@ -1657,16 +1657,6 @@ MoQSession::TrackPublisherImpl::objectStream(
           std::move(payload),
           extensions,
           /*finSubgroup=*/true);
-    case ObjectStatus::OBJECT_NOT_EXIST:
-    case ObjectStatus::GROUP_NOT_EXIST: {
-      auto& subgroupPublisherImpl =
-          static_cast<StreamPublisherImpl&>(*subgroup.value());
-      return subgroupPublisherImpl.publishStatus(
-          objHeader.id,
-          objHeader.status,
-          noExtensions(),
-          /*finStream=*/true);
-    }
     case ObjectStatus::END_OF_GROUP:
       return subgroup.value()->endOfGroup(objHeader.id);
     case ObjectStatus::END_OF_TRACK:
@@ -1968,6 +1958,8 @@ class MoQSession::SubscribeTrackReceiveState
             << "deliverPublishDoneAndRemove: Delivering PUBLISH_DONE to app; statusCode="
             << folly::to_underlying(pendingPublishDone_->statusCode)
             << " alias=" << alias_ << " requestID=" << requestID_;
+        MOQ_SUBSCRIBER_STATS(
+            session_->subscriberStatsCallback_, onSubscriptionEnd);
         auto token = cancelSource_.getToken();
         auto cb = std::exchange(callback_, nullptr);
         cb->publishDone(std::move(*pendingPublishDone_));
@@ -2205,6 +2197,7 @@ void MoQSession::cleanup() {
     auto requestID = it->first;
     auto pubTrack = std::move(it->second);
     pubTracks_.erase(it);
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
     pubTrack->terminatePublish(
         PublishDone(
             {requestID,
@@ -2312,6 +2305,10 @@ void MoQSession::drain() {
 
 void MoQSession::goaway(Goaway goaway) {
   if (!draining_) {
+    if (!moqFrameWriter_.getVersion().has_value()) {
+      close(SessionCloseErrorCode::NO_ERROR);
+      return;
+    }
     if (logger_) {
       logger_->logGoaway(goaway);
     }
@@ -3022,45 +3019,41 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     if (isCancelled()) {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
-    folly::Expected<folly::Unit, MoQPublishError> res{folly::unit};
+    auto toParseResult =
+        [](const folly::Expected<folly::Unit, MoQPublishError>& r) {
+          return r ? MoQCodec::ParseResult::CONTINUE
+                   : MoQCodec::ParseResult::ERROR_TERMINATE;
+        };
     // Handle subscription/fetch consumers
     switch (status) {
-      case ObjectStatus::NORMAL:
-        break;
-      case ObjectStatus::OBJECT_NOT_EXIST:
-        // Object doesn't exist - no action needed, continue
-        break;
-      case ObjectStatus::GROUP_NOT_EXIST:
-        // Group doesn't exist - end subgroup for subscriptions
-        if (!fetchState_) {
-          endOfSubgroup();
-        }
-        break;
       case ObjectStatus::END_OF_GROUP:
         // FetchConsumer::endOfGroup has an optional param
         if (fetchState_) {
-          res = fetchState_->getFetchCallback()->endOfGroup(
+          return toParseResult(fetchState_->getFetchCallback()->endOfGroup(
               group,
               subgroup,
               objectID,
-              /*finFetch=*/false);
+              /*finFetch=*/false));
         } else {
-          res = subgroupCallback_->endOfGroup(objectID);
+          auto r = subgroupCallback_->endOfGroup(objectID);
           endOfSubgroup();
+          return toParseResult(r);
         }
-        break;
-      case ObjectStatus::END_OF_TRACK:
-        res = invokeCallback(
+      case ObjectStatus::END_OF_TRACK: {
+        auto r = invokeCallback(
             &SubgroupConsumer::endOfTrackAndGroup,
             &FetchConsumer::endOfTrackAndGroup,
             group,
             subgroup,
             objectID);
         endOfSubgroup();
+        return toParseResult(r);
+      }
+      case ObjectStatus::NORMAL:
+      default:
         break;
     }
-    return res ? MoQCodec::ParseResult::CONTINUE
-               : MoQCodec::ParseResult::ERROR_TERMINATE;
+    return MoQCodec::ParseResult::CONTINUE;
   }
 
   MoQCodec::ParseResult onEndOfRange(
@@ -3670,6 +3663,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
   } else {
     trackPublisher->unsubscribe();
     if (pubTracks_.erase(unsubscribe.requestID)) {
+      MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
       retireRequestID(/*signalWriteLoop=*/true);
     } // else, the caller invoked publishDone, which isn't needed but fine
   }
@@ -3705,6 +3699,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
     pendingPublishTracks_.erase(trackIt->second->fullTrackName());
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   }
 
   publishPtr->setValue(std::move(publishOk));
@@ -4765,6 +4760,7 @@ Subscriber::PublishResult MoQSession::publish(
 void MoQSession::publishOk(const PublishOk& pubOk, ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << pubOk.requestID << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishOk);
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionBegin);
 
   if (logger_) {
     logger_->logPublishOk(pubOk, ControlMessageType::CREATED);
@@ -4887,6 +4883,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     co_return folly::makeUnexpected(subscribeResult.error());
   } else {
     MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeSuccess);
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionBegin);
     co_return std::make_shared<ReceiverSubscriptionHandle>(
         std::move(subscribeResult.value()), trackAlias, shared_from_this());
   }
@@ -4895,6 +4892,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
 void MoQSession::sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeSuccess);
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   auto res = moqFrameWriter_.writeSubscribeOk(ctx.writeBuf(), subOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
@@ -4953,6 +4951,9 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
              << " sess=" << this;
   // cancel() should send STOP_SENDING on any open streams for this
   // subscription
+  if (trackIt->second->getSubscribeCallback()) {
+    MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionEnd);
+  }
   trackIt->second->cancel();
   subTracks_.erase(trackIt);
   reqIdToTrackAlias_.erase(trackAliasIt);
@@ -4981,6 +4982,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
               << " sess=" << this;
     return;
   }
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
   auto* ctx = it->second->replyContext();
   SCOPE_EXIT {
     pubTracks_.erase(it);
@@ -5412,9 +5414,16 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
     FrameType frameType) {
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (frameType) {
+    // SUBSCRIBE_NAMESPACE arrives on a fresh bidi stream in draft 16+; the
+    // wire enumerator is LEGACY_SUBSCRIBE_NAMESPACE (0x11) on drafts 16-17 and
+    // SUBSCRIBE_NAMESPACE (0x50) on draft 18+. The bidi codec's allow-list
+    // includes both so the same config serves either.
+    case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
     case FrameType::SUBSCRIBE_NAMESPACE:
       return BidiStreamConfig{
-          {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE},
+          {FrameType::LEGACY_SUBSCRIBE_NAMESPACE,
+           FrameType::SUBSCRIBE_NAMESPACE,
+           FrameType::REQUEST_UPDATE},
           [this](RequestID id) {
             onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
           }};

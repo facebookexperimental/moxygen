@@ -125,6 +125,25 @@ class MoQStatsCallback {
    * Subscriber: The publisher closed a subscription stream to us
    */
   virtual void onSubscriptionStreamClosed() = 0;
+
+  /*
+   * Publisher: A subscription became active (sent SUBSCRIBE_OK, or had a
+   *   PUBLISH accepted via PUBLISH_OK)
+   * Subscriber: A subscription became active (received SUBSCRIBE_OK, or sent
+   *   PUBLISH_OK accepting a PUBLISH)
+   * Pairs with onSubscriptionEnd to form a gauge of active subscriptions.
+   */
+  virtual void onSubscriptionBegin() = 0;
+
+  /*
+   * Publisher: An active subscription ended (sent PUBLISH_DONE, received
+   *   UNSUBSCRIBE, or session closed while subscription was active)
+   * Subscriber: An active subscription ended (PUBLISH_DONE delivered to app,
+   *   unsubscribe called, or session closed while subscription was active)
+   * Pairs with onSubscriptionBegin; this callback fires exactly once per
+   * onSubscriptionBegin, so the difference is a non-negative gauge.
+   */
+  virtual void onSubscriptionEnd() = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {

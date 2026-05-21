@@ -8,6 +8,7 @@
 
 #include <thread>
 
+#include <folly/portability/GMock.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 

@@ -51,6 +51,9 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
       onSubscribeNamespace,
       (SubscribeNamespace subscribeNamespace));
 
+  // Draft 18+
+  MOCK_METHOD(void, onSubscribeTracks, (SubscribeTracks subscribeTracks));
+
   MOCK_METHOD(
       void,
       onUnsubscribeNamespace,
@@ -422,6 +425,10 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onSubscriptionStreamClosed, (), (override));
 
+  MOCK_METHOD(void, onSubscriptionBegin, (), (override));
+
+  MOCK_METHOD(void, onSubscriptionEnd, (), (override));
+
   MOCK_METHOD(void, recordPublishNamespaceLatency, (uint64_t), (override));
 
   MOCK_METHOD(void, recordPublishLatency, (uint64_t), (override));
@@ -476,6 +483,10 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onSubscriptionStreamOpened, (), (override));
 
   MOCK_METHOD(void, onSubscriptionStreamClosed, (), (override));
+
+  MOCK_METHOD(void, onSubscriptionBegin, (), (override));
+
+  MOCK_METHOD(void, onSubscriptionEnd, (), (override));
 
   MOCK_METHOD(void, recordSubscribeLatency, (uint64_t), (override));
 

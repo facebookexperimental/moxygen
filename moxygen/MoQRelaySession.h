@@ -53,6 +53,15 @@ class MoQRelaySession : public MoQSession {
   // Inherit all base constructors
   using MoQSession::MoQSession;
 
+  // ~MoQSession calls cleanup(), but the vtable has reverted to MoQSession
+  // at that point, so MoQRelaySession::cleanup() would be skipped.
+  // Call cleanupRelayState() directly to avoid shared_from_this() issues
+  // in the destructor (cleanup() calls setRequestSession() which needs
+  // a live shared_ptr).
+  ~MoQRelaySession() override {
+    cleanupRelayState();
+  }
+
   // Static factory for creating relay sessions in clients
   static std::function<std::shared_ptr<MoQSession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>,
@@ -84,6 +93,10 @@ class MoQRelaySession : public MoQSession {
   }
 
  private:
+  // Clean up relay-specific state without requiring shared_from_this().
+  // Safe to call from the destructor (where the shared_ptr is expired).
+  void cleanupRelayState();
+
   // Forward declarations for inner classes
   class SubscriberPublishNamespaceCallback;
   class PublisherPublishNamespaceHandle;

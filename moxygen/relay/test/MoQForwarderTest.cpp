@@ -1044,12 +1044,11 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
               downstreamPayload += p->moveToFbString().toStdString();
               return folly::makeExpected<MoQPublishError>(folly::unit);
             });
-        EXPECT_CALL(*sg, objectPayload(_, _))
-            .WillOnce([&](Payload p, bool) {
-              downstreamPayload += p->moveToFbString().toStdString();
-              return folly::makeExpected<MoQPublishError>(
-                  ObjectPublishStatus::IN_PROGRESS);
-            });
+        EXPECT_CALL(*sg, objectPayload(_, _)).WillOnce([&](Payload p, bool) {
+          downstreamPayload += p->moveToFbString().toStdString();
+          return folly::makeExpected<MoQPublishError>(
+              ObjectPublishStatus::IN_PROGRESS);
+        });
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -1067,8 +1066,7 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
 
   auto initial = folly::IOBuf::copyBuffer(std::string(kInitialLength, 'a'));
   ASSERT_TRUE(
-      subgroup
-          ->beginObject(kObjectID, kObjectLength, std::move(initial), {})
+      subgroup->beginObject(kObjectID, kObjectLength, std::move(initial), {})
           .hasValue());
 
   // Late PUBLISH_OK with LargestObject: range.start becomes largest.object + 1.
@@ -1084,8 +1082,8 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
   subscriber->onPublishOk(pubOk);
   EXPECT_EQ(subscriber->range.start.object, kObjectID + 1);
 
-  auto continuation =
-      folly::IOBuf::copyBuffer(std::string(kObjectLength - kInitialLength, 'b'));
+  auto continuation = folly::IOBuf::copyBuffer(
+      std::string(kObjectLength - kInitialLength, 'b'));
   ASSERT_TRUE(
       subgroup->objectPayload(std::move(continuation), /*finStream=*/false)
           .hasValue());

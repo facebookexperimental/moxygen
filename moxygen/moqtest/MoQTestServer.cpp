@@ -17,20 +17,6 @@ namespace moxygen {
 const int kDefaultExpires = 0;
 const std::string kDefaultPublishDoneReason = "Testing";
 
-void MoQTestSubscriptionHandle::unsubscribe() {
-  cancelSource_.requestCancellation();
-}
-
-folly::coro::Task<MoQTestSubscriptionHandle::RequestUpdateResult>
-MoQTestSubscriptionHandle::requestUpdate(RequestUpdate update) {
-  LOG(INFO) << "Received Request Update";
-  co_return folly::makeUnexpected(
-      RequestError{
-          update.requestID,
-          RequestErrorCode::NOT_SUPPORTED,
-          "Request update not implemented"});
-}
-
 folly::coro::Task<MoQTestFetchHandle::RequestUpdateResult>
 MoQTestFetchHandle::requestUpdate(RequestUpdate update) {
   LOG(INFO) << "Received Request Update for Fetch";
@@ -63,12 +49,19 @@ MoQTestServer::MoQTestServer(
           kEndpointName),
       versions_(versions) {}
 
+void MoQTestServer::removeSubscription(SubKey key) {
+  auto it = activeSubscriptions_.find(key);
+  if (it != activeSubscriptions_.end()) {
+    it->second.cancelSource.requestCancellation();
+    activeSubscriptions_.erase(it);
+  }
+}
+
 folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
   LOG(INFO) << "Recieved Subscription";
 
-  // Ensure Params are valid according to spec, if not return SubscribeError
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
       &sub.fullTrackName.trackNamespace);
   if (res.hasError()) {
@@ -79,28 +72,39 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
     co_return folly::makeUnexpected(error);
   }
 
-  // Start a Co-routine to send objects back according to spec
-  auto alias = TrackAlias(sub.requestID.value);
-  callback->setTrackAlias(alias);
-  // Declare cancellation source
-  folly::CancellationSource cancelSource;
+  auto session = MoQSession::getRequestSession();
+  auto forwarder = std::make_shared<MoQForwarder>(sub.fullTrackName);
+  forwarder->setTrackAlias(TrackAlias(sub.requestID.value));
+
+  SubKey subKey{session.get(), sub.requestID.value};
+  auto& state = activeSubscriptions_[subKey];
+  state.forwarder = forwarder;
+  auto token = state.cancelSource.getToken();
+
+  struct EmptyCb : public MoQForwarder::Callback {
+    std::weak_ptr<MoQTestServer> server;
+    SubKey key;
+    void onEmpty(MoQForwarder*) override {
+      if (auto s = server.lock()) {
+        s->removeSubscription(key);
+      }
+    }
+  };
+  auto cb = std::make_shared<EmptyCb>();
+  cb->server = std::static_pointer_cast<MoQTestServer>(shared_from_this());
+  cb->key = subKey;
+  forwarder->setCallback(std::move(cb));
+
+  auto subscriber = forwarder->addSubscriber(session, sub, std::move(callback));
 
   co_withCancellation(
-      cancelSource.getToken(),
+      token,
       co_withExecutor(
           co_await folly::coro::co_current_executor,
-          onSubscribe(sub, callback)))
+          onSubscribe(sub, forwarder)))
       .start();
 
-  // Return a SubscribeOk
-  SubscribeOk subRes{
-      sub.requestID,
-      alias,
-      std::chrono::milliseconds(kDefaultExpires),
-      MoQSession::resolveGroupOrder(GroupOrder::OldestFirst, sub.groupOrder),
-      std::nullopt};
-  co_return std::make_shared<MoQTestSubscriptionHandle>(
-      subRes, std::move(cancelSource));
+  co_return subscriber;
 }
 
 // Perform Co-routine

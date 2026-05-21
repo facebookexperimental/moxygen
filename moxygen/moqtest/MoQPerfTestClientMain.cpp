@@ -19,6 +19,9 @@
 
 #include "moxygen/moqtest/MoQPerfTestClient.h"
 
+// Declared in MoQPerfTestClient.cpp.
+DECLARE_string(versions);
+
 DEFINE_string(relay_url, "https://localhost:9999", "Relay URL to connect to");
 DEFINE_bool(
     quic_transport,
@@ -140,6 +143,8 @@ int main(int argc, char** argv) {
   XLOG(INFO) << "Relay URL: " << FLAGS_relay_url;
   XLOG(INFO) << "Transport: "
              << (FLAGS_quic_transport ? "QUIC" : "WebTransport");
+  XLOG(INFO) << "MoQ versions: "
+             << (FLAGS_versions.empty() ? "(all supported)" : FLAGS_versions);
   XLOG(INFO) << "Number of threads: " << FLAGS_num_threads;
   XLOG(INFO) << "Duration: " << FLAGS_duration << " seconds";
   XLOG(INFO) << "Subscriber ramp (total): " << FLAGS_subscriber_ramp << "/sec";

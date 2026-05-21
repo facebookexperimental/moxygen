@@ -183,6 +183,46 @@ class Publisher {
                 "unimplemented"}));
   }
 
+  // On successful SUBSCRIBE_TRACKS, a SubscribeTracksHandle is returned,
+  // which the caller can use to unsubscribe from the tracks or update the
+  // request.
+  class SubscribeTracksHandle {
+   public:
+    SubscribeTracksHandle() = default;
+    explicit SubscribeTracksHandle(SubscribeTracksOk ok)
+        : subscribeTracksOk_(std::move(ok)) {}
+    virtual ~SubscribeTracksHandle() = default;
+
+    virtual void unsubscribeTracks() = 0;
+
+    using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
+    virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
+        RequestUpdate reqUpdate) = 0;
+
+    const SubscribeTracksOk& subscribeTracksOk() const {
+      return *subscribeTracksOk_;
+    }
+
+   protected:
+    void setSubscribeTracksOk(SubscribeTracksOk ok) {
+      subscribeTracksOk_ = std::move(ok);
+    }
+
+    std::optional<SubscribeTracksOk> subscribeTracksOk_;
+  };
+
+  // Send/respond to SUBSCRIBE_TRACKS (draft 18+ only).
+  using SubscribeTracksResult = folly::
+      Expected<std::shared_ptr<SubscribeTracksHandle>, SubscribeTracksError>;
+  virtual folly::coro::Task<SubscribeTracksResult> subscribeTracks(
+      SubscribeTracks subTracks) {
+    return folly::coro::makeTask<SubscribeTracksResult>(folly::makeUnexpected(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::NOT_SUPPORTED,
+            "unimplemented"}));
+  }
+
   virtual void goaway(Goaway /*goaway*/) {}
 };
 

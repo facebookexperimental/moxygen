@@ -38,7 +38,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
       alpn,
       transportSettings);
 
-  quicConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+  transportConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - quicConnectStart);
 
   if (logger_) {

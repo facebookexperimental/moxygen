@@ -239,11 +239,11 @@ TEST_P(MoQCodecTest, AllObject) {
           false,
           testing::_))
       .Times(2);
+  // Only 1 status object - END_OF_GROUP terminates the subgroup
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          testing::_, testing::_, testing::_, testing::_, testing::_))
-      .Times(2);
+          testing::_, testing::_, testing::_, testing::_, testing::_));
   objectStreamCodec_.onIngress(std::move(allMsgs), true);
 }
 
@@ -328,7 +328,7 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
   moqFrameWriter_.writeSingleObjectStream(
       writeBuf,
       TrackAlias(1),
-      ObjectHeader(2, 3, 4, 5, ObjectStatus::OBJECT_NOT_EXIST),
+      ObjectHeader(2, 3, 4, 5, ObjectStatus::END_OF_GROUP),
       nullptr);
 
   EXPECT_CALL(
@@ -337,8 +337,8 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST));
-  EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::END_OF_GROUP));
+  // onEndOfStream is not called - END_OF_GROUP implies stream end
   // extra coverage of underflow in header
   objectStreamCodec_.onIngress(writeBuf.split(3), false);
   objectStreamCodec_.onIngress(writeBuf.move(), false);
@@ -425,7 +425,7 @@ TEST_P(MoQCodecTest, Fetch) {
   obj.length = 0;
   res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
   obj.id++;
-  obj.status = ObjectStatus::GROUP_NOT_EXIST;
+  obj.status = ObjectStatus::END_OF_GROUP;
   obj.length = 0;
   res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
 
@@ -647,7 +647,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
       writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
   // First object with status - will trigger ERROR_TERMINATE
   ObjectHeader statusObj(2, 3, 4, 5);
-  statusObj.status = ObjectStatus::OBJECT_NOT_EXIST;
+  statusObj.status = ObjectStatus::END_OF_GROUP;
   statusObj.length = 0;
   res = moqFrameWriter_.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, statusObj, nullptr);
@@ -664,7 +664,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::END_OF_GROUP))
       .WillOnce(testing::Return(MoQCodec::ParseResult::ERROR_TERMINATE));
 
   // Second object should NOT be parsed
@@ -781,7 +781,7 @@ TEST_P(MoQCodecTest, CallbackReturnsContinue) {
   EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
 }
 
-// Test zero-length status object followed by normal object
+// Test zero-length NORMAL object followed by normal object
 // This exposes a cursor invalidation bug where trimStart() invalidates the
 // cursor, but when chunkLen == 0, splitAndResetCursor() isn't called,
 // leaving the cursor stale for the next object parse.
@@ -794,12 +794,12 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
       SubgroupIDFormat::Present,
       false);
 
-  // Write a zero-length status object (valid zero-length case)
-  ObjectHeader statusObj(0, 0, 4, 0);
-  statusObj.status = ObjectStatus::OBJECT_NOT_EXIST;
-  statusObj.length = 0;
+  // Write a zero-length NORMAL object
+  ObjectHeader zeroLenObj(0, 0, 4, 0);
+  zeroLenObj.status = ObjectStatus::NORMAL;
+  zeroLenObj.length = 0;
   res = moqFrameWriter_.writeStreamObject(
-      writeBuf, StreamType::SUBGROUP_HEADER_SG, statusObj, nullptr);
+      writeBuf, StreamType::SUBGROUP_HEADER_SG, zeroLenObj, nullptr);
 
   // Write another object with non-zero length
   ObjectHeader normalObj(0, 0, 5, 0, 5);
@@ -813,11 +813,10 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
       objectStreamCodecCallback_,
       onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
 
-  // Expect onObjectStatus for the zero-length status object
+  // Expect onObjectBegin for the zero-length NORMAL object (length=0)
   EXPECT_CALL(
       objectStreamCodecCallback_,
-      onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::OBJECT_NOT_EXIST))
+      onObjectBegin(2, 3, 4, testing::_, 0, testing::_, true, false, false))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
 
   // Expect onObjectBegin for the normal object (this would crash without the
@@ -1025,6 +1024,148 @@ TEST(MoQCodecTest, DuplicateSetupFrameIsError) {
 
   EXPECT_CALL(callback, onConnectionError(testing::_));
   clientCodec.onIngress(firstSetup->clone(), false);
+}
+
+// ===========================================================================
+// Draft 18+: SUBSCRIBE_TRACKS / SUBSCRIBE_NAMESPACE wire-format dispatch
+// ===========================================================================
+
+namespace {
+
+SubscribeTracks makeSubscribeTracks() {
+  SubscribeTracks subTracks;
+  subTracks.requestID = RequestID(7);
+  subTracks.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"example.com", "live"});
+  return subTracks;
+}
+
+SubscribeNamespace makeSubscribeNamespace() {
+  SubscribeNamespace subNs;
+  subNs.requestID = RequestID(11);
+  subNs.trackNamespacePrefix =
+      TrackNamespace(std::vector<std::string>{"example.com", "meeting=1"});
+  return subNs;
+}
+
+} // namespace
+
+// SUBSCRIBE_TRACKS must never appear on the control stream (it's a request-
+// initiating message that always begins a fresh bidi stream per draft 18
+// §10.19). MoQControlCodec::checkFrameAllowed must return false for it.
+TEST(MoQCodecTest, ControlStreamRejectsSubscribeTracksV18) {
+  // Set up a server-side control codec at draft 18 that has already seen
+  // CLIENT_SETUP, so non-setup frames are admitted into the post-setup switch.
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue setupBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup setup;
+  setup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+  writeClientSetup(setupBuf, setup, kVersionDraft18);
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQControlCodec serverCodec(MoQControlCodec::Direction::SERVER, &callback);
+  serverCodec.initializeVersion(kVersionDraft18);
+  EXPECT_CALL(callback, onClientSetup(testing::_));
+  serverCodec.onIngress(setupBuf.move(), false);
+
+  // Now feed SUBSCRIBE_TRACKS on the same control stream — must be rejected.
+  folly::IOBufQueue tracksBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer.writeSubscribeTracks(tracksBuf, makeSubscribeTracks()).hasValue());
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  serverCodec.onIngress(tracksBuf.move(), false);
+}
+
+// SUBSCRIBE_TRACKS arriving on a fresh bidi stream — the new dispatch case in
+// MoQControlCodec::parseFrame should route it to onSubscribeTracks.
+TEST(MoQCodecTest, BidiCodecParsesSubscribeTracksV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer.writeSubscribeTracks(buf, makeSubscribeTracks()).hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback, {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onFrame(FrameType::SUBSCRIBE_TRACKS));
+  EXPECT_CALL(callback, onSubscribeTracks(testing::_))
+      .WillOnce(testing::Invoke([](SubscribeTracks subTracks) {
+        EXPECT_EQ(subTracks.requestID, RequestID(7));
+        EXPECT_EQ(
+            subTracks.trackNamespacePrefix,
+            TrackNamespace(std::vector<std::string>{"example.com", "live"}));
+      }));
+  bidiCodec.onIngress(buf.move(), true);
+}
+
+// FrameType::SUBSCRIBE_NAMESPACE is the v18 wire enumerator (0x50). A v18
+// bidi codec configured to accept it must dispatch a v18-serialized
+// SUBSCRIBE_NAMESPACE (which goes out as 0x50) to onSubscribeNamespace.
+TEST(MoQCodecTest, BidiCodecAcceptsSubscribeNamespaceWireV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer.writeSubscribeNamespace(buf, makeSubscribeNamespace()).hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback, {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onFrame(FrameType::SUBSCRIBE_NAMESPACE));
+  EXPECT_CALL(callback, onSubscribeNamespace(testing::_))
+      .WillOnce(testing::Invoke([](SubscribeNamespace subNs) {
+        EXPECT_EQ(subNs.requestID, RequestID(11));
+      }));
+  bidiCodec.onIngress(buf.move(), true);
+}
+
+// A bidi codec that only allow-lists SUBSCRIBE_NAMESPACE (the v18 wire
+// enumerator 0x50) must reject the legacy wire 0x11 — its allow-list doesn't
+// include LEGACY_SUBSCRIBE_NAMESPACE so checkFrameAllowed returns false and
+// the session is closed with PROTOCOL_VIOLATION.
+TEST(MoQCodecTest, BidiCodecRejectsLegacyWireWhenOnlyV18Listed) {
+  MoQFrameWriter v17Writer;
+  v17Writer.initializeVersion(kVersionDraft17);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(v17Writer.writeSubscribeNamespace(buf, makeSubscribeNamespace())
+                  .hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback, {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  bidiCodec.onIngress(buf.move(), false);
+}
+
+// Symmetric to the previous test: a bidi codec that only allow-lists
+// LEGACY_SUBSCRIBE_NAMESPACE (the pre-v18 wire enumerator 0x11) must reject
+// the new v18 wire 0x50. The session-level demuxer (getBidiStreamConfig)
+// installs both enumerators, so this scenario only applies when a caller
+// constructs a bidi codec with a narrower allow-list.
+TEST(MoQCodecTest, BidiCodecRejectsV18WireWhenOnlyLegacyListed) {
+  MoQFrameWriter v18Writer;
+  v18Writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(v18Writer.writeSubscribeNamespace(buf, makeSubscribeNamespace())
+                  .hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback,
+      {FrameType::LEGACY_SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft17);
+
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  bidiCodec.onIngress(buf.move(), false);
 }
 
 INSTANTIATE_TEST_SUITE_P(

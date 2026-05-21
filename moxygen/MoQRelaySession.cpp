@@ -285,14 +285,7 @@ class MoQRelaySession::MoQRelayPendingRequestState
   };
 };
 
-void MoQRelaySession::cleanup() {
-  // Set up request context so publishNamespaceDone() can identify this session.
-  // This is needed because cleanup() is called directly (not from a message
-  // handler) and MoQRelay::publishNamespaceDone() uses getRequestSession() to
-  // verify ownership.
-  folly::RequestContextScopeGuard guard;
-  setRequestSession();
-
+void MoQRelaySession::cleanupRelayState() {
   // Clean up publishNamespace maps
   for (auto& ann : publishNamespaceCallbacks_) {
     if (ann.second) {
@@ -317,6 +310,17 @@ void MoQRelaySession::cleanup() {
   }
   subscribeNamespaceHandles_.clear();
   legacySubscribeNamespaceToReqId_.clear();
+}
+
+void MoQRelaySession::cleanup() {
+  // Set up request context so publishNamespaceDone() can identify this session.
+  // This is needed because cleanup() is called directly (not from a message
+  // handler) and MoQRelay::publishNamespaceDone() uses getRequestSession() to
+  // verify ownership.
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+
+  cleanupRelayState();
 
   // Call parent cleanup to handle base class cleanup
   MoQSession::cleanup();

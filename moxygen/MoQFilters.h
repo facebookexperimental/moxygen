@@ -58,6 +58,10 @@ class TrackConsumerFilter : public TrackConsumer {
     downstream_->setDeliveryCallback(std::move(callback));
   }
 
+  void setDownstream(std::shared_ptr<TrackConsumer> downstream) {
+    downstream_ = std::move(downstream);
+  }
+
  protected:
   std::shared_ptr<TrackConsumer> downstream_;
 };
@@ -118,7 +122,11 @@ class SubgroupConsumerFilter : public SubgroupConsumer {
     return downstream_->awaitReadyToConsume();
   }
 
- private:
+  void setDownstream(std::shared_ptr<SubgroupConsumer> downstream) {
+    downstream_ = std::move(downstream);
+  }
+
+ protected:
   std::shared_ptr<SubgroupConsumer> downstream_;
 };
 

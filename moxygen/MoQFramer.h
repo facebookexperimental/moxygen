@@ -255,6 +255,11 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
+  // Draft 18+ only.
+  folly::Expected<SubscribeTracks, ErrorCode> parseSubscribeTracks(
+      folly::io::Cursor& cursor,
+      size_t length) const noexcept;
+
   folly::Expected<SubscribeNamespaceOk, ErrorCode> parseSubscribeNamespaceOk(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
@@ -574,6 +579,11 @@ class MoQFrameWriter {
   WriteResult writeSubscribeNamespace(
       folly::IOBufQueue& writeBuf,
       const SubscribeNamespace& subscribeNamespace) const noexcept;
+
+  // Draft 18+ only.
+  WriteResult writeSubscribeTracks(
+      folly::IOBufQueue& writeBuf,
+      const SubscribeTracks& subscribeTracks) const noexcept;
 
   WriteResult writeSubscribeNamespaceOk(
       folly::IOBufQueue& writeBuf,
