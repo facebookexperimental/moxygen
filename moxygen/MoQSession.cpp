@@ -5433,7 +5433,11 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
 folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     proxygen::WebTransport::BidiStreamHandle bh) noexcept {
   co_await folly::coro::co_safe_point;
-  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto sessionToken = co_await folly::coro::co_current_cancellation_token;
+  auto streamToken = folly::cancellation_token_merge(
+      bh.readHandle->getCancelToken(), bh.writeHandle->getCancelToken());
+  auto token =
+      folly::cancellation_token_merge(sessionToken, std::move(streamToken));
   if (token.isCancellationRequested()) {
     co_return;
   }
@@ -5444,10 +5448,14 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
   bool fin = false;
 
   do {
-    auto streamData =
-        co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
+    auto streamData = co_await co_awaitTry(
+        folly::coro::co_withCancellation(
+            token, readHandle->readStreamData().via(exec_.get())));
     if (!streamData.hasValue()) {
       break;
+    }
+    if (token.isCancellationRequested()) {
+      co_return;
     }
     // Accumulate data in the buffer
     if (streamData->data) {
@@ -5457,6 +5465,10 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     // Try to parse frame type from the accumulated buffer
     frameType = getFrameType(readBuf);
   } while (!frameType.has_value() && !fin);
+
+  if (token.isCancellationRequested()) {
+    co_return;
+  }
 
   if (frameType.has_value() && readBuf.chainLength() > 0) {
     // Create StreamData with the accumulated buffer
