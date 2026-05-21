@@ -102,7 +102,12 @@ class SimplePublisher : public moxygen::Publisher {
 
 namespace moxygen {
 
-const std::vector<std::string> kInteropAlpns = {"moqt-14", "moqt-16"};
+// ALPN preference list, ordered highest-preference first.
+// "moq-00" is the legacy ALPN used by drafts < 15 (see kAlpnMoqtLegacy in
+// MoQVersions.h) and is what moq-rs and some other implementations offer for
+// draft-14 raw-QUIC handshakes. Including it here lets the interop client
+// negotiate with those servers.
+const std::vector<std::string> kInteropAlpns = {"moqt-16", "moqt-14", "moq-00"};
 
 MoQInteropClient::MoQInteropClient(
     folly::EventBase* evb,
