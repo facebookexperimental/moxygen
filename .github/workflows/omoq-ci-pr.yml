@@ -1,0 +1,130 @@
+name: ci pr
+
+# PR verification: build/test matrix.
+# Main push uses omoq-ci-main.yml (adds publish/release/notify).
+# asan debug runs on the Linode self-hosted runner for same-repo PRs
+# (cache reuse, faster); fork PRs fall back to matrix.runner.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  # Verify: build/test matrix
+  # ════════════════════════════════════════════════════════════════════════════
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            name: linux
+            cache_prefix: ci-ninja-ubuntu-22.04
+          - runner: macos-15
+            name: macos
+            cache_prefix: ci-ninja-macos-15
+          - runner: ubuntu-22.04   # fork-PR fallback (same-repo PRs route to Linode)
+            linode: true
+            name: asan debug
+            cache_prefix: ci-asan-ubuntu-22.04
+    name: ${{ matrix.name }}
+    # head.repo.fork is the wrong check — openmoq/moxygen is itself a fork of
+    # upstream, so it's always true. Compare full_name to github.repository.
+    runs-on: ${{ fromJSON(matrix.linode && github.event.pull_request.head.repo.full_name == github.repository && '["self-hosted","linode"]' || format('["{0}"]', matrix.runner)) }}
+    env:
+      USE_LINODE: ${{ (matrix.linode && github.event.pull_request.head.repo.full_name == github.repository) && 'true' || 'false' }}
+    steps:
+      - name: Fix workspace ownership (self-hosted)
+        if: env.USE_LINODE == 'true'
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE/_build" "$GITHUB_WORKSPACE/_install"
+          sudo chown -R $(id -u):$(id -g) "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        if: env.USE_LINODE != 'true'
+        run: bash standalone/install-system-deps.sh
+
+      - name: Cache FetchContent downloads
+        if: env.USE_LINODE != 'true'
+        uses: actions/cache@v4
+        with:
+          path: _build/_deps
+          key: ${{ matrix.cache_prefix }}-deps-${{ hashFiles('build/deps/github_hashes/**/*-rev.txt', 'standalone/patches/**') }}
+          restore-keys: |
+            ${{ matrix.cache_prefix }}-deps-
+
+      - name: Set up ccache
+        if: env.USE_LINODE != 'true'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ matrix.cache_prefix }}
+          max-size: 500M
+
+      - name: Configure
+        run: |
+          ASAN_FLAGS=()
+          EXTRA_FLAGS=()
+          if [ "${{ matrix.name }}" = "asan debug" ]; then
+            ASAN_FLAGS=(
+              -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+              -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+              -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+            )
+          fi
+          # Linode: persist FetchContent under $HOME, namespaced per cache_prefix.
+          if [ "$USE_LINODE" = "true" ]; then
+            EXTRA_FLAGS+=(-DFETCHCONTENT_BASE_DIR="$HOME/.cache/moxygen-${{ matrix.cache_prefix }}/_deps")
+          fi
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/_install \
+            "${ASAN_FLAGS[@]}" "${EXTRA_FLAGS[@]}"
+
+      - name: Build
+        # Linode: -j(n-2) reserves 2 cores for co-resident workloads (e.g. relay).
+        run: |
+          if [ "$USE_LINODE" = "true" ]; then
+            cmake --build _build -j$(( $(getconf _NPROCESSORS_ONLN) - 2 ))
+          else
+            cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+          fi
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: ${{ matrix.name == 'asan debug' && 'detect_leaks=1:abort_on_error=1' || '' }}
+        run: ctest --test-dir _build --output-on-failure --output-junit test-results.xml
+
+      # dorny/test-reporter writes a Check Run, which needs 'checks: write' on
+      # GITHUB_TOKEN. Fork-PR tokens are read-only regardless of workflow perms,
+      # so skip on cross-repo PRs. ctest output above still shows pass/fail.
+      - name: Publish test results
+        uses: dorny/test-reporter@v1.9.1
+        if: ${{ (success() || failure()) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        with:
+          name: "test (${{ matrix.name }})"
+          path: _build/test-results.xml
+          reporter: java-junit
+
+      - name: Note fork-PR reporter skip
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          echo "::notice::Publish test results skipped — fork-PR GITHUB_TOKEN lacks checks:write. ctest output above is authoritative."
+
+      - name: Install (smoke test)
+        if: matrix.name != 'asan debug'
+        run: cmake --install _build

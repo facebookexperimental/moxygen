@@ -1,0 +1,362 @@
+name: version release
+
+# Manual workflow to cut a versioned release from the dispatched ref.
+# Builds portable Linux production tarballs (-O3 + frame pointers + static
+# system libs, ISA-baselined for cross-distro portability) on demand,
+# combines them with the existing platform tarballs promoted from the
+# rolling snapshot pre-release, and creates a tagged, non-prerelease
+# GitHub release.
+#
+# Job graph (parallel):
+#
+#   validate
+#     │
+#     ▼
+#   create-release (--draft)
+#     │
+#     ├──► portable-build (matrix amd64/arm64) ─► uploads directly to release
+#     ├──► promote-snapshot ─► xargs -P parallel uploads to release
+#     │
+#     ▼
+#   finalize (--draft=false)
+#
+# Direct uploads from build runners avoid the actions/upload-artifact +
+# actions/download-artifact round-trip; parallel xargs in promote-snapshot
+# fans out the 8 platform tarballs concurrently. Combined: ~30 min wall
+# clock vs the ~2 hours a serial create+upload would take.
+#
+# Usage: Actions → version release → Run workflow → enter version (e.g. 1.2.3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.2.3)'
+        required: true
+        type: string
+
+# Serialize per-version dispatches: prevents two runs with the same
+# version from both passing validate's tag-doesn't-exist check and
+# then racing on create-release.
+concurrency:
+  group: version-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  # Validate: gate on semver + tag-doesn't-exist + resolve snapshot tag/sha
+  # before doing any expensive work.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      snapshot_tag: ${{ steps.v.outputs.snapshot_tag }}
+      snapshot_sha: ${{ steps.v.outputs.snapshot_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs and resolve refs
+        id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "Error: version must be semver (e.g. 1.2.3 or 1.2.3-rc1)" >&2
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Error: tag $TAG already exists" >&2
+            exit 1
+          fi
+
+          # Snapshot derived from dispatched ref.
+          BRANCH="${{ github.ref_name }}"
+          if [ "$BRANCH" = "main" ]; then
+            SNAPSHOT_TAG="snapshot-latest"
+          else
+            LABEL="${BRANCH#release/}"
+            SNAPSHOT_TAG="snapshot-${LABEL}-latest"
+          fi
+
+          # Resolve snapshot SHA (the commit ci-main built from).
+          SNAPSHOT_SHA=$(gh api repos/{owner}/{repo}/releases \
+            --jq ".[] | select(.tag_name == \"$SNAPSHOT_TAG\") | .target_commitish")
+          if [[ -z "$SNAPSHOT_SHA" ]]; then
+            echo "Error: $SNAPSHOT_TAG release not found. Push to the dispatched branch first to produce a snapshot." >&2
+            exit 1
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "snapshot_tag=$SNAPSHOT_TAG"
+            echo "snapshot_sha=$SNAPSHOT_SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "Dispatched from $BRANCH → snapshot $SNAPSHOT_TAG @ $SNAPSHOT_SHA"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Create-release: open a draft release that the upload jobs append to.
+  # Asset uploads happen in portable-build and promote-snapshot, both running
+  # in parallel and pushing directly to this release.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  create-release:
+    needs: [validate]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+
+      - uses: actions/checkout@v4
+
+      - name: Create release (no assets yet)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          SNAPSHOT_TAG: ${{ needs.validate.outputs.snapshot_tag }}
+          SNAPSHOT_SHA: ${{ needs.validate.outputs.snapshot_sha }}
+        run: |
+          # Mark prereleases (1.2.3-rc1) as such so GitHub's "latest"
+          # algorithm correctly excludes them.
+          PRERELEASE_FLAG=()
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE_FLAG=(--prerelease)
+          fi
+          gh release create "$TAG" \
+            --target "$SNAPSHOT_SHA" \
+            --title "moxygen $VERSION" \
+            "${PRERELEASE_FLAG[@]}" \
+            --notes "$(cat <<EOF
+          **Version:** \`${VERSION}\`
+          **Commit:** \`${SNAPSHOT_SHA}\`
+
+          Existing platform tarballs promoted from [\`${SNAPSHOT_TAG}\`](${{ github.server_url }}/${{ github.repository }}/releases/tag/${SNAPSHOT_TAG}); portable Linux tarballs built fresh from this commit.
+
+          **Existing platform tarballs** (RelWithDebInfo, distro-specific):
+          - \`moxygen-<platform>.tar.gz\` — stripped release build
+          - \`moxygen-<platform>-dbg.tar.gz\` — split debug symbols (.debug sidecar)
+
+          **Portable Linux tarballs** (Release -O3, ISA-baselined, statically linked):
+          - \`moxygen-linux-amd64.tar.gz\` — \`-march=x86-64-v2\` (≈ all cloud x86 since 2015)
+          - \`moxygen-linux-arm64.tar.gz\` — \`-march=armv8-a\` (Graviton, Ampere, Apple M, RPi 3+, Rockchip)
+          - \`moxygen-linux-{amd64,arm64}-dbg.tar.gz\` — split debug symbols (.debug sidecar)
+
+          Portable tarballs are compiled with frame pointers preserved (\`-fno-omit-frame-pointer -fasynchronous-unwind-tables\`) so signal-handler stack unwinding (folly::symbolizer) works against the .dbg sidecar even at \`-O3\`.
+          EOF
+          )"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Portable-build: -O3 + frame-pointer + static-syslibs Linux tarballs.
+  # Each matrix entry uploads its own outputs directly to the draft release —
+  # avoids the actions/upload-artifact + actions/download-artifact round-trip.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  portable-build:
+    needs: [validate, create-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ISA baseline pins:
+          #   x86-64-v2 = SSE4.2+POPCNT (≈ all cloud x86 since 2015)
+          #   armv8-a   = base ARMv8.0 (covers Graviton 1-4, Ampere, Apple M,
+          #               RPi 3/4/5, Rockchip RK3399 + RK3588 / Orange Pi)
+          - name: linux-amd64
+            runner: ubuntu-22.04
+            cxx_flags: "-march=x86-64-v2 -fno-omit-frame-pointer -fasynchronous-unwind-tables"
+            artifact: moxygen-linux-amd64.tar.gz
+            debug_artifact: moxygen-linux-amd64-dbg.tar.gz
+
+          - name: linux-arm64
+            runner: ubuntu-22.04-arm
+            cxx_flags: "-march=armv8-a -fno-omit-frame-pointer -fasynchronous-unwind-tables"
+            artifact: moxygen-linux-arm64.tar.gz
+            debug_artifact: moxygen-linux-arm64-dbg.tar.gz
+
+    name: portable (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: bash standalone/install-system-deps.sh
+
+      - name: Cache FetchContent downloads
+        uses: actions/cache@v4
+        with:
+          path: _build/_deps
+          key: portable-${{ matrix.name }}-deps-${{ hashFiles('build/deps/github_hashes/**/*-rev.txt', 'standalone/patches/**') }}
+          restore-keys: |
+            portable-${{ matrix.name }}-deps-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: portable-${{ matrix.name }}
+          max-size: 500M
+
+      - name: Configure
+        shell: bash
+        run: |
+          # Portable tarball treatment: static-link the SONAME-churning system
+          # libs (glog/gflags/double-conversion), disable libunwind (Ubuntu's
+          # libunwind.a is non-PIC, blocks PIE link), and disable LTO link-
+          # time codegen (Debian/Ubuntu fat-LTO system .a files would otherwise
+          # clash with -O3 -march + PIE producing R_AARCH64_ADR_PREL_PG_HI21
+          # against __stack_chk_guard).
+          #
+          # BUILD_TESTS=ON intentional: the moxygen tarball ships
+          # lib/cmake/GTest/GTestConfig.cmake which moqx's test/CMakeLists.txt
+          # consumes. No tests run because BUILD_TESTING=OFF.
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUNDLE_DEPS=ON \
+            -DBUNDLE_DEPS_STATIC_SYSLIBS=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_LibUnwind=TRUE \
+            -DCMAKE_C_FLAGS="${{ matrix.cxx_flags }} -fno-lto" \
+            -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }} -fno-lto" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fno-lto" \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install"
+
+      - name: Build
+        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: Install
+        run: cmake --install _build
+
+      - name: Package
+        run: |
+          bash openmoq/scripts/collect-artifacts-standalone.sh \
+            --install-prefix "$GITHUB_WORKSPACE/install" \
+            --output "${{ matrix.artifact }}" \
+            --debug-output "${{ matrix.debug_artifact }}"
+          ls -lh "${{ matrix.artifact }}" "${{ matrix.debug_artifact }}"
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+
+      - name: Upload to release (binary + dbg in parallel)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          # Upload binary and dbg sidecar in parallel from this runner.
+          # All matrix entries run on different runners so the two arches
+          # also upload concurrently with each other.
+          printf '%s\n' "${{ matrix.artifact }}" "${{ matrix.debug_artifact }}" | \
+            xargs -n1 -P 2 -I{} gh release upload "$TAG" {} --clobber
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Promote-snapshot: copy the existing platform tarballs (bookworm/ubuntu/
+  # macos) from the rolling snapshot to the new release. Runs in parallel
+  # with portable-build; uploads via xargs -P for further fan-out.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  promote-snapshot:
+    needs: [validate, create-release]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+
+      - name: Verify snapshot hasn't been replaced mid-flight
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SNAPSHOT_TAG: ${{ needs.validate.outputs.snapshot_tag }}
+          EXPECTED_SHA: ${{ needs.validate.outputs.snapshot_sha }}
+        run: |
+          CURRENT_SHA=$(gh api "repos/$REPO/releases" \
+            --jq ".[] | select(.tag_name == \"$SNAPSHOT_TAG\") | .target_commitish")
+          if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
+            echo "Error: $SNAPSHOT_TAG was replaced mid-release." >&2
+            echo "  expected: $EXPECTED_SHA" >&2
+            echo "  current:  $CURRENT_SHA" >&2
+            echo "Retry the dispatch — ci-main published a new snapshot during this run." >&2
+            exit 1
+          fi
+
+      - name: Download snapshot tarballs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SNAPSHOT_TAG: ${{ needs.validate.outputs.snapshot_tag }}
+        run: |
+          mkdir -p snapshot-assets
+          gh release download "$SNAPSHOT_TAG" --repo "$REPO" --dir snapshot-assets --pattern '*.tar.gz'
+          # Drop any portable tarballs from snapshot — those are built fresh
+          # in portable-build and uploaded directly there.
+          rm -f snapshot-assets/moxygen-linux-amd64*.tar.gz \
+                snapshot-assets/moxygen-linux-arm64*.tar.gz
+          echo "Snapshot tarballs to promote:"
+          ls -lh snapshot-assets/
+
+      - name: Upload to release (parallel)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          # Fan out asset upload to N concurrent gh release upload calls.
+          # 6 is a safe upper bound — GitHub releases handle concurrent
+          # uploads to the same release fine.
+          find snapshot-assets -name '*.tar.gz' -print0 | \
+            xargs -0 -n1 -P 6 -I{} gh release upload "$TAG" --repo "$REPO" {} --clobber
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Finalize: flip draft → published once all assets are up. Runs only if
+  # both upload jobs succeeded.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  finalize:
+    needs: [validate, portable-build, promote-snapshot]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.OMOQ_APP_ID }}
+          private-key: ${{ secrets.OMOQ_APP_PRIV_KEY }}
+
+      - name: Confirm release published
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          # No --latest flag here. Let GitHub's auto-latest algorithm
+          # pick the highest non-prerelease semver tag. Forcing --latest
+          # would mark a hotfix patch from a release/vM.m branch as
+          # latest even when a newer vM.(m+1) line exists.
+          echo "Released: $TAG"
+          gh release view "$TAG" --repo "$REPO" --json isLatest,isPrerelease,name --jq '"isLatest=\(.isLatest) isPrerelease=\(.isPrerelease) name=\(.name)"'
