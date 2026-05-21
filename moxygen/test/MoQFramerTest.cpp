@@ -4042,8 +4042,14 @@ TEST_P(MoQFramerV16PlusTest, SubscribeNamespaceWithTrackFilter) {
   folly::io::Cursor cursor(serialized.get());
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  // Draft 16 uses the legacy SUBSCRIBE_NAMESPACE wire type 0x11
+  // (draft-ietf-moq-transport-16 section 9.25); draft 18 renumbers it to
+  // 0x50 via the LEGACY_SUBSCRIBE_NAMESPACE / SUBSCRIBE_NAMESPACE split.
+  // This test class is instantiated for kVersionDraft16 only (the body
+  // asserts pre-v18 options/forward fields), so the wire type is 0x11.
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+      frameType->first,
+      folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
       parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
@@ -4126,8 +4132,14 @@ TEST_P(MoQFramerV16PlusTest, TrackFilterLargeValues) {
   folly::io::Cursor cursor(serialized.get());
 
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  // Draft 16 uses the legacy SUBSCRIBE_NAMESPACE wire type 0x11
+  // (draft-ietf-moq-transport-16 section 9.25); draft 18 renumbers it to
+  // 0x50 via the LEGACY_SUBSCRIBE_NAMESPACE / SUBSCRIBE_NAMESPACE split.
+  // This test class is instantiated for kVersionDraft16 only (the body
+  // asserts pre-v18 options/forward fields), so the wire type is 0x11.
   EXPECT_EQ(
-      frameType->first, folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE));
+      frameType->first,
+      folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE));
 
   auto parseResult =
       parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
