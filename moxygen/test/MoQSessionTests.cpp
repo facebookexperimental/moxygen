@@ -584,6 +584,53 @@ TEST(MoQSessionTest, BidiStreamRejectsUnexpectedFrameType) {
   EXPECT_TRUE(serverWt->isSessionClosed());
 }
 
+TEST(MoQSessionTest, BidiStreamDemuxerHonorsStreamCancellation) {
+  folly::EventBase eventBase;
+  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+
+  class TestServerSetupCallback : public MoQSession::ServerSetupCallback {
+   public:
+    folly::Try<ServerSetup> onClientSetup(
+        ClientSetup,
+        const std::shared_ptr<MoQSession>&) override {
+      return folly::Try<ServerSetup>(ServerSetup{});
+    }
+    folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+        const ClientSetup&,
+        uint64_t,
+        std::shared_ptr<MoQSession>) override {
+      return folly::unit;
+    }
+  };
+
+  TestServerSetupCallback serverSetupCallback;
+  auto serverSession = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
+      serverSetupCallback,
+      moqExecutor);
+  serverSession->validateAndSetVersionFromAlpn("moqt-16");
+  clientWt->setPeerHandler(serverSession.get());
+
+  auto bidiResult = clientWt->createBidiStream();
+  ASSERT_TRUE(bidiResult.hasValue());
+  auto streamId = bidiResult->writeHandle->getID();
+
+  eventBase.loopOnce();
+
+  bidiResult->readHandle->stopSending(0);
+
+  auto buf = folly::IOBuf::create(1);
+  buf->append(1);
+  buf->writableData()[0] = 0x20;
+  bidiResult->writeHandle->writeStreamData(std::move(buf), false, nullptr);
+
+  eventBase.loop();
+
+  EXPECT_FALSE(serverWt->writeHandles[streamId]->pri.has_value());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,

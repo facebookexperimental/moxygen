@@ -99,6 +99,27 @@ class SubNSReply {
   std::shared_ptr<ReplyContext> replyContext_;
 };
 
+// Reply type that writes a generic REQUEST_OK / REQUEST_ERROR frame to a
+// ReplyContext. Used as the response sink for request/reply messages that
+// share the generic REQUEST_OK / REQUEST_ERROR envelope.
+class MessageReply {
+ public:
+  MessageReply(
+      MoQFrameWriter& moqFrameWriter,
+      std::shared_ptr<ReplyContext> replyContext)
+      : moqFrameWriter_(moqFrameWriter),
+        replyContext_(std::move(replyContext)) {}
+
+  virtual ~MessageReply() = default;
+
+  virtual WriteResult ok(const RequestOk& okMsg);
+  virtual WriteResult error(const SubscribeTracksError& errorMsg);
+
+ protected:
+  MoQFrameWriter& moqFrameWriter_;
+  std::shared_ptr<ReplyContext> replyContext_;
+};
+
 class MoQSession : public Subscriber,
                    public Publisher,
                    public MoQControlCodec::ControlCallback,
@@ -193,6 +214,12 @@ class MoQSession : public Subscriber,
   virtual std::shared_ptr<SubNSReply> getSubNsReply(
       std::shared_ptr<ReplyContext> replyContext) {
     return std::make_shared<SubNSReply>(
+        moqFrameWriter_, std::move(replyContext));
+  }
+
+  virtual std::shared_ptr<MessageReply> getMessageReply(
+      std::shared_ptr<ReplyContext> replyContext) {
+    return std::make_shared<MessageReply>(
         moqFrameWriter_, std::move(replyContext));
   }
 
@@ -502,6 +529,7 @@ class MoQSession : public Subscriber,
     void onConnectionError(ErrorCode error) override;
     void onRequestUpdate(RequestUpdate requestUpdate) override;
     void onSubscribeNamespace(SubscribeNamespace subNs) override;
+    void onSubscribeTracks(SubscribeTracks subTracks) override;
 
     std::optional<RequestID> requestID() const {
       return requestID_;
@@ -741,9 +769,19 @@ class MoQSession : public Subscriber,
       const SubscribeNamespaceError& subscribeNamespaceError,
       std::shared_ptr<SubNSReply>&& subNsReply);
 
+  void subscribeTracksError(
+      const SubscribeTracksError& subscribeTracksError,
+      std::shared_ptr<MessageReply>&& messageReply);
+
   virtual void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
       std::shared_ptr<SubNSReply> subNsReply);
+
+  virtual void onSubscribeTracksImpl(
+      const SubscribeTracks& subscribeTracks,
+      std::shared_ptr<MessageReply> messageReply);
+
+  virtual void onSubscribeTracksStreamClosed(RequestID /*requestID*/) {}
 
   // REQUEST_UPDATE error response - available for subclass handlers
   void requestUpdateError(
@@ -785,7 +823,8 @@ class MoQSession : public Subscriber,
       REQUEST_UPDATE,
       // PublishNamespace types - only handled by MoQRelaySession subclass
       PUBLISH_NAMESPACE,
-      SUBSCRIBE_NAMESPACE
+      SUBSCRIBE_NAMESPACE,
+      SUBSCRIBE_TRACKS // draft 18+
     };
 
     // Make polymorphic for subclassing - destructor implemented below
@@ -877,6 +916,7 @@ class MoQSession : public Subscriber,
           break;
         case Type::PUBLISH_NAMESPACE:
         case Type::SUBSCRIBE_NAMESPACE:
+        case Type::SUBSCRIBE_TRACKS:
           // These types are handled by MoQRelaySession subclass destructor
           break;
       }
@@ -906,6 +946,9 @@ class MoQSession : public Subscriber,
         case Type::SUBSCRIBE_NAMESPACE:
           return ok ? FrameType::SUBSCRIBE_NAMESPACE_OK
                     : FrameType::SUBSCRIBE_NAMESPACE_ERROR;
+        case Type::SUBSCRIBE_TRACKS:
+          // Draft 18 uses unified REQUEST_OK / REQUEST_ERROR.
+          return ok ? FrameType::REQUEST_OK : FrameType::REQUEST_ERROR;
       }
       folly::assume_unreachable();
     }

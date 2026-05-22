@@ -2659,6 +2659,14 @@ void MoQSession::BidiRequestCallback::onSubscribeNamespace(
   }
 }
 
+void MoQSession::BidiRequestCallback::onSubscribeTracks(
+    SubscribeTracks subTracks) {
+  if (handleFirstFrame(subTracks.requestID)) {
+    auto messageReply = session_->getMessageReply(replyContext_);
+    session_->onSubscribeTracksImpl(subTracks, std::move(messageReply));
+  }
+}
+
 folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamReadHandle* readHandle,
     proxygen::WebTransport::StreamData initialData,
@@ -5427,6 +5435,10 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
           [this](RequestID id) {
             onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
           }};
+    case FrameType::SUBSCRIBE_TRACKS:
+      return BidiStreamConfig{
+          {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
+          [this](RequestID id) { onSubscribeTracksStreamClosed(id); }};
     default:
       return std::nullopt;
   }
@@ -5435,7 +5447,11 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
 folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     proxygen::WebTransport::BidiStreamHandle bh) noexcept {
   co_await folly::coro::co_safe_point;
-  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto sessionToken = co_await folly::coro::co_current_cancellation_token;
+  auto streamToken = folly::cancellation_token_merge(
+      bh.readHandle->getCancelToken(), bh.writeHandle->getCancelToken());
+  auto token =
+      folly::cancellation_token_merge(sessionToken, std::move(streamToken));
   if (token.isCancellationRequested()) {
     co_return;
   }
@@ -5446,19 +5462,31 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
   bool fin = false;
 
   do {
-    auto streamData =
-        co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
+    auto streamData = co_await co_awaitTry(
+        folly::coro::co_withCancellation(
+            token, readHandle->readStreamData().via(exec_.get())));
     if (!streamData.hasValue()) {
       break;
+    }
+    if (token.isCancellationRequested()) {
+      co_return;
     }
     // Accumulate data in the buffer
     if (streamData->data) {
       readBuf.append(std::move(streamData->data));
     }
     fin = streamData->fin;
-    // Try to parse frame type from the accumulated buffer
+    // Try to parse frame type from the accumulated buffer. Each FrameType
+    // enumerator is its own wire integer, so a plain cast suffices — wire
+    // 0x50 maps to SUBSCRIBE_NAMESPACE (v18), 0x11 to
+    // LEGACY_SUBSCRIBE_NAMESPACE (v17-), 0x51 to SUBSCRIBE_TRACKS, etc.
+    // getBidiStreamConfig handles the routing for both wire enumerators.
     frameType = getFrameType(readBuf);
   } while (!frameType.has_value() && !fin);
+
+  if (token.isCancellationRequested()) {
+    co_return;
+  }
 
   if (frameType.has_value() && readBuf.chainLength() > 0) {
     // Create StreamData with the accumulated buffer
@@ -5962,6 +5990,40 @@ void MoQSession::subscribeNamespaceError(
   }
 }
 
+// Draft 18+: SUBSCRIBE_TRACKS handlers and helpers
+void MoQSession::onSubscribeTracksImpl(
+    const SubscribeTracks& subscribeTracks,
+    std::shared_ptr<MessageReply> messageReply) {
+  XLOG(DBG1) << __func__ << " prefix=" << subscribeTracks.trackNamespacePrefix
+             << " - sending NOT_SUPPORTED error, sess=" << this;
+  if (receivedGoaway_) {
+    subscribeTracksError(
+        SubscribeTracksError{
+            subscribeTracks.requestID,
+            SubscribeTracksErrorCode::GOING_AWAY,
+            "Session received GOAWAY"},
+        std::move(messageReply));
+    return;
+  }
+  subscribeTracksError(
+      SubscribeTracksError{
+          subscribeTracks.requestID,
+          SubscribeTracksErrorCode::NOT_SUPPORTED,
+          "SubscribeTracks not supported by simple client"},
+      std::move(messageReply));
+}
+
+void MoQSession::subscribeTracksError(
+    const SubscribeTracksError& subscribeTracksError,
+    std::shared_ptr<MessageReply>&& messageReply) {
+  XLOG(DBG1) << __func__ << " reqID=" << subscribeTracksError.requestID.value
+             << " sess=" << this;
+  auto res = messageReply->error(subscribeTracksError);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeTracksError failed sess=" << this;
+  }
+}
+
 // Static methods
 std::shared_ptr<MoQSession> MoQSession::getRequestSession() {
   auto reqData =
@@ -6039,6 +6101,21 @@ WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
       subNsError,
       FrameType::SUBSCRIBE_NAMESPACE_ERROR);
   replyContext_->flush();
+  return res;
+}
+
+WriteResult MessageReply::ok(const RequestOk& okMsg) {
+  auto res = moqFrameWriter_.writeRequestOk(
+      replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
+  replyContext_->flush();
+  return res;
+}
+
+WriteResult MessageReply::error(const SubscribeTracksError& errorMsg) {
+  auto res = moqFrameWriter_.writeRequestError(
+      replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
+  // After ERROR the publisher is done with this stream — FIN it.
+  replyContext_->flush(/*fin=*/true);
   return res;
 }
 
