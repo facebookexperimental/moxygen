@@ -3,6 +3,23 @@
 # LICENSE file in the root directory of this source tree.
 
 cmake_minimum_required(VERSION 3.16)
+
+# Pin CMAKE_OSX_SYSROOT to the CommandLineTools SDK BEFORE project() so the
+# compiler probe records this sysroot. Setting it after project()/enable_
+# language() doesn't reach the compiler's baked sysroot — which folly et al.
+# pick up via xcrun-style discovery and bake into IMPORTED_LOCATION of
+# exported target configs. The CommandLineTools SDK lives at a stable path
+# present on every dev mac and CI runner, unlike the versioned
+# /Applications/Xcode_X.Y.app/.../SDKs/MacOSX.sdk that xcrun resolves to on
+# hosts with Xcode installed. Plain EXISTS check works on any host — the
+# path is macOS-only.
+if(EXISTS "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+    if(NOT DEFINED CMAKE_OSX_SYSROOT)
+        set(CMAKE_OSX_SYSROOT
+            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" CACHE PATH "")
+    endif()
+endif()
+
 project(moxygen-standalone VERSION 1.0.0 LANGUAGES CXX C)
 
 # Disable CMake user package registry to prevent picking up stale getdeps builds
@@ -113,6 +130,32 @@ if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
         OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     if(_brew_prefix AND EXISTS "${_brew_prefix}/opt/openssl@3")
         set(OPENSSL_ROOT_DIR "${_brew_prefix}/opt/openssl@3" CACHE PATH "")
+    endif()
+endif()
+
+# Same brew-Cellar-versioning problem as openssl: find_package(Sodium) bakes
+# /opt/homebrew/Cellar/libsodium/<version>/... into fizz-targets.cmake
+# INTERFACE_INCLUDE_DIRECTORIES, so the install tree breaks after
+# `brew upgrade libsodium`. Steer through brew's stable opt-symlink.
+# Note: FindSodium.cmake (in build/fbcode_builder/CMake/) uses lowercase
+# `sodium_*` cache variables (sodium_INCLUDE_DIR, sodium_LIBRARY_RELEASE),
+# not the FindOpenSSL-style uppercase convention.
+if(APPLE AND (NOT DEFINED sodium_INCLUDE_DIR OR NOT DEFINED sodium_LIBRARY_RELEASE))
+    if(NOT DEFINED _brew_prefix)
+        execute_process(COMMAND brew --prefix
+            OUTPUT_VARIABLE _brew_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    endif()
+    if(_brew_prefix AND EXISTS "${_brew_prefix}/opt/libsodium")
+        if(NOT DEFINED sodium_INCLUDE_DIR)
+            set(sodium_INCLUDE_DIR
+                "${_brew_prefix}/opt/libsodium/include" CACHE PATH "")
+        endif()
+        if(NOT DEFINED sodium_LIBRARY_RELEASE)
+            set(sodium_LIBRARY_RELEASE
+                "${_brew_prefix}/opt/libsodium/lib/libsodium.dylib"
+                CACHE FILEPATH "")
+        endif()
     endif()
 endif()
 
