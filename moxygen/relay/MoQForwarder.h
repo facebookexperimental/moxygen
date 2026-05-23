@@ -9,6 +9,7 @@
 #include "moxygen/MoQLocation.h"
 #include "moxygen/MoQSession.h"
 
+#include <folly/Executor.h>
 #include <folly/container/F14Set.h>
 #include <folly/hash/Hash.h>
 
@@ -135,6 +136,9 @@ class MoQForwarder : public TrackConsumer {
     }
 
     std::shared_ptr<MoQSession> session;
+    // Key used in MoQForwarder::subscribers_: session.get() for session
+    // subscribers, executor pointer for channel subscribers.
+    const void* mapKey{nullptr};
     RequestID requestID;
     SubscribeRange range;
     std::shared_ptr<TrackConsumer> trackConsumer;
@@ -164,7 +168,7 @@ class MoQForwarder : public TrackConsumer {
   }
 
   std::shared_ptr<Subscriber> getSubscriber(MoQSession* session) const {
-    auto it = subscribers_.find(session);
+    auto it = subscribers_.find(static_cast<const void*>(session));
     return it != subscribers_.end() ? it->second : nullptr;
   }
 
@@ -194,6 +198,26 @@ class MoQForwarder : public TrackConsumer {
       std::shared_ptr<TrackConsumer> consumer,
       bool passive = false);
 
+  // Add a channel subscriber: a cross-exec filter routing to a per-thread
+  // local forwarder.  `exec` is the subscriber iothread's executor — used as
+  // the unique map key so only one cross-exec filter per executor is added.
+  // Returns the Subscriber handle; call removeChannelSubscriber(handle) when
+  // the local forwarder drains.
+  std::shared_ptr<MoQForwarder::Subscriber> addChannelSubscriber(
+      folly::Executor* exec,
+      bool forward,
+      std::shared_ptr<TrackConsumer> consumer);
+
+  // Remove a channel subscriber added via addChannelSubscriber().
+  void removeChannelSubscriber(
+      const std::shared_ptr<MoQForwarder::Subscriber>& handle,
+      std::optional<PublishDone> pubDone = std::nullopt);
+
+  // Remove a channel subscriber by its executor key (avoids needing the handle).
+  void removeChannelSubscriberByExec(
+      folly::Executor* exec,
+      std::optional<PublishDone> pubDone = std::nullopt);
+
   folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
       const std::shared_ptr<MoQSession>& session,
       const JoiningFetch& joining) const;
@@ -202,6 +226,13 @@ class MoQForwarder : public TrackConsumer {
   // open subgroups. Calls removeSubscriber() if no subgroups are open.
   void drainSubscriber(
       const std::shared_ptr<MoQSession>& session,
+      PublishDone pubDone,
+      const std::string& callsite);
+
+  // Same as drainSubscriber but looks up by mapKey rather than session pointer.
+  // Use this for channel subscribers (keyed by executor, session is null).
+  void drainSubscriberByKey(
+      const void* mapKey,
       PublishDone pubDone,
       const std::string& callsite);
 
@@ -353,8 +384,15 @@ class MoQForwarder : public TrackConsumer {
 
   // Helper that removes a subscriber given an iterator (avoids lookup)
   void removeSubscriberIt(
-      folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator
+      folly::F14FastMap<const void*, std::shared_ptr<Subscriber>>::iterator
           subIt,
+      std::optional<PublishDone> pubDone,
+      const std::string& callsite);
+
+  // Helper that looks up by mapKey and removes (used internally where a
+  // Subscriber reference is available but no session pointer)
+  void removeSubscriberByKey(
+      const void* key,
       std::optional<PublishDone> pubDone,
       const std::string& callsite);
 
@@ -370,7 +408,9 @@ class MoQForwarder : public TrackConsumer {
 
   FullTrackName fullTrackName_;
   std::optional<TrackAlias> trackAlias_;
-  folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;
+  // Keyed by const void*: session.get() for session subscribers,
+  // executor pointer for channel subscribers (cross-exec filters).
+  folly::F14FastMap<const void*, std::shared_ptr<Subscriber>> subscribers_;
   folly::F14FastMap<
       SubgroupIdentifier,
       std::shared_ptr<SubgroupForwarder>,
