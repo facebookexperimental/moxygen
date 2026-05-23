@@ -186,7 +186,9 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
 
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
@@ -240,7 +242,9 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
 
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
@@ -306,7 +310,9 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
       int objectSize = getObjectSize(objectId, &params);
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
@@ -378,7 +384,9 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       }
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       // Find Object Size
       int objectSize = getObjectSize(objectId, &params);
@@ -510,7 +518,9 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
 
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
@@ -560,7 +570,9 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
 
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
@@ -610,7 +622,9 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
 
       // Add Integer/Variable Extensions if needed
       std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension, params.testVariableExtension);
+          params.testIntegerExtension,
+          params.testVariableExtension,
+          includeTimestampExtension_);
 
       int subgroupId;
       if (params.objectsPerGroup > 1) {

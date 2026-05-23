@@ -8,6 +8,7 @@
 
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
+#include <chrono>
 #include "moxygen/MoQVersions.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
@@ -95,6 +96,9 @@ folly::coro::Task<void> SubscriberState::connect() {
         [] {
           quic::TransportSettings ts;
           ts.orderedReadCallbacks = true;
+          ts.rxPacketsBeforeAckAfterInit = 2;
+          ts.shouldUseRecvmmsgForBatchRecv = true;
+          ts.maxRecvBatchSize = 32;
           return ts;
         }(),
         getMoqtProtocols(FLAGS_versions, true));
@@ -199,6 +203,19 @@ ObjectReceiverCallback::FlowControlState SubscriberState::Callback::onObject(
   state_.objectsReceived_++;
   if (payload) {
     state_.bytesReceived_ += payload->computeChainDataLength();
+  }
+
+  if (auto sendTs =
+          objHeader.extensions.getIntExtension(kTimestampExtensionType)) {
+    uint64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    if (nowMs >= *sendTs) {
+      uint64_t latencyMs = nowMs - *sendTs;
+      state_.totalLatencyMs_ += latencyMs;
+      state_.latencyObjects_++;
+      state_.testClient_.recordLatency(latencyMs);
+    }
   }
 
   // Update largest object seen for track restart detection
@@ -376,7 +393,12 @@ folly::coro::Task<void> MoQPerfTestClient::run() {
     XLOG(INFO) << "Test cancelled";
   }
 
-  // Clear all subscribers to trigger cleanup
+  // Flush active subscriber stats before clearing so getResults() stays
+  // accurate
+  for (auto& [id, sub] : subscribers_) {
+    cumulativeObjects_ += sub->objectsReceived_;
+    cumulativeBytes_ += sub->bytesReceived_;
+  }
   subscribers_.clear();
 }
 
@@ -437,6 +459,8 @@ void MoQPerfTestClient::removeSubscriber(size_t id) {
   // Add subscriber's stats to cumulative totals before removing
   cumulativeObjects_ += it->second->objectsReceived_;
   cumulativeBytes_ += it->second->bytesReceived_;
+  cumulativeLatencyMs_ += it->second->totalLatencyMs_;
+  cumulativeLatencyObjects_ += it->second->latencyObjects_;
 
   // Destructor will handle unsubscribe
   subscribers_.erase(it);
@@ -474,6 +498,23 @@ std::optional<AbsoluteLocation> MoQPerfTestClient::getLargestObjectSeen()
   return largestObjectSeen_;
 }
 
+void MoQPerfTestClient::recordLatency(uint64_t latencyMs) {
+  intervalLatencySum_.fetch_add(latencyMs, std::memory_order_relaxed);
+  intervalLatencyCount_.fetch_add(1, std::memory_order_relaxed);
+
+  uint64_t cur = intervalLatencyMin_.load(std::memory_order_relaxed);
+  while (latencyMs < cur &&
+         !intervalLatencyMin_.compare_exchange_weak(
+             cur, latencyMs, std::memory_order_relaxed)) {
+  }
+
+  cur = intervalLatencyMax_.load(std::memory_order_relaxed);
+  while (latencyMs > cur &&
+         !intervalLatencyMax_.compare_exchange_weak(
+             cur, latencyMs, std::memory_order_relaxed)) {
+  }
+}
+
 MoQPerfTestClient::TestResults MoQPerfTestClient::getResults() const {
   TestResults results;
   results.subscribersReached = peakSubscribers_.load();
@@ -485,11 +526,24 @@ MoQPerfTestClient::TestResults MoQPerfTestClient::getResults() const {
   // Combine cumulative stats with current active subscribers
   results.totalObjects = cumulativeObjects_.load();
   results.totalBytes = cumulativeBytes_.load();
+  results.totalLatencyMs = cumulativeLatencyMs_.load();
+  results.latencyObjects = cumulativeLatencyObjects_.load();
 
   for (const auto& [id, sub] : subscribers_) {
     results.totalObjects += sub->objectsReceived_;
     results.totalBytes += sub->bytesReceived_;
+    results.totalLatencyMs += sub->totalLatencyMs_;
+    results.latencyObjects += sub->latencyObjects_;
   }
+
+  results.intervalLatency.sumMs =
+      intervalLatencySum_.exchange(0, std::memory_order_relaxed);
+  results.intervalLatency.count =
+      intervalLatencyCount_.exchange(0, std::memory_order_relaxed);
+  results.intervalLatency.minMs = intervalLatencyMin_.exchange(
+      std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+  results.intervalLatency.maxMs =
+      intervalLatencyMax_.exchange(0, std::memory_order_relaxed);
 
   auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                      std::chrono::steady_clock::now() - startTime_)

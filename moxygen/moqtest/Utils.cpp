@@ -6,6 +6,8 @@
 
 #include "moxygen/moqtest/Utils.h"
 
+#include <chrono>
+
 namespace moxygen {
 
 const int kNumParams = 16;
@@ -150,7 +152,8 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
 
 std::vector<Extension> getExtensions(
     int integerExtensionId,
-    int variableExtensionId) {
+    int variableExtensionId,
+    bool includeTimestamp) {
   std::vector<Extension> extensions;
   if (integerExtensionId >= 0) {
     uint64_t randomNumber = std::rand();
@@ -164,6 +167,13 @@ std::vector<Extension> getExtensions(
     Extension ext{
         static_cast<uint64_t>(2 * variableExtensionId + 1), {std::move(buf)}};
     extensions.push_back(ext);
+  }
+  if (includeTimestamp) {
+    uint64_t timestampMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    extensions.push_back(Extension{kTimestampExtensionType, timestampMs});
   }
   return extensions;
 }

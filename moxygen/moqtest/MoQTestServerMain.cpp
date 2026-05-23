@@ -33,6 +33,11 @@ DEFINE_string(
     versions,
     "",
     "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
+DEFINE_bool(
+    include_timestamp_extension,
+    false,
+    "Stamp each object with a send-time millisecond timestamp extension "
+    "(used by the perf client for latency measurement).");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
@@ -40,6 +45,7 @@ int main(int argc, char** argv) {
 
   auto server = std::make_shared<moxygen::MoQTestServer>(
       FLAGS_cert, FLAGS_key, FLAGS_versions);
+  server->setIncludeTimestampExtension(FLAGS_include_timestamp_extension);
 
   folly::SocketAddress addr("::", FLAGS_port);
   server->start(addr);

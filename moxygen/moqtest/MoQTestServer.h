@@ -59,6 +59,10 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       const std::string& key = "",
       const std::string& versions = "");
 
+  void setIncludeTimestampExtension(bool include) {
+    includeTimestampExtension_ = include;
+  }
+
   //  Override onNewSession to set publisher handler to be this object
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {
@@ -151,6 +155,7 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
   folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
       activeSubscriptions_;
+  bool includeTimestampExtension_{false};
 };
 
 } // namespace moxygen
