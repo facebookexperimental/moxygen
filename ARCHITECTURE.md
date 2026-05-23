@@ -327,7 +327,7 @@ Moxygen uses an executor abstraction for event-driven operations:
 
 MoQSession operations are event-driven:
 - Control messages processed in `controlReadLoop()` and `controlWriteLoop()` coroutines
-- Stream data handled via `unidirectionalReadLoop()` callbacks
+- Stream data handled via `dataStreamReadLoop()` callbacks
 - Datagrams processed in `onDatagram()` callback
 - All operations run on the session's executor
 

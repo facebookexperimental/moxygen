@@ -65,6 +65,10 @@ constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta05;
 constexpr std::string_view kAlpnMoqtDraft16Meta00 = "moqt-16-meta-00";
 constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 
+// ALPN constants for draft 18 (uni control streams)
+constexpr std::string_view kAlpnMoqtDraft18 = "moqt-18";
+constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
+
 constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft14,
     kVersionDraft15,
@@ -99,6 +103,9 @@ std::vector<std::string> getMoqtProtocols(
     bool useStandard = false);
 
 bool isSupportedVersion(uint64_t version);
+
+// Returns true if the given version uses unidirectional control streams
+bool useUniControlStreams(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.
 std::string getSupportedVersionsString();

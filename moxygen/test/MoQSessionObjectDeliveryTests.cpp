@@ -248,26 +248,30 @@ CO_TEST_P_X(MoQSessionTest, TooFarBehindOneSubgroup) {
   serverSession_->setMoqSettings(moqSettings);
 
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    eventBase_.add(
-        [this, pub, sub, serverWt = serverWt_.get(), eventBase = &eventBase_] {
-          EXPECT_CALL(
-              *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
-          EXPECT_CALL(
-              *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
-          auto sgp = pub->beginSubgroup(0, 0, 0).value();
-          auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
-          EXPECT_TRUE(objectResult.hasValue());
+    auto objStreamId = serverObjectStreamId();
+    eventBase_.add([this,
+                    pub,
+                    sub,
+                    serverWt = serverWt_.get(),
+                    eventBase = &eventBase_,
+                    objStreamId] {
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+      EXPECT_CALL(
+          *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
+      EXPECT_TRUE(objectResult.hasValue());
 
-          // Run this stuff later on, otherwise the test will hang because of
-          // the discrepancy in the stream count because the stream would have
-          // been reset before the subgroup header got across.
-          eventBase->add([pub, sub, serverWt, sgp] {
-            // Start buffering data
-            serverWt->writeHandles[2]->setImmediateDelivery(false);
-            auto objectResult2 = sgp->object(1, moxygen::test::makeBuf(101));
-            EXPECT_TRUE(objectResult2.hasError());
-          });
-        });
+      // Run this stuff later on, otherwise the test will hang because of
+      // the discrepancy in the stream count because the stream would have
+      // been reset before the subgroup header got across.
+      eventBase->add([pub, sub, serverWt, sgp, objStreamId] {
+        // Start buffering data
+        serverWt->writeHandles[objStreamId]->setImmediateDelivery(false);
+        auto objectResult2 = sgp->object(1, moxygen::test::makeBuf(101));
+        EXPECT_TRUE(objectResult2.hasError());
+      });
+    });
     co_return makeSubscribeOkResult(sub);
   });
 
@@ -294,7 +298,8 @@ CO_TEST_P_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
   serverSession_->setMoqSettings(moqSettings);
 
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    eventBase_.add([this, pub, sub, serverWt = serverWt_.get()] {
+    auto objStreamId = serverObjectStreamId();
+    eventBase_.add([this, pub, sub, serverWt = serverWt_.get(), objStreamId] {
       EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
       EXPECT_CALL(
           *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
@@ -303,13 +308,13 @@ CO_TEST_P_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
       EXPECT_TRUE(objectResult.hasValue());
 
       // Start buffering data
-      serverWt->writeHandles[2]->setImmediateDelivery(false);
+      serverWt->writeHandles[objStreamId]->setImmediateDelivery(false);
       for (uint32_t i = 0; i < 10; i++) {
         // Run this stuff later on, otherwise the test will hang because of
         // the discrepancy in the stream count because the stream would have
         // been reset before the subgroup header got across.
         objectResult = sgp->object(i + 1, moxygen::test::makeBuf(50));
-        serverWt->writeHandles[2]->deliverInflightData();
+        serverWt->writeHandles[objStreamId]->deliverInflightData();
         EXPECT_FALSE(objectResult.hasError());
       }
       pub->publishDone(getTrackEndedPublishDone(sub.requestID));
@@ -340,11 +345,13 @@ CO_TEST_P_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
   serverSession_->setMoqSettings(moqSettings);
 
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    auto objStreamId0 = serverObjectStreamId(0);
     eventBase_.add([this,
                     pub,
                     sub,
                     serverWt = serverWt_.get(),
-                    eventBase = &eventBase_] {
+                    eventBase = &eventBase_,
+                    objStreamId0] {
       std::vector<std::shared_ptr<SubgroupConsumer>> subgroupConsumers;
 
       EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened())
@@ -367,16 +374,17 @@ CO_TEST_P_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
       // Run this stuff later on, otherwise the test will hang because of
       // the discrepancy in the stream count because the stream would have
       // been reset before the subgroup header got across.
-      eventBase->add([pub, sub, serverWt, subgroupConsumers] {
+      eventBase->add([pub, sub, serverWt, subgroupConsumers, objStreamId0] {
         for (uint32_t subgroupId = 0; subgroupId < 2; subgroupId++) {
-          serverWt->writeHandles[2 + subgroupId * 4]->setImmediateDelivery(
-              false);
+          serverWt->writeHandles[objStreamId0 + subgroupId * 4]
+              ->setImmediateDelivery(false);
           auto objectResult = subgroupConsumers[subgroupId]->object(
               1, moxygen::test::makeBuf(30));
           EXPECT_TRUE(objectResult.hasValue());
         }
 
-        serverWt->writeHandles[10]->setImmediateDelivery(false);
+        serverWt->writeHandles[objStreamId0 + 2 * 4]->setImmediateDelivery(
+            false);
         auto objectResult =
             subgroupConsumers[2]->object(1, moxygen::test::makeBuf(40));
         EXPECT_TRUE(objectResult.hasError());
@@ -419,7 +427,8 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
   EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
       .WillOnce(testing::Invoke([&] {
         eventBase_.add([&] {
-          serverWt_->writeHandles[2]->setImmediateDelivery(false);
+          serverWt_->writeHandles[serverObjectStreamId()]->setImmediateDelivery(
+              false);
           EXPECT_CALL(
               *serverPublisherStatsCallback_, onSubscriptionStreamClosed());
           EXPECT_CALL(
@@ -440,7 +449,7 @@ CO_TEST_P_X(MoQSessionTest, PublisherAliveUntilAllBytesDelivered) {
       getSubscribe(kTestTrackName), subscribeCallback_);
   co_await barricade;
   barricade.reset();
-  serverWt_->writeHandles[2]->deliverInflightData();
+  serverWt_->writeHandles[serverObjectStreamId()]->deliverInflightData();
 
   EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Return(folly::unit));
@@ -528,30 +537,34 @@ CO_TEST_P_X(MoQSessionTest, DeliveryCallbackBasic) {
         // Set the delivery callback
         pub->setDeliveryCallback(deliveryCallback);
 
-        eventBase_.add(
-            [this, pub, sub, serverWt = serverWt_.get(), deliveryCallback] {
-              EXPECT_CALL(
-                  *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
-              EXPECT_CALL(
-                  *clientSubscriberStatsCallback_,
-                  onSubscriptionStreamOpened());
-              auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        auto objStreamId = serverObjectStreamId();
+        eventBase_.add([this,
+                        pub,
+                        sub,
+                        serverWt = serverWt_.get(),
+                        deliveryCallback,
+                        objStreamId] {
+          EXPECT_CALL(
+              *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+          EXPECT_CALL(
+              *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
 
-              // Buffer data to control delivery timing
-              serverWt->writeHandles[2]->setImmediateDelivery(false);
-              auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
-              EXPECT_TRUE(objectResult.hasValue());
+          // Buffer data to control delivery timing
+          serverWt->writeHandles[objStreamId]->setImmediateDelivery(false);
+          auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
+          EXPECT_TRUE(objectResult.hasValue());
 
-              // Manually trigger delivery - this should invoke the callback
-              // Expect the delivery callback to be invoked for the object
-              EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0))
-                  .WillOnce(testing::Return());
-              serverWt->writeHandles[2]->deliverInflightData();
+          // Manually trigger delivery - this should invoke the callback
+          // Expect the delivery callback to be invoked for the object
+          EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0))
+              .WillOnce(testing::Return());
+          serverWt->writeHandles[objStreamId]->deliverInflightData();
 
-              sgp->endOfSubgroup();
-              serverWt->writeHandles[2]->deliverInflightData();
-              pub->publishDone(getTrackEndedPublishDone(sub.requestID));
-            });
+          sgp->endOfSubgroup();
+          serverWt->writeHandles[objStreamId]->deliverInflightData();
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
         co_return makeSubscribeOkResult(sub);
       });
 
@@ -576,39 +589,42 @@ CO_TEST_P_X(MoQSessionTest, DeliveryCallbackObjectSplitInTwo) {
         // Set the delivery callback
         pub->setDeliveryCallback(deliveryCallback);
 
-        eventBase_.add(
-            [this, pub, sub, serverWt = serverWt_.get(), deliveryCallback] {
-              EXPECT_CALL(
-                  *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
-              EXPECT_CALL(
-                  *clientSubscriberStatsCallback_,
-                  onSubscriptionStreamOpened());
-              auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        auto objStreamId = serverObjectStreamId();
+        eventBase_.add([this,
+                        pub,
+                        sub,
+                        serverWt = serverWt_.get(),
+                        deliveryCallback,
+                        objStreamId] {
+          EXPECT_CALL(
+              *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+          EXPECT_CALL(
+              *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+          auto sgp = pub->beginSubgroup(0, 0, 0).value();
 
-              serverWt->writeHandles[2]->setImmediateDelivery(false);
+          serverWt->writeHandles[objStreamId]->setImmediateDelivery(false);
 
-              // Begin object with initial payload (5 bytes) out of total 10
-              // bytes
-              auto beginObjectResult =
-                  sgp->beginObject(0, 10, moxygen::test::makeBuf(5));
-              EXPECT_TRUE(beginObjectResult.hasValue());
+          // Begin object with initial payload (5 bytes) out of total 10
+          // bytes
+          auto beginObjectResult =
+              sgp->beginObject(0, 10, moxygen::test::makeBuf(5));
+          EXPECT_TRUE(beginObjectResult.hasValue());
 
-              serverWt->writeHandles[2]->deliverInflightData();
+          serverWt->writeHandles[objStreamId]->deliverInflightData();
 
-              // Expect the delivery callback to be invoked for the object
-              EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0)).Times(1);
+          // Expect the delivery callback to be invoked for the object
+          EXPECT_CALL(*deliveryCallback, onDelivered(_, 0, 0, 0)).Times(1);
 
-              // Send remaining payload (5 bytes) to complete the object
-              auto payloadResult =
-                  sgp->objectPayload(moxygen::test::makeBuf(5));
-              EXPECT_TRUE(payloadResult.hasValue());
+          // Send remaining payload (5 bytes) to complete the object
+          auto payloadResult = sgp->objectPayload(moxygen::test::makeBuf(5));
+          EXPECT_TRUE(payloadResult.hasValue());
 
-              serverWt->writeHandles[2]->deliverInflightData();
+          serverWt->writeHandles[objStreamId]->deliverInflightData();
 
-              sgp->endOfSubgroup();
-              serverWt->writeHandles[2]->deliverInflightData();
-              pub->publishDone(getTrackEndedPublishDone(sub.requestID));
-            });
+          sgp->endOfSubgroup();
+          serverWt->writeHandles[objStreamId]->deliverInflightData();
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
         co_return makeSubscribeOkResult(sub);
       });
 
@@ -936,7 +952,7 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCallbackErrorTerminatesStream) {
 
 // Regression test: When a subscriber's SubgroupConsumer returns an error from
 // beginObject (e.g., due to a cache payload mismatch in the relay), the
-// session's unidirectionalReadLoop gets ERROR_TERMINATE from codec.onIngress.
+// session's dataStreamReadLoop gets ERROR_TERMINATE from codec.onIngress.
 // Without the fix, the read loop just breaks without calling dcb.reset(),
 // leaving the SubgroupConsumer in a zombie state. The SubgroupForwarder
 // retains open downstream subgroups that are never cleaned up.

@@ -395,6 +395,7 @@ class TestServer : public MoQServer {
                   std::vector<std::string> alpns = {"h3"};
                   auto moqt = getDefaultMoqtProtocols(true);
                   alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+                  alpns.emplace_back(kAlpnMoqtDraft18Latest);
                   return alpns;
                 }(),
                 fizz::server::ClientAuthMode::None,
@@ -936,7 +937,17 @@ TEST_P(MoQIntegrationTest, SessionSetup_ConnectAndDisconnect) {
   }));
 }
 
-TEST_P(MoQIntegrationTest, SessionSetup_VersionNegotiation) {
+using MoQProductionVersionTest = MoQIntegrationTest;
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQProductionVersionTest,
+    MoQProductionVersionTest,
+    testing::ValuesIn(kSupportedVersions),
+    [](const testing::TestParamInfo<uint64_t>& info) {
+      return "Draft" + std::to_string(getDraftMajorVersion(info.param));
+    });
+
+TEST_P(MoQProductionVersionTest, SessionSetup_VersionNegotiation) {
   runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
     co_await connectClient();
     auto version = client_->moqSession_->getNegotiatedVersion();
@@ -1066,7 +1077,7 @@ TEST_P(MoQIntegrationTest, Fetch_ServerRejects) {
   }));
 }
 
-TEST_P(MoQIntegrationTest, SessionSetup_ServerRejectsClient) {
+TEST_P(MoQProductionVersionTest, SessionSetup_ServerRejectsClient) {
   // Stop the normal server and start a rejecting one.
   // Note: server setup runs outside runTest() so it lacks the 10s timeout,
   // but local server init is fast and deterministic.
@@ -1453,10 +1464,18 @@ TEST_P(MoQIntegrationTest, PublishAndSubscribe_InOrderDelivery) {
           }));
 }
 
+namespace {
+const std::vector<uint64_t> kIntegrationTestVersions = [] {
+  std::vector<uint64_t> v(kSupportedVersions.begin(), kSupportedVersions.end());
+  v.push_back(kVersionDraft18);
+  return v;
+}();
+} // namespace
+
 INSTANTIATE_TEST_SUITE_P(
     MoQIntegrationTest,
     MoQIntegrationTest,
-    testing::ValuesIn(kSupportedVersions),
+    testing::ValuesIn(kIntegrationTestVersions),
     [](const testing::TestParamInfo<uint64_t>& info) {
       return "Draft" + std::to_string(getDraftMajorVersion(info.param));
     });

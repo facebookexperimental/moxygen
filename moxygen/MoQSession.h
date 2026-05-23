@@ -563,7 +563,19 @@ class MoQSession : public Subscriber,
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
 
-  folly::coro::Task<void> unidirectionalReadLoop(
+  folly::coro::Task<void> dataStreamReadLoop(
+      std::shared_ptr<MoQSession> session,
+      proxygen::WebTransport::StreamReadHandle* readHandle,
+      proxygen::WebTransport::StreamData initialBufferedData = {
+          nullptr,
+          false});
+
+  void startControlWriteLoop(
+      proxygen::WebTransport::StreamWriteHandle* writeHandle);
+
+  void replayBufferedUniStreams();
+
+  folly::coro::Task<void> handlePreSetupUniStream(
       std::shared_ptr<MoQSession> session,
       proxygen::WebTransport::StreamReadHandle* readHandle);
 
@@ -1048,6 +1060,12 @@ class MoQSession : public Subscriber,
   folly::coro::Promise<Setup> setupPromise_;
   folly::coro::Future<Setup> setupFuture_;
   bool setupComplete_{false};
+  bool peerControlStreamReceived_{false};
+  struct BufferedUniStream {
+    proxygen::WebTransport::StreamReadHandle* readHandle;
+    proxygen::WebTransport::StreamData initialData;
+  };
+  std::vector<BufferedUniStream> bufferedPreSetupUniStreams_;
   bool draining_{false};
   bool receivedGoaway_{false};
 

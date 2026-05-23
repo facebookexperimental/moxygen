@@ -96,6 +96,8 @@ class MoQServerBase : public MoQSession::ServerSetupCallback,
     return endpoints_.count(std::string(path)) > 0;
   }
 
+  virtual Setup makeServerSetup();
+
   // AUTHORITY parameter validation methods
   bool isValidAuthorityFormat(const std::string& authority);
   bool isSupportedAuthority(const std::string& authority);

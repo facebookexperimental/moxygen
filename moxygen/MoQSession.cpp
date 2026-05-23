@@ -2250,9 +2250,36 @@ const folly::RequestToken& MoQSession::sessionRequestToken() {
   return token;
 }
 
+void MoQSession::startControlWriteLoop(
+    proxygen::WebTransport::StreamWriteHandle* writeHandle) {
+  writeHandle->setPriority(quic::HTTPPriorityQueue::Priority(0, false, 0));
+  if (logger_) {
+    logger_->logStreamTypeSet(
+        writeHandle->getID(), MOQTStreamType::CONTROL, Owner::LOCAL);
+  }
+  auto mergeToken = folly::cancellation_token_merge(
+      cancellationSource_.getToken(), writeHandle->getCancelToken());
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(std::move(mergeToken), controlWriteLoop(writeHandle)))
+      .start();
+}
+
 void MoQSession::start() {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (dir_ == MoQControlCodec::Direction::CLIENT) {
+  if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
+    // Uni control mode: both client and server open a uni stream for outgoing
+    // control messages
+    auto us = wt_->createUniStream();
+    if (!us) {
+      XLOG(ERR) << "Failed to get uni control stream sess=" << this;
+      wt_->closeSession();
+      return;
+    }
+    startControlWriteLoop(us.value());
+    // controlReadLoop starts when the peer's uni stream arrives via
+    // onNewUniStream -> handlePreSetupUniStream
+  } else if (dir_ == MoQControlCodec::Direction::CLIENT) {
     auto cs = wt_->createBidiStream();
     if (!cs) {
       XLOG(ERR) << "Failed to get control stream sess=" << this;
@@ -2260,24 +2287,7 @@ void MoQSession::start() {
       return;
     }
     auto controlStream = cs.value();
-    controlStream.writeHandle->setPriority(
-        quic::HTTPPriorityQueue::Priority(0, false, 0));
-
-    if (logger_) {
-      logger_->logStreamTypeSet(
-          controlStream.readHandle->getID(),
-          MOQTStreamType::CONTROL,
-          Owner::LOCAL);
-    }
-
-    auto mergeToken = folly::cancellation_token_merge(
-        cancellationSource_.getToken(),
-        controlStream.writeHandle->getCancelToken());
-    co_withExecutor(
-        exec_.get(),
-        co_withCancellation(
-            std::move(mergeToken), controlWriteLoop(controlStream.writeHandle)))
-        .start();
+    startControlWriteLoop(controlStream.writeHandle);
 
     proxygen::WebTransport::StreamData streamData{nullptr, false};
     co_withExecutor(
@@ -2394,24 +2404,14 @@ folly::coro::Task<Setup> MoQSession::setup(Setup setup) {
 
 folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     Setup setup) {
-  XCHECK(dir_ == MoQControlCodec::Direction::CLIENT);
   XLOG(DBG1) << __func__ << " sess=" << this;
+
+  // Server may also call awaitPeerSetup() after sending SERVER_SETUP
+  // proactively, to negotiate setup parameters with the client.
   std::tie(setupPromise_, setupFuture_) =
       folly::coro::makePromiseContract<Setup>();
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
-
-  // Set authority/path from CLIENT_SETUP params if present
-  auto setupAuthority = getFirstStringParam(
-      setup.params, folly::to_underlying(SetupKey::AUTHORITY));
-  if (!setupAuthority.empty()) {
-    authority_ = std::move(setupAuthority);
-  }
-  auto setupPath =
-      getFirstStringParam(setup.params, folly::to_underlying(SetupKey::PATH));
-  if (!setupPath.empty()) {
-    path_ = std::move(setupPath);
-  }
 
   setup.params.insertParam(SetupParameter(
       {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
@@ -2422,17 +2422,31 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     setupSerializationVersion = *negotiatedVersion_;
   }
 
+  bool isClient = (dir_ == MoQControlCodec::Direction::CLIENT);
+  if (isClient) {
+    // Set authority/path from CLIENT_SETUP params if present
+    auto setupAuthority = getFirstStringParam(
+        setup.params, folly::to_underlying(SetupKey::AUTHORITY));
+    if (!setupAuthority.empty()) {
+      authority_ = std::move(setupAuthority);
+    }
+    auto setupPath =
+        getFirstStringParam(setup.params, folly::to_underlying(SetupKey::PATH));
+    if (!setupPath.empty()) {
+      path_ = std::move(setupPath);
+    }
+  }
   // Set up the shared receive-side token cache and point the control codec
   // at it. The cache is necessarily empty at this point.
   receiveTokenCache_.setMaxSize(
-      getMaxAuthTokenCacheSizeIfPresent(setup.params), /*evict=*/false);
+      getMaxAuthTokenCacheSizeIfPresent(setup.params), /*evict=*/!isClient);
   controlCodec_->setTokenCache(&receiveTokenCache_);
   // Optimistically registers params without knowing peer's capabilities
   aliasifyAuthTokens(setup.params, setupSerializationVersion);
   auto res =
-      writeClientSetup(controlWriteBuf_, setup, setupSerializationVersion);
+      writeSetup(controlWriteBuf_, setup, setupSerializationVersion, isClient);
   if (res.hasError()) {
-    XLOG(ERR) << "writeClientSetup failed sess=" << this;
+    XLOG(ERR) << "writeSetup failed sess=" << this;
     return folly::makeUnexpected(res.error());
   }
   maxRequestID_ = maxRequestID;
@@ -2467,6 +2481,8 @@ folly::coro::Task<Setup> MoQSession::awaitPeerSetup() {
   XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
              << std::dec << " (draft-"
              << getDraftMajorVersion(negotiatedVersion) << ")";
+
+  replayBufferedUniStreams();
 
   co_return *serverSetup;
 }
@@ -2587,35 +2603,31 @@ void MoQSession::onClientSetup(Setup clientSetup) {
     return;
   }
 
-  serverSetup->params.insertParam(SetupParameter(
-      {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-       getMoQTImplementationString()}));
-
   {
     auto negotiatedVersion = *getNegotiatedVersion();
     XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
                << std::dec << " (draft-"
                << getDraftMajorVersion(negotiatedVersion) << ")";
   }
-  auto maxRequestID = getMaxRequestIDIfPresent(serverSetup->params);
 
-  // Set up the shared receive-side token cache and point the control codec
-  // at it. May evict tokens optimistically registered during CLIENT_SETUP.
-  receiveTokenCache_.setMaxSize(
-      getMaxAuthTokenCacheSizeIfPresent(serverSetup->params), /*evict=*/true);
-  controlCodec_->setTokenCache(&receiveTokenCache_);
-  aliasifyAuthTokens(serverSetup->params);
-  auto res =
-      writeServerSetup(controlWriteBuf_, *serverSetup, *getNegotiatedVersion());
-  if (!res) {
-    XLOG(ERR) << "writeServerSetup failed sess=" << this;
-    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-    return;
+  bool isUniControl = useUniControlStreams(*getNegotiatedVersion());
+
+  if (isUniControl) {
+    // SERVER_SETUP was already sent proactively in start(). Fulfill the
+    // setup promise so a server-side awaitPeerSetup() can return.
+    // MAX_REQUEST_ID is no longer derived from setup params in draft-18+; the
+    // QUIC bidi stream limit governs request flow control instead.
+    setupPromise_.setValue(clientSetup);
+    setupComplete_ = true;
+    replayBufferedUniStreams();
+  } else {
+    auto res = sendSetup(std::move(*serverSetup));
+    if (res.hasError()) {
+      close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+      return;
+    }
+    setupComplete_ = true;
   }
-  maxRequestID_ = maxRequestID;
-  maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
-  setupComplete_ = true;
-  controlWriteEvent_.signal();
 }
 
 std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
@@ -3160,9 +3172,11 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
 
 } // namespace detail
 
-folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
+folly::coro::Task<void> MoQSession::dataStreamReadLoop(
     std::shared_ptr<MoQSession> session,
-    proxygen::WebTransport::StreamReadHandle* readHandle) {
+    proxygen::WebTransport::StreamReadHandle* readHandle,
+    proxygen::WebTransport::StreamData initialBufferedData) {
+  auto streamData = std::move(initialBufferedData);
   co_await folly::coro::co_safe_point;
   auto id = readHandle->getID();
   auto rhToken = readHandle->getCancelToken();
@@ -3273,30 +3287,34 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
   codec.setStreamId(id);
 
   while (readHandle && !token.isCancellationRequested()) {
-    // Use session or request state token for read (NOT readHandle token)
-    // This prevents exception masking when WebTransport cancels readHandle
-    auto streamData = co_await co_awaitTry(
-        folly::coro::co_withCancellation(
-            token, readHandle->readStreamData().via(exec_.get())));
-    if (streamData.hasException()) {
-      XLOG(ERR) << folly::exceptionStr(streamData.exception()) << " id=" << id
-                << " sess=" << this;
-      ResetStreamErrorCode errorCode{ResetStreamErrorCode::INTERNAL_ERROR};
-      auto wtEx =
-          streamData.tryGetExceptionObject<proxygen::WebTransport::Exception>();
-      if (wtEx) {
-        errorCode = ResetStreamErrorCode(wtEx->error);
+    // First iteration may use initialBufferedData; subsequent iterations
+    // read from the stream
+    if (!(streamData.data || streamData.fin)) {
+      auto streamDataTry = co_await co_awaitTry(
+          folly::coro::co_withCancellation(
+              token, readHandle->readStreamData().via(exec_.get())));
+      if (streamDataTry.hasException()) {
+        XLOG(ERR) << folly::exceptionStr(streamDataTry.exception())
+                  << " id=" << id << " sess=" << this;
+        ResetStreamErrorCode errorCode{ResetStreamErrorCode::INTERNAL_ERROR};
+        auto wtEx =
+            streamDataTry
+                .tryGetExceptionObject<proxygen::WebTransport::Exception>();
+        if (wtEx) {
+          errorCode = ResetStreamErrorCode(wtEx->error);
+        }
+        if (!dcb.reset(errorCode)) {
+          XLOG(ERR) << __func__ << " terminating for unknown "
+                    << "stream id=" << id << " sess=" << this;
+        }
+        break;
       }
-      if (!dcb.reset(errorCode)) {
-        XLOG(ERR) << __func__ << " terminating for unknown "
-                  << "stream id=" << id << " sess=" << this;
-      }
-      break;
+      streamData = std::move(*streamDataTry);
     }
-    if (streamData->data || streamData->fin) {
+    if (streamData.data || streamData.fin) {
       MoQCodec::ParseResult result = MoQCodec::ParseResult::ERROR_TERMINATE;
       try {
-        result = codec.onIngress(std::move(streamData->data), streamData->fin);
+        result = codec.onIngress(std::move(streamData.data), streamData.fin);
 
         // Handle BLOCKED state
         if (result == MoQCodec::ParseResult::BLOCKED) {
@@ -3322,7 +3340,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
 
           if (result == MoQCodec::ParseResult::CONTINUE) {
             // codec may have buffered excess ingress while blocked
-            result = codec.onIngress(nullptr, streamData->fin);
+            result = codec.onIngress(nullptr, streamData.fin);
           }
           if (result == MoQCodec::ParseResult::BLOCKED) {
             // state was deleted (unsubscribe)
@@ -3336,7 +3354,7 @@ folly::coro::Task<void> MoQSession::unidirectionalReadLoop(
         result = MoQCodec::ParseResult::ERROR_TERMINATE;
       }
 
-      if (streamData->fin) {
+      if (streamData.fin) {
         XLOG(DBG3) << "End of stream id=" << id << " sess=" << this;
         readHandle = nullptr;
       } else if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
@@ -5354,6 +5372,17 @@ void MoQSession::onNewUniStream(
     proxygen::WebTransport::StreamReadHandle* rh) noexcept {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (!setupComplete_) {
+    if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
+      // In uni control mode, uni streams before setup may carry the peer's
+      // control stream (with SETUP)
+      co_withExecutor(
+          exec_.get(),
+          co_withCancellation(
+              cancellationSource_.getToken(),
+              handlePreSetupUniStream(shared_from_this(), rh)))
+          .start();
+      return;
+    }
     XLOG(ERR) << "Uni stream before setup complete sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
@@ -5363,7 +5392,7 @@ void MoQSession::onNewUniStream(
       exec_.get(),
       co_withCancellation(
           cancellationSource_.getToken(),
-          unidirectionalReadLoop(shared_from_this(), rh)))
+          dataStreamReadLoop(shared_from_this(), rh)))
       .start();
 }
 
@@ -5383,6 +5412,83 @@ void MoQSession::onNewBidiStream(
   }
 
   handleClientSetup(bh, proxygen::WebTransport::StreamData{nullptr, false});
+}
+
+void MoQSession::replayBufferedUniStreams() {
+  for (auto& buffered : bufferedPreSetupUniStreams_) {
+    co_withExecutor(
+        exec_.get(),
+        co_withCancellation(
+            cancellationSource_.getToken(),
+            dataStreamReadLoop(
+                shared_from_this(),
+                buffered.readHandle,
+                std::move(buffered.initialData))))
+        .start();
+  }
+  bufferedPreSetupUniStreams_.clear();
+}
+
+folly::coro::Task<void> MoQSession::handlePreSetupUniStream(
+    std::shared_ptr<MoQSession> session, // keeps session alive
+    proxygen::WebTransport::StreamReadHandle* readHandle) {
+  co_await folly::coro::co_safe_point;
+
+  std::optional<FrameType> frameType = std::nullopt;
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  bool fin = false;
+
+  do {
+    auto streamData = co_await co_awaitTry(
+        folly::coro::co_withCancellation(
+            cancellationSource_.getToken(),
+            readHandle->readStreamData().via(exec_.get())));
+    if (!streamData.hasValue()) {
+      break;
+    }
+    if (streamData->data) {
+      readBuf.append(std::move(streamData->data));
+    }
+    fin = streamData->fin;
+    frameType = getFrameType(readBuf);
+  } while (!frameType.has_value() && !fin);
+
+  if (!frameType.has_value() || readBuf.chainLength() == 0) {
+    co_return;
+  }
+
+  if (*frameType == FrameType::SETUP) {
+    // This is the peer's control stream
+    if (peerControlStreamReceived_) {
+      XLOG(ERR) << "Duplicate control stream sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      co_return;
+    }
+    peerControlStreamReceived_ = true;
+
+    if (logger_) {
+      logger_->logStreamTypeSet(
+          readHandle->getID(), MOQTStreamType::CONTROL, Owner::REMOTE);
+    }
+
+    proxygen::WebTransport::StreamData initialData{readBuf.move(), fin};
+    co_await controlReadLoop(readHandle, std::move(initialData));
+  } else if (setupComplete_) {
+    // Setup already completed while we were reading — dispatch directly
+    co_await dataStreamReadLoop(
+        std::move(session),
+        readHandle,
+        proxygen::WebTransport::StreamData{readBuf.move(), fin});
+  } else {
+    // Data stream arrived before setup - buffer it
+    static constexpr size_t kMaxBufferedPreSetupUniStreams = 100;
+    if (bufferedPreSetupUniStreams_.size() >= kMaxBufferedPreSetupUniStreams) {
+      XLOG(ERR) << "Too many pre-setup uni streams sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      co_return;
+    }
+    bufferedPreSetupUniStreams_.push_back({readHandle, {readBuf.move(), fin}});
+  }
 }
 
 void MoQSession::handleClientSetup(
@@ -5489,7 +5595,14 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
   if (frameType.has_value() && readBuf.chainLength() > 0) {
     // Create StreamData with the accumulated buffer
     proxygen::WebTransport::StreamData accumulatedData{readBuf.move(), fin};
-    if (*frameType == FrameType::CLIENT_SETUP) {
+    if (*frameType == FrameType::CLIENT_SETUP ||
+        *frameType == FrameType::SETUP) {
+      if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
+        XLOG(ERR) << "Setup frame on bidi stream in uni control mode sess="
+                  << this;
+        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+        co_return;
+      }
       // Process the frame as a CLIENT_SETUP
       handleClientSetup(bh, std::move(accumulatedData));
     } else {

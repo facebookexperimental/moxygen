@@ -244,6 +244,11 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
   subscribeHandler->unsubscribe();
 }
 CO_TEST_P_X(MoQSessionTest, UniStreamBeforeSetup) {
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    // Draft 18+ uses uni streams for control, so receiving one before
+    // setup is expected behavior, not an error.
+    co_return;
+  }
   EXPECT_FALSE(clientWt_->isSessionClosed());
   serverWt_->createUniStream();
   // Check that the client closed the session
@@ -265,6 +270,225 @@ CO_TEST_P_X(MoQSessionTest, EmptyUnidirectionalStream) {
 
   co_await folly::coro::sleep(std::chrono::milliseconds(50));
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// === Uni Control Stream tests (draft-18-meta-00) ===
+
+class MoQUniControlTest : public MoQSessionTest {};
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQUniControlTest,
+    MoQUniControlTest,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+CO_TEST_P_X(MoQUniControlTest, UniControlSetup) {
+  co_await setupMoQSession();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQUniControlTest, UniControlSubscribeAfterSetup) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    auto pubResult = pub->beginSubgroup(0, 0, 0);
+    EXPECT_FALSE(pubResult.hasError());
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+  res.value()->unsubscribe();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQUniControlTest, UniControlFetchAfterSetup) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+    EXPECT_NE(standalone, nullptr);
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub->object(
+        standalone->start.group,
+        /*subgroupID=*/0,
+        standalone->start.object,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  folly::coro::Baton baton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
+      .WillOnce([&] {
+        baton.post();
+        return folly::unit;
+      });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamBeforeSetup) {
+  // Verify that a data uni stream arriving before setup completes is
+  // buffered and replayed with its initial data after setup.
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+
+  clientSession_->start();
+  serverSession_->start();
+
+  // Server sends SERVER_SETUP
+  moxygen::Setup serverSetup;
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+          initialMaxRequestID_});
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+  serverSession_->sendSetup(std::move(serverSetup));
+
+  // Before client completes setup, server opens a data uni stream with
+  // a subgroup header + object. This exercises handlePreSetupUniStream's
+  // buffering path and verifies initialData is preserved on replay.
+  auto dataWh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  folly::IOBufQueue dataBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  TrackAlias trackAlias(0); // will match requestID 0
+  ObjectHeader objHeader(0, 0, 0, 0, ObjectStatus::NORMAL);
+  objHeader.length = 5;
+  writer.writeSubgroupHeader(dataBuf, trackAlias, objHeader);
+  writer.writeStreamObject(
+      dataBuf,
+      getSubgroupStreamType(
+          kVersionDraft18, SubgroupIDFormat::Present, true, false),
+      objHeader,
+      makeBuf(5));
+  // Don't FIN yet — the stream must stay open until after subscribe
+  // so the read loop can wait for the alias baton
+  dataWh->writeStreamData(dataBuf.move(), false, nullptr);
+
+  // Now complete client setup
+  clientSession_->setServerMaxTokenCacheSizeGuess(1024);
+  auto peerSetup =
+      co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
+
+  // Yield so the replayed data stream's read loop can execute and
+  // register its alias baton in bufferedSubgroups_
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Subscribe so the client registers trackAlias=0. The buffered data
+  // stream's read loop will resolve once the alias is known.
+  expectSubscribe([](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sgConsumer =
+      std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton baton;
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, _, _))
+      .WillOnce(testing::Return(sgConsumer));
+  EXPECT_CALL(*sgConsumer, object(0, HasChainDataLengthOf(5), _, _))
+      .WillOnce([&](auto, auto, const auto&, auto) {
+        baton.post();
+        return folly::unit;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  co_await baton;
+
+  res.value()->unsubscribe();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQUniControlTest, UniControlDuplicateSetupStream) {
+  co_await setupMoQSession();
+
+  // Now open a second uni stream with SERVER_SETUP frame type - should be
+  // rejected as duplicate
+  auto wh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup dupSetup;
+  writeServerSetup(writeBuf, dupSetup, kVersionDraft18);
+  wh->writeStreamData(writeBuf.move(), false, nullptr);
+
+  for (int i = 0; i < 50 && !clientWt_->isSessionClosed(); ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  // The client should have closed the session due to duplicate control stream
+  EXPECT_TRUE(clientWt_->isSessionClosed());
+}
+
+CO_TEST_P_X(MoQUniControlTest, BidiSetupRejectedInUniControlMode) {
+  co_await setupMoQSession();
+
+  auto bidiResult = clientWt_->createBidiStream();
+  EXPECT_TRUE(bidiResult.hasValue());
+  if (!bidiResult.hasValue()) {
+    co_return;
+  }
+  auto writeHandle = bidiResult->writeHandle;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup setup;
+  writeClientSetup(writeBuf, setup, kVersionDraft18);
+  writeHandle->writeStreamData(writeBuf.move(), false, nullptr);
+
+  for (int i = 0; i < 50 && !serverWt_->isSessionClosed(); ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_TRUE(serverWt_->isSessionClosed());
+}
+
+CO_TEST_P_X(MoQUniControlTest, MaxBufferedPreSetupUniStreams) {
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+
+  clientSession_->start();
+  serverSession_->start();
+
+  // Server proactively sends SERVER_SETUP
+  moxygen::Setup serverSetup;
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+          initialMaxRequestID_});
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+  serverSession_->sendSetup(std::move(serverSetup));
+
+  // Before client completes setup, open 101 data uni streams from server.
+  // Each writes a non-SETUP frame type byte so handlePreSetupUniStream
+  // buffers them.
+  static constexpr uint8_t kSubgroupHeaderByte =
+      folly::to_underlying(StreamType::SUBGROUP_HEADER_SG_ZERO);
+  for (int i = 0; i <= 100; i++) {
+    auto wh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+    auto buf = folly::IOBuf::create(1);
+    buf->append(1);
+    buf->writableData()[0] = kSubgroupHeaderByte;
+    wh->writeStreamData(std::move(buf), false, nullptr);
+  }
+
+  for (int i = 0; i < 50 && !clientWt_->isSessionClosed(); ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_TRUE(clientWt_->isSessionClosed());
 }
 
 // New tests for MoQClientBase guarding WT callbacks after session reset
