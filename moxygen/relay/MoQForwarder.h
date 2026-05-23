@@ -148,6 +148,7 @@ class MoQForwarder : public TrackConsumer {
     }
 
     bool shouldForward;
+    bool passive{false};
     bool pinned{false};
     bool receivedPublishDone_{false};
 
@@ -181,6 +182,17 @@ class MoQForwarder : public TrackConsumer {
       const PublishRequest& pub) {
     return addSubscriber(std::move(session), pub.forward);
   }
+
+  // Add a subscriber with an explicit consumer and optional passive flag.
+  // Passive subscribers receive objects but do not count toward
+  // forwardingSubscribers_, so they do not affect the forwardChanged callback
+  // or onEmpty firing.  Use passive=true for internal consumers (e.g. cache)
+  // that should not influence the relay's upstream subscription lifecycle.
+  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
+      std::shared_ptr<MoQSession> session,
+      bool forward,
+      std::shared_ptr<TrackConsumer> consumer,
+      bool passive = false);
 
   folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
       const std::shared_ptr<MoQSession>& session,
@@ -377,6 +389,7 @@ class MoQForwarder : public TrackConsumer {
   void countReceivedObject(uint64_t groupID);
 
   uint64_t forwardingSubscribers_{0};
+  uint32_t passiveCount_{0};
   uint64_t totalGroupsReceived_{0};
   uint64_t totalObjectsReceived_{0};
   // NOTE: counts distinct group transitions, not distinct group IDs.

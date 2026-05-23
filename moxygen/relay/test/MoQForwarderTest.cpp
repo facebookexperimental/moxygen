@@ -1096,4 +1096,94 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
           std::string(kObjectLength - kInitialLength, 'b'));
 }
 
+namespace {
+struct ForwardChangedTracker : public MoQForwarder::Callback {
+  void onEmpty(MoQForwarder*) override {
+    emptyCalls++;
+  }
+  void forwardChanged(MoQForwarder*) override {
+    forwardChangedCalls++;
+  }
+  int emptyCalls{0};
+  int forwardChangedCalls{0};
+};
+} // namespace
+
+// Test: passive subscriber does not trigger forwardChanged on add or remove.
+TEST_F(MoQForwarderTest, PassiveSubscriberDoesNotTriggerForwardChanged) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto cb = std::make_shared<ForwardChangedTracker>();
+  forwarder->setCallback(cb);
+
+  auto session = createMockSession();
+  auto consumer = createMockConsumer();
+
+  // Adding a passive subscriber does not fire forwardChanged.
+  auto handle = forwarder->addSubscriber(session, /*forward=*/true, consumer, /*passive=*/true);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(cb->forwardChangedCalls, 0);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0u);
+
+  // Removing the passive subscriber does not fire forwardChanged either.
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_EQ(cb->forwardChangedCalls, 0);
+}
+
+// Test: onEmpty fires when only passive subscribers remain (not when empty).
+TEST_F(MoQForwarderTest, OnEmptyFiresWhenOnlyPassiveRemain) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto cb = std::make_shared<ForwardChangedTracker>();
+  forwarder->setCallback(cb);
+
+  auto realSession = createMockSession();
+  auto passiveSession = createMockSession();
+  auto realConsumer = createMockConsumer();
+  auto passiveConsumer = createMockConsumer();
+
+  forwarder->addSubscriber(realSession, /*forward=*/true, realConsumer);
+  forwarder->addSubscriber(passiveSession, /*forward=*/true, passiveConsumer, /*passive=*/true);
+
+  // Removing the real subscriber fires onEmpty (passive still attached).
+  forwarder->removeSubscriber(realSession, std::nullopt, "test");
+  EXPECT_EQ(cb->emptyCalls, 1);
+  // Forwarder is effectively empty (only passive remains) — passiveCount == subscribers.size().
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+}
+
+// Test: mixed real+passive — forwardChanged fires only on real-subscriber transitions.
+TEST_F(MoQForwarderTest, ForwardChangedFiresOnlyOnRealSubscriberTransitions) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto cb = std::make_shared<ForwardChangedTracker>();
+  forwarder->setCallback(cb);
+
+  auto realSession1 = createMockSession();
+  auto realSession2 = createMockSession();
+  auto passiveSession = createMockSession();
+  auto consumer = createMockConsumer();
+
+  // First real subscriber: forwardChanged fires (0→1).
+  forwarder->addSubscriber(realSession1, /*forward=*/true, consumer);
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+
+  // Passive subscriber: no forwardChanged.
+  forwarder->addSubscriber(passiveSession, /*forward=*/true, consumer, /*passive=*/true);
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+
+  // Second real subscriber: no forwardChanged (count stays > 0).
+  forwarder->addSubscriber(realSession2, /*forward=*/true, consumer);
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 2u);
+
+  // Removing one real subscriber: no forwardChanged (still 1 left).
+  forwarder->removeSubscriber(realSession1, std::nullopt, "test");
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+
+  // Removing the last real subscriber fires onEmpty (passive still present)
+  // but NOT an intermediate forwardChanged.
+  forwarder->removeSubscriber(realSession2, std::nullopt, "test");
+  EXPECT_EQ(cb->forwardChangedCalls, 1); // no additional forwardChanged
+  EXPECT_EQ(cb->emptyCalls, 1);
+}
+
 } // namespace moxygen::test

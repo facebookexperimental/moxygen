@@ -241,6 +241,45 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
   return it->second;
 }
 
+std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
+    std::shared_ptr<MoQSession> session,
+    bool forward,
+    std::shared_ptr<TrackConsumer> consumer,
+    bool passive) {
+  if (draining_) {
+    XLOG(ERR) << "addSubscriber called on draining track";
+    return nullptr;
+  }
+  auto sessionPtr = session.get();
+  if (consumer && trackAlias_) {
+    consumer->setTrackAlias(*trackAlias_);
+  }
+  auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
+      *this,
+      SubscribeOk{
+          RequestID(0),
+          trackAlias_.value_or(TrackAlias(0)),
+          std::chrono::milliseconds(0),
+          groupOrder_,
+          largest_,
+          extensions_},
+      std::move(session),
+      RequestID(0),
+      SubscribeRange{{0, 0}, kLocationMax},
+      std::move(consumer),
+      forward);
+  subscriber->passive = passive;
+  auto [it, inserted] = subscribers_.emplace(sessionPtr, subscriber);
+  if (inserted) {
+    if (passive) {
+      passiveCount_++;
+    } else if (forward) {
+      addForwardingSubscriber();
+    }
+  }
+  return it->second;
+}
+
 folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
     const std::shared_ptr<MoQSession>& session,
     const JoiningFetch& joining) const {
@@ -337,7 +376,7 @@ void MoQForwarder::removeSubscriber(
 }
 
 void MoQForwarder::checkAndFireOnEmpty() {
-  if (subscribers_.empty()) {
+  if (subscribers_.size() == passiveCount_) {
     if (subgroups_.empty()) {
       if (callback_) {
         callback_->onEmpty(this);
@@ -365,9 +404,12 @@ void MoQForwarder::removeSubscriberIt(
     subscriber.trackConsumer->publishDone(std::move(*pubDone));
   }
 
-  if (subscriber.shouldForward) {
-    if (subscribers_.size() == 1) {
-      // don't trigger a forwardUpdated callback here, we will trigger onEmpty
+  if (subscriber.passive) {
+    passiveCount_--;
+  } else if (subscriber.shouldForward) {
+    if (subscribers_.size() == passiveCount_ + 1) {
+      // Last non-passive subscriber: onEmpty is about to fire, suppress
+      // the intermediate forwardChanged.
       forwardingSubscribers_--;
     } else {
       removeForwardingSubscriber();
@@ -695,6 +737,10 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
 }
 
 void MoQForwarder::Subscriber::updateForwardState(bool newForward) {
+  if (passive) {
+    shouldForward = newForward;
+    return;
+  }
   auto wasForwarding = shouldForward;
   shouldForward = newForward;
   if (shouldForward && !wasForwarding) {
