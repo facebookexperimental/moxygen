@@ -4525,13 +4525,14 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << "sess=" << this;
-  if (draining_) {
-    XLOG(DBG1) << "Rejecting track status request, session draining sess="
-               << this;
+  if (draining_ || closed_) {
+    XLOG(DBG1)
+        << "Rejecting track status request, session draining/closed sess="
+        << this;
     TrackStatusError trackStatusError{
         trackStatus.requestID,
         TrackStatusErrorCode::INTERNAL_ERROR,
-        "Draining session"};
+        "draining/closed session"};
     co_return folly::makeUnexpected(trackStatusError);
   }
   aliasifyAuthTokens(trackStatus.params);
@@ -4669,14 +4670,15 @@ Subscriber::PublishResult MoQSession::publish(
   XLOG(DBG1) << __func__ << " reqID=" << pub.requestID
              << " track=" << pub.fullTrackName.trackName << " sess=" << this;
 
-  // Reject new publish attempts if session is draining
-  if (draining_) {
-    XLOG(DBG1) << "Rejecting publish request, session draining sess=" << this;
+  // Reject new publish attempts if session is draining or closed
+  if (draining_ || closed_) {
+    XLOG(DBG1) << "Rejecting publish request, session draining/closed sess="
+               << this;
     return folly::makeUnexpected(
         PublishError{
             pub.requestID,
             PublishErrorCode::INTERNAL_ERROR,
-            "Session draining"});
+            "draining/closed session"});
   }
 
   if (!handle) {
@@ -4854,11 +4856,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, recordSubscribeLatency, durationMsec.count());
   };
-  if (draining_) {
+  if (draining_ || closed_) {
     SubscribeError subscribeError = {
         std::numeric_limits<uint64_t>::max(),
         SubscribeErrorCode::INTERNAL_ERROR,
-        "Draining session"};
+        "draining/closed session"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
     co_return folly::makeUnexpected(subscribeError);
@@ -5203,11 +5205,11 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   };
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
-  if (draining_) {
+  if (draining_ || closed_) {
     FetchError fetchError = {
         std::numeric_limits<uint64_t>::max(),
         FetchErrorCode::INTERNAL_ERROR,
-        "Draining session"};
+        "draining/closed session"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onFetchError, fetchError.errorCode);
     co_return folly::makeUnexpected(fetchError);
