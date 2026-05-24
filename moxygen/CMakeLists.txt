@@ -112,6 +112,7 @@ moxygen_add_library(moxygen_moq_server_base
   SRCS
     MoQServerBase.cpp
   DEPS
+    moxygen_moq_versions
     Folly::folly_coro_baton
     Folly::folly_logging_logging
   EXPORTED_DEPS

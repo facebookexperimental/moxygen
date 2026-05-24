@@ -652,14 +652,17 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKArrivesOneByteAtATime) {
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
         co_await folly::coro::co_reschedule_on_current_executor;
 
-        serverWt_->writeHandles[2]->setImmediateDelivery(false);
+        serverWt_->writeHandles[serverObjectStreamId()]->setImmediateDelivery(
+            false);
         sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
         for (auto i = 0; i < 3; i++) {
-          serverWt_->writeHandles[2]->deliverInflightData(1);
+          serverWt_->writeHandles[serverObjectStreamId()]->deliverInflightData(
+              1);
           co_await folly::coro::co_reschedule_on_current_executor;
         }
-        serverWt_->writeHandles[2]->setImmediateDelivery(true);
-        serverWt_->writeHandles[2]->deliverInflightData();
+        serverWt_->writeHandles[serverObjectStreamId()]->setImmediateDelivery(
+            true);
+        serverWt_->writeHandles[serverObjectStreamId()]->deliverInflightData();
         co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
       });
 
@@ -719,13 +722,16 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
   EXPECT_TRUE(res.hasError());
   // Verify that the publisher's WebTransport received a stop sending on the
   // object stream
+  auto objectStreamId = serverObjectStreamId();
   auto waits = 0;
-  while (!serverWt_->writeHandles[2]->getWriteErr().has_value() &&
+  while (!serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value() &&
          waits++ < 6) {
     co_await folly::coro::sleep(std::chrono::seconds(1));
   }
-  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().has_value());
-  EXPECT_EQ(serverWt_->writeHandles[2]->writeException()->error, 0);
+  EXPECT_TRUE(
+      serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value());
+  EXPECT_EQ(
+      serverWt_->writeHandles[objectStreamId]->writeException()->error, 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -775,13 +781,16 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
   // Verify that the publisher's WebTransport received a stop sending on the
   // object stream
   co_await streamBaton;
+  auto objectStreamId = serverObjectStreamId();
   auto waits = 0;
-  while (!serverWt_->writeHandles[2]->getWriteErr().has_value() &&
+  while (!serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value() &&
          waits++ < 6) {
     co_await folly::coro::sleep(std::chrono::milliseconds(250));
   }
-  EXPECT_TRUE(serverWt_->writeHandles[2]->getWriteErr().has_value());
-  EXPECT_EQ(serverWt_->writeHandles[2]->writeException()->error, 0);
+  EXPECT_TRUE(
+      serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value());
+  EXPECT_EQ(
+      serverWt_->writeHandles[objectStreamId]->writeException()->error, 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   // This don't get called by session
@@ -968,8 +977,10 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeImmediatelyAfterSubscribeReturns) {
         auto sgp = pub->beginSubgroup(0, 0, 0);
         XCHECK(sgp.hasValue());
         sgp.value()->object(0, moxygen::test::makeBuf(10));
-        serverWt_->writeHandles[2]->setImmediateDelivery(false);
-        serverWt_->writeHandles[2]->deliverInflightData(2); // type and alias
+        serverWt_->writeHandles[serverObjectStreamId()]->setImmediateDelivery(
+            false);
+        serverWt_->writeHandles[serverObjectStreamId()]->deliverInflightData(
+            2); // type and alias
         co_await folly::coro::co_reschedule_on_current_executor;
         co_await folly::coro::co_reschedule_on_current_executor;
         auto result = makeSubscribeOkResult(sub);
@@ -1010,7 +1021,8 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeFromWithinPublishDoneHandler) {
       [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
         trackConsumer = pub;
         auto sgp = pub->beginSubgroup(0, 0, 0).value();
-        serverWt_->writeHandles[2]->setImmediateDelivery(false);
+        serverWt_->writeHandles[serverObjectStreamId()]->setImmediateDelivery(
+            false);
         co_await folly::coro::co_reschedule_on_current_executor;
         trackConsumer->publishDone(getTrackEndedPublishDone(sub.requestID));
         co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});

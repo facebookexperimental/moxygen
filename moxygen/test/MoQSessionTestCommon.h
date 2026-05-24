@@ -229,6 +229,11 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 
   folly::coro::Task<void> rescheduleN(int n);
 
+  // Returns the stream ID of the nth (0-based) object uni stream on the server.
+  // In draft 18, the server uses uni stream 2 for its outgoing control,
+  // so object streams start at 6 instead of 2.
+  uint64_t serverObjectStreamId(uint64_t n = 0) const;
+
   folly::EventBase eventBase_;
   std::shared_ptr<MoQFollyExecutorImpl> MoQExecutor_;
   std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt_;

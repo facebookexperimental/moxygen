@@ -83,6 +83,9 @@ std::optional<std::string> getAlpnFromVersion(
   if (draftNum == 15) {
     return std::string(kAlpnMoqtDraft15Latest);
   }
+  if (draftNum == 18) {
+    return std::string(kAlpnMoqtDraft18Latest);
+  }
   return std::string(kAlpnMoqtDraft16Latest);
 }
 
@@ -125,6 +128,10 @@ std::vector<std::string> getMoqtProtocols(
     }
   }
   return protocols;
+}
+
+bool useUniControlStreams(uint64_t version) {
+  return getDraftMajorVersion(version) >= 18;
 }
 
 std::string getSupportedVersionsString() {

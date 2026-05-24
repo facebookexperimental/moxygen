@@ -7,6 +7,7 @@
 #include <folly/coro/Baton.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQServerBase.h>
+#include <moxygen/MoQVersions.h>
 
 namespace moxygen {
 
@@ -40,6 +41,22 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
   // Keep the server alive through the co_await so the terminateClientSession
   // virtual dispatch is safe even if the caller's shared_ptr has been dropped.
   auto self = shared_from_this();
+
+  // In uni control mode, the server proactively sends SERVER_SETUP
+  auto version = clientSession->getNegotiatedVersion();
+  if (version && useUniControlStreams(*version)) {
+    auto setup = makeServerSetup();
+    if (auto logger = clientSession->getLogger()) {
+      logger->logServerSetup(setup, *version);
+    }
+    auto res = clientSession->sendSetup(std::move(setup));
+    if (res.hasError()) {
+      XLOG(ERR) << "Failed to send proactive SERVER_SETUP sess="
+                << clientSession.get();
+      clientSession->close(SessionCloseErrorCode::INTERNAL_ERROR);
+    }
+  }
+
   // The clientSession will cancel this token when the app calls close() or
   // the underlying transport invokes onSessionEnd
   folly::coro::Baton baton;
@@ -47,6 +64,21 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
       clientSession->getCancelToken(), [&baton] { baton.post(); });
   co_await baton;
   terminateClientSession(std::move(clientSession));
+}
+
+Setup MoQServerBase::makeServerSetup() {
+  static constexpr size_t kDefaultMaxRequestID = 100;
+  static constexpr size_t kMaxAuthTokenCacheSize = 1024;
+  Setup setup;
+  setup.params.insertParam(
+      Parameter{
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+          kDefaultMaxRequestID});
+  setup.params.insertParam(
+      Parameter{
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+          kMaxAuthTokenCacheSize});
+  return setup;
 }
 
 folly::Try<Setup> MoQServerBase::onClientSetup(
@@ -64,19 +96,7 @@ folly::Try<Setup> MoQServerBase::onClientSetup(
     XLOG(DBG1) << "MoQServerBase::ClientSetup: No ALPN, using draft-14";
   }
 
-  // TODO: Make the default MAX_REQUEST_ID configurable and
-  // take in the value from ClientSetup
-  static constexpr size_t kDefaultMaxRequestID = 100;
-  static constexpr size_t kMaxAuthTokenCacheSize = 1024;
-  Setup serverSetup;
-  serverSetup.params.insertParam(
-      Parameter{
-          folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-          kDefaultMaxRequestID});
-  serverSetup.params.insertParam(
-      Parameter{
-          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-          kMaxAuthTokenCacheSize});
+  auto serverSetup = makeServerSetup();
 
   // Log Server Setup
   if (auto logger = session->getLogger()) {

@@ -152,11 +152,13 @@ std::vector<VersionParams> getSupportedVersionParams() {
   // (the client vector will have just one element, and the server version will
   // be that element)
   std::vector<VersionParams> result;
-  result.reserve(kSupportedVersions.size());
+  result.reserve(kSupportedVersions.size() + 1);
   for (auto supportedVersion : kSupportedVersions) {
     result.emplace_back(
         std::vector<uint64_t>{supportedVersion}, supportedVersion);
   }
+  // Draft 18 uses uni-directional control streams and bidi request streams
+  result.emplace_back(std::vector<uint64_t>{kVersionDraft18}, kVersionDraft18);
   return result;
 }
 
@@ -274,6 +276,20 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   serverSession_->setSubscribeHandler(serverSubscriber);
   serverSession_->start();
   clientSession_->setServerMaxTokenCacheSizeGuess(1024);
+
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream
+    moxygen::Setup serverSetupMsg;
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+            initialMaxRequestID_});
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    serverSession_->sendSetup(std::move(serverSetupMsg));
+  }
+
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
 
@@ -313,6 +329,19 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
   serverSession_->setPublishHandler(serverPublisher);
   serverSession_->setSubscribeHandler(serverSubscriber);
   serverSession_->start();
+
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream
+    moxygen::Setup serverSetupMsg;
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID});
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    serverSession_->sendSetup(std::move(serverSetupMsg));
+  }
+
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(maxRequestID));
 
@@ -470,6 +499,14 @@ std::vector<uint64_t> MoQSessionTest::getClientSupportedVersions() {
 
 uint64_t MoQSessionTest::getServerSelectedVersion() {
   return GetParam().serverVersion;
+}
+
+uint64_t MoQSessionTest::serverObjectStreamId(uint64_t n) const {
+  // FakeSharedWebTransport uni stream IDs: 2, 6, 10, 14, ...
+  // In draft 18, ID 2 is the server's outgoing control stream,
+  // so object streams start at 6.
+  uint64_t base = useUniControlStreams(GetParam().serverVersion) ? 6 : 2;
+  return base + n * 4;
 }
 
 uint8_t MoQSessionTest::getRequestIDMultiplier() const {
