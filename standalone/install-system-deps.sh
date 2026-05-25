@@ -76,7 +76,8 @@ install_macos() {
         boost \
         fmt \
         c-ares \
-        gperf
+        gperf \
+        brotli
 }
 
 # Detect OS - check macOS first
