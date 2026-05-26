@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <fizz/protocol/CertificateVerifier.h>
 #include <proxygen/lib/transport/qmux/QmuxSession.h>
 #include <moxygen/MoQClientBase.h>
 
@@ -17,7 +18,10 @@ namespace moxygen {
 // changes to MoQSession itself are required.
 class MoQQmuxClient : public MoQClientBase {
  public:
-  MoQQmuxClient(std::shared_ptr<MoQExecutor> exec, proxygen::URL url);
+  MoQQmuxClient(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
 
   ~MoQQmuxClient() override;
 
