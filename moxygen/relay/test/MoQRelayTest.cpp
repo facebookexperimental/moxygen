@@ -1599,10 +1599,10 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
   // Enable dynamic groups and attach a callback to observe NGR fires
   PublishRequest pub;
   setPublisherDynamicGroups(pub, true);
-  subscriber->forwarder.setExtensions(pub.extensions);
+  subscriber->forwarder->setExtensions(pub.extensions);
 
   auto cb = std::make_shared<TestNGRCallback>();
-  subscriber->forwarder.setCallback(cb);
+  subscriber->forwarder->setCallback(cb);
 
   // Build a PublishOk carrying NEW_GROUP_REQUEST=20
   TrackRequestParameters ngrParams(FrameType::PUBLISH_OK);
@@ -1626,9 +1626,9 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
   cb->calls.clear();
 
   // outstanding=20: re-requesting group 20 is a no-op; group 21 fires
-  subscriber->forwarder.tryProcessNewGroupRequest(makeNGRParams(20));
+  subscriber->forwarder->tryProcessNewGroupRequest(makeNGRParams(20));
   EXPECT_TRUE(cb->calls.empty()) << "Group 20 already outstanding";
-  subscriber->forwarder.tryProcessNewGroupRequest(makeNGRParams(21));
+  subscriber->forwarder->tryProcessNewGroupRequest(makeNGRParams(21));
   ASSERT_EQ(cb->calls.size(), 1u);
   EXPECT_EQ(cb->calls[0], 21u);
 

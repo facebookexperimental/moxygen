@@ -142,9 +142,13 @@ class MoQForwarder : public TrackConsumer {
     // publishing subgroups.  Having this state here makes it easy to remove
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
-    MoQForwarder& forwarder;
+    MoQForwarder* forwarder;
     bool shouldForward;
     bool receivedPublishDone_{false};
+
+    void detach() {
+      forwarder = nullptr;
+    }
 
    private:
     // Updates shouldForward and keeps forwardingSubscribers_ in sync,

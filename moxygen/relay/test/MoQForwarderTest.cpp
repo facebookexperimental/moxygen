@@ -1096,4 +1096,46 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
           std::string(kObjectLength - kInitialLength, 'b'));
 }
 
+// Test: Destroying the forwarder detaches all subscribers; subsequent
+// unsubscribe / requestUpdate calls on the surviving Subscriber handle must
+// not crash.
+TEST_F(MoQForwarderTest, SubscriberDetachedOnForwarderDestruction) {
+  auto session = createMockSession();
+  auto consumer = createMockConsumer();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto subscriber = addSubscriber(*forwarder, session, consumer, RequestID(1));
+  ASSERT_NE(subscriber, nullptr);
+  ASSERT_NE(subscriber->forwarder, nullptr);
+
+  forwarder.reset();
+  EXPECT_EQ(subscriber->forwarder, nullptr);
+
+  // unsubscribe is a no-op after detach.
+  subscriber->unsubscribe();
+
+  // requestUpdate succeeds and updates local range without touching forwarder.
+  // The forward-state update is silently skipped after detach.
+  RequestUpdate upd;
+  upd.requestID = RequestID(1);
+  upd.start = AbsoluteLocation{5, 0};
+  upd.forward = false;
+  auto result =
+      folly::coro::blockingWait(subscriber->requestUpdate(std::move(upd)));
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(subscriber->range.start.group, 5u);
+
+  // onPublishOk is a no-op after detach.
+  PublishOk pubOk{
+      RequestID(1),
+      true,
+      0,
+      GroupOrder::OldestFirst,
+      LocationType::LargestObject,
+      AbsoluteLocation{0, 0},
+      std::nullopt,
+      TrackRequestParameters(FrameType::PUBLISH_OK)};
+  subscriber->onPublishOk(pubOk);
+}
+
 } // namespace moxygen::test
