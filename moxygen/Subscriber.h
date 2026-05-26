@@ -64,7 +64,7 @@ class Subscriber {
               "unimplemented"});
     }
 
-    const PublishNamespaceOk& publishNamespaceOk() const {
+    virtual const PublishNamespaceOk& publishNamespaceOk() const {
       return *publishNamespaceOk_;
     }
 

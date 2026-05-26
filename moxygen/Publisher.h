@@ -50,7 +50,7 @@ class SubscriptionHandle {
   virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
       RequestUpdate reqUpdate) = 0;
 
-  const SubscribeOk& subscribeOk() const {
+  virtual const SubscribeOk& subscribeOk() const {
     return *subscribeOk_;
   }
 
@@ -108,7 +108,7 @@ class Publisher {
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
         RequestUpdate reqUpdate) = 0;
 
-    const FetchOk& fetchOk() const {
+    virtual const FetchOk& fetchOk() const {
       return *fetchOk_;
     }
 
@@ -145,7 +145,7 @@ class Publisher {
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
         RequestUpdate reqUpdate) = 0;
 
-    const SubscribeNamespaceOk& subscribeNamespaceOk() const {
+    virtual const SubscribeNamespaceOk& subscribeNamespaceOk() const {
       return *subscribeNamespaceOk_;
     }
 
@@ -199,7 +199,7 @@ class Publisher {
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
         RequestUpdate reqUpdate) = 0;
 
-    const SubscribeTracksOk& subscribeTracksOk() const {
+    virtual const SubscribeTracksOk& subscribeTracksOk() const {
       return *subscribeTracksOk_;
     }
 
