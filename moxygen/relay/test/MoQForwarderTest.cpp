@@ -18,6 +18,12 @@ using namespace moxygen;
 
 namespace moxygen::test {
 
+namespace {
+struct DummyExecutor : public folly::Executor {
+  void add(folly::Func) override {}
+};
+} // namespace
+
 const TrackNamespace kFwdTestNamespace{{"test", "namespace"}};
 const FullTrackName kFwdTestTrackName{kFwdTestNamespace, "track1"};
 
@@ -1094,6 +1100,279 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
       downstreamPayload,
       std::string(kInitialLength, 'a') +
           std::string(kObjectLength - kInitialLength, 'b'));
+}
+
+namespace {
+struct ForwardChangedTracker : public MoQForwarder::Callback {
+  void onEmpty(MoQForwarder*) override {
+    emptyCalls++;
+  }
+  void forwardChanged(MoQForwarder*) override {
+    forwardChangedCalls++;
+  }
+  int emptyCalls{0};
+  int forwardChangedCalls{0};
+};
+} // namespace
+
+// Test: passive subscriber does not trigger forwardChanged on add or remove.
+TEST_F(MoQForwarderTest, PassiveSubscriberDoesNotTriggerForwardChanged) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto cb = std::make_shared<ForwardChangedTracker>();
+  forwarder->setCallback(cb);
+
+  auto session = createMockSession();
+  auto consumer = createMockConsumer();
+
+  // Adding a passive subscriber does not fire forwardChanged.
+  auto handle = forwarder->addSubscriber(session, /*forward=*/true, consumer, /*passive=*/true);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(cb->forwardChangedCalls, 0);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0u);
+
+  // Removing the passive subscriber does not fire forwardChanged either.
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_EQ(cb->forwardChangedCalls, 0);
+}
+
+// Test: onEmpty fires when only passive subscribers remain (not when empty).
+TEST_F(MoQForwarderTest, OnEmptyFiresWhenOnlyPassiveRemain) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto cb = std::make_shared<ForwardChangedTracker>();
+  forwarder->setCallback(cb);
+
+  auto realSession = createMockSession();
+  auto passiveSession = createMockSession();
+  auto realConsumer = createMockConsumer();
+  auto passiveConsumer = createMockConsumer();
+
+  forwarder->addSubscriber(realSession, /*forward=*/true, realConsumer);
+  forwarder->addSubscriber(passiveSession, /*forward=*/true, passiveConsumer, /*passive=*/true);
+
+  // Removing the real subscriber fires onEmpty (passive still attached).
+  forwarder->removeSubscriber(realSession, std::nullopt, "test");
+  EXPECT_EQ(cb->emptyCalls, 1);
+  // Forwarder is effectively empty (only passive remains) — passiveCount == subscribers.size().
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+}
+
+// Test: mixed real+passive — forwardChanged fires only on real-subscriber transitions.
+TEST_F(MoQForwarderTest, ForwardChangedFiresOnlyOnRealSubscriberTransitions) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto cb = std::make_shared<ForwardChangedTracker>();
+  forwarder->setCallback(cb);
+
+  auto realSession1 = createMockSession();
+  auto realSession2 = createMockSession();
+  auto passiveSession = createMockSession();
+  auto consumer = createMockConsumer();
+
+  // First real subscriber: forwardChanged fires (0→1).
+  forwarder->addSubscriber(realSession1, /*forward=*/true, consumer);
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+
+  // Passive subscriber: no forwardChanged.
+  forwarder->addSubscriber(passiveSession, /*forward=*/true, consumer, /*passive=*/true);
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+
+  // Second real subscriber: no forwardChanged (count stays > 0).
+  forwarder->addSubscriber(realSession2, /*forward=*/true, consumer);
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 2u);
+
+  // Removing one real subscriber: no forwardChanged (still 1 left).
+  forwarder->removeSubscriber(realSession1, std::nullopt, "test");
+  EXPECT_EQ(cb->forwardChangedCalls, 1);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+
+  // Removing the last real subscriber fires onEmpty (passive still present)
+  // but NOT an intermediate forwardChanged.
+  forwarder->removeSubscriber(realSession2, std::nullopt, "test");
+  EXPECT_EQ(cb->forwardChangedCalls, 1); // no additional forwardChanged
+  EXPECT_EQ(cb->emptyCalls, 1);
+}
+
+// Test: addChannelSubscriber delivers subgroup objects to the channel consumer.
+TEST_F(MoQForwarderTest, ChannelSubscriberReceivesSubgroupObjects) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  DummyExecutor exec;
+
+  auto handle = forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(handle->session, nullptr);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+
+  std::shared_ptr<MockSubgroupConsumer> sg;
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+        sg = createMockSubgroupConsumer();
+        EXPECT_CALL(*sg, object(0, _, _, false)).WillOnce(Return(folly::unit));
+        EXPECT_CALL(*sg, endOfSubgroup()).WillOnce(Return(folly::unit));
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  auto sgRes = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto pubSg = *sgRes;
+  EXPECT_TRUE(pubSg->object(0, test::makeBuf(4)).hasValue());
+  EXPECT_TRUE(pubSg->endOfSubgroup().hasValue());
+}
+
+// Test: removeChannelSubscriber(handle) removes the subscriber.
+TEST_F(MoQForwarderTest, RemoveChannelSubscriberByHandle) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  DummyExecutor exec;
+
+  auto handle = forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  forwarder->removeChannelSubscriber(
+      handle,
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          ""});
+
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0u);
+}
+
+// Test: removeChannelSubscriberByExec removes the subscriber by executor key.
+TEST_F(MoQForwarderTest, RemoveChannelSubscriberByExec) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  DummyExecutor exec;
+
+  auto handle = forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer);
+  ASSERT_NE(handle, nullptr);
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+
+  forwarder->removeChannelSubscriberByExec(&exec, std::nullopt);
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: publishDone fans out to both session and channel subscribers.
+TEST_F(MoQForwarderTest, PublishDoneFansOutToMixedSubscribers) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto sessionConsumer = createMockConsumer();
+  auto channelConsumer = createMockConsumer();
+  auto session = createMockSession();
+  DummyExecutor exec;
+
+  addSubscriber(*forwarder, session, sessionConsumer, RequestID(1));
+  forwarder->addChannelSubscriber(&exec, /*forward=*/true, channelConsumer);
+  EXPECT_EQ(forwarder->subscriberCount(), 2u);
+
+  EXPECT_CALL(*sessionConsumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*channelConsumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "done"});
+
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: duplicate addChannelSubscriber with the same exec is a no-op (returns
+// existing entry, forwarding count not double-incremented).
+TEST_F(MoQForwarderTest, DuplicateChannelSubscriberSameExecIsNoOp) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  DummyExecutor exec;
+  auto consumer1 = createMockConsumer();
+  auto consumer2 = createMockConsumer();
+
+  auto handle1 = forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer1);
+  ASSERT_NE(handle1, nullptr);
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+
+  // Same exec — emplace is a no-op, existing handle is returned.
+  auto handle2 = forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer2);
+  ASSERT_NE(handle2, nullptr);
+  EXPECT_EQ(handle1.get(), handle2.get());
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
+}
+
+// Test: channel subscriber drains gracefully when publishDone arrives with
+// open subgroups, then is removed when the last subgroup closes.
+TEST_F(MoQForwarderTest, ChannelSubscriberDrainsWhenSubgroupsOpen) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  DummyExecutor exec;
+
+  std::shared_ptr<MockSubgroupConsumer> sg;
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+        sg = createMockSubgroupConsumer();
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer);
+  auto pubSg = forwarder->beginSubgroup(0, 0, 0).value();
+  ASSERT_TRUE(pubSg->beginObject(0, 10, 0).hasValue());
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*sg, reset(_)).Times(0);
+
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0), PublishDoneStatusCode::SUBSCRIPTION_ENDED, 0, ""});
+
+  // Subscriber draining but still present (open subgroup).
+  EXPECT_EQ(forwarder->subscriberCount(), 1u);
+
+  EXPECT_CALL(*sg, objectPayload(_, true));
+  EXPECT_TRUE(pubSg->objectPayload(test::makeBuf(10), true));
+
+  // Last subgroup closed — subscriber removed.
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: requestUpdate on a channel subscriber (null session) with an invalid
+// range does not crash.
+TEST_F(MoQForwarderTest, ChannelSubscriberRequestUpdateInvalidRangeNoCrash) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  DummyExecutor exec;
+
+  forwarder->setLargest({5, 0});
+  auto handle = forwarder->addChannelSubscriber(&exec, /*forward=*/true, consumer);
+  ASSERT_NE(handle, nullptr);
+
+  // endGroup=1 with range.start={0,0}: valid — should not crash.
+  RequestUpdate validUpdate;
+  validUpdate.requestID = RequestID(1);
+  validUpdate.endGroup = 10;
+  auto res1 = folly::coro::blockingWait(handle->requestUpdate(validUpdate));
+  EXPECT_TRUE(res1.hasValue());
+
+  // Set start ahead of a bounded end to trigger the invalid-range path, which
+  // calls session->close() — that must not crash when session is null.
+  RequestUpdate invalidUpdate;
+  invalidUpdate.requestID = RequestID(2);
+  invalidUpdate.start = AbsoluteLocation{20, 0}; // applied first, moves range.start
+  invalidUpdate.endGroup = 3; // endGroup=3 > 0, newEnd={3,0} < range.start={20,0}
+  auto res2 = folly::coro::blockingWait(handle->requestUpdate(invalidUpdate));
+  EXPECT_FALSE(res2.hasValue());
 }
 
 } // namespace moxygen::test

@@ -9,6 +9,7 @@
 #include "moxygen/MoQLocation.h"
 #include "moxygen/MoQSession.h"
 
+#include <folly/Executor.h>
 #include <folly/container/F14Set.h>
 #include <folly/hash/Hash.h>
 
@@ -135,6 +136,9 @@ class MoQForwarder : public TrackConsumer {
     }
 
     std::shared_ptr<MoQSession> session;
+    // Key used in MoQForwarder::subscribers_: session.get() for session
+    // subscribers, executor pointer for channel subscribers.
+    const void* mapKey{nullptr};
     RequestID requestID;
     SubscribeRange range;
     std::shared_ptr<TrackConsumer> trackConsumer;
@@ -143,7 +147,13 @@ class MoQForwarder : public TrackConsumer {
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
     MoQForwarder& forwarder;
+    bool isPinned() const {
+      return pinned;
+    }
+
     bool shouldForward;
+    bool passive{false};
+    bool pinned{false};
     bool receivedPublishDone_{false};
 
    private:
@@ -155,6 +165,11 @@ class MoQForwarder : public TrackConsumer {
 
   [[nodiscard]] bool empty() const {
     return subscribers_.empty();
+  }
+
+  std::shared_ptr<Subscriber> getSubscriber(MoQSession* session) const {
+    auto it = subscribers_.find(static_cast<const void*>(session));
+    return it != subscribers_.end() ? it->second : nullptr;
   }
 
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
@@ -172,6 +187,37 @@ class MoQForwarder : public TrackConsumer {
     return addSubscriber(std::move(session), pub.forward);
   }
 
+  // Add a subscriber with an explicit consumer and optional passive flag.
+  // Passive subscribers receive objects but do not count toward
+  // forwardingSubscribers_, so they do not affect the forwardChanged callback
+  // or onEmpty firing.  Use passive=true for internal consumers (e.g. cache)
+  // that should not influence the relay's upstream subscription lifecycle.
+  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
+      std::shared_ptr<MoQSession> session,
+      bool forward,
+      std::shared_ptr<TrackConsumer> consumer,
+      bool passive = false);
+
+  // Add a channel subscriber: a cross-exec filter routing to a per-thread
+  // local forwarder.  `exec` is the subscriber iothread's executor — used as
+  // the unique map key so only one cross-exec filter per executor is added.
+  // Returns the Subscriber handle; call removeChannelSubscriber(handle) when
+  // the local forwarder drains.
+  std::shared_ptr<MoQForwarder::Subscriber> addChannelSubscriber(
+      folly::Executor* exec,
+      bool forward,
+      std::shared_ptr<TrackConsumer> consumer);
+
+  // Remove a channel subscriber added via addChannelSubscriber().
+  void removeChannelSubscriber(
+      const std::shared_ptr<MoQForwarder::Subscriber>& handle,
+      std::optional<PublishDone> pubDone = std::nullopt);
+
+  // Remove a channel subscriber by its executor key (avoids needing the handle).
+  void removeChannelSubscriberByExec(
+      folly::Executor* exec,
+      std::optional<PublishDone> pubDone = std::nullopt);
+
   folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
       const std::shared_ptr<MoQSession>& session,
       const JoiningFetch& joining) const;
@@ -180,6 +226,13 @@ class MoQForwarder : public TrackConsumer {
   // open subgroups. Calls removeSubscriber() if no subgroups are open.
   void drainSubscriber(
       const std::shared_ptr<MoQSession>& session,
+      PublishDone pubDone,
+      const std::string& callsite);
+
+  // Same as drainSubscriber but looks up by mapKey rather than session pointer.
+  // Use this for channel subscribers (keyed by executor, session is null).
+  void drainSubscriberByKey(
+      const void* mapKey,
       PublishDone pubDone,
       const std::string& callsite);
 
@@ -310,6 +363,18 @@ class MoQForwarder : public TrackConsumer {
     return forwardingSubscribers_;
   }
 
+  size_t subscriberCount() const {
+    return subscribers_.size();
+  }
+
+  uint64_t totalGroupsReceived() const {
+    return totalGroupsReceived_;
+  }
+
+  uint64_t totalObjectsReceived() const {
+    return totalObjectsReceived_;
+  }
+
  private:
   static Payload maybeClone(const Payload& payload);
 
@@ -319,8 +384,15 @@ class MoQForwarder : public TrackConsumer {
 
   // Helper that removes a subscriber given an iterator (avoids lookup)
   void removeSubscriberIt(
-      folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>>::iterator
+      folly::F14FastMap<const void*, std::shared_ptr<Subscriber>>::iterator
           subIt,
+      std::optional<PublishDone> pubDone,
+      const std::string& callsite);
+
+  // Helper that looks up by mapKey and removes (used internally where a
+  // Subscriber reference is available but no session pointer)
+  void removeSubscriberByKey(
+      const void* key,
       std::optional<PublishDone> pubDone,
       const std::string& callsite);
 
@@ -336,7 +408,9 @@ class MoQForwarder : public TrackConsumer {
 
   FullTrackName fullTrackName_;
   std::optional<TrackAlias> trackAlias_;
-  folly::F14FastMap<MoQSession*, std::shared_ptr<Subscriber>> subscribers_;
+  // Keyed by const void*: session.get() for session subscribers,
+  // executor pointer for channel subscribers (cross-exec filters).
+  folly::F14FastMap<const void*, std::shared_ptr<Subscriber>> subscribers_;
   folly::F14FastMap<
       SubgroupIdentifier,
       std::shared_ptr<SubgroupForwarder>,
@@ -349,7 +423,20 @@ class MoQForwarder : public TrackConsumer {
   // the upstream Largest Group advances (indicating the request was fulfilled).
   std::optional<uint64_t> outstandingNewGroupRequest_{};
   std::shared_ptr<Callback> callback_;
+  // Increments totalObjectsReceived_ and, when the group changes,
+  // totalGroupsReceived_.  Call once per incoming object regardless of delivery
+  // mode (subgroup stream, objectStream, datagram).
+  void countReceivedObject(uint64_t groupID);
+
   uint64_t forwardingSubscribers_{0};
+  uint32_t passiveCount_{0};
+  uint64_t totalGroupsReceived_{0};
+  uint64_t totalObjectsReceived_{0};
+  // NOTE: counts distinct group transitions, not distinct group IDs.
+  // If subgroups for a group arrive interleaved with another group (e.g. under
+  // NewestFirst delivery or due to retransmission), a group may be counted more
+  // than once.  This is a best-effort counter for diagnostics only.
+  uint64_t lastGroupSeen_{std::numeric_limits<uint64_t>::max()};
   bool draining_{false};
 };
 
