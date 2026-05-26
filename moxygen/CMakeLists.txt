@@ -148,6 +148,16 @@ moxygen_add_library(moxygen_moq_early_data_handler
     Folly::folly_logging_logging
 )
 
+moxygen_add_library(moxygen_qmux_utils
+  SRCS
+    QmuxUtils.cpp
+  DEPS
+    mvfst::mvfst_constants
+  EXPORTED_DEPS
+    proxygen::proxygen_transport_qmux_qmux_framer
+    mvfst::mvfst_state_transport_settings
+)
+
 moxygen_add_library(moxygen_moqclient_base
   SRCS
     MoQClientBase.cpp
