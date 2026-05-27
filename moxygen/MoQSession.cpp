@@ -2319,10 +2319,17 @@ void MoQSession::goaway(Goaway goaway) {
       close(SessionCloseErrorCode::NO_ERROR);
       return;
     }
+    if (getDraftMajorVersion(*moqFrameWriter_.getVersion()) >= 18) {
+      goaway.requestID = RequestID(nextExpectedPeerRequestID_);
+    }
     if (logger_) {
       logger_->logGoaway(goaway);
     }
-    moqFrameWriter_.writeGoaway(controlWriteBuf_, goaway);
+    auto res = moqFrameWriter_.writeGoaway(controlWriteBuf_, goaway);
+    if (!res) {
+      XLOG(ERR) << "writeGoaway failed sess=" << this;
+      return;
+    }
     controlWriteEvent_.signal();
     drain();
   }

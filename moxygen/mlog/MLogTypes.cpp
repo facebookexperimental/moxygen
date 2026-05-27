@@ -664,6 +664,10 @@ folly::dynamic MOQTGoaway::toDynamic() const {
   } else {
     obj["new_session_uri"] = "";
   }
+  obj["timeout"] = timeout;
+  if (requestId.has_value()) {
+    obj["request_id"] = *requestId;
+  }
 
   return obj;
 }

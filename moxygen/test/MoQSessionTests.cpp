@@ -235,7 +235,13 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
   clientSession_->goaway(goaway);
   folly::coro::Baton goawayBaton;
   EXPECT_CALL(*serverPublisher, goaway(_))
-      .WillOnce(testing::Invoke([&goawayBaton](auto /* goaway */) -> void {
+      .WillOnce(testing::Invoke([&](auto receivedGoaway) -> void {
+        if (getDraftMajorVersion(getServerSelectedVersion()) >= 18) {
+          ASSERT_TRUE(receivedGoaway.requestID.has_value());
+          EXPECT_EQ(*receivedGoaway.requestID, RequestID(1));
+        } else {
+          EXPECT_FALSE(receivedGoaway.requestID.has_value());
+        }
         goawayBaton.post();
         return;
       }));

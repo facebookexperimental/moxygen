@@ -214,6 +214,8 @@ class MOQTGoaway : public MOQTBaseControlMessage {
   folly::dynamic toDynamic() const override;
   std::optional<uint64_t> length;
   std::unique_ptr<folly::IOBuf> newSessionUri;
+  uint64_t timeout{0};
+  std::optional<uint64_t> requestId;
 };
 
 struct MOQTLocation {

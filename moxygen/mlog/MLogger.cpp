@@ -229,6 +229,10 @@ void MLogger::logGoaway(const Goaway& goaway, ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTGoaway>();
   baseMsg->length = length;
   baseMsg->newSessionUri = folly::IOBuf::copyBuffer(goaway.newSessionUri);
+  baseMsg->timeout = goaway.timeout;
+  if (goaway.requestID.has_value()) {
+    baseMsg->requestId = goaway.requestID->value;
+  }
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
