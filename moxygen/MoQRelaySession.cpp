@@ -478,6 +478,12 @@ MoQRelaySession::publishNamespace(
         durationMsec.count());
   };
   const auto& trackNamespace = ann.trackNamespace;
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    co_return folly::makeUnexpected(PublishNamespaceError(
+        {peekNextRequestID(),
+         PublishNamespaceErrorCode::GOING_AWAY,
+         "Session received GOAWAY"}));
+  }
   aliasifyAuthTokens(ann.params);
   ann.requestID = getNextRequestID();
   auto res = moqFrameWriter_.writePublishNamespace(controlWriteBuf_, ann);
@@ -732,6 +738,17 @@ void MoQRelaySession::onPublishNamespaceImpl(
   if (closeSessionIfRequestIDInvalid(ann.requestID, false, true)) {
     return;
   }
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting publishNamespace request, GOAWAY/draining sess="
+               << this;
+    publishNamespaceError(
+        PublishNamespaceError{
+            ann.requestID,
+            PublishNamespaceErrorCode::GOING_AWAY,
+            "Session going away"},
+        *replyContext);
+    return;
+  }
 
   if (!subscribeHandler_) {
     XLOG(DBG1) << __func__ << "No subscriber callback set";
@@ -924,6 +941,12 @@ MoQRelaySession::subscribeNamespace(
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   const auto& trackNamespace = sa.trackNamespacePrefix;
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    co_return folly::makeUnexpected(SubscribeNamespaceError(
+        {peekNextRequestID(),
+         SubscribeNamespaceErrorCode::GOING_AWAY,
+         "Session received GOAWAY"}));
+  }
   aliasifyAuthTokens(sa.params);
   sa.requestID = getNextRequestID();
 
@@ -1017,6 +1040,17 @@ void MoQRelaySession::onSubscribeNamespaceImpl(
         sa, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
   }
   if (closeSessionIfRequestIDInvalid(sa.requestID, false, true)) {
+    return;
+  }
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting subscribeNamespace request, GOAWAY/draining sess="
+               << this;
+    subscribeNamespaceError(
+        SubscribeNamespaceError{
+            sa.requestID,
+            SubscribeNamespaceErrorCode::GOING_AWAY,
+            "Session going away"},
+        std::move(subNsReply));
     return;
   }
   if (!publishHandler_) {

@@ -219,6 +219,323 @@ CO_TEST_P_X(MoQAuthorityPathTest, PathInClientSetupConflictsWithPreSetPath) {
   EXPECT_TRUE(result.hasException() || serverWt_->isSessionClosed());
 }
 
+class Draft18GoawayRequestRejectionTest : public MoQSessionTest {
+ protected:
+  std::shared_ptr<testing::NiceMock<MockTrackConsumer>>
+  makeKeepAliveConsumer() {
+    auto keepAliveConsumer =
+        std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+    ON_CALL(*keepAliveConsumer, setTrackAlias(_))
+        .WillByDefault(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    ON_CALL(*keepAliveConsumer, publishDone(_))
+        .WillByDefault(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    return keepAliveConsumer;
+  }
+
+  folly::coro::Task<std::shared_ptr<Publisher::SubscriptionHandle>>
+  openServerSubscriptionToKeepDrainOpen(
+      std::shared_ptr<TrackConsumer> keepAliveConsumer) {
+    expectSubscribe(
+        [](SubscribeRequest sub, auto /* pub */) -> TaskSubscribeResult {
+          co_return makeSubscribeOkResult(sub);
+        },
+        MoQControlCodec::Direction::CLIENT);
+    auto keepAlive = co_await serverSession_->subscribe(
+        getSubscribe(kTestTrackName), keepAliveConsumer);
+    EXPECT_FALSE(keepAlive.hasError());
+    if (keepAlive.hasError()) {
+      co_return nullptr;
+    }
+    co_return keepAlive.value();
+  }
+
+  void expectNoServerPeerRequests() {
+    EXPECT_CALL(*serverPublisher, subscribe(_, _)).Times(0);
+    EXPECT_CALL(*serverPublisher, fetch(_, _)).Times(0);
+    EXPECT_CALL(*serverPublisher, trackStatus(_)).Times(0);
+    EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _)).Times(0);
+    EXPECT_CALL(*serverSubscriber, publish(_, _)).Times(0);
+    EXPECT_CALL(*serverSubscriber, publishNamespace(_, _)).Times(0);
+  }
+
+  template <typename StartRequest>
+  folly::coro::Task<void> expectInboundRequestRejectedAfterGoaway(
+      const char* /* requestName */,
+      StartRequest startRequest) {
+    co_await setupMoQSession();
+
+    auto keepAliveConsumer = makeKeepAliveConsumer();
+    auto keepAlive =
+        co_await openServerSubscriptionToKeepDrainOpen(keepAliveConsumer);
+    if (!keepAlive) {
+      co_return;
+    }
+
+    auto serverControl = serverWt_->writeHandles[2];
+    CHECK(serverControl != nullptr);
+    serverControl->setImmediateDelivery(false);
+    serverSession_->goaway(Goaway{});
+    co_await rescheduleN(2);
+
+    std::optional<RequestErrorCode> errorCode;
+    folly::coro::Baton done;
+    folly::coro::co_withExecutor(
+        MoQExecutor_.get(),
+        folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+          errorCode = co_await startRequest();
+          done.post();
+        }))
+        .start();
+
+    co_await rescheduleN(4);
+    serverControl->deliverInflightData();
+    co_await rescheduleN(4);
+    serverControl->deliverInflightData();
+    co_await done;
+
+    EXPECT_TRUE(errorCode.has_value());
+    if (!errorCode.has_value()) {
+      co_return;
+    }
+    EXPECT_EQ(*errorCode, RequestErrorCode::GOING_AWAY);
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  }
+
+  template <typename StartRequest>
+  folly::coro::Task<void> expectLocalRequestRejectedAfterGoaway(
+      const char* requestName,
+      StartRequest startRequest) {
+    co_await setupMoQSession();
+
+    auto keepAliveConsumer = makeKeepAliveConsumer();
+    auto keepAlive =
+        co_await openServerSubscriptionToKeepDrainOpen(keepAliveConsumer);
+    if (!keepAlive) {
+      co_return;
+    }
+
+    folly::coro::Baton goawayReceived;
+    EXPECT_CALL(*clientPublisher, goaway(_))
+        .WillOnce(testing::Invoke([&goawayReceived](Goaway /* goaway */) {
+          goawayReceived.post();
+        }));
+    serverSession_->goaway(Goaway{});
+    co_await goawayReceived;
+
+    expectNoServerPeerRequests();
+    auto errorCode = co_await startRequest();
+    co_await rescheduleN(4);
+
+    EXPECT_EQ(errorCode, RequestErrorCode::GOING_AWAY);
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft18GoawayRequestRejectionTest,
+    Draft18GoawayRequestRejectionTest,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    SentGoawayRejectsInboundSubscribe) {
+  co_await expectInboundRequestRejectedAfterGoaway(
+      "SUBSCRIBE", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->subscribe(
+            getSubscribe(kTestTrackName), subscribeCallback_);
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(Draft18GoawayRequestRejectionTest, SentGoawayRejectsInboundFetch) {
+  co_await expectInboundRequestRejectedAfterGoaway(
+      "FETCH", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->fetch(
+            getFetch({0, 0}, {0, 1}), fetchCallback_);
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    SentGoawayRejectsInboundPublish) {
+  co_await expectInboundRequestRejectedAfterGoaway(
+      "PUBLISH", [this]() -> folly::coro::Task<RequestErrorCode> {
+        PublishRequest pub{
+            RequestID(0),
+            FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+            TrackAlias(100),
+            GroupOrder::Default,
+            AbsoluteLocation{0, 100},
+            true,
+        };
+        auto result =
+            clientSession_->publish(std::move(pub), makePublishHandle());
+        if (result.hasError()) {
+          co_return result.error().errorCode;
+        }
+        auto reply = co_await std::move(result.value().reply);
+        EXPECT_TRUE(reply.hasError());
+        if (!reply.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return reply.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    SentGoawayRejectsInboundTrackStatus) {
+  co_await expectInboundRequestRejectedAfterGoaway(
+      "TRACK_STATUS", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->trackStatus(getTrackStatus());
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    SentGoawayRejectsInboundPublishNamespace) {
+  co_await expectInboundRequestRejectedAfterGoaway(
+      "PUBLISH_NAMESPACE", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result =
+            co_await clientSession_->publishNamespace(getPublishNamespace());
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    SentGoawayRejectsInboundSubscribeNamespace) {
+  co_await expectInboundRequestRejectedAfterGoaway(
+      "SUBSCRIBE_NAMESPACE", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->subscribeNamespace(
+            getSubscribeNamespace(), nullptr);
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    ReceivedGoawayRejectsLocalSubscribe) {
+  co_await expectLocalRequestRejectedAfterGoaway(
+      "SUBSCRIBE", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->subscribe(
+            getSubscribe(kTestTrackName), subscribeCallback_);
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    ReceivedGoawayRejectsLocalFetch) {
+  co_await expectLocalRequestRejectedAfterGoaway(
+      "FETCH", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->fetch(
+            getFetch({0, 0}, {0, 1}), fetchCallback_);
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    ReceivedGoawayRejectsLocalPublish) {
+  co_await expectLocalRequestRejectedAfterGoaway(
+      "PUBLISH", [this]() -> folly::coro::Task<RequestErrorCode> {
+        PublishRequest pub{
+            RequestID(0),
+            FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+            TrackAlias(100),
+            GroupOrder::Default,
+            AbsoluteLocation{0, 100},
+            true,
+        };
+        auto result =
+            clientSession_->publish(std::move(pub), makePublishHandle());
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    ReceivedGoawayRejectsLocalTrackStatus) {
+  co_await expectLocalRequestRejectedAfterGoaway(
+      "TRACK_STATUS", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->trackStatus(getTrackStatus());
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    ReceivedGoawayRejectsLocalPublishNamespace) {
+  co_await expectLocalRequestRejectedAfterGoaway(
+      "PUBLISH_NAMESPACE", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result =
+            co_await clientSession_->publishNamespace(getPublishNamespace());
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
+CO_TEST_P_X(
+    Draft18GoawayRequestRejectionTest,
+    ReceivedGoawayRejectsLocalSubscribeNamespace) {
+  co_await expectLocalRequestRejectedAfterGoaway(
+      "SUBSCRIBE_NAMESPACE", [this]() -> folly::coro::Task<RequestErrorCode> {
+        auto result = co_await clientSession_->subscribeNamespace(
+            getSubscribeNamespace(), nullptr);
+        EXPECT_TRUE(result.hasError());
+        if (!result.hasError()) {
+          co_return RequestErrorCode::INTERNAL_ERROR;
+        }
+        co_return result.error().errorCode;
+      });
+}
+
 CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
