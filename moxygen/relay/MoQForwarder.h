@@ -151,6 +151,9 @@ class MoQForwarder : public TrackConsumer {
     bool passive{false};
     bool pinned{false};
     bool receivedPublishDone_{false};
+    bool isPinned() const {
+      return pinned;
+    }
 
     void detach() {
       forwarder = nullptr;

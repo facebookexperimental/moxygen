@@ -18,12 +18,6 @@ using namespace moxygen;
 
 namespace moxygen::test {
 
-namespace {
-struct DummyExecutor : public folly::Executor {
-  void add(folly::Func) override {}
-};
-} // namespace
-
 const TrackNamespace kFwdTestNamespace{{"test", "namespace"}};
 const FullTrackName kFwdTestTrackName{kFwdTestNamespace, "track1"};
 
