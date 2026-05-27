@@ -12,7 +12,9 @@
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <proxygen/lib/utils/URL.h>
 #include <quic/client/QuicClientTransport.h>
+#include <quic/fizz/client/handshake/QuicPskCache.h>
 #include <quic/state/TransportSettings.h>
+#include <moxygen/MoQEarlyDataHandler.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/mlog/MLogger.h>
 #include <functional>
@@ -80,7 +82,28 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       const quic::TransportSettings& transportSettings,
       const std::vector<std::string>& alpns = {});
 
+  // Phase 1: Connect QUIC, create session, send CLIENT_SETUP.
+  // After this, moqSession_ is available for sending early requests.
+  folly::coro::Task<void> connectAndSendSetup(
+      std::chrono::milliseconds connect_timeout,
+      std::chrono::milliseconds transaction_timeout,
+      std::shared_ptr<Publisher> publishHandler,
+      std::shared_ptr<Subscriber> subscribeHandler,
+      const quic::TransportSettings& transportSettings,
+      const std::vector<std::string>& alpns = {});
+
+  // Phase 2: Await SERVER_SETUP, update earlyDataHandler params.
+  folly::coro::Task<Setup> awaitSetupComplete();
+
   void setLogger(const std::shared_ptr<MLogger>& logger);
+
+  void setPskCache(std::shared_ptr<quic::QuicPskCache> pskCache) {
+    pskCache_ = std::move(pskCache);
+  }
+
+  void setEarlyDataHandler(MoQEarlyDataHandler* handler) {
+    earlyDataHandler_ = handler;
+  }
 
   void goaway(const Goaway& goaway);
   std::shared_ptr<MLogger> logger_ = nullptr;
@@ -99,7 +122,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
 
   static SessionFactory defaultSessionFactory();
 
-  folly::coro::Task<Setup> completeSetupMoQSession(
+  void completeSetupMoQSession(
       proxygen::WebTransport* wt,
       const std::optional<std::string>& pathParam,
       std::shared_ptr<Publisher> publishHandler,
@@ -120,6 +143,10 @@ class MoQClientBase : public proxygen::WebTransportHandler {
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
   std::optional<std::string> negotiatedProtocol_;
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
+  std::shared_ptr<quic::QuicPskCache> pskCache_;
+  MoQEarlyDataHandler* earlyDataHandler_{nullptr};
+  // Non-owning; owned by quicWebTransport_. Used only for post-setup logging.
+  quic::QuicClientTransport* quicSocket_{nullptr};
   std::chrono::milliseconds transportConnectTime_{0};
   std::chrono::milliseconds moqHandshakeTime_{0};
 };

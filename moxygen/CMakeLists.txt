@@ -167,10 +167,12 @@ moxygen_add_library(moxygen_moqclient_base
   EXPORTED_DEPS
     moxygen_mlog_mlogger
     moxygen_moq
+    moxygen_moq_early_data_handler
     proxygen::proxygen_http_webtransport
     proxygen::proxygen_http_webtransport_quicwebtransport
     proxygen::proxygen_utils_parse_url
     mvfst::mvfst_client
+    mvfst::mvfst_fizz_client_handshake_psk_cache
     mvfst::mvfst_state_transport_settings
     fizz::fizz
     Folly::folly_coro_promise
