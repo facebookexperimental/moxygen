@@ -14,7 +14,9 @@
 
 namespace quic {
 class QuicClientTransport;
-}
+class QuicPskCache;
+class EarlyDataAppParamsHandler;
+} // namespace quic
 
 namespace moxygen {
 
@@ -27,7 +29,10 @@ class QuicConnector {
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
       const std::vector<std::string>& alpns,
-      const quic::TransportSettings& transportSettings);
+      const quic::TransportSettings& transportSettings,
+      std::shared_ptr<quic::QuicPskCache> pskCache = nullptr,
+      const std::string& hostname = "",
+      quic::EarlyDataAppParamsHandler* earlyDataHandler = nullptr);
 };
 
 } // namespace moxygen

@@ -9,10 +9,13 @@
 #include <folly/coro/Promise.h>
 #include <folly/coro/Timeout.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
+#include <folly/logging/xlog.h>
 #include <quic/client/QuicClientTransport.h>
 #include <quic/common/events/FollyQuicEventBase.h>
 #include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
+#include <quic/fizz/client/handshake/QuicPskCache.h>
+#include <quic/state/EarlyDataAppParamsHandler.h>
 
 namespace {
 
@@ -81,7 +84,10 @@ QuicConnector::connectQuic(
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
     const std::vector<std::string>& alpns,
-    const quic::TransportSettings& transportSettings) {
+    const quic::TransportSettings& transportSettings,
+    std::shared_ptr<quic::QuicPskCache> pskCache,
+    const std::string& hostname,
+    quic::EarlyDataAppParamsHandler* earlyDataHandler) {
   auto qEvb = std::make_shared<quic::FollyQuicEventBase>(eventBase);
   auto sock = std::make_unique<quic::FollyQuicAsyncUDPSocket>(qEvb);
   // Set UDP socket buffer sizes to 1 MB
@@ -90,24 +96,41 @@ QuicConnector::connectQuic(
   sock->setSndBuf(kUdpBufferSize);
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns(alpns);
+  if (earlyDataHandler) {
+    fizzContext->setSendEarlyData(true);
+  }
+  auto handshakeCtxBuilder = quic::FizzClientQuicHandshakeContext::Builder()
+                                 .setFizzClientContext(fizzContext)
+                                 .setCertificateVerifier(std::move(verifier));
+  if (pskCache) {
+    handshakeCtxBuilder =
+        std::move(handshakeCtxBuilder).setPskCache(std::move(pskCache));
+  }
   auto quicClient = quic::QuicClientTransport::newClient(
       std::move(qEvb),
       std::move(sock),
-      quic::FizzClientQuicHandshakeContext::Builder()
-          .setFizzClientContext(fizzContext)
-          .setCertificateVerifier(std::move(verifier))
-          .build(),
+      std::move(handshakeCtxBuilder).build(),
       /*connectionIdSize=*/0);
   // Make a copy of transportSettings and enable datagram support
   auto ts = transportSettings;
   ts.maxServerRecvPacketsPerLoop = 10;
   ts.datagramConfig.enabled = true;
+  if (earlyDataHandler) {
+    ts.attemptEarlyData = true;
+    XLOG(DBG4) << "QuicConnector: 0-RTT enabled, hostname=" << hostname;
+  }
 
   quicClient->setCongestionControllerFactory(
       std::make_shared<quic::DefaultCongestionControllerFactory>());
   quicClient->setTransportSettings(ts);
   quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
+  if (!hostname.empty()) {
+    quicClient->setHostname(hostname);
+  }
+  if (earlyDataHandler) {
+    quicClient->setEarlyDataAppParamsHandler(earlyDataHandler);
+  }
   folly::CancellationToken cancellationToken =
       co_await folly::coro::co_current_cancellation_token;
   QuicConnectCB cb(quicClient, std::move(cancellationToken));
