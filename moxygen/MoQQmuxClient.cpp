@@ -121,6 +121,11 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
   if (fizzCb.exception) {
     co_yield folly::coro::co_error(std::move(fizzCb.exception));
   }
+
+  if (auto stdAlpn = fizzClient->getApplicationProtocol(); !stdAlpn.empty()) {
+    negotiatedProtocol_ = std::move(stdAlpn);
+  }
+
   auto transport = std::make_unique<folly::coro::Transport>(
       evb, folly::AsyncTransport::UniquePtr(std::move(fizzClient)));
 
