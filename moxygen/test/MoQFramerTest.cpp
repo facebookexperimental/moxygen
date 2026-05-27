@@ -347,6 +347,90 @@ TEST_P(MoQFramerTest, SerializeAndParseAll) {
   parseAll(cursor, true);
 }
 
+TEST(MoQFramerGoawayTest, Draft17RemainsUriOnly) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft17);
+  Goaway goaway;
+  goaway.newSessionUri = "/new-session";
+  goaway.timeout = 1500;
+  goaway.requestID = RequestID(6);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeGoaway(writeBuf, goaway).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::GOAWAY));
+  auto bodyLen = cursor.readBE<uint16_t>();
+  EXPECT_EQ(bodyLen, goaway.newSessionUri.size() + 1);
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft17);
+  auto parsed = parser.parseGoaway(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->newSessionUri, goaway.newSessionUri);
+  EXPECT_EQ(parsed->timeout, 0);
+  EXPECT_FALSE(parsed->requestID.has_value());
+}
+
+TEST(MoQFramerGoawayTest, Draft18RoundtripIncludesTimeoutAndRequestID) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  Goaway goaway;
+  goaway.newSessionUri = "/new-session";
+  goaway.timeout = 1500;
+  goaway.requestID = RequestID(6);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeGoaway(writeBuf, goaway).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::GOAWAY));
+  auto bodyLen = cursor.readBE<uint16_t>();
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  auto parsed = parser.parseGoaway(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->newSessionUri, goaway.newSessionUri);
+  EXPECT_EQ(parsed->timeout, goaway.timeout);
+  ASSERT_TRUE(parsed->requestID.has_value());
+  EXPECT_EQ(*parsed->requestID, *goaway.requestID);
+}
+
+TEST(MoQFramerGoawayTest, Draft18RequiresTimeoutAndRequestID) {
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+
+  folly::IOBufQueue uriOnly{folly::IOBufQueue::cacheChainLength()};
+  const std::string uri = "/new-session";
+  writeVarintTo(uriOnly, uri.size());
+  uriOnly.append(uri);
+  const auto uriOnlyLen = uriOnly.chainLength();
+  auto uriOnlySerialized = uriOnly.move();
+  folly::io::Cursor uriOnlyCursor(uriOnlySerialized.get());
+  auto uriOnlyParsed = parser.parseGoaway(uriOnlyCursor, uriOnlyLen);
+  ASSERT_TRUE(uriOnlyParsed.hasError());
+  EXPECT_EQ(uriOnlyParsed.error(), ErrorCode::PARSE_UNDERFLOW);
+
+  folly::IOBufQueue missingRequestID{folly::IOBufQueue::cacheChainLength()};
+  writeVarintTo(missingRequestID, uri.size());
+  missingRequestID.append(uri);
+  writeVarintTo(missingRequestID, 1500);
+  const auto missingRequestIDLen = missingRequestID.chainLength();
+  auto missingRequestIDSerialized = missingRequestID.move();
+  folly::io::Cursor missingRequestIDCursor(missingRequestIDSerialized.get());
+  auto missingRequestIDParsed =
+      parser.parseGoaway(missingRequestIDCursor, missingRequestIDLen);
+  ASSERT_TRUE(missingRequestIDParsed.hasError());
+  EXPECT_EQ(missingRequestIDParsed.error(), ErrorCode::PARSE_UNDERFLOW);
+}
+
 TEST_P(MoQFramerTest, ParseObjectHeader) {
   // Test OBJECT_DATAGRAM with ObjectStatus::END_OF_GROUP
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};

@@ -14,15 +14,13 @@
 
 namespace moxygen {
 
-folly::coro::Task<void> MoQClientBase::setupMoQSession(
+folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler,
     const quic::TransportSettings& transportSettings,
     const std::vector<std::string>& alpns) {
-  proxygen::WebTransport* wt = nullptr;
-
   std::vector<std::string> alpn =
       alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
   XLOG(DBG1) << "MoQClientBase: QUIC ALPNs: " << folly::join(", ", alpn);
@@ -60,18 +58,24 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   }
 
   // Make WebTransport object
+  quicSocket_ = quicClient.get();
   quicWebTransport_ =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicClient));
   quicWebTransport_->setHandler(this);
-  wt = quicWebTransport_.get();
+  auto* wt = quicWebTransport_.get();
 
-  auto moqHandshakeStart = std::chrono::steady_clock::now();
-
-  auto result = co_await folly::coro::co_awaitTry(completeSetupMoQSession(
+  completeSetupMoQSession(
       wt,
       url_.getPath(),
       std::move(publishHandler),
-      std::move(subscribeHandler)));
+      std::move(subscribeHandler));
+}
+
+folly::coro::Task<Setup> MoQClientBase::awaitSetupComplete() {
+  auto moqHandshakeStart = std::chrono::steady_clock::now();
+
+  auto result =
+      co_await folly::coro::co_awaitTry(moqSession_->awaitPeerSetup());
 
   moqHandshakeTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - moqHandshakeStart);
@@ -79,9 +83,51 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
   if (result.hasException()) {
     co_yield folly::coro::co_error(result.exception());
   }
+
+  if (quicSocket_) {
+    auto transportInfo = quicSocket_->getTransportInfo();
+    XLOG(DBG1) << "MoQ setup complete, usedZeroRtt="
+               << transportInfo.usedZeroRtt;
+  }
+
+  // Update early data handler with server's params for future 0-RTT
+  if (earlyDataHandler_ && result.hasValue()) {
+    uint64_t serverMaxRequestID = 0;
+    uint64_t serverMaxAuthTokenCacheSize = 0;
+    for (const auto& param : result->params) {
+      if (param.key == folly::to_underlying(SetupKey::MAX_REQUEST_ID)) {
+        serverMaxRequestID = param.asUint64;
+      } else if (
+          param.key ==
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
+        serverMaxAuthTokenCacheSize = param.asUint64;
+      }
+    }
+    earlyDataHandler_->setCurrentParams(
+        serverMaxRequestID, serverMaxAuthTokenCacheSize);
+  }
+
+  co_return std::move(*result);
 }
 
-folly::coro::Task<Setup> MoQClientBase::completeSetupMoQSession(
+folly::coro::Task<void> MoQClientBase::setupMoQSession(
+    std::chrono::milliseconds connect_timeout,
+    std::chrono::milliseconds transaction_timeout,
+    std::shared_ptr<Publisher> publishHandler,
+    std::shared_ptr<Subscriber> subscribeHandler,
+    const quic::TransportSettings& transportSettings,
+    const std::vector<std::string>& alpns) {
+  co_await connectAndSendSetup(
+      connect_timeout,
+      transaction_timeout,
+      std::move(publishHandler),
+      std::move(subscribeHandler),
+      transportSettings,
+      alpns);
+  co_await awaitSetupComplete();
+}
+
+void MoQClientBase::completeSetupMoQSession(
     proxygen::WebTransport* wt,
     const std::optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
@@ -110,7 +156,7 @@ folly::coro::Task<Setup> MoQClientBase::completeSetupMoQSession(
         clientSetup,
         moqSession_->getNegotiatedVersion().value_or(kVersionDraft14));
   }
-  return moqSession_->setup(clientSetup);
+  moqSession_->sendSetup(clientSetup);
 }
 
 Setup MoQClientBase::getClientSetup(const std::optional<std::string>& path) {

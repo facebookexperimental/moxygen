@@ -147,6 +147,9 @@ MoQForwarder::~MoQForwarder() {
   for (auto& [id, subgroupForwarder] : subgroups_) {
     subgroupForwarder->detach();
   }
+  for (auto& [_, sub] : subscribers_) {
+    sub->detach();
+  }
 }
 
 void MoQForwarder::setDeliveryTimeout(uint64_t timeout) {
@@ -752,7 +755,7 @@ MoQForwarder::Subscriber::Subscriber(
       requestID(sid),
       range(r),
       trackConsumer(std::move(tc)),
-      forwarder(f),
+      forwarder(&f),
       shouldForward(shouldForwardIn) {}
 
 void MoQForwarder::Subscriber::setPublisherGroupOrder(
@@ -777,12 +780,12 @@ void MoQForwarder::Subscriber::setExtensions(Extensions extensions) {
 PublishRequest MoQForwarder::Subscriber::getPublishRequest() const {
   return PublishRequest{
       RequestID(0),
-      forwarder.fullTrackName(),
+      forwarder->fullTrackName(),
       TrackAlias(0),
-      forwarder.groupOrder(),
-      forwarder.largest(),
+      forwarder->groupOrder(),
+      forwarder->largest(),
       shouldForward,
-      forwarder.extensions()};
+      forwarder->extensions()};
 }
 
 void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
@@ -802,32 +805,32 @@ void MoQForwarder::Subscriber::setParam(const TrackRequestParameter& param) {
 }
 
 void MoQForwarder::Subscriber::updateForwardState(bool newForward) {
-  if (passive) {
-    shouldForward = newForward;
-    return;
-  }
+  XCHECK(forwarder);
   auto wasForwarding = shouldForward;
   shouldForward = newForward;
   if (shouldForward && !wasForwarding) {
-    forwarder.addForwardingSubscriber();
+    forwarder->addForwardingSubscriber();
   } else if (wasForwarding && !shouldForward) {
-    forwarder.removeForwardingSubscriber();
+    forwarder->removeForwardingSubscriber();
   }
 }
 
 void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
+  if (!forwarder) {
+    return;
+  }
   // Update subscriber range from PUBLISH_OK
   std::optional<AbsoluteLocation> end;
   if (pubOk.endGroup) {
     end = AbsoluteLocation{*pubOk.endGroup, 0};
   }
   range =
-      toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder.largest());
+      toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder->largest());
 
   updateForwardState(pubOk.forward);
 
   // Handle NEW_GROUP_REQUEST forwarding if present
-  forwarder.tryProcessNewGroupRequest(pubOk.params);
+  forwarder->tryProcessNewGroupRequest(pubOk.params);
 }
 
 folly::coro::Task<folly::Expected<RequestOk, RequestError>>
@@ -863,20 +866,23 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
     range.end = newEnd;
   }
 
-  // Only update forward state if explicitly provided (per draft 15+)
-  if (requestUpdate.forward.has_value()) {
-    updateForwardState(*requestUpdate.forward);
+  if (forwarder) {
+    // Only update forward state if explicitly provided (per draft 15+)
+    if (requestUpdate.forward.has_value()) {
+      updateForwardState(*requestUpdate.forward);
+    }
+    // Only update new group request if provided
+    forwarder->tryProcessNewGroupRequest(requestUpdate.params);
   }
-
-  // Only update new group request if provided
-  forwarder.tryProcessNewGroupRequest(requestUpdate.params);
 
   co_return RequestOk{.requestID = requestUpdate.requestID};
 }
 
 void MoQForwarder::Subscriber::unsubscribe() {
-  XLOG(DBG4) << "unsubscribe key=" << mapKey;
-  forwarder.removeSubscriberByKey(mapKey, std::nullopt, "unsubscribe");
+  XLOG(DBG4) << "unsubscribe sess=" << this;
+  if (forwarder) {
+    forwarder->removeSubscriber(session, std::nullopt, "unsubscribe");
+  }
 }
 
 bool MoQForwarder::Subscriber::checkShouldForward() {

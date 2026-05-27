@@ -243,7 +243,11 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   addTestParams(trackStatusOk.params, moqFrameWriter);
 
   res = moqFrameWriter.writeTrackStatusOk(writeBuf, trackStatusOk);
-  res = moqFrameWriter.writeGoaway(writeBuf, Goaway({"new uri"}));
+  Goaway goaway{"new uri"};
+  if (getDraftMajorVersion(version) >= 18) {
+    goaway.requestID = RequestID(in == TestControlMessages::CLIENT ? 1 : 0);
+  }
+  res = moqFrameWriter.writeGoaway(writeBuf, goaway);
 
   // SubscribeNamespace - not on control stream for draft 16+
   if (getDraftMajorVersion(version) < 16) {

@@ -754,6 +754,8 @@ class MoQSession : public Subscriber,
       bool skipCheck,
       bool isNewRequest,
       bool parityMatters = true);
+  bool shouldRejectNewPeerRequestDueToGoaway() const;
+  bool shouldFailNewLocalRequestDueToGoaway() const;
   uint8_t getRequestIDMultiplier() const {
     return 2;
   }
@@ -1068,9 +1070,11 @@ class MoQSession : public Subscriber,
   std::vector<BufferedUniStream> bufferedPreSetupUniStreams_;
   bool draining_{false};
   bool receivedGoaway_{false};
+  std::optional<RequestID> receivedGoawayRequestID_;
 
   uint64_t nextRequestID_{0};
   uint64_t nextExpectedPeerRequestID_{0};
+  uint64_t nextPeerRequestIDForGoaway_{0};
   uint64_t maxRequestID_{0};
 
   ServerSetupCallback* serverSetupCallback_{nullptr};

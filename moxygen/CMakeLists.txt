@@ -132,6 +132,7 @@ moxygen_add_library(moxygen_moq_server
     Folly::folly_string
   EXPORTED_DEPS
     moxygen_moq
+    moxygen_moq_early_data_handler
     moxygen_moq_server_base
     proxygen::proxygen_hq_server
     Folly::folly_init_init
@@ -148,6 +149,16 @@ moxygen_add_library(moxygen_moq_early_data_handler
     Folly::folly_logging_logging
 )
 
+moxygen_add_library(moxygen_qmux_utils
+  SRCS
+    QmuxUtils.cpp
+  DEPS
+    mvfst::mvfst_constants
+  EXPORTED_DEPS
+    proxygen::proxygen_transport_qmux_qmux_framer
+    mvfst::mvfst_state_transport_settings
+)
+
 moxygen_add_library(moxygen_moqclient_base
   SRCS
     MoQClientBase.cpp
@@ -157,10 +168,12 @@ moxygen_add_library(moxygen_moqclient_base
   EXPORTED_DEPS
     moxygen_mlog_mlogger
     moxygen_moq
+    moxygen_moq_early_data_handler
     proxygen::proxygen_http_webtransport
     proxygen::proxygen_http_webtransport_quicwebtransport
     proxygen::proxygen_utils_parse_url
     mvfst::mvfst_client
+    mvfst::mvfst_fizz_client_handshake_psk_cache
     mvfst::mvfst_state_transport_settings
     fizz::fizz
     Folly::folly_coro_promise

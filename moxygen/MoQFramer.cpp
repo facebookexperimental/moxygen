@@ -2654,6 +2654,23 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     return folly::makeUnexpected(res.error());
   }
   goaway.newSessionUri = std::move(res.value());
+  if (getDraftMajorVersion(*version_) >= 18) {
+    auto timeout = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!timeout) {
+      XLOG(DBG4) << "parseGoaway: UNDERFLOW on timeout";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= timeout->second;
+    goaway.timeout = timeout->first;
+
+    auto requestID = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parseGoaway: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    goaway.requestID = RequestID(requestID->first);
+  }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -5242,6 +5259,14 @@ WriteResult MoQFrameWriter::writeGoaway(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
   writeFixedString(writeBuf, goaway.newSessionUri, size, error);
+  if (getDraftMajorVersion(*version_) >= 18) {
+    writeVarint(writeBuf, goaway.timeout, size, error);
+    if (goaway.requestID.has_value()) {
+      writeVarint(writeBuf, goaway.requestID->value, size, error);
+    } else {
+      error = true;
+    }
+  }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

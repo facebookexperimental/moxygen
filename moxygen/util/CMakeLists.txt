@@ -12,9 +12,12 @@ moxygen_add_library(moxygen_util_quic_connector
     mvfst::mvfst_common_events_folly_eventbase
     mvfst::mvfst_common_udpsocket_folly_async_udp_socket
     mvfst::mvfst_fizz_client_handshake
+    mvfst::mvfst_fizz_client_handshake_psk_cache
+    mvfst::mvfst_state_early_data_app_params_handler
     Folly::folly_coro_promise
     Folly::folly_coro_timeout
     Folly::folly_futures_core
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     mvfst::mvfst_state_transport_settings
     fizz::fizz

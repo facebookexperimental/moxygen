@@ -54,6 +54,27 @@ class MoQRelayClient {
         alpns);
   }
 
+  folly::coro::Task<void> connectAndSendSetup(
+      std::shared_ptr<Publisher> publisher,
+      std::shared_ptr<Subscriber> subscriber,
+      std::chrono::milliseconds connectTimeout = std::chrono::seconds(5),
+      std::chrono::milliseconds transactionTimeout = std::chrono::seconds(60),
+      const quic::TransportSettings& transportSettings =
+          quic::TransportSettings(),
+      const std::vector<std::string>& alpns = {}) {
+    co_await moqClient_->connectAndSendSetup(
+        connectTimeout,
+        transactionTimeout,
+        std::move(publisher),
+        std::move(subscriber),
+        transportSettings,
+        alpns);
+  }
+
+  folly::coro::Task<Setup> awaitSetupComplete() {
+    return moqClient_->awaitSetupComplete();
+  }
+
   folly::coro::Task<void> run(
       std::shared_ptr<Publisher> publisher,
       std::vector<TrackNamespace> namespaces) {

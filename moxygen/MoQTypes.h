@@ -1207,6 +1207,8 @@ struct TrackStatusOk {
 
 struct Goaway {
   std::string newSessionUri;
+  uint64_t timeout{0};
+  std::optional<RequestID> requestID;
 };
 
 struct MaxRequestID {

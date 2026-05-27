@@ -23,7 +23,10 @@ MoQClient::connectQuic(
       timeoutMs,
       verifier,
       alpns,
-      transportSettings);
+      transportSettings,
+      pskCache_,
+      url_.getHost(),
+      earlyDataHandler_);
 
   co_return quicClient;
 }

@@ -14,6 +14,7 @@
 
 #include <folly/logging/xlog.h>
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -2169,7 +2170,8 @@ MoQSession::MoQSession(
       controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
       nextRequestID_(0),
 
-      nextExpectedPeerRequestID_(1) {}
+      nextExpectedPeerRequestID_(1),
+      nextPeerRequestIDForGoaway_(1) {}
 
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
@@ -2181,6 +2183,7 @@ MoQSession::MoQSession(
       controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
       nextRequestID_(1),
       nextExpectedPeerRequestID_(0),
+      nextPeerRequestIDForGoaway_(0),
       serverSetupCallback_(&serverSetupCallback) {}
 
 MoQSession::~MoQSession() {
@@ -2319,10 +2322,17 @@ void MoQSession::goaway(Goaway goaway) {
       close(SessionCloseErrorCode::NO_ERROR);
       return;
     }
+    if (getDraftMajorVersion(*moqFrameWriter_.getVersion()) >= 18) {
+      goaway.requestID = RequestID(nextPeerRequestIDForGoaway_);
+    }
     if (logger_) {
       logger_->logGoaway(goaway);
     }
-    moqFrameWriter_.writeGoaway(controlWriteBuf_, goaway);
+    auto res = moqFrameWriter_.writeGoaway(controlWriteBuf_, goaway);
+    if (!res) {
+      XLOG(ERR) << "writeGoaway failed sess=" << this;
+      return;
+    }
     controlWriteEvent_.signal();
     drain();
   }
@@ -3389,12 +3399,12 @@ void MoQSession::onSubscribeImpl(
         MOQTByteStringType::STRING_VALUE,
         ControlMessageType::PARSED);
   }
-  if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting subscribe request, received GOAWAY sess=" << this;
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting subscribe request, GOAWAY/draining sess=" << this;
     subscribeError(
         {subscribeRequest.requestID,
          SubscribeErrorCode::GOING_AWAY,
-         "Session received GOAWAY"},
+         "Session going away"},
         *replyContext);
     return;
   }
@@ -3973,13 +3983,13 @@ void MoQSession::onPublishImpl(
   if (closeSessionIfRequestIDInvalid(publish.requestID, false, true)) {
     return;
   }
-  if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting publish request, received GOAWAY sess=" << this;
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting publish request, GOAWAY/draining sess=" << this;
     publishError(
         PublishError{
             publish.requestID,
             PublishErrorCode::GOING_AWAY,
-            "Session received GOAWAY"},
+            "Session going away"},
         *replyContext);
     return;
   }
@@ -4196,12 +4206,10 @@ void MoQSession::onFetchImpl(
   if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
     return;
   }
-  if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting fetch request, received GOAWAY sess=" << this;
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting fetch request, GOAWAY/draining sess=" << this;
     fetchError(
-        {fetch.requestID,
-         FetchErrorCode::GOING_AWAY,
-         "Session received GOAWAY"},
+        {fetch.requestID, FetchErrorCode::GOING_AWAY, "Session going away"},
         *replyContext);
     return;
   }
@@ -4402,13 +4410,13 @@ void MoQSession::onTrackStatusImpl(
   if (closeSessionIfRequestIDInvalid(trackStatus.requestID, false, true)) {
     return;
   }
-  if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting track status request, received GOAWAY sess="
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting track status request, GOAWAY/draining sess="
                << this;
     trackStatusError(
         {trackStatus.requestID,
          TrackStatusErrorCode::GOING_AWAY,
-         "Session received GOAWAY"},
+         "Session going away"},
         *replyContext);
     return;
   }
@@ -4537,6 +4545,15 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
         "draining/closed session"};
     co_return folly::makeUnexpected(trackStatusError);
   }
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting track status request, received GOAWAY sess="
+               << this;
+    TrackStatusError trackStatusError{
+        peekNextRequestID(),
+        TrackStatusErrorCode::GOING_AWAY,
+        "Session received GOAWAY"};
+    co_return folly::makeUnexpected(trackStatusError);
+  }
   aliasifyAuthTokens(trackStatus.params);
   trackStatus.requestID = getNextRequestID();
 
@@ -4643,6 +4660,27 @@ void MoQSession::onGoaway(Goaway goaway) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
+  auto negotiatedVersion = getNegotiatedVersion();
+  if (negotiatedVersion && getDraftMajorVersion(*negotiatedVersion) >= 18) {
+    // Wire input is rejected by parseGoaway(); keep this for synthesized
+    // values.
+    if (!goaway.requestID.has_value()) {
+      XLOG(ERR) << "Received GOAWAY without requestID sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
+    }
+    const bool requestIDOdd = (goaway.requestID->value % 2) == 1;
+    // Our locally initiated request IDs are odd when we are the server.
+    const bool localRequestIDParityOdd =
+        dir_ == MoQControlCodec::Direction::SERVER;
+    if (requestIDOdd != localRequestIDParityOdd) {
+      XLOG(ERR) << "Received GOAWAY with invalid requestID parity id="
+                << *goaway.requestID << " sess=" << this;
+      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+      return;
+    }
+    receivedGoawayRequestID_ = goaway.requestID;
+  }
   receivedGoaway_ = true;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
@@ -4681,6 +4719,14 @@ Subscriber::PublishResult MoQSession::publish(
             pub.requestID,
             PublishErrorCode::INTERNAL_ERROR,
             "draining/closed session"});
+  }
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting publish request, received GOAWAY sess=" << this;
+    return folly::makeUnexpected(
+        PublishError{
+            peekNextRequestID(),
+            PublishErrorCode::GOING_AWAY,
+            "Session received GOAWAY"});
   }
 
   if (!handle) {
@@ -4863,6 +4909,15 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
         std::numeric_limits<uint64_t>::max(),
         SubscribeErrorCode::INTERNAL_ERROR,
         "draining/closed session"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
+    co_return folly::makeUnexpected(subscribeError);
+  }
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    SubscribeError subscribeError = {
+        peekNextRequestID(),
+        SubscribeErrorCode::GOING_AWAY,
+        "Session received GOAWAY"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
     co_return folly::makeUnexpected(subscribeError);
@@ -5212,6 +5267,15 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
         std::numeric_limits<uint64_t>::max(),
         FetchErrorCode::INTERNAL_ERROR,
         "draining/closed session"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+    co_return folly::makeUnexpected(fetchError);
+  }
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    FetchError fetchError = {
+        peekNextRequestID(),
+        FetchErrorCode::GOING_AWAY,
+        "Session received GOAWAY"};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onFetchError, fetchError.errorCode);
     co_return folly::makeUnexpected(fetchError);
@@ -5758,6 +5822,11 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
       }
       nextExpectedPeerRequestID_ += getRequestIDMultiplier();
     } // in draft 16+, request IDs can come out of order
+    if (getDraftMajorVersion(*getNegotiatedVersion()) >= 18) {
+      nextPeerRequestIDForGoaway_ = std::max(
+          nextPeerRequestIDForGoaway_,
+          requestID.value + getRequestIDMultiplier());
+    }
   } else {
     if (requestID.value >= maxRequestID_) {
       XLOG(ERR) << "Invalid requestID: " << requestID << " sess=" << this;
@@ -5766,6 +5835,22 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
     }
   }
   return false;
+}
+
+bool MoQSession::shouldRejectNewPeerRequestDueToGoaway() const {
+  if (receivedGoaway_) {
+    return true;
+  }
+  return draining_ && negotiatedVersion_.has_value() &&
+      getDraftMajorVersion(*negotiatedVersion_) >= 18;
+}
+
+bool MoQSession::shouldFailNewLocalRequestDueToGoaway() const {
+  // The received cutoff describes already-sent requests; after GOAWAY, do not
+  // start new local requests on this session.
+  return receivedGoawayRequestID_.has_value() &&
+      negotiatedVersion_.has_value() &&
+      getDraftMajorVersion(*negotiatedVersion_) >= 18;
 }
 
 void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
@@ -5908,14 +5993,14 @@ void MoQSession::onPublishNamespaceImpl(
     std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " ns=" << publishNamespace.trackNamespace
              << " - sending NOT_SUPPORTED error, sess=" << this;
-  if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting publishNamespace request, received GOAWAY sess="
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting publishNamespace request, GOAWAY/draining sess="
                << this;
     publishNamespaceError(
         PublishNamespaceError{
             publishNamespace.requestID,
             PublishNamespaceErrorCode::GOING_AWAY,
-            "Session received GOAWAY"},
+            "Session going away"},
         *replyContext);
     return;
   }
@@ -6008,14 +6093,14 @@ void MoQSession::onSubscribeNamespaceImpl(
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeNamespace.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
-  if (receivedGoaway_) {
-    XLOG(DBG1) << "Rejecting subscribeNamespace request, received GOAWAY sess="
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting subscribeNamespace request, GOAWAY/draining sess="
                << this;
     subscribeNamespaceError(
         SubscribeNamespaceError{
             subscribeNamespace.requestID,
             SubscribeNamespaceErrorCode::GOING_AWAY,
-            "Session received GOAWAY"},
+            "Session going away"},
         std::move(subNsReply));
     return;
   }
