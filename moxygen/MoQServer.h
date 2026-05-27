@@ -7,6 +7,7 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
+#include <moxygen/MoQEarlyDataHandler.h>
 #include <moxygen/MoQServerBase.h>
 
 #include <folly/init/Init.h>
@@ -173,6 +174,7 @@ class MoQServer : public MoQServerBase {
     std::shared_ptr<MoQSession> clientSession_;
   };
 
+  MoQEarlyDataHandler earlyDataHandler_;
   std::string cert_;
   std::string key_;
   quic::samples::HQServerParams params_;

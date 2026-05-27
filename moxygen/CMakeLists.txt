@@ -132,6 +132,7 @@ moxygen_add_library(moxygen_moq_server
     Folly::folly_string
   EXPORTED_DEPS
     moxygen_moq
+    moxygen_moq_early_data_handler
     moxygen_moq_server_base
     proxygen::proxygen_hq_server
     Folly::folly_init_init

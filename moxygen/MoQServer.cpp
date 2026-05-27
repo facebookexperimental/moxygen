@@ -94,6 +94,13 @@ MoQServer::MoQServer(
   factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
 
+  // Configure 0-RTT early data handler with server's default params
+  constexpr uint64_t kDefaultMaxRequestID = 100;
+  constexpr uint64_t kMaxAuthTokenCacheSize = 1024;
+  earlyDataHandler_.setCurrentParams(
+      kDefaultMaxRequestID, kMaxAuthTokenCacheSize);
+  factory_->setEarlyDataAppParamsHandler(&earlyDataHandler_);
+
   // Register ALPN handlers for direct QUIC MoQT connections
   XLOG(DBG1) << "MoQServer: Registering ALPN handlers: "
              << folly::join(", ", quicAlpns);
