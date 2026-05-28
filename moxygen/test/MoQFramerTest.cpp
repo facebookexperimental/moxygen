@@ -4213,6 +4213,135 @@ TEST_F(MoQFramerV18Test, SubscribeTracksForwardFalseSerializedAsParameter) {
   EXPECT_EQ(parsed->forward, false);
 }
 
+// Draft 18 added a Track Properties block at the end of REQUEST_OK. Verify
+// that a populated TRACK_STATUS_OK round-trips its Track Properties through
+// the wire and back into the TrackStatusOk struct.
+TEST_F(MoQFramerV18Test, RequestOkTrackPropertiesRoundtrip) {
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 42;
+  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatusOk.largest = AbsoluteLocation({3, 7});
+  trackStatusOk.groupOrder = GroupOrder::OldestFirst;
+  trackStatusOk.expires = std::chrono::milliseconds(2500);
+  // Populate Track Properties with a couple of well-known properties.
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 100});
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kDynamicGroupsExtensionType, 1});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeTrackStatusOk(writeBuf, trackStatusOk).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
+
+  auto bodyLen = frameLength(cursor);
+  auto result = parser_.parseRequestOk(cursor, bodyLen, FrameType::REQUEST_OK);
+  ASSERT_TRUE(result.hasValue());
+
+  auto parsed = result->toTrackStatusOk();
+  EXPECT_EQ(parsed.requestID, 42);
+  EXPECT_EQ(parsed.expires, std::chrono::milliseconds(2500));
+  ASSERT_TRUE(parsed.largest.has_value());
+  EXPECT_EQ(parsed.largest->group, 3);
+  EXPECT_EQ(parsed.largest->object, 7);
+
+  EXPECT_EQ(parsed.trackProperties, trackStatusOk.trackProperties);
+}
+
+// REQUEST_OK with empty Track Properties must not emit any additional bytes
+// past the parameter block (the spec encodes "no properties" by the absence
+// of bytes — there is no count or length prefix).
+TEST_F(MoQFramerV18Test, RequestOkEmptyTrackPropertiesEmitsNoBytes) {
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(11);
+  // trackProperties left empty intentionally.
+
+  folly::IOBufQueue v18Buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeRequestOk(v18Buf, requestOk, FrameType::REQUEST_OK)
+                  .hasValue());
+
+  MoQFrameWriter v17Writer;
+  v17Writer.initializeVersion(kVersionDraft17);
+  folly::IOBufQueue v17Buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(v17Writer.writeRequestOk(v17Buf, requestOk, FrameType::REQUEST_OK)
+                  .hasValue());
+
+  // With no Track Properties, the wire bytes for v18 must match v17 byte-for-
+  // byte; both encode just request_id + num_params.
+  auto v18Bytes = v18Buf.move();
+  auto v17Bytes = v17Buf.move();
+  EXPECT_TRUE(folly::IOBufEqualTo()(*v18Bytes, *v17Bytes));
+}
+
+// writeRequestOk must refuse to emit a frame whose semantic frame type is
+// anything other than TRACK_STATUS_OK when trackProperties is non-empty - the
+// spec requires Track Properties to be empty for those response shorthands.
+TEST_F(
+    MoQFramerV18Test,
+    WriteRequestOkRejectsTrackPropertiesForNonTrackStatus) {
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(5);
+  requestOk.trackProperties.insertMutableExtension(
+      Extension{kMaxCacheDurationExtensionType, 30000});
+
+  const std::array<FrameType, 4> nonTrackStatusFrameTypes{
+      FrameType::REQUEST_OK,
+      FrameType::PUBLISH_NAMESPACE_OK,
+      FrameType::SUBSCRIBE_NAMESPACE_OK,
+      FrameType::PUBLISH_OK,
+  };
+  for (auto frameType : nonTrackStatusFrameTypes) {
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    auto result = writer_.writeRequestOk(writeBuf, requestOk, frameType);
+    ASSERT_TRUE(result.hasError()) << "Expected write failure for frameType="
+                                   << folly::to_underlying(frameType);
+    EXPECT_EQ(result.error(), quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // Sanity check: writing TRACK_STATUS_OK with the same trackProperties does
+  // succeed so the test isn't accidentally validating the wrong invariant.
+  folly::IOBufQueue okBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(
+      writer_.writeRequestOk(okBuf, requestOk, FrameType::TRACK_STATUS_OK)
+          .hasValue());
+}
+
+// Older drafts (e.g. draft 17) must not serialize or parse Track Properties
+// on REQUEST_OK; a TrackStatusOk with trackProperties populated must
+// roundtrip without the extra bytes.
+TEST(MoQFramerRequestOkTrackProperties, Draft17DoesNotEmitTrackProperties) {
+  MoQFrameWriter writer;
+  MoQFrameParser parser;
+  writer.initializeVersion(kVersionDraft17);
+  parser.initializeVersion(kVersionDraft17);
+
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 1;
+  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatusOk.largest = AbsoluteLocation({1, 2});
+  trackStatusOk.expires = std::chrono::milliseconds(500);
+  // Populate trackProperties even though draft 17 should ignore them.
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 100});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeTrackStatusOk(writeBuf, trackStatusOk).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ASSERT_TRUE(quic::follyutils::decodeQuicInteger(cursor).has_value());
+  size_t bodyLen = cursor.readBE<uint16_t>();
+  auto result = parser.parseRequestOk(cursor, bodyLen, FrameType::REQUEST_OK);
+  ASSERT_TRUE(result.hasValue());
+
+  // Draft 17 has no Track Properties on the wire so it parses back as empty.
+  EXPECT_TRUE(result->trackProperties.empty());
+}
+
 // Draft 17 must continue to use wire type 0x11 for SUBSCRIBE_NAMESPACE.
 TEST(MoQFramerWireTypeTranslation, Draft17UsesLegacyWireType) {
   MoQFrameWriter writer;

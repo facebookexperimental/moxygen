@@ -4509,6 +4509,24 @@ void MoQSession::handleTrackStatusOkFromRequestOk(const RequestOk& requestOk) {
   onTrackStatusOk(std::move(trackStatusOk));
 }
 
+bool MoQSession::validateRequestOkTrackProperties(
+    const RequestOk& requestOk,
+    FrameType resolvedFrameType) {
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
+    return true;
+  }
+  if (resolvedFrameType == FrameType::TRACK_STATUS_OK) {
+    return true;
+  }
+  if (requestOk.trackProperties.empty()) {
+    return true;
+  }
+  XLOG(ERR) << "Track Properties not allowed in REQUEST_OK for frameType="
+            << folly::to_underlying(resolvedFrameType) << ", sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  return false;
+}
+
 void MoQSession::handleSubscribeUpdateOkFromRequestOk(
     const RequestOk& requestOk,
     PendingRequestIterator reqIt) {
@@ -6027,6 +6045,10 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   // In v15+, convert REQUEST_OK back to specific frame type
   if (*getNegotiatedVersion() > 14) {
     frameType = reqIt->second->getOkFrameType();
+  }
+
+  if (!validateRequestOkTrackProperties(requestOk, frameType)) {
+    return;
   }
 
   switch (frameType) {

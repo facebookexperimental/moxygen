@@ -537,6 +537,10 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   if (*getNegotiatedVersion() > 14) {
     frameType = reqIt->second->getOkFrameType();
   }
+  if (!validateRequestOkTrackProperties(requestOk, frameType)) {
+    // Session was closed; do not erase pending state - close() will tear down.
+    return;
+  }
   switch (frameType) {
     case moxygen::FrameType::TRACK_STATUS_OK: {
       // Use base class helper

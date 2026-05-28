@@ -1030,6 +1030,14 @@ class MoQSession : public Subscriber,
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
 
+  // Draft 18+: Track Properties on REQUEST_OK are only permitted for
+  // TRACK_STATUS_OK. For all other shorthands receiving Track Properties is a
+  // PROTOCOL_VIOLATION (spec section 10.5). Returns true if the frame is
+  // valid; if it returns false the session has already been closed.
+  bool validateRequestOkTrackProperties(
+      const RequestOk& requestOk,
+      FrameType resolvedFrameType);
+
  protected:
   std::optional<uint64_t> negotiatedVersion_;
 

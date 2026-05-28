@@ -2364,6 +2364,18 @@ folly::Expected<PublishNamespaceOk, ErrorCode> MoQFrameParser::parseRequestOk(
       }
     }
   }
+
+  if (getDraftMajorVersion(*version_) >= 18 && length > 0) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensionKvPairs(cursor, tempHeader, length, true);
+    if (!ext) {
+      XLOG(DBG4) << "parseRequestOk: error in parseExtensionKvPairs: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    requestOk.trackProperties = std::move(tempHeader.extensions);
+    length = 0;
+  }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -3373,6 +3385,7 @@ TrackStatusOk RequestOk::toTrackStatusOk() const {
   TrackStatusOk trackStatusOk;
   trackStatusOk.requestID = requestID;
   trackStatusOk.params = params;
+  trackStatusOk.trackProperties = trackProperties;
 
   // There may or may not be any value in attempting to convert the full object
   // since we only need the request Id to resolve the promise, except for
@@ -3406,6 +3419,7 @@ RequestOk RequestOk::fromTrackStatusOk(const TrackStatusOk& trackStatusOk) {
   RequestOk requestOk;
   requestOk.requestID = trackStatusOk.requestID;
   requestOk.params = trackStatusOk.params;
+  requestOk.trackProperties = trackStatusOk.trackProperties;
 
   // Add expires parameter
   requestOk.requestSpecificParams.emplace_back(
@@ -4989,13 +5003,16 @@ WriteResult MoQFrameWriter::writeRequestOk(
   CHECK(version_.has_value()) << "Version needs to be set to write request ok";
   size_t size = 0;
   bool error = false;
+  // Preserve the semantic frame type passed by the caller; we still need it
+  // below to decide whether Track Properties are valid (draft 18+).
+  const FrameType semanticFrameType = frameType;
   if (getDraftMajorVersion(*version_) > 14) {
     frameType = FrameType::REQUEST_OK;
   }
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
   writeVarint(writeBuf, requestOk.requestID.value, size, error);
   if (getDraftMajorVersion(*version_) > 14) {
-    if (frameType == FrameType::SUBSCRIBE_NAMESPACE_OK &&
+    if (semanticFrameType == FrameType::SUBSCRIBE_NAMESPACE_OK &&
         !requestOk.params.empty()) {
       return folly::makeUnexpected(
           quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -5006,6 +5023,23 @@ WriteResult MoQFrameWriter::writeRequestOk(
         requestOk.requestSpecificParams,
         size,
         error);
+  }
+  // Draft 18+: Track Properties (bare key-value pairs, no length prefix) are
+  // only allowed for TRACK_STATUS_OK responses.
+  if (getDraftMajorVersion(*version_) >= 18) {
+    if (semanticFrameType == FrameType::TRACK_STATUS_OK) {
+      writeExtensions(
+          writeBuf,
+          requestOk.trackProperties,
+          size,
+          error,
+          /*withLengthPrefix=*/false);
+    } else if (!requestOk.trackProperties.empty()) {
+      // Caller populated Track Properties for a frame type that requires them
+      // to be empty.
+      return folly::makeUnexpected(
+          quic::TransportErrorCode::PROTOCOL_VIOLATION);
+    }
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -5114,7 +5148,7 @@ WriteResult MoQFrameWriter::writeTrackStatusOk(
 
   if (getDraftMajorVersion(*version_) >= 15) {
     auto requestOk = RequestOk::fromTrackStatusOk(trackStatusOk);
-    return writeRequestOk(writeBuf, requestOk, FrameType::REQUEST_OK);
+    return writeRequestOk(writeBuf, requestOk, FrameType::TRACK_STATUS_OK);
   }
 
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS_OK, error);

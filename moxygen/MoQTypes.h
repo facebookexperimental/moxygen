@@ -1166,6 +1166,9 @@ struct TrackStatusOk {
   // context exists is inferred from presence of largest
   std::optional<AbsoluteLocation> largest;
   TrackRequestParameters params{FrameType::REQUEST_OK};
+  // Track Properties block at the end of REQUEST_OK in draft 18+. Carried via
+  // the same Extensions container used for SUBSCRIBE_OK/PUBLISH/FETCH_OK.
+  Extensions trackProperties;
   // < v14 parameters maintained for compatibility
   FullTrackName fullTrackName;
   TrackStatusCode statusCode{};
@@ -1310,6 +1313,10 @@ struct RequestOk {
   RequestID requestID;
   TrackRequestParameters params{FrameType::REQUEST_OK};
   std::vector<Parameter> requestSpecificParams;
+  // Track Properties (draft 18+). Populated only for TRACK_STATUS_OK; must be
+  // empty for PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
+  // PUBLISH_NAMESPACE_OK.
+  Extensions trackProperties;
 
   TrackStatusOk toTrackStatusOk() const;
   static RequestOk fromTrackStatusOk(const TrackStatusOk& trackStatusOk);
