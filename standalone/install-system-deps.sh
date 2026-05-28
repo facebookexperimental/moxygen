@@ -15,6 +15,7 @@ install_ubuntu() {
         cmake \
         ninja-build \
         git \
+        pkg-config \
         libssl-dev \
         libunwind-dev \
         libgoogle-glog-dev \
@@ -75,7 +76,8 @@ install_macos() {
         boost \
         fmt \
         c-ares \
-        gperf
+        gperf \
+        brotli
 }
 
 # Detect OS - check macOS first

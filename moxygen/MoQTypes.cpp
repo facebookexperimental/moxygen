@@ -236,6 +236,9 @@ const folly::F14FastSet<FrameType> kAllowedFramesForNewGroupRequest = {
     FrameType::REQUEST_UPDATE,
     FrameType::PUBLISH_OK};
 
+const folly::F14FastSet<FrameType> kAllowedFramesForTrackFilter = {
+    FrameType::SUBSCRIBE_NAMESPACE};
+
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -255,6 +258,7 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
         {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
         {TrackRequestParamKey::NEW_GROUP_REQUEST,
          kAllowedFramesForNewGroupRequest},
+        {TrackRequestParamKey::TRACK_FILTER, kAllowedFramesForTrackFilter},
 };
 
 // Frame types that allow all parameters (no validation)
