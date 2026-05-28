@@ -121,6 +121,11 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
   if (fizzCb.exception) {
     co_yield folly::coro::co_error(std::move(fizzCb.exception));
   }
+
+  if (auto stdAlpn = fizzClient->getApplicationProtocol(); !stdAlpn.empty()) {
+    negotiatedProtocol_ = std::move(stdAlpn);
+  }
+
   auto transport = std::make_unique<folly::coro::Transport>(
       evb, folly::AsyncTransport::UniquePtr(std::move(fizzClient)));
 
@@ -145,18 +150,12 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
   transportConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - connectStart);
 
-  auto handshakeStart = std::chrono::steady_clock::now();
-  auto result = co_await folly::coro::co_awaitTry(completeSetupMoQSession(
+  completeSetupMoQSession(
       qmuxSession_.get(),
       url_.getPath(),
       std::move(publishHandler),
-      std::move(subscribeHandler)));
-  moqHandshakeTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - handshakeStart);
-
-  if (result.hasException()) {
-    co_yield folly::coro::co_error(result.exception());
-  }
+      std::move(subscribeHandler));
+  co_await awaitSetupComplete();
 }
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
