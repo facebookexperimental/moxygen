@@ -330,10 +330,29 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
   // Only intercept for v16+ and announcement types
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
     auto existingRequestID = requestUpdate.existingRequestID;
+    auto requestID = requestUpdate.requestID;
 
     // Check publishNamespaceHandles_ for PUBLISH_NAMESPACE (formerly ANNOUNCE)
     auto announceIt = publishNamespaceHandles_.find(existingRequestID);
     if (announceIt != publishNamespaceHandles_.end()) {
+      if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
+        return;
+      }
+      if (shouldRejectNewPeerRequestDueToGoaway()) {
+        XLOG(DBG1)
+            << "Rejecting publishNamespace request update, GOAWAY/draining sess="
+            << this;
+        requestUpdateError(
+            RequestError{
+                requestID, RequestErrorCode::GOING_AWAY, "Session going away"},
+            existingRequestID,
+            /*terminateExistingRequest=*/false);
+        return;
+      }
+      if (closeSessionIfRequestIDInvalid(
+              existingRequestID, false, false, false)) {
+        return;
+      }
       handlePublishNamespaceRequestUpdate(requestUpdate, announceIt->second);
       return;
     }
@@ -342,6 +361,24 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
     // SUBSCRIBE_ANNOUNCES)
     auto subAnnIt = subscribeNamespaceHandles_.find(existingRequestID);
     if (subAnnIt != subscribeNamespaceHandles_.end()) {
+      if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
+        return;
+      }
+      if (shouldRejectNewPeerRequestDueToGoaway()) {
+        XLOG(DBG1)
+            << "Rejecting subscribeNamespace request update, GOAWAY/draining sess="
+            << this;
+        requestUpdateError(
+            RequestError{
+                requestID, RequestErrorCode::GOING_AWAY, "Session going away"},
+            existingRequestID,
+            /*terminateExistingRequest=*/false);
+        return;
+      }
+      if (closeSessionIfRequestIDInvalid(
+              existingRequestID, false, false, false)) {
+        return;
+      }
       handleSubscribeNamespaceRequestUpdate(requestUpdate, subAnnIt->second);
       return;
     }

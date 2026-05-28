@@ -800,7 +800,8 @@ class MoQSession : public Subscriber,
   // REQUEST_UPDATE error response - available for subclass handlers
   void requestUpdateError(
       const SubscribeUpdateError& requestError,
-      RequestID existingRequestID);
+      RequestID existingRequestID,
+      bool terminateExistingRequest = true);
 
   // REQUEST_UPDATE ok response - available for subclass handlers
   void requestUpdateOk(const RequestOk& requestOk);

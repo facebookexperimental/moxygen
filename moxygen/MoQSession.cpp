@@ -3596,6 +3596,16 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
     logger_->logSubscribeUpdate(requestUpdate, ControlMessageType::PARSED);
   }
 
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting request update, GOAWAY/draining sess=" << this;
+    requestUpdateError(
+        RequestError{
+            requestID, RequestErrorCode::GOING_AWAY, "Session going away"},
+        existingRequestID,
+        /*terminateExistingRequest=*/false);
+    return;
+  }
+
   if (closeSessionIfRequestIDInvalid(existingRequestID, false, false, false)) {
     return;
   }
@@ -3921,6 +3931,13 @@ class MoQSession::ReceiverSubscriptionHandle
     }
 
     requestUpdate.existingRequestID = subscribeOk_->requestID;
+    if (session_->shouldFailNewLocalRequestDueToGoaway()) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              session_->peekNextRequestID(),
+              RequestErrorCode::GOING_AWAY,
+              "Session received GOAWAY"});
+    }
     if (getDraftMajorVersion(*(session_->getNegotiatedVersion())) >= 14) {
       requestUpdate.requestID = session_->getNextRequestID();
     } else {
@@ -5118,7 +5135,8 @@ void MoQSession::requestUpdateOk(const RequestOk& requestOk) {
 
 void MoQSession::requestUpdateError(
     const SubscribeUpdateError& requestError,
-    RequestID existingRequestID) {
+    RequestID existingRequestID,
+    bool terminateExistingRequest) {
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
 
@@ -5128,6 +5146,10 @@ void MoQSession::requestUpdateError(
     XLOG(ERR) << "writeRequestError for REQUEST_UPDATE failed sess=" << this;
   } else {
     controlWriteEvent_.signal();
+  }
+
+  if (!terminateExistingRequest) {
+    return;
   }
 
   // Terminate subscription with PUBLISH_DONE (UPDATE_FAILED)
