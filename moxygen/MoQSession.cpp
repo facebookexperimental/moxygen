@@ -2793,6 +2793,65 @@ MoQSession::getSubscribeTrackReceiveState(TrackAlias trackAlias) {
   return trackIt->second;
 }
 
+folly::Expected<
+    std::shared_ptr<MoQSession::SubscribeTrackReceiveState>,
+    FetchError>
+MoQSession::resolveJoiningFetch(
+    JoiningFetch& joining, const FullTrackName& fullTrackName) {
+  if (joining.joiningRequestID == kAutoRequestID) {
+    for (const auto& [reqID, pending] : pendingRequests_) {
+      if (const auto* trackPtr = pending->tryGetSubscribeTrack()) {
+        if ((*trackPtr)->fullTrackName() == fullTrackName) {
+          joining.joiningRequestID = reqID;
+          return *trackPtr;
+        }
+      }
+    }
+    for (const auto& [alias, state] : subTracks_) {
+      if (state->fullTrackName() == fullTrackName) {
+        joining.joiningRequestID = state->getRequestID();
+        return state;
+      }
+    }
+    XLOG(ERR) << "kAutoRequestID joining FETCH found no match"
+              << " ftn=" << fullTrackName << " sess=" << this;
+    return folly::makeUnexpected(FetchError{
+        kAutoRequestID,
+        FetchErrorCode::INTERNAL_ERROR,
+        "No matching subscribe for auto joining FETCH"});
+  }
+
+  std::shared_ptr<SubscribeTrackReceiveState> state;
+  auto pendingIt = pendingRequests_.find(joining.joiningRequestID);
+  if (pendingIt != pendingRequests_.end()) {
+    if (auto* trackPtr = pendingIt->second->tryGetSubscribeTrack()) {
+      state = *trackPtr;
+    }
+  } else {
+    auto subIt = reqIdToTrackAlias_.find(joining.joiningRequestID);
+    if (subIt != reqIdToTrackAlias_.end()) {
+      state = getSubscribeTrackReceiveState(subIt->second);
+    }
+  }
+  if (!state) {
+    XLOG(ERR) << "API error, joining FETCH for invalid requestID="
+              << joining.joiningRequestID.value << " sess=" << this;
+    return folly::makeUnexpected(FetchError{
+        std::numeric_limits<uint64_t>::max(),
+        FetchErrorCode::INTERNAL_ERROR,
+        "Invalid JSID"});
+  }
+  if (fullTrackName != state->fullTrackName()) {
+    XLOG(ERR) << "API error, track name mismatch=" << fullTrackName << ","
+              << state->fullTrackName() << " sess=" << this;
+    return folly::makeUnexpected(FetchError{
+        std::numeric_limits<uint64_t>::max(),
+        FetchErrorCode::INTERNAL_ERROR,
+        "Track name mismatch"});
+  }
+  return state;
+}
+
 std::shared_ptr<MoQSession::FetchTrackReceiveState>
 MoQSession::getFetchTrackReceiveState(RequestID requestID) {
   XLOG(DBG3) << "getTrack reqID=" << requestID;
@@ -5322,40 +5381,14 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto [standalone, joining] = fetchType(fetch);
   FullTrackName fullTrackName = fetch.fullTrackName;
   if (joining) {
-    std::shared_ptr<SubscribeTrackReceiveState> state;
-    auto pendingIt = pendingRequests_.find(joining->joiningRequestID);
-    if (pendingIt != pendingRequests_.end()) {
-      if (auto* trackPtr = pendingIt->second->tryGetSubscribeTrack()) {
-        state = *trackPtr;
-      }
-    } else {
-      auto subIt = reqIdToTrackAlias_.find(joining->joiningRequestID);
-      if (subIt != reqIdToTrackAlias_.end()) {
-        state = getSubscribeTrackReceiveState(subIt->second);
-      }
-    }
-    if (!state) {
-      XLOG(ERR) << "API error, joining FETCH for invalid requestID="
-                << joining->joiningRequestID.value << " sess=" << this;
-      FetchError fetchError = {
-          std::numeric_limits<uint64_t>::max(),
-          FetchErrorCode::INTERNAL_ERROR,
-          "Invalid JSID"};
+    // May populate joining->joiningRequestID when kAutoRequestID is passed.
+    auto stateResult = resolveJoiningFetch(*joining, fullTrackName);
+    if (stateResult.hasError()) {
       MOQ_SUBSCRIBER_STATS(
-          subscriberStatsCallback_, onFetchError, fetchError.errorCode);
-      co_return folly::makeUnexpected(fetchError);
-    }
-
-    if (fullTrackName != state->fullTrackName()) {
-      XLOG(ERR) << "API error, track name mismatch=" << fullTrackName << ","
-                << state->fullTrackName() << " sess=" << this;
-      FetchError fetchError = {
-          std::numeric_limits<uint64_t>::max(),
-          FetchErrorCode::INTERNAL_ERROR,
-          "Track name mismatch"};
-      MOQ_SUBSCRIBER_STATS(
-          subscriberStatsCallback_, onFetchError, fetchError.errorCode);
-      co_return folly::makeUnexpected(fetchError);
+          subscriberStatsCallback_,
+          onFetchError,
+          stateResult.error().errorCode);
+      co_return folly::makeUnexpected(stateResult.error());
     }
   }
   auto reqID = getNextRequestID();
