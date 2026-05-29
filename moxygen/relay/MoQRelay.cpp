@@ -53,15 +53,15 @@ folly::coro::Task<void> MoQRelay::doNewGroupRequestUpdate(
   }
 }
 
-std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findNamespaceNode(
+std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findInTree(
+    NamespaceNode& root,
     const TrackNamespace& ns,
     bool createMissingNodes,
     MatchType matchType,
     std::vector<std::pair<
         std::shared_ptr<MoQSession>,
         NamespaceNode::NamespaceSubscriberInfo>>* sessions) {
-  std::shared_ptr<NamespaceNode> nodePtr(
-      std::shared_ptr<void>(), &publishNamespaceRoot_);
+  std::shared_ptr<NamespaceNode> nodePtr(std::shared_ptr<void>(), &root);
   for (auto i = 0ul; i < ns.size(); i++) {
     if (sessions) {
       // Extract session pointers with their subscriber info from the map
@@ -77,12 +77,10 @@ std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findNamespaceNode(
         nodePtr->children.emplace(name, node);
         // Don't increment yet - only when content is actually added
         nodePtr = std::move(node);
-      } else if (
-          matchType == MatchType::Prefix &&
-          nodePtr.get() != &publishNamespaceRoot_) {
+      } else if (matchType == MatchType::Prefix && nodePtr.get() != &root) {
         return nodePtr;
       } else {
-        XLOG(ERR) << "prefix not found in publishNamespace tree";
+        XLOG(ERR) << "prefix not found in tree";
         return nullptr;
       }
     } else {
@@ -744,6 +742,102 @@ void MoQRelay::unsubscribeNamespace(
   }
   // TODO: error?
   XLOG(DBG1) << "Namespace prefix was not subscribed by this session";
+}
+
+// Draft 18+
+class MoQRelay::TracksSubscription : public Publisher::SubscribeTracksHandle {
+ public:
+  TracksSubscription(
+      std::shared_ptr<MoQRelay> relay,
+      std::shared_ptr<MoQSession> session,
+      RequestOk ok,
+      TrackNamespace trackNamespacePrefix)
+      : Publisher::SubscribeTracksHandle(std::move(ok)),
+        relay_(std::move(relay)),
+        session_(std::move(session)),
+        trackNamespacePrefix_(std::move(trackNamespacePrefix)) {}
+
+  void unsubscribeTracks() override {
+    if (relay_) {
+      relay_->unsubscribeTracks(trackNamespacePrefix_, std::move(session_));
+      relay_.reset();
+    }
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for relay SUBSCRIBE_TRACKS"});
+  }
+
+ private:
+  std::shared_ptr<MoQRelay> relay_;
+  std::shared_ptr<MoQSession> session_;
+  TrackNamespace trackNamespacePrefix_;
+};
+
+folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
+    SubscribeTracks subTracks) {
+  XLOG(DBG1) << __func__ << " nsp=" << subTracks.trackNamespacePrefix;
+
+  auto session = MoQSession::getRequestSession();
+  auto maybeNegotiatedVersion = session->getNegotiatedVersion();
+  CHECK(maybeNegotiatedVersion.has_value());
+  if (getDraftMajorVersion(*maybeNegotiatedVersion) < 18) {
+    co_return folly::makeUnexpected(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::NOT_SUPPORTED,
+            "SUBSCRIBE_TRACKS requires draft 18+"});
+  }
+
+  // Register in the parallel tracks tree (independent overlap space).
+  auto tracksNode = findTracksSubscriberNode(
+      subTracks.trackNamespacePrefix, /*createMissingNodes=*/true);
+  bool wasEmpty = !tracksNode->hasLocalSessions();
+  tracksNode->sessions.emplace(
+      session,
+      NamespaceNode::NamespaceSubscriberInfo{
+          subTracks.forward,
+          // Tracks-tree entries always behave like PUBLISH-style subscribers;
+          // options is unused for this tree.
+          SubscribeNamespaceOptions::PUBLISH,
+          /*namespacePublishHandle=*/nullptr,
+          subTracks.trackNamespacePrefix});
+  if (wasEmpty && tracksNode->parent_) {
+    tracksNode->parent_->incrementActiveChildren();
+  }
+
+  RequestOk subTracksOk{subTracks.requestID};
+  co_return std::make_shared<TracksSubscription>(
+      shared_from_this(),
+      std::move(session),
+      std::move(subTracksOk),
+      subTracks.trackNamespacePrefix);
+}
+
+void MoQRelay::unsubscribeTracks(
+    const TrackNamespace& trackNamespacePrefix,
+    std::shared_ptr<MoQSession> session) {
+  XLOG(DBG1) << __func__ << " nsp=" << trackNamespacePrefix;
+  auto nodePtr = findTracksSubscriberNode(trackNamespacePrefix);
+  if (!nodePtr) {
+    return;
+  }
+  bool hadLocalContent = nodePtr->hasLocalSessions();
+  auto it = nodePtr->sessions.find(session);
+  if (it == nodePtr->sessions.end()) {
+    XLOG(DBG1) << "Tracks prefix was not subscribed by this session";
+    return;
+  }
+  nodePtr->sessions.erase(it);
+  if (hadLocalContent && !nodePtr->shouldKeep() && nodePtr->parent_ &&
+      !trackNamespacePrefix.trackNamespace.empty()) {
+    nodePtr->parent_->tryPruneChild(trackNamespacePrefix.trackNamespace.back());
+  }
 }
 
 std::shared_ptr<MoQSession> MoQRelay::findPublishNamespaceSession(

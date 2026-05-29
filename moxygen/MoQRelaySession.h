@@ -81,10 +81,21 @@ class MoQRelaySession : public MoQSession {
       SubscribeNamespace subAnn,
       std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
+  // Draft 18+
+  folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
+      SubscribeTracks subTracks) override;
+
  protected:
   void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
       std::shared_ptr<SubNSReply> subNsReply) override;
+
+  // Draft 18+
+  void onSubscribeTracksImpl(
+      const SubscribeTracks& subscribeTracks,
+      std::shared_ptr<MessageReply> messageReply) override;
+
+  void onSubscribeTracksStreamClosed(RequestID requestID) override;
 
   std::shared_ptr<SubNSReply> getSubNsReply(
       std::shared_ptr<ReplyContext> replyContext) override {
@@ -101,6 +112,7 @@ class MoQRelaySession : public MoQSession {
   class SubscriberPublishNamespaceCallback;
   class PublisherPublishNamespaceHandle;
   class SubscribeNamespaceHandle;
+  class SubscribeTracksHandle;
 
   // Override to handle ANNOUNCE and SUBSCRIBE_ANNOUNCES updates
   void onRequestUpdate(RequestUpdate requestUpdate) override;
@@ -122,6 +134,14 @@ class MoQRelaySession : public MoQSession {
       const SubscribeNamespaceOk& saOk,
       std::shared_ptr<SubNSReply>&& subNsReply);
   void unsubscribeNamespace(const UnsubscribeNamespace& unsubAnn);
+
+  // Draft 18+: SUBSCRIBE_TRACKS handling.
+  folly::coro::Task<void> handleSubscribeTracks(
+      SubscribeTracks subTracks,
+      std::shared_ptr<MessageReply> messageReply);
+  void subscribeTracksOk(
+      const RequestOk& subTracksOk,
+      std::shared_ptr<MessageReply>&& messageReply);
 
   folly::coro::Task<void> handlePublishNamespace(
       PublishNamespace publishNamespace,
@@ -148,6 +168,10 @@ class MoQRelaySession : public MoQSession {
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
   void handleSubscribeNamespaceOkFromRequestOk(
+      const RequestOk& requestOk,
+      PendingRequestIterator reqIt);
+  // Draft 18+
+  void handleSubscribeTracksOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
 
@@ -177,6 +201,12 @@ class MoQRelaySession : public MoQSession {
       std::shared_ptr<Publisher::SubscribeNamespaceHandle>,
       RequestID::hash>
       subscribeNamespaceHandles_;
+  // Draft 18+
+  folly::F14FastMap<
+      RequestID,
+      std::shared_ptr<Publisher::SubscribeTracksHandle>,
+      RequestID::hash>
+      subscribeTracksHandles_;
 
   // Legacy TrackNamespace → RequestID translation maps.
   // Remove these once we drop support for the respective legacy versions.

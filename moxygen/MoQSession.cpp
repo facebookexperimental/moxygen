@@ -3598,6 +3598,16 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
     logger_->logSubscribeUpdate(requestUpdate, ControlMessageType::PARSED);
   }
 
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting request update, GOAWAY/draining sess=" << this;
+    requestUpdateError(
+        RequestError{
+            requestID, RequestErrorCode::GOING_AWAY, "Session going away"},
+        existingRequestID,
+        /*terminateExistingRequest=*/false);
+    return;
+  }
+
   if (closeSessionIfRequestIDInvalid(existingRequestID, false, false, false)) {
     return;
   }
@@ -3923,6 +3933,13 @@ class MoQSession::ReceiverSubscriptionHandle
     }
 
     requestUpdate.existingRequestID = subscribeOk_->requestID;
+    if (session_->shouldFailNewLocalRequestDueToGoaway()) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              session_->peekNextRequestID(),
+              RequestErrorCode::GOING_AWAY,
+              "Session received GOAWAY"});
+    }
     if (getDraftMajorVersion(*(session_->getNegotiatedVersion())) >= 14) {
       requestUpdate.requestID = session_->getNextRequestID();
     } else {
@@ -4509,6 +4526,24 @@ void MoQSession::handleTrackStatusOkFromRequestOk(const RequestOk& requestOk) {
              << " sess=" << this;
   auto trackStatusOk = requestOk.toTrackStatusOk();
   onTrackStatusOk(std::move(trackStatusOk));
+}
+
+bool MoQSession::validateRequestOkTrackProperties(
+    const RequestOk& requestOk,
+    FrameType resolvedFrameType) {
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
+    return true;
+  }
+  if (resolvedFrameType == FrameType::TRACK_STATUS_OK) {
+    return true;
+  }
+  if (requestOk.trackProperties.empty()) {
+    return true;
+  }
+  XLOG(ERR) << "Track Properties not allowed in REQUEST_OK for frameType="
+            << folly::to_underlying(resolvedFrameType) << ", sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  return false;
 }
 
 void MoQSession::handleSubscribeUpdateOkFromRequestOk(
@@ -5102,7 +5137,8 @@ void MoQSession::requestUpdateOk(const RequestOk& requestOk) {
 
 void MoQSession::requestUpdateError(
     const SubscribeUpdateError& requestError,
-    RequestID existingRequestID) {
+    RequestID existingRequestID,
+    bool terminateExistingRequest) {
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
 
@@ -5112,6 +5148,10 @@ void MoQSession::requestUpdateError(
     XLOG(ERR) << "writeRequestError for REQUEST_UPDATE failed sess=" << this;
   } else {
     controlWriteEvent_.signal();
+  }
+
+  if (!terminateExistingRequest) {
+    return;
   }
 
   // Terminate subscription with PUBLISH_DONE (UPDATE_FAILED)
@@ -5608,8 +5648,13 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
             onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
           }};
     case FrameType::SUBSCRIBE_TRACKS:
+      // Note: REQUEST_UPDATE is intentionally NOT in the allow-list. The
+      // SUBSCRIBE_TRACKS message has no updateable per-request state
+      // (forward, prefix, params), so accepting a REQUEST_UPDATE on this
+      // stream would just trigger a NOT_SUPPORTED response with no useful
+      // semantics. Drop it at the codec instead.
       return BidiStreamConfig{
-          {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
+          {FrameType::SUBSCRIBE_TRACKS},
           [this](RequestID id) { onSubscribeTracksStreamClosed(id); }};
     default:
       return std::nullopt;
@@ -6029,6 +6074,10 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   // In v15+, convert REQUEST_OK back to specific frame type
   if (*getNegotiatedVersion() > 14) {
     frameType = reqIt->second->getOkFrameType();
+  }
+
+  if (!validateRequestOkTrackProperties(requestOk, frameType)) {
+    return;
   }
 
   switch (frameType) {

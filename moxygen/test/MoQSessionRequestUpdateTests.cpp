@@ -12,6 +12,187 @@ using namespace moxygen::test;
 namespace {
 using testing::_;
 
+class Draft18RequestUpdateGoawayTest : public MoQSessionTest {
+ protected:
+  struct OpenSubscription {
+    SubscribeRequest subscribeRequest;
+    std::shared_ptr<Publisher::SubscriptionHandle> clientHandle;
+    std::shared_ptr<MockSubscriptionHandle> serverHandle;
+    std::shared_ptr<TrackConsumer> serverConsumer;
+  };
+
+  folly::coro::Task<OpenSubscription> openSubscription() {
+    co_await setupMoQSession();
+
+    OpenSubscription subscription;
+    expectSubscribe([&subscription](auto sub, auto pub) -> TaskSubscribeResult {
+      subscription.serverConsumer = pub;
+      subscription.serverHandle =
+          makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      co_return subscription.serverHandle;
+    });
+
+    subscription.subscribeRequest = getSubscribe(kTestTrackName);
+    auto result = co_await clientSession_->subscribe(
+        subscription.subscribeRequest, subscribeCallback_);
+    EXPECT_FALSE(result.hasError());
+    if (!result.hasError()) {
+      subscription.clientHandle = result.value();
+    }
+    co_return subscription;
+  }
+
+  std::shared_ptr<testing::NiceMock<MockTrackConsumer>>
+  makeKeepAliveConsumer() {
+    auto keepAliveConsumer =
+        std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+    ON_CALL(*keepAliveConsumer, setTrackAlias(_))
+        .WillByDefault(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    ON_CALL(*keepAliveConsumer, publishDone(_))
+        .WillByDefault(
+            testing::Return(
+                folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+    return keepAliveConsumer;
+  }
+
+  folly::coro::Task<std::shared_ptr<Publisher::SubscriptionHandle>>
+  openServerSubscriptionToKeepDrainOpen() {
+    expectSubscribe(
+        [](auto sub, auto /* pub */) -> TaskSubscribeResult {
+          co_return makeSubscribeOkResult(sub);
+        },
+        MoQControlCodec::Direction::CLIENT);
+    auto keepAlive = co_await serverSession_->subscribe(
+        getSubscribe(kTestTrackName), makeKeepAliveConsumer());
+    EXPECT_FALSE(keepAlive.hasError());
+    if (keepAlive.hasError()) {
+      co_return nullptr;
+    }
+    co_return keepAlive.value();
+  }
+
+  void expectTrackEndedPublishDone(
+      std::optional<PublishDoneStatusCode>& statusCode,
+      folly::coro::Baton& publishDone) {
+    EXPECT_CALL(*subscribeCallback_, publishDone(_))
+        .WillOnce([&statusCode, &publishDone](const PublishDone& done) {
+          statusCode = done.statusCode;
+          publishDone.post();
+          return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+        });
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft18RequestUpdateGoawayTest,
+    Draft18RequestUpdateGoawayTest,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+CO_TEST_P_X(
+    Draft18RequestUpdateGoawayTest,
+    DrainingRejectsInboundRequestUpdate) {
+  auto subscription = co_await openSubscription();
+  if (!subscription.clientHandle || !subscription.serverConsumer) {
+    co_return;
+  }
+  auto keepAlive = co_await openServerSubscriptionToKeepDrainOpen();
+  if (!keepAlive) {
+    co_return;
+  }
+
+  std::optional<PublishDoneStatusCode> publishDoneStatusCode;
+  folly::coro::Baton publishDone;
+  expectTrackEndedPublishDone(publishDoneStatusCode, publishDone);
+
+  // GOAWAY sets draining_; use drain() directly so the client can still send
+  // REQUEST_UPDATE and exercise the peer-side rejection path.
+  serverSession_->drain();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*subscription.serverHandle, requestUpdateCalled).Times(0);
+  EXPECT_CALL(*subscription.serverHandle, requestUpdateResult()).Times(0);
+
+  SubscribeUpdate update{
+      subscription.subscribeRequest.requestID,
+      RequestID(0),
+      AbsoluteLocation{1, 0},
+      2,
+      kDefaultPriority + 1,
+      true};
+
+  auto result = co_await subscription.clientHandle->requestUpdate(update);
+  EXPECT_TRUE(result.hasError());
+  if (result.hasError()) {
+    EXPECT_EQ(result.error().requestID, RequestID(getRequestIDMultiplier()));
+    EXPECT_EQ(result.error().errorCode, RequestErrorCode::GOING_AWAY);
+  }
+  EXPECT_FALSE(publishDoneStatusCode.has_value());
+  if (publishDoneStatusCode.has_value()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+
+  subscription.serverConsumer->publishDone(
+      getTrackEndedPublishDone(subscription.subscribeRequest.requestID));
+  co_await publishDone;
+  EXPECT_EQ(publishDoneStatusCode, PublishDoneStatusCode::TRACK_ENDED);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestUpdateGoawayTest,
+    ReceivedGoawayRejectsLocalRequestUpdate) {
+  auto subscription = co_await openSubscription();
+  if (!subscription.clientHandle || !subscription.serverConsumer) {
+    co_return;
+  }
+  auto keepAlive = co_await openServerSubscriptionToKeepDrainOpen();
+  if (!keepAlive) {
+    co_return;
+  }
+
+  folly::coro::Baton goawayReceived;
+  EXPECT_CALL(*clientPublisher, goaway(_))
+      .WillOnce(testing::Invoke([&goawayReceived](Goaway /* goaway */) {
+        goawayReceived.post();
+      }));
+  serverSession_->goaway(Goaway{});
+  co_await goawayReceived;
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(0);
+  EXPECT_CALL(*subscription.serverHandle, requestUpdateCalled).Times(0);
+  EXPECT_CALL(*subscription.serverHandle, requestUpdateResult()).Times(0);
+
+  SubscribeUpdate update{
+      subscription.subscribeRequest.requestID,
+      RequestID(0),
+      AbsoluteLocation{1, 0},
+      2,
+      kDefaultPriority + 1,
+      true};
+
+  auto result = co_await subscription.clientHandle->requestUpdate(update);
+  EXPECT_TRUE(result.hasError());
+  if (result.hasError()) {
+    EXPECT_EQ(result.error().requestID, RequestID(getRequestIDMultiplier()));
+    EXPECT_EQ(result.error().errorCode, RequestErrorCode::GOING_AWAY);
+  }
+  co_await rescheduleN(4);
+
+  std::optional<PublishDoneStatusCode> publishDoneStatusCode;
+  folly::coro::Baton publishDone;
+  expectTrackEndedPublishDone(publishDoneStatusCode, publishDone);
+  subscription.serverConsumer->publishDone(
+      getTrackEndedPublishDone(subscription.subscribeRequest.requestID));
+  co_await publishDone;
+  EXPECT_EQ(publishDoneStatusCode, PublishDoneStatusCode::TRACK_ENDED);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // =============================================================================
 // SUBSCRIBE REQUEST_UPDATE tests
 // =============================================================================
@@ -70,8 +251,13 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterStartDecreases) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// Test that subscription filter validation fails when endGroup < start.group
+// Test that subscription filter validation fails when endGroup < start.group.
+// Draft-18+ encodes EndGroup as an unsigned delta from StartLocation.group, so
+// endGroup < start.group cannot be represented on the wire; skip in that case.
 CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterEndLessThanStart) {
+  if (getDraftMajorVersion(GetParam().serverVersion) >= 18) {
+    co_return;
+  }
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;

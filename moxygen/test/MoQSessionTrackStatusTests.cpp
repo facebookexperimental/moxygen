@@ -4,7 +4,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include "moxygen/MoQTrackProperties.h"
 #include "moxygen/test/MoQSessionTestCommon.h"
+#include "moxygen/test/MockMoQSession.h"
 
 using namespace moxygen;
 using namespace moxygen::test;
@@ -127,4 +129,114 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusPublisherException) {
     co_await folly::coro::co_reschedule_on_current_executor;
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// === Track Properties validation tests for REQUEST_OK (draft 18+) ===
+
+namespace {
+
+// Test fixture exposes the protected helper so we can directly exercise the
+// draft-18 Track Properties validation that BOTH MoQSession::onRequestOk and
+// MoQRelaySession::onRequestOk delegate to. Testing the shared helper covers
+// both code paths.
+class ValidatorSession : public MockMoQSession {
+ public:
+  using MockMoQSession::MockMoQSession;
+  using MoQSession::validateRequestOkTrackProperties;
+};
+
+class CloseCallbackRecorder : public MoQSession::MoQSessionCloseCallback {
+ public:
+  void onMoQSessionClosed(
+      SessionCloseErrorCode error,
+      folly::Optional<uint32_t> /*wtError*/) override {
+    closed = true;
+    lastError = error;
+  }
+  bool closed{false};
+  SessionCloseErrorCode lastError{SessionCloseErrorCode::NO_ERROR};
+};
+
+std::shared_ptr<testing::NiceMock<ValidatorSession>> makeValidatorSession(
+    uint64_t version) {
+  auto session = std::make_shared<testing::NiceMock<ValidatorSession>>();
+  ON_CALL(*session, getNegotiatedVersion())
+      .WillByDefault(testing::Return(std::optional<uint64_t>(version)));
+  return session;
+}
+
+RequestOk makeRequestOkWithProperty() {
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(1);
+  requestOk.trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 50});
+  return requestOk;
+}
+
+} // namespace
+
+TEST(MoQSessionRequestOkTrackPropertiesValidation, AllowsTrackStatusOk) {
+  auto session = makeValidatorSession(kVersionDraft18);
+  auto requestOk = makeRequestOkWithProperty();
+  EXPECT_TRUE(session->validateRequestOkTrackProperties(
+      requestOk, FrameType::TRACK_STATUS_OK));
+}
+
+TEST(MoQSessionRequestOkTrackPropertiesValidation, AllowsEmptyTrackProperties) {
+  auto session = makeValidatorSession(kVersionDraft18);
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(1);
+  // trackProperties intentionally empty.
+
+  for (auto frameType :
+       {FrameType::REQUEST_OK,
+        FrameType::PUBLISH_NAMESPACE_OK,
+        FrameType::SUBSCRIBE_NAMESPACE_OK,
+        FrameType::PUBLISH_OK}) {
+    EXPECT_TRUE(
+        session->validateRequestOkTrackProperties(requestOk, frameType));
+  }
+}
+
+TEST(
+    MoQSessionRequestOkTrackPropertiesValidation,
+    RejectsTrackPropertiesForNonTrackStatusOk) {
+  // Each non-TRACK_STATUS_OK frame type with non-empty trackProperties must
+  // cause the session to close with PROTOCOL_VIOLATION. This is the rule that
+  // MoQRelaySession::onRequestOk previously bypassed; covered here via the
+  // shared helper that both onRequestOk implementations now call.
+  for (auto frameType :
+       {FrameType::REQUEST_OK,
+        FrameType::PUBLISH_NAMESPACE_OK,
+        FrameType::SUBSCRIBE_NAMESPACE_OK,
+        FrameType::PUBLISH_OK}) {
+    auto session = makeValidatorSession(kVersionDraft18);
+    CloseCallbackRecorder recorder;
+    session->setSessionCloseCallback(&recorder);
+    auto requestOk = makeRequestOkWithProperty();
+
+    EXPECT_FALSE(
+        session->validateRequestOkTrackProperties(requestOk, frameType))
+        << "frameType=" << folly::to_underlying(frameType);
+    EXPECT_TRUE(session->isClosed())
+        << "frameType=" << folly::to_underlying(frameType);
+    EXPECT_TRUE(recorder.closed)
+        << "frameType=" << folly::to_underlying(frameType);
+    EXPECT_EQ(recorder.lastError, SessionCloseErrorCode::PROTOCOL_VIOLATION)
+        << "frameType=" << folly::to_underlying(frameType);
+  }
+}
+
+TEST(
+    MoQSessionRequestOkTrackPropertiesValidation,
+    PreDraft18AllowsTrackPropertiesForAnyFrameType) {
+  // The validator is a no-op for drafts that don't have Track Properties on
+  // REQUEST_OK. The helper accepts whatever is on the struct; it is the
+  // wire-level writer/parser that drops the field for those versions.
+  auto session = makeValidatorSession(kVersionDraft17);
+  auto requestOk = makeRequestOkWithProperty();
+
+  EXPECT_TRUE(session->validateRequestOkTrackProperties(
+      requestOk, FrameType::REQUEST_OK));
+  EXPECT_FALSE(session->isClosed());
 }

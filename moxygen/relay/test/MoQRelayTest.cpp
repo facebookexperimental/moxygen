@@ -2365,4 +2365,82 @@ TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
   }
 }
 
+// ============================================================================
+// Draft 18+: SUBSCRIBE_TRACKS tests
+// ============================================================================
+
+class MoQRelayTracksTest : public MoQRelayTest {
+ protected:
+  // Like createMockSession() but reports draft 18 for the negotiated version.
+  std::shared_ptr<MockMoQSession> createV18Session() {
+    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    ON_CALL(*session, getNegotiatedVersion())
+        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+    getOrCreateMockState(session);
+    return session;
+  }
+
+  // Helper that mirrors doSubscribeNamespace but for the new SUBSCRIBE_TRACKS
+  // path. The handle is tracked for cleanup in the per-session state.
+  std::shared_ptr<Publisher::SubscribeTracksHandle> doSubscribeTracks(
+      std::shared_ptr<MoQSession> session,
+      const TrackNamespace& nsPrefix) {
+    SubscribeTracks subTracks;
+    subTracks.trackNamespacePrefix = nsPrefix;
+    return withSessionContext(session, [&]() {
+      auto task = relay_->subscribeTracks(std::move(subTracks));
+      auto res = folly::coro::blockingWait(std::move(task), exec_.get());
+      EXPECT_TRUE(res.hasValue());
+      if (!res.hasValue()) {
+        return std::shared_ptr<Publisher::SubscribeTracksHandle>(nullptr);
+      }
+      // Stash for cleanup so the destructor doesn't fire on a stale relay.
+      auto handle = *res;
+      cleanupHandles_.push_back(handle);
+      return handle;
+    });
+  }
+
+  void TearDown() override {
+    // Drop our local handle refs before MoQRelayTest tears down the relay.
+    for (auto& handle : cleanupHandles_) {
+      if (handle) {
+        handle->unsubscribeTracks();
+      }
+    }
+    cleanupHandles_.clear();
+    MoQRelayTest::TearDown();
+  }
+
+ private:
+  std::vector<std::shared_ptr<Publisher::SubscribeTracksHandle>>
+      cleanupHandles_;
+};
+
+// Pre-draft-18 sessions can't issue SUBSCRIBE_TRACKS at all.
+TEST_F(MoQRelayTracksTest, SubscribeTracksRejectsPreV18) {
+  auto session = createMockSession(); // defaults to kVersionDraftCurrent (v14)
+  SubscribeTracks subTracks;
+  subTracks.trackNamespacePrefix = TrackNamespace{{"test"}};
+  withSessionContext(session, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->subscribeTracks(std::move(subTracks)), exec_.get());
+    ASSERT_FALSE(res.hasValue());
+    EXPECT_EQ(res.error().errorCode, SubscribeTracksErrorCode::NOT_SUPPORTED);
+  });
+  removeSession(session);
+}
+
+// SUBSCRIBE_TRACKS and SUBSCRIBE_NAMESPACE live in independent overlap
+// spaces, so the same prefix in both trees is allowed by the spec.
+TEST_F(MoQRelayTracksTest, SamePrefixInBothTreesAllowed) {
+  auto session = createV18Session();
+  TrackNamespace prefix{{"test", "live"}};
+  // Subscribing to the same prefix via both messages must succeed.
+  doSubscribeNamespace(session, prefix);
+  auto tracksHandle = doSubscribeTracks(session, prefix);
+  EXPECT_NE(tracksHandle, nullptr);
+  removeSession(session);
+}
+
 } // namespace moxygen::test

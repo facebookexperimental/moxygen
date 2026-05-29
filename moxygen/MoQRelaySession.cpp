@@ -174,6 +174,64 @@ class MoQRelaySession::SubscribeNamespaceHandle
   proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle_{nullptr};
 };
 
+// Draft 18+: handle returned to subscribers from
+// MoQRelaySession::subscribeTracks
+class MoQRelaySession::SubscribeTracksHandle
+    : public Publisher::SubscribeTracksHandle {
+ public:
+  SubscribeTracksHandle(
+      std::shared_ptr<MoQRelaySession> session,
+      RequestOk subTracksOk,
+      proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle)
+      : Publisher::SubscribeTracksHandle(std::move(subTracksOk)),
+        session_(session),
+        bidiWriteHandle_(bidiWriteHandle) {}
+
+  SubscribeTracksHandle(const SubscribeTracksHandle&) = delete;
+  SubscribeTracksHandle& operator=(const SubscribeTracksHandle&) = delete;
+  SubscribeTracksHandle(SubscribeTracksHandle&&) = delete;
+  SubscribeTracksHandle& operator=(SubscribeTracksHandle&&) = delete;
+
+  ~SubscribeTracksHandle() override {
+    unsubscribeTracks();
+  }
+
+  void unsubscribeTracks() override {
+    auto session = session_.lock();
+    if (!session || session->isClosed()) {
+      session_.reset();
+      bidiWriteHandle_ = nullptr;
+      return;
+    }
+    if (bidiWriteHandle_) {
+      // FIN the bidi reply stream — that's how the subscriber signals
+      // cancellation in draft 18.
+      auto res =
+          bidiWriteHandle_->writeStreamData(nullptr, /*fin=*/true, nullptr);
+      if (!res) {
+        XLOG(ERR)
+            << "writeStreamData(fin=true) for SUBSCRIBE_TRACKS failed error="
+            << uint64_t(res.error());
+      }
+      bidiWriteHandle_ = nullptr;
+    }
+    session_.reset();
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for SUBSCRIBE_TRACKS"});
+  }
+
+ private:
+  std::weak_ptr<MoQRelaySession> session_;
+  proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle_{nullptr};
+};
+
 // MoQRelayPendingRequestState - extends base PendingRequestState with
 // publishNamespace support
 class MoQRelaySession::MoQRelayPendingRequestState
@@ -194,11 +252,23 @@ class MoQRelaySession::MoQRelayPendingRequestState
   MoQRelayPendingRequestState& operator=(MoQRelayPendingRequestState&&) =
       delete;
 
+  // Tag for disambiguating SUBSCRIBE_TRACKS construction; the promise type is
+  // identical to SUBSCRIBE_NAMESPACE's, so we use a tag rather than
+  // overloading.
+  struct SubscribeTracksTag {};
+
   explicit MoQRelayPendingRequestState(
       folly::coro::Promise<
           folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>
           promise) {
     type_ = Type::SUBSCRIBE_NAMESPACE;
+    new (&subscribeNamespaceStorage_) auto(std::move(promise));
+  }
+
+  MoQRelayPendingRequestState(
+      folly::coro::Promise<folly::Expected<RequestOk, RequestError>> promise,
+      SubscribeTracksTag) {
+    type_ = Type::SUBSCRIBE_TRACKS;
     new (&subscribeNamespaceStorage_) auto(std::move(promise));
   }
 
@@ -217,6 +287,12 @@ class MoQRelaySession::MoQRelayPendingRequestState
         if (auto* subscribeNamespacePtr = tryGetSubscribeNamespace(this)) {
           subscribeNamespacePtr->setValue(
               folly::makeUnexpected(std::move(error)));
+          return type_;
+        }
+        return folly::makeUnexpected(folly::unit);
+      case Type::SUBSCRIBE_TRACKS:
+        if (auto* subscribeTracksPtr = tryGetSubscribeTracks(this)) {
+          subscribeTracksPtr->setValue(folly::makeUnexpected(std::move(error)));
           return type_;
         }
         return folly::makeUnexpected(folly::unit);
@@ -239,6 +315,12 @@ class MoQRelaySession::MoQRelayPendingRequestState
     return std::make_unique<MoQRelayPendingRequestState>(std::move(promise));
   }
 
+  static std::unique_ptr<MoQRelayPendingRequestState> makeSubscribeTracks(
+      folly::coro::Promise<folly::Expected<RequestOk, RequestError>> promise) {
+    return std::make_unique<MoQRelayPendingRequestState>(
+        std::move(promise), SubscribeTracksTag{});
+  }
+
   // Override destructor to handle publishNamespace storage
   ~MoQRelayPendingRequestState() override {
     switch (getType()) {
@@ -246,6 +328,7 @@ class MoQRelaySession::MoQRelayPendingRequestState
         publishNamespaceStorage_.~PendingPublishNamespace();
         break;
       case Type::SUBSCRIBE_NAMESPACE:
+      case Type::SUBSCRIBE_TRACKS:
         subscribeNamespaceStorage_.~Promise();
         break;
       default:
@@ -270,6 +353,17 @@ class MoQRelaySession::MoQRelayPendingRequestState
       tryGetSubscribeNamespace(PendingRequestState* base) {
     if (base && base->getType() == Type::SUBSCRIBE_NAMESPACE) {
       auto* relay = static_cast<MoQRelayPendingRequestState*>(base);
+      return &relay->subscribeNamespaceStorage_;
+    }
+    return nullptr;
+  }
+
+  static folly::coro::Promise<folly::Expected<RequestOk, RequestError>>*
+      FOLLY_NULLABLE
+      tryGetSubscribeTracks(PendingRequestState* base) {
+    if (base && base->getType() == Type::SUBSCRIBE_TRACKS) {
+      auto* relay = static_cast<MoQRelayPendingRequestState*>(base);
+      // Underlying promise type is identical to SUBSCRIBE_NAMESPACE's.
       return &relay->subscribeNamespaceStorage_;
     }
     return nullptr;
@@ -310,6 +404,14 @@ void MoQRelaySession::cleanupRelayState() {
   }
   subscribeNamespaceHandles_.clear();
   legacySubscribeNamespaceToReqId_.clear();
+
+  // Draft 18+: drop subscribeTracks handles too.
+  for (auto& subTracks : subscribeTracksHandles_) {
+    if (subTracks.second) {
+      subTracks.second->unsubscribeTracks();
+    }
+  }
+  subscribeTracksHandles_.clear();
 }
 
 void MoQRelaySession::cleanup() {
@@ -330,10 +432,29 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
   // Only intercept for v16+ and announcement types
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
     auto existingRequestID = requestUpdate.existingRequestID;
+    auto requestID = requestUpdate.requestID;
 
     // Check publishNamespaceHandles_ for PUBLISH_NAMESPACE (formerly ANNOUNCE)
     auto announceIt = publishNamespaceHandles_.find(existingRequestID);
     if (announceIt != publishNamespaceHandles_.end()) {
+      if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
+        return;
+      }
+      if (shouldRejectNewPeerRequestDueToGoaway()) {
+        XLOG(DBG1)
+            << "Rejecting publishNamespace request update, GOAWAY/draining sess="
+            << this;
+        requestUpdateError(
+            RequestError{
+                requestID, RequestErrorCode::GOING_AWAY, "Session going away"},
+            existingRequestID,
+            /*terminateExistingRequest=*/false);
+        return;
+      }
+      if (closeSessionIfRequestIDInvalid(
+              existingRequestID, false, false, false)) {
+        return;
+      }
       handlePublishNamespaceRequestUpdate(requestUpdate, announceIt->second);
       return;
     }
@@ -342,6 +463,24 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
     // SUBSCRIBE_ANNOUNCES)
     auto subAnnIt = subscribeNamespaceHandles_.find(existingRequestID);
     if (subAnnIt != subscribeNamespaceHandles_.end()) {
+      if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
+        return;
+      }
+      if (shouldRejectNewPeerRequestDueToGoaway()) {
+        XLOG(DBG1)
+            << "Rejecting subscribeNamespace request update, GOAWAY/draining sess="
+            << this;
+        requestUpdateError(
+            RequestError{
+                requestID, RequestErrorCode::GOING_AWAY, "Session going away"},
+            existingRequestID,
+            /*terminateExistingRequest=*/false);
+        return;
+      }
+      if (closeSessionIfRequestIDInvalid(
+              existingRequestID, false, false, false)) {
+        return;
+      }
       handleSubscribeNamespaceRequestUpdate(requestUpdate, subAnnIt->second);
       return;
     }
@@ -537,6 +676,10 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   if (*getNegotiatedVersion() > 14) {
     frameType = reqIt->second->getOkFrameType();
   }
+  if (!validateRequestOkTrackProperties(requestOk, frameType)) {
+    // Session was closed; do not erase pending state - close() will tear down.
+    return;
+  }
   switch (frameType) {
     case moxygen::FrameType::TRACK_STATUS_OK: {
       // Use base class helper
@@ -553,6 +696,9 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
           break;
         case PendingRequestState::Type::SUBSCRIBE_NAMESPACE:
           handleSubscribeNamespaceOkFromRequestOk(requestOk, reqIt);
+          break;
+        case PendingRequestState::Type::SUBSCRIBE_TRACKS:
+          handleSubscribeTracksOkFromRequestOk(requestOk, reqIt);
           break;
         case PendingRequestState::Type::REQUEST_UPDATE:
           // Use base class helper
@@ -1223,6 +1369,179 @@ void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
+// Draft 18+: SUBSCRIBE_TRACKS subscriber methods
+folly::coro::Task<Publisher::SubscribeTracksResult>
+MoQRelaySession::subscribeTracks(SubscribeTracks subTracks) {
+  XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
+             << " sess=" << this;
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
+    co_return folly::makeUnexpected(SubscribeTracksError(
+        {RequestID(0),
+         SubscribeTracksErrorCode::NOT_SUPPORTED,
+         "SUBSCRIBE_TRACKS requires draft 18+"}));
+  }
+  // Mirror subscribe/subscribeNamespace/publishNamespace: don't start a new
+  // local request after we've received a GOAWAY.
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    co_return folly::makeUnexpected(SubscribeTracksError(
+        {peekNextRequestID(),
+         SubscribeTracksErrorCode::GOING_AWAY,
+         "Session received GOAWAY"}));
+  }
+  aliasifyAuthTokens(subTracks.params);
+  subTracks.requestID = getNextRequestID();
+
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubscribeTracks(buf, subTracks);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeTracks failed sess=" << this;
+    co_return folly::makeUnexpected(SubscribeTracksError(
+        {RequestID(0),
+         SubscribeTracksErrorCode::INTERNAL_ERROR,
+         "local write failed"}));
+  }
+  auto sendResult = sendRequest(
+      buf,
+      {FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
+      subTracks.requestID,
+      /*minBidiDraftVersion=*/18);
+  if (sendResult.hasError()) {
+    co_return folly::makeUnexpected(SubscribeTracksError(
+        {RequestID(0),
+         SubscribeTracksErrorCode::INTERNAL_ERROR,
+         std::move(sendResult.error())}));
+  }
+
+  auto contract = folly::coro::makePromiseContract<
+      folly::Expected<RequestOk, RequestError>>();
+  pendingRequests_.emplace(
+      subTracks.requestID,
+      MoQRelayPendingRequestState::makeSubscribeTracks(
+          std::move(contract.first)));
+
+  auto subTracksResult = co_await std::move(contract.second);
+  if (subTracksResult.hasError()) {
+    // The bidi request stream is normally FINed by SubscribeTracksHandle on
+    // unsubscribe; on the error path we never construct a handle, so FIN it
+    // here to release the stream resource and let the peer observe end-of-
+    // request.
+    if (auto* writeHandle = sendResult.value()) {
+      auto finRes = writeHandle->writeStreamData(
+          nullptr, /*fin=*/true, /*byteEventCallback=*/nullptr);
+      if (!finRes) {
+        XLOG(ERR)
+            << "writeStreamData(fin=true) for SUBSCRIBE_TRACKS error path "
+               "failed err="
+            << uint64_t(finRes.error()) << " sess=" << this;
+      }
+    }
+    co_return folly::makeUnexpected(subTracksResult.error());
+  }
+  co_return std::make_shared<SubscribeTracksHandle>(
+      std::static_pointer_cast<MoQRelaySession>(shared_from_this()),
+      std::move(subTracksResult.value()),
+      sendResult.value());
+}
+
+// Draft 18+: SUBSCRIBE_TRACKS publisher methods
+void MoQRelaySession::onSubscribeTracksImpl(
+    const SubscribeTracks& subTracks,
+    std::shared_ptr<MessageReply> messageReply) {
+  XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
+             << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(subTracks.requestID, false, true)) {
+    return;
+  }
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting subscribeTracks request, GOAWAY/draining sess="
+               << this;
+    subscribeTracksError(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::GOING_AWAY,
+            "Session going away"},
+        std::move(messageReply));
+    return;
+  }
+  if (!publishHandler_) {
+    subscribeTracksError(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::NOT_SUPPORTED,
+            "Not a publisher"},
+        std::move(messageReply));
+    return;
+  }
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handleSubscribeTracks(subTracks, std::move(messageReply))))
+      .start();
+}
+
+folly::coro::Task<void> MoQRelaySession::handleSubscribeTracks(
+    SubscribeTracks subTracks,
+    std::shared_ptr<MessageReply> messageReply) {
+  co_await folly::coro::co_safe_point;
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto subTracksResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->subscribeTracks(subTracks)));
+  if (subTracksResult.hasException()) {
+    XLOG(ERR) << "Exception in subscribeTracks publisher callback ex="
+              << subTracksResult.exception().what().toStdString();
+    subscribeTracksError(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::INTERNAL_ERROR,
+            subTracksResult.exception().what().toStdString()},
+        std::move(messageReply));
+    co_return;
+  }
+  if (subTracksResult->hasError()) {
+    auto err = std::move(subTracksResult->error());
+    err.requestID = subTracks.requestID; // In case the app got it wrong
+    subscribeTracksError(err, std::move(messageReply));
+    co_return;
+  }
+  auto handle = std::move(subTracksResult->value());
+  auto subTracksOk = handle->subscribeTracksOk();
+  subscribeTracksOk(subTracksOk, std::move(messageReply));
+  subscribeTracksHandles_[subTracks.requestID] = std::move(handle);
+}
+
+void MoQRelaySession::subscribeTracksOk(
+    const RequestOk& subTracksOk,
+    std::shared_ptr<MessageReply>&& messageReply) {
+  XLOG(DBG1) << __func__ << " id=" << subTracksOk.requestID << " sess=" << this;
+  auto res = messageReply->ok(subTracksOk);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeTracksOk failed sess=" << this;
+  }
+}
+
+void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
+  XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
+  // Always retire the request, even if no handle was stored — the error
+  // paths in onSubscribeTracksImpl / handleSubscribeTracks (GOING_AWAY,
+  // NOT_SUPPORTED, app errors, exceptions) never insert a handle, and
+  // without retiring the credit here the peer's request-ID budget would
+  // leak by one for every rejected SUBSCRIBE_TRACKS.
+  auto it = subscribeTracksHandles_.find(requestID);
+  if (it != subscribeTracksHandles_.end()) {
+    auto handle = std::move(it->second);
+    subscribeTracksHandles_.erase(it);
+    if (handle) {
+      folly::RequestContextScopeGuard guard;
+      setRequestSession();
+      handle->unsubscribeTracks();
+    }
+  }
+  retireRequestID(/*signalWriteLoop=*/true);
+}
+
 // Helper methods for handling RequestOk
 void MoQRelaySession::handlePublishNamespaceOkFromRequestOk(
     const RequestOk& requestOk,
@@ -1274,6 +1593,22 @@ void MoQRelaySession::handleSubscribeNamespaceOkFromRequestOk(
   }
 
   subscribeNamespacePtr->setValue(requestOk);
+}
+
+void MoQRelaySession::handleSubscribeTracksOkFromRequestOk(
+    const RequestOk& requestOk,
+    PendingRequestIterator reqIt) {
+  XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
+             << " sess=" << this;
+  auto* subscribeTracksPtr =
+      MoQRelayPendingRequestState::tryGetSubscribeTracks(reqIt->second.get());
+  if (!subscribeTracksPtr) {
+    XLOG(ERR) << "Request ID " << requestOk.requestID
+              << " is not a SUBSCRIBE_TRACKS request, sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  subscribeTracksPtr->setValue(requestOk);
 }
 
 WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {

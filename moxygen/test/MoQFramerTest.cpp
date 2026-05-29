@@ -1801,6 +1801,133 @@ TEST_P(MoQFramerTest, ParseSubscriptionFilterLargestGroup) {
   EXPECT_FALSE(parseRes->start.has_value());
 }
 
+namespace {
+
+// Encode a SubscribeRequest with AbsoluteRange and return the serialized bytes
+// produced by writeSubscribeRequest at the given draft version.
+std::unique_ptr<folly::IOBuf> writeAbsoluteRangeSubscribe(
+    uint64_t version,
+    AbsoluteLocation start,
+    uint64_t endGroup) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto req = SubscribeRequest::make(
+      FullTrackName{TrackNamespace({"ns"}), "track"},
+      /*priority*/ kDefaultPriority,
+      /*groupOrder*/ GroupOrder::Default,
+      /*forward*/ true,
+      /*locType*/ LocationType::AbsoluteRange,
+      /*start*/ std::make_optional(start),
+      /*endGroup*/ endGroup,
+      /*params*/ {});
+  CHECK(writer.writeSubscribeRequest(buf, req).hasValue());
+  return buf.move();
+}
+
+} // namespace
+
+// Draft-18 encodes EndGroup as a delta from StartLocation.group. Verify the
+// wire encoding differs from earlier drafts by exactly that delta and that
+// round-tripping recovers the absolute endGroup.
+TEST(MoQFramerSubscriptionFilter, EndGroupDeltaV18) {
+  constexpr AbsoluteLocation kStart{10, 20};
+  constexpr uint64_t kEndGroup = 30;
+  constexpr uint64_t kDelta = kEndGroup - kStart.group;
+
+  auto v17Bytes =
+      writeAbsoluteRangeSubscribe(kVersionDraft17, kStart, kEndGroup);
+  auto v18Bytes =
+      writeAbsoluteRangeSubscribe(kVersionDraft18, kStart, kEndGroup);
+
+  // Both versions encode EndGroup with a 1-byte varint here (values < 64), so
+  // the encoded frames must differ in length by zero but in the EndGroup byte
+  // by exactly (kEndGroup - kDelta). Confirm by parsing the v18 frame with the
+  // matching parser and seeing the absolute value emerge.
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(v18Bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  ASSERT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasValue());
+  EXPECT_EQ(parseRes->locType, LocationType::AbsoluteRange);
+  ASSERT_TRUE(parseRes->start.has_value());
+  EXPECT_EQ(parseRes->start->group, kStart.group);
+  EXPECT_EQ(parseRes->start->object, kStart.object);
+  EXPECT_EQ(parseRes->endGroup, kEndGroup);
+
+  // The v17 and v18 frames must differ only by the EndGroup byte: v17 carries
+  // the absolute value while v18 carries the delta.
+  ASSERT_EQ(
+      v17Bytes->computeChainDataLength(), v18Bytes->computeChainDataLength());
+  std::string v17Str = v17Bytes->moveToFbString().toStdString();
+  std::string v18Str = v18Bytes->moveToFbString().toStdString();
+  size_t diffCount = 0;
+  size_t diffIdx = 0;
+  for (size_t i = 0; i < v17Str.size(); ++i) {
+    if (v17Str[i] != v18Str[i]) {
+      ++diffCount;
+      diffIdx = i;
+    }
+  }
+  ASSERT_EQ(diffCount, 1u);
+  EXPECT_EQ(static_cast<uint8_t>(v17Str[diffIdx]), kEndGroup);
+  EXPECT_EQ(static_cast<uint8_t>(v18Str[diffIdx]), kDelta);
+}
+
+// Regression: pre-v18 drafts must continue to treat EndGroup as absolute.
+TEST(MoQFramerSubscriptionFilter, EndGroupAbsoluteV17Roundtrip) {
+  constexpr AbsoluteLocation kStart{10, 20};
+  constexpr uint64_t kEndGroup = 30;
+
+  auto bytes = writeAbsoluteRangeSubscribe(kVersionDraft17, kStart, kEndGroup);
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft17);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  ASSERT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasValue());
+  EXPECT_EQ(parseRes->endGroup, kEndGroup);
+}
+
+// A v18 peer that sends an EndGroup delta whose absolute value would exceed
+// kEightByteLimit (the MoQ varint range) must trigger a protocol violation,
+// matching the spec text "Close session when delta encoding wraps".
+TEST(MoQFramerSubscriptionFilter, EndGroupDeltaOverflowRejectedV18) {
+  // Use the v17 writer (absolute encoding) to plant the wire endGroup = max
+  // alongside start.group = 1, so the v18 parser will compute
+  // 1 + kEightByteLimit and overflow.
+  auto bytes = writeAbsoluteRangeSubscribe(
+      kVersionDraft17, AbsoluteLocation{1, 0}, kEightByteLimit);
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  ASSERT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasError());
+  EXPECT_EQ(parseRes.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
@@ -4315,8 +4442,9 @@ TEST_F(MoQFramerV18Test, SubscribeNamespaceUsesNewWireTypeAndOmitsOptions) {
   EXPECT_EQ(parsed->requestID, req.requestID);
   EXPECT_EQ(parsed->trackNamespacePrefix, req.trackNamespacePrefix);
   // Defaults are restored on the parse side because the fields aren't on the
-  // wire in draft 18.
-  EXPECT_EQ(parsed->options, SubscribeNamespaceOptions::BOTH);
+  // wire in draft 18. v18 SUBSCRIBE_NAMESPACE is NAMESPACE-only — PUBLISH
+  // fan-out moved to the new SUBSCRIBE_TRACKS message.
+  EXPECT_EQ(parsed->options, SubscribeNamespaceOptions::NAMESPACE);
   EXPECT_EQ(parsed->forward, true);
 }
 
@@ -4365,6 +4493,135 @@ TEST_F(MoQFramerV18Test, SubscribeTracksForwardFalseSerializedAsParameter) {
   auto parsed = parser_.parseSubscribeTracks(cursor, bodyLen);
   ASSERT_TRUE(parsed.hasValue());
   EXPECT_EQ(parsed->forward, false);
+}
+
+// Draft 18 added a Track Properties block at the end of REQUEST_OK. Verify
+// that a populated TRACK_STATUS_OK round-trips its Track Properties through
+// the wire and back into the TrackStatusOk struct.
+TEST_F(MoQFramerV18Test, RequestOkTrackPropertiesRoundtrip) {
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 42;
+  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatusOk.largest = AbsoluteLocation({3, 7});
+  trackStatusOk.groupOrder = GroupOrder::OldestFirst;
+  trackStatusOk.expires = std::chrono::milliseconds(2500);
+  // Populate Track Properties with a couple of well-known properties.
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 100});
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kDynamicGroupsExtensionType, 1});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeTrackStatusOk(writeBuf, trackStatusOk).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
+
+  auto bodyLen = frameLength(cursor);
+  auto result = parser_.parseRequestOk(cursor, bodyLen, FrameType::REQUEST_OK);
+  ASSERT_TRUE(result.hasValue());
+
+  auto parsed = result->toTrackStatusOk();
+  EXPECT_EQ(parsed.requestID, 42);
+  EXPECT_EQ(parsed.expires, std::chrono::milliseconds(2500));
+  ASSERT_TRUE(parsed.largest.has_value());
+  EXPECT_EQ(parsed.largest->group, 3);
+  EXPECT_EQ(parsed.largest->object, 7);
+
+  EXPECT_EQ(parsed.trackProperties, trackStatusOk.trackProperties);
+}
+
+// REQUEST_OK with empty Track Properties must not emit any additional bytes
+// past the parameter block (the spec encodes "no properties" by the absence
+// of bytes — there is no count or length prefix).
+TEST_F(MoQFramerV18Test, RequestOkEmptyTrackPropertiesEmitsNoBytes) {
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(11);
+  // trackProperties left empty intentionally.
+
+  folly::IOBufQueue v18Buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeRequestOk(v18Buf, requestOk, FrameType::REQUEST_OK)
+                  .hasValue());
+
+  MoQFrameWriter v17Writer;
+  v17Writer.initializeVersion(kVersionDraft17);
+  folly::IOBufQueue v17Buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(v17Writer.writeRequestOk(v17Buf, requestOk, FrameType::REQUEST_OK)
+                  .hasValue());
+
+  // With no Track Properties, the wire bytes for v18 must match v17 byte-for-
+  // byte; both encode just request_id + num_params.
+  auto v18Bytes = v18Buf.move();
+  auto v17Bytes = v17Buf.move();
+  EXPECT_TRUE(folly::IOBufEqualTo()(*v18Bytes, *v17Bytes));
+}
+
+// writeRequestOk must refuse to emit a frame whose semantic frame type is
+// anything other than TRACK_STATUS_OK when trackProperties is non-empty - the
+// spec requires Track Properties to be empty for those response shorthands.
+TEST_F(
+    MoQFramerV18Test,
+    WriteRequestOkRejectsTrackPropertiesForNonTrackStatus) {
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(5);
+  requestOk.trackProperties.insertMutableExtension(
+      Extension{kMaxCacheDurationExtensionType, 30000});
+
+  const std::array<FrameType, 4> nonTrackStatusFrameTypes{
+      FrameType::REQUEST_OK,
+      FrameType::PUBLISH_NAMESPACE_OK,
+      FrameType::SUBSCRIBE_NAMESPACE_OK,
+      FrameType::PUBLISH_OK,
+  };
+  for (auto frameType : nonTrackStatusFrameTypes) {
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    auto result = writer_.writeRequestOk(writeBuf, requestOk, frameType);
+    ASSERT_TRUE(result.hasError()) << "Expected write failure for frameType="
+                                   << folly::to_underlying(frameType);
+    EXPECT_EQ(result.error(), quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // Sanity check: writing TRACK_STATUS_OK with the same trackProperties does
+  // succeed so the test isn't accidentally validating the wrong invariant.
+  folly::IOBufQueue okBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(
+      writer_.writeRequestOk(okBuf, requestOk, FrameType::TRACK_STATUS_OK)
+          .hasValue());
+}
+
+// Older drafts (e.g. draft 17) must not serialize or parse Track Properties
+// on REQUEST_OK; a TrackStatusOk with trackProperties populated must
+// roundtrip without the extra bytes.
+TEST(MoQFramerRequestOkTrackProperties, Draft17DoesNotEmitTrackProperties) {
+  MoQFrameWriter writer;
+  MoQFrameParser parser;
+  writer.initializeVersion(kVersionDraft17);
+  parser.initializeVersion(kVersionDraft17);
+
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 1;
+  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
+  trackStatusOk.largest = AbsoluteLocation({1, 2});
+  trackStatusOk.expires = std::chrono::milliseconds(500);
+  // Populate trackProperties even though draft 17 should ignore them.
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 100});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeTrackStatusOk(writeBuf, trackStatusOk).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ASSERT_TRUE(quic::follyutils::decodeQuicInteger(cursor).has_value());
+  size_t bodyLen = cursor.readBE<uint16_t>();
+  auto result = parser.parseRequestOk(cursor, bodyLen, FrameType::REQUEST_OK);
+  ASSERT_TRUE(result.hasValue());
+
+  // Draft 17 has no Track Properties on the wire so it parses back as empty.
+  EXPECT_TRUE(result->trackProperties.empty());
 }
 
 // Draft 17 must continue to use wire type 0x11 for SUBSCRIBE_NAMESPACE.

@@ -172,7 +172,8 @@ folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
     size_t& length) noexcept;
 folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     folly::io::Cursor& cursor,
-    size_t& length) noexcept;
+    size_t& length,
+    uint64_t version) noexcept;
 folly::Expected<std::optional<Parameter>, ErrorCode> parseIntParam(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -382,7 +383,8 @@ folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
 
 folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     folly::io::Cursor& cursor,
-    size_t& length) noexcept {
+    size_t& length,
+    uint64_t version) noexcept {
   SubscriptionFilter filter;
 
   // Parse filter type
@@ -428,7 +430,19 @@ folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
       XLOG(DBG4) << "parseSubscriptionFilter: UNDERFLOW on endGroup";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    filter.endGroup = endGroup->first;
+    // In draft-18+, EndGroup is encoded as a delta from StartLocation.group.
+    // In draft-17 and earlier, EndGroup is an absolute group number.
+    if (getDraftMajorVersion(version) >= 18) {
+      if (endGroup->first > kEightByteLimit - filter.location->group) {
+        XLOG(ERR) << "parseSubscriptionFilter: EndGroup delta wraps "
+                  << "(start.group=" << filter.location->group
+                  << " + delta=" << endGroup->first << " > kEightByteLimit)";
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      filter.endGroup = endGroup->first + filter.location->group;
+    } else {
+      filter.endGroup = endGroup->first;
+    }
     length -= endGroup->second;
   }
 
@@ -513,7 +527,7 @@ folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     size_t filterSize = filterLen;
-    auto res = parseSubscriptionFilter(cursor, filterSize);
+    auto res = parseSubscriptionFilter(cursor, filterSize, version);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -2431,6 +2445,18 @@ folly::Expected<PublishNamespaceOk, ErrorCode> MoQFrameParser::parseRequestOk(
       }
     }
   }
+
+  if (getDraftMajorVersion(*version_) >= 18 && length > 0) {
+    ObjectHeader tempHeader;
+    auto ext = parseExtensionKvPairs(cursor, tempHeader, length, true);
+    if (!ext) {
+      XLOG(DBG4) << "parseRequestOk: error in parseExtensionKvPairs: "
+                 << folly::to_underlying(ext.error());
+      return folly::makeUnexpected(ext.error());
+    }
+    requestOk.trackProperties = std::move(tempHeader.extensions);
+    length = 0;
+  }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -2975,7 +3001,9 @@ MoQFrameParser::parseSubscribeNamespace(
   auto majorVersion = getDraftMajorVersion(*version_);
 
   // The SUBSCRIBE_NAMESPACE message has an "options" field only in drafts
-  // 16 and 17.
+  // 16 and 17. In draft 18+, SUBSCRIBE_NAMESPACE is NAMESPACE-only — peers
+  // wanting PUBLISH fan-out use the new SUBSCRIBE_TRACKS message. Prior to
+  // draft 16 the field doesn't exist either, but the legacy behavior is BOTH.
   if (majorVersion >= 16 && majorVersion < 18) {
     auto options = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!options) {
@@ -2985,6 +3013,8 @@ MoQFrameParser::parseSubscribeNamespace(
     length -= options->second;
     subscribeNamespace.options =
         static_cast<SubscribeNamespaceOptions>(options->first);
+  } else if (majorVersion >= 18) {
+    subscribeNamespace.options = SubscribeNamespaceOptions::NAMESPACE;
   } else {
     subscribeNamespace.options = SubscribeNamespaceOptions::BOTH;
   }
@@ -3440,6 +3470,7 @@ TrackStatusOk RequestOk::toTrackStatusOk() const {
   TrackStatusOk trackStatusOk;
   trackStatusOk.requestID = requestID;
   trackStatusOk.params = params;
+  trackStatusOk.trackProperties = trackProperties;
 
   // There may or may not be any value in attempting to convert the full object
   // since we only need the request Id to resolve the promise, except for
@@ -3473,6 +3504,7 @@ RequestOk RequestOk::fromTrackStatusOk(const TrackStatusOk& trackStatusOk) {
   RequestOk requestOk;
   requestOk.requestID = trackStatusOk.requestID;
   requestOk.params = trackStatusOk.params;
+  requestOk.trackProperties = trackStatusOk.trackProperties;
 
   // Add expires parameter
   requestOk.requestSpecificParams.emplace_back(
@@ -4159,10 +4191,20 @@ void MoQFrameWriter::writeSubscriptionFilter(
     }
   }
 
-  // Write end group for AbsoluteRange
+  // Write end group for AbsoluteRange.
+  // In draft-18+, EndGroup is encoded as a delta from StartLocation.group.
+  // In draft-17 and earlier, EndGroup is an absolute group number.
   if (filter.filterType == LocationType::AbsoluteRange) {
-    if (filter.endGroup.has_value()) {
-      writeVarint(writeBuf, *filter.endGroup, size, error);
+    if (filter.endGroup.has_value() && filter.location.has_value()) {
+      uint64_t toWrite = *filter.endGroup;
+      if (getDraftMajorVersion(*version_) >= 18) {
+        if (*filter.endGroup < filter.location->group) {
+          error = true;
+          return;
+        }
+        toWrite = *filter.endGroup - filter.location->group;
+      }
+      writeVarint(writeBuf, toWrite, size, error);
     } else {
       error = true;
     }
@@ -5080,13 +5122,16 @@ WriteResult MoQFrameWriter::writeRequestOk(
   CHECK(version_.has_value()) << "Version needs to be set to write request ok";
   size_t size = 0;
   bool error = false;
+  // Preserve the semantic frame type passed by the caller; we still need it
+  // below to decide whether Track Properties are valid (draft 18+).
+  const FrameType semanticFrameType = frameType;
   if (getDraftMajorVersion(*version_) > 14) {
     frameType = FrameType::REQUEST_OK;
   }
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
   writeVarint(writeBuf, requestOk.requestID.value, size, error);
   if (getDraftMajorVersion(*version_) > 14) {
-    if (frameType == FrameType::SUBSCRIBE_NAMESPACE_OK &&
+    if (semanticFrameType == FrameType::SUBSCRIBE_NAMESPACE_OK &&
         !requestOk.params.empty()) {
       return folly::makeUnexpected(
           quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -5097,6 +5142,23 @@ WriteResult MoQFrameWriter::writeRequestOk(
         requestOk.requestSpecificParams,
         size,
         error);
+  }
+  // Draft 18+: Track Properties (bare key-value pairs, no length prefix) are
+  // only allowed for TRACK_STATUS_OK responses.
+  if (getDraftMajorVersion(*version_) >= 18) {
+    if (semanticFrameType == FrameType::TRACK_STATUS_OK) {
+      writeExtensions(
+          writeBuf,
+          requestOk.trackProperties,
+          size,
+          error,
+          /*withLengthPrefix=*/false);
+    } else if (!requestOk.trackProperties.empty()) {
+      // Caller populated Track Properties for a frame type that requires them
+      // to be empty.
+      return folly::makeUnexpected(
+          quic::TransportErrorCode::PROTOCOL_VIOLATION);
+    }
   }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
@@ -5205,7 +5267,7 @@ WriteResult MoQFrameWriter::writeTrackStatusOk(
 
   if (getDraftMajorVersion(*version_) >= 15) {
     auto requestOk = RequestOk::fromTrackStatusOk(trackStatusOk);
-    return writeRequestOk(writeBuf, requestOk, FrameType::REQUEST_OK);
+    return writeRequestOk(writeBuf, requestOk, FrameType::TRACK_STATUS_OK);
   }
 
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS_OK, error);
