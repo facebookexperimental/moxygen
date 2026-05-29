@@ -1801,6 +1801,133 @@ TEST_P(MoQFramerTest, ParseSubscriptionFilterLargestGroup) {
   EXPECT_FALSE(parseRes->start.has_value());
 }
 
+namespace {
+
+// Encode a SubscribeRequest with AbsoluteRange and return the serialized bytes
+// produced by writeSubscribeRequest at the given draft version.
+std::unique_ptr<folly::IOBuf> writeAbsoluteRangeSubscribe(
+    uint64_t version,
+    AbsoluteLocation start,
+    uint64_t endGroup) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto req = SubscribeRequest::make(
+      FullTrackName{TrackNamespace({"ns"}), "track"},
+      /*priority*/ kDefaultPriority,
+      /*groupOrder*/ GroupOrder::Default,
+      /*forward*/ true,
+      /*locType*/ LocationType::AbsoluteRange,
+      /*start*/ std::make_optional(start),
+      /*endGroup*/ endGroup,
+      /*params*/ {});
+  CHECK(writer.writeSubscribeRequest(buf, req).hasValue());
+  return buf.move();
+}
+
+} // namespace
+
+// Draft-18 encodes EndGroup as a delta from StartLocation.group. Verify the
+// wire encoding differs from earlier drafts by exactly that delta and that
+// round-tripping recovers the absolute endGroup.
+TEST(MoQFramerSubscriptionFilter, EndGroupDeltaV18) {
+  constexpr AbsoluteLocation kStart{10, 20};
+  constexpr uint64_t kEndGroup = 30;
+  constexpr uint64_t kDelta = kEndGroup - kStart.group;
+
+  auto v17Bytes =
+      writeAbsoluteRangeSubscribe(kVersionDraft17, kStart, kEndGroup);
+  auto v18Bytes =
+      writeAbsoluteRangeSubscribe(kVersionDraft18, kStart, kEndGroup);
+
+  // Both versions encode EndGroup with a 1-byte varint here (values < 64), so
+  // the encoded frames must differ in length by zero but in the EndGroup byte
+  // by exactly (kEndGroup - kDelta). Confirm by parsing the v18 frame with the
+  // matching parser and seeing the absolute value emerge.
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(v18Bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  ASSERT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasValue());
+  EXPECT_EQ(parseRes->locType, LocationType::AbsoluteRange);
+  ASSERT_TRUE(parseRes->start.has_value());
+  EXPECT_EQ(parseRes->start->group, kStart.group);
+  EXPECT_EQ(parseRes->start->object, kStart.object);
+  EXPECT_EQ(parseRes->endGroup, kEndGroup);
+
+  // The v17 and v18 frames must differ only by the EndGroup byte: v17 carries
+  // the absolute value while v18 carries the delta.
+  ASSERT_EQ(
+      v17Bytes->computeChainDataLength(), v18Bytes->computeChainDataLength());
+  std::string v17Str = v17Bytes->moveToFbString().toStdString();
+  std::string v18Str = v18Bytes->moveToFbString().toStdString();
+  size_t diffCount = 0;
+  size_t diffIdx = 0;
+  for (size_t i = 0; i < v17Str.size(); ++i) {
+    if (v17Str[i] != v18Str[i]) {
+      ++diffCount;
+      diffIdx = i;
+    }
+  }
+  ASSERT_EQ(diffCount, 1u);
+  EXPECT_EQ(static_cast<uint8_t>(v17Str[diffIdx]), kEndGroup);
+  EXPECT_EQ(static_cast<uint8_t>(v18Str[diffIdx]), kDelta);
+}
+
+// Regression: pre-v18 drafts must continue to treat EndGroup as absolute.
+TEST(MoQFramerSubscriptionFilter, EndGroupAbsoluteV17Roundtrip) {
+  constexpr AbsoluteLocation kStart{10, 20};
+  constexpr uint64_t kEndGroup = 30;
+
+  auto bytes = writeAbsoluteRangeSubscribe(kVersionDraft17, kStart, kEndGroup);
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft17);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  ASSERT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasValue());
+  EXPECT_EQ(parseRes->endGroup, kEndGroup);
+}
+
+// A v18 peer that sends an EndGroup delta whose absolute value would exceed
+// kEightByteLimit (the MoQ varint range) must trigger a protocol violation,
+// matching the spec text "Close session when delta encoding wraps".
+TEST(MoQFramerSubscriptionFilter, EndGroupDeltaOverflowRejectedV18) {
+  // Use the v17 writer (absolute encoding) to plant the wire endGroup = max
+  // alongside start.group = 1, so the v18 parser will compute
+  // 1 + kEightByteLimit and overflow.
+  auto bytes = writeAbsoluteRangeSubscribe(
+      kVersionDraft17, AbsoluteLocation{1, 0}, kEightByteLimit);
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  ASSERT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasError());
+  EXPECT_EQ(parseRes.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,

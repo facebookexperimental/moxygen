@@ -172,7 +172,8 @@ folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
     size_t& length) noexcept;
 folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     folly::io::Cursor& cursor,
-    size_t& length) noexcept;
+    size_t& length,
+    uint64_t version) noexcept;
 folly::Expected<std::optional<Parameter>, ErrorCode> parseIntParam(
     folly::io::Cursor& cursor,
     size_t& length,
@@ -377,7 +378,8 @@ folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
 
 folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
     folly::io::Cursor& cursor,
-    size_t& length) noexcept {
+    size_t& length,
+    uint64_t version) noexcept {
   SubscriptionFilter filter;
 
   // Parse filter type
@@ -423,7 +425,19 @@ folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
       XLOG(DBG4) << "parseSubscriptionFilter: UNDERFLOW on endGroup";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    filter.endGroup = endGroup->first;
+    // In draft-18+, EndGroup is encoded as a delta from StartLocation.group.
+    // In draft-17 and earlier, EndGroup is an absolute group number.
+    if (getDraftMajorVersion(version) >= 18) {
+      if (endGroup->first > kEightByteLimit - filter.location->group) {
+        XLOG(ERR) << "parseSubscriptionFilter: EndGroup delta wraps "
+                  << "(start.group=" << filter.location->group
+                  << " + delta=" << endGroup->first << " > kEightByteLimit)";
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+      filter.endGroup = endGroup->first + filter.location->group;
+    } else {
+      filter.endGroup = endGroup->first;
+    }
     length -= endGroup->second;
   }
 
@@ -480,7 +494,7 @@ folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     size_t filterSize = filterLen;
-    auto res = parseSubscriptionFilter(cursor, filterSize);
+    auto res = parseSubscriptionFilter(cursor, filterSize, version);
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -4093,10 +4107,20 @@ void MoQFrameWriter::writeSubscriptionFilter(
     }
   }
 
-  // Write end group for AbsoluteRange
+  // Write end group for AbsoluteRange.
+  // In draft-18+, EndGroup is encoded as a delta from StartLocation.group.
+  // In draft-17 and earlier, EndGroup is an absolute group number.
   if (filter.filterType == LocationType::AbsoluteRange) {
-    if (filter.endGroup.has_value()) {
-      writeVarint(writeBuf, *filter.endGroup, size, error);
+    if (filter.endGroup.has_value() && filter.location.has_value()) {
+      uint64_t toWrite = *filter.endGroup;
+      if (getDraftMajorVersion(*version_) >= 18) {
+        if (*filter.endGroup < filter.location->group) {
+          error = true;
+          return;
+        }
+        toWrite = *filter.endGroup - filter.location->group;
+      }
+      writeVarint(writeBuf, toWrite, size, error);
     } else {
       error = true;
     }

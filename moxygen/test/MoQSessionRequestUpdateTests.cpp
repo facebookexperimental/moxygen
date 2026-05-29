@@ -251,8 +251,13 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterStartDecreases) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// Test that subscription filter validation fails when endGroup < start.group
+// Test that subscription filter validation fails when endGroup < start.group.
+// Draft-18+ encodes EndGroup as an unsigned delta from StartLocation.group, so
+// endGroup < start.group cannot be represented on the wire; skip in that case.
 CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterEndLessThanStart) {
+  if (getDraftMajorVersion(GetParam().serverVersion) >= 18) {
+    co_return;
+  }
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
