@@ -310,6 +310,14 @@ void MoQRelaySession::cleanupRelayState() {
   }
   subscribeNamespaceHandles_.clear();
   legacySubscribeNamespaceToReqId_.clear();
+
+  // Draft 18+: drop subscribeTracks handles too.
+  for (auto& subTracks : subscribeTracksHandles_) {
+    if (subTracks.second) {
+      subTracks.second->unsubscribeTracks();
+    }
+  }
+  subscribeTracksHandles_.clear();
 }
 
 void MoQRelaySession::cleanup() {
@@ -1261,6 +1269,105 @@ void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
   handle->unsubscribeNamespace();
   subscribeNamespaceHandles_.erase(requestID);
 
+  retireRequestID(/*signalWriteLoop=*/true);
+}
+
+// Draft 18+: SUBSCRIBE_TRACKS publisher methods
+void MoQRelaySession::onSubscribeTracksImpl(
+    const SubscribeTracks& subTracks,
+    std::shared_ptr<MessageReply> messageReply) {
+  XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
+             << " sess=" << this;
+  if (closeSessionIfRequestIDInvalid(subTracks.requestID, false, true)) {
+    return;
+  }
+  if (shouldRejectNewPeerRequestDueToGoaway()) {
+    XLOG(DBG1) << "Rejecting subscribeTracks request, GOAWAY/draining sess="
+               << this;
+    subscribeTracksError(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::GOING_AWAY,
+            "Session going away"},
+        std::move(messageReply));
+    return;
+  }
+  if (!publishHandler_) {
+    subscribeTracksError(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::NOT_SUPPORTED,
+            "Not a publisher"},
+        std::move(messageReply));
+    return;
+  }
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          handleSubscribeTracks(subTracks, std::move(messageReply))))
+      .start();
+}
+
+folly::coro::Task<void> MoQRelaySession::handleSubscribeTracks(
+    SubscribeTracks subTracks,
+    std::shared_ptr<MessageReply> messageReply) {
+  co_await folly::coro::co_safe_point;
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  auto subTracksResult = co_await co_awaitTry(co_withCancellation(
+      cancellationSource_.getToken(),
+      publishHandler_->subscribeTracks(subTracks)));
+  if (subTracksResult.hasException()) {
+    XLOG(ERR) << "Exception in subscribeTracks publisher callback ex="
+              << subTracksResult.exception().what().toStdString();
+    subscribeTracksError(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::INTERNAL_ERROR,
+            subTracksResult.exception().what().toStdString()},
+        std::move(messageReply));
+    co_return;
+  }
+  if (subTracksResult->hasError()) {
+    auto err = std::move(subTracksResult->error());
+    err.requestID = subTracks.requestID; // In case the app got it wrong
+    subscribeTracksError(err, std::move(messageReply));
+    co_return;
+  }
+  auto handle = std::move(subTracksResult->value());
+  auto subTracksOk = handle->subscribeTracksOk();
+  subscribeTracksOk(subTracksOk, std::move(messageReply));
+  subscribeTracksHandles_[subTracks.requestID] = std::move(handle);
+}
+
+void MoQRelaySession::subscribeTracksOk(
+    const RequestOk& subTracksOk,
+    std::shared_ptr<MessageReply>&& messageReply) {
+  XLOG(DBG1) << __func__ << " id=" << subTracksOk.requestID << " sess=" << this;
+  auto res = messageReply->ok(subTracksOk);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeTracksOk failed sess=" << this;
+  }
+}
+
+void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
+  XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
+  // Always retire the request, even if no handle was stored — the error
+  // paths in onSubscribeTracksImpl / handleSubscribeTracks (GOING_AWAY,
+  // NOT_SUPPORTED, app errors, exceptions) never insert a handle, and
+  // without retiring the credit here the peer's request-ID budget would
+  // leak by one for every rejected SUBSCRIBE_TRACKS.
+  auto it = subscribeTracksHandles_.find(requestID);
+  if (it != subscribeTracksHandles_.end()) {
+    auto handle = std::move(it->second);
+    subscribeTracksHandles_.erase(it);
+    if (handle) {
+      folly::RequestContextScopeGuard guard;
+      setRequestSession();
+      handle->unsubscribeTracks();
+    }
+  }
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
