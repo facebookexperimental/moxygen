@@ -376,6 +376,7 @@ void MoQForwarder::removeSubscriberIt(
       removeForwardingSubscriber();
     }
   }
+  subIt->second->detach();
   subscribers_.erase(subIt);
   XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
   checkAndFireOnEmpty();
