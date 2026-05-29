@@ -45,6 +45,9 @@ class MoQRelay : public Publisher,
       SubscribeNamespace subAnn,
       std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
+  folly::coro::Task<SubscribeTracksResult> subscribeTracks(
+      SubscribeTracks subTracks) override;
+
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
       PublishNamespace ann,
       std::shared_ptr<Subscriber::PublishNamespaceCallback>) override;
@@ -82,9 +85,15 @@ class MoQRelay : public Publisher,
 
  private:
   class NamespaceSubscription;
+  class TracksSubscription;
   class TerminationFilter;
 
   void unsubscribeNamespace(
+      const TrackNamespace& prefix,
+      std::shared_ptr<MoQSession> session);
+
+  // Draft 18+
+  void unsubscribeTracks(
       const TrackNamespace& prefix,
       std::shared_ptr<MoQSession> session);
 
@@ -162,7 +171,11 @@ class MoQRelay : public Publisher,
     void tryPruneChild(const std::string& childKey);
   };
 
+  // We maintain two separate prefix trees, one for SUBSCRIBE_NAMESPACE,
+  // and one for SUBSCRIBE_TRACKS. In the SUBSCRIBE_TRACKS tree, only
+  // `children` and `sessions` are populated.
   NamespaceNode publishNamespaceRoot_{*this};
+  NamespaceNode tracksSubscriberRoot_{*this};
   enum class MatchType { Exact, Prefix };
   std::shared_ptr<NamespaceNode> findNamespaceNode(
       const TrackNamespace& ns,
@@ -170,7 +183,31 @@ class MoQRelay : public Publisher,
       MatchType matchType = MatchType::Exact,
       std::vector<std::pair<
           std::shared_ptr<MoQSession>,
-          NamespaceNode::NamespaceSubscriberInfo>>* sessions = nullptr);
+          NamespaceNode::NamespaceSubscriberInfo>>* sessions = nullptr) {
+    return findInTree(
+        publishNamespaceRoot_, ns, createMissingNodes, matchType, sessions);
+  }
+
+  // Draft 18+: same lookup, but in the tracks-subscriber tree.
+  std::shared_ptr<NamespaceNode> findTracksSubscriberNode(
+      const TrackNamespace& ns,
+      bool createMissingNodes = false,
+      MatchType matchType = MatchType::Exact,
+      std::vector<std::pair<
+          std::shared_ptr<MoQSession>,
+          NamespaceNode::NamespaceSubscriberInfo>>* sessions = nullptr) {
+    return findInTree(
+        tracksSubscriberRoot_, ns, createMissingNodes, matchType, sessions);
+  }
+
+  std::shared_ptr<NamespaceNode> findInTree(
+      NamespaceNode& root,
+      const TrackNamespace& ns,
+      bool createMissingNodes,
+      MatchType matchType,
+      std::vector<std::pair<
+          std::shared_ptr<MoQSession>,
+          NamespaceNode::NamespaceSubscriberInfo>>* sessions);
 
   struct RelaySubscription {
     RelaySubscription(
