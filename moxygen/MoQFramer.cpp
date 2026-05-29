@@ -2934,7 +2934,9 @@ MoQFrameParser::parseSubscribeNamespace(
   auto majorVersion = getDraftMajorVersion(*version_);
 
   // The SUBSCRIBE_NAMESPACE message has an "options" field only in drafts
-  // 16 and 17.
+  // 16 and 17. In draft 18+, SUBSCRIBE_NAMESPACE is NAMESPACE-only — peers
+  // wanting PUBLISH fan-out use the new SUBSCRIBE_TRACKS message. Prior to
+  // draft 16 the field doesn't exist either, but the legacy behavior is BOTH.
   if (majorVersion >= 16 && majorVersion < 18) {
     auto options = quic::follyutils::decodeQuicInteger(cursor, length);
     if (!options) {
@@ -2944,6 +2946,8 @@ MoQFrameParser::parseSubscribeNamespace(
     length -= options->second;
     subscribeNamespace.options =
         static_cast<SubscribeNamespaceOptions>(options->first);
+  } else if (majorVersion >= 18) {
+    subscribeNamespace.options = SubscribeNamespaceOptions::NAMESPACE;
   } else {
     subscribeNamespace.options = SubscribeNamespaceOptions::BOTH;
   }

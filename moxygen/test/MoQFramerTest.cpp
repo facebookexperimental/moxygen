@@ -4288,8 +4288,9 @@ TEST_F(MoQFramerV18Test, SubscribeNamespaceUsesNewWireTypeAndOmitsOptions) {
   EXPECT_EQ(parsed->requestID, req.requestID);
   EXPECT_EQ(parsed->trackNamespacePrefix, req.trackNamespacePrefix);
   // Defaults are restored on the parse side because the fields aren't on the
-  // wire in draft 18.
-  EXPECT_EQ(parsed->options, SubscribeNamespaceOptions::BOTH);
+  // wire in draft 18. v18 SUBSCRIBE_NAMESPACE is NAMESPACE-only — PUBLISH
+  // fan-out moved to the new SUBSCRIBE_TRACKS message.
+  EXPECT_EQ(parsed->options, SubscribeNamespaceOptions::NAMESPACE);
   EXPECT_EQ(parsed->forward, true);
 }
 
