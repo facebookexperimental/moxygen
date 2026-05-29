@@ -418,6 +418,23 @@ Subscriber::PublishResult MoQRelay::publish(
     sessions.emplace_back(sessionPtr, info);
   }
 
+  // Draft 18+: also gather SUBSCRIBE_TRACKS subscribers from the parallel
+  // tracks tree. They live in an independent overlap space and only want
+  // PUBLISH messages (no NAMESPACE / NAMESPACE_DONE).
+  std::vector<std::pair<
+      std::shared_ptr<MoQSession>,
+      NamespaceNode::NamespaceSubscriberInfo>>
+      tracksSessions;
+  if (auto tracksNode = findTracksSubscriberNode(
+          pub.fullTrackName.trackNamespace,
+          /*createMissingNodes=*/false,
+          MatchType::Exact,
+          &tracksSessions)) {
+    for (const auto& [sessionPtr, info] : tracksNode->sessions) {
+      tracksSessions.emplace_back(sessionPtr, info);
+    }
+  }
+
   auto session = MoQSession::getRequestSession();
   bool wasEmpty = !nodePtr->hasLocalSessions();
 
@@ -472,6 +489,17 @@ Subscriber::PublishResult MoQRelay::publish(
     if (outSession != session &&
         (info.options == SubscribeNamespaceOptions::PUBLISH ||
          info.options == SubscribeNamespaceOptions::BOTH)) {
+      nSubscribers++;
+      auto exec = outSession->getExecutor();
+      co_withExecutor(
+          exec, publishToSession(outSession, forwarder, info.forward))
+          .start();
+    }
+  }
+  // Draft 18+: fan out to SUBSCRIBE_TRACKS subscribers (always PUBLISH-style;
+  // options is irrelevant for this tree).
+  for (auto& [outSession, info] : tracksSessions) {
+    if (outSession != session) {
       nSubscribers++;
       auto exec = outSession->getExecutor();
       co_withExecutor(
