@@ -108,6 +108,8 @@ TrackStatus getTrackStatus();
 
 moxygen::SubscribeNamespace getSubscribeNamespace();
 
+moxygen::SubscribeTracks getSubscribeTracks();
+
 moxygen::PublishNamespace getPublishNamespace();
 
 std::shared_ptr<MockSubscriptionHandle> makePublishHandle();

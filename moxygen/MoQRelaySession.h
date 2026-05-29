@@ -81,6 +81,10 @@ class MoQRelaySession : public MoQSession {
       SubscribeNamespace subAnn,
       std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
+  // Draft 18+
+  folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
+      SubscribeTracks subTracks) override;
+
  protected:
   void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
@@ -108,6 +112,7 @@ class MoQRelaySession : public MoQSession {
   class SubscriberPublishNamespaceCallback;
   class PublisherPublishNamespaceHandle;
   class SubscribeNamespaceHandle;
+  class SubscribeTracksHandle;
 
   // Override to handle ANNOUNCE and SUBSCRIBE_ANNOUNCES updates
   void onRequestUpdate(RequestUpdate requestUpdate) override;
@@ -163,6 +168,10 @@ class MoQRelaySession : public MoQSession {
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
   void handleSubscribeNamespaceOkFromRequestOk(
+      const RequestOk& requestOk,
+      PendingRequestIterator reqIt);
+  // Draft 18+
+  void handleSubscribeTracksOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
 

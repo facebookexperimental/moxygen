@@ -5646,8 +5646,13 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
             onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
           }};
     case FrameType::SUBSCRIBE_TRACKS:
+      // Note: REQUEST_UPDATE is intentionally NOT in the allow-list. The
+      // SUBSCRIBE_TRACKS message has no updateable per-request state
+      // (forward, prefix, params), so accepting a REQUEST_UPDATE on this
+      // stream would just trigger a NOT_SUPPORTED response with no useful
+      // semantics. Drop it at the codec instead.
       return BidiStreamConfig{
-          {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
+          {FrameType::SUBSCRIBE_TRACKS},
           [this](RequestID id) { onSubscribeTracksStreamClosed(id); }};
     default:
       return std::nullopt;

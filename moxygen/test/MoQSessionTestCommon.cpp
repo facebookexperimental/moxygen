@@ -94,6 +94,11 @@ moxygen::SubscribeNamespace getSubscribeNamespace() {
       RequestID(0), TrackNamespace{{"foo"}}, true /* forward */};
 }
 
+moxygen::SubscribeTracks getSubscribeTracks() {
+  return SubscribeTracks{
+      RequestID(0), TrackNamespace{{"foo"}}, true /* forward */};
+}
+
 moxygen::PublishNamespace getPublishNamespace() {
   return PublishNamespace{RequestID(0), TrackNamespace{{"foo"}}};
 }

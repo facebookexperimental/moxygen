@@ -184,8 +184,10 @@ class Publisher {
   }
 
   // On successful SUBSCRIBE_TRACKS, a SubscribeTracksHandle is returned,
-  // which the caller can use to unsubscribe from the tracks or update the
-  // request.
+  // which the caller can use to unsubscribe from the tracks. The message
+  // has no updateable per-request state, so REQUEST_UPDATE is not accepted
+  // on SUBSCRIBE_TRACKS bidi streams; the requestUpdate() override below
+  // remains for interface compatibility but always returns NOT_SUPPORTED.
   class SubscribeTracksHandle {
    public:
     SubscribeTracksHandle() = default;
