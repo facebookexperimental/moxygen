@@ -129,7 +129,9 @@ moxygen_add_library(moxygen_moq_server
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
+    Folly::folly_portability
     Folly::folly_string
+    Folly::folly_net_net_ops
   EXPORTED_DEPS
     moxygen_moq
     moxygen_moq_early_data_handler

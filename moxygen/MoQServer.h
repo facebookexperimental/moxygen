@@ -25,6 +25,13 @@ const std::string kDefaultFilePath =
 
 class MoQServer : public MoQServerBase {
  public:
+  struct Options {
+    std::optional<quic::TransportSettings> transportSettings;
+    std::function<bool()> useQuicWtSession;
+    size_t udpSendBufferBytes{0};
+    size_t udpRecvBufferBytes{0};
+  };
+
   MoQServer(
       std::string cert,
       std::string key,
@@ -32,11 +39,30 @@ class MoQServer : public MoQServerBase {
       std::optional<quic::TransportSettings> transportSettings = std::nullopt,
       std::function<bool()> useQuicWtSession = {});
 
+  // Primary constructor — use Options to configure transport and socket params.
   MoQServer(
       std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
       std::string endpoint,
-      std::optional<quic::TransportSettings> transportSettings = std::nullopt,
-      std::function<bool()> useQuicWtSession = {});
+      Options options);
+
+  // Overload for callers that need no options.
+  MoQServer(
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+      std::string endpoint)
+      : MoQServer(std::move(fizzContext), std::move(endpoint), Options{}) {}
+
+  // Legacy overload — delegates to the Options constructor.
+  MoQServer(
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+      std::string endpoint,
+      std::optional<quic::TransportSettings> transportSettings,
+      std::function<bool()> useQuicWtSession = {})
+      : MoQServer(
+            std::move(fizzContext),
+            std::move(endpoint),
+            Options{
+                .transportSettings = std::move(transportSettings),
+                .useQuicWtSession = std::move(useQuicWtSession)}) {}
 
   void start(const folly::SocketAddress& addr) override {
     start(addr, {});
