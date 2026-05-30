@@ -2443,4 +2443,27 @@ TEST_F(MoQRelayTracksTest, SamePrefixInBothTreesAllowed) {
   removeSession(session);
 }
 
+// New tracks published after a SUBSCRIBE_TRACKS are forwarded to the
+// subscribing session as PUBLISH messages.
+TEST_F(MoQRelayTracksTest, NewPublishFanoutToTracksSubscriber) {
+  auto subscriber = createV18Session();
+  auto publisher = createMockSession();
+  setupPublishSucceeds(subscriber);
+
+  doSubscribeTracks(subscriber, kTestNamespace);
+
+  // The relay should issue exactly one PUBLISH to `subscriber` when the
+  // matching track shows up.
+  EXPECT_CALL(*subscriber, publish(_, _)).Times(1);
+
+  doPublish(publisher, kTestTrackName);
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
+  removeSession(subscriber);
+  removeSession(publisher);
+}
+
 } // namespace moxygen::test
