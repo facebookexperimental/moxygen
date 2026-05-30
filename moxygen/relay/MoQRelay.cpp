@@ -347,7 +347,7 @@ void MoQRelay::publishNamespaceDone(
   }
 }
 
-void MoQRelay::onPublishDone(const FullTrackName& ftn) {
+void MoQRelay::onPublishDoneImpl(const FullTrackName& ftn) {
   XLOG(DBG1) << __func__ << " ftn=" << ftn;
 
   auto it = subscriptions_.find(ftn);
@@ -618,7 +618,7 @@ class MoQRelay::TerminationFilter : public TrackConsumerFilter {
     // 1. Remove from nodePtr->publishes
     // 2. Clear subscription.handle
     if (relay_) {
-      relay_->onPublishDone(ftn_);
+      relay_->onPublishDoneImpl(ftn_);
     }
     // Change the downstream code to something like "upstream ended"?
     return TrackConsumerFilter::publishDone(std::move(pubDone));
