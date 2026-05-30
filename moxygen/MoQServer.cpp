@@ -108,7 +108,7 @@ MoQServer::MoQServer(
   constexpr uint64_t kMaxAuthTokenCacheSize = 1024;
   earlyDataHandler_.setCurrentParams(
       kDefaultMaxRequestID, kMaxAuthTokenCacheSize);
-  factory_->setDefaultEarlyDataHandler(&earlyDataHandler_);
+  factory_->setEarlyDataAppParamsHandler(&earlyDataHandler_);
 
   // Register ALPN handlers for direct QUIC MoQT connections
   XLOG(DBG1) << "MoQServer: Registering ALPN handlers: "
