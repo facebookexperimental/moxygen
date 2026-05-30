@@ -24,7 +24,12 @@ install_ubuntu() {
         libevent-dev \
         libsodium-dev \
         libzstd-dev \
-        libboost-all-dev \
+        libboost-dev \
+        libboost-context-dev \
+        libboost-filesystem-dev \
+        libboost-program-options-dev \
+        libboost-regex-dev \
+        libboost-thread-dev \
         libfmt-dev \
         zlib1g-dev \
         libc-ares-dev \
