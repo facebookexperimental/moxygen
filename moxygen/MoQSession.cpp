@@ -5556,7 +5556,7 @@ folly::coro::Task<void> MoQSession::handlePreSetupUniStream(
       readBuf.append(std::move(streamData->data));
     }
     fin = streamData->fin;
-    frameType = getFrameType(readBuf);
+    frameType = getFrameType(readBuf, negotiatedVersion_);
   } while (!frameType.has_value() && !fin);
 
   if (!frameType.has_value() || readBuf.chainLength() == 0) {
@@ -5696,7 +5696,7 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     // 0x50 maps to SUBSCRIBE_NAMESPACE (v18), 0x11 to
     // LEGACY_SUBSCRIBE_NAMESPACE (v17-), 0x51 to SUBSCRIBE_TRACKS, etc.
     // getBidiStreamConfig handles the routing for both wire enumerators.
-    frameType = getFrameType(readBuf);
+    frameType = getFrameType(readBuf, negotiatedVersion_);
   } while (!frameType.has_value() && !fin);
 
   if (token.isCancellationRequested()) {
@@ -5758,7 +5758,9 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
   readBuf.append(std::move(datagram));
   size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
-  auto type = quic::follyutils::decodeQuicInteger(cursor);
+  MoQFrameParser parser;
+  parser.initializeVersion(*negotiatedVersion_);
+  auto type = parser.decodeVarint(cursor);
   if (!type) {
     XLOG(ERR) << __func__ << " Bad datagram header failed to parse type l="
               << readBuf.chainLength() << " sess=" << this;
@@ -5772,8 +5774,6 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
     return;
   }
   remainingLength -= type->second;
-  MoQFrameParser parser;
-  parser.initializeVersion(*negotiatedVersion_);
   auto res = parser.parseDatagramObjectHeader(
       cursor, DatagramType(type->first), remainingLength);
   if (res.hasError()) {

@@ -26,11 +26,18 @@ const size_t kMaxFrameHeaderSize = 32;
 
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
 
+// Test-only free helpers that always operate on QUIC varints (drafts <17
+// behavior). Production code should use MoQFrameWriter::writeVarint /
+// MoQFrameParser::parseFixedString which dispatch on the negotiated version.
 void writeVarint(
     folly::IOBufQueue& buf,
     uint64_t value,
     size_t& size,
     bool& error) noexcept;
+
+folly::Expected<std::string, ErrorCode> parseFixedString(
+    folly::io::Cursor& cursor,
+    size_t& length);
 
 inline StreamType getSubgroupStreamType(
     uint64_t version,
@@ -100,10 +107,6 @@ inline DatagramType getDatagramType(
         (majorVersion >= 15 && !priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
   }
 }
-
-folly::Expected<std::string, ErrorCode> parseFixedString(
-    folly::io::Cursor& cursor,
-    size_t& length);
 
 class MoQFrameParser {
  public:
@@ -443,6 +446,49 @@ class MoQFrameParser {
       const TrackRequestParameters& params,
       Extensions& extensions) const noexcept;
 
+  // Promoted from free helpers so member-to-member calls can use the cached
+  // useMoQVarint_/version_/tokenCache_ state without threading them through.
+  enum class ParamsType { ClientSetup, ServerSetup, Request };
+
+  folly::Expected<std::string, ErrorCode> parseFixedString(
+      folly::io::Cursor& cursor,
+      size_t& length) const noexcept;
+
+  folly::Expected<AbsoluteLocation, ErrorCode> parseAbsoluteLocation(
+      folly::io::Cursor& cursor,
+      size_t& length) const noexcept;
+
+  folly::Expected<SubscriptionFilter, ErrorCode> parseSubscriptionFilter(
+      folly::io::Cursor& cursor,
+      size_t& length) const noexcept;
+
+  folly::Expected<std::optional<AuthToken>, ErrorCode> parseAuthToken(
+      folly::io::Cursor& cursor,
+      size_t length,
+      ParamsType paramsType) const noexcept;
+
+  folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      uint64_t version,
+      uint64_t key,
+      ParamsType paramsType) const noexcept;
+
+  folly::Expected<std::optional<Parameter>, ErrorCode> parseIntParam(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      uint64_t version,
+      uint64_t key) const noexcept;
+
+  folly::Expected<folly::Unit, ErrorCode> parseParams(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      uint64_t version,
+      size_t numParams,
+      Parameters& params,
+      std::vector<Parameter>& requestSpecificParams,
+      ParamsType paramsType) const noexcept;
+
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};
   MoQTokenCache* tokenCache_{nullptr};
@@ -678,6 +724,37 @@ class MoQFrameWriter {
     return *res;
   }
 
+  // Version-aware varint encode. Dispatches to QUIC varint on drafts <17 and
+  // MoQ varint on drafts >=17.
+  void writeVarint(
+      folly::IOBufQueue& buf,
+      uint64_t value,
+      size_t& size,
+      bool& error) const noexcept {
+    if (error) {
+      return;
+    }
+    folly::io::QueueAppender appender(&buf, kMaxFrameHeaderSize);
+    if (useMoQVarint_) {
+      auto res = encodeMoQVarint(value, appender);
+      if (res.hasError()) {
+        error = true;
+      } else {
+        size += *res;
+      }
+      return;
+    }
+    auto appenderOp = [&appender](auto val) mutable {
+      appender.writeBE(folly::tag<decltype(val)>, val);
+    };
+    auto res = quic::encodeQuicInteger(value, appenderOp);
+    if (res.hasError()) {
+      error = true;
+    } else {
+      size += *res;
+    }
+  }
+
   void writeExtensions(
       folly::IOBufQueue& writeBuf,
       const Extensions& extensions,
@@ -686,6 +763,36 @@ class MoQFrameWriter {
       bool withLengthPrefix = true) const noexcept;
 
  private:
+  // Promoted from free helpers so they pick up useMoQVarint_/version_.
+  void writeFixedString(
+      folly::IOBufQueue& writeBuf,
+      const std::string& str,
+      size_t& size,
+      bool& error) const noexcept;
+
+  void writeFixedTuple(
+      folly::IOBufQueue& writeBuf,
+      const std::vector<std::string>& tup,
+      size_t& size,
+      bool& error) const noexcept;
+
+  void writeTrackNamespace(
+      folly::IOBufQueue& writeBuf,
+      const TrackNamespace& tn,
+      size_t& size,
+      bool& error) const noexcept;
+
+  uint16_t* writeFrameHeader(
+      folly::IOBufQueue& writeBuf,
+      FrameType frameType,
+      bool& error) const noexcept;
+
+  void writeFullTrackName(
+      folly::IOBufQueue& writeBuf,
+      const FullTrackName& fullTrackName,
+      size_t& size,
+      bool error) const noexcept;
+
   void writeKeyValuePairs(
       folly::IOBufQueue& writeBuf,
       const std::vector<Extension>& extensions,
@@ -752,10 +859,20 @@ class MoQFrameWriter {
   mutable std::optional<uint64_t> previousFetchGroup_;
   mutable std::optional<uint64_t> previousFetchSubgroup_;
   mutable std::optional<uint8_t> previousFetchPriority_;
+
+  // writeSetup is a free function but needs access to writer member helpers
+  // to dispatch on the negotiated version.
+  friend WriteResult writeSetup(
+      folly::IOBufQueue& writeBuf,
+      const Setup& setup,
+      uint64_t version,
+      bool isClient) noexcept;
 };
 
 // Parses the frame type from the beginning of the buffer without consuming it.
 // Returns std::nullopt if there isn't enough data to parse the frame type.
-std::optional<FrameType> getFrameType(const folly::IOBufQueue& readBuf);
+std::optional<FrameType> getFrameType(
+    const folly::IOBufQueue& readBuf,
+    std::optional<uint64_t> version = std::nullopt);
 
 } // namespace moxygen

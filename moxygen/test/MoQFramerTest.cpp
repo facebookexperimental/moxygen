@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQFramer.h"
+#include "moxygen/MoQVarint.h"
 
 #include <folly/logging/xlog.h>
 #include <folly/portability/GMock.h>
@@ -2650,31 +2651,31 @@ TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
       << "No additional data should be present (version field not written)";
 }
 
-TEST(MoQFramerTest, WriteClientSetupUsesSetupFrameTypeForDraft17) {
+TEST(MoQFramerTest, WriteClientSetupUsesSetupFrameTypeForDraft18) {
   auto clientSetup = moxygen::Setup{};
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft17);
+  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft18);
   EXPECT_TRUE(result.hasValue()) << "Failed to write CLIENT_SETUP";
 
   auto buffer = writeBuf.move();
   folly::io::Cursor cursor(buffer.get());
 
-  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  auto frameType = decodeMoQVarint(cursor);
   EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SETUP));
 }
 
-TEST(MoQFramerTest, WriteServerSetupUsesSetupFrameTypeForDraft17) {
+TEST(MoQFramerTest, WriteServerSetupUsesSetupFrameTypeForDraft18) {
   auto serverSetup = moxygen::Setup{};
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeServerSetup(writeBuf, serverSetup, kVersionDraft17);
+  auto result = writeServerSetup(writeBuf, serverSetup, kVersionDraft18);
   EXPECT_TRUE(result.hasValue()) << "Failed to write SERVER_SETUP";
 
   auto buffer = writeBuf.move();
   folly::io::Cursor cursor(buffer.get());
 
-  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  auto frameType = decodeMoQVarint(cursor);
   EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SETUP));
 }
 
@@ -4277,7 +4278,7 @@ TEST_F(MoQFramerV18Test, SubscribeNamespaceUsesNewWireTypeAndOmitsOptions) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  auto wireType = quic::follyutils::decodeQuicInteger(cursor);
+  auto wireType = decodeMoQVarint(cursor);
   ASSERT_TRUE(wireType.has_value());
   EXPECT_EQ(wireType->first, 0x50u);
 
@@ -4307,7 +4308,7 @@ TEST_F(MoQFramerV18Test, SubscribeTracksRoundtrip) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
-  auto wireType = quic::follyutils::decodeQuicInteger(cursor);
+  auto wireType = decodeMoQVarint(cursor);
   ASSERT_TRUE(wireType.has_value());
   EXPECT_EQ(wireType->first, folly::to_underlying(FrameType::SUBSCRIBE_TRACKS));
   EXPECT_EQ(wireType->first, 0x51u);
@@ -4333,7 +4334,7 @@ TEST_F(MoQFramerV18Test, SubscribeTracksForwardFalseSerializedAsParameter) {
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
-  ASSERT_TRUE(quic::follyutils::decodeQuicInteger(cursor).has_value());
+  ASSERT_TRUE(decodeMoQVarint(cursor).has_value());
 
   auto bodyLen = frameLength(cursor);
   auto parsed = parser_.parseSubscribeTracks(cursor, bodyLen);

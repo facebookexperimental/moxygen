@@ -19,7 +19,7 @@ void MoQCodec::onIngressStart(std::unique_ptr<folly::IOBuf> data) {
 folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrameHeaderType(
     folly::io::Cursor& cursor,
     size_t& remainingLength) {
-  auto type = quic::follyutils::decodeQuicInteger(cursor);
+  auto type = moqFrameParser_.decodeVarint(cursor);
   if (!type) {
     XLOG(DBG6) << __func__ << " underflow";
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -172,7 +172,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
   while (!connError_ && ingress_.chainLength() > totalBytesConsumed) {
     switch (parseState_) {
       case ParseState::STREAM_HEADER_TYPE: {
-        auto type = quic::follyutils::decodeQuicInteger(cursor);
+        auto type = moqFrameParser_.decodeVarint(cursor);
         if (!type) {
           XLOG(DBG6) << __func__ << " underflow";
           connError_ = ErrorCode::PARSE_UNDERFLOW;
