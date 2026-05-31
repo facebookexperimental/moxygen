@@ -1,0 +1,82 @@
+name: dev build (manual)
+
+# Manual workflow that produces snapshot-equivalent moxygen tarballs from
+# any branch. Mirrors the publish job in omoq-ci-main.yml: same
+# BUNDLE_DEPS=ON / BUILD_TESTING=OFF / BUILD_SHARED_LIBS=OFF configure
+# flags, same collect-artifacts-standalone.sh packaging, same 90-day
+# actions-artifact retention.
+#
+# Triggered on-demand so PR branches can be validated end-to-end against
+# consumers (e.g. moqx) without waiting for the PR to merge into main and
+# the rolling snapshot release to regenerate.
+#
+# Strict isolation (mirrors moqx#315): no GHCR push, no release tag
+# promotion, no deploy. Pure kit producer.
+#
+# Usage:
+#   gh workflow run omoq-dev-build.yml --ref <branch> -f target=<target>
+#   gh run watch
+#   gh run download <run-id>
+#   tar -C <prefix> -xzf moxygen-dev-<target>-<sha>.tar.gz
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Build target platform'
+        type: choice
+        options:
+          - macos-15-arm64
+          - ubuntu-22.04-amd64
+        default: macos-15-arm64
+
+jobs:
+  build:
+    name: dev build (${{ inputs.target }})
+    runs-on: ${{ inputs.target == 'macos-15-arm64' && 'macos-15' || 'ubuntu-22.04' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: bash standalone/install-system-deps.sh
+
+      - name: Configure
+        run: |
+          cmake -B _build -S standalone -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUNDLE_DEPS=ON \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install"
+
+      - name: Build
+        run: cmake --build _build -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: Install
+        run: cmake --install _build
+
+      - name: Package
+        run: |
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          ARTIFACT="moxygen-dev-${{ inputs.target }}-${SHA_SHORT}.tar.gz"
+          DEBUG_ARTIFACT="moxygen-dev-${{ inputs.target }}-${SHA_SHORT}-dbg.tar.gz"
+          bash openmoq/scripts/collect-artifacts-standalone.sh \
+            --install-prefix "$GITHUB_WORKSPACE/install" \
+            --output "$ARTIFACT" \
+            --debug-output "$DEBUG_ARTIFACT"
+          echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
+          echo "DEBUG_ARTIFACT=$DEBUG_ARTIFACT" >> $GITHUB_ENV
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ env.ARTIFACT }}
+          retention-days: 90
+
+      - name: Upload debug tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DEBUG_ARTIFACT }}
+          path: ${{ env.DEBUG_ARTIFACT }}
+          retention-days: 90

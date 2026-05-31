@@ -27,6 +27,7 @@ folly
 fizz
 wangle
 mvfst
+picoquic
 proxygen
 
 [dependencies.test=on]

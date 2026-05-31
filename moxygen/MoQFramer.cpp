@@ -421,6 +421,8 @@ MoQFrameParser::parseVariableParam(
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
   const auto subscriptionFilterKey =
       folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+  const auto trackFilterKey =
+      folly::to_underlying(TrackRequestParamKey::TRACK_FILTER);
   if (key == authKey) {
     auto res = decodeVarint(cursor, length);
     if (!res) {
@@ -469,6 +471,29 @@ MoQFrameParser::parseVariableParam(
     }
     length -= lenRes->first;
     p.asSubscriptionFilter = res.value();
+  } else if (key == trackFilterKey && getDraftMajorVersion(version) >= 16) {
+    // TRACK_FILTER (key=0x29, odd = length-prefixed)
+    // NOTE: TRACK_FILTER is an active proposal, not yet landed
+    // in the core specification. Using draft-16+ check as a placeholder until
+    // the feature is formally specified.
+    auto lenRes = quic::follyutils::decodeQuicInteger(cursor, length);
+    if (!lenRes) {
+      XLOG(DBG4) << "parseVariableParam: UNDERFLOW on trackFilter length";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= lenRes->second;
+    auto filterLen = lenRes->first;
+    if (filterLen > length || !cursor.canAdvance(filterLen)) {
+      XLOG(DBG4) << "parseVariableParam: UNDERFLOW on trackFilter data";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    size_t filterSize = filterLen;
+    auto res = parseTrackFilter(cursor, filterSize);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    length -= lenRes->first;
+    p.asTrackFilter = res.value();
   }
 
   else {
@@ -1397,6 +1422,17 @@ std::optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
     if (param.key ==
         folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
       return param.asSubscriptionFilter;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<TrackFilter> MoQFrameParser::extractTrackFilter(
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  for (const auto& param : requestSpecificParams) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::TRACK_FILTER)) {
+      return param.asTrackFilter;
     }
   }
   return std::nullopt;
@@ -3995,6 +4031,8 @@ void MoQFrameWriter::writeParamValue(
     bool& error) const noexcept {
   const auto subscriptionFilterKey =
       folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
+  const auto trackFilterKey =
+      folly::to_underlying(TrackRequestParamKey::TRACK_FILTER);
   const auto largestObjectKey =
       folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT);
   const auto expiresKey = folly::to_underlying(TrackRequestParamKey::EXPIRES);
@@ -4007,6 +4045,17 @@ void MoQFrameWriter::writeParamValue(
     folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
     size_t tmpSize = 0;
     writeSubscriptionFilter(tmpBuf, param.asSubscriptionFilter, tmpSize, error);
+    if (!error) {
+      writeVarint(writeBuf, tmpSize, size, error);
+      writeBuf.append(tmpBuf.move());
+      size += tmpSize;
+    }
+  } else if (param.key == trackFilterKey) {
+    // Track filter key is odd (0x29), so it needs a length prefix.
+    // Write to a temporary buffer to compute the length first.
+    folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t tmpSize = 0;
+    writeTrackFilter(tmpBuf, param.asTrackFilter, tmpSize, error);
     if (!error) {
       writeVarint(writeBuf, tmpSize, size, error);
       writeBuf.append(tmpBuf.move());
@@ -4086,6 +4135,17 @@ void MoQFrameWriter::writeSubscriptionFilter(
       error = true;
     }
   }
+}
+
+void writeTrackFilter(
+    folly::IOBufQueue& writeBuf,
+    const TrackFilter& filter,
+    size_t& size,
+    bool& error) noexcept {
+  // Write propertyType
+  writeVarint(writeBuf, filter.propertyType, size, error);
+  // Write maxSelected (N)
+  writeVarint(writeBuf, filter.maxSelected, size, error);
 }
 
 WriteResult MoQFrameWriter::writeDatagramObject(
