@@ -10,6 +10,7 @@
 #include <folly/io/IOBufQueue.h>
 #include <moxygen/MoQTokenCache.h>
 #include <moxygen/MoQTypes.h>
+#include <moxygen/MoQVarint.h>
 #include <moxygen/MoQVersions.h>
 
 #include <quic/QuicException.h>
@@ -291,10 +292,32 @@ class MoQFrameParser {
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";
     version_ = versionIn;
+    useMoQVarint_ = getDraftMajorVersion(versionIn) >= 17;
   }
 
   std::optional<uint64_t> getVersion() const {
     return version_;
+  }
+
+  // Version-aware varint decode. Dispatches to QUIC varint on drafts <17 and
+  // MoQ varint on drafts >=17. The dispatch flag is cached in
+  // `initializeVersion` so this stays a single load + branch. The default cap
+  // branches on the dispatch flag: MoQ varints can be 9 bytes, QUIC varints 8.
+  quic::Optional<std::pair<uint64_t, size_t>> decodeVarint(
+      folly::io::Cursor& cursor) const {
+    if (useMoQVarint_) {
+      return decodeMoQVarint(cursor, 9);
+    }
+    return quic::follyutils::decodeQuicInteger(cursor, sizeof(uint64_t));
+  }
+
+  quic::Optional<std::pair<uint64_t, size_t>> decodeVarint(
+      folly::io::Cursor& cursor,
+      uint64_t atMost) const {
+    if (useMoQVarint_) {
+      return decodeMoQVarint(cursor, atMost);
+    }
+    return quic::follyutils::decodeQuicInteger(cursor, atMost);
   }
 
   void setTokenCacheMaxSize(size_t size) {
@@ -421,6 +444,7 @@ class MoQFrameParser {
       Extensions& extensions) const noexcept;
 
   std::optional<uint64_t> version_;
+  bool useMoQVarint_{false};
   MoQTokenCache* tokenCache_{nullptr};
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding (draft-15+)
@@ -631,10 +655,27 @@ class MoQFrameWriter {
   void initializeVersion(uint64_t versionIn) {
     CHECK(!version_) << "Version already initialized";
     version_ = versionIn;
+    useMoQVarint_ = getDraftMajorVersion(versionIn) >= 17;
   }
 
   std::optional<uint64_t> getVersion() const {
     return version_;
+  }
+
+  // Version-aware varint encoded-size query. Returns the number of bytes the
+  // minimal encoding of `value` would consume, or sets `error` and returns 0
+  // if the value is inexpressible (only possible with QUIC varint, which
+  // tops out at 2^62-1; MoQ varint covers the full uint64_t range).
+  size_t getVarintSize(uint64_t value, bool& error) const noexcept {
+    if (useMoQVarint_) {
+      return getMoQVarintSize(value);
+    }
+    auto res = quic::getQuicIntegerSize(value);
+    if (res.hasError()) {
+      error = true;
+      return 0;
+    }
+    return *res;
   }
 
   void writeExtensions(
@@ -705,6 +746,7 @@ class MoQFrameWriter {
       TrackRequestParameters& params) const noexcept;
 
   std::optional<uint64_t> version_;
+  bool useMoQVarint_{false};
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding (draft-15+)
   mutable std::optional<uint64_t> previousFetchGroup_;

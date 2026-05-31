@@ -45,6 +45,7 @@ moxygen_add_library(moxygen_moq_framer
   EXPORTED_DEPS
     moxygen_moq_token_cache
     moxygen_moq_types
+    moxygen_moq_varint
     moxygen_moq_versions
     mvfst::mvfst_codec_types
     mvfst::mvfst_exception
