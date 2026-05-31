@@ -151,6 +151,12 @@ bool datagramObjectIdZero(uint64_t version, DatagramType datagramType);
 
 void writeSize(uint16_t* sizePtr, size_t size, bool& error, uint64_t versionIn);
 
+void writeTrackFilter(
+    folly::IOBufQueue& writeBuf,
+    const TrackFilter& filter,
+    size_t& size,
+    bool& error) noexcept;
+
 bool includeSetupParam(uint64_t version, SetupKey key);
 
 // Test-only helper: QUIC varint length prefix + fixed string. Production code
@@ -404,6 +410,32 @@ MoQFrameParser::parseSubscriptionFilter(
     }
     length -= endGroup->second;
   }
+
+  return filter;
+}
+
+folly::Expected<TrackFilter, ErrorCode> parseTrackFilter(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept {
+  TrackFilter filter;
+
+  // Parse propertyType
+  auto propertyType = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!propertyType) {
+    XLOG(DBG4) << "parseTrackFilter: UNDERFLOW on propertyType";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= propertyType->second;
+  filter.propertyType = propertyType->first;
+
+  // Parse maxSelected (N)
+  auto maxSelected = quic::follyutils::decodeQuicInteger(cursor, length);
+  if (!maxSelected) {
+    XLOG(DBG4) << "parseTrackFilter: UNDERFLOW on maxSelected";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= maxSelected->second;
+  filter.maxSelected = maxSelected->first;
 
   return filter;
 }
