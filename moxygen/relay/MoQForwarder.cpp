@@ -683,6 +683,11 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::publishDone(
     PublishDone pubDone) {
   XLOG(DBG1) << __func__ << " pubDone reason=" << pubDone.reasonPhrase;
   draining_ = true;
+  if (callback_) {
+    // Signal source termination before draining subscribers, so any owning
+    // registry can release this forwarder (identity-scoped via the pointer).
+    callback_->onPublishDone(this);
+  }
   forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     drainSubscriberByKey(
         sub->mapKey,

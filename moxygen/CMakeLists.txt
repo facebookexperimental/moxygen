@@ -26,6 +26,16 @@ moxygen_add_library(moxygen_moq_types
     Folly::folly_io_iobuf
 )
 
+moxygen_add_library(moxygen_moq_varint
+  SRCS
+    MoQVarint.cpp
+  EXPORTED_DEPS
+    mvfst::mvfst_common_optional
+    mvfst::mvfst_constants
+    Folly::folly_expected
+    Folly::folly_io_iobuf
+)
+
 moxygen_add_library(moxygen_moq_framer
   SRCS
     MoQFramer.cpp
@@ -35,6 +45,7 @@ moxygen_add_library(moxygen_moq_framer
   EXPORTED_DEPS
     moxygen_moq_token_cache
     moxygen_moq_types
+    moxygen_moq_varint
     moxygen_moq_versions
     mvfst::mvfst_codec_types
     mvfst::mvfst_exception

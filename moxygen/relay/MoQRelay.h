@@ -97,7 +97,7 @@ class MoQRelay : public Publisher,
       const TrackNamespace& prefix,
       std::shared_ptr<MoQSession> session);
 
-  void onPublishDone(const FullTrackName& ftn);
+  void onPublishDoneImpl(const FullTrackName& ftn);
 
   struct NamespaceNode : public Subscriber::PublishNamespaceHandle {
     explicit NamespaceNode(MoQRelay& relay, NamespaceNode* parent = nullptr)
