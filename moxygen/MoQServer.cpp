@@ -122,12 +122,12 @@ MoQServer::MoQServer(
 
 void MoQServer::registerAlpnHandler(const std::vector<std::string>& alpns) {
   if (!factory_) {
-    XLOG(INFO) << "Cannot register ALPN handler: factory not initialized";
+    XLOG(DBG1) << "Cannot register ALPN handler: factory not initialized";
     return;
   }
 
   if (hqServer_) {
-    XLOG(INFO) << "Cannot register ALPN handler: server already started";
+    XLOG(DBG1) << "Cannot register ALPN handler: server already started";
     return;
   }
 

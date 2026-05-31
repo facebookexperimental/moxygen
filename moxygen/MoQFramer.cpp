@@ -3491,7 +3491,7 @@ void writeSize(
     bool& error,
     uint64_t versionIn) {
   if (size > ((1 << 16) - 1)) {
-    XLOG(ERR) << "Control message size exceeds max sz=" << size;
+    XLOG(WARN) << "Control message size exceeds max sz=" << size;
     error = true;
     return;
   }
