@@ -867,7 +867,7 @@ MoQFrameParser::parseSubgroupHeader(
     folly::io::Cursor& cursor,
     size_t length,
     const SubgroupOptions& options) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing subgroup header";
   auto startLength = length;
   SubgroupHeaderResult result;
@@ -1378,7 +1378,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     size_t numParams,
     TrackRequestParameters& params,
     std::vector<Parameter>& requestSpecificParams) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing track request params";
   params.setMajorVersion(getDraftMajorVersion(*version_));
   return parseParams(
@@ -1405,7 +1405,7 @@ std::optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
 folly::Expected<SubscribeRequest, ErrorCode>
 MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
     const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing a subscribe request";
   SubscribeRequest subscribeRequest;
   auto requestID = decodeVarint(cursor, length);
@@ -1569,7 +1569,7 @@ void MoQFrameParser::handleRequestSpecificParams(
 folly::Expected<RequestUpdate, ErrorCode> MoQFrameParser::parseRequestUpdate(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing a request update";
 
   RequestUpdate requestUpdate;
@@ -1876,7 +1876,7 @@ folly::Expected<PublishDone, ErrorCode> MoQFrameParser::parsePublishDone(
   }
   publishDone.reasonPhrase = std::move(reas.value());
 
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing PUBLISH_DONE";
   if (getDraftMajorVersion(*version_) <= 9) {
     if (length == 0) {
@@ -1901,7 +1901,7 @@ folly::Expected<PublishDone, ErrorCode> MoQFrameParser::parsePublishDone(
 folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing a publish request";
   PublishRequest publish;
   auto requestID = decodeVarint(cursor, length);
@@ -2058,7 +2058,7 @@ void MoQFrameParser::handleRequestSpecificParams(
 folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing a publish ok";
   PublishOk publishOk;
   auto requestID = decodeVarint(cursor, length);
@@ -2431,7 +2431,7 @@ MoQFrameParser::parsePublishNamespaceCancel(
 folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "version_ needs to be set to parse TrackStatus";
 
   if (getDraftMajorVersion(*version_) >= 14) {
@@ -2485,7 +2485,7 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
 folly::Expected<TrackStatusOk, ErrorCode> MoQFrameParser::parseTrackStatusOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "version_ needs to be set to parse TrackStatusOk";
 
   if (getDraftMajorVersion(*version_) >= 14) {
@@ -2940,7 +2940,7 @@ MoQFrameParser::parseSubscribeNamespace(
 folly::Expected<SubscribeTracks, ErrorCode>
 MoQFrameParser::parseSubscribeTracks(folly::io::Cursor& cursor, size_t length)
     const noexcept {
-  CHECK_GE(getDraftMajorVersion(*version_), 18u)
+  XCHECK_GE(getDraftMajorVersion(*version_), 18u)
       << "SUBSCRIBE_TRACKS is draft 18+ only";
   SubscribeTracks subscribeTracks;
 
@@ -3088,8 +3088,8 @@ MoQFrameParser::parseUnsubscribeNamespace(
 folly::Expected<Namespace, ErrorCode> MoQFrameParser::parseNamespace(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_) << "Need to have version_ set in order to parse NAMESPACE";
-  CHECK_GE(getDraftMajorVersion(*version_), 16)
+  XCHECK(version_) << "Need to have version_ set in order to parse NAMESPACE";
+  XCHECK_GE(getDraftMajorVersion(*version_), 16)
       << "NAMESPACE message doesn't exist for version 15 and below, this function "
       << "shouldn't be called";
   Namespace ns;
@@ -3111,9 +3111,9 @@ folly::Expected<Namespace, ErrorCode> MoQFrameParser::parseNamespace(
 folly::Expected<NamespaceDone, ErrorCode> MoQFrameParser::parseNamespaceDone(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
-  CHECK(version_)
+  XCHECK(version_)
       << "Need to have version_ set in order to parse NAMESPACE_DONE";
-  CHECK_GE(getDraftMajorVersion(*version_), 16)
+  XCHECK_GE(getDraftMajorVersion(*version_), 16)
       << "NAMESPACE_DONE message doesn't exist for version 15 and below, this function "
       << "shouldn't be called";
   NamespaceDone namespaceDone;
@@ -3154,7 +3154,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseExtensions(
     folly::io::Cursor& cursor,
     size_t& length,
     ObjectHeader& objectHeader) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "The version must be set before parsing extensions";
 
   // Parse the length of the extension block
@@ -3481,7 +3481,7 @@ uint16_t* MoQFrameWriter::writeFrameHeader(
   writeVarint(writeBuf, folly::to_underlying(frameType), size, error);
   auto res = writeBuf.preallocate(2, 256);
   writeBuf.postallocate(2);
-  CHECK_GE(res.second, 2);
+  XCHECK_GE(res.second, 2);
   return static_cast<uint16_t*>(res.first);
 }
 
@@ -3491,7 +3491,7 @@ void writeSize(
     bool& error,
     uint64_t versionIn) {
   if (size > ((1 << 16) - 1)) {
-    LOG(ERROR) << "Control message size exceeds max sz=" << size;
+    XLOG(ERR) << "Control message size exceeds max sz=" << size;
     error = true;
     return;
   }
@@ -3955,7 +3955,7 @@ void MoQFrameWriter::writeTrackRequestParams(
     const std::vector<Parameter>& requestSpecificParams,
     size_t& size,
     bool& error) const noexcept {
-  CHECK(*version_) << "Version must be set before writing track request params";
+  XCHECK(*version_) << "Version must be set before writing track request params";
   // Write total count of all parameters
   writeVarint(
       writeBuf, params.size() + requestSpecificParams.size(), size, error);
@@ -4047,7 +4047,7 @@ void MoQFrameWriter::writeSubscriptionFilter(
     const SubscriptionFilter& filter,
     size_t& size,
     bool& error) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version must be set before writing subscription filter";
 
   // Write filter type
@@ -4110,10 +4110,10 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   bool isObjectIdZero =
       (objectHeader.id == 0 && (getDraftMajorVersion(version_.value()) >= 14));
 
-  CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
+  XCHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
       << "non-zero length objects require NORMAL status";
   if (objectHeader.status != ObjectStatus::NORMAL || !hasLength) {
-    CHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
+    XCHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
         << "non-empty objectPayload with no header length";
     writeVarint(
         writeBuf,
@@ -4365,14 +4365,14 @@ WriteResult MoQFrameWriter::writeStreamObject(
     writeExtensions(writeBuf, objectHeader.extensions, size, error);
   }
   bool hasLength = objectHeader.length && *objectHeader.length > 0;
-  CHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
+  XCHECK(!hasLength || objectHeader.status == ObjectStatus::NORMAL)
       << "non-zero length objects require NORMAL status";
   if (hasLength) {
     writeVarint(writeBuf, *objectHeader.length, size, error);
     writeBuf.append(std::move(objectPayload));
     // TODO: adjust size?
   } else {
-    CHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
+    XCHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
         << "non-empty objectPayload with no header length";
     writeVarint(writeBuf, 0, size, error);
     writeVarint(
@@ -4387,7 +4387,7 @@ WriteResult MoQFrameWriter::writeStreamObject(
 WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write subscribe request";
   size_t size = 0;
   bool error = false;
@@ -4509,7 +4509,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
 WriteResult MoQFrameWriter::writeRequestUpdate(
     folly::IOBufQueue& writeBuf,
     const RequestUpdate& update) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write request update";
   size_t size = 0;
   bool error = false;
@@ -4599,7 +4599,7 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
 WriteResult MoQFrameWriter::writeSubscribeOk(
     folly::IOBufQueue& writeBuf,
     const SubscribeOk& subscribeOk) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write subscribe ok";
   size_t size;
   bool error = false;
@@ -4696,7 +4696,7 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
 WriteResult MoQFrameWriter::writeMaxRequestID(
     folly::IOBufQueue& writeBuf,
     const MaxRequestID& maxRequestID) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write max requestID";
   size_t size = 0;
   bool error = false;
@@ -4712,7 +4712,7 @@ WriteResult MoQFrameWriter::writeMaxRequestID(
 WriteResult MoQFrameWriter::writeRequestsBlocked(
     folly::IOBufQueue& writeBuf,
     const RequestsBlocked& subscribesBlocked) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write subscribes blocked";
   size_t size = 0;
   bool error = false;
@@ -4728,7 +4728,7 @@ WriteResult MoQFrameWriter::writeRequestsBlocked(
 WriteResult MoQFrameWriter::writeUnsubscribe(
     folly::IOBufQueue& writeBuf,
     const Unsubscribe& unsubscribe) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write unsubscribe";
+  XCHECK(version_.has_value()) << "Version needs to be set to write unsubscribe";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::UNSUBSCRIBE, error);
@@ -4743,7 +4743,7 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
 WriteResult MoQFrameWriter::writePublishDone(
     folly::IOBufQueue& writeBuf,
     const PublishDone& publishDone) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write subscribe done";
   size_t size = 0;
   bool error = false;
@@ -4766,7 +4766,7 @@ WriteResult MoQFrameWriter::writePublishDone(
 WriteResult MoQFrameWriter::writePublish(
     folly::IOBufQueue& writeBuf,
     const PublishRequest& publish) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write publish";
+  XCHECK(version_.has_value()) << "Version needs to be set to write publish";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH, error);
@@ -4849,7 +4849,7 @@ WriteResult MoQFrameWriter::writePublish(
 WriteResult MoQFrameWriter::writePublishOk(
     folly::IOBufQueue& writeBuf,
     const PublishOk& publishOk) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write publish ok";
+  XCHECK(version_.has_value()) << "Version needs to be set to write publish ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_OK, error);
@@ -4958,7 +4958,7 @@ WriteResult MoQFrameWriter::writePublishOk(
 WriteResult MoQFrameWriter::writePublishNamespace(
     folly::IOBufQueue& writeBuf,
     const PublishNamespace& publishNamespace) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write publishNamespace";
   size_t size = 0;
   bool error = false;
@@ -4985,7 +4985,7 @@ WriteResult MoQFrameWriter::writeRequestOk(
     folly::IOBufQueue& writeBuf,
     const RequestOk& requestOk,
     FrameType frameType) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write request ok";
+  XCHECK(version_.has_value()) << "Version needs to be set to write request ok";
   size_t size = 0;
   bool error = false;
   // Preserve the semantic frame type passed by the caller; we still need it
@@ -5036,7 +5036,7 @@ WriteResult MoQFrameWriter::writeRequestOk(
 WriteResult MoQFrameWriter::writePublishNamespaceDone(
     folly::IOBufQueue& writeBuf,
     const PublishNamespaceDone& publishNamespaceDone) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write publishNamespaceDone";
   size_t size = 0;
   bool error = false;
@@ -5045,7 +5045,7 @@ WriteResult MoQFrameWriter::writePublishNamespaceDone(
 
   if (getDraftMajorVersion(*version_) >= 16) {
     // v16+: Write Request ID
-    CHECK(publishNamespaceDone.requestID.has_value())
+    XCHECK(publishNamespaceDone.requestID.has_value())
         << "RequestID required for v16+ PublishNamespaceDone";
     writeVarint(writeBuf, publishNamespaceDone.requestID->value, size, error);
   } else {
@@ -5064,7 +5064,7 @@ WriteResult MoQFrameWriter::writePublishNamespaceDone(
 WriteResult MoQFrameWriter::writePublishNamespaceCancel(
     folly::IOBufQueue& writeBuf,
     const PublishNamespaceCancel& publishNamespaceCancel) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write publishNamespace cancel";
   size_t size = 0;
   bool error = false;
@@ -5073,7 +5073,7 @@ WriteResult MoQFrameWriter::writePublishNamespaceCancel(
 
   if (getDraftMajorVersion(*version_) >= 16) {
     // v16+: Write Request ID
-    CHECK(publishNamespaceCancel.requestID.has_value())
+    XCHECK(publishNamespaceCancel.requestID.has_value())
         << "RequestID required for v16+ PublishNamespaceCancel";
     writeVarint(writeBuf, publishNamespaceCancel.requestID->value, size, error);
   } else {
@@ -5098,7 +5098,7 @@ WriteResult MoQFrameWriter::writePublishNamespaceCancel(
 WriteResult MoQFrameWriter::writeTrackStatus(
     folly::IOBufQueue& writeBuf,
     const TrackStatus& trackStatus) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "version_ needs to be set to write TrackStatusRequest";
   size_t size = 0;
   bool error = false;
@@ -5125,7 +5125,7 @@ WriteResult MoQFrameWriter::writeTrackStatus(
 WriteResult MoQFrameWriter::writeTrackStatusOk(
     folly::IOBufQueue& writeBuf,
     const TrackStatusOk& trackStatusOk) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "version_ needs to be set to write TrackStatus";
 
   size_t size = 0;
@@ -5182,7 +5182,7 @@ WriteResult MoQFrameWriter::writeTrackStatusError(
 WriteResult MoQFrameWriter::writeGoaway(
     folly::IOBufQueue& writeBuf,
     const Goaway& goaway) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write Goaway";
+  XCHECK(version_.has_value()) << "Version needs to be set to write Goaway";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
@@ -5205,7 +5205,7 @@ WriteResult MoQFrameWriter::writeGoaway(
 WriteResult MoQFrameWriter::writeSubscribeNamespace(
     folly::IOBufQueue& writeBuf,
     const SubscribeNamespace& subscribeNamespace) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write subscribeNamespace";
   auto majorVersion = getDraftMajorVersion(*version_);
   size_t size = 0;
@@ -5251,9 +5251,9 @@ WriteResult MoQFrameWriter::writeSubscribeNamespace(
 WriteResult MoQFrameWriter::writeSubscribeTracks(
     folly::IOBufQueue& writeBuf,
     const SubscribeTracks& subscribeTracks) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write subscribeTracks";
-  CHECK_GE(getDraftMajorVersion(*version_), 18u)
+  XCHECK_GE(getDraftMajorVersion(*version_), 18u)
       << "SUBSCRIBE_TRACKS is draft 18+ only";
   size_t size = 0;
   bool error = false;
@@ -5291,7 +5291,7 @@ WriteResult MoQFrameWriter::writeSubscribeNamespaceOk(
 WriteResult MoQFrameWriter::writeUnsubscribeNamespace(
     folly::IOBufQueue& writeBuf,
     const UnsubscribeNamespace& unsubscribeNamespace) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write unsubscribeNamespace";
   size_t size = 0;
   bool error = false;
@@ -5320,8 +5320,8 @@ WriteResult MoQFrameWriter::writeUnsubscribeNamespace(
 WriteResult MoQFrameWriter::writeNamespace(
     folly::IOBufQueue& writeBuf,
     const Namespace& ns) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write namespace";
-  CHECK_GE(getDraftMajorVersion(*version_), 16)
+  XCHECK(version_.has_value()) << "Version needs to be set to write namespace";
+  XCHECK_GE(getDraftMajorVersion(*version_), 16)
       << "NAMESPACE message doesn't exist for version 15 and below, this function "
       << "shouldn't be called";
   size_t size = 0;
@@ -5338,9 +5338,9 @@ WriteResult MoQFrameWriter::writeNamespace(
 WriteResult MoQFrameWriter::writeNamespaceDone(
     folly::IOBufQueue& writeBuf,
     const NamespaceDone& namespaceDone) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write namespace done";
-  CHECK_GE(getDraftMajorVersion(*version_), 16)
+  XCHECK_GE(getDraftMajorVersion(*version_), 16)
       << "NAMESPACE_DONE message doesn't exist for version 15 and below, this function "
       << "shouldn't be called";
   size_t size = 0;
@@ -5358,7 +5358,7 @@ WriteResult MoQFrameWriter::writeNamespaceDone(
 WriteResult MoQFrameWriter::writeFetch(
     folly::IOBufQueue& writeBuf,
     const Fetch& fetch) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write fetch";
+  XCHECK(version_.has_value()) << "Version needs to be set to write fetch";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH, error);
@@ -5383,7 +5383,7 @@ WriteResult MoQFrameWriter::writeFetch(
     writeVarint(writeBuf, standalone->end.group, size, error);
     writeVarint(writeBuf, standalone->end.object, size, error);
   } else {
-    CHECK(joining);
+    XCHECK(joining);
 
     writeVarint(
         writeBuf, folly::to_underlying(joining->fetchType), size, error);
@@ -5422,7 +5422,7 @@ WriteResult MoQFrameWriter::writeFetch(
 WriteResult MoQFrameWriter::writeFetchCancel(
     folly::IOBufQueue& writeBuf,
     const FetchCancel& fetchCancel) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write fetch cancel";
   size_t size = 0;
   bool error = false;
@@ -5438,7 +5438,7 @@ WriteResult MoQFrameWriter::writeFetchCancel(
 WriteResult MoQFrameWriter::writeFetchOk(
     folly::IOBufQueue& writeBuf,
     const FetchOk& fetchOk) const noexcept {
-  CHECK(version_.has_value()) << "Version needs to be set to write fetch ok";
+  XCHECK(version_.has_value()) << "Version needs to be set to write fetch ok";
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
@@ -5480,7 +5480,7 @@ WriteResult MoQFrameWriter::writeRequestError(
     folly::IOBufQueue& writeBuf,
     const RequestError& requestError,
     FrameType frameType) const noexcept {
-  CHECK(version_.has_value())
+  XCHECK(version_.has_value())
       << "Version needs to be set to write request error";
   // XCHECK that frameType is one of the allowed types for this function
   XCHECK(

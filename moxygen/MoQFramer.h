@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/io/Cursor.h>
+#include <folly/logging/xlog.h>
 #include <folly/io/IOBufQueue.h>
 #include <moxygen/MoQTokenCache.h>
 #include <moxygen/MoQTypes.h>
@@ -293,7 +294,7 @@ class MoQFrameParser {
       ObjectHeader& objectHeader) const noexcept;
 
   void initializeVersion(uint64_t versionIn) {
-    CHECK(!version_) << "Version already initialized";
+    XCHECK(!version_) << "Version already initialized";
     version_ = versionIn;
     useMoQVarint_ = getDraftMajorVersion(versionIn) >= 17;
   }
@@ -699,7 +700,7 @@ class MoQFrameWriter {
       const std::optional<uint64_t>& forceVersion = std::nullopt) const;
 
   void initializeVersion(uint64_t versionIn) {
-    CHECK(!version_) << "Version already initialized";
+    XCHECK(!version_) << "Version already initialized";
     version_ = versionIn;
     useMoQVarint_ = getDraftMajorVersion(versionIn) >= 17;
   }

@@ -79,7 +79,7 @@ class MoQEarlyDataHandler : public quic::EarlyDataAppParamsHandler {
         appender.writeBE(folly::tag<decltype(v)>, v);
       };
       auto res = quic::encodeQuicInteger(val, appenderOp);
-      DCHECK(res.has_value());
+      XDCHECK(res.has_value());
     };
     writeVarint(maxRequestID_);
     writeVarint(maxAuthTokenCacheSize_);

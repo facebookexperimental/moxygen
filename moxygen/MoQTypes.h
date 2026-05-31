@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/Expected.h>
+#include <folly/logging/xlog.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/IOBuf.h>
 #include <algorithm>
@@ -585,13 +586,13 @@ class Parameters {
     if (!isParamAllowed(key)) {
       return folly::makeUnexpected(ErrorCode::INVALID_REQUEST_ID);
     }
-    CHECK_LE(position, params_.size());
+    XCHECK_LE(position, params_.size());
     params_.insert(params_.begin() + position, std::move(param));
     return folly::unit;
   }
 
   void eraseParam(size_t position) {
-    CHECK_LT(position, params_.size());
+    XCHECK_LT(position, params_.size());
     params_.erase(params_.begin() + position);
   }
 
@@ -1011,7 +1012,7 @@ struct TrackNamespace {
     return true;
   }
   void trimEnd() {
-    CHECK_GT(size(), 0);
+    XCHECK_GT(size(), 0);
     trackNamespace.pop_back();
   }
 };
@@ -1206,7 +1207,7 @@ struct JoiningFetch {
       : joiningRequestID(jsid),
         joiningStart(joiningStartIn),
         fetchType(fetchTypeIn) {
-    CHECK(
+    XCHECK(
         fetchType == FetchType::RELATIVE_JOINING ||
         fetchType == FetchType::ABSOLUTE_JOINING);
   }

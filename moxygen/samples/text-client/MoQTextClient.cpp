@@ -5,6 +5,7 @@
  */
 
 #include <folly/base64.h>
+#include <folly/logging/xlog.h>
 #include <folly/coro/Sleep.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
@@ -145,7 +146,7 @@ class TextHandler : public ObjectReceiverCallback {
   }
 
   void onPublishDone(PublishDone) override {
-    CHECK(!fetch_);
+    XCHECK(!fetch_);
     std::cout << __func__ << std::endl;
     baton.post();
   }
@@ -446,7 +447,7 @@ int main(int argc, char* argv[]) {
   }
   int sumFetchCount =
       int(FLAGS_jafetch) + int(FLAGS_jrfetch) + int(FLAGS_fetch);
-  CHECK(sumFetchCount <= 1)
+  XCHECK(sumFetchCount <= 1)
       << "Can specify at most one of jafetch or jrfetch or fetch";
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);

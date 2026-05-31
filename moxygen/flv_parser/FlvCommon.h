@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/io/Cursor.h>
+#include <folly/logging/xlog.h>
 #include <folly/io/IOBuf.h>
 #include <cstdint>
 #include <optional>
@@ -78,7 +79,7 @@ class BitReader {
         }
         currentByte_ = cursor_->readBE<uint8_t>();
       }
-      CHECK_EQ(currentByte_.has_value(), true);
+      XCHECK_EQ(currentByte_.has_value(), true);
       uint8_t tmp = currentByte_.value_or(0) & (uint8_t)std::pow(2, 7 - bitPos);
       result = result << 1;
       if (tmp > 0) {

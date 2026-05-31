@@ -737,7 +737,7 @@ void MoQRelaySession::onPublishNamespaceCancel(
 
   RequestID reqId;
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-    CHECK(publishNamespaceCancel.requestID.has_value());
+    XCHECK(publishNamespaceCancel.requestID.has_value());
     XLOG(DBG1) << __func__ << " requestID=" << *publishNamespaceCancel.requestID
                << " sess=" << this;
     reqId = *publishNamespaceCancel.requestID;
@@ -808,7 +808,7 @@ void MoQRelaySession::publishNamespaceDone(const PublishNamespaceDone& unann) {
 
   // Try resolve requestID
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-    CHECK(unann.requestID.has_value());
+    XCHECK(unann.requestID.has_value());
     XLOG(DBG1) << __func__ << " requestID=" << *unann.requestID
                << " sess=" << this;
     reqId = *unann.requestID;
@@ -1014,7 +1014,7 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone unAnn) {
 
   RequestID reqId;
   if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-    CHECK(unAnn.requestID.has_value());
+    XCHECK(unAnn.requestID.has_value());
     XLOG(DBG1) << __func__ << " requestID=" << *unAnn.requestID
                << " sess=" << this;
     reqId = *unAnn.requestID;
