@@ -86,7 +86,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   StreamType parseStreamType(folly::io::Cursor& cursor) {
-    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+    auto frameType = parser_.decodeVarint(cursor);
     if (!frameType) {
       throw TestUnderflow();
     }
@@ -94,7 +94,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   DatagramType parseDatagramType(folly::io::Cursor& cursor) {
-    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+    auto frameType = parser_.decodeVarint(cursor);
     if (!frameType) {
       throw TestUnderflow();
     }
@@ -106,6 +106,15 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
       throw TestUnderflow();
     }
     cursor.skip(i);
+  }
+
+  // Consume a varint-encoded frame type using the version-aware parser so
+  // tests work across QUIC-varint (drafts <17) and MoQ-varint (drafts >=17).
+  void skipFrameType(folly::io::Cursor& cursor) {
+    auto frameType = parser_.decodeVarint(cursor);
+    if (!frameType) {
+      throw TestUnderflow();
+    }
   }
 
   template <class T>
@@ -128,87 +137,87 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   void parseAll(folly::io::Cursor& cursor, bool eom) {
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r1 = parser_.parseClientSetup(cursor, frameLength(cursor));
     testUnderflowResult(r1);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r2 = parser_.parseServerSetup(cursor, frameLength(cursor));
     testUnderflowResult(r2);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r3 = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
     testUnderflowResult(r3);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r3a = parser_.parseRequestUpdate(cursor, frameLength(cursor));
     testUnderflowResult(r3a);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r4 = parser_.parseSubscribeOk(cursor, frameLength(cursor));
     testUnderflowResult(r4);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r4a = parser_.parseMaxRequestID(cursor, frameLength(cursor));
     testUnderflowResult(r4a);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r4b = parser_.parseRequestsBlocked(cursor, frameLength(cursor));
     testUnderflowResult(r4b);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r5 = parser_.parseRequestError(
         cursor, frameLength(cursor), FrameType::SUBSCRIBE_ERROR);
     testUnderflowResult(r5);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r6 = parser_.parseUnsubscribe(cursor, frameLength(cursor));
     testUnderflowResult(r6);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r7 = parser_.parsePublishDone(cursor, frameLength(cursor));
     testUnderflowResult(r7);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r8a = parser_.parsePublish(cursor, frameLength(cursor));
     testUnderflowResult(r8a);
     EXPECT_TRUE(getPublisherPriority(*r8a).has_value());
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r8b = parser_.parsePublishOk(cursor, frameLength(cursor));
     testUnderflowResult(r8b);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r8c = parser_.parseRequestError(
         cursor, frameLength(cursor), FrameType::PUBLISH_ERROR);
     testUnderflowResult(r8c);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r9 = parser_.parsePublishNamespace(cursor, frameLength(cursor));
     testUnderflowResult(r9);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r10 = parser_.parsePublishNamespaceOk(cursor, frameLength(cursor));
     testUnderflowResult(r10);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r11 = parser_.parseRequestError(
         cursor, frameLength(cursor), FrameType::PUBLISH_NAMESPACE_ERROR);
     testUnderflowResult(r11);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r12 = parser_.parsePublishNamespaceCancel(cursor, frameLength(cursor));
     testUnderflowResult(r12);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r13 = parser_.parsePublishNamespaceDone(cursor, frameLength(cursor));
     testUnderflowResult(r13);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r14a = parser_.parseTrackStatus(cursor, frameLength(cursor));
     testUnderflowResult(r14a);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     if (getDraftMajorVersion(GetParam()) < 15) {
       auto r14b = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
       testUnderflowResult(r14b);
@@ -218,45 +227,45 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
       testUnderflowResult(r14b);
     }
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r14 = parser_.parseGoaway(cursor, frameLength(cursor));
     testUnderflowResult(r14);
 
     // SubscribeNamespace messages are not on control stream for draft 16+
     if (getDraftMajorVersion(GetParam()) < 16) {
-      skip(cursor, 1);
+      skipFrameType(cursor);
       auto r9a = parser_.parseSubscribeNamespace(cursor, frameLength(cursor));
       testUnderflowResult(r9a);
 
-      skip(cursor, 1);
+      skipFrameType(cursor);
       auto r10a =
           parser_.parseSubscribeNamespaceOk(cursor, frameLength(cursor));
       testUnderflowResult(r10a);
 
-      skip(cursor, 1);
+      skipFrameType(cursor);
       auto r11a = parser_.parseRequestError(
           cursor, frameLength(cursor), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
       testUnderflowResult(r11a);
 
-      skip(cursor, 1);
+      skipFrameType(cursor);
       auto r13a =
           parser_.parseUnsubscribeNamespace(cursor, frameLength(cursor));
       testUnderflowResult(r13a);
     }
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r16 = parser_.parseFetch(cursor, frameLength(cursor));
     testUnderflowResult(r16);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r17 = parser_.parseFetchCancel(cursor, frameLength(cursor));
     testUnderflowResult(r17);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r18 = parser_.parseFetchOk(cursor, frameLength(cursor));
     testUnderflowResult(r18);
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r19 = parser_.parseRequestError(
         cursor, frameLength(cursor), FrameType::FETCH_ERROR);
     testUnderflowResult(r19);
@@ -288,7 +297,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_EQ(r20->value.status, ObjectStatus::END_OF_GROUP);
     // END_OF_GROUP terminates the subgroup - no more objects to parse
 
-    skip(cursor, 1);
+    skipFrameType(cursor);
     auto r21 = parser_.parseFetchHeader(cursor, cursor.totalLength());
     testUnderflowResult(r21);
     EXPECT_EQ(r21->value, RequestID(1));
@@ -963,8 +972,10 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
         << "Failed to write client setup for maxRequestID:" << maxRequestID;
     auto buffer = writeBuf.move();
     auto cursor = folly::io::Cursor(buffer.get());
-    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-    uint64_t expectedFrameType = folly::to_underlying(FrameType::CLIENT_SETUP);
+    auto frameType = parser_.decodeVarint(cursor);
+    uint64_t expectedFrameType = getDraftMajorVersion(GetParam()) >= 17
+        ? folly::to_underlying(FrameType::SETUP)
+        : folly::to_underlying(FrameType::CLIENT_SETUP);
     EXPECT_EQ(frameType->first, expectedFrameType);
     auto parseClientSetupResult =
         parser_.parseClientSetup(cursor, frameLength(cursor));
@@ -1483,55 +1494,62 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
       writeBufs[3], writer_, AliasType::DELETE_ALIAS, 0xff, 0, "");
   tokenLengths.push_back(len);
 
+  // Encode `v` as a version-aware varint into a fresh IOBuf so the test can
+  // splice it back into the serialized frame. Works on both QUIC-varint
+  // (drafts <17) and MoQ-varint (drafts >=17) without the test knowing which.
+  auto encodeVarintBuf = [&](uint64_t v) -> std::unique_ptr<folly::IOBuf> {
+    folly::IOBufQueue q{folly::IOBufQueue::cacheChainLength()};
+    size_t s = 0;
+    bool err = false;
+    writer_.writeVarint(q, v, s, err);
+    CHECK(!err);
+    return q.move();
+  };
+
   for (int j = 0; j < 4; ++j) {
     /*
-     * The five buffer operations in AuthTokenUnderflowTest carve the serialized
-     * SUBSCRIBE frame into pieces so the test can fiddle with the token-length
-     * field while keeping the rest of the frame intact:
+     * Carve the serialized SUBSCRIBE frame into pieces so the test can fiddle
+     * with the token-length field while keeping the rest of the frame intact.
+     * The frame layout is [3-byte header][preamble][tokenLengthVarint][token].
+     * The token bytes are always the tail because AUTH_TOKEN is the only param
+     * and there is nothing after the parameter section.
      */
     auto frameHeader = writeBufs[j].split(3);
-    // Version 15+ don't have the filter within the request, but in the
-    // parameters. Version 16+ also uses delta encoding for param keys and
-    // sorts parameters by key, so AUTH_TOKEN (key=3) comes BEFORE
-    // SUBSCRIPTION_FILTER (key=0x21=33), shortening the offset.
-    const uint32_t kDraft16PreambleLength = 15;
-    const uint32_t kDraft15PreambleLength = 20;
-    const uint32_t kDraft14PreambleLength = 19;
+    // SUBSCRIBE preamble layout differs per draft. v14 had SUBSCRIPTION_FILTER
+    // inline in the frame body; v15 moved it into a parameter (sorted after
+    // AUTH_TOKEN); v16+ uses delta-encoded param keys so AUTH_TOKEN (key=3)
+    // comes first; v17+ MoQ varint encodes most preamble values identically
+    // because they are all <128. There is also a trailing param-section tail
+    // after the AUTH_TOKEN value, so frontLength can't be derived purely from
+    // tokenLength and totalSize.
     uint32_t frontLength;
-    if (getDraftMajorVersion(GetParam()) >= 16) {
-      frontLength = kDraft16PreambleLength;
-    } else if (getDraftMajorVersion(GetParam()) >= 15) {
-      frontLength = kDraft15PreambleLength;
+    auto major = getDraftMajorVersion(GetParam());
+    if (major >= 16) {
+      frontLength = 15;
+    } else if (major >= 15) {
+      frontLength = 20;
     } else {
-      frontLength = kDraft14PreambleLength;
+      frontLength = 19;
     }
+    bool sizeErr = false;
+    const size_t origTokenLengthBytes =
+        writer_.getVarintSize(tokenLengths[j], sizeErr);
+    CHECK(!sizeErr);
     auto front = writeBufs[j].split(frontLength);
-    auto origTokenLengthBytes = tokenLengths[j] > 64 ? 2 : 1;
     auto tokenLengthBuf = writeBufs[j].split(origTokenLengthBytes);
     auto tail = writeBufs[j].move();
     folly::io::Cursor cursor(frameHeader.get());
 
-    auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+    auto frameType = parser_.decodeVarint(cursor);
     EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
 
     len = frameLength(cursor, false);
     for (size_t i = 0; i < tokenLengths[j] - 1; ++i) {
       auto toParse = front->clone();
-      auto shortTokenLengthBuf = folly::IOBuf::create(2);
-      uint8_t tokenLengthBytes = 0;
-      CHECK(quic::encodeQuicInteger(i, [&](auto val) {
-        if (sizeof(val) == 1) {
-          shortTokenLengthBuf->writableData()[0] = val;
-        } else {
-          val = folly::Endian::big(val);
-          memcpy(shortTokenLengthBuf->writableData(), &val, 2);
-        }
-        shortTokenLengthBuf->append(sizeof(val));
-        tokenLengthBytes = sizeof(val);
-      }));
+      auto shortTokenLengthBuf = encodeVarintBuf(i);
+      size_t tokenLengthBytes = shortTokenLengthBuf->computeChainDataLength();
       toParse->appendToChain(std::move(shortTokenLengthBuf));
       toParse->appendToChain(tail->clone());
-      folly::io::Cursor tmpCursor(toParse.get());
       cursor.reset(toParse.get());
       auto parseResult = parser_.parseSubscribeRequest(
           cursor, len - (origTokenLengthBytes - tokenLengthBytes));
@@ -1544,23 +1562,12 @@ TEST_P(MoQFramerAuthTest, AuthTokenUnderflowTest) {
     }
     if (j == 1 || j == 2) { // register / delete mutate cache state
       auto toParse = front->clone();
-      auto shortTokenLengthBuf = folly::IOBuf::create(2);
-      uint8_t tokenLengthBytes = 0;
       auto newLength = j == 1 ? tokenLengths[j] + 1 : 5;
-      CHECK(quic::encodeQuicInteger(newLength, [&](auto val) {
-        if (sizeof(val) == 1) {
-          shortTokenLengthBuf->writableData()[0] = val;
-        } else {
-          val = folly::Endian::big(val);
-          memcpy(shortTokenLengthBuf->writableData(), &val, 2);
-        }
-        shortTokenLengthBuf->append(sizeof(val));
-        tokenLengthBytes = sizeof(val);
-      }));
+      auto shortTokenLengthBuf = encodeVarintBuf(newLength);
+      size_t tokenLengthBytes = shortTokenLengthBuf->computeChainDataLength();
       toParse->appendToChain(std::move(shortTokenLengthBuf));
       toParse->appendToChain(tail->clone());
       toParse->appendToChain(folly::IOBuf::copyBuffer("a"));
-      folly::io::Cursor tmpCursor(toParse.get());
       cursor.reset(toParse.get());
       auto parseResult = parser_.parseSubscribeRequest(
           cursor, len - (origTokenLengthBytes - tokenLengthBytes) + 1);
@@ -1932,12 +1939,20 @@ TEST(MoQFramerSubscriptionFilter, EndGroupDeltaOverflowRejectedV18) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::ValuesIn(kSupportedVersions));
+    ::testing::Values(
+        kVersionDraft14,
+        kVersionDraft15,
+        kVersionDraft16,
+        kVersionDraft18));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,
     MoQFramerAuthTest,
-    ::testing::ValuesIn(kSupportedVersions));
+    ::testing::Values(
+        kVersionDraft14,
+        kVersionDraft15,
+        kVersionDraft16,
+        kVersionDraft18));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);
