@@ -211,10 +211,17 @@ class MoQForwarder : public TrackConsumer {
   // the unique map key so only one cross-exec filter per executor is added.
   // Returns the Subscriber handle; call removeChannelSubscriber(handle) when
   // the local forwarder drains.
+  //
+  // passive=true marks the channel subscriber as not counting toward
+  // forwardingSubscribers_ or blocking onEmpty (see addSubscriber). Use it for
+  // the relay's own internal chain (top-N/termination/cache) attached below a
+  // local-forwarder primary, so the primary's onEmpty still fires once the last
+  // real cross-exec subscriber leaves.
   std::shared_ptr<MoQForwarder::Subscriber> addChannelSubscriber(
       folly::Executor* exec,
       bool forward,
-      std::shared_ptr<TrackConsumer> consumer);
+      std::shared_ptr<TrackConsumer> consumer,
+      bool passive = false);
 
   // Remove a channel subscriber added via addChannelSubscriber().
   void removeChannelSubscriber(

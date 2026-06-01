@@ -289,7 +289,8 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
 std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addChannelSubscriber(
     folly::Executor* exec,
     bool forward,
-    std::shared_ptr<TrackConsumer> consumer) {
+    std::shared_ptr<TrackConsumer> consumer,
+    bool passive) {
   if (draining_) {
     XLOG(ERR) << "addChannelSubscriber called on draining track";
     return nullptr;
@@ -312,10 +313,15 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addChannelSubscriber(
       SubscribeRange{{0, 0}, kLocationMax},
       std::move(consumer),
       forward);
+  subscriber->passive = passive;
   subscriber->mapKey = key;
   auto [it, inserted] = subscribers_.emplace(key, subscriber);
-  if (inserted && forward) {
-    addForwardingSubscriber();
+  if (inserted) {
+    if (passive) {
+      passiveCount_++;
+    } else if (forward) {
+      addForwardingSubscriber();
+    }
   }
   return it->second;
 }
@@ -597,7 +603,15 @@ MoQForwarder::beginSubgroup(
       if (it != sub->subgroups.end() && it->second) {
         it->second->reset(ResetStreamErrorCode::CANCELLED);
         sub->subgroups.erase(it);
-        anyReset = true;
+        // Passive subscribers (e.g. the relay's own top-N/cache observer chain)
+        // are not real downstream consumers: they never stop_sending, so they
+        // must not mask the "no active consumers" signal. Reset their stale
+        // subgroup but do not count them toward anyReset, otherwise a duplicate
+        // subgroup would never propagate CANCELLED back to the publisher once
+        // all real consumers have stop_sent.
+        if (!sub->passive) {
+          anyReset = true;
+        }
       }
     }
     existingIt->second->detach();
