@@ -820,13 +820,19 @@ class DummyMoQClientBase : public MoQClientBase {
   using MoQClientBase::MoQClientBase;
 
   void test_onNewBidiStream(proxygen::WebTransport::BidiStreamHandle bidi) {
-    MoQClientBase::onNewBidiStream(std::move(bidi));
+    if (moqSession_) {
+      moqSession_->onNewBidiStream(std::move(bidi));
+    }
   }
   void test_onNewUniStream(proxygen::WebTransport::StreamReadHandle* handle) {
-    MoQClientBase::onNewUniStream(handle);
+    if (moqSession_) {
+      moqSession_->onNewUniStream(handle);
+    }
   }
   void test_onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
-    MoQClientBase::onDatagram(std::move(datagram));
+    if (moqSession_) {
+      moqSession_->onDatagram(std::move(datagram));
+    }
   }
   void test_goaway(const Goaway& goaway) {
     MoQClientBase::goaway(goaway);

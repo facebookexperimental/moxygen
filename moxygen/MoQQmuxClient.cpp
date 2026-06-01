@@ -144,7 +144,6 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
       qmuxParamsFromTransportSettings(transportSettings),
       std::move(transport),
       qmuxConnectTimeout);
-  qmuxSession_->setHandler(this);
   qmuxSession_->start(qmuxSession_);
 
   transportConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -155,6 +154,7 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
       url_.getPath(),
       std::move(publishHandler),
       std::move(subscribeHandler));
+  qmuxSession_->setHandler(moqSession_.get());
   co_await awaitSetupComplete();
 }
 

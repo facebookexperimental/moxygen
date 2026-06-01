@@ -26,7 +26,7 @@ const std::string kDefaultClientFilePath = "./mlog_client.txt";
 
 class Subscriber;
 
-class MoQClientBase : public proxygen::WebTransportHandler {
+class MoQClientBase {
  public:
   using SessionFactory = std::function<std::shared_ptr<MoQSession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>,
@@ -51,7 +51,7 @@ class MoQClientBase : public proxygen::WebTransportHandler {
         sessionFactory_(std::move(sessionFactory)),
         verifier_(std::move(verifier)) {}
 
-  ~MoQClientBase() override {
+  virtual ~MoQClientBase() {
     if (moqSession_) {
       moqSession_->close(SessionCloseErrorCode::NO_ERROR);
       moqSession_.reset();
@@ -128,14 +128,6 @@ class MoQClientBase : public proxygen::WebTransportHandler {
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler);
   Setup getClientSetup(const std::optional<std::string>& path);
-
-  void onSessionEnd(folly::Optional<uint32_t>) noexcept override;
-  void onSessionDrain() noexcept override;
-  void onNewBidiStream(
-      proxygen::WebTransport::BidiStreamHandle handle) noexcept override;
-  void onNewUniStream(
-      proxygen::WebTransport::StreamReadHandle* handle) noexcept override;
-  void onDatagram(std::unique_ptr<folly::IOBuf>) noexcept override;
 
   std::shared_ptr<MoQExecutor> exec_;
   proxygen::URL url_;

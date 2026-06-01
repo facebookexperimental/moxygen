@@ -5833,6 +5833,17 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
   }
 }
 
+void MoQSession::onSessionEnd(folly::Optional<uint32_t> err) noexcept {
+  if (logger_) {
+    logger_->outputLogs();
+  }
+  XLOG(DBG1) << __func__ << "err="
+             << (err ? folly::to<std::string>(*err) : std::string("none"))
+             << " sess=" << this;
+  // The peer closed us, but we can close with NO_ERROR
+  close(SessionCloseErrorCode::NO_ERROR, err);
+}
+
 bool MoQSession::closeSessionIfRequestIDInvalid(
     RequestID requestID,
     bool skipCheck,

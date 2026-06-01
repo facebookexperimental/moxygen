@@ -61,7 +61,6 @@ folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
   quicSocket_ = quicClient.get();
   quicWebTransport_ =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicClient));
-  quicWebTransport_->setHandler(this);
   auto* wt = quicWebTransport_.get();
 
   completeSetupMoQSession(
@@ -135,6 +134,10 @@ void MoQClientBase::completeSetupMoQSession(
   //  Create MoQSession and Setup MoQSession parameters
   moqSession_ =
       createSession(folly::MaybeManagedPtr<proxygen::WebTransport>(wt));
+  if (quicWebTransport_) {
+    quicWebTransport_->setHandler(moqSession_.get());
+  }
+  moqSession_->setLogger(logger_);
 
   moqSession_->setPath(url_.getPath());
   moqSession_->setAuthority(url_.getHostAndPortOmitDefault());
@@ -193,70 +196,18 @@ Setup MoQClientBase::getClientSetup(const std::optional<std::string>& path) {
   return clientSetup;
 }
 
-void MoQClientBase::onSessionEnd(folly::Optional<uint32_t> err) noexcept {
-  if (logger_) {
-    logger_->outputLogs();
-  }
-
-  // Clear handler FIRST to prevent further callbacks
-  if (quicWebTransport_) {
-    quicWebTransport_->setHandler(nullptr);
-  }
-
-  // Take ownership and clear members before calling into session.
-  // If 'this' is destroyed during session->onSessionEnd(),
-  // we only touch local stack variables after that.
-  auto session = std::exchange(moqSession_, nullptr);
-  auto wt = std::exchange(quicWebTransport_, nullptr);
-
-  if (session) {
-    session->onSessionEnd(err);
-  }
-}
-
-void MoQClientBase::onSessionDrain() noexcept {
-  XLOG(DBG1) << "Received DRAIN_SESSION capsule";
-}
-
-void MoQClientBase::onNewBidiStream(
-    proxygen::WebTransport::BidiStreamHandle bidi) noexcept {
-  XLOG(DBG1) << __func__;
-  if (!moqSession_) {
-    XLOG(DBG1) << "onNewBidiStream after session reset; ignoring";
-    return;
-  }
-  moqSession_->onNewBidiStream(std::move(bidi));
-}
-
-void MoQClientBase::onNewUniStream(
-    proxygen::WebTransport::StreamReadHandle* stream) noexcept {
-  XLOG(DBG1) << __func__;
-  if (!moqSession_) {
-    XLOG(DBG1) << "onNewUniStream after session reset; ignoring";
-    return;
-  }
-  moqSession_->onNewUniStream(stream);
-}
-
-void MoQClientBase::onDatagram(
-    std::unique_ptr<folly::IOBuf> datagram) noexcept {
-  if (!moqSession_) {
-    XLOG(DBG1) << "onDatagram after session reset; ignoring";
-    return;
-  }
-  moqSession_->onDatagram(std::move(datagram));
-}
-
 void MoQClientBase::goaway(const Goaway& goaway) {
   XLOG(DBG1) << __func__;
-  if (!moqSession_) {
-    return;
+  if (moqSession_) {
+    moqSession_->goaway(goaway);
   }
-  moqSession_->goaway(goaway);
 }
 
 void MoQClientBase::setLogger(const std::shared_ptr<MLogger>& logger) {
   logger_ = logger;
+  if (moqSession_) {
+    moqSession_->setLogger(logger_);
+  }
 }
 
 MoQClientBase::SessionFactory MoQClientBase::defaultSessionFactory() {

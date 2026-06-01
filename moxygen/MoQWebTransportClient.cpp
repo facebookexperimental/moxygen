@@ -196,7 +196,9 @@ void MoQWebTransportClient::HTTPHandler::onError(
   }
   // the moq session has been torn down...
   XLOG(ERR) << folly::exceptionStr(ex);
-  client_.onSessionEnd(folly::none);
+  if (moqSession_) {
+    moqSession_->onSessionEnd(folly::none);
+  }
 }
 
 } // namespace moxygen

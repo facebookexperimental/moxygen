@@ -482,13 +482,7 @@ class MoQSession : public Subscriber,
   };
   std::optional<BidiStreamConfig> getBidiStreamConfig(FrameType frameType);
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
-  void onSessionEnd(folly::Optional<uint32_t> err) noexcept override {
-    XLOG(DBG1) << __func__ << "err="
-               << (err ? folly::to<std::string>(*err) : std::string("none"))
-               << " sess=" << this;
-    // The peer closed us, but we can close with NO_ERROR
-    close(SessionCloseErrorCode::NO_ERROR, err);
-  }
+  void onSessionEnd(folly::Optional<uint32_t> err) noexcept override;
   void onSessionDrain() noexcept override {
     XLOG(DBG1) << __func__ << " sess=" << this;
   }

@@ -43,7 +43,8 @@ class MoQWebTransportClient : public MoQClient {
 
   class HTTPHandler : public proxygen::HTTPTransactionHandler {
    public:
-    explicit HTTPHandler(MoQWebTransportClient& client) : client_(client) {}
+    explicit HTTPHandler(MoQWebTransportClient& client)
+        : client_(client), moqSession_(client.moqSession_) {}
     ~HTTPHandler() override {
       if (txn_) {
         txn_->setHandler(nullptr);
@@ -66,24 +67,33 @@ class MoQWebTransportClient : public MoQClient {
     void onEgressResumed() noexcept override {}
 
     void onEOM() noexcept override {
-      client_.onSessionEnd(folly::none);
+      if (moqSession_) {
+        moqSession_->onSessionEnd(folly::none);
+      }
     }
     void onError(const proxygen::HTTPException& ex) noexcept override;
     void onWebTransportBidiStream(
         proxygen::HTTPCodec::StreamID,
         proxygen::WebTransport::BidiStreamHandle handle) noexcept override {
-      client_.onNewBidiStream(std::move(handle));
+      if (moqSession_) {
+        moqSession_->onNewBidiStream(std::move(handle));
+      }
     }
     void onWebTransportUniStream(
         proxygen::HTTPCodec::StreamID,
         proxygen::WebTransport::StreamReadHandle* handle) noexcept override {
-      client_.onNewUniStream(handle);
+      if (moqSession_) {
+        moqSession_->onNewUniStream(handle);
+      }
     }
     void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override {
-      client_.onDatagram(std::move(datagram));
+      if (moqSession_) {
+        moqSession_->onDatagram(std::move(datagram));
+      }
     }
 
     MoQWebTransportClient& client_;
+    std::shared_ptr<MoQSession>& moqSession_;
     proxygen::HTTPTransaction* txn_{nullptr};
     std::pair<
         folly::coro::Promise<proxygen::WebTransport*>,
