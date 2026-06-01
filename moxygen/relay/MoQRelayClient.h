@@ -10,13 +10,14 @@
 #include <folly/logging/xlog.h>
 #include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClient.h>
+#include <moxygen/MoQClientBase.h>
 #include <moxygen/MoQRelaySession.h>
 
 namespace moxygen {
 
 class MoQRelayClient {
  public:
-  explicit MoQRelayClient(std::unique_ptr<MoQClient> moqClient)
+  explicit MoQRelayClient(std::unique_ptr<MoQClientBase> moqClient)
       : moqClient_(std::move(moqClient)) {}
 
   // Convenience constructor for QUIC transport with relay session
@@ -146,7 +147,7 @@ class MoQRelayClient {
   }
 
  private:
-  std::unique_ptr<MoQClient> moqClient_;
+  std::unique_ptr<MoQClientBase> moqClient_;
   std::vector<std::shared_ptr<Subscriber::PublishNamespaceHandle>>
       publishNamespaceHandles_;
 };
