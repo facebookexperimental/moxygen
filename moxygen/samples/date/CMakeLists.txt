@@ -24,9 +24,11 @@ target_link_libraries(
   moqdateserver PUBLIC
   moxygen_events_moq_folly_executor_impl
   moxygen_mlog_file_mlogger
+  moxygen_moq_qmux_server
   moxygen_moq_server
   moxygen_moq_webtransport_client
   moxygen_moqclient
+  moxygen_qmux_utils
   moxygen_relay_moq_forwarder
   moxygen_relay_moq_relay_client
   moxygen_util_signal_handler
