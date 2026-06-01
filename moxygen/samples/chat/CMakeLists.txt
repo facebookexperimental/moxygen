@@ -25,6 +25,7 @@ target_link_libraries(
   moxygen_events_moq_folly_executor_impl
   moxygen_moqclient
   moxygen_relay_moq_relay_client
+  moxygen_samples_util_qmux_relay_utils
   Folly::folly_init_init
 )
 

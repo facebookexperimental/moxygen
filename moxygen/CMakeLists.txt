@@ -204,6 +204,54 @@ moxygen_add_library(moxygen_moqclient
     Folly::folly_coro_task
 )
 
+moxygen_add_library(moxygen_moq_qmux_client
+  SRCS
+    MoQQmuxClient.cpp
+  DEPS
+    moxygen_events_moq_folly_executor_impl
+    moxygen_qmux_utils
+    proxygen::proxygen_transport_qmux_qmux_connector
+    Folly::folly_coro_baton
+    Folly::folly_coro_task
+    Folly::folly_io_async_async_socket
+    Folly::folly_io_coro_socket
+    Folly::folly_logging_logging
+  EXPORTED_DEPS
+    moxygen_moqclient_base
+    proxygen::proxygen_transport_qmux_qmux_session
+    fizz::fizz
+)
+
+moxygen_add_library(moxygen_moq_qmux_server
+  SRCS
+    MoQQmuxServer.cpp
+  DEPS
+    moxygen_events_moq_folly_executor_impl
+    proxygen::proxygen_transport_qmux_qmux_connector
+    Folly::folly_coro_baton
+    Folly::folly_coro_timeout
+    Folly::folly_coro_with_cancellation
+    Folly::folly_futures_core
+    Folly::folly_io_async_async_socket
+    Folly::folly_io_coro_socket
+    Folly::folly_logging_logging
+    Folly::folly_scope_guard
+  EXPORTED_DEPS
+    moxygen_moq_server_base
+    moxygen_qmux_utils
+    proxygen::proxygen_transport_qmux_qmux_framer
+    proxygen::proxygen_transport_qmux_qmux_session
+    mvfst::mvfst_state_transport_settings
+    fizz::fizz
+    Folly::folly_cancellation_token
+    Folly::folly_io_async_async_transport
+    Folly::folly_io_async_scoped_event_base_thread
+    Folly::folly_io_async_server_socket
+    Folly::folly_network_address
+    Folly::folly_synchronization_baton
+    Folly::folly_system_hardware_concurrency
+)
+
 moxygen_add_library(moxygen_moq_webtransport_client
   SRCS
     MoQWebTransportClient.cpp
