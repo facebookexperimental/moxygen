@@ -10,6 +10,7 @@
 #include <folly/hash/Hash.h>
 #include <folly/io/IOBuf.h>
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -741,8 +742,8 @@ struct TrackAlias {
 std::ostream& operator<<(std::ostream& os, TrackAlias alias);
 
 struct RequestID {
-  /* implicit */ RequestID(uint64_t v) : value(v) {}
-  RequestID() = default;
+  constexpr /* implicit */ RequestID(uint64_t v) : value(v) {}
+  constexpr RequestID() = default;
   uint64_t value{0};
   bool operator==(const RequestID& s) const {
     return value == s.value;
@@ -769,6 +770,10 @@ struct RequestID {
   };
 };
 std::ostream& operator<<(std::ostream& os, RequestID id);
+
+// Sentinel value meaning "let the session resolve the request ID automatically"
+// (e.g. by searching pending requests and active tracks for the matching track name).
+constexpr RequestID kAutoRequestID{std::numeric_limits<uint64_t>::max()};
 
 // TrackIdentifier variant removed - ObjectHeader now uses TrackAlias directly
 
