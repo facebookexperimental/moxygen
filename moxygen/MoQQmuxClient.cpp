@@ -63,6 +63,17 @@ MoQQmuxClient::MoQQmuxClient(
     std::shared_ptr<fizz::CertificateVerifier> verifier)
     : MoQClientBase(std::move(exec), std::move(url), std::move(verifier)) {}
 
+MoQQmuxClient::MoQQmuxClient(
+    std::shared_ptr<MoQExecutor> exec,
+    proxygen::URL url,
+    SessionFactory sessionFactory,
+    std::shared_ptr<fizz::CertificateVerifier> verifier)
+    : MoQClientBase(
+          std::move(exec),
+          std::move(url),
+          std::move(sessionFactory),
+          std::move(verifier)) {}
+
 MoQQmuxClient::~MoQQmuxClient() {
   if (qmuxSession_) {
     qmuxSession_->setHandler(nullptr);

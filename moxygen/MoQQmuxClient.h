@@ -23,6 +23,16 @@ class MoQQmuxClient : public MoQClientBase {
       proxygen::URL url,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
 
+  // Overload that lets the caller install a custom session factory, e.g.
+  // MoQRelaySession::createRelaySessionFactory() to enable publishNamespace /
+  // subscribeNamespace on the resulting session. Mirrors the corresponding
+  // overload on MoQClient.
+  MoQQmuxClient(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      SessionFactory sessionFactory,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
+
   ~MoQQmuxClient() override;
 
   folly::coro::Task<void> setupMoQSession(
