@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <fizz/server/FizzServerContext.h>
 #include <folly/CancellationToken.h>
 #include <folly/SocketAddress.h>
 #include <folly/io/async/AsyncServerSocket.h>
@@ -43,10 +44,15 @@ class MoQQmuxServer : public MoQServerBase {
     size_t serverThreads{folly::available_concurrency()};
   };
 
-  explicit MoQQmuxServer(std::string endpoint)
-      : MoQQmuxServer(std::move(endpoint), Config{}) {}
+  MoQQmuxServer(
+      std::string endpoint,
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext)
+      : MoQQmuxServer(std::move(endpoint), std::move(fizzContext), Config{}) {}
 
-  MoQQmuxServer(std::string endpoint, Config config);
+  MoQQmuxServer(
+      std::string endpoint,
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+      Config config);
 
   ~MoQQmuxServer() override;
 
@@ -102,6 +108,7 @@ class MoQQmuxServer : public MoQServerBase {
   }
 
   const Config config_;
+  const std::shared_ptr<const fizz::server::FizzServerContext> fizzContext_;
 
   folly::CancellationSource cancelSource_;
   std::vector<std::unique_ptr<WorkerShutdownState>> workerShutdownState_;

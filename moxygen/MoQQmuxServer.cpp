@@ -6,15 +6,52 @@
 
 #include <moxygen/MoQQmuxServer.h>
 
+#include <fizz/server/AsyncFizzServer.h>
 #include <folly/ScopeGuard.h>
+#include <folly/coro/Baton.h>
+#include <folly/coro/CurrentExecutor.h>
+#include <folly/coro/Error.h>
+#include <folly/coro/Timeout.h>
 #include <folly/coro/WithCancellation.h>
+#include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/coro/Transport.h>
 #include <folly/logging/xlog.h>
 #include <proxygen/lib/transport/qmux/QmuxConnector.h>
+#include <moxygen/MoQVersions.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
+#include <algorithm>
 
 namespace moxygen {
+
+namespace {
+
+// Bridges AsyncFizzServer's callback-based handshake into a coroutine.
+class FizzAcceptCb : public fizz::server::AsyncFizzServer::HandshakeCallback {
+ public:
+  void fizzHandshakeSuccess(
+      fizz::server::AsyncFizzServer* /*transport*/) noexcept override {
+    baton.post();
+  }
+  void fizzHandshakeError(
+      fizz::server::AsyncFizzServer* /*transport*/,
+      folly::exception_wrapper ex) noexcept override {
+    exception = std::move(ex);
+    baton.post();
+  }
+  // QMUX-over-TLS is TLS 1.3 only; refuse the SSLv2-style fallback path.
+  void fizzHandshakeAttemptFallback(
+      fizz::server::AttemptVersionFallback /*fallback*/) override {
+    exception = folly::make_exception_wrapper<std::runtime_error>(
+        "MoQQmuxServer: TLS version fallback not supported");
+    baton.post();
+  }
+
+  folly::coro::Baton baton;
+  folly::exception_wrapper exception;
+};
+
+} // namespace
 
 class MoQQmuxServer::WorkerAcceptCallback
     : public folly::AsyncServerSocket::AcceptCallback {
@@ -54,8 +91,19 @@ class MoQQmuxServer::WorkerAcceptCallback
   const std::shared_ptr<MoQExecutor> executor_;
 };
 
-MoQQmuxServer::MoQQmuxServer(std::string endpoint, Config config)
-    : MoQServerBase(std::move(endpoint)), config_(std::move(config)) {}
+MoQQmuxServer::MoQQmuxServer(
+    std::string endpoint,
+    std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+    Config config)
+    : MoQServerBase(std::move(endpoint)),
+      config_(std::move(config)),
+      fizzContext_(std::move(fizzContext)) {
+  CHECK(fizzContext_) << "MoQQmuxServer requires a non-null FizzServerContext";
+  const auto& alpns = fizzContext_->getSupportedAlpns();
+  CHECK(std::any_of(alpns.begin(), alpns.end(), [](const std::string& a) {
+    return isLegacyAlpn(a) || getVersionFromAlpn(a).has_value();
+  })) << "FizzServerContext must advertise at least one MoQ ALPN";
+}
 
 MoQQmuxServer::~MoQQmuxServer() {
   if (!serverSockets_.empty()) {
@@ -188,8 +236,74 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
 
   co_await folly::coro::co_withCancellation(
       cancelSource_.getToken(), [&]() -> folly::coro::Task<void> {
+        auto handshakeStart = std::chrono::steady_clock::now();
+
+        // Step 1: Fizz handshake on the accepted socket, bounded by
+        // config_.handshakeTimeout. AsyncFizzServer::accept() registers
+        // the callback but arms no deadline of its own, so without an
+        // outer timeout a peer that completes the TCP handshake and
+        // then sends nothing would park this coroutine forever.
+        FizzAcceptCb fizzCb;
+        fizz::server::AsyncFizzServer::UniquePtr fizzServer(
+            new fizz::server::AsyncFizzServer(
+                folly::AsyncTransportWrapper::UniquePtr(std::move(asyncSocket)),
+                fizzContext_));
+        fizzServer->accept(&fizzCb);
+        folly::EventBaseThreadTimekeeper tk{*workerEvb};
+        auto fizzWaitResult = co_await folly::coro::co_awaitTry(
+            folly::coro::timeout(
+                [&]() -> folly::coro::Task<void> {
+                  auto token =
+                      co_await folly::coro::co_current_cancellation_token;
+                  folly::CancellationCallback cb(
+                      token, [&] { fizzCb.baton.post(); });
+                  co_await fizzCb.baton;
+                  co_await folly::coro::co_reschedule_on_current_executor;
+                  if (token.isCancellationRequested()) {
+                    co_yield folly::coro::co_stopped_may_throw;
+                  }
+                }(),
+                config_.handshakeTimeout,
+                &tk));
+        if (fizzWaitResult.hasException()) {
+          XLOG(WARN) << "MoQQmuxServer: Fizz handshake timed out or failed: "
+                     << fizzWaitResult.exception().what();
+          co_return;
+        }
+        if (fizzCb.exception) {
+          XLOG(WARN) << "MoQQmuxServer: Fizz handshake failed: "
+                     << fizzCb.exception.what();
+          co_return;
+        }
+
+        // Grab the negotiated ALPN before fizzServer is moved away. The
+        // MoQ draft version selected during the TLS handshake is
+        // announced here as e.g. "moqt-16"; we hand it to the MoQSession
+        // below so the server doesn't silently fall back to draft-14 in
+        // onClientSetup.
+        std::string alpn = fizzServer->getApplicationProtocol();
+
+        // Require a recognized MoQ ALPN.
+        if (!isLegacyAlpn(alpn) && !getVersionFromAlpn(alpn).has_value()) {
+          XLOG(WARN) << "MoQQmuxServer: rejecting connection; "
+                     << (alpn.empty() ? "TLS completed without ALPN negotiation"
+                                      : "negotiated ALPN '" + alpn +
+                                 "' is not a MoQ protocol");
+          co_return;
+        }
+
+        // Step 2: Wrap the encrypted AsyncFizzServer in a coro::Transport
+        // for QmuxConnector.
         auto transport = std::make_unique<folly::coro::Transport>(
-            workerEvb, std::move(asyncSocket));
+            workerEvb, folly::AsyncTransport::UniquePtr(std::move(fizzServer)));
+
+        // Step 3: QMUX handshake.
+        auto elapsedSoFar =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - handshakeStart);
+        auto qmuxTimeout = config_.handshakeTimeout > elapsedSoFar
+            ? config_.handshakeTimeout - elapsedSoFar
+            : std::chrono::milliseconds(0);
 
         auto sessionResult = co_await folly::coro::co_awaitTry(
             proxygen::qmux::QmuxConnector::connect(
@@ -197,7 +311,7 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
                 proxygen::qmux::WtDir::Server,
                 config_.selfTransportParams,
                 std::move(transport),
-                config_.handshakeTimeout,
+                qmuxTimeout,
                 config_.sessionConfig));
         if (sessionResult.hasException()) {
           XLOG(WARN) << "MoQQmuxServer: QMUX handshake failed: "
@@ -207,6 +321,7 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
 
         auto qmuxSession = std::move(*sessionResult);
         auto moqSession = createSession(qmuxSession, std::move(executor));
+        moqSession->validateAndSetVersionFromAlpn(alpn);
         qmuxSession->setHandler(moqSession.get());
         qmuxSession->start(qmuxSession);
 
