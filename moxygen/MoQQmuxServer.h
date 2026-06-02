@@ -69,6 +69,15 @@ class MoQQmuxServer : public MoQServerBase {
       const folly::SocketAddress& addr,
       std::vector<folly::EventBase*> evbs);
 
+  // Initialise the worker pool without binding any listening sockets.
+  // Use when this server is fed externally-accepted post-Fizz transports
+  void initExternallyFed(std::vector<folly::EventBase*> workerEvbs);
+
+  // Run a MoQ session over an already-Fizz-completed transport.
+  folly::coro::Task<void> handleExternallyFedSession(
+      folly::AsyncTransport::UniquePtr fizzCompletedTransport,
+      std::string negotiatedAlpn);
+
   void stop() override;
 
   [[nodiscard]] folly::SocketAddress getAddress() const override {
@@ -94,7 +103,6 @@ class MoQQmuxServer : public MoQServerBase {
 
   folly::coro::Task<void> handleAccept(
       folly::EventBase* workerEvb,
-      std::shared_ptr<MoQExecutor> executor,
       folly::AsyncTransport::UniquePtr asyncSocket,
       WorkerShutdownState* state);
 
@@ -106,11 +114,21 @@ class MoQQmuxServer : public MoQServerBase {
   // specifically (caller computes it; must be > 0ms).
   folly::coro::Task<void> runQmuxAndSession(
       folly::EventBase* workerEvb,
-      std::shared_ptr<MoQExecutor> executor,
       folly::AsyncTransport::UniquePtr fizzCompletedTransport,
       std::string negotiatedAlpn,
       std::chrono::milliseconds qmuxTimeout,
       WorkerShutdownState* state);
+
+  // Must not be called from a worker event base thread (it joins on those event
+  // bases).
+  void teardown();
+
+  // Lookup the per-worker shutdown-state for a worker EB. Returns nullptr
+  // if the EB is not in this server's pool.
+  WorkerShutdownState* findStateFor(folly::EventBase* workerEvb) noexcept;
+
+  std::shared_ptr<MoQExecutor> findExecutorFor(
+      folly::EventBase* workerEvb) noexcept;
 
   bool isInWorkerPool() const noexcept {
     for (auto* evb : workerEvbs_) {
@@ -126,11 +144,13 @@ class MoQQmuxServer : public MoQServerBase {
 
   folly::CancellationSource cancelSource_;
   std::vector<std::unique_ptr<WorkerShutdownState>> workerShutdownState_;
+  std::vector<std::shared_ptr<MoQExecutor>> workerExecutors_;
   std::vector<folly::EventBase*> workerEvbs_;
   std::vector<std::unique_ptr<folly::ScopedEventBaseThread>> ownedWorkers_;
   std::vector<std::shared_ptr<folly::AsyncServerSocket>> serverSockets_;
   std::vector<std::unique_ptr<WorkerAcceptCallback>> workerCallbacks_;
   folly::SocketAddress boundAddr_;
+  bool started_{false};
   bool stopped_{false};
 };
 

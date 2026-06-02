@@ -15,6 +15,7 @@
 #include <folly/coro/WithCancellation.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/io/async/AsyncSocket.h>
+#include <folly/io/async/EventBaseManager.h>
 #include <folly/io/coro/Transport.h>
 #include <folly/logging/xlog.h>
 #include <proxygen/lib/transport/qmux/QmuxConnector.h>
@@ -60,10 +61,7 @@ class MoQQmuxServer::WorkerAcceptCallback
       MoQQmuxServer& server,
       folly::EventBase* workerEvb,
       MoQQmuxServer::WorkerShutdownState* shutdownState)
-      : server_(server),
-        workerEvb_(workerEvb),
-        shutdownState_(shutdownState),
-        executor_(std::make_shared<MoQFollyExecutorImpl>(workerEvb)) {}
+      : server_(server), workerEvb_(workerEvb), shutdownState_(shutdownState) {}
 
   void connectionAccepted(
       folly::NetworkSocket fd,
@@ -76,7 +74,7 @@ class MoQQmuxServer::WorkerAcceptCallback
     co_withExecutor(
         workerEvb_,
         server_.handleAccept(
-            workerEvb_, executor_, std::move(asyncSocket), shutdownState_))
+            workerEvb_, std::move(asyncSocket), shutdownState_))
         .start();
   }
 
@@ -88,7 +86,6 @@ class MoQQmuxServer::WorkerAcceptCallback
   MoQQmuxServer& server_;
   folly::EventBase* const workerEvb_;
   MoQQmuxServer::WorkerShutdownState* const shutdownState_;
-  const std::shared_ptr<MoQExecutor> executor_;
 };
 
 MoQQmuxServer::MoQQmuxServer(
@@ -106,7 +103,7 @@ MoQQmuxServer::MoQQmuxServer(
 }
 
 MoQQmuxServer::~MoQQmuxServer() {
-  if (!serverSockets_.empty()) {
+  if (started_ && !stopped_) {
     stop();
   }
 }
@@ -115,7 +112,11 @@ void MoQQmuxServer::start(
     const folly::SocketAddress& addr,
     std::vector<folly::EventBase*> evbs) {
   CHECK(!stopped_) << "MoQQmuxServer::start called after stop()";
-  CHECK(serverSockets_.empty()) << "MoQQmuxServer::start called twice";
+  CHECK(!started_)
+      << "MoQQmuxServer::start called twice / after initExternallyFed";
+
+  // Rollback guard to ensure that we cleanup if start() throws.
+  auto rollback = folly::makeGuard([this] { teardown(); });
 
   if (evbs.empty()) {
     // No caller-supplied pool — spin up our own. Joined in stop().
@@ -139,8 +140,11 @@ void MoQQmuxServer::start(
   serverSockets_.reserve(workerEvbs_.size());
   workerCallbacks_.reserve(workerEvbs_.size());
   workerShutdownState_.reserve(workerEvbs_.size());
+  workerExecutors_.reserve(workerEvbs_.size());
   for (size_t i = 0; i < workerEvbs_.size(); ++i) {
     workerShutdownState_.push_back(std::make_unique<WorkerShutdownState>());
+    workerExecutors_.push_back(
+        std::make_shared<MoQFollyExecutorImpl>(workerEvbs_[i]));
   }
 
   // If `addr` has port 0 the first bind picks an ephemeral port; the
@@ -177,18 +181,92 @@ void MoQQmuxServer::start(
   }
 
   boundAddr_ = bindAddr;
+  started_ = true;
+  rollback.dismiss();
   XLOG(DBG1) << "MoQQmuxServer listening on " << boundAddr_.describe()
              << " across " << workerEvbs_.size()
              << " worker evb(s) (SO_REUSEPORT)";
 }
 
+void MoQQmuxServer::initExternallyFed(
+    std::vector<folly::EventBase*> workerEvbs) {
+  CHECK(!stopped_) << "MoQQmuxServer::initExternallyFed called after stop()";
+  CHECK(!started_)
+      << "MoQQmuxServer::initExternallyFed called twice / after start()";
+  CHECK(!workerEvbs.empty())
+      << "MoQQmuxServer::initExternallyFed requires a non-empty worker pool";
+  for (auto* evb : workerEvbs) {
+    CHECK(evb) << "null EventBase in MoQQmuxServer worker pool";
+  }
+  workerEvbs_ = std::move(workerEvbs);
+  workerShutdownState_.reserve(workerEvbs_.size());
+  workerExecutors_.reserve(workerEvbs_.size());
+  for (size_t i = 0; i < workerEvbs_.size(); ++i) {
+    workerShutdownState_.push_back(std::make_unique<WorkerShutdownState>());
+    workerExecutors_.push_back(
+        std::make_shared<MoQFollyExecutorImpl>(workerEvbs_[i]));
+  }
+  started_ = true;
+}
+
+MoQQmuxServer::WorkerShutdownState* MoQQmuxServer::findStateFor(
+    folly::EventBase* workerEvb) noexcept {
+  for (size_t i = 0; i < workerEvbs_.size(); ++i) {
+    if (workerEvbs_[i] == workerEvb) {
+      return workerShutdownState_[i].get();
+    }
+  }
+  return nullptr;
+}
+
+std::shared_ptr<MoQExecutor> MoQQmuxServer::findExecutorFor(
+    folly::EventBase* workerEvb) noexcept {
+  for (size_t i = 0; i < workerEvbs_.size(); ++i) {
+    if (workerEvbs_[i] == workerEvb) {
+      return workerExecutors_[i];
+    }
+  }
+  return nullptr;
+}
+
+folly::coro::Task<void> MoQQmuxServer::handleExternallyFedSession(
+    folly::AsyncTransport::UniquePtr fizzCompletedTransport,
+    std::string negotiatedAlpn) {
+  auto* workerEvb = folly::EventBaseManager::get()->getExistingEventBase();
+  CHECK(workerEvb) << "handleExternallyFedSession must run on a thread "
+                      "that owns an EventBase";
+  WorkerShutdownState* state = findStateFor(workerEvb);
+  CHECK(state) << "handleExternallyFedSession: current EventBase is not in "
+                  "this server's worker pool";
+  ++state->inflightAccepts;
+  SCOPE_EXIT {
+    if (--state->inflightAccepts == 0 && state->draining) {
+      state->done.post();
+    }
+  };
+
+  co_await folly::coro::co_withCancellation(
+      cancelSource_.getToken(), [&]() -> folly::coro::Task<void> {
+        co_await runQmuxAndSession(
+            workerEvb,
+            std::move(fizzCompletedTransport),
+            std::move(negotiatedAlpn),
+            config_.handshakeTimeout,
+            state);
+      }());
+}
+
 void MoQQmuxServer::stop() {
   CHECK(!isInWorkerPool())
       << "MoQQmuxServer::stop must not be called from a worker EB thread";
-  if (serverSockets_.empty()) {
+  if (!started_ || stopped_) {
     return;
   }
   stopped_ = true;
+  teardown();
+}
+
+void MoQQmuxServer::teardown() {
   for (size_t i = 0; i < serverSockets_.size(); ++i) {
     auto* workerEvb = workerEvbs_[i];
     auto& socket = serverSockets_[i];
@@ -218,13 +296,13 @@ void MoQQmuxServer::stop() {
   }
 
   workerShutdownState_.clear();
+  workerExecutors_.clear();
   workerEvbs_.clear();
   ownedWorkers_.clear();
 }
 
 folly::coro::Task<void> MoQQmuxServer::handleAccept(
     folly::EventBase* workerEvb,
-    std::shared_ptr<MoQExecutor> executor,
     folly::AsyncTransport::UniquePtr asyncSocket,
     WorkerShutdownState* state) {
   ++state->inflightAccepts;
@@ -283,15 +361,6 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
         // onClientSetup.
         std::string alpn = fizzServer->getApplicationProtocol();
 
-        // Require a recognized MoQ ALPN.
-        if (!isLegacyAlpn(alpn) && !getVersionFromAlpn(alpn).has_value()) {
-          XLOG(WARN) << "MoQQmuxServer: rejecting connection; "
-                     << (alpn.empty() ? "TLS completed without ALPN negotiation"
-                                      : "negotiated ALPN '" + alpn +
-                                 "' is not a MoQ protocol");
-          co_return;
-        }
-
         // Step 2: QMUX handshake.
         auto elapsedSoFar =
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -308,7 +377,6 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
         // Delegate the post-Fizz body to the shared helper.
         co_await runQmuxAndSession(
             workerEvb,
-            std::move(executor),
             folly::AsyncTransport::UniquePtr(std::move(fizzServer)),
             std::move(alpn),
             qmuxTimeout,
@@ -318,11 +386,22 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
 
 folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
     folly::EventBase* workerEvb,
-    std::shared_ptr<MoQExecutor> executor,
     folly::AsyncTransport::UniquePtr fizzCompletedTransport,
     std::string negotiatedAlpn,
     std::chrono::milliseconds qmuxTimeout,
     WorkerShutdownState* state) {
+  if (!isLegacyAlpn(negotiatedAlpn) &&
+      !getVersionFromAlpn(negotiatedAlpn).has_value()) {
+    XLOG(WARN) << "MoQQmuxServer: rejecting session; "
+               << (negotiatedAlpn.empty()
+                       ? "no negotiated ALPN"
+                       : "ALPN '" + negotiatedAlpn + "' is not a MoQ protocol");
+    co_return;
+  }
+
+  auto executor = findExecutorFor(workerEvb);
+  CHECK(executor)
+      << "runQmuxAndSession: workerEvb is not in this server's pool";
   auto transport = std::make_unique<folly::coro::Transport>(
       workerEvb, std::move(fizzCompletedTransport));
 

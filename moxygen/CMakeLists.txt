@@ -140,9 +140,9 @@ moxygen_add_library(moxygen_moq_server
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
+    Folly::folly_net_net_ops
     Folly::folly_portability
     Folly::folly_string
-    Folly::folly_net_net_ops
   EXPORTED_DEPS
     moxygen_moq
     moxygen_moq_early_data_handler
@@ -227,12 +227,16 @@ moxygen_add_library(moxygen_moq_qmux_server
     MoQQmuxServer.cpp
   DEPS
     moxygen_events_moq_folly_executor_impl
+    moxygen_moq_versions
     proxygen::proxygen_transport_qmux_qmux_connector
     Folly::folly_coro_baton
+    Folly::folly_coro_current_executor
+    Folly::folly_coro_error
     Folly::folly_coro_timeout
     Folly::folly_coro_with_cancellation
     Folly::folly_futures_core
     Folly::folly_io_async_async_socket
+    Folly::folly_io_async_event_base_manager
     Folly::folly_io_coro_socket
     Folly::folly_logging_logging
     Folly::folly_scope_guard
