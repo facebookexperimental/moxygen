@@ -74,6 +74,8 @@ target_link_libraries(
   moxygen_relay_moq_relay
   moxygen_moq_relay_session
   moxygen_moq_server
+  moxygen_moq_qmux_server
+  moxygen_qmux_utils
   Folly::folly_init_init
   Folly::folly_io_async_async_signal_handler
 )
