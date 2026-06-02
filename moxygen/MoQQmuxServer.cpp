@@ -301,9 +301,14 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
         auto elapsedSoFar =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - handshakeStart);
-        auto qmuxTimeout = config_.handshakeTimeout > elapsedSoFar
-            ? config_.handshakeTimeout - elapsedSoFar
-            : std::chrono::milliseconds(0);
+        if (elapsedSoFar >= config_.handshakeTimeout) {
+          XLOG(WARN) << "MoQQmuxServer: handshake budget exhausted by Fizz; "
+                     << "rejecting connection (elapsed=" << elapsedSoFar.count()
+                     << "ms, budget=" << config_.handshakeTimeout.count()
+                     << "ms)";
+          co_return;
+        }
+        auto qmuxTimeout = config_.handshakeTimeout - elapsedSoFar;
 
         auto sessionResult = co_await folly::coro::co_awaitTry(
             proxygen::qmux::QmuxConnector::connect(
