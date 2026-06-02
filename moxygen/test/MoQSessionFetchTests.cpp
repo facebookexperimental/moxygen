@@ -44,6 +44,63 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
   co_await baton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, FetchNewestFirstResponseObjects) {
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 18) {
+    co_return;
+  }
+
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.groupOrder, GroupOrder::NewestFirst);
+    auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+    EXPECT_NE(standalone, nullptr);
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    auto first = fetchPub->object(
+        /*groupID=*/10,
+        /*subgroupID=*/0,
+        /*objectID=*/5,
+        moxygen::test::makeBuf(100),
+        noExtensions());
+    EXPECT_TRUE(first.hasValue());
+    auto second = fetchPub->object(
+        /*groupID=*/7,
+        /*subgroupID=*/0,
+        /*objectID=*/1,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    EXPECT_TRUE(second.hasValue());
+    co_return std::make_shared<MockFetchHandle>(FetchOk{
+        fetch.requestID,
+        GroupOrder::NewestFirst,
+        /*endOfTrack=*/false,
+        AbsoluteLocation{7, 1}});
+  });
+
+  folly::coro::Baton baton;
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(
+        *fetchCallback_,
+        object(10, 0, 5, HasChainDataLengthOf(100), _, false, _))
+        .WillOnce(testing::Return(folly::unit));
+    EXPECT_CALL(
+        *fetchCallback_, object(7, 0, 1, HasChainDataLengthOf(100), _, true, _))
+        .WillOnce([&] {
+          baton.post();
+          return folly::unit;
+        });
+  }
+  expectFetchSuccess();
+  auto fetch = getFetch({7, 1}, {10, 5});
+  fetch.groupOrder = GroupOrder::NewestFirst;
+  auto res = co_await clientSession_->fetch(fetch, fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {

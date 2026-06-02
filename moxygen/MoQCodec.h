@@ -282,6 +282,10 @@ class MoQObjectStreamCodec : public MoQCodec {
     callback_ = callback;
   }
 
+  void setFetchGroupOrder(GroupOrder groupOrder) {
+    moqFrameParser_.setFetchGroupOrder(groupOrder);
+  }
+
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
  private:

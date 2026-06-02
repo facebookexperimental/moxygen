@@ -501,6 +501,7 @@ StreamPublisherImpl::StreamPublisherImpl(
   }
 
   moqFrameWriter_.initializeVersion(publisher->getVersion());
+  moqFrameWriter_.setFetchGroupOrder(publisher->getGroupOrder());
   (void)moqFrameWriter_.writeFetchHeader(writeBuf_, publisher->requestID());
 }
 
@@ -2035,9 +2036,13 @@ class MoQSession::FetchTrackReceiveState
       FullTrackName fullTrackName,
       RequestID requestID,
       std::shared_ptr<FetchConsumer> fetchCallback,
+      GroupOrder fetchGroupOrder = GroupOrder::OldestFirst,
       std::shared_ptr<MLogger> logger = nullptr)
       : TrackReceiveStateBase(std::move(fullTrackName), requestID),
-        callback_(std::move(fetchCallback)) {
+        callback_(std::move(fetchCallback)),
+        fetchGroupOrder_(
+            fetchGroupOrder == GroupOrder::Default ? GroupOrder::OldestFirst
+                                                   : fetchGroupOrder) {
     logger_ = std::move(logger);
   }
 
@@ -2049,6 +2054,10 @@ class MoQSession::FetchTrackReceiveState
 
   std::shared_ptr<FetchConsumer> getFetchCallback() const {
     return callback_;
+  }
+
+  GroupOrder getFetchGroupOrder() const {
+    return fetchGroupOrder_;
   }
 
   void resetFetchCallback(MoQSession* session) {
@@ -2096,6 +2105,7 @@ class MoQSession::FetchTrackReceiveState
  private:
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<FetchConsumer> callback_;
+  GroupOrder fetchGroupOrder_;
   folly::coro::Promise<FetchResult> promise_;
   uint64_t currentStreamId_{0};
 };
@@ -3349,11 +3359,12 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   };
 
   // Lambda for onFetch
-  auto onFetchFunc = [this, &token](RequestID requestID) {
+  auto onFetchFunc = [this, &token, &codec](RequestID requestID) {
     auto state = getFetchTrackReceiveState(requestID);
     if (state) {
       // FetchTrackReceiveState lifecycle now controls read loop
       token = state->getCancelToken();
+      codec.setFetchGroupOrder(state->getFetchGroupOrder());
     }
     return state;
   };
@@ -5448,7 +5459,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   }
   controlWriteEvent_.signal();
   auto trackReceiveState = std::make_shared<FetchTrackReceiveState>(
-      fullTrackName, reqID, std::move(consumer), logger_);
+      fullTrackName, reqID, std::move(consumer), fetch.groupOrder, logger_);
   auto fetchTrack = fetches_.try_emplace(reqID, trackReceiveState);
   XCHECK(fetchTrack.second)
       << "RequestID already in use id=" << reqID << " sess=" << this;

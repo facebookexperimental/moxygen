@@ -26,6 +26,41 @@ inline void writeVarintTo(folly::IOBufQueue& q, uint64_t v) {
   (void)quic::encodeQuicInteger(v, appenderOp);
 }
 
+inline void writeMoQVarintTo(folly::IOBufQueue& q, uint64_t v) {
+  folly::io::QueueAppender appender(&q, kMaxFrameHeaderSize);
+  (void)encodeMoQVarint(v, appender);
+}
+
+uint64_t readVarintFrom(folly::io::Cursor& cursor) {
+  auto value = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(value.has_value());
+  return value.has_value() ? value->first : 0;
+}
+
+void writeFetchObjectWithSerializationFlags(
+    folly::IOBufQueue& q,
+    uint64_t flags,
+    std::optional<uint64_t> groupField,
+    std::optional<uint64_t> subgroupField,
+    std::optional<uint64_t> objectField,
+    std::optional<uint8_t> priority,
+    uint64_t payloadLength = 1) {
+  writeMoQVarintTo(q, flags);
+  if (groupField.has_value()) {
+    writeMoQVarintTo(q, *groupField);
+  }
+  if (subgroupField.has_value()) {
+    writeMoQVarintTo(q, *subgroupField);
+  }
+  if (objectField.has_value()) {
+    writeMoQVarintTo(q, *objectField);
+  }
+  if (priority.has_value()) {
+    q.append(&*priority, 1);
+  }
+  writeMoQVarintTo(q, payloadLength);
+}
+
 // Build a legacy CLIENT_SETUP frame (versions array + 0 params).
 // Returns the IOBuf and positions a cursor at the payload (past frame header).
 // Usage: auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft14});
@@ -4486,6 +4521,406 @@ TEST(MoQFramerRequestOkTrackProperties, Draft17DoesNotEmitTrackProperties) {
   EXPECT_TRUE(result->trackProperties.empty());
 }
 
+TEST_F(MoQFramerV18Test, FetchObjectDeltaDecodesAscendingOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group delta, object delta, priority
+      10,
+      std::nullopt,
+      4,
+      7);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x04, // same group, object delta
+      std::nullopt,
+      std::nullopt,
+      3,
+      std::nullopt);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x0c, // group delta, object delta
+      1,
+      std::nullopt,
+      2,
+      std::nullopt);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+
+  auto first = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(first->value));
+  const auto& firstObj = std::get<ObjectHeader>(first->value);
+  EXPECT_EQ(firstObj.group, 10);
+  EXPECT_EQ(firstObj.id, 4);
+  EXPECT_EQ(firstObj.priority, 7);
+
+  auto second = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(second.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(second->value));
+  const auto& secondObj = std::get<ObjectHeader>(second->value);
+  EXPECT_EQ(secondObj.group, 10);
+  EXPECT_EQ(secondObj.id, 7);
+  EXPECT_EQ(secondObj.priority, 7);
+
+  auto third = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(third.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(third->value));
+  const auto& thirdObj = std::get<ObjectHeader>(third->value);
+  EXPECT_EQ(thirdObj.group, 12);
+  EXPECT_EQ(thirdObj.id, 2);
+}
+
+TEST_F(MoQFramerV18Test, FetchEndOfRangeSetsPriorGroupAndObject) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group delta, object delta, priority
+      5,
+      std::nullopt,
+      10,
+      7);
+  writeMoQVarintTo(writeBuf, kSerializationFlagEndOfUnknownRange);
+  writeMoQVarintTo(writeBuf, 5);
+  writeMoQVarintTo(writeBuf, 20);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x00, // same group, object ID is prior object ID plus one
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+
+  auto first = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+
+  auto markerResult = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(markerResult.hasValue());
+  ASSERT_TRUE(
+      std::holds_alternative<MoQFrameParser::EndOfRangeMarker>(
+          markerResult->value));
+  const auto& marker =
+      std::get<MoQFrameParser::EndOfRangeMarker>(markerResult->value);
+  EXPECT_EQ(marker.groupId, 5);
+  EXPECT_EQ(marker.objectId, 20);
+  EXPECT_TRUE(marker.isUnknownOrNonexistent);
+
+  auto next = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(next.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(next->value));
+  const auto& nextObj = std::get<ObjectHeader>(next->value);
+  EXPECT_EQ(nextObj.group, 5);
+  EXPECT_EQ(nextObj.id, 21);
+  EXPECT_EQ(nextObj.priority, 7);
+}
+
+TEST_F(MoQFramerV18Test, FetchObjectDeltaDecodesDescendingOrder) {
+  parser_.setFetchGroupOrder(GroupOrder::NewestFirst);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group delta, object delta, priority
+      10,
+      std::nullopt,
+      5,
+      9);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x0c, // group delta, object delta
+      2,
+      std::nullopt,
+      1,
+      std::nullopt);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+
+  auto first = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+  auto second = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(second.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(second->value));
+  const auto& secondObj = std::get<ObjectHeader>(second->value);
+  EXPECT_EQ(secondObj.group, 7);
+  EXPECT_EQ(secondObj.id, 1);
+  EXPECT_EQ(secondObj.priority, 9);
+}
+
+TEST_F(MoQFramerV18Test, FetchFirstObjectRequiresGroupAndObjectDeltas) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x18, // group delta and priority, but no object delta
+      10,
+      std::nullopt,
+      std::nullopt,
+      7);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+  auto result = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST_F(MoQFramerV18Test, FetchRejectsInvalidSerializationFlagsAbove127) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group delta, object delta, priority
+      5,
+      std::nullopt,
+      10,
+      7);
+  writeMoQVarintTo(writeBuf, 0x100);
+  writeMoQVarintTo(writeBuf, 1);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+  auto first = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+
+  auto result = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST_F(MoQFramerV18Test, FetchObjectDeltaRejectsDescendingGroupUnderflow) {
+  parser_.setFetchGroupOrder(GroupOrder::NewestFirst);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group delta, object delta, priority
+      0,
+      std::nullopt,
+      1,
+      7);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x0c, // group delta, object delta
+      0,
+      std::nullopt,
+      1,
+      std::nullopt);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+  auto first = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+
+  auto second = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(second.hasError());
+  EXPECT_EQ(second.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST(MoQFramerFetchObjectDelta, Draft17FieldsRemainAbsolute) {
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft17);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group ID, object ID, priority
+      10,
+      std::nullopt,
+      4,
+      7);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x0c, // group ID, object ID
+      20,
+      std::nullopt,
+      3,
+      std::nullopt);
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ObjectHeader headerTemplate;
+  auto first = parser.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+
+  auto second = parser.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(second.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(second->value));
+  const auto& secondObj = std::get<ObjectHeader>(second->value);
+  EXPECT_EQ(secondObj.group, 20);
+  EXPECT_EQ(secondObj.id, 3);
+}
+
+TEST_F(MoQFramerV18Test, WriteFetchObjectDeltaEncodesAscendingOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeFetchHeader(writeBuf, RequestID(1)).hasValue());
+
+  ObjectHeader first(10, 0, 4, 7, 1);
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      first,
+                      folly::IOBuf::copyBuffer("a"))
+                  .hasValue());
+  ObjectHeader second(10, 0, 7, 7, 1);
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      second,
+                      folly::IOBuf::copyBuffer("b"))
+                  .hasValue());
+  ObjectHeader third(12, 0, 2, 7, 1);
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      third,
+                      folly::IOBuf::copyBuffer("c"))
+                  .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(
+      readVarintFrom(cursor), folly::to_underlying(StreamType::FETCH_HEADER));
+  EXPECT_EQ(readVarintFrom(cursor), RequestID(1).value);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x1c);
+  EXPECT_EQ(readVarintFrom(cursor), 10);
+  EXPECT_EQ(readVarintFrom(cursor), 4);
+  EXPECT_EQ(cursor.readBE<uint8_t>(), 7);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x04);
+  EXPECT_EQ(readVarintFrom(cursor), 3);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x0c);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  EXPECT_EQ(readVarintFrom(cursor), 2);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+  EXPECT_EQ(cursor.totalLength(), 0);
+}
+
+TEST_F(MoQFramerV18Test, WriteFetchObjectDeltaEncodesDescendingOrder) {
+  writer_.setFetchGroupOrder(GroupOrder::NewestFirst);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeFetchHeader(writeBuf, RequestID(1)).hasValue());
+
+  ObjectHeader first(10, 0, 5, 9, 1);
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      first,
+                      folly::IOBuf::copyBuffer("a"))
+                  .hasValue());
+  ObjectHeader second(7, 0, 1, 9, 1);
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      second,
+                      folly::IOBuf::copyBuffer("b"))
+                  .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  EXPECT_EQ(
+      readVarintFrom(cursor), folly::to_underlying(StreamType::FETCH_HEADER));
+  EXPECT_EQ(readVarintFrom(cursor), RequestID(1).value);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x1c);
+  EXPECT_EQ(readVarintFrom(cursor), 10);
+  EXPECT_EQ(readVarintFrom(cursor), 5);
+  EXPECT_EQ(cursor.readBE<uint8_t>(), 9);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x0c);
+  EXPECT_EQ(readVarintFrom(cursor), 2);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+  EXPECT_EQ(cursor.totalLength(), 0);
+}
+
+TEST(MoQFramerFetchObjectDelta, Draft17WriterFieldsRemainAbsolute) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft17);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeFetchHeader(writeBuf, RequestID(1)).hasValue());
+
+  ObjectHeader first(10, 0, 4, 7, 1);
+  ASSERT_TRUE(writer
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      first,
+                      folly::IOBuf::copyBuffer("a"))
+                  .hasValue());
+  ObjectHeader second(20, 0, 3, 7, 1);
+  ASSERT_TRUE(writer
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      second,
+                      folly::IOBuf::copyBuffer("b"))
+                  .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  EXPECT_EQ(
+      readVarintFrom(cursor), folly::to_underlying(StreamType::FETCH_HEADER));
+  EXPECT_EQ(readVarintFrom(cursor), RequestID(1).value);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x1c);
+  EXPECT_EQ(readVarintFrom(cursor), 10);
+  EXPECT_EQ(readVarintFrom(cursor), 4);
+  EXPECT_EQ(cursor.readBE<uint8_t>(), 7);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x0c);
+  EXPECT_EQ(readVarintFrom(cursor), 20);
+  EXPECT_EQ(readVarintFrom(cursor), 3);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+  EXPECT_EQ(cursor.totalLength(), 0);
+}
+
 // Draft 17 must continue to use wire type 0x11 for SUBSCRIBE_NAMESPACE.
 TEST(MoQFramerWireTypeTranslation, Draft17UsesLegacyWireType) {
   MoQFrameWriter writer;
@@ -4505,10 +4940,10 @@ TEST(MoQFramerWireTypeTranslation, Draft17UsesLegacyWireType) {
 }
 
 // Wire-level enumerator values: each FrameType integer IS a wire integer.
-// LEGACY_SUBSCRIBE_NAMESPACE is the v17- wire value (0x11); SUBSCRIBE_NAMESPACE
-// is the v18+ wire value (0x50). The writer picks between them based on the
-// negotiated version; the parser accepts either and dispatches to the same
-// handler.
+// LEGACY_SUBSCRIBE_NAMESPACE is the v17- wire value (0x11);
+// SUBSCRIBE_NAMESPACE is the v18+ wire value (0x50). The writer picks between
+// them based on the negotiated version; the parser accepts either and
+// dispatches to the same handler.
 TEST(MoQFramerSubscribeNamespaceWireType, EnumValuesMatchSpec) {
   EXPECT_EQ(folly::to_underlying(FrameType::LEGACY_SUBSCRIBE_NAMESPACE), 0x11u);
   EXPECT_EQ(folly::to_underlying(FrameType::SUBSCRIBE_NAMESPACE), 0x50u);
@@ -4596,7 +5031,8 @@ TEST_F(ParametersIsParamAllowedTest, ParamNotAllowedForFrameType) {
 }
 
 TEST_F(ParametersIsParamAllowedTest, ParamAllowedForAllFrameTypes) {
-  // MAX_CACHE_DURATION and PUBLISHER_PRIORITY have empty sets = allowed for all
+  // MAX_CACHE_DURATION and PUBLISHER_PRIORITY have empty sets = allowed for
+  // all
   Parameters paramsPublishNamespace(FrameType::PUBLISH_NAMESPACE);
   EXPECT_TRUE(paramsPublishNamespace.isParamAllowed(
       TrackRequestParamKey::MAX_CACHE_DURATION));
@@ -4729,7 +5165,8 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
 
   // Now manually append an invalid param (EXPIRES) to the serialized buffer
   // For testing the receive path, we create a separate SubscribeRequest
-  // that bypasses write-time validation by using a Parameters without frameType
+  // that bypasses write-time validation by using a Parameters without
+  // frameType
 
   // Create a SubscribeRequest struct directly (not via make()) so we can
   // add params that bypass validation
@@ -4746,7 +5183,8 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
   // Add valid param using insertParam
   reqWithInvalidParam.params.insertParam(Parameter(
       folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 5000));
-  // Try to insert EXPIRES which is invalid for SUBSCRIBE - it will be rejected
+  // Try to insert EXPIRES which is invalid for SUBSCRIBE - it will be
+  // rejected
   auto insertResult = reqWithInvalidParam.params.insertParam(
       Parameter(folly::to_underlying(TrackRequestParamKey::EXPIRES), 1000));
   // The insertion of invalid param should fail
@@ -4954,7 +5392,8 @@ TEST_F(ParametersIsParamAllowedTest, GroupOrderStillAllowedInV16PublishOk) {
   EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::GROUP_ORDER));
 }
 
-// Verify that a parse underflow doesn't corrupt delta-encoded object ID state.
+// Verify that a parse underflow doesn't corrupt delta-encoded object ID
+// state.
 TEST_P(MoQFramerTest, SubgroupObjectUnderflowDoesNotCorruptDeltaState) {
   if (getDraftMajorVersion(GetParam()) < 14) {
     return;

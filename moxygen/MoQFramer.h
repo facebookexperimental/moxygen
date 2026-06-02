@@ -323,6 +323,8 @@ class MoQFrameParser {
     return quic::follyutils::decodeQuicInteger(cursor, atMost);
   }
 
+  void setFetchGroupOrder(GroupOrder groupOrder) noexcept;
+
   void setTokenCacheMaxSize(size_t size) {
     tokenCache_->setMaxSize(size, /*evict=*/true);
   }
@@ -339,6 +341,7 @@ class MoQFrameParser {
     previousFetchGroup_ = std::nullopt;
     previousFetchSubgroup_ = std::nullopt;
     previousFetchPriority_ = std::nullopt;
+    fetchGroupOrder_ = GroupOrder::OldestFirst;
   }
 
  private:
@@ -497,6 +500,7 @@ class MoQFrameParser {
   mutable std::optional<uint64_t> previousFetchGroup_;
   mutable std::optional<uint64_t> previousFetchSubgroup_;
   mutable std::optional<uint8_t> previousFetchPriority_;
+  mutable GroupOrder fetchGroupOrder_{GroupOrder::OldestFirst};
   // Context for extension delta decoding (draft-16+)
   mutable uint64_t previousExtensionType_ = 0;
 };
@@ -755,6 +759,8 @@ class MoQFrameWriter {
     }
   }
 
+  void setFetchGroupOrder(GroupOrder groupOrder) noexcept;
+
   void writeExtensions(
       folly::IOBufQueue& writeBuf,
       const Extensions& extensions,
@@ -859,6 +865,7 @@ class MoQFrameWriter {
   mutable std::optional<uint64_t> previousFetchGroup_;
   mutable std::optional<uint64_t> previousFetchSubgroup_;
   mutable std::optional<uint8_t> previousFetchPriority_;
+  mutable GroupOrder fetchGroupOrder_{GroupOrder::OldestFirst};
 
   // writeSetup is a free function but needs access to writer member helpers
   // to dispatch on the negotiated version.

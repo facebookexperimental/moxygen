@@ -140,6 +140,126 @@ folly::Expected<uint64_t, moxygen::ErrorCode> decodeDelta(
   return previous + delta;
 }
 
+folly::Expected<uint64_t, moxygen::ErrorCode> resolveFetchGroupID(
+    const std::optional<uint64_t>& groupIDField,
+    bool useFetchObjectDeltas,
+    const std::optional<uint64_t>& previousFetchGroup,
+    moxygen::GroupOrder fetchGroupOrder) {
+  if (!groupIDField.has_value()) {
+    if (!previousFetchGroup.has_value()) {
+      XLOG(ERR) << "resolveFetchGroupID: First object must have explicit "
+                   "group ID";
+      return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+    }
+    return previousFetchGroup.value();
+  }
+
+  if (!useFetchObjectDeltas) {
+    return groupIDField.value();
+  }
+
+  auto groupIDDelta = groupIDField.value();
+  if (!previousFetchGroup.has_value()) {
+    return groupIDDelta;
+  }
+
+  if (fetchGroupOrder == moxygen::GroupOrder::NewestFirst) {
+    if (groupIDDelta == std::numeric_limits<uint64_t>::max() ||
+        previousFetchGroup.value() < groupIDDelta + 1) {
+      return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+    }
+    return previousFetchGroup.value() - (groupIDDelta + 1);
+  }
+
+  if (groupIDDelta == std::numeric_limits<uint64_t>::max() ||
+      previousFetchGroup.value() >
+          std::numeric_limits<uint64_t>::max() - groupIDDelta - 1) {
+    return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return previousFetchGroup.value() + groupIDDelta + 1;
+}
+
+folly::Expected<uint64_t, moxygen::ErrorCode> resolveFetchObjectID(
+    const std::optional<uint64_t>& objectIDField,
+    bool draft18GroupIDDeltaPresent,
+    bool useFetchObjectDeltas,
+    const std::optional<uint64_t>& previousObjectID) {
+  DCHECK(useFetchObjectDeltas || !draft18GroupIDDeltaPresent);
+  if (objectIDField.has_value()) {
+    if (!useFetchObjectDeltas || draft18GroupIDDeltaPresent) {
+      return objectIDField.value();
+    }
+
+    if (!previousObjectID.has_value()) {
+      XLOG(ERR) << "resolveFetchObjectID: First object cannot reference "
+                   "prior object ID";
+      return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+    }
+    return decodeDelta(previousObjectID.value(), objectIDField.value());
+  }
+
+  if (!previousObjectID.has_value()) {
+    XLOG(ERR) << "resolveFetchObjectID: First object must have explicit "
+                 "object ID";
+    return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+  }
+  if (useFetchObjectDeltas &&
+      previousObjectID.value() == std::numeric_limits<uint64_t>::max()) {
+    return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return previousObjectID.value() + 1;
+}
+
+struct FetchObjectDeltaFields {
+  std::optional<uint64_t> groupIDDelta;
+  std::optional<uint64_t> objectIDDelta;
+};
+
+std::optional<FetchObjectDeltaFields> computeFetchObjectDeltaFieldsForWrite(
+    const moxygen::ObjectHeader& objectHeader,
+    const std::optional<uint64_t>& previousFetchGroup,
+    const std::optional<uint64_t>& previousObjectID,
+    moxygen::GroupOrder fetchGroupOrder) {
+  FetchObjectDeltaFields fields;
+
+  if (!previousFetchGroup.has_value()) {
+    fields.groupIDDelta = objectHeader.group;
+  } else if (objectHeader.group != previousFetchGroup.value()) {
+    if (fetchGroupOrder == moxygen::GroupOrder::NewestFirst) {
+      if (objectHeader.group >= previousFetchGroup.value()) {
+        return std::nullopt;
+      }
+      fields.groupIDDelta = previousFetchGroup.value() - objectHeader.group - 1;
+    } else {
+      if (objectHeader.group <= previousFetchGroup.value()) {
+        return std::nullopt;
+      }
+      fields.groupIDDelta = objectHeader.group - previousFetchGroup.value() - 1;
+    }
+  }
+  const bool groupIDDeltaPresent = fields.groupIDDelta.has_value();
+
+  bool objectIDIsNext = false;
+  if (previousObjectID.has_value() &&
+      previousObjectID.value() != std::numeric_limits<uint64_t>::max()) {
+    objectIDIsNext = objectHeader.id == previousObjectID.value() + 1;
+  }
+  if (!previousObjectID.has_value()) {
+    fields.objectIDDelta = objectHeader.id;
+  } else if (groupIDDeltaPresent) {
+    if (!objectIDIsNext) {
+      fields.objectIDDelta = objectHeader.id;
+    }
+  } else if (!objectIDIsNext) {
+    if (objectHeader.id < previousObjectID.value()) {
+      return std::nullopt;
+    }
+    fields.objectIDDelta = objectHeader.id - previousObjectID.value();
+  }
+
+  return fields;
+}
+
 } // namespace
 
 namespace moxygen {
@@ -746,11 +866,17 @@ MoQFrameParser::parseFetchHeader(folly::io::Cursor& cursor, size_t length)
       RequestID(requestID->first), requestID->second};
 }
 
+void MoQFrameParser::setFetchGroupOrder(GroupOrder groupOrder) noexcept {
+  fetchGroupOrder_ =
+      groupOrder == GroupOrder::Default ? GroupOrder::OldestFirst : groupOrder;
+}
+
 void MoQFrameParser::resetFetchContext() const noexcept {
   previousFetchGroup_.reset();
   previousFetchSubgroup_.reset();
   previousObjectID_.reset();
   previousFetchPriority_.reset();
+  fetchGroupOrder_ = GroupOrder::OldestFirst;
 }
 
 bool datagramTypeHasExtensions(uint64_t version, DatagramType datagramType) {
@@ -1048,11 +1174,20 @@ MoQFrameParser::parseFetchObjectDraft15(
     }
     remainingLength -= objectId->second;
 
+    previousFetchGroup_ = groupId->first;
+    previousObjectID_ = objectId->first;
+
     length = remainingLength;
     return EndOfRangeMarker{
         groupId->first,
         objectId->first,
         flags == kSerializationFlagEndOfUnknownRange};
+  }
+
+  if (flags >= 128) {
+    XLOG(ERR) << "parseFetchObjectDraft15: Invalid serialization flags: 0x"
+              << std::hex << flags;
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
   // Check reserved bits - version dependent
@@ -1083,27 +1218,50 @@ MoQFrameParser::parseFetchObjectDraft15(
 
   // flags < 128: interpret as bit flags for normal object
   uint8_t bitFlags = static_cast<uint8_t>(flags);
+  const bool useFetchObjectDeltas = getDraftMajorVersion(*version_) >= 18;
+  const bool groupIDFieldPresent = bitFlags &
+      folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK);
+  const bool objectIDFieldPresent = bitFlags &
+      folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK);
+  const bool groupIDDeltaPresent = useFetchObjectDeltas && groupIDFieldPresent;
+  const bool objectIDDeltaPresent =
+      useFetchObjectDeltas && objectIDFieldPresent;
+  const bool hasPreviousFetchGroup = previousFetchGroup_.has_value();
+  const bool hasPreviousObjectID = previousObjectID_.has_value();
+  if (hasPreviousFetchGroup != hasPreviousObjectID) {
+    XLOG(ERR) << "parseFetchObjectDraft15: Inconsistent prior FETCH object "
+                 "state";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  const bool firstFetchObject = !hasPreviousFetchGroup;
 
-  // Decode Group ID (flags & 0x08)
-  if (bitFlags &
-      folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK)) {
-    // Group ID field is present
-    auto group = decodeVarint(cursor, remainingLength);
-    if (!group) {
+  if (useFetchObjectDeltas && firstFetchObject &&
+      (!groupIDDeltaPresent || !objectIDDeltaPresent)) {
+    XLOG(ERR) << "parseFetchObjectDraft15: First draft-18 FETCH object must "
+                 "include group and object deltas";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+
+  // Decode Group ID (flags & 0x08). In draft 18+, this is Group ID Delta.
+  std::optional<uint64_t> groupIDField;
+  if (groupIDFieldPresent) {
+    auto parsedGroupIDField = decodeVarint(cursor, remainingLength);
+    if (!parsedGroupIDField) {
       XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on group";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    remainingLength -= group->second;
-    objectHeader.group = group->first;
-  } else {
-    // Group ID is same as previous
-    if (!previousFetchGroup_.has_value()) {
-      XLOG(ERR) << "parseFetchObjectDraft15: First object must have explicit "
-                   "group ID";
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    objectHeader.group = previousFetchGroup_.value();
+    remainingLength -= parsedGroupIDField->second;
+    groupIDField = parsedGroupIDField->first;
   }
+  auto groupID = resolveFetchGroupID(
+      groupIDField,
+      useFetchObjectDeltas,
+      previousFetchGroup_,
+      fetchGroupOrder_);
+  if (groupID.hasError()) {
+    return folly::makeUnexpected(groupID.error());
+  }
+  objectHeader.group = groupID.value();
 
   // Decode Subgroup ID (flags & 0x03)
   // Ignore if datagram
@@ -1154,26 +1312,26 @@ MoQFrameParser::parseFetchObjectDraft15(
     }
   }
 
-  // Decode Object ID (flags & 0x04)
-  if (bitFlags &
-      folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK)) {
-    // Object ID field is present
-    auto id = decodeVarint(cursor, remainingLength);
-    if (!id) {
+  // Decode Object ID (flags & 0x04). In draft 18+, this is Object ID Delta.
+  std::optional<uint64_t> objectIDField;
+  if (objectIDFieldPresent) {
+    auto parsedObjectIDField = decodeVarint(cursor, remainingLength);
+    if (!parsedObjectIDField) {
       XLOG(DBG4) << "parseFetchObjectDraft15: UNDERFLOW on id";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    remainingLength -= id->second;
-    objectHeader.id = id->first;
-  } else {
-    // Object ID is the prior Object's ID plus one
-    if (!previousObjectID_.has_value()) {
-      XLOG(ERR) << "parseFetchObjectDraft15: First object must have explicit "
-                   "object ID";
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    objectHeader.id = previousObjectID_.value() + 1;
+    remainingLength -= parsedObjectIDField->second;
+    objectIDField = parsedObjectIDField->first;
   }
+  auto objectID = resolveFetchObjectID(
+      objectIDField,
+      groupIDDeltaPresent,
+      useFetchObjectDeltas,
+      previousObjectID_);
+  if (objectID.hasError()) {
+    return folly::makeUnexpected(objectID.error());
+  }
+  objectHeader.id = objectID.value();
 
   // Decode Priority (flags & 0x10)
   if (bitFlags &
@@ -3710,6 +3868,11 @@ WriteResult MoQFrameWriter::writeFetchHeader(
   return size;
 }
 
+void MoQFrameWriter::setFetchGroupOrder(GroupOrder groupOrder) noexcept {
+  fetchGroupOrder_ =
+      groupOrder == GroupOrder::Default ? GroupOrder::OldestFirst : groupOrder;
+}
+
 WriteResult MoQFrameWriter::writeSingleObjectStream(
     folly::IOBufQueue& writeBuf,
     TrackAlias trackAlias,
@@ -4199,6 +4362,7 @@ void MoQFrameWriter::writeFetchObjectDraft15(
     bool forwardingPreferenceIsDatagram) const noexcept {
   // Draft-15+ FETCH object format with Serialization Flags
   uint8_t flags = 0;
+  const bool useFetchObjectDeltas = getDraftMajorVersion(*version_) >= 18;
 
   if (forwardingPreferenceIsDatagram && getDraftMajorVersion(*version_) >= 16) {
     // Set datagram bit
@@ -4229,18 +4393,20 @@ void MoQFrameWriter::writeFetchObjectDraft15(
     }
   }
 
-  // Bit 2 (0x04): Object ID present
-  if (!previousObjectID_.has_value() ||
-      objectHeader.id != previousObjectID_.value() + 1) {
-    flags |=
-        folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK);
-  }
+  if (!useFetchObjectDeltas) {
+    // Bit 2 (0x04): Object ID field is present.
+    if (!previousObjectID_.has_value() ||
+        objectHeader.id != previousObjectID_.value() + 1) {
+      flags |=
+          folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK);
+    }
 
-  // Bit 3 (0x08): Group ID present
-  if (!previousFetchGroup_.has_value() ||
-      objectHeader.group != previousFetchGroup_.value()) {
-    flags |=
-        folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK);
+    // Bit 3 (0x08): Group ID field is present.
+    if (!previousFetchGroup_.has_value() ||
+        objectHeader.group != previousFetchGroup_.value()) {
+      flags |=
+          folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK);
+    }
   }
 
   // Bit 4 (0x10): Priority present
@@ -4259,6 +4425,27 @@ void MoQFrameWriter::writeFetchObjectDraft15(
         folly::to_underlying(FetchHeaderSerializationBits::EXTENSIONS_BITMASK);
   }
 
+  FetchObjectDeltaFields fetchObjectDeltaFields;
+
+  if (useFetchObjectDeltas) {
+    auto computedFields = computeFetchObjectDeltaFieldsForWrite(
+        objectHeader, previousFetchGroup_, previousObjectID_, fetchGroupOrder_);
+    if (!computedFields.has_value()) {
+      error = true;
+      return;
+    }
+    fetchObjectDeltaFields = computedFields.value();
+
+    if (fetchObjectDeltaFields.groupIDDelta.has_value()) {
+      flags |=
+          folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK);
+    }
+    if (fetchObjectDeltaFields.objectIDDelta.has_value()) {
+      flags |=
+          folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK);
+    }
+  }
+
   // Write Serialization Flags - single byte for v15, varint for v16+
   if (getDraftMajorVersion(*version_) >= 16) {
     writeVarint(writeBuf, flags, size, error);
@@ -4267,10 +4454,15 @@ void MoQFrameWriter::writeFetchObjectDraft15(
     size += 1;
   }
 
-  // Write Group ID if flag set
+  // Write Group ID Delta in draft 18+, otherwise Group ID.
   if (flags &
       folly::to_underlying(FetchHeaderSerializationBits::GROUP_ID_BITMASK)) {
-    writeVarint(writeBuf, objectHeader.group, size, error);
+    writeVarint(
+        writeBuf,
+        useFetchObjectDeltas ? *fetchObjectDeltaFields.groupIDDelta
+                             : objectHeader.group,
+        size,
+        error);
   }
 
   // Write Subgroup ID if mode is 0x03
@@ -4282,10 +4474,15 @@ void MoQFrameWriter::writeFetchObjectDraft15(
     writeVarint(writeBuf, objectHeader.subgroup, size, error);
   }
 
-  // Write Object ID if flag set
+  // Write Object ID Delta in draft 18+, otherwise Object ID.
   if (flags &
       folly::to_underlying(FetchHeaderSerializationBits::OBJECT_ID_BITMASK)) {
-    writeVarint(writeBuf, objectHeader.id, size, error);
+    writeVarint(
+        writeBuf,
+        useFetchObjectDeltas ? *fetchObjectDeltaFields.objectIDDelta
+                             : objectHeader.id,
+        size,
+        error);
   }
 
   // Write Priority if flag set

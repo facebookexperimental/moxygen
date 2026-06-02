@@ -51,6 +51,34 @@ void expectOnTrackStatusOk(
   }
 }
 
+void writeVarintTo(folly::IOBufQueue& q, uint64_t value) {
+  size_t size = 0;
+  bool error = false;
+  moxygen::writeVarint(q, value, size, error);
+  EXPECT_FALSE(error);
+}
+
+void writeFetchObjectWithSerializationFlags(
+    folly::IOBufQueue& q,
+    uint64_t flags,
+    std::optional<uint64_t> groupField,
+    std::optional<uint64_t> objectField,
+    std::optional<uint8_t> priority,
+    std::string_view payload) {
+  writeVarintTo(q, flags);
+  if (groupField.has_value()) {
+    writeVarintTo(q, *groupField);
+  }
+  if (objectField.has_value()) {
+    writeVarintTo(q, *objectField);
+  }
+  if (priority.has_value()) {
+    q.append(&*priority, 1);
+  }
+  writeVarintTo(q, payload.size());
+  q.append(folly::IOBuf::copyBuffer(payload));
+}
+
 } // namespace
 
 namespace moxygen::test {
@@ -442,6 +470,44 @@ TEST_P(MoQCodecTest, Fetch) {
       objectStreamCodecCallback_,
       onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
   objectStreamCodec_.onIngress(writeBuf.move(), false);
+}
+
+TEST(MoQCodecTest, FetchObjectUsesCallbackGroupOrderForV18DeltaDecode) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  writeVarintTo(writeBuf, folly::to_underlying(StreamType::FETCH_HEADER));
+  writeVarintTo(writeBuf, RequestID(1).value);
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x1c, // group delta, object delta, priority
+      10,
+      5,
+      3,
+      "a");
+  writeFetchObjectWithSerializationFlags(
+      writeBuf,
+      0x0c, // group delta, object delta
+      2,
+      1,
+      std::nullopt,
+      "b");
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(kVersionDraft18);
+
+  testing::InSequence seq;
+  EXPECT_CALL(callback, onFetchHeader(RequestID(1)))
+      .WillOnce(testing::Invoke([&codec](RequestID) {
+        codec.setFetchGroupOrder(GroupOrder::NewestFirst);
+        return MoQCodec::ParseResult::CONTINUE;
+      }));
+  EXPECT_CALL(callback, onObjectBegin(10, 0, 5, _, 1, _, true, false, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(callback, onObjectBegin(7, 0, 1, _, 1, _, true, false, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  EXPECT_EQ(
+      codec.onIngress(writeBuf.move(), false), MoQCodec::ParseResult::CONTINUE);
 }
 
 TEST_P(MoQCodecTest, FetchHeaderUnderflow) {
