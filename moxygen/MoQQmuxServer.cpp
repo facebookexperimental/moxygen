@@ -292,12 +292,7 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
           co_return;
         }
 
-        // Step 2: Wrap the encrypted AsyncFizzServer in a coro::Transport
-        // for QmuxConnector.
-        auto transport = std::make_unique<folly::coro::Transport>(
-            workerEvb, folly::AsyncTransport::UniquePtr(std::move(fizzServer)));
-
-        // Step 3: QMUX handshake.
+        // Step 2: QMUX handshake.
         auto elapsedSoFar =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - handshakeStart);
@@ -310,34 +305,54 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
         }
         auto qmuxTimeout = config_.handshakeTimeout - elapsedSoFar;
 
-        auto sessionResult = co_await folly::coro::co_awaitTry(
-            proxygen::qmux::QmuxConnector::connect(
-                workerEvb,
-                proxygen::qmux::WtDir::Server,
-                config_.selfTransportParams,
-                std::move(transport),
-                qmuxTimeout,
-                config_.sessionConfig));
-        if (sessionResult.hasException()) {
-          XLOG(WARN) << "MoQQmuxServer: QMUX handshake failed: "
-                     << sessionResult.exception().what();
-          co_return;
-        }
-
-        auto qmuxSession = std::move(*sessionResult);
-        auto moqSession = createSession(qmuxSession, std::move(executor));
-        moqSession->validateAndSetVersionFromAlpn(alpn);
-        qmuxSession->setHandler(moqSession.get());
-        qmuxSession->start(qmuxSession);
-
-        auto* moqSessionPtr = moqSession.get();
-        state->liveSessions.insert(moqSessionPtr);
-        SCOPE_EXIT {
-          state->liveSessions.erase(moqSessionPtr);
-        };
-
-        co_await handleClientSession(std::move(moqSession));
+        // Delegate the post-Fizz body to the shared helper.
+        co_await runQmuxAndSession(
+            workerEvb,
+            std::move(executor),
+            folly::AsyncTransport::UniquePtr(std::move(fizzServer)),
+            std::move(alpn),
+            qmuxTimeout,
+            state);
       }());
+}
+
+folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
+    folly::EventBase* workerEvb,
+    std::shared_ptr<MoQExecutor> executor,
+    folly::AsyncTransport::UniquePtr fizzCompletedTransport,
+    std::string negotiatedAlpn,
+    std::chrono::milliseconds qmuxTimeout,
+    WorkerShutdownState* state) {
+  auto transport = std::make_unique<folly::coro::Transport>(
+      workerEvb, std::move(fizzCompletedTransport));
+
+  auto sessionResult = co_await folly::coro::co_awaitTry(
+      proxygen::qmux::QmuxConnector::connect(
+          workerEvb,
+          proxygen::qmux::WtDir::Server,
+          config_.selfTransportParams,
+          std::move(transport),
+          qmuxTimeout,
+          config_.sessionConfig));
+  if (sessionResult.hasException()) {
+    XLOG(WARN) << "MoQQmuxServer: QMUX handshake failed: "
+               << sessionResult.exception().what();
+    co_return;
+  }
+
+  auto qmuxSession = std::move(*sessionResult);
+  auto moqSession = createSession(qmuxSession, std::move(executor));
+  moqSession->validateAndSetVersionFromAlpn(negotiatedAlpn);
+  qmuxSession->setHandler(moqSession.get());
+  qmuxSession->start(qmuxSession);
+
+  auto* moqSessionPtr = moqSession.get();
+  state->liveSessions.insert(moqSessionPtr);
+  SCOPE_EXIT {
+    state->liveSessions.erase(moqSessionPtr);
+  };
+
+  co_await handleClientSession(std::move(moqSession));
 }
 
 } // namespace moxygen

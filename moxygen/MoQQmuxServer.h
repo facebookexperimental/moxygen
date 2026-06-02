@@ -98,6 +98,20 @@ class MoQQmuxServer : public MoQServerBase {
       folly::AsyncTransport::UniquePtr asyncSocket,
       WorkerShutdownState* state);
 
+  // Post-Fizz portion of the per-connection flow: wraps the already-
+  // authenticated transport in a coro::Transport, runs the QMUX handshake,
+  // creates the MoQSession, registers it in state->liveSessions, and drives
+  // handleClientSession. Caller owns the inflight-count + cancellation
+  // wrapping. qmuxTimeout is the remaining handshake budget for QMUX
+  // specifically (caller computes it; must be > 0ms).
+  folly::coro::Task<void> runQmuxAndSession(
+      folly::EventBase* workerEvb,
+      std::shared_ptr<MoQExecutor> executor,
+      folly::AsyncTransport::UniquePtr fizzCompletedTransport,
+      std::string negotiatedAlpn,
+      std::chrono::milliseconds qmuxTimeout,
+      WorkerShutdownState* state);
+
   bool isInWorkerPool() const noexcept {
     for (auto* evb : workerEvbs_) {
       if (evb->isInEventBaseThread()) {
