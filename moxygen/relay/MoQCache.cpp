@@ -802,7 +802,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       uint64_t groupID,
       uint64_t subgroupID,
       Priority priority,
-      bool /*containsLastInGroup*/ = false) override {
+      BeginSubgroupOptions options = {}) override {
     // TODO: Handle containsLastInGroup parameter when caching
     // Check if the group is known to not exist
     if (isGroupNonExistent(track_.gaps, groupID)) {
@@ -812,7 +812,7 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       return folly::makeUnexpected(MoQPublishError(
           MoQPublishError::MALFORMED_TRACK, "Invalid status change"));
     }
-    auto res = consumer_->beginSubgroup(groupID, subgroupID, priority);
+    auto res = consumer_->beginSubgroup(groupID, subgroupID, priority, options);
     if (res.hasValue() && !track_.evicted) {
       track_.getOrCreateGroupWithEviction(groupID, cache_);
       return std::make_shared<SubgroupWriteback>(

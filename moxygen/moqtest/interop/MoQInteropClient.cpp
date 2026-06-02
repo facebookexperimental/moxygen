@@ -30,7 +30,7 @@ class NoopTrackConsumer : public moxygen::TrackConsumer {
       uint64_t /*groupID*/,
       uint64_t /*subgroupID*/,
       moxygen::Priority /*priority*/,
-      bool /*containsLastInGroup*/) override {
+      moxygen::TrackConsumer::BeginSubgroupOptions /*options*/) override {
     return folly::makeUnexpected(
         moxygen::MoQPublishError(
             moxygen::MoQPublishError::API_ERROR, "NoopTrackConsumer"));

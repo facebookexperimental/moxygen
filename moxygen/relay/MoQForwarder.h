@@ -224,7 +224,7 @@ class MoQForwarder : public TrackConsumer {
       uint64_t groupID,
       uint64_t subgroupID,
       Priority priority,
-      bool containsLastInGroup = false) override;
+      BeginSubgroupOptions options = {}) override;
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitStreamCredit() override;
@@ -247,7 +247,7 @@ class MoQForwarder : public TrackConsumer {
     MoQForwarder* forwarder_;
     SubgroupIdentifier identifier_;
     Priority priority_;
-    bool containsLastInGroup_{false};
+    TrackConsumer::BeginSubgroupOptions options_;
 
     template <typename Fn>
     folly::Expected<folly::Unit, MoQPublishError> forEachSubscriberSubgroup(
@@ -279,7 +279,7 @@ class MoQForwarder : public TrackConsumer {
         uint64_t group,
         uint64_t subgroup,
         Priority priority,
-        bool containsLastInGroup = false);
+        TrackConsumer::BeginSubgroupOptions options = {});
 
     // Detach from the owning MoQForwarder (called from MoQForwarder destructor)
     void detach();

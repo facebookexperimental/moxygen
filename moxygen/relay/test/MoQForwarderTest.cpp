@@ -124,14 +124,22 @@ TEST_F(MoQForwarderTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
   auto mockConsumer3 = createMockConsumer();
 
   EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _, _))
-      .WillOnce([this](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 createMockSubgroupConsumer());
       });
 
   EXPECT_CALL(*mockConsumer2, beginSubgroup(_, _, _, _))
-      .WillOnce([this](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 createMockSubgroupConsumer());
@@ -190,7 +198,11 @@ TEST_F(MoQForwarderTest, GracefulSessionDraining) {
 
   for (uint64_t i = 0; i < 2; ++i) {
     EXPECT_CALL(*consumers[0], beginSubgroup(i, 0, _, _))
-        .WillOnce([this, i, &sub0_sgs](uint64_t, uint64_t, uint8_t, bool) {
+        .WillOnce([this, i, &sub0_sgs](
+                      uint64_t,
+                      uint64_t,
+                      uint8_t,
+                      moxygen::TrackConsumer::BeginSubgroupOptions) {
           sub0_sgs[i] = createMockSubgroupConsumer();
           return folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -199,7 +211,11 @@ TEST_F(MoQForwarderTest, GracefulSessionDraining) {
   }
 
   EXPECT_CALL(*consumers[1], beginSubgroup(1, 0, _, _))
-      .WillOnce([this, &sub1_sg0](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sub1_sg0](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sub1_sg0 = createMockSubgroupConsumer();
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -244,7 +260,11 @@ TEST_F(MoQForwarderTest, RemoveSessionResetsOpenSubgroups) {
 
   for (uint64_t i = 0; i < sgs.size(); ++i) {
     EXPECT_CALL(*consumer, beginSubgroup(i, 0, _, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
+        .WillOnce([this, i, &sgs](
+                      uint64_t,
+                      uint64_t,
+                      uint8_t,
+                      moxygen::TrackConsumer::BeginSubgroupOptions) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], object(0, testing::_, testing::_, false))
               .WillOnce(testing::Return(folly::unit));
@@ -288,7 +308,11 @@ TEST_F(MoQForwarderTest, DrainingSubscriberRemovedOnSubgroupError) {
 
   for (uint64_t i = 0; i < sgs.size(); ++i) {
     EXPECT_CALL(*consumer, beginSubgroup(i, 0, _, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
+        .WillOnce([this, i, &sgs](
+                      uint64_t,
+                      uint64_t,
+                      uint8_t,
+                      moxygen::TrackConsumer::BeginSubgroupOptions) {
           sgs[i] = createMockSubgroupConsumer();
           return folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -338,7 +362,10 @@ TEST_F(MoQForwarderTest, SubscriberUnsubscribeDoesNotReceiveNewObjects) {
   auto mockConsumer2 = createMockConsumer();
 
   EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
         EXPECT_CALL(*sg, beginObject(_, _, _, _)).WillOnce(Return(folly::unit));
         EXPECT_CALL(*sg, reset(_));
@@ -393,7 +420,11 @@ TEST_F(MoQForwarderTest, DataOperationCancelledWhenAllSubscribersFail) {
 
   for (size_t i = 0; i < 2; ++i) {
     EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
+        .WillOnce([this, i, &sgs](
+                      uint64_t,
+                      uint64_t,
+                      uint8_t,
+                      moxygen::TrackConsumer::BeginSubgroupOptions) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], objectPayload(_, false))
               .WillOnce(Return(
@@ -446,7 +477,11 @@ TEST_F(MoQForwarderTest, PartialSubscriberFailureDoesNotCancelData) {
   }
 
   EXPECT_CALL(*consumers[0], beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sgs](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sgs](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sgs[0] = createMockSubgroupConsumer();
         EXPECT_CALL(*sgs[0], objectPayload(_, false))
             .WillOnce(Return(
@@ -463,7 +498,11 @@ TEST_F(MoQForwarderTest, PartialSubscriberFailureDoesNotCancelData) {
 
   for (size_t i = 1; i < 3; ++i) {
     EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _, _))
-        .WillOnce([this, i, &sgs](uint64_t, uint64_t, uint8_t, bool) {
+        .WillOnce([this, i, &sgs](
+                      uint64_t,
+                      uint64_t,
+                      uint8_t,
+                      moxygen::TrackConsumer::BeginSubgroupOptions) {
           sgs[i] = createMockSubgroupConsumer();
           EXPECT_CALL(*sgs[i], objectPayload(_, false))
               .WillRepeatedly(Return(
@@ -546,7 +585,11 @@ TEST_F(MoQForwarderTest, SubgroupTombstonedAfterCancelledError) {
   std::shared_ptr<MockSubgroupConsumer> sg;
 
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg = createMockSubgroupConsumer();
         EXPECT_CALL(*sg, object(0, _, _, false)).WillOnce(Return(folly::unit));
         EXPECT_CALL(*sg, object(1, _, _, false))
@@ -560,7 +603,11 @@ TEST_F(MoQForwarderTest, SubgroupTombstonedAfterCancelledError) {
 
   std::shared_ptr<MockSubgroupConsumer> sg2;
   EXPECT_CALL(*consumer, beginSubgroup(1, 0, _, _))
-      .WillOnce([this, &sg2](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg2](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg2 = createMockSubgroupConsumer();
         EXPECT_CALL(*sg2, endOfSubgroup()).WillOnce(Return(folly::unit));
         return folly::
@@ -597,7 +644,11 @@ TEST_F(MoQForwarderTest, TombstonedSubgroupIgnoresSubsequentObjects) {
   std::shared_ptr<MockSubgroupConsumer> sg;
 
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg = createMockSubgroupConsumer();
         EXPECT_CALL(*sg, object(0, _, _, false))
             .WillOnce(Return(
@@ -643,7 +694,11 @@ TEST_F(MoQForwarderTest, LateJoinerGetsSubgroupAfterTombstone) {
   std::shared_ptr<MockSubgroupConsumer> sg1;
 
   EXPECT_CALL(*consumer1, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg1](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg1](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg1 = createMockSubgroupConsumer();
         EXPECT_CALL(*sg1, object(0, _, _, false))
             .WillOnce(Return(
@@ -658,7 +713,11 @@ TEST_F(MoQForwarderTest, LateJoinerGetsSubgroupAfterTombstone) {
   std::shared_ptr<MockSubgroupConsumer> sg2;
 
   EXPECT_CALL(*consumer2, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg2](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg2](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg2 = createMockSubgroupConsumer();
         EXPECT_CALL(*sg2, object(1, _, _, false)).WillOnce(Return(folly::unit));
         EXPECT_CALL(*sg2, endOfSubgroup()).WillOnce(Return(folly::unit));
@@ -694,7 +753,11 @@ TEST_F(MoQForwarderTest, HardErrorsRemoveSubscriber) {
   std::shared_ptr<MockSubgroupConsumer> sg;
 
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg = createMockSubgroupConsumer();
         EXPECT_CALL(*sg, object(0, _, _, false))
             .WillOnce(Return(
@@ -739,7 +802,11 @@ TEST_F(MoQForwarderTest, EndOfSubgroupHardErrorDoesNotCrash) {
   std::shared_ptr<MockSubgroupConsumer> sg;
 
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg = createMockSubgroupConsumer();
         EXPECT_CALL(*sg, endOfSubgroup())
             .WillOnce(Return(
@@ -777,7 +844,11 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingDoesNotCrash) {
   std::shared_ptr<MockSubgroupConsumer> sg;
 
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg = createMockSubgroupConsumer();
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -824,7 +895,11 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
   auto consumer2 = createMockConsumer();
 
   EXPECT_CALL(*consumer1, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg1](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg1](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg1 = createMockSubgroupConsumer();
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -832,7 +907,11 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
       });
 
   EXPECT_CALL(*consumer2, beginSubgroup(0, 0, _, _))
-      .WillOnce([this, &sg2](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([this, &sg2](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         sg2 = createMockSubgroupConsumer();
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -1037,7 +1116,10 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
   std::string downstreamPayload;
 
   EXPECT_CALL(*mockConsumer, beginSubgroup(_, _, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         auto sg = createMockSubgroupConsumer();
         EXPECT_CALL(*sg, beginObject(kObjectID, kObjectLength, _, _))
             .WillOnce([&](uint64_t, uint64_t, Payload p, Extensions) {

@@ -33,6 +33,10 @@ class DeliveryCallback {
       uint64_t objectId) = 0;
 };
 
+struct BeginSubgroupOptions {
+  bool containsLastInGroup{false};
+};
+
 // MoQ Consumers
 //
 // These interfaces are used both for writing and reading track data.
@@ -135,6 +139,8 @@ class SubgroupConsumer {
 // resource limits.
 class TrackConsumer {
  public:
+  using BeginSubgroupOptions = moxygen::BeginSubgroupOptions;
+
   virtual ~TrackConsumer() = default;
 
   // Set the Track Alias for this track.  This is called by publishers in
@@ -145,14 +151,13 @@ class TrackConsumer {
 
   // Begin delivering a new subgroup in the specified group.  If the consumer is
   // writing, this Can fail with MoQPublishError::BLOCKED when out of stream
-  // credit.  containsLastInGroup indicates this subgroup contains the last
-  // object in the group.
+  // credit.
   virtual folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(
       uint64_t groupID,
       uint64_t subgroupID,
       Priority priority,
-      bool containsLastInGroup = false) = 0;
+      BeginSubgroupOptions options = {}) = 0;
 
   // Wait for additional stream credit.
   virtual folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>

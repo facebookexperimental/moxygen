@@ -410,6 +410,12 @@ class MoQRelayTest : public ::testing::Test {
   std::shared_ptr<MoQRelay> relay_;
 };
 
+auto matchesBeginSubgroupOptions(bool containsLastInGroup) {
+  return Truly([=](const TrackConsumer::BeginSubgroupOptions& options) {
+    return options.containsLastInGroup == containsLastInGroup;
+  });
+}
+
 // Test: Basic relay construction
 TEST_F(MoQRelayTest, Construction) {
   EXPECT_NE(relay_, nullptr);
@@ -911,7 +917,10 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
       });
 
   EXPECT_CALL(*mockConsumer1, beginSubgroup(_, _, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
         EXPECT_CALL(*sg, endOfSubgroup())
             .WillOnce(testing::Return(folly::unit));
@@ -1655,23 +1664,35 @@ TEST_F(MoQRelayTest, DuplicateSubgroupReplacesActiveConsumers) {
 
   // First beginSubgroup gives v1 consumers; second call gives v2 consumers
   EXPECT_CALL(*mockConsumer1, beginSubgroup(0, 0, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg1v1);
       })
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg1v2);
       });
   EXPECT_CALL(*mockConsumer2, beginSubgroup(0, 0, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg2v1);
       })
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg2v2);
@@ -1717,7 +1738,10 @@ TEST_F(MoQRelayTest, DuplicateSubgroupCancelledWhenNoActiveConsumers) {
   auto mockSg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
 
   EXPECT_CALL(*mockConsumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 mockSg);
@@ -1764,18 +1788,27 @@ TEST_F(MoQRelayTest, DuplicateSubgroupSkipsTombstonedSubscriber) {
 
   // First beginSubgroup: both A and B get consumers
   EXPECT_CALL(*consumerA, beginSubgroup(0, 0, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sgAv1);
       })
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sgAv2);
       });
   EXPECT_CALL(*consumerB, beginSubgroup(0, 0, _, _))
-      .WillOnce([&](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sgBv1);
@@ -1840,7 +1873,11 @@ TEST_F(MoQRelayTest, ForwardChangedAfterPublisherTermination) {
   // Begin a subgroup so the subscriber has open subgroups and survives drain
   auto sg = createMockSubgroupConsumer();
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -1896,7 +1933,11 @@ TEST_F(MoQRelayTest, FetchAfterPublisherTermination) {
   auto consumer = createMockConsumer();
   auto sg = createMockSubgroupConsumer();
   EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -2003,7 +2044,11 @@ TEST_F(MoQRelayTest, PublishReplacesSubscribeDrainsOldAndServesNew) {
   auto newConsumer = createMockConsumer();
   auto sg = createMockSubgroupConsumer();
   EXPECT_CALL(*newConsumer, beginSubgroup(0, 0, _, _))
-      .WillOnce([&sg](uint64_t, uint64_t, uint8_t, bool) {
+      .WillOnce([&sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
         return folly::
             makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                 sg);
@@ -2117,7 +2162,9 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
   // containsLastInGroup=true
   auto earlySubgroupConsumer = createMockSubgroupConsumer();
   EXPECT_CALL(
-      *earlyConsumer, beginSubgroup(0, 0, _, /*containsLastInGroup=*/true))
+      *earlyConsumer,
+      beginSubgroup(
+          0, 0, _, matchesBeginSubgroupOptions(/*containsLastInGroup=*/true)))
       .WillOnce(Return(
           folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -2127,7 +2174,9 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
   // default)
   auto lateSubgroupConsumer = createMockSubgroupConsumer();
   EXPECT_CALL(
-      *lateConsumer, beginSubgroup(0, 0, _, /*containsLastInGroup=*/true))
+      *lateConsumer,
+      beginSubgroup(
+          0, 0, _, matchesBeginSubgroupOptions(/*containsLastInGroup=*/true)))
       .WillOnce(Return(
           folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -2138,8 +2187,9 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
       earlySubscriber, kTestTrackName, earlyConsumer, RequestID(1));
 
   // Publisher opens subgroup with containsLastInGroup=true
-  auto sgRes =
-      publishConsumer->beginSubgroup(0, 0, 0, /*containsLastInGroup=*/true);
+  TrackConsumer::BeginSubgroupOptions beginOptions;
+  beginOptions.containsLastInGroup = true;
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0, beginOptions);
   ASSERT_TRUE(sgRes.hasValue());
   auto sg = *sgRes;
 

@@ -193,7 +193,7 @@ class ObjectReceiver : public TrackConsumer,
       uint64_t groupID,
       uint64_t subgroupID,
       Priority priority,
-      bool /*containsLastInGroup*/ = false) override {
+      BeginSubgroupOptions /*options*/ = {}) override {
     ++openSubgroups_;
     auto receiver = std::make_shared<ObjectSubgroupReceiver>(
         callback_, trackAlias_, groupID, subgroupID, priority);

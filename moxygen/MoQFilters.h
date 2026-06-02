@@ -24,9 +24,8 @@ class TrackConsumerFilter : public TrackConsumer {
       uint64_t groupID,
       uint64_t subgroupID,
       Priority priority,
-      bool containsLastInGroup = false) override {
-    return downstream_->beginSubgroup(
-        groupID, subgroupID, priority, containsLastInGroup);
+      BeginSubgroupOptions options = {}) override {
+    return downstream_->beginSubgroup(groupID, subgroupID, priority, options);
   }
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>

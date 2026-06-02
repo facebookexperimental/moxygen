@@ -1317,7 +1317,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       uint64_t groupID,
       uint64_t subgroupID,
       Priority priority,
-      bool containsLastInGroup = false) override;
+      BeginSubgroupOptions options = {}) override;
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
   beginSubgroup(
@@ -1326,7 +1326,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       Priority priority,
       SubgroupIDFormat format,
       bool includeExtensions,
-      bool containsLastInGroup);
+      BeginSubgroupOptions options);
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitStreamCredit() override;
@@ -1506,14 +1506,14 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
     Priority pubPriority,
-    bool containsLastInGroup) {
+    BeginSubgroupOptions options) {
   return beginSubgroup(
       groupID,
       subgroupID,
       pubPriority,
       SubgroupIDFormat::Present,
       true,
-      containsLastInGroup);
+      options);
 }
 
 folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -1523,7 +1523,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     Priority pubPriority,
     SubgroupIDFormat format,
     bool includeExtensions,
-    bool containsLastInGroup) {
+    TrackConsumer::BeginSubgroupOptions options) {
   if (!trackAlias_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Must set track alias first"));
@@ -1572,7 +1572,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       elidedPriority,
       format,
       includeExtensions,
-      containsLastInGroup,
+      options.containsLastInGroup,
       logger_,
       deliveryCallback_,
       effectiveTimeout);
@@ -1640,6 +1640,8 @@ MoQSession::TrackPublisherImpl::objectStream(
   }
   XCHECK(objHeader.status == ObjectStatus::NORMAL || !payload);
   Extensions extensions = objHeader.extensions;
+  TrackConsumer::BeginSubgroupOptions options;
+  options.containsLastInGroup = lastInGroup;
   auto subgroup = beginSubgroup(
       objHeader.group,
       objHeader.subgroup,
@@ -1647,7 +1649,7 @@ MoQSession::TrackPublisherImpl::objectStream(
       objHeader.subgroup == objHeader.id ? SubgroupIDFormat::FirstObject
                                          : SubgroupIDFormat::Present,
       !extensions.empty(),
-      lastInGroup);
+      options);
   if (subgroup.hasError()) {
     return folly::makeUnexpected(std::move(subgroup.error()));
   }
@@ -2983,7 +2985,10 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     // Use object priority if present, else fall back to publisher priority
     uint8_t effectivePriority =
         priority.value_or(subscribeState_->getPublisherPriority());
-    auto res = callback->beginSubgroup(group, subgroup, effectivePriority);
+    TrackConsumer::BeginSubgroupOptions beginOptions;
+    beginOptions.containsLastInGroup = options.hasEndOfGroup;
+    auto res = callback->beginSubgroup(
+        group, subgroup, effectivePriority, beginOptions);
     if (res.hasValue()) {
       subgroupCallback_ = *res;
     } else {

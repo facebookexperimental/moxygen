@@ -78,7 +78,7 @@ class MoQPerfClientTrackConsumer : public TrackConsumer {
       uint64_t /* groupID */,
       uint64_t /* subgroupID */,
       Priority /* priority */,
-      bool /* containsLastInGroup */ = false) override {
+      BeginSubgroupOptions /* options */ = {}) override {
     return std::make_shared<MoQPerfClientSubgroupConsumer>(
         [this](uint64_t inc) { dataSent_ += inc; });
   }

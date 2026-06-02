@@ -113,10 +113,7 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
       XLOG(DBG2) << "Making new subgroup for consumer=" << sub->trackConsumer
                  << " " << callsite;
       auto res = sub->trackConsumer->beginSubgroup(
-          identifier_.group,
-          identifier_.subgroup,
-          priority_,
-          containsLastInGroup_);
+          identifier_.group, identifier_.subgroup, priority_, options_);
       if (res.hasError()) {
         forwarder_->removeSubscriberOnError(*sub, res.error(), callsite);
       } else {
@@ -472,7 +469,7 @@ MoQForwarder::beginSubgroup(
     uint64_t groupID,
     uint64_t subgroupID,
     Priority priority,
-    bool containsLastInGroup) {
+    BeginSubgroupOptions options) {
   updateLargest(groupID, 0);
   SubgroupIdentifier subgroupIdentifier({groupID, subgroupID});
 
@@ -508,7 +505,7 @@ MoQForwarder::beginSubgroup(
   }
 
   auto subgroupForwarder = std::make_shared<SubgroupForwarder>(
-      *this, groupID, subgroupID, priority, containsLastInGroup);
+      *this, groupID, subgroupID, priority, options);
   auto res = forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     if (!checkRange(*sub) || !sub->checkShouldForward()) {
       return;
@@ -519,7 +516,7 @@ MoQForwarder::beginSubgroup(
       return;
     }
     auto sgRes = sub->trackConsumer->beginSubgroup(
-        groupID, subgroupID, priority, containsLastInGroup);
+        groupID, subgroupID, priority, options);
     if (sgRes.hasError()) {
       removeSubscriberOnError(*sub, sgRes.error(), "beginSubgroup");
     } else {
@@ -794,11 +791,11 @@ MoQForwarder::SubgroupForwarder::SubgroupForwarder(
     uint64_t group,
     uint64_t subgroup,
     Priority priority,
-    bool containsLastInGroup)
+    TrackConsumer::BeginSubgroupOptions options)
     : forwarder_(&forwarder),
       identifier_{group, subgroup},
       priority_(priority),
-      containsLastInGroup_(containsLastInGroup) {}
+      options_(options) {}
 
 void MoQForwarder::SubgroupForwarder::detach() {
   forwarder_ = nullptr;
