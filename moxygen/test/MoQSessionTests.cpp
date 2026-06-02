@@ -536,6 +536,110 @@ CO_TEST_P_X(
       });
 }
 
+class RecordingSessionCloseCallback
+    : public MoQSession::MoQSessionCloseCallback {
+ public:
+  void onMoQSessionClosed(
+      SessionCloseErrorCode error,
+      folly::Optional<uint32_t> /* wtError */) override {
+    errorCode = error;
+    closed.post();
+  }
+
+  std::optional<SessionCloseErrorCode> errorCode;
+  folly::coro::Baton closed;
+};
+
+class Draft18GoawayTimeoutTest : public MoQSessionTest {
+ protected:
+  folly::coro::Task<std::shared_ptr<Publisher::SubscriptionHandle>>
+  openPeerSubscription() {
+    co_await setupMoQSession();
+    expectSubscribe([](auto sub, auto /* pub */) -> TaskSubscribeResult {
+      co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    });
+
+    auto result = co_await clientSession_->subscribe(
+        getSubscribe(kTestTrackName), subscribeCallback_);
+    EXPECT_FALSE(result.hasError());
+    if (result.hasError()) {
+      co_return nullptr;
+    }
+    co_return result.value();
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft18GoawayTimeoutTest,
+    Draft18GoawayTimeoutTest,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+CO_TEST_P_X(Draft18GoawayTimeoutTest, TimeoutClosesOpenPeerSubscription) {
+  auto subscription = co_await openPeerSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  RecordingSessionCloseCallback closeCallback;
+  serverSession_->setSessionCloseCallback(&closeCallback);
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([](const PublishDone& done) {
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SESSION_CLOSED);
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+
+  Goaway goaway;
+  goaway.timeout = 1;
+  serverSession_->goaway(goaway);
+
+  co_await closeCallback.closed;
+  EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::GOAWAY_TIMEOUT);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18GoawayTimeoutTest, ClosingPeerSubscriptionCancelsTimeout) {
+  auto subscription = co_await openPeerSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  RecordingSessionCloseCallback closeCallback;
+  serverSession_->setSessionCloseCallback(&closeCallback);
+
+  Goaway goaway;
+  goaway.timeout = 1000;
+  serverSession_->goaway(goaway);
+  EXPECT_FALSE(closeCallback.errorCode.has_value());
+
+  subscription->unsubscribe();
+  co_await closeCallback.closed;
+  EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::NO_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18GoawayTimeoutTest,
+    ZeroTimeoutDoesNotCloseOpenPeerSubscription) {
+  auto subscription = co_await openPeerSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  RecordingSessionCloseCallback closeCallback;
+  serverSession_->setSessionCloseCallback(&closeCallback);
+
+  Goaway goaway;
+  goaway.timeout = 0;
+  serverSession_->goaway(goaway);
+  co_await rescheduleN(4);
+  EXPECT_FALSE(closeCallback.errorCode.has_value());
+
+  subscription->unsubscribe();
+  co_await closeCallback.closed;
+  EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::NO_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {

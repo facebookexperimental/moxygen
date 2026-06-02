@@ -2160,6 +2160,27 @@ MoQSession::PendingRequestState::setError(
 using folly::coro::co_awaitTry;
 using folly::coro::co_error;
 
+class MoQSession::GoawayTimeoutCallback : public quic::QuicTimerCallback {
+ public:
+  explicit GoawayTimeoutCallback(MoQSession& session) : session_(session) {}
+
+  void timeoutExpired() noexcept override {
+    auto weakSession = session_.weak_from_this();
+    session_.exec_->add([weakSession = std::move(weakSession)]() mutable {
+      if (auto session = weakSession.lock()) {
+        session->onGoawayTimeoutExpired();
+      }
+    });
+  }
+
+  void callbackCanceled() noexcept override {
+    XLOG(DBG4) << "GOAWAY timeout canceled sess=" << &session_;
+  }
+
+ private:
+  MoQSession& session_;
+};
+
 // Constructors
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
@@ -2195,6 +2216,7 @@ MoQSession::~MoQSession() {
 }
 
 void MoQSession::cleanup() {
+  cancelGoawayTimeout();
   while (!pubTracks_.empty()) {
     auto it = pubTracks_.begin();
     auto requestID = it->first;
@@ -2322,7 +2344,9 @@ void MoQSession::goaway(Goaway goaway) {
       close(SessionCloseErrorCode::NO_ERROR);
       return;
     }
-    if (getDraftMajorVersion(*moqFrameWriter_.getVersion()) >= 18) {
+    const bool draft18OrLater =
+        getDraftMajorVersion(*moqFrameWriter_.getVersion()) >= 18;
+    if (draft18OrLater) {
       goaway.requestID = RequestID(nextPeerRequestIDForGoaway_);
     }
     if (logger_) {
@@ -2333,15 +2357,61 @@ void MoQSession::goaway(Goaway goaway) {
       XLOG(ERR) << "writeGoaway failed sess=" << this;
       return;
     }
+    if (draft18OrLater && goaway.timeout > 0) {
+      scheduleGoawayTimeout(goaway.timeout);
+    }
     controlWriteEvent_.signal();
     drain();
   }
 }
 
 void MoQSession::checkForCloseOnDrain() {
-  if (draining_ && fetches_.empty() && subTracks_.empty()) {
+  if (draining_ && !hasOpenRequestsForDrain()) {
     close(SessionCloseErrorCode::NO_ERROR);
   }
+}
+
+void MoQSession::scheduleGoawayTimeout(uint64_t timeoutMs) {
+  cancelGoawayTimeout();
+  goawayTimeout_ = std::make_unique<GoawayTimeoutCallback>(*this);
+  auto* callback = goawayTimeout_.get();
+  const auto maxTimeout = std::chrono::milliseconds::max();
+  const auto timeout = timeoutMs > static_cast<uint64_t>(maxTimeout.count())
+      ? maxTimeout
+      : std::chrono::milliseconds(timeoutMs);
+  XLOG(DBG1) << "Scheduling GOAWAY timeout timeoutMs=" << timeout.count()
+             << " sess=" << this;
+  exec_->scheduleTimeout(callback, timeout);
+}
+
+void MoQSession::cancelGoawayTimeout() {
+  if (goawayTimeout_) {
+    goawayTimeout_->cancelTimerCallback();
+    goawayTimeout_.reset();
+  }
+}
+
+void MoQSession::onGoawayTimeoutExpired() {
+  if (closed_ || !draining_) {
+    return;
+  }
+  if (!hasOpenRequestsForGoaway()) {
+    checkForCloseOnDrain();
+    return;
+  }
+  XLOG(DBG1) << "GOAWAY timeout expired with open requests sess=" << this;
+  close(SessionCloseErrorCode::GOAWAY_TIMEOUT);
+}
+
+bool MoQSession::hasOpenRequestsForDrain() const {
+  if (negotiatedVersion_ && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+    return hasOpenRequestsForGoaway();
+  }
+  return !fetches_.empty() || !subTracks_.empty();
+}
+
+bool MoQSession::hasOpenRequestsForGoaway() const {
+  return !pubTracks_.empty() || !fetches_.empty() || !subTracks_.empty();
 }
 
 void MoQSession::close(
@@ -3709,6 +3779,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
     if (pubTracks_.erase(unsubscribe.requestID)) {
       MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
       retireRequestID(/*signalWriteLoop=*/true);
+      checkForCloseOnDrain();
     } // else, the caller invoked publishDone, which isn't needed but fine
   }
 }
@@ -5029,6 +5100,9 @@ void MoQSession::subscribeError(
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onSubscribeError, subErr.errorCode);
   pubTracks_.erase(subErr.requestID);
+  SCOPE_EXIT {
+    checkForCloseOnDrain();
+  };
   auto res = moqFrameWriter_.writeRequestError(
       ctx.writeBuf(), subErr, FrameType::SUBSCRIBE_ERROR);
   retireRequestID(/*signalWriteLoop=*/false);
@@ -5102,6 +5176,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   auto* ctx = it->second->replyContext();
   SCOPE_EXIT {
     pubTracks_.erase(it);
+    checkForCloseOnDrain();
   };
   if (!ctx) {
     return;
@@ -5211,6 +5286,7 @@ void MoQSession::fetchComplete(RequestID requestID) {
   }
   pubTracks_.erase(it);
   retireRequestID(/*signalWriteLoop=*/true);
+  checkForCloseOnDrain();
 }
 
 void MoQSession::requestUpdate(const RequestUpdate& reqUpdate) {
@@ -5418,6 +5494,9 @@ void MoQSession::fetchError(const FetchError& fetchErr, ReplyContext& ctx) {
   }
 
   pubTracks_.erase(fetchErr.requestID);
+  SCOPE_EXIT {
+    checkForCloseOnDrain();
+  };
   auto res = moqFrameWriter_.writeRequestError(
       ctx.writeBuf(), fetchErr, FrameType::FETCH_ERROR);
   if (!res) {

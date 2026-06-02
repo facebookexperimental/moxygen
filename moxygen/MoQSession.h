@@ -1043,9 +1043,16 @@ class MoQSession : public Subscriber,
   MoQTokenCache receiveTokenCache_;
 
  private:
+  class GoawayTimeoutCallback;
+
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
   void removeBufferedSubgroupBaton(TrackAlias alias, TimedBaton* baton);
+  void scheduleGoawayTimeout(uint64_t timeoutMs);
+  void cancelGoawayTimeout();
+  void onGoawayTimeoutExpired();
+  bool hasOpenRequestsForDrain() const;
+  bool hasOpenRequestsForGoaway() const;
 
   // Private session state
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
@@ -1090,6 +1097,7 @@ class MoQSession : public Subscriber,
   // Cached transport info to avoid expensive getTransportInfo calls
   mutable quic::TransportInfo cachedTransportInfo_;
   mutable std::chrono::steady_clock::time_point lastTransportInfoUpdate_{};
+  std::unique_ptr<GoawayTimeoutCallback> goawayTimeout_;
   bool closed_{false};
   std::string authority_;
   std::string path_;
