@@ -7,17 +7,16 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
-#include <moxygen/MoQClient.h>
 #include <moxygen/MoQLocation.h>
 #include <moxygen/MoQQmuxServer.h>
 #include <moxygen/MoQServer.h>
-#include <moxygen/MoQWebTransportClient.h>
 #include <moxygen/QmuxUtils.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/mlog/FileMLogger.h>
 #include <moxygen/mlog/FileMLoggerFactory.h>
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/relay/MoQRelayClient.h>
+#include <moxygen/samples/util/Utils.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 #include <moxygen/util/SignalHandler.h>
 #include <iomanip>
@@ -550,18 +549,14 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
       ? std::make_shared<
             moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>()
       : nullptr;
-
-  auto relayClient = std::make_unique<MoQRelayClient>(
-      (FLAGS_quic_transport ? std::make_unique<MoQClient>(
-                                  moqEvb,
-                                  url,
-                                  MoQRelaySession::createRelaySessionFactory(),
-                                  verifier)
-                            : std::make_unique<MoQWebTransportClient>(
-                                  moqEvb,
-                                  url,
-                                  MoQRelaySession::createRelaySessionFactory(),
-                                  verifier)));
+  auto relayClient =
+      std::make_unique<MoQRelayClient>(samples::makeRelayClientTransport(
+          moqEvb,
+          url,
+          std::move(verifier),
+          FLAGS_qmux                 ? samples::TransportType::QMUX
+              : FLAGS_quic_transport ? samples::TransportType::QUIC
+                                     : samples::TransportType::WEB_TRANSPORT));
 
   if (loggerFactory) {
     relayClient->setLogger(loggerFactory->createMLogger());

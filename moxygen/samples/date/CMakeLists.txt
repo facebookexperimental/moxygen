@@ -31,6 +31,7 @@ target_link_libraries(
   moxygen_qmux_utils
   moxygen_relay_moq_forwarder
   moxygen_relay_moq_relay_client
+  moxygen_samples_util_qmux_relay_utils
   moxygen_util_signal_handler
   Folly::folly_futures_core
 )
