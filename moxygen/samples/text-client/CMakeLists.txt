@@ -24,8 +24,8 @@ target_link_libraries(
   moqtextclient PUBLIC
   moxygen_mlog_file_mlogger
   moxygen_mlog_mlogger
-  moxygen_moq_webtransport_client
   moxygen_relay_moq_relay_client
+  moxygen_samples_util_qmux_relay_utils
   Folly::folly_init_init
   Folly::folly_io_async_async_signal_handler
 )
