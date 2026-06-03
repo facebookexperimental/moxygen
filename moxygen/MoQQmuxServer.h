@@ -74,7 +74,7 @@ class MoQQmuxServer : public MoQServerBase {
   void initExternallyFed(std::vector<folly::EventBase*> workerEvbs);
 
   // Run a MoQ session over an already-Fizz-completed transport.
-  folly::coro::Task<void> handleExternallyFedSession(
+  bool dispatchExternallyFedSession(
       folly::AsyncTransport::UniquePtr fizzCompletedTransport,
       std::string negotiatedAlpn);
 
@@ -105,6 +105,12 @@ class MoQQmuxServer : public MoQServerBase {
       folly::EventBase* workerEvb,
       folly::AsyncTransport::UniquePtr asyncSocket,
       WorkerShutdownState* state);
+
+  // Called by dispatchExternallyFedSession after doing some synchronous work.
+  folly::coro::Task<void> handleExternallyFedSession(
+      WorkerShutdownState* state,
+      folly::AsyncTransport::UniquePtr fizzCompletedTransport,
+      std::string negotiatedAlpn);
 
   // Post-Fizz portion of the per-connection flow: wraps the already-
   // authenticated transport in a coro::Transport, runs the QMUX handshake,

@@ -229,16 +229,38 @@ std::shared_ptr<MoQExecutor> MoQQmuxServer::findExecutorFor(
   return nullptr;
 }
 
+bool MoQQmuxServer::dispatchExternallyFedSession(
+    folly::AsyncTransport::UniquePtr fizzCompletedTransport,
+    std::string negotiatedAlpn) {
+  auto* workerEvb = folly::EventBaseManager::get()->getExistingEventBase();
+  CHECK(workerEvb && workerEvb->isInEventBaseThread())
+      << "dispatchExternallyFedSession must be called on a worker EB thread";
+  WorkerShutdownState* state = findStateFor(workerEvb);
+  if (!state || state->draining) {
+    XLOG(WARN) << "MoQQmuxServer::dispatchExternallyFedSession: rejecting "
+                  "session (ALPN '"
+               << negotiatedAlpn
+               << "') — server is stopped or this worker has begun draining";
+    return false;
+  }
+  ++state->inflightAccepts;
+  co_withExecutor(
+      workerEvb,
+      handleExternallyFedSession(
+          state, std::move(fizzCompletedTransport), std::move(negotiatedAlpn)))
+      .start();
+  return true;
+}
+
 folly::coro::Task<void> MoQQmuxServer::handleExternallyFedSession(
+    WorkerShutdownState* state,
     folly::AsyncTransport::UniquePtr fizzCompletedTransport,
     std::string negotiatedAlpn) {
   auto* workerEvb = folly::EventBaseManager::get()->getExistingEventBase();
   CHECK(workerEvb) << "handleExternallyFedSession must run on a thread "
                       "that owns an EventBase";
-  WorkerShutdownState* state = findStateFor(workerEvb);
-  CHECK(state) << "handleExternallyFedSession: current EventBase is not in "
-                  "this server's worker pool";
-  ++state->inflightAccepts;
+  CHECK(state) << "handleExternallyFedSession: state must be non-null "
+                  "(caller dispatchExternallyFedSession owns the increment)";
   SCOPE_EXIT {
     if (--state->inflightAccepts == 0 && state->draining) {
       state->done.post();
