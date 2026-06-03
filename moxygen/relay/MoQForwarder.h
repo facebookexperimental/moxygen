@@ -248,12 +248,16 @@ class MoQForwarder : public TrackConsumer {
     SubgroupIdentifier identifier_;
     Priority priority_;
     TrackConsumer::BeginSubgroupOptions options_;
+    // Set only when upstream marked this stream as starting with the original
+    // first object for the logical subgroup.
+    std::optional<uint64_t> firstObjectId_;
 
     template <typename Fn>
     folly::Expected<folly::Unit, MoQPublishError> forEachSubscriberSubgroup(
         Fn&& fn,
         bool makeNew = true,
-        const std::string& callsite = "");
+        const std::string& callsite = "",
+        bool beginsWithFirstObjectForNewSubgroups = false);
 
     // Helper to erase subgroup from subscriber and remove subscriber if
     // draining
@@ -272,6 +276,8 @@ class MoQForwarder : public TrackConsumer {
 
     // Updates largest on the forwarder (no-op if detached)
     void updateLargest(uint64_t group, uint64_t object);
+
+    bool startsWithFirstObject(uint64_t objectID);
 
    public:
     SubgroupForwarder(

@@ -174,6 +174,7 @@ class StreamPublisherImpl
       SubgroupIDFormat format,
       bool includeExtensions,
       bool endOfGroup,
+      bool beginsWithFirstObject,
       std::shared_ptr<MLogger> logger = nullptr,
       std::shared_ptr<DeliveryCallback> deliveryCallback = nullptr,
       std::optional<std::chrono::milliseconds> deliveryTimeout = std::nullopt);
@@ -515,6 +516,7 @@ StreamPublisherImpl::StreamPublisherImpl(
     SubgroupIDFormat format,
     bool includeExtensions,
     bool endOfGroup,
+    bool beginsWithFirstObject,
     std::shared_ptr<MLogger> logger,
     std::shared_ptr<DeliveryCallback> deliveryCallback,
     std::optional<std::chrono::milliseconds> deliveryTimeout)
@@ -533,7 +535,8 @@ StreamPublisherImpl::StreamPublisherImpl(
       format,
       includeExtensions,
       endOfGroup,
-      sgPriority.has_value());
+      sgPriority.has_value(),
+      beginsWithFirstObject);
   trackAlias_ = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -556,7 +559,12 @@ StreamPublisherImpl::StreamPublisherImpl(
 
   writeBuf_.move(); // clear FETCH_HEADER
   (void)moqFrameWriter_.writeSubgroupHeader(
-      writeBuf_, trackAlias_, header_, format, includeExtensions);
+      writeBuf_,
+      trackAlias_,
+      header_,
+      format,
+      includeExtensions,
+      beginsWithFirstObject);
 }
 
 // Private methods
@@ -1573,6 +1581,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       format,
       includeExtensions,
       options.containsLastInGroup,
+      options.beginsWithFirstObject,
       logger_,
       deliveryCallback_,
       effectiveTimeout);
@@ -1642,6 +1651,7 @@ MoQSession::TrackPublisherImpl::objectStream(
   Extensions extensions = objHeader.extensions;
   TrackConsumer::BeginSubgroupOptions options;
   options.containsLastInGroup = lastInGroup;
+  options.beginsWithFirstObject = true;
   auto subgroup = beginSubgroup(
       objHeader.group,
       objHeader.subgroup,
@@ -2987,6 +2997,7 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         priority.value_or(subscribeState_->getPublisherPriority());
     TrackConsumer::BeginSubgroupOptions beginOptions;
     beginOptions.containsLastInGroup = options.hasEndOfGroup;
+    beginOptions.beginsWithFirstObject = options.beginsWithFirstObject;
     auto res = callback->beginSubgroup(
         group, subgroup, effectivePriority, beginOptions);
     if (res.hasValue()) {

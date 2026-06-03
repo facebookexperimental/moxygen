@@ -35,6 +35,7 @@ class DeliveryCallback {
 
 struct BeginSubgroupOptions {
   bool containsLastInGroup{false};
+  bool beginsWithFirstObject{true};
 };
 
 // MoQ Consumers

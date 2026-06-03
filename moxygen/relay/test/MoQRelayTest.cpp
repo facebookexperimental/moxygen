@@ -410,9 +410,90 @@ class MoQRelayTest : public ::testing::Test {
   std::shared_ptr<MoQRelay> relay_;
 };
 
-auto matchesBeginSubgroupOptions(bool containsLastInGroup) {
+class NoopSubgroupConsumer : public SubgroupConsumer {
+ public:
+  folly::Expected<folly::Unit, MoQPublishError>
+  object(uint64_t, Payload, Extensions, bool) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  beginObject(uint64_t, uint64_t, Payload, Extensions) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload,
+      bool) override {
+    return folly::makeExpected<MoQPublishError, ObjectPublishStatus>(
+        ObjectPublishStatus::DONE);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(uint64_t) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  void reset(ResetStreamErrorCode) override {}
+};
+
+class RecordingTrackConsumer : public TrackConsumer {
+ public:
+  folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
+      TrackAlias) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+  beginSubgroup(
+      uint64_t /*groupID*/,
+      uint64_t /*subgroupID*/,
+      Priority /*priority*/,
+      TrackConsumer::BeginSubgroupOptions options) override {
+    beginSubgroupOptions.push_back(options);
+    std::shared_ptr<SubgroupConsumer> subgroup =
+        std::make_shared<NoopSubgroupConsumer>();
+    return folly::makeExpected<MoQPublishError>(std::move(subgroup));
+  }
+
+  folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
+  awaitStreamCredit() override {
+    return folly::makeExpected<MoQPublishError>(
+        folly::makeSemiFuture(folly::unit));
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  objectStream(const ObjectHeader&, Payload, bool) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  datagram(const ObjectHeader&, Payload, bool) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> publishDone(
+      PublishDone) override {
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  }
+
+  std::vector<TrackConsumer::BeginSubgroupOptions> beginSubgroupOptions;
+};
+
+auto matchesBeginSubgroupOptions(
+    bool containsLastInGroup,
+    bool beginsWithFirstObject) {
   return Truly([=](const TrackConsumer::BeginSubgroupOptions& options) {
-    return options.containsLastInGroup == containsLastInGroup;
+    return options.containsLastInGroup == containsLastInGroup &&
+        options.beginsWithFirstObject == beginsWithFirstObject;
   });
 }
 
@@ -2164,7 +2245,12 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
   EXPECT_CALL(
       *earlyConsumer,
       beginSubgroup(
-          0, 0, _, matchesBeginSubgroupOptions(/*containsLastInGroup=*/true)))
+          0,
+          0,
+          _,
+          matchesBeginSubgroupOptions(
+              /*containsLastInGroup=*/true,
+              /*beginsWithFirstObject=*/true)))
       .WillOnce(Return(
           folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -2176,7 +2262,12 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
   EXPECT_CALL(
       *lateConsumer,
       beginSubgroup(
-          0, 0, _, matchesBeginSubgroupOptions(/*containsLastInGroup=*/true)))
+          0,
+          0,
+          _,
+          matchesBeginSubgroupOptions(
+              /*containsLastInGroup=*/true,
+              /*beginsWithFirstObject=*/false)))
       .WillOnce(Return(
           folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -2210,6 +2301,78 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
       .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   EXPECT_TRUE(
       sg->object(1, folly::IOBuf::copyBuffer("world"), {}, false).hasValue());
+
+  EXPECT_TRUE(sg->endOfSubgroup().hasValue());
+  removeSession(publisherSession);
+  removeSession(earlySubscriber);
+  removeSession(lateSubscriber);
+}
+
+TEST_F(MoQRelayTest, ForwarderLateJoiner_FirstObjectOnlyAtOriginalStart) {
+  auto publisherSession = createMockSession();
+  auto earlySubscriber = createMockSession();
+  auto lateSubscriber = createMockSession();
+
+  auto earlyConsumer = std::make_shared<RecordingTrackConsumer>();
+  auto lateConsumer = std::make_shared<RecordingTrackConsumer>();
+
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  subscribeToTrack(
+      earlySubscriber, kTestTrackName, earlyConsumer, RequestID(1));
+
+  TrackConsumer::BeginSubgroupOptions beginOptions;
+  beginOptions.beginsWithFirstObject = true;
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0, beginOptions);
+  ASSERT_TRUE(sgRes.hasValue());
+  ASSERT_EQ(earlyConsumer->beginSubgroupOptions.size(), 1);
+  EXPECT_TRUE(earlyConsumer->beginSubgroupOptions[0].beginsWithFirstObject);
+  auto sg = *sgRes;
+
+  EXPECT_TRUE(
+      sg->object(0, folly::IOBuf::copyBuffer("hi"), {}, false).hasValue());
+
+  subscribeToTrack(lateSubscriber, kTestTrackName, lateConsumer, RequestID(2));
+
+  EXPECT_TRUE(
+      sg->object(1, folly::IOBuf::copyBuffer("world"), {}, false).hasValue());
+  ASSERT_EQ(lateConsumer->beginSubgroupOptions.size(), 1);
+  EXPECT_FALSE(lateConsumer->beginSubgroupOptions[0].beginsWithFirstObject);
+
+  EXPECT_TRUE(sg->endOfSubgroup().hasValue());
+  removeSession(publisherSession);
+  removeSession(earlySubscriber);
+  removeSession(lateSubscriber);
+}
+
+TEST_F(MoQRelayTest, ForwarderFirstObjectNotSetWhenUpstreamDidNotSetIt) {
+  auto publisherSession = createMockSession();
+  auto earlySubscriber = createMockSession();
+  auto lateSubscriber = createMockSession();
+
+  auto earlyConsumer = std::make_shared<RecordingTrackConsumer>();
+  auto lateConsumer = std::make_shared<RecordingTrackConsumer>();
+
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  subscribeToTrack(
+      earlySubscriber, kTestTrackName, earlyConsumer, RequestID(1));
+
+  TrackConsumer::BeginSubgroupOptions beginOptions;
+  beginOptions.beginsWithFirstObject = false;
+  auto sgRes = publishConsumer->beginSubgroup(0, 0, 0, beginOptions);
+  ASSERT_TRUE(sgRes.hasValue());
+  ASSERT_EQ(earlyConsumer->beginSubgroupOptions.size(), 1);
+  EXPECT_FALSE(earlyConsumer->beginSubgroupOptions[0].beginsWithFirstObject);
+  auto sg = *sgRes;
+
+  EXPECT_TRUE(
+      sg->object(0, folly::IOBuf::copyBuffer("hi"), {}, false).hasValue());
+
+  subscribeToTrack(lateSubscriber, kTestTrackName, lateConsumer, RequestID(2));
+
+  EXPECT_TRUE(
+      sg->object(1, folly::IOBuf::copyBuffer("world"), {}, false).hasValue());
+  ASSERT_EQ(lateConsumer->beginSubgroupOptions.size(), 1);
+  EXPECT_FALSE(lateConsumer->beginSubgroupOptions[0].beginsWithFirstObject);
 
   EXPECT_TRUE(sg->endOfSubgroup().hasValue());
   removeSession(publisherSession);

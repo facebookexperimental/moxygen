@@ -3813,7 +3813,8 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
     TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
     SubgroupIDFormat format,
-    bool includeExtensions) const noexcept {
+    bool includeExtensions,
+    bool beginsWithFirstObject) const noexcept {
   size_t size = 0;
   bool error = false;
 
@@ -3828,7 +3829,8 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
       objectHeader.subgroup == 0 ? SubgroupIDFormat::Zero : format,
       includeExtensions,
       /*endOfGroup=*/false,
-      priorityPresent);
+      priorityPresent,
+      beginsWithFirstObject);
   auto streamTypeInt = folly::to_underlying(streamType);
   writeVarint(writeBuf, streamTypeInt, size, error);
   writeVarint(writeBuf, trackAlias.value, size, error);
@@ -3885,7 +3887,8 @@ WriteResult MoQFrameWriter::writeSingleObjectStream(
       objectHeader,
       objectHeader.subgroup == objectHeader.id ? SubgroupIDFormat::FirstObject
                                                : SubgroupIDFormat::Present,
-      hasExtensions);
+      hasExtensions,
+      /*beginsWithFirstObject=*/true);
   if (res) {
     return writeStreamObject(
         writeBuf,
@@ -5726,9 +5729,15 @@ bool isValidSubgroupType(uint64_t version, uint64_t streamType) {
   if ((streamType & 0x06) == 0x06) { // invalid subgroup type
     return false;
   }
+  auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion < 18 && (streamType & SG_FIRST_OBJECT)) {
+    return false;
+  }
   uint64_t max = 0x3D;
-  if (getDraftMajorVersion(version) < 15) {
+  if (majorVersion < 15) {
     max = 0x1D;
+  } else if (majorVersion >= 18) {
+    max = 0x7D;
   }
   return (streamType <= max);
 }

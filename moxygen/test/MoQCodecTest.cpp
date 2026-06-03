@@ -618,6 +618,37 @@ TEST_P(MoQCodecTest, SubgroupHeaderWithEOF) {
   objectStreamCodec_.onIngress(writeBuf.move(), true);
 }
 
+TEST_P(MoQCodecTest, FirstObjectSubgroupOption) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5),
+      SubgroupIDFormat::Present,
+      /*includeExtensions=*/true,
+      /*beginsWithFirstObject=*/true);
+  ASSERT_TRUE(res);
+
+  const bool expectedBeginsWithFirstObject =
+      getDraftMajorVersion(GetParam()) >= 18;
+  EXPECT_CALL(
+      objectStreamCodecCallback_,
+      onSubgroup(
+          TrackAlias(1),
+          2,
+          3,
+          std::optional<uint8_t>(5),
+          testing::Truly(
+              [expectedBeginsWithFirstObject](const SubgroupOptions& options) {
+                return options.beginsWithFirstObject ==
+                    expectedBeginsWithFirstObject;
+              })))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(objectStreamCodecCallback_, onEndOfStream());
+
+  objectStreamCodec_.onIngress(writeBuf.move(), true);
+}
+
 // Test that when onObjectBegin returns ERROR_TERMINATE, the codec
 // short-circuits and returns immediately without processing more data
 TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectBegin) {

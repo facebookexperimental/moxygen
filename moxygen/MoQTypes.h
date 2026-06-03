@@ -258,6 +258,7 @@ constexpr uint8_t SG_SUBGROUP_VALUE = 0x2;
 constexpr uint8_t SG_HAS_SUBGROUP_ID = 0x4;
 constexpr uint8_t SG_HAS_END_OF_GROUP = 0x8;
 constexpr uint8_t SG_PRIORITY_NOT_PRESENT = 0x20;
+constexpr uint8_t SG_FIRST_OBJECT = 0x40;
 
 // Datagram Type Bit Fields
 constexpr uint8_t DG_HAS_EXTENSIONS = 0x1;
@@ -274,6 +275,7 @@ struct SubgroupOptions {
   SubgroupIDFormat subgroupIDFormat{SubgroupIDFormat::Present};
   bool hasEndOfGroup{false};
   bool priorityPresent{true};
+  bool beginsWithFirstObject{false};
 };
 
 std::ostream& operator<<(std::ostream& os, FrameType type);

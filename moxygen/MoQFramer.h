@@ -44,7 +44,8 @@ inline StreamType getSubgroupStreamType(
     SubgroupIDFormat format,
     bool includeExtensions,
     bool endOfGroup,
-    bool priorityPresent = true) {
+    bool priorityPresent = true,
+    bool beginsWithFirstObject = false) {
   auto majorVersion = getDraftMajorVersion(version);
   return StreamType(
       folly::to_underlying(StreamType::SUBGROUP_HEADER_MASK) |
@@ -52,7 +53,8 @@ inline StreamType getSubgroupStreamType(
       (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
       (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
       (endOfGroup ? SG_HAS_END_OF_GROUP : 0) |
-      (majorVersion >= 15 && !priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0));
+      (majorVersion >= 15 && !priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0) |
+      (majorVersion >= 18 && beginsWithFirstObject ? SG_FIRST_OBJECT : 0));
 }
 
 bool isValidSubgroupType(uint64_t version, uint64_t streamType);
@@ -75,6 +77,8 @@ inline SubgroupOptions getSubgroupOptions(
   if (majorVersion >= 15) {
     options.priorityPresent = !(streamTypeInt & SG_PRIORITY_NOT_PRESENT);
   }
+  options.beginsWithFirstObject =
+      majorVersion >= 18 && (streamTypeInt & SG_FIRST_OBJECT);
   return options;
 }
 
@@ -537,7 +541,8 @@ class MoQFrameWriter {
       TrackAlias trackAlias,
       const ObjectHeader& objectHeader,
       SubgroupIDFormat format = SubgroupIDFormat::Present,
-      bool includeExtensions = true) const noexcept;
+      bool includeExtensions = true,
+      bool beginsWithFirstObject = false) const noexcept;
 
   WriteResult writeFetchHeader(folly::IOBufQueue& writeBuf, RequestID requestID)
       const noexcept;

@@ -1228,7 +1228,12 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   folly::io::Cursor cursor(serialized.get());
 
   auto streamType = getSubgroupStreamType(
-      GetParam(), SubgroupIDFormat::FirstObject, false, false);
+      GetParam(),
+      SubgroupIDFormat::FirstObject,
+      /*includeExtensions=*/false,
+      /*endOfGroup=*/false,
+      /*priorityPresent=*/true,
+      /*beginsWithFirstObject=*/true);
   auto parsedST = parseStreamType(cursor);
   EXPECT_EQ(parsedST, streamType)
       << GetParam() << " " << folly::to_underlying(parsedST) << " "
@@ -3097,9 +3102,15 @@ TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
   static const std::set<uint64_t> validV15 = {
       0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
       0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D};
+  static const std::set<uint64_t> validV18 = {
+      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+      0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D,
+      0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D,
+      0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D};
 
   uint64_t version14 = kVersionDraft14;
   uint64_t version15 = kVersionDraft15;
+  uint64_t version18 = kVersionDraft18;
 
   for (uint64_t t = 0; t <= 255; ++t) {
     bool shouldBeValidV14 = validV14.count(t) > 0;
@@ -3108,6 +3119,9 @@ TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
     bool shouldBeValidV15 = validV15.count(t) > 0;
     EXPECT_EQ(isValidSubgroupType(version15, t), shouldBeValidV15)
         << "v15: 0x" << std::hex << t;
+    bool shouldBeValidV18 = validV18.count(t) > 0;
+    EXPECT_EQ(isValidSubgroupType(version18, t), shouldBeValidV18)
+        << "v18: 0x" << std::hex << t;
   }
 }
 
@@ -3207,6 +3221,68 @@ TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripNone) {
 TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripValue) {
   testSubgroupPriorityRoundTrip(
       kVersionDraft15, 80, StreamType::SUBGROUP_HEADER_SG, 80);
+}
+
+TEST(MoQFramerTest, FirstObjectSubgroupHeaderRoundTripDraft18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader objHeader = {
+      100, 50, 200, 64, ObjectStatus::NORMAL, noExtensions(), 0};
+  auto result = writer.writeSubgroupHeader(
+      writeBuf,
+      TrackAlias(25),
+      objHeader,
+      SubgroupIDFormat::Present,
+      /*includeExtensions=*/false,
+      /*beginsWithFirstObject=*/true);
+  ASSERT_TRUE(result.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto parsedStreamType = decodeMoQVarint(cursor);
+  ASSERT_TRUE(parsedStreamType.has_value());
+  EXPECT_EQ(parsedStreamType->first, 0x54);
+
+  auto sgOptions =
+      getSubgroupOptions(kVersionDraft18, StreamType(parsedStreamType->first));
+  EXPECT_TRUE(sgOptions.beginsWithFirstObject);
+  auto parseResult =
+      parser.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
+  ASSERT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->value.trackAlias, TrackAlias(25));
+  EXPECT_EQ(parseResult->value.objectHeader.group, 100);
+  EXPECT_EQ(parseResult->value.objectHeader.subgroup, 50);
+  EXPECT_EQ(parseResult->value.objectHeader.priority, 64);
+}
+
+TEST(MoQFramerTest, FirstObjectSubgroupHeaderIgnoredBeforeDraft18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft17);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ObjectHeader objHeader = {
+      100, 50, 200, 64, ObjectStatus::NORMAL, noExtensions(), 0};
+  auto result = writer.writeSubgroupHeader(
+      writeBuf,
+      TrackAlias(25),
+      objHeader,
+      SubgroupIDFormat::Present,
+      /*includeExtensions=*/false,
+      /*beginsWithFirstObject=*/true);
+  ASSERT_TRUE(result.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto parsedStreamType = decodeMoQVarint(cursor);
+  ASSERT_TRUE(parsedStreamType.has_value());
+  EXPECT_EQ(parsedStreamType->first, 0x14);
+  EXPECT_FALSE(isValidSubgroupType(kVersionDraft17, 0x54));
+  EXPECT_FALSE(getSubgroupOptions(kVersionDraft17, StreamType(0x54))
+                   .beginsWithFirstObject);
 }
 
 // Test class for GroupOrder defaults feature (draft 15+)
