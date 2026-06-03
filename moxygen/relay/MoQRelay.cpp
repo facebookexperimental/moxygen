@@ -839,6 +839,43 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
     tracksNode->parent_->incrementActiveChildren();
   }
 
+  // Walk the existing publish tree and emit PUBLISH for each matching
+  // already-published track.
+  auto exec = session->getExecutor();
+  std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
+  if (auto pubNode = findNamespaceNode(
+          subTracks.trackNamespacePrefix,
+          /*createMissingNodes=*/false,
+          MatchType::Exact)) {
+    nodes.emplace_back(subTracks.trackNamespacePrefix, pubNode);
+  }
+  while (!nodes.empty()) {
+    auto [prefix, pubNode] = std::move(*nodes.begin());
+    nodes.pop_front();
+    for (auto& publishEntry : pubNode->publishes) {
+      auto& publishSession = publishEntry.second;
+      FullTrackName ftn{prefix, publishEntry.first};
+      auto subscriptionIt = subscriptions_.find(ftn);
+      if (subscriptionIt == subscriptions_.end()) {
+        continue;
+      }
+      if (publishSession == session) {
+        // Don't echo the subscriber's own published tracks back to them.
+        continue;
+      }
+      co_withExecutor(
+          exec,
+          publishToSession(
+              session, subscriptionIt->second.forwarder, subTracks.forward))
+          .start();
+    }
+    for (auto& nextNodeIt : pubNode->children) {
+      TrackNamespace nodePrefix(prefix);
+      nodePrefix.append(nextNodeIt.first);
+      nodes.emplace_back(std::forward_as_tuple(nodePrefix, nextNodeIt.second));
+    }
+  }
+
   RequestOk subTracksOk{subTracks.requestID};
   co_return std::make_shared<TracksSubscription>(
       shared_from_this(),

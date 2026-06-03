@@ -2516,4 +2516,24 @@ TEST_F(MoQRelayTracksTest, NewPublishFanoutToTracksSubscriber) {
   removeSession(publisher);
 }
 
+// A SUBSCRIBE_TRACKS that arrives after a track is already published gets
+// the existing track via PUBLISH on registration.
+TEST_F(MoQRelayTracksTest, ExistingPublishEchoedToNewTracksSubscriber) {
+  auto subscriber = createV18Session();
+  auto publisher = createMockSession();
+  setupPublishSucceeds(subscriber);
+
+  doPublish(publisher, kTestTrackName);
+
+  EXPECT_CALL(*subscriber, publish(_, _)).Times(1);
+  doSubscribeTracks(subscriber, kTestNamespace);
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
+  removeSession(subscriber);
+  removeSession(publisher);
+}
+
 } // namespace moxygen::test
