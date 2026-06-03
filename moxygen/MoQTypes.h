@@ -132,6 +132,12 @@ enum class RequestErrorCode : uint32_t {
 
   DUPLICATE_SUBSCRIPTION = 0x19,
 
+  // Draft 18+: returned by SUBSCRIBE_TRACKS when the requesting session
+  // already has an established SUBSCRIBE_TRACKS at an overlapping prefix
+  // (ancestor, descendant, or exact). See draft-ietf-moq-transport §10.19
+  // for the semantics and §15.10.2 for the on-wire value.
+  PREFIX_OVERLAP = 0x30,
+
   // Special values
   CANCELLED = std::numeric_limits<uint32_t>::max(),
 };

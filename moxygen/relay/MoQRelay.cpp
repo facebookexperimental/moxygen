@@ -90,6 +90,43 @@ std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findInTree(
   return nodePtr;
 }
 
+bool MoQRelay::hasTracksSubscriptionInSubtree(
+    const NamespaceNode& root,
+    std::shared_ptr<MoQSession> session) const {
+  std::vector<const NamespaceNode*> nodesToVisit{&root};
+  while (!nodesToVisit.empty()) {
+    const auto* node = nodesToVisit.back();
+    nodesToVisit.pop_back();
+    if (node->sessions.find(session) != node->sessions.end()) {
+      return true;
+    }
+    for (const auto& [_, child] : node->children) {
+      nodesToVisit.push_back(child.get());
+    }
+  }
+  return false;
+}
+
+bool MoQRelay::hasOverlappingTracksSubscription(
+    const TrackNamespace& trackNamespacePrefix,
+    std::shared_ptr<MoQSession> session) const {
+  const NamespaceNode* node = &tracksSubscriberRoot_;
+  for (size_t i = 0; i < trackNamespacePrefix.size(); i++) {
+    // Nodes visited before the target prefix are strict ancestors.
+    if (node->sessions.find(session) != node->sessions.end()) {
+      return true;
+    }
+    auto it = node->children.find(trackNamespacePrefix[i]);
+    if (it == node->children.end()) {
+      return false;
+    }
+    node = it->second.get();
+  }
+
+  // The target subtree covers exact-prefix and descendant registrations.
+  return hasTracksSubscriptionInSubtree(*node, std::move(session));
+}
+
 folly::coro::Task<Subscriber::PublishNamespaceResult>
 MoQRelay::publishNamespace(
     PublishNamespace ann,
@@ -820,6 +857,15 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
             subTracks.requestID,
             SubscribeTracksErrorCode::NOT_SUPPORTED,
             "SUBSCRIBE_TRACKS requires draft 18+"});
+  }
+
+  if (hasOverlappingTracksSubscription(
+          subTracks.trackNamespacePrefix, session)) {
+    co_return folly::makeUnexpected(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::PREFIX_OVERLAP,
+            "Overlapping SUBSCRIBE_TRACKS exists in this session"});
   }
 
   // Register in the parallel tracks tree (independent overlap space).

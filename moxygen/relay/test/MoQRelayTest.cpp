@@ -2430,25 +2430,31 @@ class MoQRelayTracksTest : public MoQRelayTest {
     return session;
   }
 
-  // Helper that mirrors doSubscribeNamespace but for the new SUBSCRIBE_TRACKS
-  // path. The handle is tracked for cleanup in the per-session state.
-  std::shared_ptr<Publisher::SubscribeTracksHandle> doSubscribeTracks(
+  Publisher::SubscribeTracksResult subscribeTracks(
       std::shared_ptr<MoQSession> session,
       const TrackNamespace& nsPrefix) {
     SubscribeTracks subTracks;
     subTracks.trackNamespacePrefix = nsPrefix;
     return withSessionContext(session, [&]() {
       auto task = relay_->subscribeTracks(std::move(subTracks));
-      auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-      EXPECT_TRUE(res.hasValue());
-      if (!res.hasValue()) {
-        return std::shared_ptr<Publisher::SubscribeTracksHandle>(nullptr);
-      }
-      // Stash for cleanup so the destructor doesn't fire on a stale relay.
-      auto handle = *res;
-      cleanupHandles_.push_back(handle);
-      return handle;
+      return folly::coro::blockingWait(std::move(task), exec_.get());
     });
+  }
+
+  // Helper that mirrors doSubscribeNamespace but for the new SUBSCRIBE_TRACKS
+  // path. The handle is tracked for cleanup in the per-session state.
+  std::shared_ptr<Publisher::SubscribeTracksHandle> doSubscribeTracks(
+      std::shared_ptr<MoQSession> session,
+      const TrackNamespace& nsPrefix) {
+    auto res = subscribeTracks(session, nsPrefix);
+    EXPECT_TRUE(res.hasValue());
+    if (!res.hasValue()) {
+      return nullptr;
+    }
+    // Stash for cleanup so the destructor doesn't fire on a stale relay.
+    auto handle = *res;
+    cleanupHandles_.push_back(handle);
+    return handle;
   }
 
   void TearDown() override {
@@ -2470,14 +2476,9 @@ class MoQRelayTracksTest : public MoQRelayTest {
 // Pre-draft-18 sessions can't issue SUBSCRIBE_TRACKS at all.
 TEST_F(MoQRelayTracksTest, SubscribeTracksRejectsPreV18) {
   auto session = createMockSession(); // defaults to kVersionDraftCurrent (v14)
-  SubscribeTracks subTracks;
-  subTracks.trackNamespacePrefix = TrackNamespace{{"test"}};
-  withSessionContext(session, [&]() {
-    auto res = folly::coro::blockingWait(
-        relay_->subscribeTracks(std::move(subTracks)), exec_.get());
-    ASSERT_FALSE(res.hasValue());
-    EXPECT_EQ(res.error().errorCode, SubscribeTracksErrorCode::NOT_SUPPORTED);
-  });
+  auto res = subscribeTracks(session, TrackNamespace{{"test"}});
+  ASSERT_FALSE(res.hasValue());
+  EXPECT_EQ(res.error().errorCode, SubscribeTracksErrorCode::NOT_SUPPORTED);
   removeSession(session);
 }
 
@@ -2514,6 +2515,43 @@ TEST_F(MoQRelayTracksTest, NewPublishFanoutToTracksSubscriber) {
   ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
   removeSession(subscriber);
   removeSession(publisher);
+}
+
+// Draft 18 section 10.19: a SUBSCRIBE_TRACKS from a session that already has a
+// registration at an exact / ancestor / descendant prefix is rejected with
+// PREFIX_OVERLAP. The first SUBSCRIBE_TRACKS for any of those prefixes
+// succeeds; the second one (in any order) fails.
+TEST_F(MoQRelayTracksTest, OverlappingSubscribeTracksRejected) {
+  auto session = createV18Session();
+  const TrackNamespace base{{"a", "b"}};
+  const TrackNamespace ancestor{{"a"}};
+  const TrackNamespace descendant{{"a", "b", "c"}};
+  const std::vector<std::pair<std::string, TrackNamespace>> overlaps{
+      {"exact", base},
+      {"ancestor", ancestor},
+      {"descendant", descendant},
+  };
+
+  // First call establishes the registration.
+  auto baseHandle = doSubscribeTracks(session, base);
+  ASSERT_NE(baseHandle, nullptr);
+
+  // Exact duplicate, ancestor, and descendant prefixes must all fail.
+  for (const auto& [label, prefix] : overlaps) {
+    SCOPED_TRACE(label);
+    auto res = subscribeTracks(session, prefix);
+    ASSERT_FALSE(res.hasValue());
+    EXPECT_EQ(res.error().errorCode, SubscribeTracksErrorCode::PREFIX_OVERLAP);
+  }
+
+  // A different session subscribing to an overlapping prefix is fine; the
+  // check is per-session.
+  auto otherSession = createV18Session();
+  auto otherHandle = doSubscribeTracks(otherSession, base);
+  EXPECT_NE(otherHandle, nullptr);
+
+  removeSession(session);
+  removeSession(otherSession);
 }
 
 // A SUBSCRIBE_TRACKS that arrives after a track is already published gets

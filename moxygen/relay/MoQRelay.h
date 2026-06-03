@@ -209,6 +209,13 @@ class MoQRelay : public Publisher,
           std::shared_ptr<MoQSession>,
           NamespaceNode::NamespaceSubscriberInfo>>* sessions);
 
+  bool hasOverlappingTracksSubscription(
+      const TrackNamespace& trackNamespacePrefix,
+      std::shared_ptr<MoQSession> session) const;
+  bool hasTracksSubscriptionInSubtree(
+      const NamespaceNode& node,
+      std::shared_ptr<MoQSession> session) const;
+
   struct RelaySubscription {
     RelaySubscription(
         std::shared_ptr<MoQForwarder> f,
