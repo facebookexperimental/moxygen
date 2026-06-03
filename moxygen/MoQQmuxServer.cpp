@@ -231,7 +231,8 @@ std::shared_ptr<MoQExecutor> MoQQmuxServer::findExecutorFor(
 
 bool MoQQmuxServer::dispatchExternallyFedSession(
     folly::AsyncTransport::UniquePtr fizzCompletedTransport,
-    std::string negotiatedAlpn) {
+    std::string negotiatedAlpn,
+    folly::Function<void(MoQSession*)> postCreateHook) {
   auto* workerEvb = folly::EventBaseManager::get()->getExistingEventBase();
   CHECK(workerEvb && workerEvb->isInEventBaseThread())
       << "dispatchExternallyFedSession must be called on a worker EB thread";
@@ -247,7 +248,10 @@ bool MoQQmuxServer::dispatchExternallyFedSession(
   co_withExecutor(
       workerEvb,
       handleExternallyFedSession(
-          state, std::move(fizzCompletedTransport), std::move(negotiatedAlpn)))
+          state,
+          std::move(fizzCompletedTransport),
+          std::move(negotiatedAlpn),
+          std::move(postCreateHook)))
       .start();
   return true;
 }
@@ -255,7 +259,8 @@ bool MoQQmuxServer::dispatchExternallyFedSession(
 folly::coro::Task<void> MoQQmuxServer::handleExternallyFedSession(
     WorkerShutdownState* state,
     folly::AsyncTransport::UniquePtr fizzCompletedTransport,
-    std::string negotiatedAlpn) {
+    std::string negotiatedAlpn,
+    folly::Function<void(MoQSession*)> postCreateHook) {
   auto* workerEvb = folly::EventBaseManager::get()->getExistingEventBase();
   CHECK(workerEvb) << "handleExternallyFedSession must run on a thread "
                       "that owns an EventBase";
@@ -274,7 +279,8 @@ folly::coro::Task<void> MoQQmuxServer::handleExternallyFedSession(
             std::move(fizzCompletedTransport),
             std::move(negotiatedAlpn),
             config_.handshakeTimeout,
-            state);
+            state,
+            std::move(postCreateHook));
       }());
 }
 
@@ -411,7 +417,8 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
     folly::AsyncTransport::UniquePtr fizzCompletedTransport,
     std::string negotiatedAlpn,
     std::chrono::milliseconds qmuxTimeout,
-    WorkerShutdownState* state) {
+    WorkerShutdownState* state,
+    folly::Function<void(MoQSession*)> postCreateHook) {
   if (!isLegacyAlpn(negotiatedAlpn) &&
       !getVersionFromAlpn(negotiatedAlpn).has_value()) {
     XLOG(WARN) << "MoQQmuxServer: rejecting session; "
@@ -452,6 +459,10 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
   SCOPE_EXIT {
     state->liveSessions.erase(moqSessionPtr);
   };
+
+  if (postCreateHook) {
+    postCreateHook(moqSessionPtr);
+  }
 
   co_await handleClientSession(std::move(moqSession));
 }

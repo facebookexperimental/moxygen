@@ -8,6 +8,7 @@
 
 #include <fizz/server/FizzServerContext.h>
 #include <folly/CancellationToken.h>
+#include <folly/Function.h>
 #include <folly/SocketAddress.h>
 #include <folly/io/async/AsyncServerSocket.h>
 #include <folly/io/async/AsyncTransport.h>
@@ -74,9 +75,12 @@ class MoQQmuxServer : public MoQServerBase {
   void initExternallyFed(std::vector<folly::EventBase*> workerEvbs);
 
   // Run a MoQ session over an already-Fizz-completed transport.
+  // postCreateHook, if non-empty, is invoked once on the worker evb after
+  // the MoQSession is created.
   bool dispatchExternallyFedSession(
       folly::AsyncTransport::UniquePtr fizzCompletedTransport,
-      std::string negotiatedAlpn);
+      std::string negotiatedAlpn,
+      folly::Function<void(MoQSession*)> postCreateHook = nullptr);
 
   void stop() override;
 
@@ -110,7 +114,8 @@ class MoQQmuxServer : public MoQServerBase {
   folly::coro::Task<void> handleExternallyFedSession(
       WorkerShutdownState* state,
       folly::AsyncTransport::UniquePtr fizzCompletedTransport,
-      std::string negotiatedAlpn);
+      std::string negotiatedAlpn,
+      folly::Function<void(MoQSession*)> postCreateHook);
 
   // Post-Fizz portion of the per-connection flow: wraps the already-
   // authenticated transport in a coro::Transport, runs the QMUX handshake,
@@ -123,7 +128,8 @@ class MoQQmuxServer : public MoQServerBase {
       folly::AsyncTransport::UniquePtr fizzCompletedTransport,
       std::string negotiatedAlpn,
       std::chrono::milliseconds qmuxTimeout,
-      WorkerShutdownState* state);
+      WorkerShutdownState* state,
+      folly::Function<void(MoQSession*)> postCreateHook = nullptr);
 
   // Must not be called from a worker event base thread (it joins on those event
   // bases).
