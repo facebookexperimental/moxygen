@@ -91,6 +91,20 @@ class MoQStatsCallback {
   virtual void onUnsubscribeNamespace() = 0;
 
   /*
+   * Draft 18+
+   * Publisher: Responded to a SUBSCRIBE_TRACKS request with REQUEST_OK
+   * Subscriber: Received a REQUEST_OK for SUBSCRIBE_TRACKS
+   */
+  virtual void onSubscribeTracksSuccess() = 0;
+
+  /*
+   * Draft 18+
+   * Publisher: Responded to a SUBSCRIBE_TRACKS request with REQUEST_ERROR
+   * Subscriber: Received a REQUEST_ERROR for SUBSCRIBE_TRACKS
+   */
+  virtual void onSubscribeTracksError(SubscribeTracksErrorCode errorCode) = 0;
+
+  /*
    * Publisher: Responded to a TRACK_STATUS request
    * Subscriber: Sent a TRACK_STATUS request
    */

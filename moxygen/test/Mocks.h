@@ -439,6 +439,14 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
       (SubscribeNamespaceErrorCode),
       (override));
 
+  MOCK_METHOD(void, onSubscribeTracksSuccess, (), (override));
+
+  MOCK_METHOD(
+      void,
+      onSubscribeTracksError,
+      (SubscribeTracksErrorCode),
+      (override));
+
   MOCK_METHOD(void, onUnsubscribeNamespace, (), (override));
 
   MOCK_METHOD(void, onTrackStatus, (), (override));
@@ -496,6 +504,14 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
       void,
       onSubscribeNamespaceError,
       (SubscribeNamespaceErrorCode),
+      (override));
+
+  MOCK_METHOD(void, onSubscribeTracksSuccess, (), (override));
+
+  MOCK_METHOD(
+      void,
+      onSubscribeTracksError,
+      (SubscribeTracksErrorCode),
       (override));
 
   MOCK_METHOD(void, onUnsubscribeNamespace, (), (override));

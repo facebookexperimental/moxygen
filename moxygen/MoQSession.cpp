@@ -6371,6 +6371,10 @@ void MoQSession::subscribeTracksError(
     std::shared_ptr<MessageReply>&& messageReply) {
   XLOG(DBG1) << __func__ << " reqID=" << subscribeTracksError.requestID.value
              << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_,
+      onSubscribeTracksError,
+      subscribeTracksError.errorCode);
   auto res = messageReply->error(subscribeTracksError);
   if (!res) {
     XLOG(ERR) << "writeSubscribeTracksError failed sess=" << this;

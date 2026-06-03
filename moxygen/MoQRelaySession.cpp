@@ -1421,6 +1421,10 @@ MoQRelaySession::subscribeTracks(SubscribeTracks subTracks) {
 
   auto subTracksResult = co_await std::move(contract.second);
   if (subTracksResult.hasError()) {
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_,
+        onSubscribeTracksError,
+        subTracksResult.error().errorCode);
     // The bidi request stream is normally FINed by SubscribeTracksHandle on
     // unsubscribe; on the error path we never construct a handle, so FIN it
     // here to release the stream resource and let the peer observe end-of-
@@ -1437,6 +1441,7 @@ MoQRelaySession::subscribeTracks(SubscribeTracks subTracks) {
     }
     co_return folly::makeUnexpected(subTracksResult.error());
   }
+  MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeTracksSuccess);
   co_return std::make_shared<SubscribeTracksHandle>(
       std::static_pointer_cast<MoQRelaySession>(shared_from_this()),
       std::move(subTracksResult.value()),
@@ -1516,6 +1521,7 @@ void MoQRelaySession::subscribeTracksOk(
     const RequestOk& subTracksOk,
     std::shared_ptr<MessageReply>&& messageReply) {
   XLOG(DBG1) << __func__ << " id=" << subTracksOk.requestID << " sess=" << this;
+  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeTracksSuccess);
   auto res = messageReply->ok(subTracksOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeTracksOk failed sess=" << this;
