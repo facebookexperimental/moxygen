@@ -5427,6 +5427,202 @@ TEST_F(UnknownParamTest, UnknownParamAcceptedInV15) {
   EXPECT_TRUE(result.hasValue());
 }
 
+namespace {
+folly::Expected<SubscribeRequest, ErrorCode> roundtripSubscribeWithRendezvous(
+    uint64_t version,
+    uint64_t timeoutMs) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+
+  SubscribeRequest req;
+  req.requestID = RequestID(1);
+  req.fullTrackName = FullTrackName({TrackNamespace({"ns"}), "track"});
+  req.locType = LocationType::LargestObject;
+  // Insert key 0x04 directly so the test exercises the parser path that
+  // distinguishes RENDEZVOUS_TIMEOUT from MAX_CACHE_DURATION by version.
+  req.params.setMajorVersion(getDraftMajorVersion(version));
+  CHECK(req.params
+            .insertParam(Parameter(
+                folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT),
+                timeoutMs))
+            .hasValue());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto writeRes = writer.writeSubscribeRequest(writeBuf, req);
+  if (!writeRes) {
+    return folly::makeUnexpected(ErrorCode::INTERNAL_ERROR);
+  }
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  CHECK(frameType.has_value());
+  CHECK_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto bodyLen = static_cast<size_t>(cursor.readBE<uint16_t>());
+  return parser.parseSubscribeRequest(cursor, bodyLen);
+}
+} // namespace
+
+// v18 SUBSCRIBE with key 0x04 must surface as an integer param on the parsed
+// SubscribeRequest so the relay can consume RENDEZVOUS_TIMEOUT.
+TEST(RendezvousTimeoutParamTest, V18SubscribeExposesParam) {
+  auto parsed = roundtripSubscribeWithRendezvous(kVersionDraft18, 1500);
+  ASSERT_TRUE(parsed.hasValue());
+  auto val = getFirstIntParam(
+      parsed->params, TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(*val, 1500u);
+}
+
+// In drafts < 18, key 0x04 still means MAX_CACHE_DURATION. In v14 it is a
+// param allowed on all frame types and must roundtrip unchanged.
+TEST(RendezvousTimeoutParamTest, PreV18Key0x04PreservesMaxCacheDuration) {
+  auto parsed = roundtripSubscribeWithRendezvous(kVersionDraft14, 4242);
+  ASSERT_TRUE(parsed.hasValue());
+  auto val = getFirstIntParam(
+      parsed->params, TrackRequestParamKey::MAX_CACHE_DURATION);
+  ASSERT_TRUE(val.has_value());
+  EXPECT_EQ(*val, 4242u);
+}
+
+// v18 non-SUBSCRIBE frames must not accept key 0x04 — insertParam rejects.
+TEST(RendezvousTimeoutParamTest, V18NonSubscribeInsertRejected) {
+  Parameters fetchParams(FrameType::FETCH);
+  fetchParams.setMajorVersion(18);
+  auto res = fetchParams.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT), 1000));
+  EXPECT_TRUE(res.hasError());
+  EXPECT_EQ(fetchParams.size(), 0);
+}
+
+namespace {
+// Hand-build a SUBSCRIBE wire frame carrying a single integer parameter
+// (`key`, `value`). `key` MUST be even (parser treats odd keys as
+// length-prefixed). Bypasses Parameters::insertParam validation so the test
+// can produce frames whose params would be rejected at construction time.
+folly::IOBufQueue
+buildSubscribeWithIntParam(uint64_t version, uint64_t key, uint64_t value) {
+  folly::IOBufQueue body{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  writeVarint(body, 0, size, error); // Request ID = 0
+  writeVarint(body, 1, size, error); // Namespace count = 1
+  writeVarint(body, 2, size, error); // "ns"
+  body.append("ns", 2);
+  size += 2;
+  writeVarint(body, 1, size, error); // track name "t"
+  body.append("t", 1);
+  size += 1;
+
+  writeVarint(body, 1, size, error); // numParams = 1
+  // v16+ uses delta encoding from previous key (initially 0); first param's
+  // delta equals the absolute key. Pre-v16 uses the absolute key directly.
+  writeVarint(body, key, size, error);
+  writeVarint(body, value, size, error);
+
+  folly::IOBufQueue framed{folly::IOBufQueue::cacheChainLength()};
+  size_t headerSize = 0;
+  writeVarint(
+      framed, folly::to_underlying(FrameType::SUBSCRIBE), headerSize, error);
+  uint16_t sizeVal = folly::Endian::big(static_cast<uint16_t>(size));
+  framed.append(&sizeVal, 2);
+  framed.append(body.move());
+  return framed;
+}
+
+folly::Expected<SubscribeRequest, ErrorCode> parseFramedSubscribe(
+    uint64_t version,
+    folly::IOBufQueue framed) {
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+  auto serialized = framed.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  CHECK(frameType.has_value());
+  CHECK_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
+  auto bodyLen = static_cast<size_t>(cursor.readBE<uint16_t>());
+  return parser.parseSubscribeRequest(cursor, bodyLen);
+}
+} // namespace
+
+// Draft 18 §10.2.1 (Parameter Scope): a known parameter that appears on a
+// message type its definition does not list MUST cause PROTOCOL_VIOLATION.
+// PUBLISHER_PRIORITY is extensions-only in v16+ (rejected by isParamAllowed
+// for SUBSCRIBE) and is not request-specific, so it exercises the
+// insertParam path that the new strict-scope check guards.
+TEST(ParamScopeTest, V18SubscribeWithDisallowedKnownParamIsProtocolViolation) {
+  auto framed = buildSubscribeWithIntParam(
+      kVersionDraft18,
+      folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
+      42);
+  auto res = parseFramedSubscribe(kVersionDraft18, std::move(framed));
+  ASSERT_FALSE(res.hasValue());
+  EXPECT_EQ(res.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+// Pre-v18 drafts predate §10.2.1's strict requirement: receivers should
+// silently ignore out-of-scope params for compatibility with peers that
+// produced them. Verify v17 keeps that behavior so this commit doesn't
+// regress older deployments.
+TEST(ParamScopeTest, PreV18SubscribeWithDisallowedKnownParamSilentlyIgnored) {
+  auto framed = buildSubscribeWithIntParam(
+      kVersionDraft17,
+      folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY),
+      42);
+  auto res = parseFramedSubscribe(kVersionDraft17, std::move(framed));
+  ASSERT_TRUE(res.hasValue());
+  // Param was dropped during parse, not retained on SubscribeRequest.
+  auto val =
+      getFirstIntParam(res->params, TrackRequestParamKey::PUBLISHER_PRIORITY);
+  EXPECT_FALSE(val.has_value());
+}
+
+// RENDEZVOUS_TIMEOUT is valid only on SUBSCRIBE in v18. The receive path
+// for any other message type must also yield PROTOCOL_VIOLATION — this
+// covers the wire-receive analogue of V18NonSubscribeInsertRejected, which
+// only exercised the insertParam API.
+TEST(ParamScopeTest, V18FetchWithRendezvousTimeoutIsProtocolViolation) {
+  // Build a FETCH whose params contain RENDEZVOUS_TIMEOUT by going through
+  // the writer with no majorVersion on the Parameters object (so
+  // insertParam's v18-scope check is bypassed and the writer just serializes
+  // the requested key/value pair). The receiver, initialized to v18, must
+  // then reject the frame per §10.2.1.
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  Fetch fetch;
+  fetch.requestID = RequestID(1);
+  fetch.fullTrackName = FullTrackName({TrackNamespace({"ns"}), "track"});
+  fetch.priority = kDefaultPriority;
+  fetch.groupOrder = GroupOrder::OldestFirst;
+  fetch.args = StandaloneFetch(AbsoluteLocation{0, 0}, AbsoluteLocation{1, 0});
+  // Do NOT call setMajorVersion — leaves MAX_CACHE_DURATION's allow-all set
+  // active so insertParam succeeds for FETCH.
+  CHECK(fetch.params
+            .insertParam(Parameter(
+                folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT),
+                1000))
+            .hasValue());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto writeRes = writer.writeFetch(writeBuf, fetch);
+  ASSERT_TRUE(writeRes.hasValue());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::FETCH));
+  auto bodyLen = static_cast<size_t>(cursor.readBE<uint16_t>());
+  auto parsed = parser.parseFetch(cursor, bodyLen);
+  ASSERT_FALSE(parsed.hasValue());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 // Tests for v16-specific track property param restrictions
 TEST_F(ParametersIsParamAllowedTest, TrackPropertyParamRejectedInV16) {
   // MAX_CACHE_DURATION and PUBLISHER_PRIORITY are extensions-only in v16
@@ -5451,6 +5647,51 @@ TEST_F(ParametersIsParamAllowedTest, DeliveryTimeoutAllowedInV16Subscribe) {
   params.setMajorVersion(16);
 
   EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::DELIVERY_TIMEOUT));
+}
+
+// In draft 18+, key 0x04 is RENDEZVOUS_TIMEOUT (only valid on SUBSCRIBE).
+// In draft 16/17 it remains MAX_CACHE_DURATION which is extensions-only.
+TEST_F(ParametersIsParamAllowedTest, RendezvousTimeoutAllowedInV18Subscribe) {
+  Parameters subV18(FrameType::SUBSCRIBE);
+  subV18.setMajorVersion(18);
+  EXPECT_TRUE(subV18.isParamAllowed(TrackRequestParamKey::RENDEZVOUS_TIMEOUT));
+}
+
+TEST_F(
+    ParametersIsParamAllowedTest,
+    RendezvousTimeoutDisallowedInV18NonSubscribe) {
+  for (auto frame :
+       {FrameType::FETCH,
+        FrameType::SUBSCRIBE_OK,
+        FrameType::PUBLISH,
+        FrameType::PUBLISH_OK}) {
+    Parameters params(frame);
+    params.setMajorVersion(18);
+    EXPECT_FALSE(
+        params.isParamAllowed(TrackRequestParamKey::RENDEZVOUS_TIMEOUT))
+        << "frame=" << folly::to_underlying(frame);
+  }
+}
+
+TEST_F(
+    ParametersIsParamAllowedTest,
+    MaxCacheDurationParamStillDisallowedInV17) {
+  // In v16/v17 MAX_CACHE_DURATION is extensions-only — not a param.
+  Parameters subV17(FrameType::SUBSCRIBE);
+  subV17.setMajorVersion(17);
+  EXPECT_FALSE(subV17.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
+}
+
+TEST_F(ParametersIsParamAllowedTest, IsRendezvousTimeoutParamHelper) {
+  const auto key =
+      folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
+  EXPECT_TRUE(isRendezvousTimeoutParam(key, 18));
+  EXPECT_TRUE(isRendezvousTimeoutParam(key, 20));
+  EXPECT_FALSE(isRendezvousTimeoutParam(key, 17));
+  EXPECT_FALSE(isRendezvousTimeoutParam(key, 15));
+  // Other keys are never rendezvous timeout.
+  EXPECT_FALSE(isRendezvousTimeoutParam(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 18));
 }
 
 TEST_F(ParametersIsParamAllowedTest, DeliveryTimeoutAllowedInV16PublishOk) {

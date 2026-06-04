@@ -723,7 +723,13 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseParams(
       } else {
         auto insertResult = params.insertParam(std::move(*res.value()));
         if (insertResult.hasError()) {
-          // Per spec: invalid params in received messages should be ignored
+          // In draft 18+, receiving parameters in a message in which it isn't
+          // allowed is a protocol violation.
+          if (getDraftMajorVersion(version) >= 18) {
+            XLOG(ERR) << "parseParams: param not allowed for frame type in "
+                      << "v18+ at param index=" << i << ", key=" << key;
+            return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+          }
           XLOG(WARN) << "parseParams: ignoring param not allowed for frame type"
                      << " at param index=" << i << ", key=" << key;
         }

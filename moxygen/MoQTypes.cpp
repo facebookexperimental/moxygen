@@ -189,13 +189,6 @@ const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeout = {
     FrameType::SUBSCRIBE,
     FrameType::SUBSCRIBE_UPDATE};
 
-// In v16+, DELIVERY_TIMEOUT is allowed in subscriber request messages and
-// PUBLISH_OK
-const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeoutV16 = {
-    FrameType::SUBSCRIBE,
-    FrameType::FETCH,
-    FrameType::PUBLISH_OK};
-
 const folly::F14FastSet<FrameType> kAllowedFramesForSubscriberPriority = {
     FrameType::SUBSCRIBE,
     FrameType::FETCH,
@@ -279,11 +272,16 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   if (majorVersion_.has_value() && *majorVersion_ >= 16) {
     switch (key) {
       case TrackRequestParamKey::MAX_CACHE_DURATION:
-      case TrackRequestParamKey::PUBLISHER_PRIORITY:
-        // These are extensions-only in v16+, not allowed as params
+        // Key 0x04 is reinterpreted as RENDEZVOUS_TIMEOUT in v18+; allowed
+        // only on SUBSCRIBE. In v16/v17 it remains MAX_CACHE_DURATION which
+        // is extensions-only.
+        if (*majorVersion_ >= 18 && frameType_ == FrameType::SUBSCRIBE) {
+          return true;
+        }
         return false;
-      case TrackRequestParamKey::DELIVERY_TIMEOUT:
-        return kAllowedFramesForDeliveryTimeoutV16.contains(frameType_);
+      case TrackRequestParamKey::PUBLISHER_PRIORITY:
+        // Extensions-only in v16+, not allowed as a param.
+        return false;
       default:
         break;
     }

@@ -51,7 +51,9 @@ std::vector<Parameter> getTestPublisherTrackRequestParams(
 // Helper to add test params to a Parameters object
 static void addTestParams(
     TrackRequestParameters& params,
-    const MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter,
+    uint64_t version) {
+  params.setMajorVersion(getDraftMajorVersion(version));
   params.insertParam(getTestAuthParam(moqFrameWriter, "binky"));
   params.insertParam(Parameter(
       folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT), 1000));
@@ -108,7 +110,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   subscribeUpdate.endGroup = std::optional<uint64_t>(3);
   subscribeUpdate.priority = 255;
   subscribeUpdate.forward = std::optional<bool>(true);
-  addTestParams(subscribeUpdate.params, moqFrameWriter);
+  addTestParams(subscribeUpdate.params, moqFrameWriter, version);
   res = moqFrameWriter.writeSubscribeUpdate(writeBuf, subscribeUpdate);
 
   // SubscribeOk
@@ -173,7 +175,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   publishOk.locType = LocationType::LargestObject;
   publishOk.start = std::nullopt;
   publishOk.endGroup = std::nullopt;
-  addTestParams(publishOk.params, moqFrameWriter);
+  addTestParams(publishOk.params, moqFrameWriter, version);
   res = moqFrameWriter.writePublishOk(writeBuf, publishOk);
 
   res = moqFrameWriter.writeRequestError(
@@ -189,7 +191,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   PublishNamespace publishNamespace;
   publishNamespace.requestID = 1;
   publishNamespace.trackNamespace = TrackNamespace({"hello"});
-  addTestParams(publishNamespace.params, moqFrameWriter);
+  addTestParams(publishNamespace.params, moqFrameWriter, version);
   res = moqFrameWriter.writePublishNamespace(writeBuf, publishNamespace);
 
   // PublishNamespaceOk
@@ -229,7 +231,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.groupOrder = GroupOrder::OldestFirst;
   trackStatus.locType = LocationType::LargestObject;
-  addTestParams(trackStatus.params, moqFrameWriter);
+  addTestParams(trackStatus.params, moqFrameWriter, version);
   res = moqFrameWriter.writeTrackStatus(writeBuf, trackStatus);
 
   // TrackStatusOk
@@ -240,7 +242,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
   trackStatusOk.largest = AbsoluteLocation({19, 77});
   trackStatusOk.groupOrder = GroupOrder::OldestFirst;
-  addTestParams(trackStatusOk.params, moqFrameWriter);
+  addTestParams(trackStatusOk.params, moqFrameWriter, version);
 
   res = moqFrameWriter.writeTrackStatusOk(writeBuf, trackStatusOk);
   Goaway goaway{"new uri"};
