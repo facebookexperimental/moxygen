@@ -6,6 +6,8 @@
 
 #include "moxygen/test/MoQSessionTestCommon.h"
 
+#include <quic/api/test/MockQuicSocket.h>
+
 using namespace moxygen;
 using namespace moxygen::test;
 using testing::_;
@@ -953,6 +955,24 @@ class DummyMoQClientBase : public MoQClientBase {
   }
 };
 
+class TestMoQClient : public MoQClient {
+ public:
+  using MoQClient::MoQClient;
+
+  void setQuicWebTransport(std::shared_ptr<proxygen::QuicWebTransport> wt) {
+    quicWebTransport_ = std::move(wt);
+  }
+};
+
+std::shared_ptr<proxygen::QuicWebTransport> makeTestQuicWebTransport() {
+  auto quicSocket = std::make_shared<testing::NiceMock<quic::MockQuicSocket>>();
+  ON_CALL(*quicSocket, setDatagramCallback(_))
+      .WillByDefault(
+          [](quic::QuicSocket::DatagramCallback*)
+              -> quic::Expected<void, quic::LocalErrorCode> { return {}; });
+  return std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
+}
+
 TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
   folly::EventBase evb;
   auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
@@ -974,6 +994,63 @@ TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
   client.test_onDatagram(folly::IOBuf::copyBuffer("hi"));
   client.test_goaway(Goaway{"/newSession"});
 }
+
+TEST(MoQClientTest, TransportStatsUnavailableAfterSessionClose) {
+  folly::EventBase evb;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
+
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  (void)serverWt;
+  auto session = std::make_shared<MoQSession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), exec);
+
+  auto quicWebTransport = makeTestQuicWebTransport();
+  auto retainedQuicWebTransport = quicWebTransport;
+
+  TestMoQClient client(exec, proxygen::URL("https://example.com:443/"));
+  client.moqSession_ = session;
+  client.setQuicWebTransport(std::move(quicWebTransport));
+
+  session->close(SessionCloseErrorCode::NO_ERROR);
+  static_cast<proxygen::WebTransport*>(retainedQuicWebTransport.get())
+      ->closeSession();
+
+  EXPECT_FALSE(client.getTransportInfo().has_value());
+
+  auto flowControl = client.getConnectionFlowControl();
+  ASSERT_FALSE(flowControl.has_value());
+  EXPECT_EQ(flowControl.error(), quic::LocalErrorCode::CONNECTION_CLOSED);
+}
+
+TEST(MoQClientTest, TransportStatsUnavailableAfterSocketClose) {
+  folly::EventBase evb;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
+
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  (void)serverWt;
+  auto session = std::make_shared<MoQSession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), exec);
+
+  auto quicWebTransport = makeTestQuicWebTransport();
+  auto retainedQuicWebTransport = quicWebTransport;
+
+  TestMoQClient client(exec, proxygen::URL("https://example.com:443/"));
+  client.moqSession_ = session;
+  client.setQuicWebTransport(std::move(quicWebTransport));
+
+  static_cast<proxygen::WebTransport*>(retainedQuicWebTransport.get())
+      ->closeSession();
+
+  EXPECT_FALSE(session->isClosed());
+  EXPECT_FALSE(client.getTransportInfo().has_value());
+
+  auto flowControl = client.getConnectionFlowControl();
+  ASSERT_FALSE(flowControl.has_value());
+  EXPECT_EQ(flowControl.error(), quic::LocalErrorCode::CONNECTION_CLOSED);
+}
+
 TEST(MoQRelayClientTest, ShutdownClearsHandlersAndResetsSession) {
   folly::EventBase evb;
   auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
