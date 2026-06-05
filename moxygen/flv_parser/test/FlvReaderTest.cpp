@@ -14,12 +14,11 @@ using namespace moxygen::flv;
 using namespace moxygen::test;
 
 namespace {
-const std::string kTestDir = getContainingDirectory(XLOG_FILENAME);
-const std::string kFlvOkTestFilePath = "resources/testOK1s.flv";
+const std::string kFlvOkTestFilePath = FLV_TEST_RESOURCE_DIR "/testOK1s.flv";
 } // namespace
 
 TEST(FlvReaderTest, ReadOk) {
-  std::string flvTestFilePath = kTestDir + "/" + kFlvOkTestFilePath;
+  std::string flvTestFilePath = kFlvOkTestFilePath;
   XLOG(INFO) << "Reading file: " << flvTestFilePath;
   FlvReader flvr(flvTestFilePath);
   uint32_t numDetectedAscHeader = 0;

@@ -14,6 +14,8 @@ moxygen_add_test(TARGET FlvReaderTests
     moxygen_flv_parser_flv_reader
     testmain
 )
+target_compile_definitions(FlvReaderTests PRIVATE
+  FLV_TEST_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
 
 moxygen_add_test(TARGET FlvSequentialReaderTests
   PREFIX "FlvSequentialReader"
@@ -24,3 +26,5 @@ moxygen_add_test(TARGET FlvSequentialReaderTests
     moxygen_flv_parser_flv_stream_parser
     testmain
 )
+target_compile_definitions(FlvSequentialReaderTests PRIVATE
+  FLV_TEST_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")

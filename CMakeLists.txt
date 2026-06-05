@@ -68,6 +68,14 @@ if (NOT DEFINED proxygen_SOURCE_DIR)
 endif()
 find_package(Glog REQUIRED)
 add_compile_definitions(GLOG_USE_GLOG_EXPORT)
+
+# Strip absolute source/build dir prefixes so folly XLOG categories derive
+# from the in-tree path (e.g. moxygen.MoQSession) instead of an absolute
+# "_deps/...-src/..." when moxygen is consumed via FetchContent. Mirrors the
+# pattern folly applies to its own sources.
+add_compile_definitions(
+  "FOLLY_XLOG_STRIP_PREFIXES=\"${CMAKE_SOURCE_DIR}:${CMAKE_BINARY_DIR}\""
+)
 find_package(gflags REQUIRED)
 find_package(Zstd REQUIRED)
 
