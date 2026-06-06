@@ -11,7 +11,6 @@
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/logging/xlog.h>
 #include <quic/client/QuicClientTransport.h>
-#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <quic/common/events/FollyQuicEventBase.h>
 #include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
@@ -124,8 +123,7 @@ QuicConnector::connectQuic(
   quicClient->setCongestionControllerFactory(
       std::make_shared<quic::DefaultCongestionControllerFactory>());
   quicClient->setTransportSettings(ts);
-  quicClient->addNewPeerAddress(
-      quic::fromFollySocketAddress<quic::SocketAddress>(connectAddr));
+  quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
   if (!hostname.empty()) {
     quicClient->setHostname(hostname);

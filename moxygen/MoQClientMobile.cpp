@@ -4,7 +4,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <quic/common/udpsocket/LibevQuicAsyncUDPSocket.h>
 
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
@@ -94,8 +93,7 @@ MoQClientMobile::connectQuic(
           .build(),
       /*connectionIdSize=*/0);
   quicClient->setTransportSettings(transportSettings);
-  quicClient->addNewPeerAddress(
-      quic::fromFollySocketAddress<quic::SocketAddress>(connectAddr));
+  quicClient->addNewPeerAddress(connectAddr);
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
   folly::CancellationToken cancellationToken =
       co_await folly::coro::co_current_cancellation_token;
