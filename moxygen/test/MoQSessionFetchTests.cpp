@@ -412,7 +412,7 @@ CO_TEST_P_X(MoQSessionTest, FetchBadLength) {
       folly::FutureTimeout);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, FetchOverLimit) {
+CO_TEST_P_X(PreDraft18Test, FetchOverLimit) {
   co_await setupMoQSession();
   expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
     EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
@@ -433,14 +433,44 @@ CO_TEST_P_X(MoQSessionTest, FetchOverLimit) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess()).Times(2);
   auto res = co_await clientSession_->fetch(fetch, fetchCallback1);
   res = co_await clientSession_->fetch(fetch, fetchCallback2);
-  // Draft 18+: stream reset → CANCELLED; older: cleanup() → INTERNAL_ERROR.
-  auto expectedCode =
-      getDraftMajorVersion(*clientSession_->getNegotiatedVersion()) >= 18
-      ? FetchErrorCode::CANCELLED
-      : FetchErrorCode::INTERNAL_ERROR;
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchError(expectedCode));
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onFetchError(FetchErrorCode::INTERNAL_ERROR));
   res = co_await clientSession_->fetch(fetch, fetchCallback3);
   EXPECT_TRUE(res.hasError());
+}
+// Draft-18 mirror of FetchOverLimit: each fetch consumes a client-initiated
+// bidi stream for the request. When the bidi stream limit is reached, the
+// next fetch fails with INTERNAL_ERROR from createBidiStream.
+CO_TEST_P_X(Draft18Test, FetchOverBidiStreamLimit) {
+  constexpr uint64_t kLimit = 2;
+  clientWt_->setMaxLocalBidiStreams(kLimit);
+  co_await setupMoQSession();
+
+  expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  auto fetchCb = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  Fetch fetch = getFetch({0, 0}, {0, 1});
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess()).Times(kLimit);
+  for (uint64_t i = 0; i < kLimit; ++i) {
+    auto res = co_await clientSession_->fetch(fetch, fetchCb);
+    EXPECT_FALSE(res.hasError()) << "fetch " << i << " should succeed";
+  }
+
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onFetchError(FetchErrorCode::INTERNAL_ERROR));
+  auto blocked = co_await clientSession_->fetch(fetch, fetchCb);
+  EXPECT_TRUE(blocked.hasError());
+  EXPECT_EQ(blocked.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
   co_await setupMoQSession();

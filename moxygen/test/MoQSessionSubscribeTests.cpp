@@ -39,7 +39,7 @@ CO_TEST_P_X(MoQSessionTest, ServerInitiatedSubscribe) {
   co_await publishDone_;
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
+CO_TEST_P_X(PreDraft18Test, MaxRequestID) {
   co_await setupMoQSession();
   {
     testing::InSequence enforceOrder;
@@ -122,6 +122,54 @@ CO_TEST_P_X(MoQSessionTest, MaxRequestID) {
   EXPECT_CALL(*clientSubscriberStatsCallback_, recordSubscribeLatency(_));
   res = co_await clientSession_->subscribe(sub, trackPublisher3);
   EXPECT_TRUE(res.hasError());
+}
+// Draft-18 mirror of MaxRequestID: each subscribe consumes a client-initiated
+// bidi stream for the request, so the QUIC bidi stream limit gates how many
+// concurrent subscribes the client can have outstanding. The (N+1)-th
+// subscribe must fail with INTERNAL_ERROR when createBidiStream returns
+// STREAM_CREATION_ERROR.
+CO_TEST_P_X(Draft18Test, SubscribeOverBidiStreamLimit) {
+  constexpr uint64_t kLimit = 2;
+  clientWt_->setMaxLocalBidiStreams(kLimit);
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeSuccess())
+      .Times(kLimit);
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub);
+  });
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto trackPublisher =
+      std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+  EXPECT_CALL(*trackPublisher, setTrackAlias(_))
+      .WillRepeatedly(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  // The two open subscribes get publishDone when the session closes.
+  EXPECT_CALL(*trackPublisher, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+
+  for (uint64_t i = 0; i < kLimit; ++i) {
+    auto res = co_await clientSession_->subscribe(
+        getSubscribe(kTestTrackName), trackPublisher);
+    EXPECT_FALSE(res.hasError()) << "subscribe " << i << " should succeed";
+  }
+
+  // Limit reached. The next subscribe's createBidiStream fails synchronously
+  // and the session surfaces it as INTERNAL_ERROR.
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordSubscribeLatency(_));
+  auto blocked = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), trackPublisher);
+  EXPECT_TRUE(blocked.hasError());
+  EXPECT_EQ(blocked.error().errorCode, SubscribeErrorCode::INTERNAL_ERROR);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
   co_await setupMoQSession();

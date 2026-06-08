@@ -268,4 +268,9 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
 // streams, uni control streams, or other draft-18-introduced behavior.
 class Draft18Test : public MoQSessionTest {};
 
+// Parameterized to pre-draft-18 versions only. Use for tests that exercise
+// MAX_REQUEST_ID / REQUESTS_BLOCKED request-ID flow control, which was
+// removed in draft 18 in favor of QUIC bidi stream limits.
+class PreDraft18Test : public MoQSessionTest {};
+
 }} // namespace moxygen::test

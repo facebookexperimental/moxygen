@@ -141,13 +141,15 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
       case FrameType::SETUP:
-      case FrameType::MAX_REQUEST_ID:
-      case FrameType::REQUESTS_BLOCKED:
       case FrameType::FETCH:
       case FrameType::FETCH_CANCEL:
       case FrameType::FETCH_OK:
       case FrameType::FETCH_ERROR:
         return true;
+      // Removed in draft-18; QUIC bidi stream limits govern instead.
+      case FrameType::MAX_REQUEST_ID:
+      case FrameType::REQUESTS_BLOCKED:
+        return getDraftMajorVersion(*negotiatedVersion_) < 18;
       case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
       case FrameType::SUBSCRIBE_NAMESPACE_OK:
       case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
