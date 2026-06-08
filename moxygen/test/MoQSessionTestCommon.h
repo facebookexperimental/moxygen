@@ -264,4 +264,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   TestTimeoutCallback testTimeout_;
 };
 
+// Parameterized to draft 18+ only. Use for tests that exercise bidi request
+// streams, uni control streams, or other draft-18-introduced behavior.
+class Draft18Test : public MoQSessionTest {};
+
 }} // namespace moxygen::test

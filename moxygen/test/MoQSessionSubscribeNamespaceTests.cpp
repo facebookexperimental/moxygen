@@ -239,7 +239,9 @@ CO_TEST_P_X(
 INSTANTIATE_TEST_SUITE_P(
     V16PlusSubscribeNamespaceTest,
     V16PlusSubscribeNamespaceTest,
-    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(
+        VersionParams{{kVersionDraft16}, kVersionDraft16},
+        VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
 CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   co_await setupMoQSession();

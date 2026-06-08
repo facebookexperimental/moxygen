@@ -561,9 +561,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestError(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
-        if (auto rid = getStreamRequestID()) {
-          res->requestID = *rid;
-        }
+        // TODO(draft-18): drop the on-wire requestID per spec §10.6 and
+        // substitute stream id for terminal / FIFO for post-terminal here.
         if (callback_) {
           callback_->onRequestError(std::move(res.value()), curFrameType_);
         }
@@ -693,9 +692,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestOk(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
-        if (auto rid = getStreamRequestID()) {
-          res->requestID = *rid;
-        }
+        // TODO(draft-18): drop the on-wire requestID per spec §10.5 and
+        // substitute stream id for terminal / FIFO for post-terminal here.
         if (callback_) {
           callback_->onRequestOk(std::move(res.value()), curFrameType_);
         }

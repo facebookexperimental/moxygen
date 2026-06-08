@@ -507,10 +507,9 @@ uint64_t MoQSessionTest::getServerSelectedVersion() {
 }
 
 uint64_t MoQSessionTest::serverObjectStreamId(uint64_t n) const {
-  // FakeSharedWebTransport uni stream IDs: 2, 6, 10, 14, ...
-  // In draft 18, ID 2 is the server's outgoing control stream,
-  // so object streams start at 6.
-  uint64_t base = useUniControlStreams(GetParam().serverVersion) ? 6 : 2;
+  // Server uni IDs are 3, 7, 11, ...; draft 18 reserves 3 for the control
+  // stream.
+  uint64_t base = useUniControlStreams(GetParam().serverVersion) ? 7 : 3;
   return base + n * 4;
 }
 
@@ -523,5 +522,10 @@ folly::coro::Task<void> MoQSessionTest::rescheduleN(int n) {
     co_await folly::coro::co_reschedule_on_current_executor;
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft18Test,
+    Draft18Test,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
 }} // namespace moxygen::test
