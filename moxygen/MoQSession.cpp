@@ -2769,10 +2769,11 @@ void MoQSession::onClientSetup(Setup clientSetup) {
 
 std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
     MoQControlCodec::ControlCallback* callback,
-    const std::vector<FrameType>& allowedFrames,
-    std::optional<RequestID> requestID) {
-  auto codec =
-      std::make_unique<MoQBidiStreamCodec>(callback, allowedFrames, requestID);
+    std::vector<FrameType> allowedFrames,
+    std::optional<RequestID> requestID,
+    std::optional<FrameType> okType) {
+  auto codec = std::make_unique<MoQBidiStreamCodec>(
+      callback, std::move(allowedFrames), requestID, okType);
   codec->initializeVersion(*negotiatedVersion_);
   codec->setTokenCache(&receiveTokenCache_);
   return codec;
@@ -2968,7 +2969,8 @@ void MoQSession::failPendingRequestOnEarlyClose(
 folly::Expected<std::shared_ptr<BidiStreamControl>, std::string>
 MoQSession::sendRequest(
     folly::IOBufQueue& writeBuf,
-    const std::vector<FrameType>& allowedResponses,
+    FrameType okType,
+    std::vector<FrameType> postTerminal,
     RequestID requestID,
     uint64_t minBidiDraftVersion,
     std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback,
@@ -2982,7 +2984,7 @@ MoQSession::sendRequest(
     bidiStream->writeHandle->writeStreamData(
         writeBuf.move(), /*fin=*/false, nullptr);
     auto* cb = senderCallback ? senderCallback.get() : this;
-    auto codec = makeBidiCodec(cb, allowedResponses, requestID);
+    auto codec = makeBidiCodec(cb, std::move(postTerminal), requestID, okType);
     // Any peer close (FIN or RST) before the terminal reply also fails the
     // pending request via failPendingRequestOnEarlyClose in controlReadLoop.
     auto control = std::make_shared<BidiStreamControl>(
@@ -4851,17 +4853,11 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   moqFrameWriter_.writeTrackStatus(writeBuf, trackStatus);
-  // In draft 15+, TRACK_STATUS_OK is sent as REQUEST_OK
-  std::vector<FrameType> allowedFrames = {
-      getDraftMajorVersion(*negotiatedVersion_) >= 15
-          ? FrameType::REQUEST_OK
-          : FrameType::TRACK_STATUS_OK,
-      FrameType::TRACK_STATUS_ERROR,
-      FrameType::REQUEST_ERROR};
   auto reqID = trackStatus.requestID;
   auto sendResult = sendRequest(
       writeBuf,
-      allowedFrames,
+      FrameType::REQUEST_OK,
+      /*postTerminal=*/{},
       reqID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
@@ -5085,10 +5081,8 @@ Subscriber::PublishResult MoQSession::publish(
   moqFrameWriter_.writePublish(writeBuf, pub);
   auto sendResult = sendRequest(
       writeBuf,
-      {FrameType::PUBLISH_OK,
-       FrameType::REQUEST_ERROR,
-       FrameType::REQUEST_OK,
-       FrameType::REQUEST_UPDATE},
+      FrameType::PUBLISH_OK,
+      /*postTerminal=*/{},
       pub.requestID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
@@ -5295,10 +5289,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   }
   auto sendResult = sendRequest(
       buf,
-      {FrameType::SUBSCRIBE_OK,
-       FrameType::REQUEST_ERROR,
-       FrameType::PUBLISH_DONE,
-       FrameType::REQUEST_OK},
+      FrameType::SUBSCRIBE_OK,
+      /*postTerminal=*/{FrameType::PUBLISH_DONE, FrameType::REQUEST_OK},
       reqID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
@@ -5769,7 +5761,8 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   moqFrameWriter_.writeFetch(writeBuf, fetch);
   auto sendResult = sendRequest(
       writeBuf,
-      {FrameType::FETCH_OK, FrameType::REQUEST_ERROR, FrameType::REQUEST_OK},
+      FrameType::FETCH_OK,
+      /*postTerminal=*/{},
       reqID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
