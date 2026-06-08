@@ -523,6 +523,120 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
   }
 }
 
+// PUBLISH requestUpdate round-trip with assertion on the REQUEST_OK reply
+// (PublishThenSubscribeUpdate fires the update but never awaits the result).
+CO_TEST_P_X(MoQSessionTest, PublishRequestUpdateRoundTrip) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100},
+      true,
+  };
+  std::shared_ptr<SubscriptionHandle> capturedHandle;
+  folly::coro::Baton subscribeUpdateProcessed;
+
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle> subHandle)
+              -> Subscriber::PublishResult {
+            capturedHandle = std::move(subHandle);
+            return makePublishOkResult(actualPub);
+          });
+
+  auto handle = makePublishHandle();
+  expectSubscribeUpdate(handle, subscribeUpdateProcessed);
+
+  auto publishResult = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(publishResult.hasValue());
+  if (!publishResult.hasValue()) {
+    co_return;
+  }
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasValue());
+  if (!replyRes.hasValue()) {
+    co_return;
+  }
+
+  SubscribeUpdate subscribeUpdate{
+      RequestID(0),
+      RequestID(0),
+      AbsoluteLocation{0, 0},
+      10,
+      kDefaultPriority + 1,
+      true};
+
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
+
+  auto updateResult = co_await capturedHandle->requestUpdate(subscribeUpdate);
+  EXPECT_TRUE(updateResult.hasValue())
+      << "REQUEST_UPDATE round-trip should produce REQUEST_OK";
+  co_await subscribeUpdateProcessed;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, PublishRequestUpdateRoundTrip) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100},
+      true,
+  };
+  std::shared_ptr<SubscriptionHandle> capturedHandle;
+  folly::coro::Baton subscribeUpdateProcessed;
+
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle> subHandle)
+              -> Subscriber::PublishResult {
+            capturedHandle = std::move(subHandle);
+            return makePublishOkResult(actualPub);
+          });
+
+  auto handle = makePublishHandle();
+  expectSubscribeUpdate(handle, subscribeUpdateProcessed);
+
+  auto publishResult = clientSession_->publish(std::move(pub), handle);
+  EXPECT_TRUE(publishResult.hasValue());
+  if (!publishResult.hasValue()) {
+    co_return;
+  }
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasValue());
+  if (!replyRes.hasValue()) {
+    co_return;
+  }
+
+  SubscribeUpdate subscribeUpdate{
+      RequestID(0),
+      RequestID(0),
+      AbsoluteLocation{0, 0},
+      10,
+      kDefaultPriority + 1,
+      true};
+
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
+
+  auto updateResult = co_await capturedHandle->requestUpdate(subscribeUpdate);
+  EXPECT_TRUE(updateResult.hasValue())
+      << "REQUEST_UPDATE round-trip should produce REQUEST_OK on PUBLISH bidi";
+  co_await subscribeUpdateProcessed;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

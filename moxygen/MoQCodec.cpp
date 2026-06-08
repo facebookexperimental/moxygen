@@ -514,9 +514,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::REQUEST_UPDATE: {
       auto res = moqFrameParser_.parseRequestUpdate(cursor, curFrameLength_);
       if (res) {
-        if (auto rid = getStreamRequestID()) {
-          res->requestID = *rid;
-        }
+        // Don't override requestID from getStreamRequestID(): on a v18 bidi
+        // the stream primary is existingRequestID, not the new update id.
         if (callback_) {
           callback_->onRequestUpdate(std::move(res.value()));
         }

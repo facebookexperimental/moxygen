@@ -520,6 +520,9 @@ class MoQSession : public Subscriber,
 
     void onConnectionError(ErrorCode error) override;
     void onRequestUpdate(RequestUpdate requestUpdate) override;
+    void onRequestOk(RequestOk requestOk, FrameType frameType) override;
+    void onRequestError(RequestError requestError, FrameType frameType)
+        override;
     void onSubscribe(SubscribeRequest sub) override;
     void onFetch(Fetch fetch) override;
     void onPublish(PublishRequest pub) override;
@@ -719,7 +722,8 @@ class MoQSession : public Subscriber,
       std::shared_ptr<ReplyContext> replyContext);
   void onPublishImpl(
       PublishRequest publish,
-      std::shared_ptr<ReplyContext> replyContext);
+      std::shared_ptr<ReplyContext> replyContext,
+      std::shared_ptr<BidiStreamControl> control = nullptr);
   virtual void onPublishNamespaceImpl(
       PublishNamespace publishNamespace,
       std::shared_ptr<ReplyContext> replyContext);
