@@ -525,7 +525,7 @@ StreamPublisherImpl::StreamPublisherImpl(
           logger,
           deliveryCallback,
           std::move(deliveryTimeout)) {
-  CHECK(writeHandle)
+  XCHECK(writeHandle)
       << "For a SUBSCRIBE, you need to pass in a non-null writeHandle";
   // When sgPriority is none, the receiver will use the value from
   // PUBLISHER_PRIORITY, which defaults to 128 if not sent by the publisher when
@@ -1722,7 +1722,7 @@ MoQSession::TrackPublisherImpl::datagram(
   } else if (header.status == ObjectStatus::NORMAL && payload) {
     headerLength = payload->computeChainDataLength();
   } // else 0 is fine
-  DCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
+  XDCHECK_EQ(headerLength, payload ? payload->computeChainDataLength() : 0);
   (void)moqFrameWriter_.writeDatagramObject(
       writeBuf,
       *trackAlias_,

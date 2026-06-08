@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/logging/xlog.h>
 #include <moxygen/tools/moqperf/MoQPerfServer.h>
 #include <moxygen/tools/moqperf/MoQPerfUtils.h>
 
@@ -37,7 +38,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
 folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
     Fetch fetchRequest,
     std::shared_ptr<FetchConsumer> callback) {
-  CHECK(!requestId_.has_value()) << "Cannot get more than one fetch, as of now";
+  XCHECK(!requestId_.has_value())
+      << "Cannot get more than one fetch, as of now";
   auto session = MoQSession::getRequestSession();
   co_withExecutor(
       session->getExecutor(),
@@ -73,7 +75,7 @@ folly::coro::Task<void> MoQPerfServer::writeLoop(
          subgroup++) {
       auto beginSubgroupResult =
           trackConsumer->beginSubgroup(group, subgroup, kDefaultPriority);
-      CHECK(beginSubgroupResult.hasValue())
+      XCHECK(beginSubgroupResult.hasValue())
           << "Unable to create subgroup with num - " << subgroup;
       auto subgroupConsumer = beginSubgroupResult.value();
       for (uint64_t objectId = 0; objectId < params.numObjectsPerSubgroup;

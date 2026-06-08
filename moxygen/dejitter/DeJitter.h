@@ -32,7 +32,7 @@ class DeJitter {
   };
 
   explicit DeJitter(uint64_t bufferSizeMs) : maxBufferSizeMs_(bufferSizeMs) {
-    CHECK_GT(maxBufferSizeMs_, 0);
+    XCHECK_GT(maxBufferSizeMs_, 0);
   }
 
   size_t size() const {

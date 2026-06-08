@@ -282,7 +282,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
           // Normal object header
           curObjectHeader_ = std::get<ObjectHeader>(fetchRes->value);
         } else {
-          DCHECK(streamType_ == StreamType::SUBGROUP_HEADER_SG);
+          XDCHECK(streamType_ == StreamType::SUBGROUP_HEADER_SG);
           auto subgroupRes = moqFrameParser_.parseSubgroupObjectHeader(
               cursor, remainingLength, curObjectHeader_, subgroupOptions_);
           if (subgroupRes.hasError()) {

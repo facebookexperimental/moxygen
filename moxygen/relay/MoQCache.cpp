@@ -1334,7 +1334,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
     std::shared_ptr<FetchConsumer> consumer,
     std::shared_ptr<Publisher> upstream) {
   auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
-  CHECK(standalone);
+  XCHECK(standalone);
   auto emplaceResult =
       cache_.emplace(fetch.fullTrackName, std::make_shared<CacheTrack>());
   auto trackIt = emplaceResult.first;
@@ -1438,7 +1438,7 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
   XLOG(DBG1) << "fetchImpl for {" << standalone->start.group << ","
              << standalone->start.object << "}, {" << standalone->end.group
              << "," << standalone->end.object << "}";
-  CHECK(standalone);
+  XCHECK(standalone);
   auto token = co_await folly::coro::co_current_cancellation_token;
   std::optional<AbsoluteLocation> fetchStart;
   bool servedOneObject = false;

@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/flv_parser/FlvCoder.h"
+#include <folly/logging/xlog.h>
 #include <netinet/in.h>
 
 namespace moxygen::flv {
@@ -68,7 +69,7 @@ std::unique_ptr<folly::IOBuf> FlvCoder::writeTag(FlvTag tag) {
     tagSize += audioTag->data->computeChainDataLength();
     queue.append(std::move(audioTag->data));
   }
-  CHECK_GT(tagSize, 0);
+  XCHECK_GT(tagSize, 0);
   queue.append(write4Bytes(static_cast<uint32_t>(tagSize)));
   return queue.move();
 }
@@ -90,7 +91,7 @@ std::unique_ptr<folly::IOBuf> FlvCoder::writeVideoTagHeader(
     const FlvVideoTag& tagVideo) {
   folly::IOBufQueue queue =
       folly::IOBufQueue(folly::IOBufQueue::cacheChainLength());
-  CHECK_EQ(tagVideo.codecId, 7);
+  XCHECK_EQ(tagVideo.codecId, 7);
   std::byte tmp = std::byte(tagVideo.frameType << 4 | (tagVideo.codecId & 0xF));
   queue.append(writeByte(tmp));
   queue.append(writeByte(std::byte(tagVideo.avcPacketType)));
@@ -101,7 +102,7 @@ std::unique_ptr<folly::IOBuf> FlvCoder::writeVideoTagHeader(
 
 std::unique_ptr<folly::IOBuf> FlvCoder::writeAudioTagHeader(
     const FlvAudioTag& tagAudio) {
-  CHECK_EQ(tagAudio.soundFormat, 10);
+  XCHECK_EQ(tagAudio.soundFormat, 10);
   folly::IOBufQueue queue =
       folly::IOBufQueue(folly::IOBufQueue::cacheChainLength());
 

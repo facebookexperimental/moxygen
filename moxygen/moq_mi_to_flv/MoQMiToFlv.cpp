@@ -27,7 +27,7 @@ std::list<flv::FlvTag> MoQMiToFlv::MoQMiToFlvPayload(
     auto flv_dts = convertTsToFlv(moqv->dts, moqv->timescale);
 
     int32_t compositionTime = flv_pts - flv_dts;
-    CHECK_GE(compositionTime, 0);
+    XCHECK_GE(compositionTime, 0);
 
     if (moqv->metadata != nullptr && !videoHeader_) {
       XLOG(INFO) << "Writing video header";

@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/logging/xlog.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/samples/chat/MoQChatClient.h>
 
@@ -309,7 +310,7 @@ void MoQChatClient::handleInput(const std::string& input) {
 
 folly::coro::Task<void> MoQChatClient::subscribeToUser(
     TrackNamespace trackNamespace) {
-  CHECK_GE(trackNamespace.size(), 5);
+  XCHECK_GE(trackNamespace.size(), 5);
   std::string username = trackNamespace[2];
   std::string deviceId = trackNamespace[3];
   std::string timestampStr = trackNamespace[4];

@@ -46,7 +46,7 @@ const char* getFrameTypeString(moxygen::FrameType type) {
 #if defined(__APPLE__)
   __builtin_unreachable();
 #else
-  LOG(FATAL) << "Unreachable";
+  XLOG(FATAL) << "Unreachable";
 #endif
 }
 
@@ -68,7 +68,7 @@ const char* getStreamTypeString(moxygen::StreamType type) {
 #if defined(__APPLE__)
   __builtin_unreachable();
 #else
-  LOG(FATAL) << "Unreachable";
+  XLOG(FATAL) << "Unreachable";
 #endif
 }
 
@@ -87,7 +87,7 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
 #if defined(__APPLE__)
   __builtin_unreachable();
 #else
-  LOG(FATAL) << "Unreachable";
+  XLOG(FATAL) << "Unreachable";
 #endif
 }
 
@@ -397,7 +397,7 @@ Fetch::Fetch(
       priority(p),
       groupOrder(g),
       args(JoiningFetch(jsid, joiningStart, fetchType)) {
-  CHECK(
+  XCHECK(
       fetchType == FetchType::RELATIVE_JOINING ||
       fetchType == FetchType::ABSOLUTE_JOINING);
   for (const auto& param : pa) {

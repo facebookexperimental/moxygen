@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/logging/xlog.h>
 #include <moxygen/tools/moqperf/MoQPerfClient.h>
 #include <moxygen/tools/moqperf/MoQPerfUtils.h>
 
@@ -125,7 +126,7 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQPerfClient::subscribe(
       /*params=*/{});
   auto subscribeResult = co_await moqClient_.moqSession_->subscribe(
       subscribeRequest, trackConsumer);
-  CHECK(subscribeResult.hasValue()) << "Issue with subscribing to peer";
+  XCHECK(subscribeResult.hasValue()) << "Issue with subscribing to peer";
   co_return subscribeResult;
 }
 
@@ -151,7 +152,7 @@ folly::coro::Task<MoQSession::FetchResult> MoQPerfClient::fetch(
       moxygen::AbsoluteLocation{0, 0}};
   auto fetchResult =
       co_await moqClient_.moqSession_->fetch(fetchRequest, fetchConsumer);
-  CHECK(fetchResult.hasValue()) << "Issue with fetching to peer";
+  XCHECK(fetchResult.hasValue()) << "Issue with fetching to peer";
   co_return fetchResult;
 }
 

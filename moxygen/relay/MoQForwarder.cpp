@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/relay/MoQForwarder.h"
+#include <folly/logging/xlog.h>
 #include "moxygen/MoQTrackProperties.h"
 
 namespace moxygen {
@@ -273,7 +274,7 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
     return folly::makeUnexpected(
         FetchError{RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No largest"});
   }
-  CHECK(
+  XCHECK(
       joining.fetchType == FetchType::RELATIVE_JOINING ||
       joining.fetchType == FetchType::ABSOLUTE_JOINING);
   auto& largest = *subIt->second->subscribeOk().largest;

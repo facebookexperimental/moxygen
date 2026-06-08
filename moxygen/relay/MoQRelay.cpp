@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/relay/MoQRelay.h"
+#include <folly/logging/xlog.h>
 #include "moxygen/MoQFilters.h"
 #include "moxygen/MoQTrackProperties.h"
 
@@ -685,7 +686,7 @@ MoQRelay::subscribeNamespace(
 
   auto session = MoQSession::getRequestSession();
   auto maybeNegotiatedVersion = session->getNegotiatedVersion();
-  CHECK(maybeNegotiatedVersion.has_value());
+  XCHECK(maybeNegotiatedVersion.has_value());
 
   // check auth
   // Allow empty namespace prefix only for draft-16 and above.
@@ -756,7 +757,7 @@ MoQRelay::subscribeNamespace(
       }
       auto& forwarder = subscriptionIt->second.forwarder;
       auto maybeVersion = session->getNegotiatedVersion();
-      CHECK(maybeVersion.has_value());
+      XCHECK(maybeVersion.has_value());
       if (getDraftMajorVersion(*maybeVersion) <= 15 ||
           (subNs.options == SubscribeNamespaceOptions::BOTH ||
            subNs.options == SubscribeNamespaceOptions::PUBLISH)) {
@@ -850,7 +851,7 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
 
   auto session = MoQSession::getRequestSession();
   auto maybeNegotiatedVersion = session->getNegotiatedVersion();
-  CHECK(maybeNegotiatedVersion.has_value());
+  XCHECK(maybeNegotiatedVersion.has_value());
   if (getDraftMajorVersion(*maybeNegotiatedVersion) < 18) {
     co_return folly::makeUnexpected(
         SubscribeTracksError{
