@@ -16,6 +16,7 @@ moxygen_add_library(moxygen_moq_types
   SRCS
     MoQTypes.cpp
   DEPS
+    moxygen_moq_versions
     Folly::folly_container_f14_hash
     Folly::folly_conv
     Folly::folly_logging_logging
@@ -248,6 +249,7 @@ moxygen_add_library(moxygen_moq_qmux_server
     mvfst::mvfst_state_transport_settings
     fizz::fizz
     Folly::folly_cancellation_token
+    Folly::folly_function
     Folly::folly_io_async_async_transport
     Folly::folly_io_async_scoped_event_base_thread
     Folly::folly_io_async_server_socket

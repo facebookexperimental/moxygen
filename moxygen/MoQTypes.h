@@ -88,12 +88,19 @@ enum class PublishDoneStatusCode : uint32_t {
   TRACK_ENDED = 0x2,
   SUBSCRIPTION_ENDED = 0x3,
   GOING_AWAY = 0x4,
-  EXPIRED = 0x5,
-  TOO_FAR_BEHIND = 0x6,
+  TOO_FAR_BEHIND = 0x5, // use tooFarBehindCode(version) on the wire
+  EXPIRED = 0x6,
+  TOO_FAR_BEHIND_16 = 0x6, // draft <= 16 value, swapped with EXPIRED in d18
   UPDATE_FAILED = 0x8,
+  EXCESSIVE_LOAD = 0x9,
+  MALFORMED_TRACK = 0x12,
   //
   SESSION_CLOSED = std::numeric_limits<uint32_t>::max()
 };
+
+// Returns the on-wire PUBLISH_DONE code for TOO_FAR_BEHIND for
+// negotiatedVersion
+PublishDoneStatusCode tooFarBehindCode(uint64_t negotiatedVersion);
 
 enum class TrackStatusCode : uint32_t {
   IN_PROGRESS = 0x0,
@@ -114,40 +121,47 @@ enum class TrackStatusCode : uint32_t {
 // Consolidated error code enum for all request types
 enum class RequestErrorCode : uint32_t {
   // Shared error codes (same semantic meaning across request types)
-  INTERNAL_ERROR = 0,
-  UNAUTHORIZED = 1,
-  TIMEOUT = 2,
-  NOT_SUPPORTED = 3,
-  TRACK_NOT_EXIST = 4,
-  INVALID_RANGE = 5,
-
-  // Note: Pending draft update
-  GOING_AWAY = 6,
-
-  // SubscribeNamespace-specific codes
-  NAMESPACE_PREFIX_UNKNOWN = 4, // Same value as TRACK_NOT_EXIST
-
-  // PublishNamespace-specific codes
-  UNINTERESTED = 4, // Same value as TRACK_NOT_EXIST
-
+  INTERNAL_ERROR = 0x0,
+  UNAUTHORIZED = 0x1,
+  TIMEOUT = 0x2,
+  NOT_SUPPORTED = 0x3,
+  MALFORMED_AUTH_TOKEN = 0x4,
+  EXPIRED_AUTH_TOKEN = 0x5,
+  GOING_AWAY = 0x6,
+  EXCESSIVE_LOAD = 0x9, // draft 18+
+  DOES_NOT_EXIST = 0x10,
+  TRACK_NOT_EXIST = 0x10,          // alias of DOES_NOT_EXIST
+  NAMESPACE_PREFIX_UNKNOWN = 0x10, // alias of DOES_NOT_EXIST
+  INVALID_RANGE = 0x11,
+  MALFORMED_TRACK = 0x12,
   DUPLICATE_SUBSCRIPTION = 0x19,
+  UNINTERESTED = 0x20,
 
   // Draft 18+: returned by SUBSCRIBE_TRACKS when the requesting session
   // already has an established SUBSCRIBE_TRACKS at an overlapping prefix
   // (ancestor, descendant, or exact). See draft-ietf-moq-transport §10.19
   // for the semantics and §15.10.2 for the on-wire value.
   PREFIX_OVERLAP = 0x30,
+  NAMESPACE_TOO_LARGE = 0x31, // draft 18+
+  INVALID_JOINING_REQUEST_ID = 0x32,
+  UNSUPPORTED_EXTENSION = 0x33, // draft 18+
+  REDIRECT = 0x34,              // draft 18+
 
   // Special values
   CANCELLED = std::numeric_limits<uint32_t>::max(),
 };
 
 enum class ResetStreamErrorCode : uint32_t {
-  INTERNAL_ERROR = 0,
-  DELIVERY_TIMEOUT = 1,
-  SESSION_CLOSED = 2,
-  CANCELLED = 3,        // received UNSUBSCRIBE / FETCH_CANCEL / STOP_SENDING
-  MALFORMED_TRACK = 12, // track violated protocol ordering constraints
+  INTERNAL_ERROR = 0x0,
+  CANCELLED = 0x1, // received UNSUBSCRIBE / FETCH_CANCEL / STOP_SENDING
+  DELIVERY_TIMEOUT = 0x2,
+  SESSION_CLOSED = 0x3,
+  GOING_AWAY = 0x4,            // draft 18+
+  TOO_FAR_BEHIND = 0x5,        // draft 18+
+  UNKNOWN_OBJECT_STATUS = 0x6, // draft 18+ (was 0x4 in draft 16)
+  EXPIRED_AUTH_TOKEN = 0x7,    // draft 18+
+  EXCESSIVE_LOAD = 0x9,        // draft 18+
+  MALFORMED_TRACK = 0x12,      // track violated protocol ordering constraints
 };
 
 enum class FrameType : uint64_t {

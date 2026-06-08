@@ -1627,10 +1627,11 @@ void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
   terminatePublish(
       PublishDone(
           {requestID_,
-           PublishDoneStatusCode::TOO_FAR_BEHIND,
+           tooFarBehindCode(
+               session_->getNegotiatedVersion().value_or(kVersionDraft14)),
            streamCount_,
            "peer is too far behind"}),
-      ResetStreamErrorCode::INTERNAL_ERROR);
+      ResetStreamErrorCode::TOO_FAR_BEHIND);
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -4358,7 +4359,7 @@ void MoQSession::onFetchImpl(
       // message error
       fetchError(
           {fetch.requestID,
-           FetchErrorCode::INTERNAL_ERROR,
+           FetchErrorCode::INVALID_JOINING_REQUEST_ID,
            "Unknown joining requestID"},
           *replyContext);
       return;

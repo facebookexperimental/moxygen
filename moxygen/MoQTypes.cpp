@@ -11,6 +11,7 @@
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/logging/xlog.h>
+#include <moxygen/MoQVersions.h>
 
 namespace {
 
@@ -93,6 +94,12 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
 } // namespace
 
 namespace moxygen {
+
+PublishDoneStatusCode tooFarBehindCode(uint64_t negotiatedVersion) {
+  return getDraftMajorVersion(negotiatedVersion) <= 16
+      ? PublishDoneStatusCode::TOO_FAR_BEHIND_16
+      : PublishDoneStatusCode::TOO_FAR_BEHIND;
+}
 
 std::string AbsoluteLocation::describe() const {
   return folly::to<std::string>("{", group, ",", object, "}");
