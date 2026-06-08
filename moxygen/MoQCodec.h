@@ -113,6 +113,16 @@ class MoQControlCodec : public MoQCodec {
   // If ParseResult::BLOCKED is returned, must call onIngress again to restart
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
+ public:
+  // Draft 18+: REQUEST_OK / REQUEST_ERROR carry no on-wire requestID; codec
+  // supplies it (terminal = stream's primary; post-terminal = FIFO).
+  virtual std::optional<RequestID> takeNextResponseRequestID() {
+    return std::nullopt;
+  }
+  virtual bool hasPendingPostTerminalResponse() const {
+    return false;
+  }
+
  protected:
   virtual std::optional<RequestID> getStreamRequestID() const {
     return std::nullopt;
@@ -245,15 +255,20 @@ class MoQBidiStreamCodec : public MoQControlCodec {
       return false;
     }
     if (!firstFrameSeen_) {
-      // Response-side: first frame on the stream MUST be the terminal reply
-      // (okType or REQUEST_ERROR).
+      // Response-side: first frame MUST be the terminal reply.
       if (okType_ && f != *okType_ && f != FrameType::REQUEST_ERROR) {
         return false;
       }
-    } else if (isRequestInitiating(f)) {
-      // Post-first-frame: a fresh request-initiating frame may never appear
-      // on an already-claimed bidi stream.
-      return false;
+    } else {
+      if (isRequestInitiating(f)) {
+        return false;
+      }
+      // Post-terminal REQUEST_OK / REQUEST_ERROR only valid with a pending
+      // update.
+      if ((f == FrameType::REQUEST_OK || f == FrameType::REQUEST_ERROR) &&
+          !hasPendingPostTerminalResponse()) {
+        return false;
+      }
     }
     firstFrameSeen_ = true;
     return true;
@@ -279,10 +294,34 @@ class MoQBidiStreamCodec : public MoQControlCodec {
     return requestID_;
   }
 
+ public:
+  // Terminal uses stream's primary (cleared after first take). Post-terminal
+  // pops from the queue (sender appends one entry per REQUEST_UPDATE sent).
+  void setResponseIDQueue(std::vector<RequestID>* queue) {
+    responseIDQueue_ = queue;
+  }
+  std::optional<RequestID> takeNextResponseRequestID() override {
+    if (requestID_) {
+      auto id = *requestID_;
+      requestID_.reset();
+      return id;
+    }
+    if (!responseIDQueue_ || responseIDQueue_->empty()) {
+      return std::nullopt;
+    }
+    auto id = responseIDQueue_->front();
+    responseIDQueue_->erase(responseIDQueue_->begin());
+    return id;
+  }
+  bool hasPendingPostTerminalResponse() const override {
+    return responseIDQueue_ && !responseIDQueue_->empty();
+  }
+
  private:
   std::vector<FrameType> allowedFrames_;
   std::optional<RequestID> requestID_;
   std::optional<FrameType> okType_;
+  std::vector<RequestID>* responseIDQueue_{nullptr};
   bool firstFrameSeen_{false};
 };
 

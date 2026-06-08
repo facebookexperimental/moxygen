@@ -528,6 +528,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::SUBSCRIBE_OK: {
       auto res = moqFrameParser_.parseSubscribeOk(cursor, curFrameLength_);
       if (res) {
+        // Consume the stream's primary requestID so any post-terminal
+        // REQUEST_OK on this bidi pops from the FIFO instead.
+        (void)takeNextResponseRequestID();
         if (callback_) {
           callback_->onSubscribeOk(std::move(res.value()));
         }
@@ -561,8 +564,11 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestError(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
-        // TODO(draft-18): drop the on-wire requestID per spec §10.6 and
-        // substitute stream id for terminal / FIFO for post-terminal here.
+        // Draft 18+: requestID is implicit. Terminal uses stream id; FIFO
+        // for post-terminal handled by takeNextPostTerminalRequestID().
+        if (auto rid = takeNextResponseRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onRequestError(std::move(res.value()), curFrameType_);
         }
@@ -662,6 +668,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::FETCH_OK: {
       auto res = moqFrameParser_.parseFetchOk(cursor, curFrameLength_);
       if (res) {
+        // Consume the stream's primary requestID so any post-terminal
+        // REQUEST_OK on this bidi pops from the FIFO instead.
+        (void)takeNextResponseRequestID();
         if (callback_) {
           callback_->onFetchOk(std::move(res.value()));
         }
@@ -692,8 +701,11 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestOk(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
-        // TODO(draft-18): drop the on-wire requestID per spec §10.5 and
-        // substitute stream id for terminal / FIFO for post-terminal here.
+        // Draft 18+: requestID is implicit. Terminal uses stream id;
+        // post-terminal pops the FIFO.
+        if (auto rid = takeNextResponseRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onRequestOk(std::move(res.value()), curFrameType_);
         }
