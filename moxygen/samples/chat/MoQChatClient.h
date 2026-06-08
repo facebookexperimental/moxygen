@@ -49,10 +49,7 @@ class MoQChatClient : public Publisher,
         : client_(std::move(client)), prefix_(std::move(prefix)) {}
 
     void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override;
-    // TODO: invoke publishNamespaceDone when namespaceDoneMsg provides the
-    // namespace suffix
-    void namespaceDoneMsg(
-        const TrackNamespace& /*trackNamespaceSuffix*/) override {}
+    void namespaceDoneMsg(const TrackNamespace& trackNamespaceSuffix) override;
 
    private:
     std::shared_ptr<MoQChatClient> client_;

@@ -199,6 +199,17 @@ void MoQChatClient::ChatNamespacePublishHandle::namespaceMsg(
       .start();
 }
 
+void MoQChatClient::ChatNamespacePublishHandle::namespaceDoneMsg(
+    const TrackNamespace& trackNamespaceSuffix) {
+  auto parts = prefix_.trackNamespace;
+  parts.insert(
+      parts.end(),
+      trackNamespaceSuffix.trackNamespace.begin(),
+      trackNamespaceSuffix.trackNamespace.end());
+  TrackNamespace fullNs(std::move(parts));
+  client_->publishNamespaceDone(fullNs);
+}
+
 folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
     SubscribeRequest subscribeReq,
     std::shared_ptr<TrackConsumer> consumer) {
