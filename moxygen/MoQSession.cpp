@@ -2557,7 +2557,9 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
   // Set up the shared receive-side token cache and point the control codec
   // at it. The cache is necessarily empty at this point.
   receiveTokenCache_.setMaxSize(
-      getMaxAuthTokenCacheSizeIfPresent(setup.params), /*evict=*/!isClient);
+      getMaxAuthTokenCacheSizeIfPresent(
+          setup.params, setupSerializationVersion),
+      /*evict=*/!isClient);
   controlCodec_->setTokenCache(&receiveTokenCache_);
   // Optimistically registers params without knowing peer's capabilities
   aliasifyAuthTokens(setup.params, setupSerializationVersion);
@@ -2654,8 +2656,8 @@ void MoQSession::onServerSetup(Setup serverSetup) {
   }
 
   initPeerMaxRequestID(serverSetup.params);
-  auto peerAuthCacheSize =
-      getMaxAuthTokenCacheSizeIfPresent(serverSetup.params);
+  auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
+      serverSetup.params, *getNegotiatedVersion());
   tokenCache_.setMaxSize(
       std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
       /*evict=*/true);
@@ -2680,8 +2682,8 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   }
 
   initPeerMaxRequestID(clientSetup.params);
-  auto peerAuthCacheSize =
-      getMaxAuthTokenCacheSizeIfPresent(clientSetup.params);
+  auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
+      clientSetup.params, negotiatedVersion_.value_or(kVersionDraft14));
   tokenCache_.setMaxSize(
       std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
       /*evict=*/true);
@@ -6417,7 +6419,13 @@ std::string MoQSession::getMoQTImplementationString() {
 }
 
 uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
-    const SetupParameters& params) {
+    const SetupParameters& params,
+    uint64_t version) {
+  // Draft 18+ delivers requests on independent bidi streams, breaking the
+  // request-order assumption that auth token aliasing relies on.
+  if (useBidiRequestStreams(version)) {
+    return 0;
+  }
   constexpr uint64_t kMaxAuthTokenCacheSize = 4096;
   for (const auto& param : params) {
     if (param.key ==
