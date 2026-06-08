@@ -110,8 +110,8 @@ bool useUniControlStreams(uint64_t version);
 // True if each request travels on its own bidi stream (draft >= 18). QUIC
 // bidi stream limits govern request flow control (MAX_REQUEST_ID /
 // REQUESTS_BLOCKED and the MAX_REQUEST_ID setup parameter were removed in
-// draft 18); also disables request-order-dependent encodings like auth
-// token aliasing.
+// draft 18); also disables request-order-dependent encodings (e.g. auth
+// token aliasing) and request-frame-on-control-stream patterns.
 bool useBidiRequestStreams(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.
