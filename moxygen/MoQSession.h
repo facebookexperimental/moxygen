@@ -28,6 +28,8 @@
 
 namespace moxygen {
 
+class BidiStreamControl;
+
 namespace detail {
 class ObjectStreamCallback;
 } // namespace detail
@@ -51,27 +53,7 @@ struct MoQSettings {
       std::chrono::seconds(2)};
 };
 
-// Generic write destination for request responses.
-// Abstracts control stream vs bidi stream writing.
-class ReplyContext {
- public:
-  explicit ReplyContext(folly::CancellationToken token)
-      : cancelToken_(std::move(token)) {}
-  virtual ~ReplyContext() = default;
-
-  // Get the buffer to serialize frames into
-  virtual folly::IOBufQueue& writeBuf() = 0;
-
-  // Flush serialized data to the transport, optionally with FIN
-  virtual void flush(bool fin = false) = 0;
-
-  bool cancelled() const {
-    return cancelToken_.isCancellationRequested();
-  }
-
- protected:
-  folly::CancellationToken cancelToken_;
-};
+class ReplyContext;
 
 class SubNSReply {
  public:
@@ -448,6 +430,14 @@ class MoQSession : public Subscriber,
       return replyContext_.get();
     }
 
+    // Lets cleanup() disarm the sender close callback before teardown.
+    void setBidiControl(std::shared_ptr<BidiStreamControl> control) {
+      bidiControl_ = std::move(control);
+    }
+    const std::shared_ptr<BidiStreamControl>& bidiControl() const {
+      return bidiControl_;
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -460,6 +450,7 @@ class MoQSession : public Subscriber,
     uint64_t bytesBufferedThreshold_{0};
     std::optional<uint8_t> publisherPriority_;
     std::shared_ptr<ReplyContext> replyContext_;
+    std::shared_ptr<BidiStreamControl> bidiControl_;
   };
 
   void onNewUniStream(
@@ -478,9 +469,13 @@ class MoQSession : public Subscriber,
 
   struct BidiStreamConfig {
     std::vector<FrameType> allowedFrames;
-    folly::Function<void(RequestID)> onStreamClosed;
+    folly::Function<void(RequestID)> onPeerTermination;
+    // If true, peer FIN fires onPeerTermination (FIN-cancels-the-request, per
+    // SUBSCRIBE_NAMESPACE spec). If false, only peer RST fires it.
+    bool finIsCancellation{false};
   };
   std::optional<BidiStreamConfig> getBidiStreamConfig(FrameType frameType);
+
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
   void onSessionEnd(folly::Optional<uint32_t> err) noexcept override;
   void onSessionDrain() noexcept override {
@@ -517,11 +512,22 @@ class MoQSession : public Subscriber,
    public:
     BidiRequestCallback(
         MoQSession* session,
-        proxygen::WebTransport::StreamWriteHandle* writeHandle)
-        : session_(session), writeHandle_(writeHandle) {}
+        std::shared_ptr<BidiStreamControl> control,
+        folly::Function<void(RequestID)> onPeerTermination)
+        : session_(session),
+          control_(std::move(control)),
+          onPeerTerminationFn_(std::move(onPeerTermination)) {}
 
     void onConnectionError(ErrorCode error) override;
     void onRequestUpdate(RequestUpdate requestUpdate) override;
+    void onRequestOk(RequestOk requestOk, FrameType frameType) override;
+    void onRequestError(RequestError requestError, FrameType frameType)
+        override;
+    void onSubscribe(SubscribeRequest sub) override;
+    void onFetch(Fetch fetch) override;
+    void onPublish(PublishRequest pub) override;
+    void onPublishNamespace(PublishNamespace pubNs) override;
+    void onTrackStatus(TrackStatus ts) override;
     void onSubscribeNamespace(SubscribeNamespace subNs) override;
     void onSubscribeTracks(SubscribeTracks subTracks) override;
 
@@ -533,23 +539,39 @@ class MoQSession : public Subscriber,
     bool handleFirstFrame(RequestID reqId);
 
     MoQSession* session_;
-    proxygen::WebTransport::StreamWriteHandle* writeHandle_;
+    std::shared_ptr<BidiStreamControl> control_;
+    folly::Function<void(RequestID)> onPeerTerminationFn_;
     std::optional<RequestID> requestID_;
     std::shared_ptr<ReplyContext> replyContext_;
   };
 
-  // Send a serialized request frame. Depending on draft version, creates a
-  // bidi stream and starts a read loop for responses. Otherwise, appends to
-  // the control stream buffer and signals. Returns the bidi write handle on
-  // success (nullptr for control stream path), or error string on failure.
-  folly::Expected<proxygen::WebTransport::StreamWriteHandle*, std::string>
-  sendRequest(
+  // Create a ReplyContext that wraps the given BidiStreamControl (draft 18+)
+  // or returns the control stream reply context (null control / legacy).
+  std::shared_ptr<ReplyContext> makeReplyContext(
+      std::shared_ptr<BidiStreamControl> control);
+
+  // Send a serialized request. In draft >= minBidiDraftVersion, opens a
+  // bidi stream and starts a read loop; otherwise appends to the control
+  // stream. Returns the control (null on the control-stream path).
+  // onPeerTermination fires on peer-initiated close after the terminal reply;
+  // early close (before terminal) is handled by failPendingRequestOnEarlyClose.
+  // In draft 18+ every response stream's first frame MUST be a terminal: the
+  // caller's typed `okType` or `REQUEST_ERROR`. `postTerminal` lists any
+  // frames the peer may send after the terminal (e.g. PUBLISH_DONE on a
+  // SUBSCRIBE).
+  folly::Expected<std::shared_ptr<BidiStreamControl>, std::string> sendRequest(
       folly::IOBufQueue& writeBuf,
-      const std::vector<FrameType>& allowedResponses,
+      FrameType okType,
+      std::vector<FrameType> postTerminal,
       RequestID requestID,
-      uint64_t minBidiDraftVersion = 17,
+      uint64_t minBidiDraftVersion = 18,
       std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
-          nullptr);
+          nullptr,
+      folly::Function<void(RequestID)> onPeerTermination = nullptr);
+
+  // Fail a pending sender request when its bidi closes before the terminal
+  // reply. No-op if the entry is already gone.
+  void failPendingRequestOnEarlyClose(RequestID requestID, bool wasReset);
 
  private:
   static const folly::RequestToken& sessionRequestToken();
@@ -592,13 +614,15 @@ class MoQSession : public Subscriber,
       std::shared_ptr<ReplyContext> replyContext);
   void sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& replyContext);
   void subscribeError(const SubscribeError& subErr, ReplyContext& replyContext);
-  void unsubscribe(const Unsubscribe& unsubscribe);
+  void unsubscribe(
+      const Unsubscribe& unsubscribe,
+      const std::shared_ptr<BidiStreamControl>& control = nullptr);
   // Backward compatibility forwarders
   void subscribeUpdate(const SubscribeUpdate& subUpdate) {
     requestUpdate(subUpdate);
   }
-  void subscribeUpdateOk(const RequestOk& reqOk) {
-    requestUpdateOk(reqOk);
+  void subscribeUpdateOk(const RequestOk& reqOk, RequestID existingReqID) {
+    requestUpdateOk(reqOk, existingReqID);
   }
   void subscribeUpdateError(
       const SubscribeUpdateError& reqError,
@@ -613,7 +637,9 @@ class MoQSession : public Subscriber,
       std::shared_ptr<ReplyContext> replyContext);
   void fetchOk(const FetchOk& fetchOk, ReplyContext& replyContext);
   void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
-  void fetchCancel(const FetchCancel& fetchCancel);
+  void fetchCancel(
+      const FetchCancel& fetchCancel,
+      const std::shared_ptr<BidiStreamControl>& control = nullptr);
 
   folly::coro::Task<void> handlePublish(
       PublishRequest publish,
@@ -669,7 +695,8 @@ class MoQSession : public Subscriber,
   // MUST NOT create any subscriptions
   static uint64_t getMaxRequestIDIfPresent(const SetupParameters& params);
   static uint64_t getMaxAuthTokenCacheSizeIfPresent(
-      const SetupParameters& params);
+      const SetupParameters& params,
+      uint64_t version);
   static std::optional<std::string> getMoQTImplementationIfPresent(
       const SetupParameters& params);
   void setPublisherPriorityFromParams(
@@ -695,26 +722,31 @@ class MoQSession : public Subscriber,
       std::shared_ptr<ReplyContext> replyContext);
   void onPublishImpl(
       PublishRequest publish,
-      std::shared_ptr<ReplyContext> replyContext);
+      std::shared_ptr<ReplyContext> replyContext,
+      std::shared_ptr<BidiStreamControl> control = nullptr);
   virtual void onPublishNamespaceImpl(
       PublishNamespace publishNamespace,
       std::shared_ptr<ReplyContext> replyContext);
 
-  void requestUpdate(const RequestUpdate& reqUpdate);
+  void requestUpdate(
+      const RequestUpdate& reqUpdate,
+      const std::shared_ptr<BidiStreamControl>& control = nullptr);
 
   folly::coro::Task<void> controlReadLoop(
       proxygen::WebTransport::StreamReadHandle* readHandle,
       proxygen::WebTransport::StreamData initialData,
       std::unique_ptr<MoQControlCodec> codec = nullptr,
       std::unique_ptr<BidiRequestCallback> bidiCallback = nullptr,
-      folly::Function<void(RequestID)> onStreamClosed = nullptr,
+      std::shared_ptr<BidiStreamControl> control = nullptr,
       std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
           nullptr);
 
   std::unique_ptr<MoQControlCodec> makeBidiCodec(
       MoQControlCodec::ControlCallback* callback,
-      const std::vector<FrameType>& allowedFrames,
-      std::optional<RequestID> requestID = std::nullopt);
+      std::vector<FrameType> allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt,
+      std::optional<FrameType> okType = std::nullopt,
+      std::vector<RequestID>* responseIDQueue = nullptr);
 
   // Core session state
   MoQControlCodec::Direction dir_;
@@ -753,6 +785,10 @@ class MoQSession : public Subscriber,
   uint8_t getRequestIDMultiplier() const {
     return 2;
   }
+  // Initialize request-ID flow control limits. On draft-18+ these are
+  // unbounded (the QUIC bidi stream limit governs instead).
+  void initLocalMaxRequestID(uint64_t fromParam);
+  void initPeerMaxRequestID(const Parameters& peerParams);
   void deliverBufferedData(TrackAlias trackAlias);
   void aliasifyAuthTokens(
       Parameters& params,
@@ -798,7 +834,12 @@ class MoQSession : public Subscriber,
       bool terminateExistingRequest = true);
 
   // REQUEST_UPDATE ok response - available for subclass handlers
-  void requestUpdateOk(const RequestOk& requestOk);
+  void requestUpdateOk(const RequestOk& requestOk, RequestID existingRequestID);
+
+  // Returns the reply context for REQUEST_UPDATE responses: the responder's
+  // bidi reply context in draft 18+, otherwise the shared control stream.
+  // Returns nullptr only when the request can no longer be found.
+  ReplyContext* getRequestUpdateReplyContext(RequestID existingRequestID);
 
   // REQUEST_UPDATE handler (protected for subclass access)
   void onRequestUpdate(RequestUpdate requestUpdate) override;
@@ -839,7 +880,7 @@ class MoQSession : public Subscriber,
     // Make polymorphic for subclassing - destructor implemented below
 
    protected:
-    Type type_;
+    Type type_{Type::SUBSCRIBE_TRACK};
     union Storage {
       Storage() {}
       ~Storage() {}
@@ -1002,9 +1043,19 @@ class MoQSession : public Subscriber,
       return type_;
     }
 
+    // For SUBSCRIBE_TRACK / FETCH the held track owns the control; set on
+    // the track instead — bidiControl() delegates.
+    void setBidiControl(std::shared_ptr<BidiStreamControl> control) {
+      bidiControl_ = std::move(control);
+    }
+    const std::shared_ptr<BidiStreamControl>& bidiControl() const;
+
    public:
     // Default constructor - only use via factory methods
     PendingRequestState() = default;
+
+   private:
+    std::shared_ptr<BidiStreamControl> bidiControl_;
   };
 
   // Pending requests map - declared after PendingRequestState class

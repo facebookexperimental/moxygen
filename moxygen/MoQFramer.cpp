@@ -2467,13 +2467,16 @@ folly::Expected<PublishNamespaceOk, ErrorCode> MoQFrameParser::parseRequestOk(
     size_t length,
     FrameType frameType) const noexcept {
   RequestOk requestOk;
-  auto requestID = decodeVarint(cursor, length);
-  if (!requestID) {
-    XLOG(DBG4) << "parseRequestOk: UNDERFLOW on requestID";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    auto requestID = decodeVarint(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parseRequestOk: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    requestOk.requestID = requestID->first;
   }
-  length -= requestID->second;
-  requestOk.requestID = requestID->first;
   if (getDraftMajorVersion(*version_) > 14) {
     // Parse track request params into requestOk.params
     auto numParams = decodeVarint(cursor, length);
@@ -3171,17 +3174,16 @@ folly::Expected<RequestError, ErrorCode> MoQFrameParser::parseRequestError(
       << "Invalid frameType passed to parseRequestError: "
       << static_cast<int>(frameType);
 
-  // All error types follow the same pattern: requestID → errorCode →
-  // reasonPhrase
-
-  // Parse requestID
-  auto requestID = decodeVarint(cursor, length);
-  if (!requestID) {
-    XLOG(DBG4) << "parseRequestError: UNDERFLOW on requestID";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    auto requestID = decodeVarint(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parseRequestError: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    requestError.requestID = requestID->first;
   }
-  length -= requestID->second;
-  requestError.requestID = requestID->first;
 
   // Parse errorCode
   auto errorCode = decodeVarint(cursor, length);
@@ -3727,6 +3729,12 @@ std::string MoQFrameWriter::encodeTokenValue(
 }
 
 bool includeSetupParam(uint64_t version, SetupKey key) {
+  // Draft 18+ delivers requests on independent bidi streams, so auth token
+  // aliasing (which relies on request ordering) is disabled. Strip the param.
+  if (key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE &&
+      useBidiRequestStreams(version)) {
+    return false;
+  }
   return key == SetupKey::MAX_REQUEST_ID || key == SetupKey::PATH ||
       key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE ||
       key == SetupKey::AUTHORIZATION_TOKEN;
@@ -5203,7 +5211,10 @@ WriteResult MoQFrameWriter::writeRequestOk(
     frameType = FrameType::REQUEST_OK;
   }
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
-  writeVarint(writeBuf, requestOk.requestID.value, size, error);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    writeVarint(writeBuf, requestOk.requestID.value, size, error);
+  }
   if (getDraftMajorVersion(*version_) > 14) {
     if (semanticFrameType == FrameType::SUBSCRIBE_NAMESPACE_OK &&
         !requestOk.params.empty()) {
@@ -5710,7 +5721,10 @@ WriteResult MoQFrameWriter::writeRequestError(
   }
   auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
 
-  writeVarint(writeBuf, requestError.requestID.value, size, error);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    writeVarint(writeBuf, requestError.requestID.value, size, error);
+  }
   writeVarint(
       writeBuf, folly::to_underlying(requestError.errorCode), size, error);
   // Write retryInterval for version 16+

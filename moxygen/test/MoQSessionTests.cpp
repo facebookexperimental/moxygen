@@ -277,7 +277,10 @@ class Draft18GoawayRequestRejectionTest : public MoQSessionTest {
       co_return;
     }
 
-    auto serverControl = serverWt_->writeHandles[2];
+    // Server's first uni stream id is 3 (QUIC-style: server uses odd uni
+    // stream id type = 3). The session's outgoing uni control stream is the
+    // first uni stream the server creates.
+    auto serverControl = serverWt_->writeHandles[3];
     CHECK(serverControl != nullptr);
     serverControl->setImmediateDelivery(false);
     serverSession_->goaway(Goaway{});

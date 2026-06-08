@@ -1337,7 +1337,11 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
     EXPECT_TRUE(result.hasValue());
     parseResult = result->toTrackStatusOk();
   }
-  EXPECT_EQ(parseResult->requestID, 7);
+  // Draft 18+ removed requestID from the REQUEST_OK wire format; it is
+  // populated from the bidi stream context by the codec, not the parser.
+  if (getDraftMajorVersion(GetParam()) < 18) {
+    EXPECT_EQ(parseResult->requestID, 7);
+  }
   EXPECT_EQ(parseResult->largest->group, 19);
   EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->statusCode, TrackStatusCode::IN_PROGRESS);
@@ -4498,7 +4502,7 @@ TEST_F(MoQFramerV18Test, RequestOkTrackPropertiesRoundtrip) {
   ASSERT_TRUE(result.hasValue());
 
   auto parsed = result->toTrackStatusOk();
-  EXPECT_EQ(parsed.requestID, 42);
+  // Draft 18+ removed requestID from REQUEST_OK; codec sets it from stream ctx.
   EXPECT_EQ(parsed.expires, std::chrono::milliseconds(2500));
   ASSERT_TRUE(parsed.largest.has_value());
   EXPECT_EQ(parsed.largest->group, 3);
@@ -4519,17 +4523,18 @@ TEST_F(MoQFramerV18Test, RequestOkEmptyTrackPropertiesEmitsNoBytes) {
   ASSERT_TRUE(writer_.writeRequestOk(v18Buf, requestOk, FrameType::REQUEST_OK)
                   .hasValue());
 
-  MoQFrameWriter v17Writer;
-  v17Writer.initializeVersion(kVersionDraft17);
-  folly::IOBufQueue v17Buf{folly::IOBufQueue::cacheChainLength()};
-  ASSERT_TRUE(v17Writer.writeRequestOk(v17Buf, requestOk, FrameType::REQUEST_OK)
-                  .hasValue());
-
-  // With no Track Properties, the wire bytes for v18 must match v17 byte-for-
-  // byte; both encode just request_id + num_params.
+  // Draft 18 wire layout is: frame_type + length + num_params. requestID is
+  // no longer on the wire (it is implicit from the bidi request stream).
   auto v18Bytes = v18Buf.move();
-  auto v17Bytes = v17Buf.move();
-  EXPECT_TRUE(folly::IOBufEqualTo()(*v18Bytes, *v17Bytes));
+  folly::io::Cursor cursor(v18Bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
+  auto bodyLen = frameLength(cursor);
+  auto numParams = quic::follyutils::decodeQuicInteger(cursor, bodyLen);
+  ASSERT_TRUE(numParams.has_value());
+  EXPECT_EQ(numParams->first, 0u);
+  EXPECT_EQ(bodyLen, numParams->second);
 }
 
 // writeRequestOk must refuse to emit a frame whose semantic frame type is

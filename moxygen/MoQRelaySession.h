@@ -149,8 +149,12 @@ class MoQRelaySession : public MoQSession {
   void publishNamespaceOk(
       const PublishNamespaceOk& annOk,
       ReplyContext& replyContext);
-  void publishNamespaceCancel(const PublishNamespaceCancel& annCan);
-  void publishNamespaceDone(const PublishNamespaceDone& publishNamespaceDone);
+  void publishNamespaceCancel(
+      const PublishNamespaceCancel& annCan,
+      std::shared_ptr<ReplyContext> replyContext);
+  void publishNamespaceDone(
+      const PublishNamespaceDone& publishNamespaceDone,
+      std::shared_ptr<ReplyContext> replyCtx);
 
   // Override all incoming publishNamespace message handlers
   void onPublishNamespace(PublishNamespace ann) override;

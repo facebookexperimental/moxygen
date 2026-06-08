@@ -253,9 +253,11 @@ folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
   EXPECT_EQ(
       setup.params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
   EXPECT_EQ(setup.params.at(1).asUint64, initialMaxRequestID_);
-  EXPECT_EQ(
-      setup.params.at(2).key,
-      folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
+  if (!useBidiRequestStreams(getServerSelectedVersion())) {
+    EXPECT_EQ(
+        setup.params.at(2).key,
+        folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
+  }
   if (failServerSetup_) {
     return folly::makeTryWith(
         []() -> moxygen::Setup { throw std::runtime_error("failed"); });
@@ -266,9 +268,11 @@ folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID),
             initialMaxRequestID_});
-    ss.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    if (!useBidiRequestStreams(getServerSelectedVersion())) {
+      ss.params.insertParam(
+          SetupParameter{
+              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    }
     return ss;
   }());
 }
@@ -283,15 +287,13 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   clientSession_->setServerMaxTokenCacheSizeGuess(1024);
 
   if (useUniControlStreams(getServerSelectedVersion())) {
-    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream.
+    // Auth token aliasing is disabled in this mode, so skip the cache size.
     moxygen::Setup serverSetupMsg;
     serverSetupMsg.params.insertParam(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID),
             initialMaxRequestID_});
-    serverSetupMsg.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
     serverSession_->sendSetup(std::move(serverSetupMsg));
   }
 
@@ -336,14 +338,12 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
   serverSession_->start();
 
   if (useUniControlStreams(getServerSelectedVersion())) {
-    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream.
+    // Auth token aliasing is disabled in this mode, so skip the cache size.
     moxygen::Setup serverSetupMsg;
     serverSetupMsg.params.insertParam(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID});
-    serverSetupMsg.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
     serverSession_->sendSetup(std::move(serverSetupMsg));
   }
 
@@ -507,10 +507,9 @@ uint64_t MoQSessionTest::getServerSelectedVersion() {
 }
 
 uint64_t MoQSessionTest::serverObjectStreamId(uint64_t n) const {
-  // FakeSharedWebTransport uni stream IDs: 2, 6, 10, 14, ...
-  // In draft 18, ID 2 is the server's outgoing control stream,
-  // so object streams start at 6.
-  uint64_t base = useUniControlStreams(GetParam().serverVersion) ? 6 : 2;
+  // Server uni IDs are 3, 7, 11, ...; draft 18 reserves 3 for the control
+  // stream.
+  uint64_t base = useUniControlStreams(GetParam().serverVersion) ? 7 : 3;
   return base + n * 4;
 }
 
@@ -523,5 +522,29 @@ folly::coro::Task<void> MoQSessionTest::rescheduleN(int n) {
     co_await folly::coro::co_reschedule_on_current_executor;
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft18Test,
+    Draft18Test,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+namespace {
+std::vector<VersionParams> getPreDraft18VersionParams() {
+  std::vector<VersionParams> result;
+  result.reserve(kSupportedVersions.size());
+  for (auto v : kSupportedVersions) {
+    if (getDraftMajorVersion(v) >= 18) {
+      continue;
+    }
+    result.emplace_back(std::vector<uint64_t>{v}, v);
+  }
+  return result;
+}
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(
+    PreDraft18Test,
+    PreDraft18Test,
+    testing::ValuesIn(getPreDraft18VersionParams()));
 
 }} // namespace moxygen::test

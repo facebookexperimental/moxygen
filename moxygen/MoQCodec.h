@@ -113,12 +113,24 @@ class MoQControlCodec : public MoQCodec {
   // If ParseResult::BLOCKED is returned, must call onIngress again to restart
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
+ public:
+  // Draft 18+: REQUEST_OK / REQUEST_ERROR carry no on-wire requestID; codec
+  // supplies it (terminal = stream's primary; post-terminal = FIFO).
+  virtual std::optional<RequestID> takeNextResponseRequestID() {
+    return std::nullopt;
+  }
+  virtual bool hasPendingPostTerminalResponse() const {
+    return false;
+  }
+
  protected:
   virtual std::optional<RequestID> getStreamRequestID() const {
     return std::nullopt;
   }
 
   virtual bool checkFrameAllowed(FrameType f) {
+    const auto major =
+        negotiatedVersion_ ? getDraftMajorVersion(*negotiatedVersion_) : 0;
     switch (f) {
       case FrameType::SUBSCRIBE:
       case FrameType::SUBSCRIBE_UPDATE:
@@ -128,26 +140,33 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_NAMESPACE:
       // case FrameType::PUBLISH_NAMESPACE_OK:
       case FrameType::REQUEST_OK:
-      case FrameType::PUBLISH_NAMESPACE_DONE:
-      case FrameType::UNSUBSCRIBE:
       case FrameType::PUBLISH_DONE:
       case FrameType::PUBLISH:
       case FrameType::PUBLISH_OK:
       case FrameType::PUBLISH_ERROR:
-      case FrameType::PUBLISH_NAMESPACE_CANCEL:
       case FrameType::TRACK_STATUS:
       case FrameType::TRACK_STATUS_ERROR:
       case FrameType::GOAWAY:
-      case FrameType::CLIENT_SETUP:
-      case FrameType::SERVER_SETUP:
-      case FrameType::SETUP:
-      case FrameType::MAX_REQUEST_ID:
-      case FrameType::REQUESTS_BLOCKED:
       case FrameType::FETCH:
-      case FrameType::FETCH_CANCEL:
       case FrameType::FETCH_OK:
       case FrameType::FETCH_ERROR:
         return true;
+      // Setup frames are version-gated; allow before negotiation.
+      case FrameType::CLIENT_SETUP:
+      case FrameType::SERVER_SETUP:
+        return !negotiatedVersion_ || major < 17;
+      case FrameType::SETUP:
+        return negotiatedVersion_ && major >= 17;
+      // Removed in draft 18: replaced by per-stream RESET, by bidi
+      // request-stream semantics, or governed by QUIC bidi stream limits.
+      case FrameType::UNSUBSCRIBE:
+      case FrameType::FETCH_CANCEL:
+      case FrameType::MAX_REQUEST_ID:
+      case FrameType::REQUESTS_BLOCKED:
+      case FrameType::PUBLISH_NAMESPACE_DONE:
+      case FrameType::PUBLISH_NAMESPACE_CANCEL:
+        return negotiatedVersion_ &&
+            !useBidiRequestStreams(*negotiatedVersion_);
       case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
       case FrameType::SUBSCRIBE_NAMESPACE_OK:
       case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
@@ -157,7 +176,7 @@ class MoQControlCodec : public MoQCodec {
       // separate bidi stream, not the control stream.
       case FrameType::NAMESPACE:
       case FrameType::NAMESPACE_DONE:
-        return getDraftMajorVersion(*negotiatedVersion_) < 16;
+        return negotiatedVersion_ && major < 16;
       // Draft 18+ only, and never on the control stream. The renumbered
       // SUBSCRIBE_NAMESPACE wire type (0x50) replaces
       // LEGACY_SUBSCRIBE_NAMESPACE (0x11) in draft 18 and only ever appears on
@@ -197,39 +216,113 @@ class MoQControlCodec : public MoQCodec {
 // Replaces MoQSubNsReceiverCodec.
 class MoQBidiStreamCodec : public MoQControlCodec {
  public:
+  // Request-side: `allowedFrames` lists every frame this stream accepts; no
+  // first-frame FrameType constraint (RequestID matching handled elsewhere).
+  // Response-side: pass `okType`. The codec admits okType + REQUEST_ERROR
+  // automatically, and requires the first frame to be one of them; entries
+  // in `allowedFrames` are treated as post-terminal followups.
+  explicit MoQBidiStreamCodec(
+      ControlCallback* callback,
+      std::vector<FrameType> allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt,
+      std::optional<FrameType> okType = std::nullopt)
+      : MoQControlCodec(Direction::SERVER, callback),
+        allowedFrames_(std::move(allowedFrames)),
+        requestID_(requestID),
+        okType_(okType) {
+    if (okType_) {
+      allowedFrames_.push_back(*okType_);
+      allowedFrames_.push_back(FrameType::REQUEST_ERROR);
+    }
+    seenSetup_ = true;
+  }
+
   explicit MoQBidiStreamCodec(
       ControlCallback* callback,
       std::initializer_list<FrameType> allowedFrames,
-      std::optional<RequestID> requestID = std::nullopt)
-      : MoQControlCodec(Direction::SERVER, callback),
-        allowedFrames_(allowedFrames),
-        requestID_(requestID) {
-    seenSetup_ = true;
-  }
-
-  explicit MoQBidiStreamCodec(
-      ControlCallback* callback,
-      const std::vector<FrameType>& allowedFrames,
-      std::optional<RequestID> requestID = std::nullopt)
-      : MoQControlCodec(Direction::SERVER, callback),
-        allowedFrames_(allowedFrames),
-        requestID_(requestID) {
-    seenSetup_ = true;
-  }
+      std::optional<RequestID> requestID = std::nullopt,
+      std::optional<FrameType> okType = std::nullopt)
+      : MoQBidiStreamCodec(
+            callback,
+            std::vector<FrameType>(allowedFrames),
+            requestID,
+            okType) {}
 
  protected:
   bool checkFrameAllowed(FrameType f) override {
-    return std::find(allowedFrames_.begin(), allowedFrames_.end(), f) !=
-        allowedFrames_.end();
+    if (std::find(allowedFrames_.begin(), allowedFrames_.end(), f) ==
+        allowedFrames_.end()) {
+      return false;
+    }
+    if (!firstFrameSeen_) {
+      // Response-side: first frame MUST be the terminal reply.
+      if (okType_ && f != *okType_ && f != FrameType::REQUEST_ERROR) {
+        return false;
+      }
+    } else {
+      if (isRequestInitiating(f)) {
+        return false;
+      }
+      // Post-terminal REQUEST_OK / REQUEST_ERROR only valid with a pending
+      // update.
+      if ((f == FrameType::REQUEST_OK || f == FrameType::REQUEST_ERROR) &&
+          !hasPendingPostTerminalResponse()) {
+        return false;
+      }
+    }
+    firstFrameSeen_ = true;
+    return true;
+  }
+
+  static bool isRequestInitiating(FrameType f) {
+    switch (f) {
+      case FrameType::SUBSCRIBE:
+      case FrameType::FETCH:
+      case FrameType::PUBLISH:
+      case FrameType::TRACK_STATUS:
+      case FrameType::PUBLISH_NAMESPACE:
+      case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
+      case FrameType::SUBSCRIBE_NAMESPACE:
+      case FrameType::SUBSCRIBE_TRACKS:
+        return true;
+      default:
+        return false;
+    }
   }
 
   std::optional<RequestID> getStreamRequestID() const override {
     return requestID_;
   }
 
+ public:
+  // Terminal uses stream's primary (cleared after first take). Post-terminal
+  // pops from the queue (sender appends one entry per REQUEST_UPDATE sent).
+  void setResponseIDQueue(std::vector<RequestID>* queue) {
+    responseIDQueue_ = queue;
+  }
+  std::optional<RequestID> takeNextResponseRequestID() override {
+    if (requestID_) {
+      auto id = *requestID_;
+      requestID_.reset();
+      return id;
+    }
+    if (!responseIDQueue_ || responseIDQueue_->empty()) {
+      return std::nullopt;
+    }
+    auto id = responseIDQueue_->front();
+    responseIDQueue_->erase(responseIDQueue_->begin());
+    return id;
+  }
+  bool hasPendingPostTerminalResponse() const override {
+    return responseIDQueue_ && !responseIDQueue_->empty();
+  }
+
  private:
   std::vector<FrameType> allowedFrames_;
   std::optional<RequestID> requestID_;
+  std::optional<FrameType> okType_;
+  std::vector<RequestID>* responseIDQueue_{nullptr};
+  bool firstFrameSeen_{false};
 };
 
 using MoQSubNsReceiverCodec = MoQBidiStreamCodec;

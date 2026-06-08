@@ -1237,7 +1237,7 @@ TEST(MoQCodecTest, BidiCodecRejectsLegacyWireWhenOnlyV18Listed) {
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQBidiStreamCodec bidiCodec(
       &callback, {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
-  bidiCodec.initializeVersion(kVersionDraft18);
+  bidiCodec.initializeVersion(kVersionDraft17);
 
   EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
   bidiCodec.onIngress(buf.move(), false);
@@ -1261,6 +1261,67 @@ TEST(MoQCodecTest, BidiCodecRejectsV18WireWhenOnlyLegacyListed) {
       {FrameType::LEGACY_SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
   bidiCodec.initializeVersion(kVersionDraft17);
 
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  bidiCodec.onIngress(buf.move(), false);
+}
+
+// On a SUBSCRIBE response stream the first frame MUST be a terminal reply
+// (SUBSCRIBE_OK or REQUEST_ERROR). A spec-violating peer that leads with
+// PUBLISH_DONE (a valid post-terminal frame, but not first) must be rejected
+// with PROTOCOL_VIOLATION.
+TEST(MoQCodecTest, BidiCodecRejectsPostTerminalAsFirstFrameV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer
+                  .writePublishDone(
+                      buf,
+                      PublishDone{
+                          RequestID(0),
+                          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+                          /*streamCount=*/0,
+                          ""})
+                  .hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback,
+      /*allowedFrames=*/{FrameType::PUBLISH_DONE},
+      /*requestID=*/std::nullopt,
+      /*okType=*/FrameType::SUBSCRIBE_OK);
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  bidiCodec.onIngress(buf.move(), false);
+}
+
+// Once a request-side bidi codec has accepted its first frame, no further
+// request-initiating frame may appear on the same stream (each request lives
+// on its own bidi). A second SUBSCRIBE here must trip PROTOCOL_VIOLATION even
+// though SUBSCRIBE is in the allow-list (it was the legal first frame).
+TEST(MoQCodecTest, BidiCodecRejectsDuplicateRequestOnSameStreamV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto sub = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"hello"}), "world"}),
+      255,
+      GroupOrder::Default,
+      true,
+      LocationType::LargestObject,
+      std::nullopt,
+      0,
+      {});
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, sub).hasValue());
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, sub).hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback, {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onFrame(FrameType::SUBSCRIBE));
+  EXPECT_CALL(callback, onSubscribe(testing::_));
   EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
   bidiCodec.onIngress(buf.move(), false);
 }

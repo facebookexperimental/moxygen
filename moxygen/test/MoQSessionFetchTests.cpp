@@ -412,7 +412,7 @@ CO_TEST_P_X(MoQSessionTest, FetchBadLength) {
       folly::FutureTimeout);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, FetchOverLimit) {
+CO_TEST_P_X(PreDraft18Test, FetchOverLimit) {
   co_await setupMoQSession();
   expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
     EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
@@ -438,6 +438,39 @@ CO_TEST_P_X(MoQSessionTest, FetchOverLimit) {
       onFetchError(FetchErrorCode::INTERNAL_ERROR));
   res = co_await clientSession_->fetch(fetch, fetchCallback3);
   EXPECT_TRUE(res.hasError());
+}
+// Draft-18 mirror of FetchOverLimit: each fetch consumes a client-initiated
+// bidi stream for the request. When the bidi stream limit is reached, the
+// next fetch fails with INTERNAL_ERROR from createBidiStream.
+CO_TEST_P_X(Draft18Test, FetchOverBidiStreamLimit) {
+  constexpr uint64_t kLimit = 2;
+  clientWt_->setMaxLocalBidiStreams(kLimit);
+  co_await setupMoQSession();
+
+  expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  auto fetchCb = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  Fetch fetch = getFetch({0, 0}, {0, 1});
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess()).Times(kLimit);
+  for (uint64_t i = 0; i < kLimit; ++i) {
+    auto res = co_await clientSession_->fetch(fetch, fetchCb);
+    EXPECT_FALSE(res.hasError()) << "fetch " << i << " should succeed";
+  }
+
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onFetchError(FetchErrorCode::INTERNAL_ERROR));
+  auto blocked = co_await clientSession_->fetch(fetch, fetchCb);
+  EXPECT_TRUE(blocked.hasError());
+  EXPECT_EQ(blocked.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
   co_await setupMoQSession();
@@ -546,6 +579,183 @@ CO_TEST_P_X(MoQSessionTest, FetchCallbackErrorTerminatesStream) {
   auto res = co_await clientSession_->fetch(fetch, fetchCallback_);
   EXPECT_FALSE(res.hasError());
 
+  co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// === Draft 18+ bidi early-close coverage ===
+
+// Peer FINs the FETCH bidi response stream without sending FETCH_OK or
+// FETCH_ERROR; the sender's coroutine resolves with a synthesized error.
+CO_TEST_P_X(Draft18Test, FetchFailsOnPeerFinWithoutReply) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawFetch;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
+        serverSawFetch.post();
+        co_await releaseHandler;
+        co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+      });
+
+  std::optional<FetchErrorCode> errorCode;
+  folly::coro::Baton done;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto result = co_await clientSession_->fetch(
+            getFetch({0, 0}, {0, 1}), fetchCallback_);
+        if (result.hasError()) {
+          errorCode = result.error().errorCode;
+        }
+        done.post();
+      }))
+      .start();
+
+  co_await serverSawFetch;
+  // Stream id 0 is the client-initiated FETCH bidi.
+  serverWt_->writeHandles.at(0)->writeStreamData(
+      nullptr, /*fin=*/true, nullptr);
+
+  co_await done;
+  EXPECT_TRUE(errorCode.has_value());
+  if (errorCode.has_value()) {
+    EXPECT_EQ(*errorCode, FetchErrorCode::CANCELLED);
+  }
+
+  releaseHandler.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Same as above but the peer RESETs the bidi (exceptionalExit path) rather
+// than FINing it cleanly.
+CO_TEST_P_X(Draft18Test, FetchFailsOnPeerResetWithoutReply) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawFetch;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
+        serverSawFetch.post();
+        co_await releaseHandler;
+        co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+      });
+
+  std::optional<FetchErrorCode> errorCode;
+  folly::coro::Baton done;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto result = co_await clientSession_->fetch(
+            getFetch({0, 0}, {0, 1}), fetchCallback_);
+        if (result.hasError()) {
+          errorCode = result.error().errorCode;
+        }
+        done.post();
+      }))
+      .start();
+
+  co_await serverSawFetch;
+  serverWt_->writeHandles.at(0)->resetStream(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+
+  co_await done;
+  EXPECT_TRUE(errorCode.has_value());
+  if (errorCode.has_value()) {
+    EXPECT_EQ(*errorCode, FetchErrorCode::CANCELLED);
+  }
+
+  releaseHandler.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Peer STOP_SENDING on FETCH bidi → onFetchCancel + server cleanup.
+CO_TEST_P_X(Draft18Test, FetchBidiStreamStopSending) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> pubHandle;
+  expectFetch([&pubHandle](Fetch fetch, auto /*fetchPub*/) -> TaskFetchResult {
+    pubHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+    co_return pubHandle;
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  folly::coro::Baton cancelBaton;
+  EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+
+  // Client STOP_SENDING on its FETCH bidi (id 0) → server onFetchCancel.
+  clientWt_->readHandles.at(0)->stopSending(0);
+  co_await cancelBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Subscriber-initiated fetchCancel() (RST write + STOP_SENDING read) must
+// reach the publisher's fetchCancel handle — peer-initiated path's mirror.
+CO_TEST_P_X(Draft18Test, FetchBidiStreamFetchCancel) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> pubHandle;
+  expectFetch([&pubHandle](Fetch fetch, auto /*fetchPub*/) -> TaskFetchResult {
+    pubHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+    co_return pubHandle;
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  folly::coro::Baton cancelBaton;
+  EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+
+  res.value()->fetchCancel();
+  co_await cancelBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Once the FETCH data stream FINs, peer STOP_SENDING on the bidi is
+// informational and must not re-fire fetchCancel on the torn-down handle.
+CO_TEST_P_X(Draft18Test, NoFetchCancelAfterFetchComplete) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> pubHandle;
+  expectFetch([&pubHandle](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+    EXPECT_NE(standalone, nullptr);
+    fetchPub->object(
+        standalone->start.group,
+        /*subgroupID=*/0,
+        standalone->start.object,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    pubHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+    co_return pubHandle;
+  });
+
+  folly::coro::Baton objBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
+      .WillOnce([&] {
+        objBaton.post();
+        return folly::unit;
+      });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await objBaton;
+
+  // Handle is torn down; STOP_SENDING must not fire fetchCancel.
+  EXPECT_CALL(*pubHandle, fetchCancel()).Times(0);
+  clientWt_->readHandles.at(0)->stopSending(0);
+
+  co_await folly::coro::co_reschedule_on_current_executor;
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
