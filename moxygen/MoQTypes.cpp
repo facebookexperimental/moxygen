@@ -236,6 +236,21 @@ const folly::F14FastSet<FrameType> kAllowedFramesForNewGroupRequest = {
     FrameType::REQUEST_UPDATE,
     FrameType::PUBLISH_OK};
 
+// v18+ SUBGROUP_DELIVERY_TIMEOUT (0x06): MAY appear in PUBLISH_OK,
+// SUBSCRIBE, or REQUEST_UPDATE.
+const folly::F14FastSet<FrameType> kAllowedFramesForSubgroupDeliveryTimeout = {
+    FrameType::PUBLISH_OK,
+    FrameType::SUBSCRIBE,
+    FrameType::REQUEST_UPDATE};
+
+// v18+ FILL_TIMEOUT (0x0A): MAY appear in FETCH only.
+const folly::F14FastSet<FrameType> kAllowedFramesForFillTimeout = {
+    FrameType::FETCH};
+
+// v18+ TRACK_NAMESPACE_PREFIX (0x34): MAY appear in REQUEST_UPDATE only.
+const folly::F14FastSet<FrameType> kAllowedFramesForTrackNamespacePrefix = {
+    FrameType::REQUEST_UPDATE};
+
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -255,6 +270,11 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
         {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
         {TrackRequestParamKey::NEW_GROUP_REQUEST,
          kAllowedFramesForNewGroupRequest},
+        {TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT,
+         kAllowedFramesForSubgroupDeliveryTimeout},
+        {TrackRequestParamKey::FILL_TIMEOUT, kAllowedFramesForFillTimeout},
+        {TrackRequestParamKey::TRACK_NAMESPACE_PREFIX,
+         kAllowedFramesForTrackNamespacePrefix},
 };
 
 // Frame types that allow all parameters (no validation)
@@ -300,6 +320,15 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
       key == TrackRequestParamKey::FORWARD &&
       frameType_ == FrameType::SUBSCRIBE_NAMESPACE) {
     return false;
+  }
+
+  // v18-only parameter keys.
+  if (key == TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT ||
+      key == TrackRequestParamKey::FILL_TIMEOUT ||
+      key == TrackRequestParamKey::TRACK_NAMESPACE_PREFIX) {
+    if (!majorVersion_.has_value() || *majorVersion_ < 18) {
+      return false;
+    }
   }
 
   auto it = kParamAllowlist.find(key);

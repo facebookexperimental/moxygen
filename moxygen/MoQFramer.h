@@ -488,6 +488,13 @@ class MoQFrameParser {
       uint64_t version,
       uint64_t key) const noexcept;
 
+  folly::Expected<std::optional<Parameter>, ErrorCode> parseV18ParamValue(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      uint64_t version,
+      uint64_t key,
+      ParamsType paramsType) const noexcept;
+
   folly::Expected<folly::Unit, ErrorCode> parseParams(
       folly::io::Cursor& cursor,
       size_t& length,
@@ -823,6 +830,12 @@ class MoQFrameWriter {
       bool& error) const noexcept;
 
   void writeParamValue(
+      folly::IOBufQueue& writeBuf,
+      const Parameter& param,
+      size_t& size,
+      bool& error) const noexcept;
+
+  void writeV18ParamValue(
       folly::IOBufQueue& writeBuf,
       const Parameter& param,
       size_t& size,

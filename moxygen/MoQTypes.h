@@ -543,12 +543,17 @@ using TrackRequestParameter = Parameter;
 
 enum class TrackRequestParamKey : uint64_t {
   AUTHORIZATION_TOKEN = 3,
+  // Key 0x02: DELIVERY_TIMEOUT for drafts < 18
+  // OBJECT_DELIVERY_TIMEOUT for drafts >= 18.
   DELIVERY_TIMEOUT = 2,
+  OBJECT_DELIVERY_TIMEOUT = 2,
   // Key 0x04: MAX_CACHE_DURATION for drafts < 18
   // RENDEZVOUS_TIMEOUT for drafts >= 18.
   MAX_CACHE_DURATION = 4,
   RENDEZVOUS_TIMEOUT = 4,
+  SUBGROUP_DELIVERY_TIMEOUT = 0x06,
   PUBLISHER_PRIORITY = 0x0E,
+  FILL_TIMEOUT = 0x0A,
   SUBSCRIBER_PRIORITY = 0x20,
   SUBSCRIPTION_FILTER = 0x21,
   EXPIRES = 8,
@@ -556,6 +561,7 @@ enum class TrackRequestParamKey : uint64_t {
   LARGEST_OBJECT = 0x9,
   FORWARD = 0x10,
   NEW_GROUP_REQUEST = 0x32,
+  TRACK_NAMESPACE_PREFIX = 0x34,
 };
 
 inline bool isRendezvousTimeoutParam(uint64_t key, uint64_t majorVersion) {
