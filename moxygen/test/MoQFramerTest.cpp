@@ -5320,6 +5320,35 @@ TEST_F(ParametersIsParamAllowedTest, ForwardForbiddenOnSubscribeNamespaceV18) {
   EXPECT_TRUE(paramsV17.isParamAllowed(TrackRequestParamKey::FORWARD));
 }
 
+// Draft-18-only parameter keys (SUBGROUP_DELIVERY_TIMEOUT 0x06, FILL_TIMEOUT
+// 0x0A, TRACK_NAMESPACE_PREFIX 0x34) reuse no earlier key value, so below
+// draft 18 they must be unknown -- which makes parseParams hard-reject them
+// with PROTOCOL_VIOLATION, preserving pre-18 behavior. At v18 they are known.
+TEST_F(ParametersIsParamAllowedTest, V18OnlyParamKeysUnknownBeforeV18) {
+  for (auto key :
+       {TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT,
+        TrackRequestParamKey::FILL_TIMEOUT,
+        TrackRequestParamKey::TRACK_NAMESPACE_PREFIX}) {
+    auto rawKey = folly::to_underlying(key);
+    EXPECT_FALSE(Parameters::isKnownParamKey(rawKey, 17));
+    EXPECT_TRUE(Parameters::isKnownParamKey(rawKey, 18));
+  }
+}
+
+// Keys present in every supported draft -- including the key values that are
+// reinterpreted in v18 (0x02 DELIVERY_TIMEOUT/OBJECT_DELIVERY_TIMEOUT, 0x04
+// MAX_CACHE_DURATION/RENDEZVOUS_TIMEOUT) -- stay known across versions.
+TEST_F(ParametersIsParamAllowedTest, StableParamKeysKnownAcrossVersions) {
+  for (auto key :
+       {TrackRequestParamKey::DELIVERY_TIMEOUT,
+        TrackRequestParamKey::MAX_CACHE_DURATION,
+        TrackRequestParamKey::SUBSCRIBER_PRIORITY}) {
+    auto rawKey = folly::to_underlying(key);
+    EXPECT_TRUE(Parameters::isKnownParamKey(rawKey, 17));
+    EXPECT_TRUE(Parameters::isKnownParamKey(rawKey, 18));
+  }
+}
+
 class ParameterValidationFlowTest : public ::testing::Test {
  protected:
   void SetUp() override {

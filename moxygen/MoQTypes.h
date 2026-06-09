@@ -587,8 +587,9 @@ class Parameters {
   // Validates if a parameter is allowed for frameType_
   bool isParamAllowed(TrackRequestParamKey key) const;
 
-  // Returns true if key is a known parameter key in kParamAllowlist
-  static bool isKnownParamKey(uint64_t key);
+  // Returns true if key is a known parameter key for the negotiated draft
+  // version. Keys introduced in draft 18 are treated as unknown below v18.
+  static bool isKnownParamKey(uint64_t key, uint64_t majorVersion);
 
   const Parameter& getParam(size_t position) const {
     return params_.at(position);

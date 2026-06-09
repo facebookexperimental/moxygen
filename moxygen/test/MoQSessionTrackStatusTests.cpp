@@ -142,6 +142,7 @@ namespace {
 class ValidatorSession : public MockMoQSession {
  public:
   using MockMoQSession::MockMoQSession;
+  using MoQSession::validateRequestOkParams;
   using MoQSession::validateRequestOkTrackProperties;
 };
 
@@ -238,5 +239,70 @@ TEST(
 
   EXPECT_TRUE(session->validateRequestOkTrackProperties(
       requestOk, FrameType::REQUEST_OK));
+  EXPECT_FALSE(session->isClosed());
+}
+
+// === Param validation tests for REQUEST_OK shorthands (draft 18+) ===
+//
+// REQUEST_OK is parsed against the union of params allowed for any shorthand
+// (e.g. OBJECT_DELIVERY_TIMEOUT lists REQUEST_OK so PUBLISH_OK passes). Once
+// the shorthand resolves, generic params not allowed for it must be rejected.
+// Both MoQSession::onRequestOk and MoQRelaySession::onRequestOk delegate to the
+// shared validateRequestOkParams helper.
+
+namespace {
+RequestOk makeRequestOkWithObjectDeliveryTimeout() {
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(1);
+  requestOk.params.setMajorVersion(getDraftMajorVersion(kVersionDraft18));
+  requestOk.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+      uint64_t(1000)));
+  return requestOk;
+}
+} // namespace
+
+TEST(
+    MoQSessionRequestOkParamsValidation,
+    AllowsObjectDeliveryTimeoutForPublishOk) {
+  auto session = makeValidatorSession(kVersionDraft18);
+  auto requestOk = makeRequestOkWithObjectDeliveryTimeout();
+  EXPECT_TRUE(
+      session->validateRequestOkParams(requestOk, FrameType::PUBLISH_OK));
+  EXPECT_FALSE(session->isClosed());
+}
+
+TEST(
+    MoQSessionRequestOkParamsValidation,
+    RejectsObjectDeliveryTimeoutForNonPublishOkShorthands) {
+  // OBJECT_DELIVERY_TIMEOUT is valid for PUBLISH_OK but not for these
+  // REQUEST_OK shorthands (spec 10.2.4). The parser accepts the superset;
+  // resolution must reject it here with PROTOCOL_VIOLATION.
+  for (auto frameType :
+       {FrameType::TRACK_STATUS_OK,
+        FrameType::SUBSCRIBE_NAMESPACE_OK,
+        FrameType::PUBLISH_NAMESPACE_OK}) {
+    auto session = makeValidatorSession(kVersionDraft18);
+    CloseCallbackRecorder recorder;
+    session->setSessionCloseCallback(&recorder);
+    auto requestOk = makeRequestOkWithObjectDeliveryTimeout();
+
+    EXPECT_FALSE(session->validateRequestOkParams(requestOk, frameType))
+        << "frameType=" << folly::to_underlying(frameType);
+    EXPECT_TRUE(session->isClosed())
+        << "frameType=" << folly::to_underlying(frameType);
+    EXPECT_EQ(recorder.lastError, SessionCloseErrorCode::PROTOCOL_VIOLATION)
+        << "frameType=" << folly::to_underlying(frameType);
+  }
+}
+
+TEST(MoQSessionRequestOkParamsValidation, PreDraft18SkipsParamValidation) {
+  // Pre-18 each shorthand had its own frame type, so there is no superset to
+  // re-check; the validator is a no-op.
+  auto session = makeValidatorSession(kVersionDraft17);
+  RequestOk requestOk;
+  requestOk.requestID = RequestID(1);
+  EXPECT_TRUE(
+      session->validateRequestOkParams(requestOk, FrameType::TRACK_STATUS_OK));
   EXPECT_FALSE(session->isClosed());
 }

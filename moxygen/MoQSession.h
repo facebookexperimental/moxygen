@@ -1034,6 +1034,15 @@ class MoQSession : public Subscriber,
       const RequestOk& requestOk,
       FrameType resolvedFrameType);
 
+  // Draft 18+: the delivery-timeout params accept REQUEST_OK at parse time (so
+  // PUBLISH_OK, sent as REQUEST_OK, is accepted), but among REQUEST_OK
+  // responses they are valid only for PUBLISH_OK. Once the shorthand resolves,
+  // reject them for any other response. Returns true if valid; if it returns
+  // false the session has already been closed.
+  bool validateRequestOkParams(
+      const RequestOk& requestOk,
+      FrameType resolvedFrameType);
+
  protected:
   std::optional<uint64_t> negotiatedVersion_;
 
