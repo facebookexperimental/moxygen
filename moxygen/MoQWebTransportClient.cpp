@@ -10,6 +10,7 @@
 #include <proxygen/lib/http/HQConnector.h>
 #include <proxygen/lib/http/session/QuicProtocolInfo.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
+#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <moxygen/MoQFramer.h>
 
 namespace {
@@ -133,8 +134,10 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
         logger_->setDcid(*quicInfo->serverConnectionId);
       }
     }
-    logger_->setLocalAddress(session->getLocalAddress());
-    logger_->setPeerAddress(session->getPeerAddress());
+    logger_->setLocalAddress(
+        quic::toFollySocketAddress(session->getLocalAddress()));
+    logger_->setPeerAddress(
+        quic::toFollySocketAddress(session->getPeerAddress()));
   }
 
   // Establish WebTransport session

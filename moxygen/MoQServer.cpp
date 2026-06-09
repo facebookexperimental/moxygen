@@ -14,6 +14,7 @@
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
 #include <proxygen/lib/http/webtransport/QuicWtSession.h>
+#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 
 #include <utility>
@@ -188,8 +189,8 @@ void MoQServer::createMoQQuicSession(
   // Capture connection IDs and addresses before moving the socket
   auto clientCid = quicSocket->getClientConnectionId();
   auto serverCid = quicSocket->getServerConnectionId();
-  auto peerAddress = quicSocket->getPeerAddress();
-  auto localAddress = quicSocket->getLocalAddress();
+  auto peerAddress = quic::toFollySocketAddress(quicSocket->getPeerAddress());
+  auto localAddress = quic::toFollySocketAddress(quicSocket->getLocalAddress());
 
   auto qevb = quicSocket->getEventBase();
   const bool useQuicWtSession = useQuicWtSession_ && useQuicWtSession_();
@@ -362,8 +363,10 @@ void MoQServer::Handler::onHeadersComplete(
         if (auto serverCid = quicSocket->getServerConnectionId()) {
           logger->setSrcCid(*serverCid);
         }
-        logger->setPeerAddress(quicSocket->getPeerAddress());
-        logger->setLocalAddress(quicSocket->getLocalAddress());
+        logger->setPeerAddress(
+            quic::toFollySocketAddress(quicSocket->getPeerAddress()));
+        logger->setLocalAddress(
+            quic::toFollySocketAddress(quicSocket->getLocalAddress()));
       }
     }
     clientSession_->setLogger(logger);

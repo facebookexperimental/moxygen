@@ -8,6 +8,7 @@
 #include <folly/String.h>
 #include <folly/coro/Error.h>
 #include <quic/client/QuicClientTransport.h>
+#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <moxygen/MoQClientBase.h>
 
 #include <utility>
@@ -46,8 +47,10 @@ folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
     if (auto dcid = quicClient->getServerConnectionId()) {
       logger_->setDcid(*dcid);
     }
-    logger_->setLocalAddress(quicClient->getLocalAddress());
-    logger_->setPeerAddress(quicClient->getPeerAddress());
+    logger_->setLocalAddress(
+        quic::toFollySocketAddress(quicClient->getLocalAddress()));
+    logger_->setPeerAddress(
+        quic::toFollySocketAddress(quicClient->getPeerAddress()));
   }
 
   // Detect negotiated ALPN before wrapping the socket
