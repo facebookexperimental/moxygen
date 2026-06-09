@@ -4625,6 +4625,27 @@ void MoQSession::handleTrackStatusOkFromRequestOk(const RequestOk& requestOk) {
   onTrackStatusOk(std::move(trackStatusOk));
 }
 
+void MoQSession::handlePublishOkFromRequestOk(const RequestOk& requestOk) {
+  XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
+             << " sess=" << this;
+  auto majorVersion = getDraftMajorVersion(*getNegotiatedVersion());
+  if (majorVersion < 18) {
+    XLOG(ERR) << "PUBLISH_OK received as REQUEST_OK before draft 18 reqID="
+              << requestOk.requestID << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  auto publishOk = requestOk.toPublishOk(majorVersion);
+  if (publishOk.hasError()) {
+    XLOG(ERR) << "Invalid PUBLISH_OK params in REQUEST_OK reqID="
+              << requestOk.requestID << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  onPublishOk(std::move(publishOk.value()));
+}
+
 bool MoQSession::validateRequestOkTrackProperties(
     const RequestOk& requestOk,
     FrameType resolvedFrameType) {
@@ -6199,6 +6220,10 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   switch (frameType) {
     case FrameType::TRACK_STATUS_OK: {
       handleTrackStatusOkFromRequestOk(requestOk);
+      break;
+    }
+    case FrameType::PUBLISH_OK: {
+      handlePublishOkFromRequestOk(requestOk);
       break;
     }
     case FrameType::REQUEST_OK: {

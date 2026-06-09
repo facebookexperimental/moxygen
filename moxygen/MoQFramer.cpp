@@ -156,6 +156,102 @@ std::vector<moxygen::Parameter> mergeAndSortParams(
   return sortParamsByKey(std::move(allParams));
 }
 
+bool isPublishOkRequestSpecificParam(moxygen::TrackRequestParamKey key) {
+  switch (key) {
+    case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
+    case moxygen::TrackRequestParamKey::EXPIRES:
+    case moxygen::TrackRequestParamKey::GROUP_ORDER:
+    case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
+    case moxygen::TrackRequestParamKey::FORWARD:
+    case moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void appendIntRequestSpecificParam(
+    std::vector<moxygen::Parameter>& requestSpecificParams,
+    moxygen::TrackRequestParamKey key,
+    std::optional<uint64_t> value) {
+  if (!value.has_value()) {
+    return;
+  }
+  requestSpecificParams.emplace_back(folly::to_underlying(key), *value);
+}
+
+void insertPublishOkIntParamIfMissing(
+    moxygen::TrackRequestParameters& params,
+    moxygen::TrackRequestParamKey key,
+    uint64_t value,
+    const char* context) {
+  if (moxygen::getFirstIntParam(params, key).has_value()) {
+    return;
+  }
+  auto insertResult =
+      params.insertParam(moxygen::Parameter(folly::to_underlying(key), value));
+  if (insertResult.hasError()) {
+    XLOG(WARN) << context
+               << ": ignoring param key=" << folly::to_underlying(key);
+  }
+}
+
+std::vector<moxygen::Parameter> getPublishOkRequestSpecificParams(
+    const moxygen::PublishOk& publishOk,
+    bool includeRequestOkOnlyParams = false) {
+  std::vector<moxygen::Parameter> requestSpecificParams;
+
+  moxygen::Parameter subscriptionFilterParam;
+  subscriptionFilterParam.key =
+      folly::to_underlying(moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER);
+  subscriptionFilterParam.asSubscriptionFilter = moxygen::SubscriptionFilter(
+      publishOk.locType,
+      publishOk.start,
+      publishOk.locType == moxygen::LocationType::AbsoluteRange
+          ? publishOk.endGroup
+          : std::nullopt);
+  requestSpecificParams.push_back(subscriptionFilterParam);
+
+  if (publishOk.subscriberPriority != moxygen::kDefaultPriority) {
+    moxygen::Parameter priorityParam;
+    priorityParam.key = folly::to_underlying(
+        moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+    priorityParam.asUint64 = publishOk.subscriberPriority;
+    requestSpecificParams.push_back(priorityParam);
+  }
+
+  if (publishOk.groupOrder != moxygen::GroupOrder::Default) {
+    moxygen::Parameter groupOrderParam;
+    groupOrderParam.key =
+        folly::to_underlying(moxygen::TrackRequestParamKey::GROUP_ORDER);
+    groupOrderParam.asUint64 = folly::to_underlying(publishOk.groupOrder);
+    requestSpecificParams.push_back(groupOrderParam);
+  }
+
+  if (!publishOk.forward) {
+    moxygen::Parameter forwardParam;
+    forwardParam.key =
+        folly::to_underlying(moxygen::TrackRequestParamKey::FORWARD);
+    forwardParam.asUint64 = 0;
+    requestSpecificParams.push_back(forwardParam);
+  }
+
+  if (includeRequestOkOnlyParams) {
+    appendIntRequestSpecificParam(
+        requestSpecificParams,
+        moxygen::TrackRequestParamKey::EXPIRES,
+        moxygen::getFirstIntParam(
+            publishOk.params, moxygen::TrackRequestParamKey::EXPIRES));
+  }
+  appendIntRequestSpecificParam(
+      requestSpecificParams,
+      moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST,
+      moxygen::getFirstIntParam(
+          publishOk.params, moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST));
+
+  return requestSpecificParams;
+}
+
 std::vector<moxygen::Extension> sortExtensionsByType(
     std::vector<moxygen::Extension> extensions) {
   std::sort(
@@ -2301,6 +2397,9 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
     size_t length) const noexcept {
   XCHECK(version_.has_value())
       << "The version must be set before parsing a publish ok";
+  if (getDraftMajorVersion(*version_) >= 18) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   PublishOk publishOk;
   auto requestID = decodeVarint(cursor, length);
   if (!requestID) {
@@ -3652,6 +3751,115 @@ RequestOk RequestOk::fromTrackStatusOk(const TrackStatusOk& trackStatusOk) {
         folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
         trackStatusOk.largest.value());
   }
+  return requestOk;
+}
+
+static folly::Expected<PublishOk, ErrorCode> requestOkToPublishOk(
+    const RequestOk& requestOk,
+    uint64_t majorVersion) {
+  PublishOk publishOk;
+  publishOk.requestID = requestOk.requestID;
+  publishOk.params = TrackRequestParameters(FrameType::PUBLISH_OK);
+  publishOk.params.setMajorVersion(majorVersion);
+
+  for (const auto& param : requestOk.params) {
+    auto insertResult = publishOk.params.insertParam(param);
+    if (insertResult.hasError()) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
+
+  for (const auto& param : requestOk.requestSpecificParams) {
+    if (!isPublishOkRequestSpecificParam(
+            static_cast<TrackRequestParamKey>(param.key))) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
+
+  std::optional<SubscriptionFilter> filter;
+  for (const auto& param : requestOk.requestSpecificParams) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
+      filter = param.asSubscriptionFilter;
+      break;
+    }
+  }
+  if (filter.has_value()) {
+    publishOk.locType = filter->filterType;
+    publishOk.start = filter->location;
+    publishOk.endGroup = filter->endGroup;
+  } else {
+    publishOk.locType = LocationType::AbsoluteStart;
+    publishOk.start = AbsoluteLocation{0, 0};
+    publishOk.endGroup = std::nullopt;
+  }
+
+  auto maybeGroupOrder = getFirstIntParam(
+      requestOk.requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
+  publishOk.groupOrder = maybeGroupOrder.has_value()
+      ? static_cast<GroupOrder>(*maybeGroupOrder)
+      : GroupOrder::Default;
+
+  auto maybePriority = getFirstIntParam(
+      requestOk.requestSpecificParams,
+      TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+  publishOk.subscriberPriority = maybePriority.has_value()
+      ? static_cast<uint8_t>(*maybePriority)
+      : kDefaultPriority;
+
+  auto maybeForward = getFirstIntParam(
+      requestOk.requestSpecificParams, TrackRequestParamKey::FORWARD);
+  publishOk.forward = maybeForward.has_value() ? (*maybeForward == 1) : true;
+
+  auto maybeExpires = getFirstIntParam(
+      requestOk.requestSpecificParams, TrackRequestParamKey::EXPIRES);
+  if (maybeExpires.has_value()) {
+    insertPublishOkIntParamIfMissing(
+        publishOk.params,
+        TrackRequestParamKey::EXPIRES,
+        *maybeExpires,
+        "toPublishOk");
+  }
+
+  auto maybeNewGroupRequest = getFirstIntParam(
+      requestOk.requestSpecificParams, TrackRequestParamKey::NEW_GROUP_REQUEST);
+  if (maybeNewGroupRequest.has_value()) {
+    insertPublishOkIntParamIfMissing(
+        publishOk.params,
+        TrackRequestParamKey::NEW_GROUP_REQUEST,
+        *maybeNewGroupRequest,
+        "toPublishOk");
+  }
+
+  return publishOk;
+}
+
+folly::Expected<PublishOk, ErrorCode> RequestOk::toPublishOk(
+    uint64_t majorVersion) const {
+  return requestOkToPublishOk(*this, majorVersion);
+}
+
+// static
+RequestOk RequestOk::fromPublishOk(
+    const PublishOk& publishOk,
+    uint64_t majorVersion) {
+  RequestOk requestOk;
+  requestOk.requestID = publishOk.requestID;
+  requestOk.params = TrackRequestParameters(FrameType::PUBLISH_OK);
+  requestOk.params.setMajorVersion(majorVersion);
+  for (const auto& param : publishOk.params) {
+    if (isPublishOkRequestSpecificParam(
+            static_cast<TrackRequestParamKey>(param.key))) {
+      continue;
+    }
+    auto insertResult = requestOk.params.insertParam(param);
+    if (insertResult.hasError()) {
+      XLOG(WARN) << "fromPublishOk: ignoring param not allowed for PUBLISH_OK"
+                 << " key=" << param.key;
+    }
+  }
+  requestOk.requestSpecificParams =
+      getPublishOkRequestSpecificParams(publishOk, true);
   return requestOk;
 }
 
@@ -5187,12 +5395,20 @@ WriteResult MoQFrameWriter::writePublishOk(
     folly::IOBufQueue& writeBuf,
     const PublishOk& publishOk) const noexcept {
   XCHECK(version_.has_value()) << "Version needs to be set to write publish ok";
+  auto majorVersion = getDraftMajorVersion(*version_);
+  if (majorVersion >= 18) {
+    return writeRequestOk(
+        writeBuf,
+        RequestOk::fromPublishOk(publishOk, majorVersion),
+        FrameType::PUBLISH_OK);
+  }
+
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_OK, error);
   writeVarint(writeBuf, publishOk.requestID.value, size, error);
 
-  if (getDraftMajorVersion(*version_) < 15) {
+  if (majorVersion < 15) {
     uint8_t forwardFlag = publishOk.forward ? 1 : 0;
     writeBuf.append(&forwardFlag, 1);
     size += 1;
@@ -5206,56 +5422,12 @@ WriteResult MoQFrameWriter::writePublishOk(
   }
 
   std::vector<Parameter> requestSpecificParams;
-  if (getDraftMajorVersion(*version_) >= 15) {
-    Parameter subscriptionFilterParam;
-    subscriptionFilterParam.key =
-        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
-    subscriptionFilterParam.asSubscriptionFilter = SubscriptionFilter(
-        publishOk.locType,
-        publishOk.start,
-        publishOk.locType == LocationType::AbsoluteRange ? publishOk.endGroup
-                                                         : std::nullopt);
-    requestSpecificParams.push_back(subscriptionFilterParam);
-
-    if (publishOk.subscriberPriority != kDefaultPriority) {
-      Parameter priorityParam;
-      priorityParam.key =
-          folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
-      priorityParam.asUint64 = publishOk.subscriberPriority;
-      requestSpecificParams.push_back(priorityParam);
-    }
-
-    if (publishOk.groupOrder != GroupOrder::Default) {
-      Parameter groupOrderParam;
-      groupOrderParam.key =
-          folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
-      groupOrderParam.asUint64 = folly::to_underlying(publishOk.groupOrder);
-      requestSpecificParams.push_back(groupOrderParam);
-    }
-
-    if (publishOk.forward == 0) {
-      // The forward param defaults to 1 if not specified, so we only need
-      // to insert the parameter if forward is 0.
-      Parameter forwardParam;
-      forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
-      forwardParam.asUint64 = 0;
-      requestSpecificParams.push_back(forwardParam);
-    }
-
-    auto newGroupRequestValue = getFirstIntParam(
-        publishOk.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
-    if (newGroupRequestValue.has_value()) {
-      Parameter newGroupRequestParam;
-      newGroupRequestParam.key =
-          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
-      newGroupRequestParam.asUint64 = *newGroupRequestValue;
-      requestSpecificParams.push_back(newGroupRequestParam);
-    }
+  if (majorVersion >= 15) {
+    requestSpecificParams = getPublishOkRequestSpecificParams(publishOk);
   } else {
     writeVarint(
         writeBuf,
-        getLocationTypeValue(
-            publishOk.locType, getDraftMajorVersion(*version_)),
+        getLocationTypeValue(publishOk.locType, majorVersion),
         size,
         error);
 

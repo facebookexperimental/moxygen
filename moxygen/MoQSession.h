@@ -1021,6 +1021,7 @@ class MoQSession : public Subscriber,
       RequestID::hash>::iterator;
 
   void handleTrackStatusOkFromRequestOk(const RequestOk& requestOk);
+  void handlePublishOkFromRequestOk(const RequestOk& requestOk);
   void handleSubscribeUpdateOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);

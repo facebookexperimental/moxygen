@@ -606,6 +606,12 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::PUBLISH_OK: {
+      if (getDraftMajorVersion(*moqFrameParser_.getVersion()) >= 18) {
+        XLOG(ERR) << "Received deprecated PUBLISH_OK frame in version="
+                  << getDraftMajorVersion(*moqFrameParser_.getVersion());
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+
       auto res = moqFrameParser_.parsePublishOk(cursor, curFrameLength_);
       if (res) {
         if (callback_) {

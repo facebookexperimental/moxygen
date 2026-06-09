@@ -687,6 +687,11 @@ void MoQRelaySession::onRequestOk(RequestOk requestOk, FrameType frameType) {
       shouldErasePendingRequest = false;
       break;
     }
+    case moxygen::FrameType::PUBLISH_OK: {
+      handlePublishOkFromRequestOk(requestOk);
+      shouldErasePendingRequest = false;
+      break;
+    }
     case moxygen::FrameType::SUBSCRIBE_NAMESPACE_OK:
     case moxygen::FrameType::REQUEST_OK: {
       // PUBLISH_NAMESPACE_OK is an alias for REQUEST_OK (both = 0x7)
