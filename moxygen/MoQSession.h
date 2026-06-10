@@ -969,6 +969,10 @@ class MoQSession : public Subscriber,
       return getFrameType(false);
     }
 
+    Type type() const {
+      return type_;
+    }
+
     virtual folly::Expected<Type, folly::Unit> setError(
         RequestError error,
         FrameType frameType);

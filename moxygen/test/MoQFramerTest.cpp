@@ -4624,6 +4624,159 @@ TEST_F(MoQFramerV18Test, SubscribeTracksForwardFalseSerializedAsParameter) {
   EXPECT_EQ(parsed->forward, false);
 }
 
+// Draft 18+ REQUEST_ERROR carries a Redirect structure when errorCode ==
+// REDIRECT. Verify round-trip of a fully-populated Redirect.
+TEST_F(MoQFramerV18Test, RequestErrorRedirectRoundtrip) {
+  RequestError requestError;
+  requestError.requestID = RequestID(7);
+  requestError.errorCode = RequestErrorCode::REDIRECT;
+  requestError.reasonPhrase = "moved";
+  requestError.retryInterval = std::chrono::milliseconds{1};
+  Redirect redirect;
+  redirect.connectUri = "https://relay.example.com/moq";
+  redirect.fullTrackName.trackNamespace =
+      TrackNamespace(std::vector<std::string>{"example.com", "live"});
+  redirect.fullTrackName.trackName = "alt-track";
+  requestError.redirect = redirect;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer_
+          .writeRequestError(writeBuf, requestError, FrameType::REQUEST_ERROR)
+          .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = decodeMoQVarint(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_ERROR));
+
+  auto bodyLen = frameLength(cursor);
+  auto parsed =
+      parser_.parseRequestError(cursor, bodyLen, FrameType::REQUEST_ERROR);
+  ASSERT_TRUE(parsed.hasValue());
+
+  EXPECT_EQ(parsed->requestID, requestError.requestID);
+  EXPECT_EQ(parsed->errorCode, RequestErrorCode::REDIRECT);
+  EXPECT_EQ(parsed->reasonPhrase, requestError.reasonPhrase);
+  EXPECT_EQ(parsed->retryInterval, requestError.retryInterval);
+  ASSERT_TRUE(parsed->redirect.has_value());
+  EXPECT_EQ(parsed->redirect->connectUri, redirect.connectUri);
+  EXPECT_EQ(
+      parsed->redirect->fullTrackName.trackNamespace,
+      redirect.fullTrackName.trackNamespace);
+  EXPECT_EQ(
+      parsed->redirect->fullTrackName.trackName,
+      redirect.fullTrackName.trackName);
+}
+
+// When errorCode == REDIRECT but no Redirect is supplied, the writer
+// must refuse — silently substituting an empty Redirect would hide a
+// caller bug and produce a misleading on-wire message. Callers that
+// genuinely want "reuse current session URI / original Full Track Name"
+// must set `redirect` to a default-constructed Redirect explicitly.
+TEST_F(MoQFramerV18Test, RequestErrorRedirectWithoutRedirectIsRejected) {
+  RequestError requestError;
+  requestError.requestID = RequestID(3);
+  requestError.errorCode = RequestErrorCode::REDIRECT;
+  requestError.reasonPhrase = "";
+  requestError.retryInterval = std::chrono::milliseconds{0};
+  // Intentionally leave requestError.redirect unset.
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_FALSE(
+      writer_
+          .writeRequestError(writeBuf, requestError, FrameType::REQUEST_ERROR)
+          .hasValue());
+}
+
+// Per draft-ietf-moq-transport-18 §10.6.2, REDIRECT is only permitted in
+// response to SUBSCRIBE, FETCH, TRACK_STATUS, PUBLISH_NAMESPACE and
+// SUBSCRIBE_NAMESPACE. The framer does not know that original request
+// context for v18+ REQUEST_ERROR; session-layer validation handles it.
+TEST_F(MoQFramerV18Test, RequestErrorRedirectDoesNotValidateRequestType) {
+  RequestError requestError;
+  requestError.requestID = RequestID(1);
+  requestError.errorCode = RequestErrorCode::REDIRECT;
+  requestError.reasonPhrase = "";
+  requestError.retryInterval = std::chrono::milliseconds{0};
+  requestError.redirect = Redirect{};
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  EXPECT_TRUE(
+      writer_
+          .writeRequestError(writeBuf, requestError, FrameType::PUBLISH_ERROR)
+          .hasValue());
+  EXPECT_TRUE(writer_
+                  .writeRequestError(
+                      writeBuf, requestError, FrameType::SUBSCRIBE_UPDATE)
+                  .hasValue());
+}
+
+// The parser only decodes REQUEST_ERROR bytes. It cannot decide whether a
+// REDIRECT is valid for the original request; session-layer enforcement handles
+// that using pending request state.
+TEST_F(MoQFramerV18Test, ParseRequestErrorDoesNotValidateRequestType) {
+  // Hand-craft a REQUEST_ERROR body with errorCode == REDIRECT and a
+  // valid Redirect payload.
+  RequestError requestError;
+  requestError.requestID = RequestID(42);
+  requestError.errorCode = RequestErrorCode::REDIRECT;
+  requestError.reasonPhrase = "moved";
+  requestError.retryInterval = std::chrono::milliseconds{0};
+  requestError.redirect = Redirect{};
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer_.writeRequestError(writeBuf, requestError, FrameType::FETCH_ERROR)
+          .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ASSERT_TRUE(decodeMoQVarint(cursor).has_value()); // frame type
+  auto bodyLen = frameLength(cursor);
+
+  // Parsing the same bytes as if they were a PUBLISH_ERROR still succeeds:
+  // request-type redirect validation requires session context.
+  auto parsed =
+      parser_.parseRequestError(cursor, bodyLen, FrameType::PUBLISH_ERROR);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->errorCode, RequestErrorCode::REDIRECT);
+  EXPECT_TRUE(parsed->redirect.has_value());
+}
+
+// When errorCode is anything other than REDIRECT, no Redirect bytes are
+// written, and the parsed RequestError has no redirect.
+TEST_F(MoQFramerV18Test, RequestErrorNonRedirectOmitsRedirect) {
+  RequestError requestError;
+  requestError.requestID = RequestID(9);
+  requestError.errorCode = RequestErrorCode::INTERNAL_ERROR;
+  requestError.reasonPhrase = "boom";
+  requestError.retryInterval = std::chrono::milliseconds{0};
+  // Set redirect anyway to confirm the writer ignores it for non-REDIRECT.
+  Redirect redirect;
+  redirect.connectUri = "ignored";
+  requestError.redirect = redirect;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer_
+          .writeRequestError(writeBuf, requestError, FrameType::REQUEST_ERROR)
+          .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = decodeMoQVarint(cursor);
+  ASSERT_TRUE(frameType.has_value());
+
+  auto bodyLen = frameLength(cursor);
+  auto parsed =
+      parser_.parseRequestError(cursor, bodyLen, FrameType::REQUEST_ERROR);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_FALSE(parsed->redirect.has_value());
+}
+
 // Draft 18 added a Track Properties block at the end of REQUEST_OK. Verify
 // that a populated TRACK_STATUS_OK round-trips its Track Properties through
 // the wire and back into the TrackStatusOk struct.

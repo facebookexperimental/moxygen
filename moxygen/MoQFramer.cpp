@@ -3387,6 +3387,34 @@ folly::Expected<RequestError, ErrorCode> MoQFrameParser::parseRequestError(
   }
   requestError.reasonPhrase = std::move(reasonPhrase.value());
 
+  if (requestError.errorCode == RequestErrorCode::REDIRECT) {
+    if (getDraftMajorVersion(*version_) < 18) {
+      XLOG(DBG4) << "REDIRECT errorCode received on pre-v18 draft";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
+
+  if (getDraftMajorVersion(*version_) >= 18 &&
+      requestError.errorCode == RequestErrorCode::REDIRECT) {
+    Redirect redirect;
+
+    auto connectUri = parseFixedString(cursor, length);
+    if (!connectUri) {
+      XLOG(DBG4) << "parseRequestError: UNDERFLOW on Redirect Connect URI";
+      return folly::makeUnexpected(connectUri.error());
+    }
+    redirect.connectUri = std::move(connectUri.value());
+
+    auto fullTrackName = parseFullTrackName(cursor, length);
+    if (!fullTrackName) {
+      XLOG(DBG4) << "parseRequestError: error parsing Redirect Full Track Name";
+      return folly::makeUnexpected(fullTrackName.error());
+    }
+    redirect.fullTrackName = std::move(fullTrackName.value());
+
+    requestError.redirect = std::move(redirect);
+  }
+
   // Check for leftover bytes
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -6005,6 +6033,18 @@ WriteResult MoQFrameWriter::writeRequestError(
       << "Invalid frameType passed to writeRequestError: "
       << static_cast<int>(frameType);
 
+  if (requestError.errorCode == RequestErrorCode::REDIRECT) {
+    if (getDraftMajorVersion(*version_) < 18) {
+      XLOG(ERR) << "REDIRECT errorCode is only valid for draft 18+, version="
+                << *version_;
+      return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+    }
+    if (!requestError.redirect) {
+      XLOG(ERR) << "REDIRECT errorCode without a Redirect struct";
+      return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+    }
+  }
+
   size_t size = 0;
   bool error = false;
   if (getDraftMajorVersion(*version_) > 14) {
@@ -6024,6 +6064,13 @@ WriteResult MoQFrameWriter::writeRequestError(
         error);
   }
   writeFixedString(writeBuf, requestError.reasonPhrase, size, error);
+
+  if (getDraftMajorVersion(*version_) >= 18 &&
+      requestError.errorCode == RequestErrorCode::REDIRECT) {
+    const Redirect& redirect = *requestError.redirect;
+    writeFixedString(writeBuf, redirect.connectUri, size, error);
+    writeFullTrackName(writeBuf, redirect.fullTrackName, size, error);
+  }
 
   writeSize(sizePtr, size, error, *version_);
   if (error) {

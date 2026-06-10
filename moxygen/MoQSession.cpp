@@ -2154,9 +2154,7 @@ MoQSession::PendingRequestState::setError(
       return type_;
     }
     case FrameType::TRACK_STATUS: {
-      storage_.trackStatus_.setValue(
-          folly::makeUnexpected(TrackStatusError(
-              {error.requestID, error.errorCode, error.reasonPhrase})));
+      storage_.trackStatus_.setValue(folly::makeUnexpected(std::move(error)));
       return type_;
     }
     case FrameType::FETCH_ERROR: {
@@ -3872,6 +3870,43 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
     if (getDraftMajorVersion(*getNegotiatedVersion()) > 14) {
       // determine real frame type from pendingRequest
       frameType = pendingState->getErrorFrameType();
+    }
+
+    if (error.errorCode == RequestErrorCode::REDIRECT) {
+      using PRStateType = PendingRequestState::Type;
+      const auto pendingType = pendingState->type();
+      const bool isNamespaceScoped =
+          (pendingType == PRStateType::PUBLISH_NAMESPACE ||
+           pendingType == PRStateType::SUBSCRIBE_NAMESPACE);
+      const bool isRedirectable =
+          (pendingType == PRStateType::SUBSCRIBE_TRACK ||
+           pendingType == PRStateType::FETCH ||
+           pendingType == PRStateType::TRACK_STATUS || isNamespaceScoped);
+      if (!isRedirectable) {
+        XLOG(ERR) << "REDIRECT not permitted for pending request type="
+                  << static_cast<int>(pendingType) << " id=" << error.requestID
+                  << " sess=" << this;
+        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+        return;
+      }
+      if (error.redirect) {
+        if (dir_ == MoQControlCodec::Direction::SERVER &&
+            !error.redirect->connectUri.empty()) {
+          XLOG(ERR) << "Server received REDIRECT with non-empty Connect URI"
+                    << " id=" << error.requestID << " sess=" << this;
+          close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+          return;
+        }
+        if (isNamespaceScoped &&
+            !error.redirect->fullTrackName.trackName.empty()) {
+          XLOG(ERR) << "Namespace-scoped REDIRECT has non-empty Track Name"
+                    << " id=" << error.requestID
+                    << " pendingType=" << static_cast<int>(pendingType)
+                    << " sess=" << this;
+          close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+          return;
+        }
+      }
     }
 
     auto setErrorRes = pendingState->setError(error, frameType);
@@ -6539,6 +6574,10 @@ WriteResult MessageReply::ok(const RequestOk& okMsg) {
 }
 
 WriteResult MessageReply::error(const SubscribeTracksError& errorMsg) {
+  if (errorMsg.errorCode == RequestErrorCode::REDIRECT) {
+    XLOG(ERR) << "REDIRECT not permitted in SUBSCRIBE_TRACKS error";
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
   auto res = moqFrameWriter_.writeRequestError(
       replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
   // After ERROR the publisher is done with this stream — FIN it.
