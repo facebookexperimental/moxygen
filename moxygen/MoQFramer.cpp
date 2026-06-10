@@ -5698,10 +5698,11 @@ WriteResult MoQFrameWriter::writeGoaway(
   writeFixedString(writeBuf, goaway.newSessionUri, size, error);
   if (getDraftMajorVersion(*version_) >= 18) {
     writeVarint(writeBuf, goaway.timeout, size, error);
+    // Per draft 18, Request ID is present only when GOAWAY is sent on the
+    // control stream. Callers signal request-stream GOAWAY by leaving
+    // requestID unset.
     if (goaway.requestID.has_value()) {
       writeVarint(writeBuf, goaway.requestID->value, size, error);
-    } else {
-      error = true;
     }
   }
   writeSize(sizePtr, size, error, *version_);
