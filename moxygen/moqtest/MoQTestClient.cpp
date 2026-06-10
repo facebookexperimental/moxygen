@@ -189,7 +189,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
   receivingType_ = ReceivingType::FETCH;
   initializeExpecteds(params);
 
-  // Fetch to the reciever
+  // Fetch to the receiver
   auto res = co_await moqClient_->moqSession_->fetch(fetch, fetchReceiver_);
   moqClient_->moqSession_->drain();
   if (!res.hasError()) {
@@ -230,7 +230,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
   }
 
-  // Adjust the expected data (If Still recieving data, leave unblocked)
+  // Adjust the expected data (If Still receiving data, leave unblocked)
   adjustExpected(params_, &objHeader);
   return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
 }
