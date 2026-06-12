@@ -9,7 +9,9 @@
 #include <folly/coro/FutureUtil.h>
 #include <quic/common/CircularDeque.h>
 #include <quic/priority/HTTPPriorityQueue.h>
+#include <moxygen/BidiStreamControl.h>
 #include <moxygen/MoQTrackProperties.h>
+#include <moxygen/ReplyContext.h>
 #include <moxygen/events/MoQDeliveryTimeoutManager.h>
 
 #include <folly/logging/xlog.h>
@@ -1006,29 +1008,6 @@ namespace moxygen {
 
 namespace {
 
-class BidiStreamReplyContext : public ReplyContext {
- public:
-  BidiStreamReplyContext(
-      proxygen::WebTransport::StreamWriteHandle* writeHandle,
-      folly::CancellationToken token)
-      : ReplyContext(std::move(token)), writeHandle_(writeHandle) {}
-
-  folly::IOBufQueue& writeBuf() override {
-    return writeBuf_;
-  }
-  void flush(bool fin = false) override {
-    if (!cancelled()) {
-      writeHandle_->writeStreamData(writeBuf_.move(), fin, nullptr);
-    } else {
-      writeBuf_.move(); // discard
-    }
-  }
-
- private:
-  folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
-  proxygen::WebTransport::StreamWriteHandle* writeHandle_;
-};
-
 class ControlStreamReplyContext : public ReplyContext {
  public:
   ControlStreamReplyContext(
@@ -1042,8 +1021,7 @@ class ControlStreamReplyContext : public ReplyContext {
   folly::IOBufQueue& writeBuf() override {
     return controlWriteBuf_;
   }
-  void flush(bool fin = false) override {
-    XCHECK(!fin) << "Cannot FIN control stream";
+  void flush(bool /*fin*/ = false) override {
     if (!cancelled()) {
       controlWriteEvent_.signal();
     }
@@ -1251,7 +1229,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         RequestOk requestOk{
             .requestID = updateRequestID,
             .requestSpecificParams = std::move(requestSpecificParams)};
-        session_->requestUpdateOk(requestOk);
+        session_->requestUpdateOk(requestOk, existingRequestID);
       }
     }
   }
@@ -1495,7 +1473,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
         session_->requestUpdateError(updateErr, existingRequestID);
       } else {
         RequestOk requestOk{.requestID = updateRequestID};
-        session_->requestUpdateOk(requestOk);
+        session_->requestUpdateOk(requestOk, existingRequestID);
       }
     }
   }
@@ -1813,10 +1791,19 @@ class MoQSession::TrackReceiveStateBase {
     return cancelSource_.isCancellationRequested();
   }
 
+  // Lets terminal-reply handlers disarm the sender close callback.
+  void setBidiControl(std::shared_ptr<BidiStreamControl> control) {
+    bidiControl_ = std::move(control);
+  }
+  const std::shared_ptr<BidiStreamControl>& bidiControl() const {
+    return bidiControl_;
+  }
+
  protected:
   FullTrackName fullTrackName_;
   RequestID requestID_;
   folly::CancellationSource cancelSource_;
+  std::shared_ptr<BidiStreamControl> bidiControl_;
 };
 
 class MoQSession::SubscribeTrackReceiveState
@@ -2076,6 +2063,10 @@ class MoQSession::FetchTrackReceiveState
   void resetFetchCallback(MoQSession* session) {
     callback_.reset();
     if (fetchOkAndAllDataReceived()) {
+      // Fetch data stream closed: FIN our bidi to release it cleanly.
+      if (bidiControl_) {
+        bidiControl_->writeFin();
+      }
       session->fetches_.erase(requestID_);
       session->checkForCloseOnDrain();
     }
@@ -2083,6 +2074,10 @@ class MoQSession::FetchTrackReceiveState
 
   void cancel(MoQSession* session) {
     cancelSource_.requestCancellation();
+    // RST the bidi (e.g. fetch-stream-open timeout); peer interprets as cancel.
+    if (bidiControl_) {
+      bidiControl_->cancel(ResetStreamErrorCode::CANCELLED);
+    }
     fetchError({requestID_, FetchErrorCode::CANCELLED, "cancelled"});
     resetFetchCallback(session);
   }
@@ -2122,6 +2117,18 @@ class MoQSession::FetchTrackReceiveState
   folly::coro::Promise<FetchResult> promise_;
   uint64_t currentStreamId_{0};
 };
+
+const std::shared_ptr<BidiStreamControl>&
+MoQSession::PendingRequestState::bidiControl() const {
+  switch (type_) {
+    case Type::SUBSCRIBE_TRACK:
+      return storage_.subscribeTrack_->bidiControl();
+    case Type::FETCH:
+      return storage_.fetchTrack_->bidiControl();
+    default:
+      return bidiControl_;
+  }
+}
 
 folly::Expected<MoQSession::PendingRequestState::Type, folly::Unit>
 MoQSession::PendingRequestState::setError(
@@ -2238,11 +2245,22 @@ MoQSession::~MoQSession() {
 
 void MoQSession::cleanup() {
   cancelGoawayTimeout();
+  // Each loop disarms its entry's bidi control before tearing it down so a
+  // peer close mid-shutdown can't race the canonical error delivery.
+  // fetches_ has no per-entry destroy loop, so it needs an upfront pass.
+  for (auto& [reqID, fetch] : fetches_) {
+    if (const auto& control = fetch->bidiControl()) {
+      control->disarmOnPeerTermination();
+    }
+  }
   while (!pubTracks_.empty()) {
     auto it = pubTracks_.begin();
     auto requestID = it->first;
     auto pubTrack = std::move(it->second);
     pubTracks_.erase(it);
+    if (const auto& control = pubTrack->bidiControl()) {
+      control->disarmOnPeerTermination();
+    }
     MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
     pubTrack->terminatePublish(
         PublishDone(
@@ -2255,6 +2273,9 @@ void MoQSession::cleanup() {
   for (auto it = subTracks_.begin(); it != subTracks_.end();) {
     auto sub = it->second;
     ++it;
+    if (const auto& control = sub->bidiControl()) {
+      control->disarmOnPeerTermination();
+    }
     // For pending subscribe, delivers subscribeError
     // For established subscriptions or pending publish, delivers publishDone
     // which can erase from subTracks_.
@@ -2269,8 +2290,10 @@ void MoQSession::cleanup() {
   // both from here, when close races the FETCH stream, and from readLoop
   // where we get a reset.
   fetches_.clear();
-  // Handle all pending requests in consolidated map
   for (auto& [reqID, pendingState] : pendingRequests_) {
+    if (const auto& control = pendingState->bidiControl()) {
+      control->disarmOnPeerTermination();
+    }
     pendingState->setError(
         RequestError{reqID, RequestErrorCode::INTERNAL_ERROR, "Session closed"},
         pendingState->getErrorFrameType());
@@ -2759,9 +2782,44 @@ bool MoQSession::BidiRequestCallback::handleFirstFrame(RequestID reqId) {
     return false;
   }
   requestID_ = reqId;
+  control_->setRequestID(reqId);
+  if (onPeerTerminationFn_) {
+    control_->setOnPeerTermination(std::move(onPeerTerminationFn_));
+  }
   replyContext_ = std::make_shared<BidiStreamReplyContext>(
-      writeHandle_, session_->cancellationSource_.getToken());
+      control_, session_->cancellationSource_.getToken());
   return true;
+}
+
+void MoQSession::BidiRequestCallback::onSubscribe(SubscribeRequest sub) {
+  if (handleFirstFrame(sub.requestID)) {
+    session_->onSubscribeImpl(std::move(sub), replyContext_);
+  }
+}
+
+void MoQSession::BidiRequestCallback::onFetch(Fetch fetch) {
+  if (handleFirstFrame(fetch.requestID)) {
+    session_->onFetchImpl(std::move(fetch), replyContext_);
+  }
+}
+
+void MoQSession::BidiRequestCallback::onPublish(PublishRequest pub) {
+  if (handleFirstFrame(pub.requestID)) {
+    session_->onPublishImpl(std::move(pub), replyContext_, control_);
+  }
+}
+
+void MoQSession::BidiRequestCallback::onPublishNamespace(
+    PublishNamespace pubNs) {
+  if (handleFirstFrame(pubNs.requestID)) {
+    session_->onPublishNamespaceImpl(std::move(pubNs), replyContext_);
+  }
+}
+
+void MoQSession::BidiRequestCallback::onTrackStatus(TrackStatus ts) {
+  if (handleFirstFrame(ts.requestID)) {
+    session_->onTrackStatusImpl(std::move(ts), replyContext_);
+  }
 }
 
 void MoQSession::BidiRequestCallback::onSubscribeNamespace(
@@ -2785,7 +2843,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     proxygen::WebTransport::StreamData initialData,
     std::unique_ptr<MoQControlCodec> codec,
     std::unique_ptr<BidiRequestCallback> bidiCallback,
-    folly::Function<void(RequestID)> onStreamClosed,
+    std::shared_ptr<BidiStreamControl> control,
     std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   auto g = folly::makeGuard([func = __func__, this] {
@@ -2795,6 +2853,18 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   auto* controlCodec = codec ? codec.get() : controlCodec_.get();
   auto streamId = readHandle->getID();
   controlCodec->setStreamId(streamId);
+  // Null readHandle on peer cancel so the exit guard skips it.
+  folly::CancellationCallback rhCancelCb(
+      readHandle->getCancelToken(), [&readHandle]() { readHandle = nullptr; });
+  auto stopSendingGuard = folly::makeGuard([&readHandle, &control, this] {
+    if (readHandle) {
+      uint32_t code = control ? control->readCancelCode() : 0;
+      XLOG(DBG1) << "Sending STOP_SENDING id=" << readHandle->getID()
+                 << " code=" << code << " sess=" << this;
+      readHandle->stopSending(code);
+      readHandle = nullptr;
+    }
+  });
 
   // Process any pre-buffered data first
   if (initialData.data || initialData.fin) {
@@ -2808,13 +2878,17 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   }
 
   bool fin = false;
+  bool exceptionalExit = false;
   auto token = co_await folly::coro::co_current_cancellation_token;
-  while (!fin && !token.isCancellationRequested()) {
+  while (!fin && readHandle && !token.isCancellationRequested()) {
     auto streamData =
         co_await co_awaitTry(readHandle->readStreamData().via(exec_.get()));
     if (streamData.hasException()) {
       XLOG(DBG4) << folly::exceptionStr(streamData.exception())
                  << " id=" << streamId << " sess=" << this;
+      // Defensive null in case rhCancelCb hasn't fired yet.
+      readHandle = nullptr;
+      exceptionalExit = true;
       break;
     }
     if (!token.isCancellationRequested() &&
@@ -2828,22 +2902,69 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       }
     }
     fin = streamData->fin;
-    XLOG_IF(DBG3, fin) << "End of stream id=" << streamId << " sess=" << this;
+    if (fin) {
+      // FIN invalidates the read handle.
+      readHandle = nullptr;
+      XLOG(DBG3) << "End of stream id=" << streamId << " sess=" << this;
+    }
   }
-  // TODO: close session on control exit
-  if (onStreamClosed && bidiCallback && !token.isCancellationRequested() &&
-      bidiCallback->requestID()) {
-    onStreamClosed(*bidiCallback->requestID());
+  // TODO: close session on control exit.
+  // On read-loop exit, fire responder close (RST always; FIN when
+  // finIsCancellation) and fail any still-pending sender request. Both
+  // suppressed during shutdown — cleanup() delivers the canonical error.
+  // STOP_SENDING is handled via BidiStreamControl::writeCancelCb_.
+  if (control && !token.isCancellationRequested() &&
+      !cancellationSource_.isCancellationRequested() &&
+      (exceptionalExit || fin)) {
+    if (exceptionalExit || control->finIsCancellation()) {
+      control->firePeerTermination();
+    }
+    if (control->requestID().has_value()) {
+      // No-op if the terminal reply already resolved + erased the pending.
+      failPendingRequestOnEarlyClose(*control->requestID(), exceptionalExit);
+    }
+    // Sender (bidiCallback==null) mirrors peer FIN with our FIN: "done
+    // updating the request". No-op if write half already closed.
+    if (!bidiCallback && fin) {
+      control->writeFin();
+    }
   }
 }
 
-folly::Expected<proxygen::WebTransport::StreamWriteHandle*, std::string>
+void MoQSession::failPendingRequestOnEarlyClose(
+    RequestID requestID,
+    bool wasReset) {
+  auto it = pendingRequests_.find(requestID);
+  if (it == pendingRequests_.end()) {
+    return;
+  }
+  auto pendingState = std::move(it->second);
+  pendingRequests_.erase(it);
+  auto frameType = pendingState->getErrorFrameType();
+  XLOG(DBG1) << "Failing pending request id=" << requestID
+             << (wasReset ? " peer reset request stream"
+                          : " peer FINed without terminal reply")
+             << " sess=" << this;
+  auto res = pendingState->setError(
+      RequestError{
+          requestID,
+          RequestErrorCode::INTERNAL_ERROR,
+          wasReset ? "peer reset request stream"
+                   : "peer FINed without terminal reply"},
+      frameType);
+  if (res.hasError()) {
+    XLOG(ERR) << "setError failure id=" << requestID << " sess=" << this;
+  }
+}
+
+folly::Expected<std::shared_ptr<BidiStreamControl>, std::string>
 MoQSession::sendRequest(
     folly::IOBufQueue& writeBuf,
     const std::vector<FrameType>& allowedResponses,
     RequestID requestID,
     uint64_t minBidiDraftVersion,
-    std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback) {
+    std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback,
+    folly::Function<void(RequestID)> onPeerTermination) {
   if (getDraftMajorVersion(*negotiatedVersion_) >= minBidiDraftVersion) {
     auto bidiStream = wt_->createBidiStream();
     if (!bidiStream) {
@@ -2854,23 +2975,35 @@ MoQSession::sendRequest(
         writeBuf.move(), /*fin=*/false, nullptr);
     auto* cb = senderCallback ? senderCallback.get() : this;
     auto codec = makeBidiCodec(cb, allowedResponses, requestID);
+    // Any peer close (FIN or RST) before the terminal reply also fails the
+    // pending request via failPendingRequestOnEarlyClose in controlReadLoop.
+    auto control = std::make_shared<BidiStreamControl>(
+        bidiStream->writeHandle,
+        cancellationSource_.getToken(),
+        /*finIsCancellation=*/true);
+    control->setRequestID(requestID);
+    if (onPeerTermination) {
+      control->setOnPeerTermination(std::move(onPeerTermination));
+    }
+    auto mergedToken = folly::cancellation_token_merge(
+        cancellationSource_.getToken(), control->getReadCancelToken());
     co_withExecutor(
         exec_.get(),
         co_withCancellation(
-            cancellationSource_.getToken(),
+            std::move(mergedToken),
             controlReadLoop(
                 bidiStream->readHandle,
                 proxygen::WebTransport::StreamData{nullptr, false},
                 std::move(codec),
                 nullptr,
-                nullptr,
+                control,
                 std::move(senderCallback))))
         .start();
-    return bidiStream->writeHandle;
+    return control;
   }
   controlWriteBuf_.append(writeBuf.move());
   controlWriteEvent_.signal();
-  return nullptr;
+  return std::shared_ptr<BidiStreamControl>{};
 }
 
 std::shared_ptr<MoQSession::SubscribeTrackReceiveState>
@@ -3842,6 +3975,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     pendingPublishTracks_.erase(trackIt->second->fullTrackName());
     MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   }
+  // No disarm: PUBLISH_OK is non-terminal; publishDone's flush(fin) disarms.
 
   publishPtr->setValue(std::move(publishOk));
   pendingRequests_.erase(pubIt);
@@ -3862,6 +3996,12 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
   if (it != pendingRequests_.end()) {
     auto pendingState = std::move(it->second);
     pendingRequests_.erase(it);
+    // Terminal reply: disarm peer-termination; FIN our write half — error
+    // ends the request from the sender's side.
+    if (const auto& control = pendingState->bidiControl()) {
+      control->disarmOnPeerTermination();
+      control->writeFin();
+    }
     // Remove from pending subscribe tracks if this was a subscribe
     auto* trackPtr = pendingState->tryGetSubscribeTrack();
     if (trackPtr) {
@@ -4049,10 +4189,12 @@ class MoQSession::ReceiverSubscriptionHandle
   ReceiverSubscriptionHandle(
       SubscribeOk ok,
       TrackAlias alias,
-      std::shared_ptr<MoQSession> session)
+      std::shared_ptr<MoQSession> session,
+      std::shared_ptr<BidiStreamControl> control = nullptr)
       : Publisher::SubscriptionHandle(std::move(ok)),
         trackAlias_(alias),
-        session_(std::move(session)) {}
+        session_(std::move(session)),
+        control_(std::move(control)) {}
 
   folly::coro::Task<SubscriptionHandle::RequestUpdateResult> requestUpdate(
       RequestUpdate requestUpdate) override {
@@ -4091,12 +4233,12 @@ class MoQSession::ReceiverSubscriptionHandle
           PendingRequestState::makeRequestUpdate(std::move(contract.first)));
 
       // Send the REQUEST_UPDATE message
-      session_->requestUpdate(requestUpdate);
+      session_->requestUpdate(requestUpdate, control_);
 
       // Wait for REQUEST_OK or REQUEST_ERROR response
       co_return co_await std::move(contract.second);
     } else {
-      session_->requestUpdate(requestUpdate);
+      session_->requestUpdate(requestUpdate, control_);
 
       // Version < 15: Return a constructed response. RequestUpdate is fire
       // and forget
@@ -4106,7 +4248,7 @@ class MoQSession::ReceiverSubscriptionHandle
 
   void unsubscribe() override {
     if (session_) {
-      session_->unsubscribe({subscribeOk_->requestID});
+      session_->unsubscribe({subscribeOk_->requestID}, control_);
       session_.reset();
     }
   }
@@ -4114,6 +4256,7 @@ class MoQSession::ReceiverSubscriptionHandle
  private:
   TrackAlias trackAlias_;
   std::shared_ptr<MoQSession> session_;
+  std::shared_ptr<BidiStreamControl> control_;
 };
 
 void MoQSession::onPublish(PublishRequest publish) {
@@ -4122,7 +4265,8 @@ void MoQSession::onPublish(PublishRequest publish) {
 
 void MoQSession::onPublishImpl(
     PublishRequest publish,
-    std::shared_ptr<ReplyContext> replyContext) {
+    std::shared_ptr<ReplyContext> replyContext,
+    std::shared_ptr<BidiStreamControl> control) {
   XLOG(DBG1) << __func__ << " reqID=" << publish.requestID << " sess=" << this;
   if (logger_) {
     logger_->logPublish(
@@ -4169,7 +4313,10 @@ void MoQSession::onPublishImpl(
   }
 
   auto publishHandle = std::make_shared<ReceiverSubscriptionHandle>(
-      SubscribeOk{publish.requestID}, publish.trackAlias, shared_from_this());
+      SubscribeOk{publish.requestID},
+      publish.trackAlias,
+      shared_from_this(),
+      std::move(control));
 
   // Use single coroutine pattern like working onPublishNamespace
   co_withExecutor(
@@ -4276,6 +4423,13 @@ void MoQSession::onPublishDone(PublishDone publishDone) {
   auto trackReceiveStateIt = subTracks_.find(alias);
   if (trackReceiveStateIt != subTracks_.end()) {
     auto state = trackReceiveStateIt->second;
+    // PUBLISH_DONE is terminal for the SUBSCRIBE bidi request stream; any
+    // subsequent FIN/RST is informational. FIN our write half to close the
+    // stream cleanly now that no further REQUEST_UPDATE can be sent.
+    if (const auto& control = state->bidiControl()) {
+      control->disarmOnPeerTermination();
+      control->writeFin();
+    }
     state->processPublishDone(std::move(publishDone));
     // Note: State removal is handled by deliverPublishDoneAndRemove called
     // from processPublishDone (when streams already arrived), onSubgroup
@@ -4421,6 +4575,8 @@ void MoQSession::onFetchImpl(
       moqSettings_.bufferingThresholds.perSubscription);
   fetchPublisher->setLogger(logger_);
   fetchPublisher->initialize();
+  // Kept for draft-18+ REQUEST_UPDATE replies on the FETCH bidi.
+  fetchPublisher->setReplyContext(replyContext);
   pubTracks_.emplace(fetch.requestID, fetchPublisher);
   co_withExecutor(
       exec_.get(),
@@ -4533,8 +4689,19 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
     return;
   }
   const auto& trackReceiveState = fetchIt->second;
+  // After FETCH_OK the fetch data streams drive completion; a subsequent
+  // FIN/RST on the bidi is informational and must not synthesize an error.
+  const auto& control = trackReceiveState->bidiControl();
+  if (control) {
+    control->disarmOnPeerTermination();
+  }
   trackReceiveState->fetchOK(std::move(fetchOk));
   if (trackReceiveState->fetchOkAndAllDataReceived()) {
+    // The data path already ran resetFetchCallback() before FETCH_OK arrived,
+    // so it left without FINing. Mirror that FIN here so the bidi terminates.
+    if (control) {
+      control->writeFin();
+    }
     fetches_.erase(fetchIt);
     checkForCloseOnDrain();
   }
@@ -4632,7 +4799,7 @@ void MoQSession::trackStatusOk(
   if (!res) {
     XLOG(ERR) << "trackStatusOk failed sess=" << this;
   } else {
-    replyContext.flush();
+    replyContext.flushFinal();
   }
 }
 
@@ -4649,7 +4816,7 @@ void MoQSession::trackStatusError(
   if (!res) {
     XLOG(ERR) << "trackStatusError failed sess=" << this;
   } else {
-    replyContext.flush();
+    replyContext.flushFinal();
   }
 }
 
@@ -4774,24 +4941,52 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   aliasifyAuthTokens(trackStatus.params);
   trackStatus.requestID = getNextRequestID();
 
-  auto res = moqFrameWriter_.writeTrackStatus(controlWriteBuf_, trackStatus);
-  if (!res) {
-    XLOG(ERR) << "writeTrackStatus failed sess=" << this;
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moqFrameWriter_.writeTrackStatus(writeBuf, trackStatus);
+  // In draft 15+, TRACK_STATUS_OK is sent as REQUEST_OK
+  std::vector<FrameType> allowedFrames = {
+      getDraftMajorVersion(*negotiatedVersion_) >= 15
+          ? FrameType::REQUEST_OK
+          : FrameType::TRACK_STATUS_OK,
+      FrameType::TRACK_STATUS_ERROR,
+      FrameType::REQUEST_ERROR};
+  auto reqID = trackStatus.requestID;
+  auto sendResult = sendRequest(
+      writeBuf,
+      allowedFrames,
+      reqID,
+      /*minBidiDraftVersion=*/18,
+      /*senderCallback=*/nullptr,
+      // Peer close (FIN or RST) before sending a reply: synthesize
+      // TRACK_STATUS_ERROR. (sender control finIsCancellation=true.)
+      [this](RequestID id) {
+        onTrackStatusError(
+            TrackStatusError{
+                id,
+                TrackStatusErrorCode::CANCELLED,
+                "peer closed stream before reply"});
+      });
+  if (sendResult.hasError()) {
     co_return folly::makeUnexpected(
         TrackStatusError{
-            trackStatus.requestID,
+            reqID,
             TrackStatusErrorCode::INTERNAL_ERROR,
-            "local write failed"});
+            std::move(sendResult.error())});
+  }
+  auto control = std::move(sendResult.value());
+  // No REQUEST_UPDATE channel for TRACK_STATUS — FIN now.
+  if (control) {
+    control->writeFin();
   }
   if (logger_) {
     logger_->logTrackStatus(trackStatus);
   }
-  controlWriteEvent_.signal();
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<TrackStatusOk, TrackStatusError>>();
-  pendingRequests_.emplace(
-      trackStatus.requestID,
-      PendingRequestState::makeTrackStatus(std::move(contract.first)));
+  auto pending =
+      PendingRequestState::makeTrackStatus(std::move(contract.first));
+  pending->setBidiControl(std::move(control));
+  pendingRequests_.emplace(reqID, std::move(pending));
   co_return co_await std::move(contract.second);
 }
 
@@ -4824,6 +5019,9 @@ void MoQSession::onTrackStatusOk(TrackStatusOk trackStatusOk) {
     return;
   }
 
+  if (const auto& control = trackStatusIt->second->bidiControl()) {
+    control->disarmOnPeerTermination();
+  }
   trackStatusPtr->setValue(std::move(trackStatusOk));
   pendingRequests_.erase(trackStatusIt);
 }
@@ -4856,6 +5054,9 @@ void MoQSession::onTrackStatusError(TrackStatusError trackStatusError) {
     return;
   }
 
+  if (const auto& control = trackStatusIt->second->bidiControl()) {
+    control->disarmOnPeerTermination();
+  }
   trackStatusPtr->setValue(folly::makeUnexpected(std::move(trackStatusError)));
   pendingRequests_.erase(trackStatusIt);
 }
@@ -4971,20 +5172,45 @@ Subscriber::PublishResult MoQSession::publish(
   XLOG(DBG1) << "publish() got requestID=" << pub.requestID
              << " nextRequestID_=" << nextRequestID_
              << " peerMaxRequestID_=" << peerMaxRequestID_ << " sess=" << this;
-  auto res = moqFrameWriter_.writePublish(controlWriteBuf_, pub);
-  if (!res) {
-    XLOG(ERR) << "writePublish failed sess=" << this;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moqFrameWriter_.writePublish(writeBuf, pub);
+  auto sendResult = sendRequest(
+      writeBuf,
+      {FrameType::PUBLISH_OK,
+       FrameType::REQUEST_ERROR,
+       FrameType::REQUEST_OK,
+       FrameType::REQUEST_UPDATE},
+      pub.requestID,
+      /*minBidiDraftVersion=*/18,
+      /*senderCallback=*/nullptr,
+      // Peer cancelled the PUBLISH bidi: tear down the local publisher.
+      [this](RequestID id) {
+        auto it = pubTracks_.find(id);
+        if (it == pubTracks_.end()) {
+          return;
+        }
+        auto trackPublisher =
+            std::static_pointer_cast<TrackPublisherImpl>(it->second);
+        trackPublisher->terminatePublish(
+            PublishDone{
+                id,
+                PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+                0,
+                "peer closed stream before reply"},
+            ResetStreamErrorCode::CANCELLED);
+      });
+  if (sendResult.hasError()) {
     return folly::makeUnexpected(
         PublishError{
             pub.requestID,
             PublishErrorCode::INTERNAL_ERROR,
-            "local write failed"});
+            std::move(sendResult.error())});
   }
   if (logger_) {
     logger_->logPublish(
         pub, MOQTByteStringType::STRING_VALUE, ControlMessageType::CREATED);
   }
-  controlWriteEvent_.signal();
 
   // Extract delivery timeout from publish extensions
   auto deliveryTimeout = getPublisherDeliveryTimeout(pub);
@@ -5003,10 +5229,15 @@ Subscriber::PublishResult MoQSession::publish(
       deliveryTimeout);
 
   // Set publishHandle in trackPublisher so it can cancel on unsubscribes
-  trackPublisher->setSubscriptionHandle(handle);
+  trackPublisher->setSubscriptionHandle(std::move(handle));
 
   // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
   setPublisherPriorityFromParams(pub.params, trackPublisher);
+
+  // Set reply context so sendPublishDone can write on the correct stream
+  auto& control = sendResult.value();
+  trackPublisher->setReplyContext(makeReplyContext(control));
+  trackPublisher->setBidiControl(control);
 
   // Store the track publisher for later lookup
   pubTracks_.emplace(pub.requestID, trackPublisher);
@@ -5015,9 +5246,9 @@ Subscriber::PublishResult MoQSession::publish(
   // Create Contract and place in pending publishes
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<PublishOk, PublishError>>();
-  pendingRequests_.emplace(
-      pub.requestID,
-      PendingRequestState::makePublish(std::move(contract.first)));
+  auto pending = PendingRequestState::makePublish(std::move(contract.first));
+  pending->setBidiControl(control);
+  pendingRequests_.emplace(pub.requestID, std::move(pending));
 
   // Build replyTask that co_awaits the future and handles cleanup
   auto replyTask = folly::coro::co_invoke(
@@ -5081,7 +5312,7 @@ void MoQSession::publishError(
     XLOG(ERR) << "writePublishError failed sess=" << this;
     return;
   }
-  replyContext.flush();
+  replyContext.flushFinal();
 
   auto aliasRes = reqIdToTrackAlias_.find(publishError.requestID);
   if (aliasRes == reqIdToTrackAlias_.end()) {
@@ -5144,8 +5375,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   sub.requestID = reqID;
   TrackAlias trackAlias = reqID.value;
   aliasifyAuthTokens(sub.params);
-
-  auto wres = moqFrameWriter_.writeSubscribeRequest(controlWriteBuf_, sub);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto wres = moqFrameWriter_.writeSubscribeRequest(buf, sub);
   if (!wres) {
     XLOG(ERR) << "writeSubscribeRequest failed sess=" << this;
     SubscribeError subscribeError = {
@@ -5154,9 +5385,37 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
         subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
     co_return folly::makeUnexpected(subscribeError);
   }
-  controlWriteEvent_.signal();
+  auto sendResult = sendRequest(
+      buf,
+      {FrameType::SUBSCRIBE_OK,
+       FrameType::REQUEST_ERROR,
+       FrameType::PUBLISH_DONE,
+       FrameType::REQUEST_OK},
+      reqID,
+      /*minBidiDraftVersion=*/18,
+      /*senderCallback=*/nullptr,
+      // streamCount=max so in-flight subgroups flush; timeout delivers done.
+      [this](RequestID id) {
+        PublishDone pd;
+        pd.requestID = id;
+        pd.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
+        pd.streamCount = std::numeric_limits<uint64_t>::max();
+        pd.reasonPhrase = "peer closed stream before reply";
+        onPublishDone(std::move(pd));
+      });
+  if (sendResult.hasError()) {
+    SubscribeError subscribeError = {
+        reqID,
+        SubscribeErrorCode::INTERNAL_ERROR,
+        std::move(sendResult.error())};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
+    co_return folly::makeUnexpected(subscribeError);
+  }
+  auto control = std::move(sendResult.value());
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
       fullTrackName, reqID, callback, this, trackAlias, logger_);
+  trackReceiveState->setBidiControl(control);
   pendingRequests_.emplace(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
   pendingSubscribeTracks_.insert(fullTrackName);
@@ -5185,7 +5444,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscribeSuccess);
     MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onSubscriptionBegin);
     co_return std::make_shared<ReceiverSubscriptionHandle>(
-        std::move(subscribeResult.value()), trackAlias, shared_from_this());
+        std::move(subscribeResult.value()),
+        trackAlias,
+        shared_from_this(),
+        std::move(control));
   }
 }
 
@@ -5228,10 +5490,12 @@ void MoQSession::subscribeError(
     logger_->logSubscribeError(subErr);
   }
 
-  ctx.flush();
+  ctx.flushFinal();
 }
 
-void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
+void MoQSession::unsubscribe(
+    const Unsubscribe& unsubscribe,
+    const std::shared_ptr<BidiStreamControl>& control) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribe);
@@ -5260,10 +5524,17 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
   trackIt->second->cancel();
   subTracks_.erase(trackIt);
   reqIdToTrackAlias_.erase(trackAliasIt);
-  auto res = moqFrameWriter_.writeUnsubscribe(controlWriteBuf_, unsubscribe);
-  if (!res) {
-    XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
-    return;
+  // Draft 18+: RESET the write half and cancel the read source on the bidi
+  // request stream. Older drafts send Unsubscribe on the control stream.
+  if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+    control->cancel(ResetStreamErrorCode::CANCELLED);
+  } else {
+    auto res = moqFrameWriter_.writeUnsubscribe(controlWriteBuf_, unsubscribe);
+    if (!res) {
+      XLOG(ERR) << "writeUnsubscribe failed sess=" << this;
+      return;
+    }
+    controlWriteEvent_.signal();
   }
 
   // Log Unsubscribe
@@ -5271,7 +5542,6 @@ void MoQSession::unsubscribe(const Unsubscribe& unsubscribe) {
     logger_->logUnsubscribe(unsubscribe);
   }
 
-  controlWriteEvent_.signal();
   checkForCloseOnDrain();
 }
 
@@ -5303,22 +5573,39 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   if (logger_) {
     logger_->logPublishDone(pubDone);
   }
-  ctx->flush();
+  ctx->flushFinal();
   retireRequestID(/*signalWriteLoop=*/false);
 }
 
-void MoQSession::requestUpdateOk(const RequestOk& requestOk) {
-  XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
-             << " sess=" << this;
+ReplyContext* MoQSession::getRequestUpdateReplyContext(
+    RequestID existingRequestID) {
+  // 18+: route on the request's bidi (null if gone). Pre-18: control stream.
+  if (getDraftMajorVersion(*negotiatedVersion_) < 18) {
+    return controlStreamReplyContext().get();
+  }
+  auto it = pubTracks_.find(existingRequestID);
+  return it != pubTracks_.end() ? it->second->replyContext() : nullptr;
+}
 
+void MoQSession::requestUpdateOk(
+    const RequestOk& requestOk,
+    RequestID existingRequestID) {
+  XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
+             << " existingReqID=" << existingRequestID << " sess=" << this;
+
+  auto* ctx = getRequestUpdateReplyContext(existingRequestID);
+  if (!ctx) {
+    XLOG(ERR) << "requestUpdateOk: no reply context for id="
+              << existingRequestID << " sess=" << this;
+    return;
+  }
   auto res = moqFrameWriter_.writeRequestOk(
-      controlWriteBuf_, requestOk, FrameType::REQUEST_OK);
+      ctx->writeBuf(), requestOk, FrameType::REQUEST_OK);
   if (!res) {
     XLOG(ERR) << "writeRequestOk for REQUEST_UPDATE failed sess=" << this;
     return;
   }
-
-  controlWriteEvent_.signal();
+  ctx->flush();
 }
 
 void MoQSession::requestUpdateError(
@@ -5328,12 +5615,17 @@ void MoQSession::requestUpdateError(
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
 
-  auto res = moqFrameWriter_.writeRequestError(
-      controlWriteBuf_, requestError, FrameType::REQUEST_UPDATE);
-  if (!res) {
-    XLOG(ERR) << "writeRequestError for REQUEST_UPDATE failed sess=" << this;
+  if (auto* ctx = getRequestUpdateReplyContext(existingRequestID)) {
+    auto res = moqFrameWriter_.writeRequestError(
+        ctx->writeBuf(), requestError, FrameType::REQUEST_UPDATE);
+    if (!res) {
+      XLOG(ERR) << "writeRequestError for REQUEST_UPDATE failed sess=" << this;
+    } else {
+      ctx->flush();
+    }
   } else {
-    controlWriteEvent_.signal();
+    XLOG(ERR) << "requestUpdateError: no reply context for id="
+              << existingRequestID << " sess=" << this;
   }
 
   if (!terminateExistingRequest) {
@@ -5402,7 +5694,9 @@ void MoQSession::fetchComplete(RequestID requestID) {
   checkForCloseOnDrain();
 }
 
-void MoQSession::requestUpdate(const RequestUpdate& reqUpdate) {
+void MoQSession::requestUpdate(
+    const RequestUpdate& reqUpdate,
+    const std::shared_ptr<BidiStreamControl>& control) {
   if (logger_) {
     logger_->logSubscribeUpdate(reqUpdate);
   }
@@ -5418,36 +5712,44 @@ void MoQSession::requestUpdate(const RequestUpdate& reqUpdate) {
                 << " sess=" << this;
       return;
     }
+  } else {
+    // Check if this is for a fetch
+    auto fetchIt = fetches_.find(reqUpdate.existingRequestID);
+    if (fetchIt == fetches_.end()) {
+      XLOG(ERR) << "No matching request ID=" << reqUpdate.existingRequestID
+                << " sess=" << this;
+      return;
+    }
+  }
+
+  auto* wh = control ? control->writeHandle() : nullptr;
+  if (wh) {
+    folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+    auto res = moqFrameWriter_.writeRequestUpdate(buf, reqUpdate);
+    if (!res) {
+      XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
+      return;
+    }
+    wh->writeStreamData(buf.move(), /*fin=*/false, nullptr);
+  } else {
     auto res = moqFrameWriter_.writeRequestUpdate(controlWriteBuf_, reqUpdate);
     if (!res) {
       XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
       return;
     }
     controlWriteEvent_.signal();
-    return;
   }
-
-  // Check if this is for a fetch
-  auto fetchIt = fetches_.find(reqUpdate.existingRequestID);
-  if (fetchIt != fetches_.end()) {
-    auto res = moqFrameWriter_.writeRequestUpdate(controlWriteBuf_, reqUpdate);
-    if (!res) {
-      XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
-      return;
-    }
-    controlWriteEvent_.signal();
-    return;
-  }
-
-  // Unknown request ID
-  XLOG(ERR) << "No matching request ID=" << reqUpdate.existingRequestID
-            << " sess=" << this;
 }
 
 class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle {
  public:
-  ReceiverFetchHandle(FetchOk ok, std::shared_ptr<MoQSession> session)
-      : FetchHandle(std::move(ok)), session_(std::move(session)) {}
+  ReceiverFetchHandle(
+      FetchOk ok,
+      std::shared_ptr<MoQSession> session,
+      std::shared_ptr<BidiStreamControl> control = nullptr)
+      : FetchHandle(std::move(ok)),
+        session_(std::move(session)),
+        control_(std::move(control)) {}
 
   folly::coro::Task<FetchHandle::RequestUpdateResult> requestUpdate(
       RequestUpdate reqUpdate) override {
@@ -5460,13 +5762,14 @@ class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle {
 
   void fetchCancel() override {
     if (session_) {
-      session_->fetchCancel({fetchOk_->requestID});
+      session_->fetchCancel({fetchOk_->requestID}, control_);
       session_.reset();
     }
   }
 
  private:
   std::shared_ptr<MoQSession> session_;
+  std::shared_ptr<BidiStreamControl> control_;
 };
 
 folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
@@ -5550,18 +5853,36 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto reqID = getNextRequestID();
   fetch.requestID = reqID;
   aliasifyAuthTokens(fetch.params);
-  auto wres = moqFrameWriter_.writeFetch(controlWriteBuf_, fetch);
-  if (!wres) {
-    XLOG(ERR) << "writeFetch failed sess=" << this;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moqFrameWriter_.writeFetch(writeBuf, fetch);
+  auto sendResult = sendRequest(
+      writeBuf,
+      {FrameType::FETCH_OK, FrameType::REQUEST_ERROR, FrameType::REQUEST_OK},
+      reqID,
+      /*minBidiDraftVersion=*/18,
+      /*senderCallback=*/nullptr,
+      // After FETCH_OK we disarm in onFetchOk so the data streams own
+      // completion.
+      [this](RequestID id) {
+        auto fetchIt = fetches_.find(id);
+        if (fetchIt == fetches_.end()) {
+          return;
+        }
+        fetchIt->second->fetchError(
+            {id, FetchErrorCode::CANCELLED, "peer closed stream before reply"});
+      });
+  if (sendResult.hasError()) {
     FetchError fetchError = {
-        reqID, FetchErrorCode::INTERNAL_ERROR, "local write failed"};
+        reqID, FetchErrorCode::INTERNAL_ERROR, std::move(sendResult.error())};
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, onFetchError, fetchError.errorCode);
     co_return folly::makeUnexpected(fetchError);
   }
-  controlWriteEvent_.signal();
+  auto control = std::move(sendResult.value());
   auto trackReceiveState = std::make_shared<FetchTrackReceiveState>(
       fullTrackName, reqID, std::move(consumer), fetch.groupOrder, logger_);
+  trackReceiveState->setBidiControl(control);
   auto fetchTrack = fetches_.try_emplace(reqID, trackReceiveState);
   XCHECK(fetchTrack.second)
       << "RequestID already in use id=" << reqID << " sess=" << this;
@@ -5579,7 +5900,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   } else {
     MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onFetchSuccess);
     co_return std::make_shared<ReceiverFetchHandle>(
-        std::move(fetchResult.value()), shared_from_this());
+        std::move(fetchResult.value()), shared_from_this(), std::move(control));
   }
 }
 
@@ -5594,6 +5915,8 @@ void MoQSession::fetchOk(const FetchOk& fetchOk, ReplyContext& replyContext) {
   if (logger_) {
     logger_->logFetchOk(fetchOk);
   }
+  // Bidi stream stays open after FETCH_OK so the subscriber can send
+  // REQUEST_UPDATE or signal cancellation via FIN/RST/STOP_SENDING.
   replyContext.flush();
 }
 
@@ -5616,10 +5939,12 @@ void MoQSession::fetchError(const FetchError& fetchErr, ReplyContext& ctx) {
     XLOG(ERR) << "writeFetchError failed sess=" << this;
     return;
   }
-  ctx.flush();
+  ctx.flushFinal();
 }
 
-void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
+void MoQSession::fetchCancel(
+    const FetchCancel& fetchCan,
+    const std::shared_ptr<BidiStreamControl>& control) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   // Log FetchCancel
@@ -5634,12 +5959,17 @@ void MoQSession::fetchCancel(const FetchCancel& fetchCan) {
     return;
   }
   trackIt->second->cancel(this);
-  auto res = moqFrameWriter_.writeFetchCancel(controlWriteBuf_, fetchCan);
-  if (!res) {
-    XLOG(ERR) << "writeFetchCancel failed sess=" << this;
-    return;
+  // Draft 18+ cancels via the bidi; older drafts send FetchCancel on control.
+  if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+    control->cancel(ResetStreamErrorCode::CANCELLED);
+  } else {
+    auto res = moqFrameWriter_.writeFetchCancel(controlWriteBuf_, fetchCan);
+    if (!res) {
+      XLOG(ERR) << "writeFetchCancel failed sess=" << this;
+      return;
+    }
+    controlWriteEvent_.signal();
   }
-  controlWriteEvent_.signal();
 }
 
 folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
@@ -5822,30 +6152,62 @@ void MoQSession::handleClientSetup(
 
 std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
     FrameType frameType) {
+  const auto major = getDraftMajorVersion(*negotiatedVersion_);
+  // SUBSCRIBE_NAMESPACE response stream: FIN-or-RST cancels per draft-16+.
+  auto subscribeNamespaceConfig = [this](FrameType wireType) {
+    return BidiStreamConfig{
+        {wireType, FrameType::REQUEST_UPDATE},
+        [this](RequestID id) {
+          onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
+        },
+        /*finIsCancellation=*/true};
+  };
+  if (major >= 18) {
+    switch (frameType) {
+      case FrameType::SUBSCRIBE:
+        return BidiStreamConfig{
+            {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE},
+            [this](RequestID id) { onUnsubscribe(Unsubscribe{id}); }};
+      case FrameType::FETCH:
+        return BidiStreamConfig{
+            {FrameType::FETCH, FrameType::REQUEST_UPDATE},
+            [this](RequestID id) { onFetchCancel(FetchCancel{id}); }};
+      case FrameType::PUBLISH:
+        return BidiStreamConfig{
+            {FrameType::PUBLISH, FrameType::REQUEST_UPDATE}, nullptr};
+      case FrameType::PUBLISH_NAMESPACE:
+        // Publisher (sender) closes the stream (FIN or RST) to withdraw
+        // the announce — both signal end-of-PUBLISH_NAMESPACE.
+        return BidiStreamConfig{
+            {FrameType::PUBLISH_NAMESPACE, FrameType::REQUEST_UPDATE},
+            [this](RequestID id) {
+              PublishNamespaceDone done;
+              done.requestID = id;
+              onPublishNamespaceDone(std::move(done));
+            },
+            /*finIsCancellation=*/true};
+      case FrameType::TRACK_STATUS:
+        return BidiStreamConfig{{FrameType::TRACK_STATUS}, nullptr};
+      case FrameType::SUBSCRIBE_NAMESPACE:
+        // v18 wire enumerator (0x50). The legacy 0x11 wire type is a
+        // protocol violation on v18 and falls through to nullopt below.
+        return subscribeNamespaceConfig(FrameType::SUBSCRIBE_NAMESPACE);
+      case FrameType::SUBSCRIBE_TRACKS:
+        // FIN here means "no more REQUEST_UPDATE" — cancel is RST only, which
+        // surfaces via exceptionalExit regardless of finIsCancellation.
+        return BidiStreamConfig{
+            {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
+            [this](RequestID id) { onSubscribeTracksStreamClosed(id); }};
+      default:
+        return std::nullopt;
+    }
+  }
+  // Drafts 16-17: SUBSCRIBE_NAMESPACE uses the legacy 0x11 wire enumerator.
+  // The v18 wire type (0x50) is a protocol violation on pre-v18 sessions.
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (frameType) {
-    // SUBSCRIBE_NAMESPACE arrives on a fresh bidi stream in draft 16+; the
-    // wire enumerator is LEGACY_SUBSCRIBE_NAMESPACE (0x11) on drafts 16-17 and
-    // SUBSCRIBE_NAMESPACE (0x50) on draft 18+. The bidi codec's allow-list
-    // includes both so the same config serves either.
     case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
-    case FrameType::SUBSCRIBE_NAMESPACE:
-      return BidiStreamConfig{
-          {FrameType::LEGACY_SUBSCRIBE_NAMESPACE,
-           FrameType::SUBSCRIBE_NAMESPACE,
-           FrameType::REQUEST_UPDATE},
-          [this](RequestID id) {
-            onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
-          }};
-    case FrameType::SUBSCRIBE_TRACKS:
-      // Note: REQUEST_UPDATE is intentionally NOT in the allow-list. The
-      // SUBSCRIBE_TRACKS message has no updateable per-request state
-      // (forward, prefix, params), so accepting a REQUEST_UPDATE on this
-      // stream would just trigger a NOT_SUPPORTED response with no useful
-      // semantics. Drop it at the codec instead.
-      return BidiStreamConfig{
-          {FrameType::SUBSCRIBE_TRACKS},
-          [this](RequestID id) { onSubscribeTracksStreamClosed(id); }};
+      return subscribeNamespaceConfig(FrameType::LEGACY_SUBSCRIBE_NAMESPACE);
     default:
       return std::nullopt;
   }
@@ -5887,7 +6249,8 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     // enumerator is its own wire integer, so a plain cast suffices — wire
     // 0x50 maps to SUBSCRIBE_NAMESPACE (v18), 0x11 to
     // LEGACY_SUBSCRIBE_NAMESPACE (v17-), 0x51 to SUBSCRIBE_TRACKS, etc.
-    // getBidiStreamConfig handles the routing for both wire enumerators.
+    // getBidiStreamConfig is version-gated so a mismatched wire type for the
+    // negotiated draft returns nullopt and the session is closed.
     frameType = getFrameType(readBuf, negotiatedVersion_);
   } while (!frameType.has_value() && !fin);
 
@@ -5916,18 +6279,25 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
         close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
         co_return;
       }
-      auto cb = std::make_unique<BidiRequestCallback>(this, bh.writeHandle);
+      auto control = std::make_shared<BidiStreamControl>(
+          bh.writeHandle,
+          cancellationSource_.getToken(),
+          config->finIsCancellation);
+      auto cb = std::make_unique<BidiRequestCallback>(
+          this, control, std::move(config->onPeerTermination));
       auto* cbPtr = cb.get();
+      auto mergedToken = folly::cancellation_token_merge(
+          cancellationSource_.getToken(), control->getReadCancelToken());
       co_withExecutor(
           exec_.get(),
           co_withCancellation(
-              cancellationSource_.getToken(),
+              std::move(mergedToken),
               controlReadLoop(
                   bh.readHandle,
                   std::move(accumulatedData),
                   makeBidiCodec(cbPtr, config->allowedFrames),
                   std::move(cb),
-                  std::move(config->onStreamClosed))))
+                  std::move(control))))
           .start();
     }
   }
@@ -6426,7 +6796,7 @@ void MoQSession::publishNamespaceError(
   if (logger_) {
     logger_->logPublishNamespaceError(publishNamespaceError);
   }
-  replyContext.flush();
+  replyContext.flushFinal();
 }
 
 void MoQSession::subscribeNamespaceError(
@@ -6535,6 +6905,18 @@ void MoQSession::setSubscribeHandler(
   subscribeHandler_ = std::move(subscribeHandler);
 }
 
+std::shared_ptr<ReplyContext> MoQSession::makeReplyContext(
+    std::shared_ptr<BidiStreamControl> control) {
+  if (control) {
+    XCHECK(control->writeHandle())
+        << "BidiStreamControl handed to makeReplyContext must have a live "
+           "write handle";
+    return std::make_shared<BidiStreamReplyContext>(
+        std::move(control), cancellationSource_.getToken());
+  }
+  return controlStreamReplyContext();
+}
+
 std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
   if (!controlStreamReplyContext_) {
     controlStreamReplyContext_ = std::make_shared<ControlStreamReplyContext>(
@@ -6562,7 +6944,7 @@ WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
       replyContext_->writeBuf(),
       subNsError,
       FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-  replyContext_->flush();
+  replyContext_->flushFinal();
   return res;
 }
 
@@ -6581,7 +6963,7 @@ WriteResult MessageReply::error(const SubscribeTracksError& errorMsg) {
   auto res = moqFrameWriter_.writeRequestError(
       replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
   // After ERROR the publisher is done with this stream — FIN it.
-  replyContext_->flush(/*fin=*/true);
+  replyContext_->flushFinal();
   return res;
 }
 

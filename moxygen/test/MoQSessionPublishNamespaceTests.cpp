@@ -115,6 +115,44 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancel) {
   co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+// Draft 18+ subscriber-initiated withdrawal: subscriber tears down the
+// PUBLISH_NAMESPACE bidi, the peer's read loop synthesizes
+// onPublishNamespaceDone. Mirror of the publisher-initiated path above.
+CO_TEST_P_X(Draft18Test, SubscriberCancelsPublishNamespace) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<MockPublishNamespaceHandle> mockPublishNamespaceHandle;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&mockPublishNamespaceHandle](
+              auto ann, auto /* publishNamespaceCallback */)
+              -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            mockPublishNamespaceHandle =
+                std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+                    {.requestID = ann.requestID, .requestSpecificParams = {}}));
+            co_return Subscriber::PublishNamespaceResult(
+                mockPublishNamespaceHandle);
+          });
+
+  EXPECT_CALL(*clientPublisherStatsCallback_, onPublishNamespaceSuccess());
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceSuccess());
+  auto publishNamespaceResult =
+      co_await clientSession_->publishNamespace(getPublishNamespace());
+  EXPECT_FALSE(publishNamespaceResult.hasError());
+
+  // STOP_SENDING the bidi read half → server fires its close callback,
+  // synthesizing onPublishNamespaceDone.
+  folly::coro::Baton doneBaton;
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+      .WillOnce([&] { doneBaton.post(); });
+  serverWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+  co_await doneBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishNamespaceError) {
   co_await setupMoQSession();
 
@@ -144,5 +182,47 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceError) {
       publishNamespaceResult.error().errorCode,
       PublishNamespaceErrorCode::UNAUTHORIZED);
 
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Sender: peer FINs the PUBLISH_NAMESPACE bidi before REQUEST_OK/ERROR —
+// publishNamespace must fail rather than strand.
+CO_TEST_P_X(Draft18Test, PublishNamespaceFailsOnPeerFinWithoutReply) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawAnn;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&](auto ann, auto /*cb*/)
+              -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            serverSawAnn.post();
+            co_await releaseHandler;
+            co_return makePublishNamespaceOkResult(ann);
+          });
+
+  std::optional<PublishNamespaceErrorCode> errorCode;
+  folly::coro::Baton done;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto result =
+            co_await clientSession_->publishNamespace(getPublishNamespace());
+        if (result.hasError()) {
+          errorCode = result.error().errorCode;
+        }
+        done.post();
+      }))
+      .start();
+
+  co_await serverSawAnn;
+  // PUBLISH_NAMESPACE bidi is the client-initiated stream id 0.
+  serverWt_->writeHandles.at(0)->writeStreamData(
+      nullptr, /*fin=*/true, nullptr);
+
+  co_await done;
+  EXPECT_TRUE(errorCode.has_value());
+
+  releaseHandler.post();
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

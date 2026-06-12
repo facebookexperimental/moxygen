@@ -8,7 +8,9 @@
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
 #include <folly/logging/xlog.h>
+#include <moxygen/BidiStreamControl.h>
 #include <moxygen/MoQRelaySession.h>
+#include <moxygen/ReplyContext.h>
 
 #include <utility>
 
@@ -37,8 +39,12 @@ class MoQRelaySession::SubscriberPublishNamespaceCallback
   SubscriberPublishNamespaceCallback(
       MoQRelaySession& session,
       const TrackNamespace& ns,
-      RequestID requestID)
-      : session_(session), trackNamespace_(ns), requestID_(requestID) {}
+      RequestID requestID,
+      std::shared_ptr<ReplyContext> replyContext)
+      : session_(session),
+        trackNamespace_(ns),
+        requestID_(requestID),
+        replyContext_(std::move(replyContext)) {}
 
   void publishNamespaceCancel(
       PublishNamespaceErrorCode errorCode,
@@ -50,13 +56,14 @@ class MoQRelaySession::SubscriberPublishNamespaceCallback
     }
     annCan.errorCode = errorCode;
     annCan.reasonPhrase = std::move(reasonPhrase);
-    session_.publishNamespaceCancel(annCan);
+    session_.publishNamespaceCancel(annCan, std::move(replyContext_));
   }
 
  private:
   MoQRelaySession& session_;
   TrackNamespace trackNamespace_;
   RequestID requestID_;
+  std::shared_ptr<ReplyContext> replyContext_;
 };
 
 class MoQRelaySession::PublisherPublishNamespaceHandle
@@ -65,10 +72,12 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
   PublisherPublishNamespaceHandle(
       std::shared_ptr<MoQRelaySession> session,
       TrackNamespace trackNamespace,
-      PublishNamespaceOk annOk)
+      PublishNamespaceOk annOk,
+      std::shared_ptr<ReplyContext> replyCtx)
       : Subscriber::PublishNamespaceHandle(std::move(annOk)),
         trackNamespace_(std::move(trackNamespace)),
-        session_(std::move(session)) {}
+        session_(std::move(session)),
+        replyCtx_(std::move(replyCtx)) {}
   PublisherPublishNamespaceHandle(const PublisherPublishNamespaceHandle&) =
       delete;
   PublisherPublishNamespaceHandle& operator=(
@@ -88,7 +97,7 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
       } else {
         unann.trackNamespace = trackNamespace_;
       }
-      session_->publishNamespaceDone(unann);
+      session_->publishNamespaceDone(unann, std::move(replyCtx_));
       session_.reset();
     }
   }
@@ -105,6 +114,7 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
  private:
   TrackNamespace trackNamespace_;
   std::shared_ptr<MoQRelaySession> session_;
+  std::shared_ptr<ReplyContext> replyCtx_;
 };
 
 class MoQRelaySession::SubscribeNamespaceHandle
@@ -114,11 +124,11 @@ class MoQRelaySession::SubscribeNamespaceHandle
       std::shared_ptr<MoQRelaySession> session,
       TrackNamespace trackNamespacePrefix,
       SubscribeNamespaceOk subAnnOk,
-      proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle = nullptr)
+      std::shared_ptr<BidiStreamControl> control = nullptr)
       : Publisher::SubscribeNamespaceHandle(std::move(subAnnOk)),
         trackNamespacePrefix_(std::move(trackNamespacePrefix)),
         session_(std::move(session)),
-        bidiWriteHandle_(bidiWriteHandle) {}
+        control_(std::move(control)) {}
   SubscribeNamespaceHandle(const SubscribeNamespaceHandle&) = delete;
   SubscribeNamespaceHandle& operator=(const SubscribeNamespaceHandle&) = delete;
   SubscribeNamespaceHandle(SubscribeNamespaceHandle&&) = delete;
@@ -133,18 +143,12 @@ class MoQRelaySession::SubscribeNamespaceHandle
         session_.reset();
         return;
       }
-      if (bidiWriteHandle_) {
-        // Draft 16+: Close the bidi stream with a FIN
+      if (control_) {
+        // Draft 16+: the spec accepts either FIN or RESET_STREAM as the
+        // cancel signal; RST matches SUBSCRIBE / FETCH / SUBSCRIBE_TRACKS.
         MOQ_SUBSCRIBER_STATS(
             session_->subscriberStatsCallback_, onUnsubscribeNamespace);
-        auto res =
-            bidiWriteHandle_->writeStreamData(nullptr, /*fin*/ true, nullptr);
-        if (!res) {
-          XLOG(ERR)
-              << "writeStreamData(fin=true) for SUBSCRIBE_NAMESPACE failed error="
-              << uint64_t(res.error());
-        }
-        bidiWriteHandle_ = nullptr;
+        control_->cancel(ResetStreamErrorCode::CANCELLED);
       } else {
         // Draft <=15: Send UnsubscribeNamespace on the control stream
         UnsubscribeNamespace msg;
@@ -171,7 +175,7 @@ class MoQRelaySession::SubscribeNamespaceHandle
  private:
   TrackNamespace trackNamespacePrefix_;
   std::shared_ptr<MoQRelaySession> session_;
-  proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle_{nullptr};
+  std::shared_ptr<BidiStreamControl> control_;
 };
 
 // Draft 18+: handle returned to subscribers from
@@ -182,10 +186,10 @@ class MoQRelaySession::SubscribeTracksHandle
   SubscribeTracksHandle(
       std::shared_ptr<MoQRelaySession> session,
       RequestOk subTracksOk,
-      proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle)
+      std::shared_ptr<BidiStreamControl> control)
       : Publisher::SubscribeTracksHandle(std::move(subTracksOk)),
         session_(session),
-        bidiWriteHandle_(bidiWriteHandle) {}
+        control_(std::move(control)) {}
 
   SubscribeTracksHandle(const SubscribeTracksHandle&) = delete;
   SubscribeTracksHandle& operator=(const SubscribeTracksHandle&) = delete;
@@ -200,21 +204,15 @@ class MoQRelaySession::SubscribeTracksHandle
     auto session = session_.lock();
     if (!session || session->isClosed()) {
       session_.reset();
-      bidiWriteHandle_ = nullptr;
+      control_.reset();
       return;
     }
-    if (bidiWriteHandle_) {
-      // FIN the bidi reply stream — that's how the subscriber signals
-      // cancellation in draft 18.
-      auto res =
-          bidiWriteHandle_->writeStreamData(nullptr, /*fin=*/true, nullptr);
-      if (!res) {
-        XLOG(ERR)
-            << "writeStreamData(fin=true) for SUBSCRIBE_TRACKS failed error="
-            << uint64_t(res.error());
-      }
-      bidiWriteHandle_ = nullptr;
+    if (control_) {
+      // No UNSUBSCRIBE_TRACKS wire frame — cancel via RST. FIN means
+      // "no more REQUEST_UPDATE", not cancel.
+      control_->cancel(ResetStreamErrorCode::CANCELLED);
     }
+    control_.reset();
     session_.reset();
   }
 
@@ -229,7 +227,7 @@ class MoQRelaySession::SubscribeTracksHandle
 
  private:
   std::weak_ptr<MoQRelaySession> session_;
-  proxygen::WebTransport::StreamWriteHandle* bidiWriteHandle_{nullptr};
+  std::shared_ptr<BidiStreamControl> control_;
 };
 
 // MoQRelayPendingRequestState - extends base PendingRequestState with
@@ -534,7 +532,7 @@ void MoQRelaySession::handlePublishNamespaceRequestUpdate(
                     RequestOk requestOk{
                         .requestID = updateRequestID,
                         .requestSpecificParams = {}};
-                    requestUpdateOk(requestOk);
+                    requestUpdateOk(requestOk, existingRequestID);
                   }
                 }
               })))
@@ -587,7 +585,7 @@ void MoQRelaySession::handleSubscribeNamespaceRequestUpdate(
                     RequestOk requestOk{
                         .requestID = updateRequestID,
                         .requestSpecificParams = {}};
-                    requestUpdateOk(requestOk);
+                    requestUpdateOk(requestOk, existingRequestID);
                   }
                 }
               })))
@@ -625,24 +623,41 @@ MoQRelaySession::publishNamespace(
   }
   aliasifyAuthTokens(ann.params);
   ann.requestID = getNextRequestID();
-  auto res = moqFrameWriter_.writePublishNamespace(controlWriteBuf_, ann);
-  if (!res) {
-    XLOG(ERR) << "writePublishNamespace failed sess=" << this;
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moqFrameWriter_.writePublishNamespace(writeBuf, ann);
+  auto sendResult = sendRequest(
+      writeBuf,
+      {FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
+      ann.requestID,
+      /*minBidiDraftVersion=*/18,
+      /*senderCallback=*/nullptr,
+      // Peer reset the PUBLISH_NAMESPACE bidi: synthesize
+      // PUBLISH_NAMESPACE_CANCEL so our announcement-handler unwinds.
+      [this](RequestID id) {
+        PublishNamespaceCancel cancel;
+        cancel.requestID = id;
+        cancel.errorCode = RequestErrorCode::CANCELLED;
+        cancel.reasonPhrase = "peer reset";
+        onPublishNamespaceCancel(std::move(cancel));
+      });
+  if (sendResult.hasError()) {
     co_return folly::makeUnexpected(PublishNamespaceError(
         {ann.requestID,
          PublishNamespaceErrorCode::INTERNAL_ERROR,
-         "local write failed"}));
+         std::move(sendResult.error())}));
   }
-  controlWriteEvent_.signal();
+  auto control = sendResult.value();
+  auto replyCtx = makeReplyContext(control);
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<PublishNamespaceOk, PublishNamespaceError>>();
-  pendingRequests_.emplace(
-      ann.requestID,
-      MoQRelayPendingRequestState::makePublishNamespace(
-          PendingPublishNamespace{
-              trackNamespace, // Use saved copy instead of ann.trackNamespace
-              std::move(contract.first),
-              std::move(publishNamespaceCallback)}));
+  auto pending = MoQRelayPendingRequestState::makePublishNamespace(
+      PendingPublishNamespace{
+          trackNamespace, // Use saved copy instead of ann.trackNamespace
+          std::move(contract.first),
+          std::move(publishNamespaceCallback)});
+  pending->setBidiControl(std::move(control));
+  pendingRequests_.emplace(ann.requestID, std::move(pending));
   auto publishNamespaceResult = co_await std::move(contract.second);
   if (publishNamespaceResult.hasError()) {
     MOQ_PUBLISHER_STATS(
@@ -655,7 +670,8 @@ MoQRelaySession::publishNamespace(
     co_return std::make_shared<PublisherPublishNamespaceHandle>(
         std::static_pointer_cast<MoQRelaySession>(shared_from_this()),
         trackNamespace,
-        std::move(publishNamespaceResult.value()));
+        std::move(publishNamespaceResult.value()),
+        std::move(replyCtx));
   }
 }
 
@@ -781,7 +797,9 @@ void MoQRelaySession::onPublishNamespaceCancel(
   }
 }
 
-void MoQRelaySession::publishNamespaceDone(const PublishNamespaceDone& unann) {
+void MoQRelaySession::publishNamespaceDone(
+    const PublishNamespaceDone& unann,
+    std::shared_ptr<ReplyContext> replyCtx) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onPublishNamespaceDone);
 
   if (logger_) {
@@ -800,16 +818,6 @@ void MoQRelaySession::publishNamespaceDone(const PublishNamespaceDone& unann) {
                "PublishNamespaceDone before PublishNamespaceOK"})));
     }
     pendingRequests_.erase(pendingIt);
-  };
-
-  // Lambda helper to write the publishNamespaceDone frame
-  auto writePublishNamespaceDoneToWire = [this, &unann]() {
-    auto res =
-        moqFrameWriter_.writePublishNamespaceDone(controlWriteBuf_, unann);
-    if (!res) {
-      XLOG(ERR) << "writePublishNamespaceDone failed sess=" << this;
-    }
-    controlWriteEvent_.signal();
   };
 
   bool found = false;
@@ -867,11 +875,22 @@ void MoQRelaySession::publishNamespaceDone(const PublishNamespaceDone& unann) {
     }
   }
 
-  if (found) {
-    writePublishNamespaceDoneToWire();
-  } else {
+  if (!found) {
     XLOG(ERR) << "PublishNamespaceDone for unknown publishNamespace, sess="
               << this;
+    return;
+  }
+  if (getDraftMajorVersion(*negotiatedVersion_) < 18) {
+    auto res =
+        moqFrameWriter_.writePublishNamespaceDone(replyCtx->writeBuf(), unann);
+    if (!res) {
+      XLOG(ERR) << "writePublishNamespaceDone failed sess=" << this;
+      return;
+    }
+    replyCtx->flushFinal();
+  } else {
+    // Draft 18+: signal "no more PUBLISH_NAMESPACE" by FINing our half.
+    replyCtx->flushFinal();
   }
 }
 
@@ -930,7 +949,10 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto annCb = std::make_shared<SubscriberPublishNamespaceCallback>(
-      *this, publishNamespace.trackNamespace, publishNamespace.requestID);
+      *this,
+      publishNamespace.trackNamespace,
+      publishNamespace.requestID,
+      replyContext);
   auto publishNamespaceResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       subscribeHandler_->publishNamespace(publishNamespace, std::move(annCb))));
@@ -985,14 +1007,23 @@ void MoQRelaySession::publishNamespaceOk(
 }
 
 void MoQRelaySession::publishNamespaceCancel(
-    const PublishNamespaceCancel& annCan) {
+    const PublishNamespaceCancel& annCan,
+    std::shared_ptr<ReplyContext> replyContext) {
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishNamespaceCancel);
-  auto res =
-      moqFrameWriter_.writePublishNamespaceCancel(controlWriteBuf_, annCan);
-  if (!res) {
-    XLOG(ERR) << "writePublishNamespaceCancel failed sess=" << this;
+  if (useUniControlStreams(*getNegotiatedVersion())) {
+    // Draft 18+: PUBLISH_NAMESPACE_CANCEL was removed from the wire. Cancel
+    // by RSTing our read half of the PUBLISH_NAMESPACE bidi stream.
+    if (replyContext) {
+      replyContext->cancel(ResetStreamErrorCode::CANCELLED);
+    }
+  } else {
+    auto res =
+        moqFrameWriter_.writePublishNamespaceCancel(controlWriteBuf_, annCan);
+    if (!res) {
+      XLOG(ERR) << "writePublishNamespaceCancel failed sess=" << this;
+    }
+    controlWriteEvent_.signal();
   }
-  controlWriteEvent_.signal();
 
   if (annCan.requestID.has_value()) {
     publishNamespaceHandles_.erase(*annCan.requestID);
@@ -1153,7 +1184,7 @@ MoQRelaySession::subscribeNamespace(
         std::static_pointer_cast<MoQRelaySession>(shared_from_this()),
         trackNamespace,
         std::move(subAnnResult.value()),
-        sendResult.value());
+        std::move(sendResult.value()));
   }
 }
 
@@ -1434,11 +1465,9 @@ MoQRelaySession::subscribeTracks(SubscribeTracks subTracks) {
         subscriberStatsCallback_,
         onSubscribeTracksError,
         subTracksResult.error().errorCode);
-    // The bidi request stream is normally FINed by SubscribeTracksHandle on
-    // unsubscribe; on the error path we never construct a handle, so FIN it
-    // here to release the stream resource and let the peer observe end-of-
-    // request.
-    if (auto* writeHandle = sendResult.value()) {
+    // Error path: no handle, no REQUEST_UPDATEs — FIN to release the stream.
+    auto& control = sendResult.value();
+    if (auto* writeHandle = control ? control->writeHandle() : nullptr) {
       auto finRes = writeHandle->writeStreamData(
           nullptr, /*fin=*/true, /*byteEventCallback=*/nullptr);
       if (!finRes) {
@@ -1654,7 +1683,7 @@ WriteResult SeparateStreamSubNsReply::error(
       replyContext_->writeBuf(),
       subNsError,
       FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-  replyContext_->flush();
+  replyContext_->flushFinal();
   errorSent_ = true;
   return res;
 }

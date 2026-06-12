@@ -1159,3 +1159,137 @@ CO_TEST_P_X(MoQSessionTest, SubscriptionEndStatFiredOnAbandonedPublisher) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// === Draft 18+ bidi early-close coverage ===
+
+// Sender-side: when a request's bidi closes (FIN or RST) before the peer
+// sends its terminal reply, the pending request must fail with
+// INTERNAL_ERROR rather than strand the coroutine forever.
+CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerFinWithoutReply) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawSubscribe;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /* pub */) -> TaskSubscribeResult {
+        serverSawSubscribe.post();
+        co_await releaseHandler;
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  std::optional<RequestErrorCode> errorCode;
+  folly::coro::Baton done;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto result = co_await clientSession_->subscribe(
+            getSubscribe(kTestTrackName), subscribeCallback_);
+        if (result.hasError()) {
+          errorCode = result.error().errorCode;
+        }
+        done.post();
+      }))
+      .start();
+
+  co_await serverSawSubscribe;
+
+  // Server FINs the bidi (stream id 0, client-initiated) with no reply.
+  serverWt_->writeHandles.at(0)->writeStreamData(
+      nullptr, /*fin=*/true, nullptr);
+
+  co_await done;
+  EXPECT_TRUE(errorCode.has_value());
+  if (errorCode.has_value()) {
+    EXPECT_EQ(*errorCode, RequestErrorCode::INTERNAL_ERROR);
+  }
+
+  releaseHandler.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Peer STOP_SENDING on a SUBSCRIBE bidi must dispatch through the same
+// teardown path as peer FIN: application unsubscribe handle fires and
+// server-side subscription state is cleaned up.
+CO_TEST_P_X(Draft18Test, BidiStreamStopSending) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  expectSubscribe([&pubHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return pubHandle;
+  });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubBaton;
+  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+
+  // Client STOP_SENDING on its subscribe bidi (id 0) → server onUnsubscribe.
+  clientWt_->readHandles.at(0)->stopSending(0);
+  co_await unsubBaton;
+
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Subscriber-initiated unsubscribe() (RST write + STOP_SENDING read) must
+// reach the publisher's unsubscribe handle — same outcome as peer-initiated
+// STOP_SENDING above, exercised from the other side.
+CO_TEST_P_X(Draft18Test, BidiStreamFinUnsubscribesSubscribe) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  expectSubscribe([&pubHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return pubHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubBaton;
+  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+
+  // Draft 18+: unsubscribe() = RST + STOP_SENDING on the bidi.
+  res.value()->unsubscribe();
+  co_await unsubBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Peer cancel arriving after PUBLISH_DONE is informational and must not
+// re-fire onUnsubscribe on the already-torn-down publisher handle.
+CO_TEST_P_X(Draft18Test, NoUnsubscribeAfterPublishDone) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    trackConsumer = pub;
+    co_return pubHandle;
+  });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onPublishDone(_));
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+
+  // Handle is torn down; STOP_SENDING must not fire onUnsubscribe.
+  EXPECT_CALL(*pubHandle, unsubscribe()).Times(0);
+  clientWt_->readHandles.at(0)->stopSending(0);
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
