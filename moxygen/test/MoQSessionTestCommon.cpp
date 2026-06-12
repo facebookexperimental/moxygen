@@ -598,4 +598,23 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18Test,
     testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
+namespace {
+std::vector<VersionParams> getPreDraft18VersionParams() {
+  std::vector<VersionParams> result;
+  result.reserve(kSupportedVersions.size());
+  for (auto v : kSupportedVersions) {
+    if (getDraftMajorVersion(v) >= 18) {
+      continue;
+    }
+    result.emplace_back(std::vector<uint64_t>{v}, v);
+  }
+  return result;
+}
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(
+    PreDraft18Test,
+    PreDraft18Test,
+    testing::ValuesIn(getPreDraft18VersionParams()));
+
 }} // namespace moxygen::test

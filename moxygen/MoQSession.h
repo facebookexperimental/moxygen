@@ -774,6 +774,10 @@ class MoQSession : public Subscriber,
   uint8_t getRequestIDMultiplier() const {
     return 2;
   }
+  // Initialize request-ID flow control limits. On draft-18+ these are
+  // unbounded (the QUIC bidi stream limit governs instead).
+  void initLocalMaxRequestID(uint64_t fromParam);
+  void initPeerMaxRequestID(const Parameters& peerParams);
   void deliverBufferedData(TrackAlias trackAlias);
   void aliasifyAuthTokens(
       Parameters& params,

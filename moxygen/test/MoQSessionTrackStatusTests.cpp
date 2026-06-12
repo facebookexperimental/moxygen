@@ -30,7 +30,7 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
   EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, TrackStatusExceptionReleasesRequestID) {
+CO_TEST_P_X(PreDraft18Test, TrackStatusExceptionReleasesRequestID) {
   co_await setupMoQSession();
   auto initialMaxRequestID = serverSession_->maxRequestID();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
@@ -50,6 +50,40 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusExceptionReleasesRequestID) {
   co_await folly::coro::co_reschedule_on_current_executor;
   // The server should have retired the request ID despite the exception.
   EXPECT_GT(serverSession_->maxRequestID(), initialMaxRequestID);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+// Draft-18 mirror of TrackStatusExceptionReleasesRequestID: when the
+// publisher throws, the trackStatus bidi must reach terminal state on both
+// halves so the QUIC bidi-stream credit is returned and a subsequent request
+// can be issued under a tight stream limit.
+CO_TEST_P_X(Draft18Test, TrackStatusExceptionReleasesBidiStreamCredit) {
+  clientWt_->setMaxLocalBidiStreams(1);
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus()).Times(2);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus()).Times(2);
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .WillOnce(
+          [](TrackStatus) -> folly::coro::Task<Publisher::TrackStatusResult> {
+            co_yield folly::coro::co_error(
+                std::runtime_error("trackStatus exploded"));
+          })
+      .WillOnce(
+          [](TrackStatus request)
+              -> folly::coro::Task<Publisher::TrackStatusResult> {
+            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+          });
+
+  auto first = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_TRUE(first.hasError());
+  // Let both peers complete their FIN/RST handshake on the bidi.
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Credit must be replenished — second trackStatus succeeds.
+  auto second = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_FALSE(second.hasError());
+
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {

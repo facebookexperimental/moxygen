@@ -2573,10 +2573,27 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     XLOG(ERR) << "writeSetup failed sess=" << this;
     return folly::makeUnexpected(res.error());
   }
-  maxRequestID_ = maxRequestID;
-  maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
+  initLocalMaxRequestID(maxRequestID);
   controlWriteEvent_.signal();
   return folly::unit;
+}
+
+void MoQSession::initLocalMaxRequestID(uint64_t fromParam) {
+  if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+    maxRequestID_ = std::numeric_limits<uint64_t>::max();
+    maxConcurrentRequests_ = std::numeric_limits<uint64_t>::max();
+  } else {
+    maxRequestID_ = fromParam;
+    maxConcurrentRequests_ = maxRequestID_ / getRequestIDMultiplier();
+  }
+}
+
+void MoQSession::initPeerMaxRequestID(const Parameters& peerParams) {
+  if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+    peerMaxRequestID_ = std::numeric_limits<uint64_t>::max();
+  } else {
+    peerMaxRequestID_ = getMaxRequestIDIfPresent(peerParams);
+  }
 }
 
 folly::coro::Task<Setup> MoQSession::awaitPeerSetup() {
@@ -2642,7 +2659,7 @@ void MoQSession::onServerSetup(Setup serverSetup) {
     initializeNegotiatedVersion(kVersionDraft14);
   }
 
-  peerMaxRequestID_ = getMaxRequestIDIfPresent(serverSetup.params);
+  initPeerMaxRequestID(serverSetup.params);
   auto peerAuthCacheSize =
       getMaxAuthTokenCacheSizeIfPresent(serverSetup.params);
   tokenCache_.setMaxSize(
@@ -2668,7 +2685,7 @@ void MoQSession::onClientSetup(Setup clientSetup) {
                << " sess=" << this;
   }
 
-  peerMaxRequestID_ = getMaxRequestIDIfPresent(clientSetup.params);
+  initPeerMaxRequestID(clientSetup.params);
   auto peerAuthCacheSize =
       getMaxAuthTokenCacheSizeIfPresent(clientSetup.params);
   tokenCache_.setMaxSize(
@@ -5659,6 +5676,9 @@ void MoQSession::retireRequestID(bool signalWriteLoop) {
 }
 
 void MoQSession::sendMaxRequestID(bool signalWriteLoop) {
+  if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+    return;
+  }
   XLOG(DBG1) << "Issuing new maxRequestID=" << maxRequestID_
              << " sess=" << this;
   auto res = moqFrameWriter_.writeMaxRequestID(

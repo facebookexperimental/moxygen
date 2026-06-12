@@ -136,6 +136,10 @@ bool useUniControlStreams(uint64_t version) {
   return getDraftMajorVersion(version) >= 18;
 }
 
+bool useBidiRequestStreams(uint64_t version) {
+  return getDraftMajorVersion(version) >= 18;
+}
+
 std::string getSupportedVersionsString() {
   std::string result;
   for (size_t i = 0; i < kSupportedVersions.size(); ++i) {
