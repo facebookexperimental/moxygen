@@ -2079,10 +2079,11 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 TEST(MoQFramerTestUtils, GetMoqtProtocols) {
   // Empty = all supported versions
   auto all = getMoqtProtocols("", true);
-  EXPECT_EQ(all.size(), 3);
-  EXPECT_EQ(all[0], "moqt-16");
-  EXPECT_EQ(all[1], "moqt-15");
-  EXPECT_EQ(all[2], "moq-00");
+  EXPECT_EQ(all.size(), 4);
+  EXPECT_EQ(all[0], "moqt-18");
+  EXPECT_EQ(all[1], "moqt-16");
+  EXPECT_EQ(all[2], "moqt-15");
+  EXPECT_EQ(all[3], "moq-00");
 
   // Single version
   auto just16 = getMoqtProtocols("16", true);

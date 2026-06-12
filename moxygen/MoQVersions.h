@@ -69,10 +69,11 @@ constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 constexpr std::string_view kAlpnMoqtDraft18 = "moqt-18";
 constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
 
-constexpr std::array<uint64_t, 3> kSupportedVersions{
+constexpr std::array<uint64_t, 4> kSupportedVersions{
     kVersionDraft14,
     kVersionDraft15,
-    kVersionDraft16};
+    kVersionDraft16,
+    kVersionDraft18};
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, kVersionDraft08_exp2 has the major

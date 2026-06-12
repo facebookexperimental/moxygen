@@ -1292,5 +1292,5 @@ TEST(MoQCodecTest, BidiCodecRejectsV18WireWhenOnlyLegacyListed) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::ValuesIn(kSupportedVersions));
+    ::testing::Values(kVersionDraft14, kVersionDraft15, kVersionDraft16));
 } // namespace moxygen::test

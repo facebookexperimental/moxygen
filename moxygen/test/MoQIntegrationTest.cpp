@@ -1095,11 +1095,58 @@ TEST_P(MoQProductionVersionTest, SessionSetup_ServerRejectsClient) {
   boundAddr.setFromLocalAddress(folly::NetworkSocket::fromFd(fds[0]));
   serverPort_ = boundAddr.getPort();
 
-  runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
-    auto res = co_await folly::coro::co_awaitTry(connectClient());
-    EXPECT_TRUE(res.hasException())
-        << "Expected setupMoQSession to fail when server rejects setup";
-  }));
+  const bool uniControl = useUniControlStreams(GetParam());
+  runTest(
+      folly::coro::co_invoke([this, uniControl]() -> folly::coro::Task<void> {
+        auto res = co_await folly::coro::co_awaitTry(connectClient());
+        if (!uniControl) {
+          // Pre-draft-18: the server validates CLIENT_SETUP before replying
+          // with SERVER_SETUP, so a rejection fails the client's setup
+          // directly.
+          EXPECT_TRUE(res.hasException())
+              << "Expected setupMoQSession to fail when server rejects setup";
+          co_return;
+        }
+        // Draft 18+: the server sends SERVER_SETUP proactively, before it has
+        // validated CLIENT_SETUP, so setup completes successfully. The
+        // rejection instead surfaces as the session being closed shortly
+        // after with VERSION_NEGOTIATION_FAILED.
+        EXPECT_FALSE(res.hasException())
+            << "Draft 18+ sends SERVER_SETUP first, so setup should complete";
+        auto session = client_->moqSession_;
+        EXPECT_NE(session, nullptr);
+        if (!session) {
+          co_return;
+        }
+
+        struct CloseObserver : public MoQSession::MoQSessionCloseCallback {
+          folly::coro::Baton baton;
+          folly::Optional<uint32_t> wtError;
+          bool fired{false};
+          void onMoQSessionClosed(
+              SessionCloseErrorCode,
+              folly::Optional<uint32_t> wt) override {
+            fired = true;
+            wtError = wt;
+            baton.post();
+          }
+        } observer;
+        session->setSessionCloseCallback(&observer);
+        // If the close already arrived before we registered, isClosed() is
+        // already set; otherwise wait for it (bounded by runTest's timeout).
+        if (!session->isClosed()) {
+          co_await observer.baton;
+        }
+        session->setSessionCloseCallback(nullptr);
+        EXPECT_TRUE(session->isClosed())
+            << "Expected session to close after server rejected setup";
+        if (observer.fired) {
+          EXPECT_EQ(
+              observer.wtError,
+              folly::Optional<uint32_t>(folly::to_underlying(
+                  SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED)));
+        }
+      }));
 }
 
 // ============================================================================
@@ -1465,11 +1512,9 @@ TEST_P(MoQIntegrationTest, PublishAndSubscribe_InOrderDelivery) {
 }
 
 namespace {
-const std::vector<uint64_t> kIntegrationTestVersions = [] {
-  std::vector<uint64_t> v(kSupportedVersions.begin(), kSupportedVersions.end());
-  v.push_back(kVersionDraft18);
-  return v;
-}();
+const std::vector<uint64_t> kIntegrationTestVersions(
+    kSupportedVersions.begin(),
+    kSupportedVersions.end());
 } // namespace
 
 INSTANTIATE_TEST_SUITE_P(

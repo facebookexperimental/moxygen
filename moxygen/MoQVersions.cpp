@@ -96,6 +96,8 @@ std::vector<std::string> getDefaultMoqtProtocols(
   if (includeExperimental) {
     // Highest version first so TLS ALPN negotiation prefers it
     protocols.push_back(
+        getAlpnFromVersion(kVersionDraft18, useStandard).value());
+    protocols.push_back(
         getAlpnFromVersion(kVersionDraft16, useStandard).value());
     protocols.push_back(
         getAlpnFromVersion(kVersionDraft15, useStandard).value());
