@@ -720,7 +720,9 @@ using V15PlusTests = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     V15PlusTests,
     V15PlusTests,
-    testing::Values(VersionParams{{kVersionDraft15}, kVersionDraft15}));
+    testing::Values(
+        VersionParams{{kVersionDraft15}, kVersionDraft15},
+        VersionParams{{kVersionDraft18}, kVersionDraft18}));
 CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
@@ -741,8 +743,13 @@ CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
           sgp->endOfTrackAndGroup(1);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        // Return SubscribeOk with PUBLISHER_PRIORITY parameter
-        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
+        // Return SubscribeOk with PUBLISHER_PRIORITY (param at v15, extension
+        // at v16+).
+        co_return makeSubscribeOkResult(
+            sub,
+            std::nullopt,
+            kPublisherPriority,
+            getDraftMajorVersion(getServerSelectedVersion()));
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -783,9 +790,14 @@ CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
           sgp->endOfTrackAndGroup(1);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        // Return SubscribeOk with PUBLISHER_PRIORITY parameter
+        // Return SubscribeOk with PUBLISHER_PRIORITY (param at v15, extension
+        // at v16+).
         constexpr uint8_t kPublisherPriority = 64;
-        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
+        co_return makeSubscribeOkResult(
+            sub,
+            std::nullopt,
+            kPublisherPriority,
+            getDraftMajorVersion(getServerSelectedVersion()));
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -826,8 +838,13 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
           sgp->endOfTrackAndGroup(0);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        // Return SubscribeOk with PUBLISHER_PRIORITY parameter
-        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
+        // Return SubscribeOk with PUBLISHER_PRIORITY (param at v15, extension
+        // at v16+).
+        co_return makeSubscribeOkResult(
+            sub,
+            std::nullopt,
+            kPublisherPriority,
+            getDraftMajorVersion(getServerSelectedVersion()));
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();

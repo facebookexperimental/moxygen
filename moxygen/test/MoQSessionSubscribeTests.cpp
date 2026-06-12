@@ -867,7 +867,9 @@ using V14PlusTests = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     V14PlusTests,
     V14PlusTests,
-    testing::Values(VersionParams{{kVersionDraft14}, kVersionDraft14}));
+    testing::Values(
+        VersionParams{{kVersionDraft14}, kVersionDraft14},
+        VersionParams{{kVersionDraft18}, kVersionDraft18}));
 CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
@@ -884,21 +886,30 @@ CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
 
-        // Set up mock expectations for subscribeUpdate for both versions
-        // For v15+, also verify requestID assignments
-        if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
+        // Set up mock expectations for subscribeUpdate for both versions.
+        // For v15+, verify the session-assigned requestID (= original + 2).
+        // The existingRequestID field is only carried on the wire in v15-17;
+        // draft 18+ moves SUBSCRIBE_UPDATE to a per-request bidi stream so the
+        // original requestID is stream-implicit and not reconstructable
+        // server-side.
+        const auto majorVersion =
+            getDraftMajorVersion(getServerSelectedVersion());
+        if (majorVersion >= 15) {
+          // Capture original requestID by value: at v18 the bidi-stream
+          // codepath fires this lambda after `sub` is destroyed.
+          const auto originalRequestID = sub.requestID.value;
           EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
               .WillOnce(
-                  testing::Invoke([&sub, &subscribeUpdateProcessed](
-                                      const auto& actualUpdate) {
-                    // Verify that existingRequestID has original requestID
-                    // value
+                  testing::Invoke([originalRequestID,
+                                   &subscribeUpdateProcessed,
+                                   majorVersion](const auto& actualUpdate) {
+                    if (majorVersion < 18) {
+                      EXPECT_EQ(
+                          actualUpdate.existingRequestID.value,
+                          originalRequestID);
+                    }
                     EXPECT_EQ(
-                        actualUpdate.existingRequestID.value,
-                        sub.requestID.value);
-                    // Verify that requestID has been assigned by session
-                    EXPECT_EQ(
-                        actualUpdate.requestID.value, sub.requestID.value + 2);
+                        actualUpdate.requestID.value, originalRequestID + 2);
 
                     subscribeUpdateProcessed.post();
                   }));

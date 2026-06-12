@@ -6,6 +6,8 @@
 
 #include "moxygen/test/MoQSessionTestCommon.h"
 
+#include "moxygen/MoQTrackProperties.h"
+
 using namespace moxygen;
 using testing::_;
 
@@ -30,20 +32,25 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     const SubscribeRequest& sub,
     const std::optional<AbsoluteLocation>& largest,
-    const std::optional<uint8_t>& publisherPriority) {
-  ParamBuilder paramBuilder;
-  if (publisherPriority.has_value()) {
-    paramBuilder.add(
-        TrackRequestParamKey::PUBLISHER_PRIORITY, publisherPriority.value());
-  }
+    const std::optional<uint8_t>& publisherPriority,
+    uint64_t majorVersion) {
   SubscribeOk subscribeOk;
   subscribeOk.requestID = sub.requestID;
   subscribeOk.trackAlias = TrackAlias(sub.requestID.value);
   subscribeOk.expires = std::chrono::milliseconds(0);
   subscribeOk.groupOrder = GroupOrder::OldestFirst;
   subscribeOk.largest = largest;
-  for (const auto& param : paramBuilder.build()) {
-    subscribeOk.params.insertParam(param);
+  if (publisherPriority.has_value()) {
+    if (majorVersion >= 16) {
+      setPublisherPriority(subscribeOk, publisherPriority.value());
+    } else {
+      ParamBuilder paramBuilder;
+      paramBuilder.add(
+          TrackRequestParamKey::PUBLISHER_PRIORITY, publisherPriority.value());
+      for (const auto& param : paramBuilder.build()) {
+        subscribeOk.params.insertParam(param);
+      }
+    }
   }
   return std::make_shared<MockSubscriptionHandle>(std::move(subscribeOk));
 }

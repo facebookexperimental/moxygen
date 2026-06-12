@@ -43,10 +43,13 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
     const Fetch& fetch,
     const AbsoluteLocation& location);
 
+// At draft 16+, PUBLISHER_PRIORITY moves from param to extension; pass
+// majorVersion so the helper picks the correct mechanism.
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     const SubscribeRequest& sub,
     const std::optional<AbsoluteLocation>& largest = std::nullopt,
-    const std::optional<uint8_t>& publisherPriority = std::nullopt);
+    const std::optional<uint8_t>& publisherPriority = std::nullopt,
+    uint64_t majorVersion = 0);
 
 TrackStatusOk makeTrackStatusOkResult(
     const TrackStatus& req,
