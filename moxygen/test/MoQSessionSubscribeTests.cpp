@@ -496,7 +496,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDuringDrain) {
   });
 
   EXPECT_CALL(
-      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _));
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
+      .WillOnce(testing::Return(folly::unit));
   auto res =
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
   EXPECT_FALSE(res.hasError());

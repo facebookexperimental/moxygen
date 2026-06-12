@@ -237,6 +237,69 @@ void MoQSessionTest::SetUp() {
 void MoQSessionTest::TearDown() {
   // Cancel the timeout to prevent false alarms after test completes
   testTimeout_.cancelTimeout();
+  // Verify every locally-initiated stream (both halves of each bidi, plus
+  // each uni's write half) reached terminal state (FIN or RST). One control
+  // stream per endpoint is intentionally kept open for the session lifetime
+  // and is exempted based on the negotiated version:
+  //   - pre-draft-18: client opens a bidi control stream (id 0); no uni
+  //     control exists.
+  //   - draft-18+:    each endpoint opens a uni control stream (client id 2,
+  //                   server id 3); no bidi control exists.
+  auto extractIds = [](const auto& container) {
+    std::vector<uint64_t> ids;
+    ids.reserve(container.size());
+    if constexpr (requires { container.begin()->first; }) {
+      for (const auto& [id, _] : container) {
+        ids.push_back(id);
+      }
+    } else {
+      for (const auto& id : container) {
+        ids.push_back(id);
+      }
+    }
+    return ids;
+  };
+  auto checkLeak = [&](const auto& container,
+                       folly::Optional<uint64_t> exemptId,
+                       std::string_view kind,
+                       std::string_view side) {
+    std::string leaks;
+    for (uint64_t id : extractIds(container)) {
+      if (exemptId && id == *exemptId) {
+        continue;
+      }
+      if (!leaks.empty()) {
+        leaks += ',';
+      }
+      leaks += std::to_string(id);
+    }
+    EXPECT_TRUE(leaks.empty())
+        << side << "-initiated " << kind
+        << " streams not fully terminated: ids=[" << leaks << "]";
+  };
+
+  const bool uniControl = useUniControlStreams(getServerSelectedVersion());
+  constexpr uint64_t kClientControlBidiId = 0;
+  constexpr uint64_t kClientControlUniId = 2;
+  constexpr uint64_t kServerControlUniId = 3;
+  const folly::Optional<uint64_t> clientBidiExempt =
+      uniControl ? folly::none : folly::make_optional(kClientControlBidiId);
+  const folly::Optional<uint64_t> clientUniExempt =
+      uniControl ? folly::make_optional(kClientControlUniId) : folly::none;
+  const folly::Optional<uint64_t> serverUniExempt =
+      uniControl ? folly::make_optional(kServerControlUniId) : folly::none;
+
+  if (clientWt_) {
+    checkLeak(
+        clientWt_->openLocalBidiStreams(), clientBidiExempt, "bidi", "client");
+    checkLeak(
+        clientWt_->openLocalUniStreams(), clientUniExempt, "uni", "client");
+  }
+  if (serverWt_) {
+    checkLeak(serverWt_->openLocalBidiStreams(), folly::none, "bidi", "server");
+    checkLeak(
+        serverWt_->openLocalUniStreams(), serverUniExempt, "uni", "server");
+  }
 }
 
 folly::Expected<folly::Unit, SessionCloseErrorCode>
