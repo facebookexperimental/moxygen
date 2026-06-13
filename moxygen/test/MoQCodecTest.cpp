@@ -1261,7 +1261,7 @@ TEST(MoQCodecTest, BidiCodecRejectsLegacyWireWhenOnlyV18Listed) {
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQBidiStreamCodec bidiCodec(
       &callback, {FrameType::SUBSCRIBE_NAMESPACE, FrameType::REQUEST_UPDATE});
-  bidiCodec.initializeVersion(kVersionDraft18);
+  bidiCodec.initializeVersion(kVersionDraft17);
 
   EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
   bidiCodec.onIngress(buf.move(), false);

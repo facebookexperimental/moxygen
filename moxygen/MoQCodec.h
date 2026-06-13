@@ -119,7 +119,12 @@ class MoQControlCodec : public MoQCodec {
   }
 
   virtual bool checkFrameAllowed(FrameType f) {
+    const auto major =
+        negotiatedVersion_ ? getDraftMajorVersion(*negotiatedVersion_) : 0;
     switch (f) {
+      case FrameType::GOAWAY:
+        return true;
+      // Request/reply frames moved to per-request bidi streams in draft 18.
       case FrameType::SUBSCRIBE:
       case FrameType::SUBSCRIBE_UPDATE:
       case FrameType::SUBSCRIBE_OK:
@@ -128,32 +133,33 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_NAMESPACE:
       // case FrameType::PUBLISH_NAMESPACE_OK:
       case FrameType::REQUEST_OK:
-      case FrameType::PUBLISH_NAMESPACE_DONE:
-      case FrameType::UNSUBSCRIBE:
       case FrameType::PUBLISH_DONE:
       case FrameType::PUBLISH:
       case FrameType::PUBLISH_OK:
       case FrameType::PUBLISH_ERROR:
-      case FrameType::PUBLISH_NAMESPACE_CANCEL:
       case FrameType::TRACK_STATUS:
       case FrameType::TRACK_STATUS_ERROR:
-      case FrameType::GOAWAY:
-      case FrameType::CLIENT_SETUP:
-      case FrameType::SERVER_SETUP:
-      case FrameType::SETUP:
       case FrameType::FETCH:
-      case FrameType::FETCH_CANCEL:
       case FrameType::FETCH_OK:
       case FrameType::FETCH_ERROR:
-        return true;
-      // Removed in draft-18; QUIC bidi stream limits govern instead.
-      // Pre-setup these frames are rejected by parseFrame() as
-      // PROTOCOL_VIOLATION (default arm of the !seenSetup_ switch), so allow
-      // them through checkFrameAllowed when negotiatedVersion_ is unset.
+        return negotiatedVersion_ &&
+            !useBidiRequestStreams(*negotiatedVersion_);
+      // Setup frames are version-gated; allow before negotiation.
+      case FrameType::CLIENT_SETUP:
+      case FrameType::SERVER_SETUP:
+        return !negotiatedVersion_ || major < 17;
+      case FrameType::SETUP:
+        return negotiatedVersion_ && major >= 17;
+      // Removed in draft 18: replaced by per-stream RESET, by bidi
+      // request-stream semantics, or governed by QUIC bidi stream limits.
+      case FrameType::UNSUBSCRIBE:
+      case FrameType::FETCH_CANCEL:
       case FrameType::MAX_REQUEST_ID:
       case FrameType::REQUESTS_BLOCKED:
-        return !negotiatedVersion_ ||
-            getDraftMajorVersion(*negotiatedVersion_) < 18;
+      case FrameType::PUBLISH_NAMESPACE_DONE:
+      case FrameType::PUBLISH_NAMESPACE_CANCEL:
+        return negotiatedVersion_ &&
+            !useBidiRequestStreams(*negotiatedVersion_);
       case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
       case FrameType::SUBSCRIBE_NAMESPACE_OK:
       case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
@@ -163,7 +169,7 @@ class MoQControlCodec : public MoQCodec {
       // separate bidi stream, not the control stream.
       case FrameType::NAMESPACE:
       case FrameType::NAMESPACE_DONE:
-        return getDraftMajorVersion(*negotiatedVersion_) < 16;
+        return negotiatedVersion_ && major < 16;
       // Draft 18+ only, and never on the control stream. The renumbered
       // SUBSCRIBE_NAMESPACE wire type (0x50) replaces
       // LEGACY_SUBSCRIBE_NAMESPACE (0x11) in draft 18 and only ever appears on
