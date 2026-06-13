@@ -323,9 +323,11 @@ folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
   EXPECT_EQ(
       setup.params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
   EXPECT_EQ(setup.params.at(1).asUint64, initialMaxRequestID_);
-  EXPECT_EQ(
-      setup.params.at(2).key,
-      folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
+  if (!useBidiRequestStreams(getServerSelectedVersion())) {
+    EXPECT_EQ(
+        setup.params.at(2).key,
+        folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
+  }
   if (failServerSetup_) {
     return folly::makeTryWith(
         []() -> moxygen::Setup { throw std::runtime_error("failed"); });
@@ -336,9 +338,11 @@ folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID),
             initialMaxRequestID_});
-    ss.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    if (!useBidiRequestStreams(getServerSelectedVersion())) {
+      ss.params.insertParam(
+          SetupParameter{
+              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+    }
     return ss;
   }());
 }
@@ -353,15 +357,13 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   clientSession_->setServerMaxTokenCacheSizeGuess(1024);
 
   if (useUniControlStreams(getServerSelectedVersion())) {
-    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream.
+    // Auth token aliasing is disabled in this mode, so skip the cache size.
     moxygen::Setup serverSetupMsg;
     serverSetupMsg.params.insertParam(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID),
             initialMaxRequestID_});
-    serverSetupMsg.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
     serverSession_->sendSetup(std::move(serverSetupMsg));
   }
 
@@ -406,14 +408,12 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
   serverSession_->start();
 
   if (useUniControlStreams(getServerSelectedVersion())) {
-    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream.
+    // Auth token aliasing is disabled in this mode, so skip the cache size.
     moxygen::Setup serverSetupMsg;
     serverSetupMsg.params.insertParam(
         SetupParameter{
             folly::to_underlying(SetupKey::MAX_REQUEST_ID), maxRequestID});
-    serverSetupMsg.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
     serverSession_->sendSetup(std::move(serverSetupMsg));
   }
 

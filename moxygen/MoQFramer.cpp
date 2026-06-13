@@ -4040,6 +4040,12 @@ std::string MoQFrameWriter::encodeTokenValue(
 }
 
 bool includeSetupParam(uint64_t version, SetupKey key) {
+  // Draft 18+ delivers requests on independent bidi streams, so auth token
+  // aliasing (which relies on request ordering) is disabled. Strip the param.
+  if (key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE &&
+      useBidiRequestStreams(version)) {
+    return false;
+  }
   return key == SetupKey::MAX_REQUEST_ID || key == SetupKey::PATH ||
       key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE ||
       key == SetupKey::AUTHORIZATION_TOKEN;

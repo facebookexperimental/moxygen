@@ -108,9 +108,11 @@ bool isSupportedVersion(uint64_t version);
 // Returns true if the given version uses unidirectional control streams
 bool useUniControlStreams(uint64_t version);
 
-// In draft 18+, each request runs on its own bidi stream, so the QUIC bidi
-// stream limit governs request flow control. MAX_REQUEST_ID, REQUESTS_BLOCKED
-// and the MAX_REQUEST_ID setup parameter were removed in draft 18.
+// True if each request travels on its own bidi stream (draft >= 18). QUIC
+// bidi stream limits govern request flow control (MAX_REQUEST_ID /
+// REQUESTS_BLOCKED and the MAX_REQUEST_ID setup parameter were removed in
+// draft 18); also disables request-order-dependent encodings like auth
+// token aliasing.
 bool useBidiRequestStreams(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.

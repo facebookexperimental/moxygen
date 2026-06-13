@@ -687,7 +687,8 @@ class MoQSession : public Subscriber,
   // MUST NOT create any subscriptions
   static uint64_t getMaxRequestIDIfPresent(const SetupParameters& params);
   static uint64_t getMaxAuthTokenCacheSizeIfPresent(
-      const SetupParameters& params);
+      const SetupParameters& params,
+      uint64_t version);
   static std::optional<std::string> getMoQTImplementationIfPresent(
       const SetupParameters& params);
   void setPublisherPriorityFromParams(
