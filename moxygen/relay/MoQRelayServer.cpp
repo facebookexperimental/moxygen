@@ -12,6 +12,7 @@
 
 #include <folly/init/Init.h>
 #include <folly/io/async/AsyncSignalHandler.h>
+#include <folly/io/async/ScopedEventBaseThread.h>
 #include <signal.h>
 
 using namespace proxygen;
@@ -38,10 +39,15 @@ DEFINE_int32(
     3,
     "Maximum groups per track in cache");
 DEFINE_bool(
+    quic,
+    true,
+    "Listen on QUIC/WebTransport (UDP). May be combined with --qmux for "
+    "dual-stack.");
+DEFINE_bool(
     qmux,
     false,
-    "Listen on QMUX-on-TCP (TLS via Fizz is mandatory) instead of "
-    "QUIC/WebTransport.");
+    "Listen on QMUX-on-TCP (TLS via Fizz is mandatory). May be combined with "
+    "--quic for dual-stack.");
 
 namespace {
 using namespace moxygen;
@@ -80,13 +86,36 @@ using MoQRelayQmuxServer = RelayServerImpl<MoQQmuxServer>;
 
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
+  XLOG_IF(FATAL, !FLAGS_quic && !FLAGS_qmux)
+      << "At least one of --quic or --qmux must be enabled";
+
   auto relay = std::make_shared<MoQRelay>(
       FLAGS_max_cached_tracks, FLAGS_max_cached_groups_per_track);
 
   folly::EventBase evb;
   std::shared_ptr<MoQRelayQuicServer> quicServer;
   std::shared_ptr<MoQRelayQmuxServer> qmuxServer;
-  std::shared_ptr<MoQServerBase> server;
+  std::vector<std::shared_ptr<MoQServerBase>> servers;
+
+  if (FLAGS_quic) {
+    std::vector<std::string> alpns = {"h3"};
+    auto moqt = getMoqtProtocols(FLAGS_versions, true);
+    alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+    auto fizzContext = FLAGS_insecure
+        ? quic::samples::createFizzServerContextWithInsecureDefault(
+              alpns,
+              fizz::server::ClientAuthMode::None,
+              "" /* cert */,
+              "" /* key */)
+        : quic::samples::createFizzServerContext(
+              alpns,
+              fizz::server::ClientAuthMode::Optional,
+              FLAGS_cert,
+              FLAGS_key);
+    quicServer = std::make_shared<MoQRelayQuicServer>(
+        relay, std::move(fizzContext), FLAGS_endpoint);
+    servers.push_back(quicServer);
+  }
 
   if (FLAGS_qmux) {
     // QMUX runs straight on TCP+TLS — no WebTransport-over-HTTP/3, so the
@@ -108,47 +137,18 @@ int main(int argc, char* argv[]) {
         qmuxParamsFromTransportSettings(quic::TransportSettings{});
     qmuxServer = std::make_shared<MoQRelayQmuxServer>(
         relay, FLAGS_endpoint, std::move(fizzContext), std::move(config));
-    server = qmuxServer;
-  } else if (FLAGS_insecure) {
-    quicServer = std::make_shared<MoQRelayQuicServer>(
-        relay,
-        quic::samples::createFizzServerContextWithInsecureDefault(
-            []() {
-              std::vector<std::string> alpns = {"h3"};
-              auto moqt = getMoqtProtocols(FLAGS_versions, true);
-              alpns.insert(alpns.end(), moqt.begin(), moqt.end());
-              return alpns;
-            }(),
-            fizz::server::ClientAuthMode::None,
-            "" /* cert */,
-            "" /* key */),
-        FLAGS_endpoint);
-    server = quicServer;
-  } else {
-    quicServer = std::make_shared<MoQRelayQuicServer>(
-        relay,
-        quic::samples::createFizzServerContext(
-            []() {
-              std::vector<std::string> alpns = {"h3"};
-              auto moqt = getMoqtProtocols(FLAGS_versions, true);
-              alpns.insert(alpns.end(), moqt.begin(), moqt.end());
-              return alpns;
-            }(),
-            fizz::server::ClientAuthMode::Optional,
-            FLAGS_cert,
-            FLAGS_key),
-        FLAGS_endpoint);
-    server = quicServer;
+    servers.push_back(qmuxServer);
   }
 
+  // MoQRelay is single-threaded; share one worker EB across both stacks.
+  folly::ScopedEventBaseThread worker("MoQRelayWorker");
+  std::vector<folly::EventBase*> workerEvbs{worker.getEventBase()};
   folly::SocketAddress addr("::", FLAGS_port);
+  if (quicServer) {
+    quicServer->start(addr, workerEvbs);
+  }
   if (qmuxServer) {
-    // Run QMUX accept + sessions on the main evb so the signal handler and
-    // QMUX work share one thread — keeps the sample simple. Production
-    // callers should pass a real worker pool.
-    qmuxServer->start(addr, {&evb});
-  } else {
-    server->start(addr);
+    qmuxServer->start(addr, workerEvbs);
   }
 
   struct SigHandler : public folly::AsyncSignalHandler {
@@ -165,7 +165,9 @@ int main(int argc, char* argv[]) {
     std::function<void()> fn_;
   } sigHandler(&evb, [&] {
     XLOG(INFO) << "Caught signal, stopping relay server";
-    server->stop();
+    for (auto& server : servers) {
+      server->stop();
+    }
     evb.terminateLoopSoon();
   });
   evb.loopForever();

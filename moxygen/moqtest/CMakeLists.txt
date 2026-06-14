@@ -71,6 +71,7 @@ target_compile_options(
 target_link_libraries(
   moxygen_moq_test_server PUBLIC
   moqtest_utils
+  moxygen_moq_qmux_server
   moxygen_moq_server
   moxygen_moq_relay_session
   moxygen_moq_webtransport_client
@@ -103,6 +104,7 @@ target_link_libraries(
   moqtest_server PUBLIC
   moxygen_moq_test_server
   moxygen_mlog_file_mlogger
+  moxygen_qmux_utils
   Folly::folly_init_init
 )
 

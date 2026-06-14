@@ -42,7 +42,8 @@ class MoQQmuxServer : public MoQServerBase {
         qmuxParamsFromTransportSettings(quic::TransportSettings{})};
     milliseconds handshakeTimeout{kDefaultHandshakeTimeout};
     proxygen::qmux::QmuxSession::Config sessionConfig{};
-    size_t serverThreads{folly::available_concurrency()};
+    // Default to one worker.
+    size_t serverThreads{1};
   };
 
   MoQQmuxServer(

@@ -49,10 +49,16 @@ DEFINE_bool(
     "Use insecure verifier (skip certificate validation)");
 DEFINE_string(mlog_path, "", "Path to mlog file");
 DEFINE_bool(
+    quic,
+    true,
+    "Listen on QUIC/WebTransport (UDP). May be combined with --qmux for "
+    "dual-stack.");
+DEFINE_bool(
     qmux,
     false,
-    "Listen on QMUX-on-TCP (TLS via Fizz is mandatory) instead of "
-    "QUIC/WebTransport. Mutually exclusive with --quic_transport.");
+    "Listen on QMUX-on-TCP (TLS via Fizz is mandatory). May be combined with "
+    "--quic for dual-stack. --quic_transport still controls the relay-client "
+    "transport when --relay_url is set.");
 
 namespace {
 using namespace moxygen;
@@ -595,8 +601,8 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
 
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
-  XLOG_IF(FATAL, FLAGS_qmux && FLAGS_quic_transport)
-      << "--qmux and --quic_transport are mutually exclusive";
+  XLOG_IF(FATAL, !FLAGS_quic && !FLAGS_qmux)
+      << "At least one of --quic or --qmux must be enabled";
 
   // Parse mode
   DatePublisher::Mode mode;
@@ -625,7 +631,29 @@ int main(int argc, char* argv[]) {
   folly::EventBase evb;
   std::shared_ptr<MoQDateServer> quicServer;
   std::shared_ptr<MoQDateQmuxServer> qmuxServer;
-  std::shared_ptr<MoQServerBase> server;
+  std::vector<std::shared_ptr<MoQServerBase>> servers;
+
+  if (FLAGS_quic) {
+    if (FLAGS_insecure) {
+      quicServer = std::make_shared<MoQDateServer>(
+          publisher,
+          quic::samples::createFizzServerContextWithInsecureDefault(
+              []() {
+                std::vector<std::string> alpns = {"h3"};
+                auto moqt = getMoqtProtocols(FLAGS_versions, true);
+                alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+                return alpns;
+              }(),
+              fizz::server::ClientAuthMode::None,
+              "" /* cert */,
+              "" /* key */),
+          "/moq-date");
+    } else {
+      quicServer = std::make_shared<MoQDateServer>(
+          publisher, FLAGS_cert, FLAGS_key, "/moq-date");
+    }
+    servers.push_back(quicServer);
+  }
 
   if (FLAGS_qmux) {
     auto qmuxAlpns = getMoqtProtocols(FLAGS_versions, true);
@@ -645,49 +673,32 @@ int main(int argc, char* argv[]) {
         qmuxParamsFromTransportSettings(quic::TransportSettings{});
     qmuxServer = std::make_shared<MoQDateQmuxServer>(
         publisher, "/moq-date", std::move(fizzContext), std::move(config));
-    server = qmuxServer;
-  } else if (FLAGS_insecure) {
-    quicServer = std::make_shared<MoQDateServer>(
-        publisher,
-        quic::samples::createFizzServerContextWithInsecureDefault(
-            []() {
-              std::vector<std::string> alpns = {"h3"};
-              auto moqt = getMoqtProtocols(FLAGS_versions, true);
-              alpns.insert(alpns.end(), moqt.begin(), moqt.end());
-              return alpns;
-            }(),
-            fizz::server::ClientAuthMode::None,
-            "" /* cert */,
-            "" /* key */),
-        "/moq-date");
-    server = quicServer;
-  } else {
-    quicServer = std::make_shared<MoQDateServer>(
-        publisher, FLAGS_cert, FLAGS_key, "/moq-date");
-    server = quicServer;
+    servers.push_back(qmuxServer);
   }
 
-  if (loggerFactory) {
-    server->setMLoggerFactory(loggerFactory);
+  for (auto& server : servers) {
+    if (loggerFactory) {
+      server->setMLoggerFactory(loggerFactory);
+    }
   }
 
+  // DatePublisher state is single-threaded; share one worker EB across stacks.
+  folly::ScopedEventBaseThread worker("MoQDateWorker");
+  std::vector<folly::EventBase*> workerEvbs{worker.getEventBase()};
   folly::SocketAddress addr("::", FLAGS_port);
-  std::unique_ptr<folly::ScopedEventBaseThread> qmuxWorker;
-  if (qmuxServer) {
-    qmuxWorker = std::make_unique<folly::ScopedEventBaseThread>("MoQDateQmux");
-    qmuxServer->start(addr, {qmuxWorker->getEventBase()});
-  } else {
-    server->start(addr);
-    // QUIC-only API; the QMUX server has no post-start async init.
+  if (quicServer) {
+    quicServer->start(addr, workerEvbs);
     quicServer->waitUntilInitialized();
+  }
+  if (qmuxServer) {
+    qmuxServer->start(addr, workerEvbs);
   }
 
   // Create relay client if relay URL is specified
   std::unique_ptr<MoQRelayClient> relayClient;
   if (!FLAGS_relay_url.empty()) {
-    folly::EventBase* workerEvb = quicServer ? quicServer->getWorkerEvbs()[0]
-                                             : qmuxWorker->getEventBase();
-    relayClient = createRelayClient(workerEvb, publisher, loggerFactory);
+    relayClient =
+        createRelayClient(worker.getEventBase(), publisher, loggerFactory);
     if (!relayClient) {
       return 1;
     }
@@ -720,7 +731,9 @@ int main(int argc, char* argv[]) {
   });
 
   evb.loop();
-  server->stop();
+  for (auto& server : servers) {
+    server->stop();
+  }
   XLOG(DBG2) << "Exiting";
   return 0;
 }

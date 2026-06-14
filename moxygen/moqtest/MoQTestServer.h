@@ -10,6 +10,7 @@
 
 #include <folly/container/F14Map.h>
 #include "moxygen/MoQClient.h"
+#include "moxygen/MoQQmuxServer.h"
 #include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQServer.h"
 #include "moxygen/MoQWebTransportClient.h"
@@ -156,6 +157,34 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
   folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
       activeSubscriptions_;
   bool includeTimestampExtension_{false};
+};
+
+// QMUX-on-TCP variant of MoQTestServer. Holds a shared MoQTestServer purely
+// for its Publisher implementation (subscribe/fetch). The wrapped instance
+// does NOT need to also be started as a QUIC server — constructing it just
+// to use as a publisher is fine.
+class MoQTestQmuxServer : public MoQQmuxServer {
+ public:
+  MoQTestQmuxServer(
+      std::shared_ptr<MoQTestServer> publisher,
+      std::string endpoint,
+      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
+      Config config = {})
+      : MoQQmuxServer(
+            std::move(endpoint),
+            std::move(fizzContext),
+            std::move(config)),
+        publisher_(std::move(publisher)) {}
+
+  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
+    clientSession->setPublishHandler(publisher_);
+    if (auto logger = createLogger()) {
+      clientSession->setLogger(logger);
+    }
+  }
+
+ private:
+  std::shared_ptr<MoQTestServer> publisher_;
 };
 
 } // namespace moxygen
