@@ -8,6 +8,7 @@
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
 
+#include <cstdint>
 #include <utility>
 
 namespace {
@@ -797,13 +798,16 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseParams(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
-    size_t numParams,
+    std::optional<size_t> numParams,
     Parameters& params,
     std::vector<Parameter>& requestSpecificParams,
     ParamsType paramsType) const noexcept {
   uint64_t previousKey = 0;
 
-  for (auto i = 0u; i < numParams; i++) {
+  // numParams == std::nullopt means "consume options until the declared
+  // message length is exhausted" (draft-17+ SETUP has no Number-of-Options
+  // field on the wire).
+  for (auto i = 0u; numParams ? i < *numParams : length > 0; i++) {
     auto keyOrDelta = decodeVarint(cursor, length);
     if (!keyOrDelta) {
       XLOG(DBG4) << "parseParams: UNDERFLOW on key";
@@ -951,18 +955,24 @@ folly::Expected<Setup, ErrorCode> MoQFrameParser::parseClientSetup(
     serializationVersion = *version_;
   }
 
-  auto numParams = decodeVarint(cursor, length);
-  if (!numParams) {
-    XLOG(DBG4) << "parseClientSetup: UNDERFLOW on numParams";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft-17 removed the Number-of-Options field; options span the rest of
+  // the message length. Older drafts still carry an explicit count.
+  std::optional<size_t> numParams;
+  if (getDraftMajorVersion(serializationVersion) < 17) {
+    auto decoded = decodeVarint(cursor, length);
+    if (!decoded) {
+      XLOG(DBG4) << "parseClientSetup: UNDERFLOW on numParams";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= decoded->second;
+    numParams = decoded->first;
   }
-  length -= numParams->second;
   std::vector<Parameter> requestSpecificParams;
   auto res = parseParams(
       cursor,
       length,
       serializationVersion,
-      numParams->first,
+      numParams,
       clientSetup.params,
       requestSpecificParams,
       ParamsType::ClientSetup);
@@ -1003,18 +1013,24 @@ folly::Expected<Setup, ErrorCode> MoQFrameParser::parseServerSetup(
     serializationVersion = *version_;
   }
 
-  auto numParams = decodeVarint(cursor, length);
-  if (!numParams) {
-    XLOG(DBG4) << "parseServerSetup: UNDERFLOW on numParams";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft-17 removed the Number-of-Options field; options span the rest of
+  // the message length. Older drafts still carry an explicit count.
+  std::optional<size_t> numParams;
+  if (getDraftMajorVersion(serializationVersion) < 17) {
+    auto decoded = decodeVarint(cursor, length);
+    if (!decoded) {
+      XLOG(DBG4) << "parseServerSetup: UNDERFLOW on numParams";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= decoded->second;
+    numParams = decoded->first;
   }
-  length -= numParams->second;
   std::vector<Parameter> requestSpecificParams;
   auto res = parseParams(
       cursor,
       length,
       serializationVersion,
-      numParams->first,
+      numParams,
       serverSetup.params,
       requestSpecificParams,
       ParamsType::ServerSetup);
@@ -4096,7 +4112,11 @@ WriteResult writeSetup(
     filteredParams = sortParamsByKey(std::move(filteredParams));
   }
 
-  writer.writeVarint(writeBuf, filteredParams.size(), size, error);
+  // Draft-17 removed the Number-of-Options field; options span the rest of
+  // the message length. Older drafts still carry an explicit count.
+  if (getDraftMajorVersion(version) < 17) {
+    writer.writeVarint(writeBuf, filteredParams.size(), size, error);
+  }
 
   uint64_t previousKey = 0;
   for (const auto& param : filteredParams) {

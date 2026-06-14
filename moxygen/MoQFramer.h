@@ -495,11 +495,14 @@ class MoQFrameParser {
       uint64_t key,
       ParamsType paramsType) const noexcept;
 
+  // numParams == std::nullopt means "consume options until the declared
+  // message length is exhausted" (draft-17+ SETUP has no Number-of-Options
+  // field on the wire).
   folly::Expected<folly::Unit, ErrorCode> parseParams(
       folly::io::Cursor& cursor,
       size_t& length,
       uint64_t version,
-      size_t numParams,
+      std::optional<size_t> numParams,
       Parameters& params,
       std::vector<Parameter>& requestSpecificParams,
       ParamsType paramsType) const noexcept;
