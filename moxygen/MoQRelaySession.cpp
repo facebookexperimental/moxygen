@@ -628,7 +628,8 @@ MoQRelaySession::publishNamespace(
   moqFrameWriter_.writePublishNamespace(writeBuf, ann);
   auto sendResult = sendRequest(
       writeBuf,
-      {FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
+      FrameType::REQUEST_OK,
+      /*postTerminal=*/{FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
       ann.requestID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
@@ -1147,6 +1148,8 @@ MoQRelaySession::subscribeNamespace(
   }
   auto sendResult = sendRequest(
       buf,
+      FrameType::REQUEST_OK,
+      /*postTerminal=*/
       {FrameType::NAMESPACE,
        FrameType::NAMESPACE_DONE,
        FrameType::REQUEST_OK,
@@ -1442,7 +1445,8 @@ MoQRelaySession::subscribeTracks(SubscribeTracks subTracks) {
   }
   auto sendResult = sendRequest(
       buf,
-      {FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
+      FrameType::REQUEST_OK,
+      /*postTerminal=*/{FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
       subTracks.requestID,
       /*minBidiDraftVersion=*/18);
   if (sendResult.hasError()) {

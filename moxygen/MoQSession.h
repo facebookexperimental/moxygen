@@ -552,9 +552,14 @@ class MoQSession : public Subscriber,
   // stream. Returns the control (null on the control-stream path).
   // onPeerTermination fires on peer-initiated close after the terminal reply;
   // early close (before terminal) is handled by failPendingRequestOnEarlyClose.
+  // In draft 18+ every response stream's first frame MUST be a terminal: the
+  // caller's typed `okType` or `REQUEST_ERROR`. `postTerminal` lists any
+  // frames the peer may send after the terminal (e.g. PUBLISH_DONE on a
+  // SUBSCRIBE).
   folly::Expected<std::shared_ptr<BidiStreamControl>, std::string> sendRequest(
       folly::IOBufQueue& writeBuf,
-      const std::vector<FrameType>& allowedResponses,
+      FrameType okType,
+      std::vector<FrameType> postTerminal,
       RequestID requestID,
       uint64_t minBidiDraftVersion = 18,
       std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
@@ -735,8 +740,9 @@ class MoQSession : public Subscriber,
 
   std::unique_ptr<MoQControlCodec> makeBidiCodec(
       MoQControlCodec::ControlCallback* callback,
-      const std::vector<FrameType>& allowedFrames,
-      std::optional<RequestID> requestID = std::nullopt);
+      std::vector<FrameType> allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt,
+      std::optional<FrameType> okType = std::nullopt);
 
   // Core session state
   MoQControlCodec::Direction dir_;

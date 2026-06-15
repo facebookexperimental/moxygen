@@ -209,30 +209,71 @@ class MoQControlCodec : public MoQCodec {
 // Replaces MoQSubNsReceiverCodec.
 class MoQBidiStreamCodec : public MoQControlCodec {
  public:
+  // Request-side: `allowedFrames` lists every frame this stream accepts; no
+  // first-frame FrameType constraint (RequestID matching handled elsewhere).
+  // Response-side: pass `okType`. The codec admits okType + REQUEST_ERROR
+  // automatically, and requires the first frame to be one of them; entries
+  // in `allowedFrames` are treated as post-terminal followups.
+  explicit MoQBidiStreamCodec(
+      ControlCallback* callback,
+      std::vector<FrameType> allowedFrames,
+      std::optional<RequestID> requestID = std::nullopt,
+      std::optional<FrameType> okType = std::nullopt)
+      : MoQControlCodec(Direction::SERVER, callback),
+        allowedFrames_(std::move(allowedFrames)),
+        requestID_(requestID),
+        okType_(okType) {
+    if (okType_) {
+      allowedFrames_.push_back(*okType_);
+      allowedFrames_.push_back(FrameType::REQUEST_ERROR);
+    }
+    seenSetup_ = true;
+  }
+
   explicit MoQBidiStreamCodec(
       ControlCallback* callback,
       std::initializer_list<FrameType> allowedFrames,
-      std::optional<RequestID> requestID = std::nullopt)
-      : MoQControlCodec(Direction::SERVER, callback),
-        allowedFrames_(allowedFrames),
-        requestID_(requestID) {
-    seenSetup_ = true;
-  }
-
-  explicit MoQBidiStreamCodec(
-      ControlCallback* callback,
-      const std::vector<FrameType>& allowedFrames,
-      std::optional<RequestID> requestID = std::nullopt)
-      : MoQControlCodec(Direction::SERVER, callback),
-        allowedFrames_(allowedFrames),
-        requestID_(requestID) {
-    seenSetup_ = true;
-  }
+      std::optional<RequestID> requestID = std::nullopt,
+      std::optional<FrameType> okType = std::nullopt)
+      : MoQBidiStreamCodec(
+            callback,
+            std::vector<FrameType>(allowedFrames),
+            requestID,
+            okType) {}
 
  protected:
   bool checkFrameAllowed(FrameType f) override {
-    return std::find(allowedFrames_.begin(), allowedFrames_.end(), f) !=
-        allowedFrames_.end();
+    if (std::find(allowedFrames_.begin(), allowedFrames_.end(), f) ==
+        allowedFrames_.end()) {
+      return false;
+    }
+    if (!firstFrameSeen_) {
+      // Response-side: first frame on the stream MUST be the terminal reply
+      // (okType or REQUEST_ERROR).
+      if (okType_ && f != *okType_ && f != FrameType::REQUEST_ERROR) {
+        return false;
+      }
+    } else {
+      // Post-first-frame: no fresh request-initiating frame, and a non-
+      // REQUEST_OK okType_ (e.g. SUBSCRIBE_OK) may only appear once.
+      // TODO: gate post-terminal REQUEST_OK/REQUEST_ERROR on sender-side queue.
+      if (isRequestInitiating(f)) {
+        return false;
+      }
+      if (okType_ && *okType_ != FrameType::REQUEST_OK && f == *okType_) {
+        return false;
+      }
+    }
+    firstFrameSeen_ = true;
+    return true;
+  }
+
+  static bool isRequestInitiating(FrameType f) {
+    return f == FrameType::SUBSCRIBE || f == FrameType::FETCH ||
+        f == FrameType::PUBLISH || f == FrameType::TRACK_STATUS ||
+        f == FrameType::PUBLISH_NAMESPACE ||
+        f == FrameType::LEGACY_SUBSCRIBE_NAMESPACE ||
+        f == FrameType::SUBSCRIBE_NAMESPACE || f == FrameType::SUBSCRIBE_TRACKS;
   }
 
   std::optional<RequestID> getStreamRequestID() const override {
@@ -242,6 +283,8 @@ class MoQBidiStreamCodec : public MoQControlCodec {
  private:
   std::vector<FrameType> allowedFrames_;
   std::optional<RequestID> requestID_;
+  std::optional<FrameType> okType_;
+  bool firstFrameSeen_{false};
 };
 
 using MoQSubNsReceiverCodec = MoQBidiStreamCodec;

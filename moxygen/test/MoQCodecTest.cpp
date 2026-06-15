@@ -1289,6 +1289,141 @@ TEST(MoQCodecTest, BidiCodecRejectsV18WireWhenOnlyLegacyListed) {
   bidiCodec.onIngress(buf.move(), false);
 }
 
+// On a SUBSCRIBE response stream the first frame MUST be a terminal reply
+// (SUBSCRIBE_OK or REQUEST_ERROR). A spec-violating peer that leads with
+// PUBLISH_DONE (a valid post-terminal frame, but not first) must be rejected
+// with PROTOCOL_VIOLATION.
+TEST(MoQCodecTest, BidiCodecRejectsPostTerminalAsFirstFrameV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer
+                  .writePublishDone(
+                      buf,
+                      PublishDone{
+                          RequestID(0),
+                          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+                          /*streamCount=*/0,
+                          ""})
+                  .hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback,
+      /*allowedFrames=*/{FrameType::PUBLISH_DONE},
+      /*requestID=*/std::nullopt,
+      /*okType=*/FrameType::SUBSCRIBE_OK);
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  bidiCodec.onIngress(buf.move(), false);
+}
+
+// Once a request-side bidi codec has accepted its first frame, no further
+// request-initiating frame may appear on the same stream (each request lives
+// on its own bidi). A second SUBSCRIBE here must trip PROTOCOL_VIOLATION even
+// though SUBSCRIBE is in the allow-list (it was the legal first frame).
+TEST(MoQCodecTest, BidiCodecRejectsDuplicateRequestOnSameStreamV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto sub = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"hello"}), "world"}),
+      255,
+      GroupOrder::Default,
+      true,
+      LocationType::LargestObject,
+      std::nullopt,
+      0,
+      {});
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, sub).hasValue());
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, sub).hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback, {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  EXPECT_CALL(callback, onFrame(FrameType::SUBSCRIBE));
+  EXPECT_CALL(callback, onSubscribe(testing::_));
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  bidiCodec.onIngress(buf.move(), false);
+}
+
+// Post-terminal OK semantics on draft-18 bidi response streams. A REQUEST_OK
+// ack of a follow-up REQUEST_UPDATE must pass on both REQUEST_OK-typed and
+// SUBSCRIBE_OK-typed streams; a repeated typed terminal (SUBSCRIBE_OK twice)
+// must trip PROTOCOL_VIOLATION.
+TEST(MoQCodecTest, BidiCodecPostTerminalOkV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  auto subOkBuf = [&] {
+    folly::IOBufQueue q{folly::IOBufQueue::cacheChainLength()};
+    SubscribeOk subOk;
+    subOk.requestID = RequestID(1);
+    subOk.trackAlias = TrackAlias(1);
+    CHECK(writer.writeSubscribeOk(q, subOk).hasValue());
+    return q.move();
+  };
+  auto reqOkBuf = [&] {
+    folly::IOBufQueue q{folly::IOBufQueue::cacheChainLength()};
+    RequestOk ok;
+    ok.requestID = RequestID(1);
+    CHECK(writer.writeRequestOk(q, ok, FrameType::REQUEST_OK).hasValue());
+    return q.move();
+  };
+
+  auto run = [&](FrameType okType,
+                 std::vector<FrameType> allowedFrames,
+                 std::vector<std::unique_ptr<folly::IOBuf>> frames,
+                 bool expectError) {
+    testing::NiceMock<MockMoQCodecCallback> callback;
+    MoQBidiStreamCodec codec(
+        &callback, std::move(allowedFrames), RequestID(1), okType);
+    codec.initializeVersion(kVersionDraft18);
+    EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION))
+        .Times(expectError ? 1 : 0);
+    folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+    for (auto& f : frames) {
+      buf.append(std::move(f));
+    }
+    codec.onIngress(buf.move(), false);
+  };
+
+  // REQUEST_OK, REQUEST_OK on a REQUEST_OK-typed stream (e.g. publish-ns):
+  // second OK is the update-ack — accepted.
+  {
+    std::vector<std::unique_ptr<folly::IOBuf>> seq;
+    seq.push_back(reqOkBuf());
+    seq.push_back(reqOkBuf());
+    run(FrameType::REQUEST_OK,
+        {FrameType::REQUEST_UPDATE},
+        std::move(seq),
+        /*expectError=*/false);
+  }
+  // SUBSCRIBE_OK, REQUEST_OK on a SUBSCRIBE-typed stream: REQUEST_OK is the
+  // update-ack — accepted.
+  {
+    std::vector<std::unique_ptr<folly::IOBuf>> seq;
+    seq.push_back(subOkBuf());
+    seq.push_back(reqOkBuf());
+    run(FrameType::SUBSCRIBE_OK,
+        {FrameType::REQUEST_UPDATE, FrameType::REQUEST_OK},
+        std::move(seq),
+        /*expectError=*/false);
+  }
+  // SUBSCRIBE_OK, SUBSCRIBE_OK: typed terminal repeated — rejected.
+  {
+    std::vector<std::unique_ptr<folly::IOBuf>> seq;
+    seq.push_back(subOkBuf());
+    seq.push_back(subOkBuf());
+    run(FrameType::SUBSCRIBE_OK,
+        {FrameType::REQUEST_UPDATE},
+        std::move(seq),
+        /*expectError=*/true);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
