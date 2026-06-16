@@ -9,6 +9,7 @@
 #include <fizz/client/AsyncFizzClient.h>
 #include <fizz/client/FizzClientContext.h>
 #include <folly/coro/Baton.h>
+#include <folly/coro/CurrentExecutor.h>
 #include <folly/coro/Task.h>
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/coro/Transport.h>
@@ -55,6 +56,48 @@ class FizzHandshakeCb
   folly::exception_wrapper exception;
 };
 
+folly::coro::Task<folly::AsyncSocket::UniquePtr> connectTcp(
+    folly::EventBase* evb,
+    const folly::SocketAddress& addr,
+    std::chrono::milliseconds connectTimeout) {
+  folly::AsyncSocket::UniquePtr asyncSocket(folly::AsyncSocket::newSocket(evb));
+  TcpConnectCb tcpCb;
+  asyncSocket->connect(&tcpCb, addr, static_cast<int>(connectTimeout.count()));
+  co_await tcpCb.baton;
+  if (tcpCb.exception) {
+    co_yield folly::coro::co_error(*tcpCb.exception);
+  }
+  co_return std::move(asyncSocket);
+}
+
+folly::coro::Task<fizz::client::AsyncFizzClient::UniquePtr> fizzHandshake(
+    folly::AsyncSocket::UniquePtr asyncSocket,
+    std::shared_ptr<fizz::CertificateVerifier> verifier,
+    std::string host,
+    const std::vector<std::string>& alpns,
+    std::chrono::milliseconds fizzTimeout) {
+  auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
+  fizzContext->setSupportedAlpns(alpns);
+  fizz::client::AsyncFizzClient::UniquePtr fizzClient(
+      new fizz::client::AsyncFizzClient(
+          folly::AsyncTransportWrapper::UniquePtr(std::move(asyncSocket)),
+          std::move(fizzContext)));
+
+  FizzHandshakeCb fizzCb;
+  fizzClient->connect(
+      &fizzCb,
+      std::move(verifier),
+      /*sni=*/folly::Optional<std::string>(host),
+      /*pskIdentity=*/host,
+      /*echConfigs=*/folly::none,
+      fizzTimeout);
+  co_await fizzCb.baton;
+  if (fizzCb.exception) {
+    co_yield folly::coro::co_error(std::move(fizzCb.exception));
+  }
+  co_return std::move(fizzClient);
+}
+
 } // namespace
 
 MoQQmuxClient::MoQQmuxClient(
@@ -87,6 +130,7 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
     std::shared_ptr<Subscriber> subscribeHandler,
     const quic::TransportSettings& transportSettings,
     const std::vector<std::string>& alpns) {
+  auto executor = co_await folly::coro::co_current_executor;
   auto* evb =
       exec_->getTypedExecutor<MoQFollyExecutorImpl>()->getBackingEventBase();
   folly::SocketAddress addr(
@@ -100,39 +144,21 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
   // AsyncFizzClient, then wrap the encrypted AsyncTransport in coro::Transport.
   // QmuxConnector is transport-agnostic and sees only the encrypted stream.
 
-  // Step 1: TCP connect.
-  folly::AsyncSocket::UniquePtr asyncSocket(folly::AsyncSocket::newSocket(evb));
-  TcpConnectCb tcpCb;
-  asyncSocket->connect(&tcpCb, addr, static_cast<int>(connectTimeout.count()));
-  co_await tcpCb.baton;
-  if (tcpCb.exception) {
-    co_yield folly::coro::co_error(*tcpCb.exception);
-  }
+  auto asyncSocket = co_await folly::coro::co_withExecutor(
+      executor, connectTcp(evb, addr, connectTimeout));
   auto tcpElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - connectStart);
   auto fizzTimeout = connectTimeout > tcpElapsed ? connectTimeout - tcpElapsed
                                                  : std::chrono::milliseconds(0);
 
-  // Step 2: Fizz handshake on the connected socket.
-  auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
-  fizzContext->setSupportedAlpns(alpns);
-  fizz::client::AsyncFizzClient::UniquePtr fizzClient(
-      new fizz::client::AsyncFizzClient(
-          folly::AsyncTransportWrapper::UniquePtr(std::move(asyncSocket)),
-          std::move(fizzContext)));
-  FizzHandshakeCb fizzCb;
-  fizzClient->connect(
-      &fizzCb,
-      verifier_,
-      /*sni=*/folly::Optional<std::string>(url_.getHost()),
-      /*pskIdentity=*/url_.getHost(),
-      /*echConfigs=*/folly::none,
-      fizzTimeout);
-  co_await fizzCb.baton;
-  if (fizzCb.exception) {
-    co_yield folly::coro::co_error(std::move(fizzCb.exception));
-  }
-
+  auto fizzClient = co_await folly::coro::co_withExecutor(
+      executor,
+      fizzHandshake(
+          std::move(asyncSocket),
+          verifier_,
+          url_.getHost(),
+          alpns,
+          fizzTimeout));
   if (auto stdAlpn = fizzClient->getApplicationProtocol(); !stdAlpn.empty()) {
     negotiatedProtocol_ = std::move(stdAlpn);
   }
@@ -149,12 +175,14 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
 
   // Hand off to QmuxConnector, which writes our QX_TRANSPORT_PARAMETERS,
   // awaits the peer's, and returns a fully-formed QmuxSession ready to start.
-  qmuxSession_ = co_await proxygen::qmux::QmuxConnector::connect(
-      evb,
-      proxygen::qmux::WtDir::Client,
-      qmuxParamsFromTransportSettings(transportSettings),
-      std::move(transport),
-      qmuxConnectTimeout);
+  qmuxSession_ = co_await folly::coro::co_withExecutor(
+      executor,
+      proxygen::qmux::QmuxConnector::connect(
+          evb,
+          proxygen::qmux::WtDir::Client,
+          qmuxParamsFromTransportSettings(transportSettings),
+          std::move(transport),
+          qmuxConnectTimeout));
   qmuxSession_->start(qmuxSession_);
 
   transportConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -166,7 +194,7 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
       std::move(publishHandler),
       std::move(subscribeHandler));
   qmuxSession_->setHandler(moqSession_.get());
-  co_await awaitSetupComplete();
+  co_await folly::coro::co_withExecutor(executor, awaitSetupComplete());
 }
 
 folly::AsyncTransport* MoQQmuxClient::getUnderlyingTransport() const {
