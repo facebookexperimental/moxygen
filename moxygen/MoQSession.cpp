@@ -1497,8 +1497,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
       groupID,
       subgroupID,
       pubPriority,
-      SubgroupIDFormat::Present,
-      true,
+      options.subgroupIDFormat,
+      options.includeExtensions,
       options);
 }
 
@@ -3151,6 +3151,8 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     TrackConsumer::BeginSubgroupOptions beginOptions;
     beginOptions.containsLastInGroup = options.hasEndOfGroup;
     beginOptions.beginsWithFirstObject = options.beginsWithFirstObject;
+    beginOptions.subgroupIDFormat = options.subgroupIDFormat;
+    beginOptions.includeExtensions = options.hasExtensions;
     auto res = callback->beginSubgroup(
         group, subgroup, effectivePriority, beginOptions);
     if (res.hasValue()) {

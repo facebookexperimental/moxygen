@@ -36,6 +36,8 @@ class DeliveryCallback {
 struct BeginSubgroupOptions {
   bool containsLastInGroup{false};
   bool beginsWithFirstObject{true};
+  SubgroupIDFormat subgroupIDFormat{SubgroupIDFormat::Present};
+  bool includeExtensions{true};
 };
 
 // MoQ Consumers

@@ -490,10 +490,14 @@ class RecordingTrackConsumer : public TrackConsumer {
 
 auto matchesBeginSubgroupOptions(
     bool containsLastInGroup,
-    bool beginsWithFirstObject) {
+    bool beginsWithFirstObject,
+    SubgroupIDFormat subgroupIDFormat = SubgroupIDFormat::Present,
+    bool includeExtensions = true) {
   return Truly([=](const TrackConsumer::BeginSubgroupOptions& options) {
     return options.containsLastInGroup == containsLastInGroup &&
-        options.beginsWithFirstObject == beginsWithFirstObject;
+        options.beginsWithFirstObject == beginsWithFirstObject &&
+        options.subgroupIDFormat == subgroupIDFormat &&
+        options.includeExtensions == includeExtensions;
   });
 }
 
@@ -2250,14 +2254,16 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
           _,
           matchesBeginSubgroupOptions(
               /*containsLastInGroup=*/true,
-              /*beginsWithFirstObject=*/true)))
+              /*beginsWithFirstObject=*/true,
+              /*subgroupIDFormat=*/SubgroupIDFormat::Zero,
+              /*includeExtensions=*/false)))
       .WillOnce(Return(
           folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
                   earlySubgroupConsumer)));
 
   // Late subscriber must also see containsLastInGroup=true (not the false
-  // default)
+  // default), plus the publisher-selected wire-format variant.
   auto lateSubgroupConsumer = createMockSubgroupConsumer();
   EXPECT_CALL(
       *lateConsumer,
@@ -2267,7 +2273,9 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
           _,
           matchesBeginSubgroupOptions(
               /*containsLastInGroup=*/true,
-              /*beginsWithFirstObject=*/false)))
+              /*beginsWithFirstObject=*/false,
+              /*subgroupIDFormat=*/SubgroupIDFormat::Zero,
+              /*includeExtensions=*/false)))
       .WillOnce(Return(
           folly::
               makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
@@ -2277,9 +2285,13 @@ TEST_F(MoQRelayTest, ForwarderLateJoiner_ContainsLastInGroupPropagated) {
   subscribeToTrack(
       earlySubscriber, kTestTrackName, earlyConsumer, RequestID(1));
 
-  // Publisher opens subgroup with containsLastInGroup=true
+  // Publisher opens subgroup with containsLastInGroup=true and a non-default
+  // wire-format variant (Zero subgroup id, no extensions). The relay must
+  // forward all of these to downstream subscribers, not its own defaults.
   TrackConsumer::BeginSubgroupOptions beginOptions;
   beginOptions.containsLastInGroup = true;
+  beginOptions.subgroupIDFormat = SubgroupIDFormat::Zero;
+  beginOptions.includeExtensions = false;
   auto sgRes = publishConsumer->beginSubgroup(0, 0, 0, beginOptions);
   ASSERT_TRUE(sgRes.hasValue());
   auto sg = *sgRes;

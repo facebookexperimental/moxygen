@@ -188,6 +188,47 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, SubgroupWireFormatHintsRoundTrip) {
+  // Publisher selects the SubgroupID::Zero + no-extensions stream variant;
+  // the subscribe-side BeginSubgroupOptions must reflect that variant rather
+  // than the historical Present + extensions defaults.
+  co_await setupMoQSession();
+  expectSubscribe(
+      [this](auto sub, auto pub) -> TaskSubscribeResult {
+        eventBase_.add([pub, sub] {
+          TrackConsumer::BeginSubgroupOptions options;
+          options.subgroupIDFormat = SubgroupIDFormat::Zero;
+          options.includeExtensions = false;
+          auto sgp = pub->beginSubgroup(0, 0, 0, options).value();
+          sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
+        co_return makeSubscribeOkResult(sub);
+      },
+      MoQControlCodec::Direction::CLIENT);
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    const TrackConsumer::BeginSubgroupOptions& opts) {
+        EXPECT_EQ(opts.subgroupIDFormat, SubgroupIDFormat::Zero);
+        EXPECT_FALSE(opts.includeExtensions);
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+  EXPECT_CALL(*sg, object(0, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+
+  expectPublishDone(MoQControlCodec::Direction::SERVER);
+  auto res = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, MixSubgroupsAndDatagrams) {
   // Test that subgroups and datagrams can be mixed on the same track
   co_await setupMoQSession();
