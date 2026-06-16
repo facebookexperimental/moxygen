@@ -169,6 +169,10 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
   co_await awaitSetupComplete();
 }
 
+folly::AsyncTransport* MoQQmuxClient::getUnderlyingTransport() const {
+  return qmuxSession_ ? qmuxSession_->getUnderlyingTransport() : nullptr;
+}
+
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQQmuxClient::connectQuic(
     folly::SocketAddress /*connectAddr*/,

@@ -10,6 +10,10 @@
 #include <proxygen/lib/transport/qmux/QmuxSession.h>
 #include <moxygen/MoQClientBase.h>
 
+namespace folly {
+class AsyncTransport;
+}
+
 namespace moxygen {
 
 // MoQClient that runs the MoQ session over a QMUX-on-TCP transport instead of
@@ -42,6 +46,11 @@ class MoQQmuxClient : public MoQClientBase {
       std::shared_ptr<Subscriber> subscribeHandler,
       const quic::TransportSettings& transportSettings,
       const std::vector<std::string>& alpns = {}) override;
+
+  // Returns the underlying byte-stream transport (Fizz-over-TCP) carrying the
+  // QMUX session, or nullptr before setup completes / after teardown. Used to
+  // surface TCP-level transport stats; the transport is owned by the session.
+  folly::AsyncTransport* getUnderlyingTransport() const;
 
  protected:
   // QMUX has no QUIC connection. The base class uses connectQuic() only from
