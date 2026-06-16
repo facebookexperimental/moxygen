@@ -23,19 +23,17 @@ class MoQClient : public MoQClientBase {
   [[nodiscard]] quic::
       Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>
       getConnectionFlowControl() const {
-    auto quicSocket = getActiveQuicSocket();
-    if (!quicSocket) {
-      return quic::make_unexpected(quic::LocalErrorCode::CONNECTION_CLOSED);
+    if (const auto* quicSocket = getQuicSocket()) {
+      return quicSocket->getConnectionFlowControl();
     }
-    return quicSocket->getConnectionFlowControl();
+    return quic::make_unexpected(quic::LocalErrorCode::CONNECTION_CLOSED);
   }
 
   [[nodiscard]] std::optional<quic::TransportInfo> getTransportInfo() const {
-    auto quicSocket = getActiveQuicSocket();
-    if (!quicSocket) {
-      return std::nullopt;
+    if (const auto* quicSocket = getQuicSocket()) {
+      return quicSocket->getTransportInfo();
     }
-    return quicSocket->getTransportInfo();
+    return std::nullopt;
   }
 
   MoQClient(
@@ -56,15 +54,6 @@ class MoQClient : public MoQClientBase {
       std::shared_ptr<fizz::CertificateVerifier> verifier,
       const std::vector<std::string>& alpns,
       const quic::TransportSettings& transportSettings) override;
-
- private:
-  [[nodiscard]] std::shared_ptr<const quic::QuicSocket> getActiveQuicSocket()
-      const {
-    if (!quicWebTransport_ || !moqSession_ || moqSession_->isClosed()) {
-      return nullptr;
-    }
-    return quicWebTransport_->getQuicSocket();
-  }
 };
 
 } // namespace moxygen

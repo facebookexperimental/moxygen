@@ -61,7 +61,7 @@ folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
   }
 
   // Make WebTransport object
-  quicSocket_ = quicClient.get();
+  quicSocket_ = quicClient;
   quicWebTransport_ =
       std::make_shared<proxygen::QuicWebTransport>(std::move(quicClient));
   auto* wt = quicWebTransport_.get();
@@ -86,10 +86,9 @@ folly::coro::Task<Setup> MoQClientBase::awaitSetupComplete() {
     co_yield folly::coro::co_error(result.exception());
   }
 
-  if (quicSocket_) {
-    auto transportInfo = quicSocket_->getTransportInfo();
+  if (const auto* qsock = getQuicSocket()) {
     XLOG(DBG1) << "MoQ setup complete, usedZeroRtt="
-               << transportInfo.usedZeroRtt;
+               << qsock->getTransportInfo().usedZeroRtt;
   }
 
   // Update early data handler with server's params for future 0-RTT

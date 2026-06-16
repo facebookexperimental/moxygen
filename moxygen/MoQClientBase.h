@@ -137,10 +137,16 @@ class MoQClientBase {
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
   std::shared_ptr<quic::QuicPskCache> pskCache_;
   MoQEarlyDataHandler* earlyDataHandler_{nullptr};
-  // Non-owning; owned by quicWebTransport_. Used only for post-setup logging.
-  quic::QuicClientTransport* quicSocket_{nullptr};
   std::chrono::milliseconds transportConnectTime_{0};
   std::chrono::milliseconds moqHandshakeTime_{0};
+
+  const quic::QuicSocket* getQuicSocket() const {
+    return quicSocket_.lock().get();
+  }
+
+ private:
+  // temporary, remove weak_ptr when migration to QuicWtSession is complete
+  std::weak_ptr<const quic::QuicClientTransport> quicSocket_;
 };
 
 } // namespace moxygen
