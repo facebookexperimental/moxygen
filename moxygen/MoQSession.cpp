@@ -2797,6 +2797,18 @@ void MoQSession::BidiRequestCallback::onRequestUpdate(
   session_->onRequestUpdate(std::move(requestUpdate));
 }
 
+void MoQSession::BidiRequestCallback::onRequestOk(
+    RequestOk requestOk,
+    FrameType frameType) {
+  session_->onRequestOk(std::move(requestOk), frameType);
+}
+
+void MoQSession::BidiRequestCallback::onRequestError(
+    RequestError requestError,
+    FrameType frameType) {
+  session_->onRequestError(std::move(requestError), frameType);
+}
+
 bool MoQSession::BidiRequestCallback::handleFirstFrame(RequestID reqId) {
   if (requestID_) {
     XLOG(ERR) << "Received duplicate request on bidi stream";
@@ -2829,6 +2841,10 @@ void MoQSession::BidiRequestCallback::onPublish(PublishRequest pub) {
   if (handleFirstFrame(pub.requestID)) {
     session_->onPublishImpl(std::move(pub), replyContext_, control_);
   }
+}
+
+void MoQSession::BidiRequestCallback::onPublishDone(PublishDone publishDone) {
+  session_->onPublishDone(std::move(publishDone));
 }
 
 void MoQSession::BidiRequestCallback::onPublishNamespace(
@@ -5206,7 +5222,9 @@ Subscriber::PublishResult MoQSession::publish(
       writeBuf,
       FrameType::REQUEST_OK,
       /*postTerminal=*/
-      {FrameType::REQUEST_UPDATE, FrameType::REQUEST_ERROR},
+      {FrameType::REQUEST_UPDATE,
+       FrameType::REQUEST_OK,
+       FrameType::REQUEST_ERROR},
       pub.requestID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
@@ -6210,7 +6228,12 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
             [this](RequestID id) { onFetchCancel(FetchCancel{id}); }};
       case FrameType::PUBLISH:
         return BidiStreamConfig{
-            {FrameType::PUBLISH, FrameType::REQUEST_UPDATE}, nullptr};
+            {FrameType::PUBLISH,
+             FrameType::REQUEST_UPDATE,
+             FrameType::PUBLISH_DONE,
+             FrameType::REQUEST_OK,
+             FrameType::REQUEST_ERROR},
+            nullptr};
       case FrameType::PUBLISH_NAMESPACE:
         // Publisher (sender) closes the stream (FIN or RST) to withdraw
         // the announce — both signal end-of-PUBLISH_NAMESPACE.
@@ -6324,6 +6347,14 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
       auto* cbPtr = cb.get();
       auto mergedToken = folly::cancellation_token_merge(
           cancellationSource_.getToken(), control->getReadCancelToken());
+      // FIFO-correlate post-terminal REQUEST_OK/ERROR for REQUEST_UPDATEs
+      // this end sends (e.g. PUBLISH bidi).
+      auto codec = makeBidiCodec(
+          cbPtr,
+          config->allowedFrames,
+          /*requestID=*/std::nullopt,
+          /*okType=*/std::nullopt,
+          &control->responseIDQueue());
       co_withExecutor(
           exec_.get(),
           co_withCancellation(
@@ -6331,7 +6362,7 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
               controlReadLoop(
                   bh.readHandle,
                   std::move(accumulatedData),
-                  makeBidiCodec(cbPtr, config->allowedFrames),
+                  std::move(codec),
                   std::move(cb),
                   std::move(control))))
           .start();

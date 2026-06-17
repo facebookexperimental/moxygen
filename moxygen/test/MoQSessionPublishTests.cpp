@@ -523,6 +523,72 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
   }
 }
 
+// PUBLISH requestUpdate round-trip with assertion on the REQUEST_OK reply
+// (PublishThenSubscribeUpdate fires the update but never awaits the result).
+CO_TEST_P_X(MoQSessionTest, PublishRequestUpdateRoundTrip) {
+  co_await publishRequestUpdateRoundTrip(
+      "REQUEST_UPDATE round-trip should produce REQUEST_OK");
+}
+
+CO_TEST_P_X(Draft18Test, PublishRequestUpdateRoundTrip) {
+  co_await publishRequestUpdateRoundTrip(
+      "REQUEST_UPDATE round-trip should produce REQUEST_OK on PUBLISH bidi");
+}
+
+CO_TEST_P_X(Draft18Test, PublishBidiForwardsPublishDone) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100},
+      true,
+      {}, // extensions
+  };
+  folly::coro::Baton publishDoneReceived;
+
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto result = makePublishOkResult(actualPub, /*expectDone=*/false);
+            auto consumer =
+                std::static_pointer_cast<MockTrackConsumer>(result->consumer);
+            EXPECT_CALL(*consumer, publishDone(_)).WillOnce([&](PublishDone) {
+              publishDoneReceived.post();
+              return folly::unit;
+            });
+            return result;
+          });
+
+  auto publishResult =
+      clientSession_->publish(std::move(pub), makePublishHandle());
+  EXPECT_TRUE(publishResult.hasValue());
+  if (!publishResult.hasValue()) {
+    co_return;
+  }
+
+  auto publish = std::move(publishResult.value());
+  auto replyRes = co_await std::move(publish.reply);
+  EXPECT_TRUE(replyRes.hasValue());
+  if (!replyRes.hasValue()) {
+    co_return;
+  }
+
+  auto doneResult = publish.consumer->publishDone(
+      getTrackEndedPublishDone(replyRes->requestID));
+  EXPECT_TRUE(doneResult.hasValue());
+  if (!doneResult.hasValue()) {
+    co_return;
+  }
+  co_await publishDoneReceived;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

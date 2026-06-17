@@ -242,7 +242,8 @@ class MoQBidiStreamCodec : public MoQControlCodec {
       : MoQControlCodec(Direction::SERVER, callback),
         allowedFrames_(std::move(allowedFrames)),
         streamRequestID_(requestID),
-        okType_(okType) {
+        okType_(okType),
+        primaryResponseIDConsumed_(!okType_) {
     if (okType_) {
       allowedFrames_.push_back(*okType_);
       allowedFrames_.push_back(FrameType::REQUEST_ERROR);

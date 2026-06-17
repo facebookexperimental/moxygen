@@ -520,9 +520,13 @@ class MoQSession : public Subscriber,
 
     void onConnectionError(ErrorCode error) override;
     void onRequestUpdate(RequestUpdate requestUpdate) override;
+    void onRequestOk(RequestOk requestOk, FrameType frameType) override;
+    void onRequestError(RequestError requestError, FrameType frameType)
+        override;
     void onSubscribe(SubscribeRequest sub) override;
     void onFetch(Fetch fetch) override;
     void onPublish(PublishRequest pub) override;
+    void onPublishDone(PublishDone publishDone) override;
     void onPublishNamespace(PublishNamespace pubNs) override;
     void onTrackStatus(TrackStatus ts) override;
     void onSubscribeNamespace(SubscribeNamespace subNs) override;

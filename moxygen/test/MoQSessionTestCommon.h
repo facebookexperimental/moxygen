@@ -26,6 +26,8 @@
 #include <moxygen/test/TestUtils.h>
 #include "moxygen/MoQRelaySession.h"
 
+#include <string_view>
+
 namespace moxygen { namespace test {
 
 // Constants
@@ -173,6 +175,12 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   virtual folly::coro::Task<void> setupMoQSession();
   virtual folly::coro::Task<void> setupMoQSessionForPublish(
       uint64_t maxRequestID = 10);
+
+  // Shared body for the PUBLISH REQUEST_UPDATE round-trip tests on both
+  // MoQSessionTest and Draft18Test. okFailureMsg is logged if the REQUEST_OK
+  // reply to the requestUpdate is missing.
+  folly::coro::Task<void> publishRequestUpdateRoundTrip(
+      std::string_view okFailureMsg);
 
   folly::DrivableExecutor* getExecutor();
 

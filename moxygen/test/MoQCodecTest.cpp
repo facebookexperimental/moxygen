@@ -1423,6 +1423,53 @@ TEST(MoQCodecTest, BidiCodecSetsExistingRequestIdOnRequestUpdateV18) {
   bidiCodec.onIngress(buf.move(), false);
 }
 
+TEST(MoQCodecTest, BidiRequestSideRequestOkUsesPendingUpdateIdV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+
+  PublishRequest pub;
+  pub.requestID = RequestID(0);
+  pub.fullTrackName = FullTrackName({TrackNamespace({"hello"}), "world"});
+  pub.trackAlias = TrackAlias(100);
+  pub.groupOrder = GroupOrder::Default;
+  pub.largest = std::nullopt;
+  pub.forward = true;
+  ASSERT_TRUE(writer.writePublish(buf, pub).hasValue());
+
+  RequestOk updateOk;
+  updateOk.requestID = RequestID(999);
+  ASSERT_TRUE(
+      writer.writeRequestOk(buf, updateOk, FrameType::REQUEST_OK).hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback,
+      {FrameType::PUBLISH,
+       FrameType::REQUEST_UPDATE,
+       FrameType::REQUEST_OK,
+       FrameType::REQUEST_ERROR});
+  bidiCodec.initializeVersion(kVersionDraft18);
+  std::deque<RequestID> responseIDQueue{RequestID(2)};
+  bidiCodec.setResponseIDQueue(&responseIDQueue);
+
+  testing::InSequence seq;
+  EXPECT_CALL(callback, onFrame(FrameType::PUBLISH));
+  EXPECT_CALL(callback, onPublish(testing::_))
+      .WillOnce(testing::Invoke([](PublishRequest actual) {
+        EXPECT_EQ(actual.requestID, RequestID(0));
+      }));
+  EXPECT_CALL(callback, onFrame(FrameType::REQUEST_OK));
+  EXPECT_CALL(callback, onRequestOk(testing::_, FrameType::REQUEST_OK))
+      .WillOnce(testing::Invoke([](RequestOk actual, FrameType) {
+        EXPECT_EQ(actual.requestID, RequestID(2));
+      }));
+  EXPECT_CALL(callback, onConnectionError(testing::_)).Times(0);
+
+  bidiCodec.onIngress(buf.move(), false);
+  EXPECT_TRUE(responseIDQueue.empty());
+}
+
 // Post-terminal OK semantics on draft-18 bidi response streams. A REQUEST_OK
 // ack of a follow-up REQUEST_UPDATE must pass on both REQUEST_OK-typed and
 // SUBSCRIBE_OK-typed streams; a repeated typed terminal (SUBSCRIBE_OK twice)
