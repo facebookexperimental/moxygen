@@ -530,9 +530,10 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::SUBSCRIBE_OK: {
       auto res = moqFrameParser_.parseSubscribeOk(cursor, curFrameLength_);
       if (res) {
-        // Consume the stream's primary requestID so any post-terminal
-        // REQUEST_OK on this bidi pops from the FIFO instead.
-        (void)takeNextResponseRequestID();
+        // d18+: requestID is implicit; recover from the bidi-stream context.
+        if (auto rid = takeNextResponseRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onSubscribeOk(std::move(res.value()));
         }
@@ -596,6 +597,10 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::PUBLISH_DONE: {
       auto res = moqFrameParser_.parsePublishDone(cursor, curFrameLength_);
       if (res) {
+        // d18+: peek the stream identity (PUBLISH_DONE follows the terminal).
+        if (auto rid = getStreamRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onPublishDone(std::move(res.value()));
         }
@@ -681,9 +686,10 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::FETCH_OK: {
       auto res = moqFrameParser_.parseFetchOk(cursor, curFrameLength_);
       if (res) {
-        // Consume the stream's primary requestID so any post-terminal
-        // REQUEST_OK on this bidi pops from the FIFO instead.
-        (void)takeNextResponseRequestID();
+        // d18+: requestID is implicit; recover from the bidi-stream context.
+        if (auto rid = takeNextResponseRequestID()) {
+          res->requestID = *rid;
+        }
         if (callback_) {
           callback_->onFetchOk(std::move(res.value()));
         }

@@ -3470,7 +3470,11 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkExpiresParameter) {
 
   // Verify expires is correctly parsed from parameter
   EXPECT_EQ(parseResult->expires, std::chrono::milliseconds(5000));
-  EXPECT_EQ(parseResult->requestID, RequestID(42));
+  // Draft 18+: requestID is implicit from the bidi stream context and not on
+  // the wire; the parser leaves it default-initialized.
+  if (getDraftMajorVersion(GetParam()) < 18) {
+    EXPECT_EQ(parseResult->requestID, RequestID(42));
+  }
   EXPECT_EQ(parseResult->trackAlias, TrackAlias(1));
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::OldestFirst);
 }

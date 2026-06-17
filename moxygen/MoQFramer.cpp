@@ -2042,13 +2042,16 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   SubscribeOk subscribeOk;
-  auto requestID = decodeVarint(cursor, length);
-  if (!requestID) {
-    XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on requestID";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    auto requestID = decodeVarint(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    subscribeOk.requestID = requestID->first;
   }
-  length -= requestID->second;
-  subscribeOk.requestID = requestID->first;
   auto trackAlias = decodeVarint(cursor, length);
   if (!trackAlias) {
     XLOG(DBG4) << "parseSubscribeOk: UNDERFLOW on trackAlias";
@@ -2200,13 +2203,16 @@ folly::Expected<PublishDone, ErrorCode> MoQFrameParser::parsePublishDone(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   PublishDone publishDone;
-  auto requestID = decodeVarint(cursor, length);
-  if (!requestID) {
-    XLOG(DBG4) << "parsePublishDone: UNDERFLOW on requestID";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    auto requestID = decodeVarint(cursor, length);
+    if (!requestID) {
+      XLOG(DBG4) << "parsePublishDone: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= requestID->second;
+    publishDone.requestID = requestID->first;
   }
-  length -= requestID->second;
-  publishDone.requestID = requestID->first;
 
   auto statusCode = decodeVarint(cursor, length);
   if (!statusCode) {
@@ -3136,13 +3142,16 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
     folly::io::Cursor& cursor,
     size_t length) const noexcept {
   FetchOk fetchOk;
-  auto res = decodeVarint(cursor, length);
-  if (!res) {
-    XLOG(DBG4) << "parseFetchOk: UNDERFLOW on requestID";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    auto res = decodeVarint(cursor, length);
+    if (!res) {
+      XLOG(DBG4) << "parseFetchOk: UNDERFLOW on requestID";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    fetchOk.requestID = res->first;
+    length -= res->second;
   }
-  fetchOk.requestID = res->first;
-  length -= res->second;
 
   // Check for next two bytes
   if (getDraftMajorVersion(*version_) < 15) {
@@ -5254,7 +5263,10 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
     const SubscribeOk& subscribeOk) const noexcept {
   size_t size = 0;
   bool error = false;
-  writeVarint(writeBuf, subscribeOk.requestID.value, size, error);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    writeVarint(writeBuf, subscribeOk.requestID.value, size, error);
+  }
   writeVarint(writeBuf, subscribeOk.trackAlias.value, size, error);
 
   // For < v15: write expires and groupOrder as fixed fields
@@ -5382,7 +5394,10 @@ WriteResult MoQFrameWriter::writePublishDone(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_DONE, error);
-  writeVarint(writeBuf, publishDone.requestID.value, size, error);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    writeVarint(writeBuf, publishDone.requestID.value, size, error);
+  }
   writeVarint(
       writeBuf, folly::to_underlying(publishDone.statusCode), size, error);
   writeVarint(writeBuf, publishDone.streamCount, size, error);
@@ -6064,7 +6079,10 @@ WriteResult MoQFrameWriter::writeFetchOk(
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
-  writeVarint(writeBuf, fetchOk.requestID.value, size, error);
+  // Draft 18+: requestID is implicit from the bidi request stream context.
+  if (getDraftMajorVersion(*version_) < 18) {
+    writeVarint(writeBuf, fetchOk.requestID.value, size, error);
+  }
   if (getDraftMajorVersion(*version_) < 15) {
     auto order = folly::to_underlying(fetchOk.groupOrder);
     writeBuf.append(&order, 1);
