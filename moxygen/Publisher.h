@@ -213,11 +213,21 @@ class Publisher {
     std::optional<SubscribeTracksOk> subscribeTracksOk_;
   };
 
-  // Send/respond to SUBSCRIBE_TRACKS (draft 18+ only).
+  class PublishBlockedHandle {
+   public:
+    virtual ~PublishBlockedHandle() = default;
+
+    virtual void publishBlocked(
+        const TrackNamespace& trackNamespaceSuffix,
+        const std::string& trackName) = 0;
+  };
+
   using SubscribeTracksResult = folly::
       Expected<std::shared_ptr<SubscribeTracksHandle>, SubscribeTracksError>;
   virtual folly::coro::Task<SubscribeTracksResult> subscribeTracks(
-      SubscribeTracks subTracks) {
+      SubscribeTracks subTracks,
+      std::shared_ptr<PublishBlockedHandle> /*publishBlockedHandle*/ =
+          nullptr) {
     return folly::coro::makeTask<SubscribeTracksResult>(folly::makeUnexpected(
         SubscribeTracksError{
             subTracks.requestID,

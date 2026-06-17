@@ -83,7 +83,9 @@ class MoQRelaySession : public MoQSession {
 
   // Draft 18+
   folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
-      SubscribeTracks subTracks) override;
+      SubscribeTracks subTracks,
+      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+          nullptr) override;
 
  protected:
   void onSubscribeNamespaceImpl(
@@ -93,13 +95,19 @@ class MoQRelaySession : public MoQSession {
   // Draft 18+
   void onSubscribeTracksImpl(
       const SubscribeTracks& subscribeTracks,
-      std::shared_ptr<MessageReply> messageReply) override;
+      std::shared_ptr<SubscribeTracksReply> subTracksReply) override;
 
   void onSubscribeTracksStreamClosed(RequestID requestID) override;
 
   std::shared_ptr<SubNSReply> getSubNsReply(
       std::shared_ptr<ReplyContext> replyContext) override {
     return std::make_shared<SeparateStreamSubNsReply>(
+        moqFrameWriter_, std::move(replyContext));
+  }
+
+  std::shared_ptr<SubscribeTracksReply> getSubTracksReply(
+      std::shared_ptr<ReplyContext> replyContext) override {
+    return std::make_shared<SubscribeTracksReply>(
         moqFrameWriter_, std::move(replyContext));
   }
 
@@ -138,10 +146,10 @@ class MoQRelaySession : public MoQSession {
   // Draft 18+: SUBSCRIBE_TRACKS handling.
   folly::coro::Task<void> handleSubscribeTracks(
       SubscribeTracks subTracks,
-      std::shared_ptr<MessageReply> messageReply);
+      std::shared_ptr<SubscribeTracksReply> subTracksReply);
   void subscribeTracksOk(
       const RequestOk& subTracksOk,
-      std::shared_ptr<MessageReply>&& messageReply);
+      std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
 
   folly::coro::Task<void> handlePublishNamespace(
       PublishNamespace publishNamespace,

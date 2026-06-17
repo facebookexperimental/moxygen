@@ -846,7 +846,8 @@ class MoQRelay::TracksSubscription : public Publisher::SubscribeTracksHandle {
 };
 
 folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
-    SubscribeTracks subTracks) {
+    SubscribeTracks subTracks,
+    std::shared_ptr<PublishBlockedHandle> /*publishBlockedHandle*/) {
   XLOG(DBG1) << __func__ << " nsp=" << subTracks.trackNamespacePrefix;
 
   auto session = MoQSession::getRequestSession();

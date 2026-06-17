@@ -46,7 +46,9 @@ class MoQRelay : public Publisher,
       std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
   folly::coro::Task<SubscribeTracksResult> subscribeTracks(
-      SubscribeTracks subTracks) override;
+      SubscribeTracks subTracks,
+      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+          nullptr) override;
 
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
       PublishNamespace ann,

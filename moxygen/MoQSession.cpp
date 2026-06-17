@@ -2871,8 +2871,8 @@ void MoQSession::BidiRequestCallback::onSubscribeNamespace(
 void MoQSession::BidiRequestCallback::onSubscribeTracks(
     SubscribeTracks subTracks) {
   if (handleFirstFrame(subTracks.requestID)) {
-    auto messageReply = session_->getMessageReply(replyContext_);
-    session_->onSubscribeTracksImpl(subTracks, std::move(messageReply));
+    auto subTracksReply = session_->getSubTracksReply(replyContext_);
+    session_->onSubscribeTracksImpl(subTracks, std::move(subTracksReply));
   }
 }
 
@@ -6900,7 +6900,7 @@ void MoQSession::subscribeNamespaceError(
 // Draft 18+: SUBSCRIBE_TRACKS handlers and helpers
 void MoQSession::onSubscribeTracksImpl(
     const SubscribeTracks& subscribeTracks,
-    std::shared_ptr<MessageReply> messageReply) {
+    std::shared_ptr<SubscribeTracksReply> subTracksReply) {
   XLOG(DBG1) << __func__ << " prefix=" << subscribeTracks.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
   if (receivedGoaway_) {
@@ -6909,7 +6909,7 @@ void MoQSession::onSubscribeTracksImpl(
             subscribeTracks.requestID,
             SubscribeTracksErrorCode::GOING_AWAY,
             "Session received GOAWAY"},
-        std::move(messageReply));
+        std::move(subTracksReply));
     return;
   }
   subscribeTracksError(
@@ -6917,19 +6917,19 @@ void MoQSession::onSubscribeTracksImpl(
           subscribeTracks.requestID,
           SubscribeTracksErrorCode::NOT_SUPPORTED,
           "SubscribeTracks not supported by simple client"},
-      std::move(messageReply));
+      std::move(subTracksReply));
 }
 
 void MoQSession::subscribeTracksError(
     const SubscribeTracksError& subscribeTracksError,
-    std::shared_ptr<MessageReply>&& messageReply) {
+    std::shared_ptr<SubscribeTracksReply>&& subTracksReply) {
   XLOG(DBG1) << __func__ << " reqID=" << subscribeTracksError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_,
       onSubscribeTracksError,
       subscribeTracksError.errorCode);
-  auto res = messageReply->error(subscribeTracksError);
+  auto res = subTracksReply->error(subscribeTracksError);
   if (!res) {
     XLOG(ERR) << "writeSubscribeTracksError failed sess=" << this;
   }
@@ -7044,6 +7044,59 @@ WriteResult MessageReply::error(const SubscribeTracksError& errorMsg) {
   // After ERROR the publisher is done with this stream — FIN it.
   replyContext_->flushFinal();
   return res;
+}
+
+WriteResult SubscribeTracksReply::ok(const RequestOk& okMsg) {
+  if (errorSent_ || okSent_) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeRequestOk(
+      replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
+  replyContext_->flush();
+  okSent_ = true;
+  flushPendingMessages();
+  return res;
+}
+
+WriteResult SubscribeTracksReply::error(const SubscribeTracksError& errorMsg) {
+  if (okSent_ || errorSent_) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = moqFrameWriter_.writeRequestError(
+      replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
+  pendingBuf_.move();
+  replyContext_->flush(/*fin=*/true);
+  errorSent_ = true;
+  return res;
+}
+
+void SubscribeTracksReply::publishBlocked(
+    const TrackNamespace& trackNamespaceSuffix,
+    const std::string& trackName) {
+  if (errorSent_) {
+    XLOG(ERR) << "Ignoring PUBLISH_BLOCKED after REQUEST_ERROR";
+    return;
+  }
+  auto res = moqFrameWriter_.writePublishBlocked(
+      replyContext_->writeBuf(),
+      PublishBlocked{trackNamespaceSuffix, trackName});
+  if (!res) {
+    XLOG(ERR) << "writePublishBlocked failed err=" << uint64_t(res.error());
+    replyContext_->writeBuf().move();
+    return;
+  }
+  if (okSent_) {
+    replyContext_->flush();
+  } else {
+    pendingBuf_.append(replyContext_->writeBuf().move());
+  }
+}
+
+void SubscribeTracksReply::flushPendingMessages() {
+  if (!pendingBuf_.empty()) {
+    replyContext_->writeBuf().append(pendingBuf_.move());
+    replyContext_->flush();
+  }
 }
 
 } // namespace moxygen

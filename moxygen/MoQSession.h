@@ -102,6 +102,30 @@ class MessageReply {
   std::shared_ptr<ReplyContext> replyContext_;
 };
 
+class SubscribeTracksReply : public MessageReply,
+                             public Publisher::PublishBlockedHandle {
+ public:
+  SubscribeTracksReply(
+      MoQFrameWriter& moqFrameWriter,
+      std::shared_ptr<ReplyContext> replyContext)
+      : MessageReply(moqFrameWriter, std::move(replyContext)) {}
+
+  ~SubscribeTracksReply() override = default;
+
+  WriteResult ok(const RequestOk&) override;
+  WriteResult error(const SubscribeTracksError&) override;
+  void publishBlocked(
+      const TrackNamespace& trackNamespaceSuffix,
+      const std::string& trackName) override;
+
+ private:
+  void flushPendingMessages();
+
+  folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
+  bool okSent_{false};
+  bool errorSent_{false};
+};
+
 class MoQSession : public Subscriber,
                    public Publisher,
                    public MoQControlCodec::ControlCallback,
@@ -199,9 +223,9 @@ class MoQSession : public Subscriber,
         moqFrameWriter_, std::move(replyContext));
   }
 
-  virtual std::shared_ptr<MessageReply> getMessageReply(
+  virtual std::shared_ptr<SubscribeTracksReply> getSubTracksReply(
       std::shared_ptr<ReplyContext> replyContext) {
-    return std::make_shared<MessageReply>(
+    return std::make_shared<SubscribeTracksReply>(
         moqFrameWriter_, std::move(replyContext));
   }
 
@@ -816,7 +840,7 @@ class MoQSession : public Subscriber,
 
   void subscribeTracksError(
       const SubscribeTracksError& subscribeTracksError,
-      std::shared_ptr<MessageReply>&& messageReply);
+      std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
 
   virtual void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
@@ -824,7 +848,7 @@ class MoQSession : public Subscriber,
 
   virtual void onSubscribeTracksImpl(
       const SubscribeTracks& subscribeTracks,
-      std::shared_ptr<MessageReply> messageReply);
+      std::shared_ptr<SubscribeTracksReply> subTracksReply);
 
   virtual void onSubscribeTracksStreamClosed(RequestID /*requestID*/) {}
 
