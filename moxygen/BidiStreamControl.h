@@ -13,6 +13,7 @@
 #include <moxygen/MoQTypes.h>
 #include <moxygen/ReplyContext.h>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 
@@ -96,6 +97,12 @@ class BidiStreamControl {
     return finIsCancellation_;
   }
 
+  // Draft 18+: sender appends update IDs in send order; the response codec
+  // pops from the front when it parses a post-terminal REQUEST_OK/ERROR.
+  std::deque<RequestID>& responseIDQueue() {
+    return responseIDQueue_;
+  }
+
  private:
   void onPeerStopSending();
   // Null the write handle and drop its cancel callback after we close it.
@@ -110,6 +117,7 @@ class BidiStreamControl {
   folly::Function<void(RequestID)> onPeerTerminationFn_;
   std::optional<RequestID> requestID_;
   std::optional<folly::CancellationCallback> writeCancelCb_;
+  std::deque<RequestID> responseIDQueue_;
   bool finIsCancellation_{true};
 };
 

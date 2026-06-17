@@ -503,6 +503,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::SUBSCRIBE: {
       auto res = moqFrameParser_.parseSubscribeRequest(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onSubscribe(std::move(res.value()));
         }
@@ -529,6 +530,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::SUBSCRIBE_OK: {
       auto res = moqFrameParser_.parseSubscribeOk(cursor, curFrameLength_);
       if (res) {
+        // Consume the stream's primary requestID so any post-terminal
+        // REQUEST_OK on this bidi pops from the FIFO instead.
+        (void)takeNextResponseRequestID();
         if (callback_) {
           callback_->onSubscribeOk(std::move(res.value()));
         }
@@ -562,8 +566,14 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestError(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
-        // TODO(draft-18): drop the on-wire requestID per spec §10.6 and
-        // substitute stream id for terminal / FIFO for post-terminal here.
+        // Draft 18+: requestID is implicit. Terminal uses stream id; FIFO
+        // for post-terminal handled by takeNextResponseRequestID(). On older
+        // drafts the wire carries it — never overwrite what was parsed.
+        if (useBidiRequestStreams(*moqFrameParser_.getVersion())) {
+          if (auto rid = takeNextResponseRequestID()) {
+            res->requestID = *rid;
+          }
+        }
         if (callback_) {
           callback_->onRequestError(std::move(res.value()), curFrameType_);
         }
@@ -597,6 +607,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::PUBLISH: {
       auto res = moqFrameParser_.parsePublish(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onPublish(std::move(res.value()));
         }
@@ -647,6 +658,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::FETCH: {
       auto res = moqFrameParser_.parseFetch(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onFetch(std::move(res.value()));
         }
@@ -669,6 +681,9 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::FETCH_OK: {
       auto res = moqFrameParser_.parseFetchOk(cursor, curFrameLength_);
       if (res) {
+        // Consume the stream's primary requestID so any post-terminal
+        // REQUEST_OK on this bidi pops from the FIFO instead.
+        (void)takeNextResponseRequestID();
         if (callback_) {
           callback_->onFetchOk(std::move(res.value()));
         }
@@ -680,6 +695,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::PUBLISH_NAMESPACE: {
       auto res = moqFrameParser_.parsePublishNamespace(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onPublishNamespace(std::move(res.value()));
         }
@@ -699,8 +715,14 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res = moqFrameParser_.parseRequestOk(
           cursor, curFrameLength_, curFrameType_);
       if (res) {
-        // TODO(draft-18): drop the on-wire requestID per spec §10.5 and
-        // substitute stream id for terminal / FIFO for post-terminal here.
+        // Draft 18+: requestID is implicit. Terminal uses stream id;
+        // post-terminal pops the FIFO. On older drafts the wire carries it —
+        // never overwrite what was parsed.
+        if (useBidiRequestStreams(*moqFrameParser_.getVersion())) {
+          if (auto rid = takeNextResponseRequestID()) {
+            res->requestID = *rid;
+          }
+        }
         if (callback_) {
           callback_->onRequestOk(std::move(res.value()), curFrameType_);
         }
@@ -736,6 +758,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::SUBSCRIBE_TRACKS: {
       auto res = moqFrameParser_.parseSubscribeTracks(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onSubscribeTracks(std::move(res.value()));
         }
@@ -751,6 +774,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       auto res =
           moqFrameParser_.parseSubscribeNamespace(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onSubscribeNamespace(std::move(res.value()));
         }
@@ -774,6 +798,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
     case FrameType::TRACK_STATUS: {
       auto res = moqFrameParser_.parseTrackStatus(cursor, curFrameLength_);
       if (res) {
+        setStreamRequestID(res->requestID);
         if (callback_) {
           callback_->onTrackStatus(std::move(res.value()));
         }

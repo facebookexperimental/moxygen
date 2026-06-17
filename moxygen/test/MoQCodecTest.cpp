@@ -1350,6 +1350,49 @@ TEST(MoQCodecTest, BidiCodecRejectsDuplicateRequestOnSameStreamV18) {
   bidiCodec.onIngress(buf.move(), false);
 }
 
+TEST(MoQCodecTest, BidiCodecSetsExistingRequestIdOnRequestUpdateV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto sub = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"hello"}), "world"}),
+      255,
+      GroupOrder::Default,
+      true,
+      LocationType::LargestObject,
+      std::nullopt,
+      0,
+      {});
+  sub.requestID = RequestID(2);
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, sub).hasValue());
+
+  RequestUpdate update;
+  update.requestID = RequestID(4);
+  update.existingRequestID = sub.requestID;
+  ASSERT_TRUE(writer.writeRequestUpdate(buf, update).hasValue());
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQBidiStreamCodec bidiCodec(
+      &callback, {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE});
+  bidiCodec.initializeVersion(kVersionDraft18);
+
+  testing::InSequence seq;
+  EXPECT_CALL(callback, onFrame(FrameType::SUBSCRIBE));
+  EXPECT_CALL(callback, onSubscribe(testing::_))
+      .WillOnce(testing::Invoke([](SubscribeRequest actual) {
+        EXPECT_EQ(actual.requestID, RequestID(2));
+      }));
+  EXPECT_CALL(callback, onFrame(FrameType::REQUEST_UPDATE));
+  EXPECT_CALL(callback, onRequestUpdate(testing::_))
+      .WillOnce(testing::Invoke([](RequestUpdate actual) {
+        EXPECT_EQ(actual.requestID, RequestID(4));
+        EXPECT_EQ(actual.existingRequestID, RequestID(2));
+      }));
+  EXPECT_CALL(callback, onConnectionError(testing::_)).Times(0);
+
+  bidiCodec.onIngress(buf.move(), false);
+}
+
 // Post-terminal OK semantics on draft-18 bidi response streams. A REQUEST_OK
 // ack of a follow-up REQUEST_UPDATE must pass on both REQUEST_OK-typed and
 // SUBSCRIBE_OK-typed streams; a repeated typed terminal (SUBSCRIBE_OK twice)
@@ -1381,6 +1424,11 @@ TEST(MoQCodecTest, BidiCodecPostTerminalOkV18) {
     MoQBidiStreamCodec codec(
         &callback, std::move(allowedFrames), RequestID(1), okType);
     codec.initializeVersion(kVersionDraft18);
+    // Simulate the sender having dispatched one REQUEST_UPDATE: the codec
+    // FIFO-correlates post-terminal REQUEST_OK / REQUEST_ERROR against this
+    // queue, so a post-terminal OK is only legal when an id is pending.
+    std::deque<RequestID> responseIDQueue{RequestID(2)};
+    codec.setResponseIDQueue(&responseIDQueue);
     EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION))
         .Times(expectError ? 1 : 0);
     folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};

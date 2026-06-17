@@ -742,7 +742,8 @@ class MoQSession : public Subscriber,
       MoQControlCodec::ControlCallback* callback,
       std::vector<FrameType> allowedFrames,
       std::optional<RequestID> requestID = std::nullopt,
-      std::optional<FrameType> okType = std::nullopt);
+      std::optional<FrameType> okType = std::nullopt,
+      std::deque<RequestID>* responseIDQueue = nullptr);
 
   // Core session state
   MoQControlCodec::Direction dir_;

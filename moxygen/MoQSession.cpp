@@ -2777,11 +2777,13 @@ std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
     MoQControlCodec::ControlCallback* callback,
     std::vector<FrameType> allowedFrames,
     std::optional<RequestID> requestID,
-    std::optional<FrameType> okType) {
+    std::optional<FrameType> okType,
+    std::deque<RequestID>* responseIDQueue) {
   auto codec = std::make_unique<MoQBidiStreamCodec>(
       callback, std::move(allowedFrames), requestID, okType);
   codec->initializeVersion(*negotiatedVersion_);
   codec->setTokenCache(&receiveTokenCache_);
+  codec->setResponseIDQueue(responseIDQueue);
   return codec;
 }
 
@@ -2995,7 +2997,6 @@ MoQSession::sendRequest(
     bidiStream->writeHandle->writeStreamData(
         writeBuf.move(), /*fin=*/false, nullptr);
     auto* cb = senderCallback ? senderCallback.get() : this;
-    auto codec = makeBidiCodec(cb, std::move(postTerminal), requestID, okType);
     // Any peer close (FIN or RST) before the terminal reply also fails the
     // pending request via failPendingRequestOnEarlyClose in controlReadLoop.
     auto control = std::make_shared<BidiStreamControl>(
@@ -3003,6 +3004,12 @@ MoQSession::sendRequest(
         cancellationSource_.getToken(),
         /*finIsCancellation=*/true);
     control->setRequestID(requestID);
+    auto codec = makeBidiCodec(
+        cb,
+        std::move(postTerminal),
+        requestID,
+        okType,
+        &control->responseIDQueue());
     if (onPeerTermination) {
       control->setOnPeerTermination(std::move(onPeerTermination));
     }
@@ -5752,6 +5759,11 @@ void MoQSession::requestUpdate(
     if (!res) {
       XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
       return;
+    }
+    // Draft 18+: response REQUEST_OK/ERROR has no wire requestID; record
+    // this update's id so the response codec can correlate FIFO-order.
+    if (getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+      control->responseIDQueue().push_back(reqUpdate.requestID);
     }
     wh->writeStreamData(buf.move(), /*fin=*/false, nullptr);
   } else {
