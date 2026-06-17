@@ -511,6 +511,7 @@ class MoQSession : public Subscriber,
   class FetchTrackReceiveState;
   friend class FetchTrackReceiveState;
   friend class SubNsStreamCallback;
+  friend class SubTracksStreamCallback;
 
   std::shared_ptr<SubscribeTrackReceiveState> getSubscribeTrackReceiveState(
       TrackAlias alias);
