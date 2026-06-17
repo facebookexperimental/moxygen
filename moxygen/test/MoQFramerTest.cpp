@@ -4824,6 +4824,31 @@ TEST_F(MoQFramerV18Test, RequestErrorNonRedirectOmitsRedirect) {
   EXPECT_FALSE(parsed->redirect.has_value());
 }
 
+TEST_F(MoQFramerV18Test, PublishBlockedRoundtrip) {
+  PublishBlocked req;
+  req.trackNamespaceSuffix =
+      TrackNamespace(std::vector<std::string>{"sports", "soccer"});
+  req.trackName = "highlights";
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writePublishBlocked(writeBuf, req).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto wireType = decodeMoQVarint(cursor);
+  ASSERT_TRUE(wireType.has_value());
+  EXPECT_EQ(wireType->first, folly::to_underlying(FrameType::PUBLISH_BLOCKED));
+  EXPECT_EQ(wireType->first, 0xFu);
+
+  auto bodyLen = frameLength(cursor);
+  auto parsed = parser_.parsePublishBlocked(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+
+  EXPECT_EQ(parsed->trackNamespaceSuffix, req.trackNamespaceSuffix);
+  EXPECT_EQ(parsed->trackName, req.trackName);
+}
+
 // Draft 18 added a Track Properties block at the end of REQUEST_OK. Verify
 // that a populated TRACK_STATUS_OK round-trips its Track Properties through
 // the wire and back into the TrackStatusOk struct.

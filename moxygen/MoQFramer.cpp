@@ -3342,6 +3342,37 @@ MoQFrameParser::parseSubscribeTracks(folly::io::Cursor& cursor, size_t length)
   return subscribeTracks;
 }
 
+folly::Expected<PublishBlocked, ErrorCode> MoQFrameParser::parsePublishBlocked(
+    folly::io::Cursor& cursor,
+    size_t length) const noexcept {
+  XCHECK(version_)
+      << "Need to have version_ set in order to parse PUBLISH_BLOCKED";
+  XCHECK_GE(getDraftMajorVersion(*version_), 18u)
+      << "PUBLISH_BLOCKED is draft 18+ only";
+  PublishBlocked publishBlocked;
+
+  // Track Namespace Suffix
+  auto res = parseNamespaceTuple(cursor, length);
+  if (!res) {
+    XLOG(DBG4) << "parsePublishBlocked: error parsing track namespace suffix";
+    return folly::makeUnexpected(res.error());
+  }
+  publishBlocked.trackNamespaceSuffix = TrackNamespace(std::move(res.value()));
+
+  // Track Name Length + Track Name
+  auto trackName = parseFixedString(cursor, length);
+  if (!trackName) {
+    XLOG(DBG4) << "parsePublishBlocked: UNDERFLOW on trackName";
+    return folly::makeUnexpected(trackName.error());
+  }
+  publishBlocked.trackName = std::move(trackName.value());
+
+  if (length > 0) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return publishBlocked;
+}
+
 folly::Expected<SubscribeNamespaceOk, ErrorCode>
 MoQFrameParser::parseSubscribeNamespaceOk(
     folly::io::Cursor& cursor,
@@ -5845,6 +5876,26 @@ WriteResult MoQFrameWriter::writeSubscribeTracks(
 
   writeTrackRequestParams(
       writeBuf, subscribeTracks.params, requestSpecificParams, size, error);
+  writeSize(sizePtr, size, error, *version_);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writePublishBlocked(
+    folly::IOBufQueue& writeBuf,
+    const PublishBlocked& publishBlocked) const noexcept {
+  XCHECK(version_.has_value())
+      << "Version needs to be set to write publishBlocked";
+  XCHECK_GE(getDraftMajorVersion(*version_), 18u)
+      << "PUBLISH_BLOCKED is draft 18+ only";
+  size_t size = 0;
+  bool error = false;
+  auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_BLOCKED, error);
+  writeTrackNamespace(
+      writeBuf, publishBlocked.trackNamespaceSuffix, size, error);
+  writeFixedString(writeBuf, publishBlocked.trackName, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

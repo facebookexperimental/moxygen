@@ -837,6 +837,18 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::TRACK_STATUS_ERROR: {
+      if (getDraftMajorVersion(*moqFrameParser_.getVersion()) >= 18) {
+        // In draft 18+, wire type 0xF is PUBLISH_BLOCKED
+        auto res = moqFrameParser_.parsePublishBlocked(cursor, curFrameLength_);
+        if (res) {
+          if (callback_) {
+            callback_->onPublishBlocked(std::move(res.value()));
+          }
+        } else {
+          return folly::makeUnexpected(res.error());
+        }
+        break;
+      }
       auto res = moqFrameParser_.parseTrackStatusError(cursor, curFrameLength_);
       if (res) {
         if (callback_) {

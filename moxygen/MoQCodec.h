@@ -102,6 +102,8 @@ class MoQControlCodec : public MoQCodec {
     virtual void onGoaway(Goaway) {}
     // Draft 18+ only.
     virtual void onSubscribeTracks(SubscribeTracks) {}
+    // Draft 18+ only.
+    virtual void onPublishBlocked(PublishBlocked) {}
   };
 
   enum class Direction { CLIENT, SERVER };
@@ -151,7 +153,6 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::PUBLISH_OK:
       case FrameType::PUBLISH_ERROR:
       case FrameType::TRACK_STATUS:
-      case FrameType::TRACK_STATUS_ERROR:
       case FrameType::FETCH:
       case FrameType::FETCH_OK:
       case FrameType::FETCH_ERROR:
@@ -190,6 +191,12 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::SUBSCRIBE_NAMESPACE:
       case FrameType::SUBSCRIBE_TRACKS:
         return false;
+      // Wire type 0xF is TRACK_STATUS_ERROR in drafts < 18, but PUBLISH_BLOCKED
+      // in draft 18+. It shouldn't be allowed on the control stream. It is only
+      // allowed on a SUBSCRIBE_TRACKS stream.
+      case FrameType::TRACK_STATUS_ERROR:
+        return !negotiatedVersion_ ||
+            getDraftMajorVersion(*negotiatedVersion_) < 18;
     }
     return false;
   }

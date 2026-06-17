@@ -1199,6 +1199,36 @@ TEST(MoQCodecTest, ControlStreamRejectsPublishOkWireTypeV18) {
   serverCodec.onIngress(publishOkBuf.move(), false);
 }
 
+// PUBLISH_BLOCKED (wire type 0xF in draft 18) is a request-stream-only message
+// (draft 18 §10.20). It must never be accepted on the control stream, even
+// though 0xF is TRACK_STATUS_ERROR (a control-stream message) in older drafts.
+TEST(MoQCodecTest, ControlStreamRejectsPublishBlockedV18) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue setupBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup setup;
+  setup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::PATH), "/foo"));
+  writeClientSetup(setupBuf, setup, kVersionDraft18);
+
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQControlCodec serverCodec(MoQControlCodec::Direction::SERVER, &callback);
+  serverCodec.initializeVersion(kVersionDraft18);
+  EXPECT_CALL(callback, onClientSetup(testing::_));
+  serverCodec.onIngress(setupBuf.move(), false);
+
+  // Feed PUBLISH_BLOCKED on the control stream — must be rejected.
+  PublishBlocked publishBlocked;
+  publishBlocked.trackNamespaceSuffix =
+      TrackNamespace(std::vector<std::string>{"example.com", "live"});
+  publishBlocked.trackName = "highlights";
+  folly::IOBufQueue blockedBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writer.writePublishBlocked(blockedBuf, publishBlocked).hasValue());
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  serverCodec.onIngress(blockedBuf.move(), false);
+}
+
 // SUBSCRIBE_TRACKS arriving on a fresh bidi stream — the new dispatch case in
 // MoQControlCodec::parseFrame should route it to onSubscribeTracks.
 TEST(MoQCodecTest, BidiCodecParsesSubscribeTracksV18) {

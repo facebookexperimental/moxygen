@@ -182,9 +182,10 @@ enum class FrameType : uint64_t {
   PUBLISH_DONE = 0xB,
   PUBLISH_NAMESPACE_CANCEL = 0xC,
   TRACK_STATUS = 0xD,
-  TRACK_STATUS_OK = 0xE, // Draft 15 and below
-  NAMESPACE_DONE = 0xE,  // Draft 16 and above
-  TRACK_STATUS_ERROR = 0xF,
+  TRACK_STATUS_OK = 0xE,    // Draft 15 and below
+  NAMESPACE_DONE = 0xE,     // Draft 16 and above
+  TRACK_STATUS_ERROR = 0xF, // Draft 16 and below
+  PUBLISH_BLOCKED = 0xF,    // Draft 18 and above
   GOAWAY = 0x10,
   LEGACY_SUBSCRIBE_NAMESPACE = 0x11, // Drafts <= 17
   SUBSCRIBE_NAMESPACE_OK = 0x12,
@@ -1328,6 +1329,12 @@ struct SubscribeTracks {
   TrackNamespace trackNamespacePrefix;
   bool forward{true};
   TrackRequestParameters params{FrameType::SUBSCRIBE_TRACKS};
+};
+
+// Draft 18+ only.
+struct PublishBlocked {
+  TrackNamespace trackNamespaceSuffix;
+  std::string trackName;
 };
 
 // Only used in draft-16 and above
