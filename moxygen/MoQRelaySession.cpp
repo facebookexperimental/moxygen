@@ -1446,7 +1446,10 @@ MoQRelaySession::subscribeTracks(SubscribeTracks subTracks) {
   auto sendResult = sendRequest(
       buf,
       FrameType::REQUEST_OK,
-      /*postTerminal=*/{FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
+      /*postTerminal=*/
+      {FrameType::REQUEST_OK,
+       FrameType::REQUEST_ERROR,
+       FrameType::PUBLISH_BLOCKED},
       subTracks.requestID,
       /*minBidiDraftVersion=*/18);
   if (sendResult.hasError()) {
