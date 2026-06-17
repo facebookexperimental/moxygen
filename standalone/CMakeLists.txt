@@ -33,8 +33,21 @@ find_library(ZSTD_LIBRARY NAMES zstd)
 # =============================================================================
 set(GITHUB_HASHES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../build/deps/github_hashes")
 
-# Helper function to read commit hash from rev.txt file
+# Helper function to read commit hash from rev.txt file.
+#
+# Falls back to the dependency's default branch (HEAD) when the pin file is
+# absent or unparseable, instead of failing the configure. This mirrors what
+# getdeps already does: in build/fbcode_builder/getdeps/fetcher.py the rev is
+# resolved as `rev or branch or "main"`, so a missing github_hashes pin simply
+# tracks HEAD rather than aborting the build. Keeping the same behavior here
+# means the standalone build keeps working if build/deps/github_hashes/ is
+# removed (e.g. by the periodic "Updating hashes" automation). Pin explicitly
+# with the *_REV_OVERRIDE cache variables when reproducibility matters.
 function(read_rev_hash ORG PROJECT OUT_VAR)
+    set(_FALLBACK_BRANCH "main")
+    if(ARGC GREATER 3)
+        set(_FALLBACK_BRANCH "${ARGV3}")
+    endif()
     set(REV_FILE "${GITHUB_HASHES_DIR}/${ORG}/${PROJECT}-rev.txt")
     if(EXISTS "${REV_FILE}")
         file(READ "${REV_FILE}" REV_CONTENT)
@@ -46,13 +59,17 @@ function(read_rev_hash ORG PROJECT OUT_VAR)
         if(CMAKE_MATCH_1)
             set(${OUT_VAR} "${CMAKE_MATCH_1}" PARENT_SCOPE)
             message(STATUS "Using pinned ${PROJECT} rev: ${CMAKE_MATCH_1}")
-        else()
-            message(FATAL_ERROR "Failed to parse rev from ${REV_FILE}")
+            return()
         endif()
+        message(WARNING
+            "Failed to parse rev from ${REV_FILE}; "
+            "falling back to ${PROJECT} ${_FALLBACK_BRANCH} (HEAD)")
     else()
-        message(FATAL_ERROR "Rev file not found: ${REV_FILE}\n"
-            "Make sure you cloned moxygen with build/deps/github_hashes/")
+        message(WARNING
+            "Rev file not found: ${REV_FILE}; "
+            "falling back to ${PROJECT} ${_FALLBACK_BRANCH} (HEAD)")
     endif()
+    set(${OUT_VAR} "${_FALLBACK_BRANCH}" PARENT_SCOPE)
 endfunction()
 
 # Read all pinned revisions
