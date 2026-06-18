@@ -175,7 +175,7 @@ class DatePublisher : public Publisher {
       co_return folly::makeUnexpected(
           TrackStatusError{
               trackStatus.requestID,
-              TrackStatusErrorCode::TRACK_NOT_EXIST,
+              TrackStatusErrorCode::DOES_NOT_EXIST,
               "The requested track does not exist"});
     }
     co_return TrackStatusOk{
@@ -198,7 +198,7 @@ class DatePublisher : public Publisher {
       co_return folly::makeUnexpected(
           SubscribeError{
               subReq.requestID,
-              SubscribeErrorCode::TRACK_NOT_EXIST,
+              SubscribeErrorCode::DOES_NOT_EXIST,
               "unexpected subscribe"});
     }
     auto largest = *forwarder_.largest();
@@ -251,7 +251,7 @@ class DatePublisher : public Publisher {
       co_return folly::makeUnexpected(
           FetchError{
               fetch.requestID,
-              FetchErrorCode::TRACK_NOT_EXIST,
+              FetchErrorCode::DOES_NOT_EXIST,
               "unexpected fetch"});
     }
     auto largest = *forwarder_.largest();

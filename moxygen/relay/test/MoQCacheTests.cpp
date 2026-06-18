@@ -573,7 +573,7 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHitEOG) {
 CO_TEST_F(MoQCacheTest, TestFetchMissUpstreamError) {
   // Test case for fetch with complete cache miss when no track is present
   expectUpstreamFetch(
-      FetchError{0, FetchErrorCode::TRACK_NOT_EXIST, "not exist"});
+      FetchError{0, FetchErrorCode::DOES_NOT_EXIST, "not exist"});
   auto res = co_await cache_.fetch(
       getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasError());
@@ -583,7 +583,7 @@ CO_TEST_F(MoQCacheTest, TestFetchMissTailUpstreamError) {
   // Test case for fetch with complete cache miss when no track is present
   populateCacheRange({0, 0}, {0, 1});
   expectUpstreamFetch(
-      FetchError{0, FetchErrorCode::TRACK_NOT_EXIST, "not exist"});
+      FetchError{0, FetchErrorCode::DOES_NOT_EXIST, "not exist"});
   expectFetchObjects({0, 0}, {0, 1}, false);
   EXPECT_CALL(*consumer_, reset(_));
   auto res = co_await cache_.fetch(

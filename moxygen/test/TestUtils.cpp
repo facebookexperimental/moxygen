@@ -133,7 +133,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   res = moqFrameWriter.writeRequestError(
       writeBuf,
       SubscribeError(
-          {RequestID(0), SubscribeErrorCode::TRACK_NOT_EXIST, "not found"}),
+          {RequestID(0), SubscribeErrorCode::DOES_NOT_EXIST, "not found"}),
       FrameType::SUBSCRIBE_ERROR);
   res = moqFrameWriter.writeUnsubscribe(
       writeBuf,

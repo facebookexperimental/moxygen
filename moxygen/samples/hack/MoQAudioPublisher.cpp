@@ -226,7 +226,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQAudioPublisher::subscribe(
   XLOG(ERR) << "Unknown track " << sub.fullTrackName;
   co_return folly::makeUnexpected(
       SubscribeError{
-          sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
+          sub.requestID, SubscribeErrorCode::DOES_NOT_EXIST, "Unknown track"});
 }
 
 void MoQAudioPublisher::publishAudioFrame(

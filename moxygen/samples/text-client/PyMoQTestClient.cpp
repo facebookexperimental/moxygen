@@ -121,10 +121,12 @@ const char* requestErrorCodeToString(RequestErrorCode code) {
       return "TIMEOUT";
     case RequestErrorCode::NOT_SUPPORTED:
       return "NOT_SUPPORTED";
-    case RequestErrorCode::TRACK_NOT_EXIST:
-      return "TRACK_NOT_EXIST/NAMESPACE_PREFIX_UNKNOWN/UNINTERESTED";
+    case RequestErrorCode::DOES_NOT_EXIST:
+      return "DOES_NOT_EXIST";
     case RequestErrorCode::INVALID_RANGE:
       return "INVALID_RANGE";
+    case RequestErrorCode::UNINTERESTED:
+      return "UNINTERESTED";
     case RequestErrorCode::CANCELLED:
       return "CANCELLED";
     case RequestErrorCode::GOING_AWAY:

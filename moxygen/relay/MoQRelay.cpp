@@ -1003,7 +1003,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       // message error?
       co_return folly::makeUnexpected(SubscribeError(
           {subReq.requestID,
-           SubscribeErrorCode::TRACK_NOT_EXIST,
+           SubscribeErrorCode::DOES_NOT_EXIST,
            "namespace required"}));
     }
     auto upstreamSession =
@@ -1012,7 +1012,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       // no such namespace has been published
       co_return folly::makeUnexpected(SubscribeError(
           {subReq.requestID,
-           SubscribeErrorCode::TRACK_NOT_EXIST,
+           SubscribeErrorCode::DOES_NOT_EXIST,
            "no such namespace or track"}));
     }
     subReq.priority = kDefaultUpstreamPriority;
@@ -1141,7 +1141,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   if (fetch.fullTrackName.trackNamespace.empty()) {
     co_return folly::makeUnexpected(FetchError(
         {fetch.requestID,
-         FetchErrorCode::TRACK_NOT_EXIST,
+         FetchErrorCode::DOES_NOT_EXIST,
          "namespace required"}));
   }
 
@@ -1153,7 +1153,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
       // message error
       co_return folly::makeUnexpected(FetchError(
           {fetch.requestID,
-           FetchErrorCode::TRACK_NOT_EXIST,
+           FetchErrorCode::DOES_NOT_EXIST,
            "No subscription for joining fetch"}));
     } else if (subscriptionIt->second.promise.isFulfilled()) {
       auto res = subscriptionIt->second.forwarder->resolveJoiningFetch(
@@ -1180,7 +1180,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     if (!upstreamSession) {
       co_return folly::makeUnexpected(FetchError(
           {fetch.requestID,
-           FetchErrorCode::TRACK_NOT_EXIST,
+           FetchErrorCode::DOES_NOT_EXIST,
            "no upstream for fetch"}));
     }
   }
@@ -1211,7 +1211,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
   if (trackStatus.fullTrackName.trackNamespace.empty()) {
     co_return folly::makeUnexpected(TrackStatusError(
         {trackStatus.requestID,
-         TrackStatusErrorCode::TRACK_NOT_EXIST,
+         TrackStatusErrorCode::DOES_NOT_EXIST,
          "namespace required"}));
   }
 
@@ -1257,7 +1257,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
       co_return folly::makeUnexpected(
           TrackStatusError{
               trackStatus.requestID,
-              TrackStatusErrorCode::TRACK_NOT_EXIST,
+              TrackStatusErrorCode::DOES_NOT_EXIST,
               "no such namespace or track"});
     }
 

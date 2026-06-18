@@ -298,14 +298,14 @@ CO_TEST_P_X(MoQSessionTest, FetchPublisherError) {
         co_return folly::makeUnexpected(
             FetchError{
                 fetch.requestID,
-                FetchErrorCode::TRACK_NOT_EXIST,
+                FetchErrorCode::DOES_NOT_EXIST,
                 "Bad trackname"});
       },
-      FetchErrorCode::TRACK_NOT_EXIST);
+      FetchErrorCode::DOES_NOT_EXIST);
   auto res =
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
   EXPECT_TRUE(res.hasError());
-  EXPECT_EQ(res.error().errorCode, FetchErrorCode::TRACK_NOT_EXIST);
+  EXPECT_EQ(res.error().errorCode, FetchErrorCode::DOES_NOT_EXIST);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, FetchPublisherThrow) {

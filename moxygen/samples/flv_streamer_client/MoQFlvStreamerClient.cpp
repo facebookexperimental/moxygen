@@ -197,7 +197,7 @@ class MoQFlvStreamerClient
       co_return folly::makeUnexpected(
           SubscribeError{
               subscribeReq.requestID,
-              SubscribeErrorCode::TRACK_NOT_EXIST,
+              SubscribeErrorCode::DOES_NOT_EXIST,
               "Full trackname NOT available"});
     }
 

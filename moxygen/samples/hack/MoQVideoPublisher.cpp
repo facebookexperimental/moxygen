@@ -366,7 +366,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
     co_return folly::makeUnexpected(
         SubscribeError{
             sub.requestID,
-            SubscribeErrorCode::TRACK_NOT_EXIST,
+            SubscribeErrorCode::DOES_NOT_EXIST,
             "Unknown track"});
   }
   if ((sub.fullTrackName == videoForwarder_.fullTrackName()) &&
@@ -393,7 +393,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
 
   co_return folly::makeUnexpected(
       SubscribeError{
-          sub.requestID, SubscribeErrorCode::TRACK_NOT_EXIST, "Unknown track"});
+          sub.requestID, SubscribeErrorCode::DOES_NOT_EXIST, "Unknown track"});
 }
 
 void MoQVideoPublisher::publishVideoFrame(

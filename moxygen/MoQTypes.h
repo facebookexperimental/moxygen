@@ -131,7 +131,6 @@ enum class RequestErrorCode : uint32_t {
   GOING_AWAY = 0x6,
   EXCESSIVE_LOAD = 0x9, // draft 18+
   DOES_NOT_EXIST = 0x10,
-  TRACK_NOT_EXIST = 0x10,          // alias of DOES_NOT_EXIST
   NAMESPACE_PREFIX_UNKNOWN = 0x10, // alias of DOES_NOT_EXIST
   INVALID_RANGE = 0x11,
   MALFORMED_TRACK = 0x12,
