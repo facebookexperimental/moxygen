@@ -17,8 +17,13 @@ class MoQClient : public MoQClientBase {
   MoQClient(
       std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,
-      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
-      : MoQClientBase(std::move(exec), std::move(url), std::move(verifier)) {}
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
+      bool useQuicWtSession = false)
+      : MoQClientBase(
+            std::move(exec),
+            std::move(url),
+            std::move(verifier),
+            useQuicWtSession) {}
 
   [[nodiscard]] quic::
       Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>
@@ -40,12 +45,14 @@ class MoQClient : public MoQClientBase {
       std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,
       SessionFactory sessionFactory,
-      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
+      bool useQuicWtSession = false)
       : MoQClientBase(
             std::move(exec),
             std::move(url),
             std::move(sessionFactory),
-            std::move(verifier)) {}
+            std::move(verifier),
+            useQuicWtSession) {}
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(

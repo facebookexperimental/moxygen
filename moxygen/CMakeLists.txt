@@ -189,6 +189,7 @@ moxygen_add_library(moxygen_moqclient_base
     moxygen_moq
     moxygen_moq_early_data_handler
     proxygen::proxygen_http_webtransport
+    proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
     proxygen::proxygen_utils_parse_url
     mvfst::mvfst_client

@@ -9,6 +9,7 @@
 #include <fizz/protocol/CertificateVerifier.h>
 #include <folly/coro/Promise.h>
 #include <proxygen/lib/http/webtransport/QuicWebTransport.h>
+#include <proxygen/lib/http/webtransport/QuicWtSession.h>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <proxygen/lib/utils/URL.h>
 #include <quic/client/QuicClientTransport.h>
@@ -35,21 +36,25 @@ class MoQClientBase {
   MoQClientBase(
       std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,
-      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
+      bool useQuicWtSession = false)
       : exec_(std::move(exec)),
         url_(std::move(url)),
         sessionFactory_(defaultSessionFactory()),
-        verifier_(std::move(verifier)) {}
+        verifier_(std::move(verifier)),
+        useQuicWtSession_(useQuicWtSession) {}
 
   MoQClientBase(
       std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,
       SessionFactory sessionFactory,
-      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
+      bool useQuicWtSession = false)
       : exec_(std::move(exec)),
         url_(std::move(url)),
         sessionFactory_(std::move(sessionFactory)),
-        verifier_(std::move(verifier)) {}
+        verifier_(std::move(verifier)),
+        useQuicWtSession_(useQuicWtSession) {}
 
   virtual ~MoQClientBase() {
     if (moqSession_) {
@@ -58,6 +63,9 @@ class MoQClientBase {
     }
     if (quicWebTransport_) {
       quicWebTransport_->setHandler(nullptr);
+    }
+    if (quicWtSession_) {
+      quicWtSession_->setHandler(nullptr);
     }
   }
 
@@ -133,10 +141,12 @@ class MoQClientBase {
   proxygen::URL url_;
   SessionFactory sessionFactory_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
+  std::shared_ptr<proxygen::QuicWtSession> quicWtSession_;
   std::optional<std::string> negotiatedProtocol_;
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
   std::shared_ptr<quic::QuicPskCache> pskCache_;
   MoQEarlyDataHandler* earlyDataHandler_{nullptr};
+  bool useQuicWtSession_{false};
   std::chrono::milliseconds transportConnectTime_{0};
   std::chrono::milliseconds moqHandshakeTime_{0};
 
