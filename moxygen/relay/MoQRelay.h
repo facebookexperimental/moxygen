@@ -232,6 +232,19 @@ class MoQRelay : public Publisher,
     bool isPublish{false};
   };
 
+  folly::coro::Task<Publisher::SubscribeResult>
+  subscribeToExistingRelaySubscription(
+      SubscribeRequest subReq,
+      std::shared_ptr<TrackConsumer> consumer,
+      std::shared_ptr<MoQSession> downstreamSession);
+
+  folly::coro::Task<Publisher::SubscribeResult>
+  subscribeToFirstRelaySubscription(
+      SubscribeRequest subReq,
+      std::shared_ptr<TrackConsumer> consumer,
+      std::shared_ptr<MoQSession> downstreamSession,
+      std::shared_ptr<MoQSession> upstreamSession);
+
   void onEmpty(MoQForwarder* forwarder) override;
   void forwardChanged(MoQForwarder* forwarder) override;
   void newGroupRequested(MoQForwarder* forwarder, uint64_t group) override;

@@ -11,7 +11,7 @@
 
 namespace {
 constexpr uint8_t kDefaultUpstreamPriority = 128;
-}
+} // namespace
 
 namespace moxygen {
 
@@ -993,142 +993,176 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     SubscribeRequest subReq,
     std::shared_ptr<TrackConsumer> consumer) {
   auto session = MoQSession::getRequestSession();
+
+  // check auth / get trackNamespace
+  if (subReq.fullTrackName.trackNamespace.empty()) {
+    // message error?
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         SubscribeErrorCode::DOES_NOT_EXIST,
+         "namespace required"}));
+  }
+
   auto subscriptionIt = subscriptions_.find(subReq.fullTrackName);
-  if (subscriptionIt == subscriptions_.end()) {
-    // first subscriber
+  if (subscriptionIt != subscriptions_.end()) {
+    co_return co_await subscribeToExistingRelaySubscription(
+        std::move(subReq), std::move(consumer), std::move(session));
+  }
 
-    // check auth
-    // get trackNamespace
-    if (subReq.fullTrackName.trackNamespace.empty()) {
-      // message error?
-      co_return folly::makeUnexpected(SubscribeError(
-          {subReq.requestID,
-           SubscribeErrorCode::DOES_NOT_EXIST,
-           "namespace required"}));
-    }
-    auto upstreamSession =
-        findPublishNamespaceSession(subReq.fullTrackName.trackNamespace);
-    if (!upstreamSession) {
-      // no such namespace has been published
-      co_return folly::makeUnexpected(SubscribeError(
-          {subReq.requestID,
-           SubscribeErrorCode::DOES_NOT_EXIST,
-           "no such namespace or track"}));
-    }
-    subReq.priority = kDefaultUpstreamPriority;
-    subReq.groupOrder = GroupOrder::Default;
-    // We only subscribe upstream with LargestObject. This is to satisfy other
-    // subscribers that join with narrower filters
-    subReq.locType = LocationType::LargestObject;
-    auto forwarder =
-        std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
-    forwarder->setCallback(shared_from_this());
-    auto emplaceRes = subscriptions_.emplace(
-        std::piecewise_construct,
-        std::forward_as_tuple(subReq.fullTrackName),
-        std::forward_as_tuple(forwarder, upstreamSession));
-    // The iterator returned from emplace does not survive across coroutine
-    // resumption, so both the guard and updating the RelaySubscription below
-    // require another lookup in the subscriptions_ map.
-    auto g = folly::makeGuard([this, trackName = subReq.fullTrackName] {
-      auto it = subscriptions_.find(trackName);
-      if (it != subscriptions_.end()) {
-        it->second.promise.setException(std::runtime_error("failed"));
-        XLOG(DBG4) << "Erasing subscription to " << it->first;
-        subscriptions_.erase(it);
-      }
-    });
-    // Add subscriber first in case objects come before subscribe OK.
-    auto subscriber = forwarder->addSubscriber(
-        std::move(session), subReq, std::move(consumer));
-    if (!subscriber) {
-      XLOG(ERR) << "addSubscriber returned null (draining?) for "
-                << subReq.fullTrackName << " reqID=" << subReq.requestID;
-      co_return folly::makeUnexpected(
-          SubscribeError{
-              subReq.requestID,
-              SubscribeErrorCode::INTERNAL_ERROR,
-              "failed to add subscriber"});
-    }
-    XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
-    // As per the spec, we must set forward = true in the subscribe request
-    // to the upstream.
-    // But should we if this is forward=0?
-    subReq.forward = forwarder->numForwardingSubscribers() > 0;
+  auto upstreamSession =
+      findPublishNamespaceSession(subReq.fullTrackName.trackNamespace);
+  if (!upstreamSession) {
+    // no such namespace has been published
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         SubscribeErrorCode::DOES_NOT_EXIST,
+         "no such namespace or track"}));
+  }
 
-    emplaceRes.first->second.requestID = upstreamSession->peekNextRequestID();
-    auto subRes = co_await upstreamSession->subscribe(
-        subReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
-    if (subRes.hasError()) {
-      co_return folly::makeUnexpected(SubscribeError(
-          {subReq.requestID,
-           subRes.error().errorCode,
-           folly::to<std::string>(
-               "upstream subscribe failed: ", subRes.error().reasonPhrase)}));
-    }
-    // is it more correct to co_await folly::coro::co_safe_point here?
-    g.dismiss();
-    auto largest = subRes.value()->subscribeOk().largest;
-    if (largest) {
-      forwarder->updateLargest(largest->group, largest->object);
-      subscriber->updateLargest(*largest);
-    }
-    // Save upstream extensions to forwarder (and existing subscribers) and
-    // cache
-    auto& upstreamExtensions = subRes.value()->subscribeOk().extensions;
-    forwarder->setExtensions(upstreamExtensions);
-    if (cache_) {
-      cache_->setTrackExtensions(subReq.fullTrackName, upstreamExtensions);
-    }
+  co_return co_await subscribeToFirstRelaySubscription(
+      std::move(subReq),
+      std::move(consumer),
+      std::move(session),
+      std::move(upstreamSession));
+}
 
-    auto it = subscriptions_.find(subReq.fullTrackName);
-    // There are cases that remove the subscription like failing to
-    // publish a datagram that was received before the subscribeOK
-    // and then gets flushed
-    if (it == subscriptions_.end()) {
-      XLOG(ERR) << "Subscription is GONE, returning exception";
+folly::coro::Task<Publisher::SubscribeResult>
+MoQRelay::subscribeToExistingRelaySubscription(
+    SubscribeRequest subReq,
+    std::shared_ptr<TrackConsumer> consumer,
+    std::shared_ptr<MoQSession> downstreamSession) {
+  auto subscriptionIt = subscriptions_.find(subReq.fullTrackName);
+  XCHECK(subscriptionIt != subscriptions_.end())
+      << "existing relay subscription required";
+
+  // Coalesce with the existing relay subscription.
+  if (!subscriptionIt->second.promise.isFulfilled()) {
+    // this will throw if the dependent subscribe failed, which is good
+    // because subscriptionIt will be invalid
+    co_await subscriptionIt->second.promise.getFuture();
+    subscriptionIt = subscriptions_.find(subReq.fullTrackName);
+    if (subscriptionIt == subscriptions_.end()) {
       co_yield folly::coro::co_error(
           std::runtime_error("subscription is gone"));
     }
-    auto& rsub = it->second;
-    rsub.requestID = subRes.value()->subscribeOk().requestID;
-    rsub.handle = std::move(subRes.value());
-    // Record NGR as outstanding (no fire — it rides the outgoing SUBSCRIBE).
-    forwarder->tryProcessNewGroupRequest(subReq.params, /*fire=*/false);
-    rsub.promise.setValue(folly::unit);
-    co_return subscriber;
-  } else {
-    if (!subscriptionIt->second.promise.isFulfilled()) {
-      // this will throw if the dependent subscribe failed, which is good
-      // because subscriptionIt will be invalid
-      co_await subscriptionIt->second.promise.getFuture();
-    }
-    auto& forwarder = subscriptionIt->second.forwarder;
-    if (forwarder->largest() && subReq.locType == LocationType::AbsoluteRange &&
-        subReq.endGroup < forwarder->largest()->group) {
-      co_return folly::makeUnexpected(
-          SubscribeError{
-              subReq.requestID,
-              SubscribeErrorCode::INVALID_RANGE,
-              "Range in the past, use FETCH"});
-      // start may be in the past, it will get adjusted forward to largest
-    }
-    auto subscriber = subscriptionIt->second.forwarder->addSubscriber(
-        std::move(session), subReq, std::move(consumer));
-    if (!subscriber) {
-      XLOG(ERR) << "addSubscriber returned null (draining?) for "
-                << subReq.fullTrackName << " reqID=" << subReq.requestID;
-      co_return folly::makeUnexpected(
-          SubscribeError{
-              subReq.requestID,
-              SubscribeErrorCode::INTERNAL_ERROR,
-              "failed to add subscriber"});
-    }
-    XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
-
-    forwarder->tryProcessNewGroupRequest(subReq.params);
-    co_return subscriber;
   }
+  auto& forwarder = subscriptionIt->second.forwarder;
+  if (forwarder->largest() && subReq.locType == LocationType::AbsoluteRange &&
+      subReq.endGroup < forwarder->largest()->group) {
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subReq.requestID,
+            SubscribeErrorCode::INVALID_RANGE,
+            "Range in the past, use FETCH"});
+    // start may be in the past, it will get adjusted forward to largest
+  }
+  auto subscriber = forwarder->addSubscriber(
+      std::move(downstreamSession), subReq, std::move(consumer));
+  if (!subscriber) {
+    XLOG(ERR) << "addSubscriber returned null (draining?) for "
+              << subReq.fullTrackName << " reqID=" << subReq.requestID;
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subReq.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "failed to add subscriber"});
+  }
+  XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
+  forwarder->tryProcessNewGroupRequest(subReq.params);
+  co_return subscriber;
+}
+
+folly::coro::Task<Publisher::SubscribeResult>
+MoQRelay::subscribeToFirstRelaySubscription(
+    SubscribeRequest subReq,
+    std::shared_ptr<TrackConsumer> consumer,
+    std::shared_ptr<MoQSession> downstreamSession,
+    std::shared_ptr<MoQSession> upstreamSession) {
+  // First downstream subscriber for this track — set up forwarder and
+  // subscribe upstream.
+  XCHECK(upstreamSession) << "upstreamSession required for first subscriber";
+
+  subReq.priority = kDefaultUpstreamPriority;
+  subReq.groupOrder = GroupOrder::Default;
+  // We only subscribe upstream with LargestObject. This is to satisfy other
+  // subscribers that join with narrower filters
+  subReq.locType = LocationType::LargestObject;
+  auto forwarder =
+      std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
+  forwarder->setCallback(shared_from_this());
+  auto emplaceRes = subscriptions_.emplace(
+      std::piecewise_construct,
+      std::forward_as_tuple(subReq.fullTrackName),
+      std::forward_as_tuple(forwarder, upstreamSession));
+  // The iterator returned from emplace does not survive across coroutine
+  // resumption, so both the guard and updating the RelaySubscription below
+  // require another lookup in the subscriptions_ map.
+  auto g = folly::makeGuard([this, trackName = subReq.fullTrackName] {
+    auto it = subscriptions_.find(trackName);
+    if (it != subscriptions_.end()) {
+      it->second.promise.setException(std::runtime_error("failed"));
+      XLOG(DBG4) << "Erasing subscription to " << it->first;
+      subscriptions_.erase(it);
+    }
+  });
+  // Add subscriber first in case objects come before subscribe OK.
+  auto subscriber = forwarder->addSubscriber(
+      std::move(downstreamSession), subReq, std::move(consumer));
+  if (!subscriber) {
+    XLOG(ERR) << "addSubscriber returned null (draining?) for "
+              << subReq.fullTrackName << " reqID=" << subReq.requestID;
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subReq.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "failed to add subscriber"});
+  }
+  XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
+  // As per the spec, we must set forward = true in the subscribe request
+  // to the upstream.
+  // But should we if this is forward=0?
+  subReq.forward = forwarder->numForwardingSubscribers() > 0;
+
+  emplaceRes.first->second.requestID = upstreamSession->peekNextRequestID();
+  auto subRes = co_await upstreamSession->subscribe(
+      subReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
+  if (subRes.hasError()) {
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         subRes.error().errorCode,
+         folly::to<std::string>(
+             "upstream subscribe failed: ", subRes.error().reasonPhrase)}));
+  }
+  // is it more correct to co_await folly::coro::co_safe_point here?
+  g.dismiss();
+  auto largest = subRes.value()->subscribeOk().largest;
+  if (largest) {
+    forwarder->updateLargest(largest->group, largest->object);
+    subscriber->updateLargest(*largest);
+  }
+  // Save upstream extensions to forwarder (and existing subscribers) and
+  // cache
+  auto& upstreamExtensions = subRes.value()->subscribeOk().extensions;
+  forwarder->setExtensions(upstreamExtensions);
+  if (cache_) {
+    cache_->setTrackExtensions(subReq.fullTrackName, upstreamExtensions);
+  }
+
+  auto it = subscriptions_.find(subReq.fullTrackName);
+  // There are cases that remove the subscription like failing to
+  // publish a datagram that was received before the subscribeOK
+  // and then gets flushed
+  if (it == subscriptions_.end()) {
+    XLOG(ERR) << "Subscription is GONE, returning exception";
+    co_yield folly::coro::co_error(std::runtime_error("subscription is gone"));
+  }
+  auto& rsub = it->second;
+  rsub.requestID = subRes.value()->subscribeOk().requestID;
+  rsub.handle = std::move(subRes.value());
+  // Record NGR as outstanding (no fire — it rides the outgoing SUBSCRIBE).
+  forwarder->tryProcessNewGroupRequest(subReq.params, /*fire=*/false);
+  rsub.promise.setValue(folly::unit);
+  co_return subscriber;
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
