@@ -14,6 +14,7 @@
 #include <moxygen/tools/moqperf/MoQPerfParams.h>
 #include <moxygen/tools/moqperf/MoQPerfServer.h>
 #include <moxygen/tools/moqperf/MoQPerfUtils.h>
+#include <iostream>
 
 // server (addr, port)
 DEFINE_string(server_addr, "", "Server's address");

@@ -17,6 +17,7 @@
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/samples/util/Utils.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
+#include <iostream>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");

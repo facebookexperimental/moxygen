@@ -6,6 +6,7 @@
 
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
+#include <iostream>
 #include "moxygen/QmuxUtils.h"
 #include "moxygen/mlog/FileMLogger.h"
 #include "moxygen/mlog/FileMLoggerFactory.h"

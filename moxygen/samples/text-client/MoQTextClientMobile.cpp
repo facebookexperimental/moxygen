@@ -9,6 +9,7 @@
 #include <folly/init/Init.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/GFlags.h>
+#include <iostream>
 
 // The following macros are defined both in 'libev' and 'libevent'.
 #undef EV_READ

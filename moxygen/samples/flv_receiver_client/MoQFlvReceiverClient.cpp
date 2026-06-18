@@ -5,6 +5,7 @@
  */
 
 #include <folly/portability/GFlags.h>
+#include <iostream>
 #include "moxygen/MoQClient.h"
 #include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/ObjectReceiver.h"
