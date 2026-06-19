@@ -445,7 +445,7 @@ Fetch::Fetch(
 
 Fetch::Fetch(
     RequestID su,
-    RequestID jsid,
+    std::optional<RequestID> jsid,
     uint64_t joiningStart,
     FetchType fetchType,
     uint8_t p,

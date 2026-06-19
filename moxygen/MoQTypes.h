@@ -11,6 +11,7 @@
 #include <folly/io/IOBuf.h>
 #include <folly/logging/xlog.h>
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -1241,7 +1242,10 @@ struct StandaloneFetch {
 };
 
 struct JoiningFetch {
-  JoiningFetch(RequestID jsid, uint64_t joiningStartIn, FetchType fetchTypeIn)
+  JoiningFetch(
+      std::optional<RequestID> jsid,
+      uint64_t joiningStartIn,
+      FetchType fetchTypeIn)
       : joiningRequestID(jsid),
         joiningStart(joiningStartIn),
         fetchType(fetchTypeIn) {
@@ -1249,7 +1253,9 @@ struct JoiningFetch {
         fetchType == FetchType::RELATIVE_JOINING ||
         fetchType == FetchType::ABSOLUTE_JOINING);
   }
-  RequestID joiningRequestID;
+  // std::nullopt means "let the session resolve the request ID automatically"
+  // by matching the FullTrackName against pending requests and active tracks.
+  std::optional<RequestID> joiningRequestID;
   // For absolute joining, this is the starting group id. For relative joining,
   // this is the group offset prior and relative to the current group of the
   // corresponding subscribe.
@@ -1270,10 +1276,11 @@ struct Fetch {
       GroupOrder g = GroupOrder::Default,
       const std::vector<Parameter>& pa = {});
 
-  // Used for absolute or relative joining fetches
+  // Used for absolute or relative joining fetches. Pass std::nullopt for jsid
+  // to let the session resolve the joining request ID by FullTrackName.
   Fetch(
       RequestID su,
-      RequestID jsid,
+      std::optional<RequestID> jsid,
       uint64_t joiningStart,
       FetchType fetchType,
       uint8_t p = kDefaultPriority,

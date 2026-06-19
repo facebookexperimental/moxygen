@@ -257,8 +257,10 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
             FetchErrorCode::DOES_NOT_EXIST,
             "Session has no active subscribe"});
   }
-  if (subIt->second->requestID != joining.joiningRequestID) {
-    XLOG(ERR) << joining.joiningRequestID
+  if (!joining.joiningRequestID.has_value() ||
+      subIt->second->requestID != *joining.joiningRequestID) {
+    XLOG(ERR) << (joining.joiningRequestID ? joining.joiningRequestID->value
+                                           : 0)
               << " does not name a Subscribe "
                  " for this track";
     return folly::makeUnexpected(

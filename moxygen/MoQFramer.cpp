@@ -6024,7 +6024,9 @@ WriteResult MoQFrameWriter::writeFetch(
 
     writeVarint(
         writeBuf, folly::to_underlying(joining->fetchType), size, error);
-    writeVarint(writeBuf, joining->joiningRequestID.value, size, error);
+    XCHECK(joining->joiningRequestID.has_value())
+        << "joiningRequestID must be resolved before serialization";
+    writeVarint(writeBuf, joining->joiningRequestID->value, size, error);
     writeVarint(writeBuf, joining->joiningStart, size, error);
   }
 

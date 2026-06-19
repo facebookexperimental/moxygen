@@ -313,8 +313,9 @@ void MLogger::logFetch(
       baseMsg->fetchType = "absolute_joining";
     }
     MOQTJoiningFetch joiningFetchMsg;
-    joiningFetchMsg.joiningRequestId =
-        std::get<JoiningFetch>(req.args).joiningRequestID.value;
+    const auto& joiningReqID =
+        std::get<JoiningFetch>(req.args).joiningRequestID;
+    joiningFetchMsg.joiningRequestId = joiningReqID ? joiningReqID->value : 0;
     joiningFetchMsg.joiningStart =
         std::get<JoiningFetch>(req.args).joiningStart;
     baseMsg->joiningFetch = std::move(joiningFetchMsg);

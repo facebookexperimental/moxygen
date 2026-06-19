@@ -820,6 +820,14 @@ class MoQSession : public Subscriber,
       Parameters& params,
       const std::optional<uint64_t>& forceVersion = std::nullopt);
   RequestID getNextRequestID();
+  // Resolves joining.joiningRequestID (including the std::nullopt auto-resolve
+  // case) and validates the resulting state against fullTrackName.  Sets
+  // joining.joiningRequestID to the resolved value when std::nullopt is passed.
+  folly::Expected<std::shared_ptr<SubscribeTrackReceiveState>, FetchError>
+  resolveJoiningFetch(
+      RequestID requestID,
+      JoiningFetch& joining,
+      const FullTrackName& fullTrackName);
   void setRequestSession() {
     folly::RequestContext::get()->setContextData(
         sessionRequestToken(),
