@@ -3651,6 +3651,13 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
           XLOG(ERR) << __func__ << " terminating for unknown "
                     << "stream id=" << id << " sess=" << this;
         }
+        // Per the WebTransport contract, the StreamReadHandle is invalid once
+        // readStreamData() yields an exception (peer reset, session close, or
+        // cancellation). The transport owns the handle and may free it on
+        // another thread, so clear our pointer here -- on the coroutine's own
+        // thread, before scope exit -- so stopSendingGuard does not call
+        // stopSending() on a dangling handle.
+        readHandle = nullptr;
         break;
       }
       streamData = std::move(*streamDataTry);
