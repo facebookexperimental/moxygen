@@ -464,7 +464,12 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
     postCreateHook(moqSessionPtr);
   }
 
-  co_await handleClientSession(std::move(moqSession));
+  // qmux loops keep a raw handler pointer and can run past session teardown, so
+  // the session must outlive them and the handler must be detached first.
+  SCOPE_EXIT {
+    qmuxSession->setHandler(nullptr);
+  };
+  co_await handleClientSession(moqSession);
 }
 
 } // namespace moxygen
