@@ -1082,6 +1082,19 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // subscribe upstream.
   XCHECK(upstreamSession) << "upstreamSession required for first subscriber";
 
+  auto downstreamMaybeVersion = downstreamSession
+      ? downstreamSession->getNegotiatedVersion()
+      : std::optional<uint64_t>{};
+  auto upstreamMaybeVersion = upstreamSession->getNegotiatedVersion();
+  const bool downstreamIsV18Plus = downstreamMaybeVersion.has_value() &&
+      getDraftMajorVersion(*downstreamMaybeVersion) >= 18;
+  const bool upstreamIsV18Plus = upstreamMaybeVersion.has_value() &&
+      getDraftMajorVersion(*upstreamMaybeVersion) >= 18;
+  if (downstreamIsV18Plus || upstreamIsV18Plus) {
+    subReq.params.eraseAllParamsOfType(
+        TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
+  }
+
   subReq.priority = kDefaultUpstreamPriority;
   subReq.groupOrder = GroupOrder::Default;
   // We only subscribe upstream with LargestObject. This is to satisfy other
