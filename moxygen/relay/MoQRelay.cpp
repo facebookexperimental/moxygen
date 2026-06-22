@@ -1026,6 +1026,64 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
       std::move(upstreamSession));
 }
 
+MoQRelay::PendingRendezvousNode& MoQRelay::findOrCreatePendingRendezvousNode(
+    const TrackNamespace& ns) {
+  auto* node = &pendingRendezvousRoot_;
+  for (const auto& part : ns.trackNamespace) {
+    auto& child = node->children[part];
+    if (!child) {
+      child = std::make_unique<PendingRendezvousNode>();
+    }
+    node = child.get();
+  }
+  return *node;
+}
+
+void MoQRelay::addPendingRendezvous(
+    const FullTrackName& ftn,
+    const std::shared_ptr<PendingRendezvous>& waiter) {
+  auto& node = findOrCreatePendingRendezvousNode(ftn.trackNamespace);
+  node.waitersByTrack[ftn.trackName].push_back(waiter);
+}
+
+void MoQRelay::erasePendingRendezvous(
+    const FullTrackName& ftn,
+    const std::shared_ptr<PendingRendezvous>& waiter) {
+  erasePendingRendezvousFromNode(
+      pendingRendezvousRoot_, ftn, /*namespaceIndex=*/0, waiter);
+}
+
+void MoQRelay::erasePendingRendezvousFromNode(
+    PendingRendezvousNode& node,
+    const FullTrackName& ftn,
+    size_t namespaceIndex,
+    const std::shared_ptr<PendingRendezvous>& waiter) {
+  if (namespaceIndex < ftn.trackNamespace.trackNamespace.size()) {
+    const auto& part = ftn.trackNamespace.trackNamespace[namespaceIndex];
+    auto childIt = node.children.find(part);
+    if (childIt == node.children.end()) {
+      return;
+    }
+    erasePendingRendezvousFromNode(
+        *childIt->second, ftn, namespaceIndex + 1, waiter);
+    if (childIt->second->empty()) {
+      node.children.erase(childIt);
+    }
+    return;
+  }
+
+  auto waitersIt = node.waitersByTrack.find(ftn.trackName);
+  if (waitersIt == node.waitersByTrack.end()) {
+    return;
+  }
+  auto& waiters = waitersIt->second;
+  waiters.erase(
+      std::remove(waiters.begin(), waiters.end(), waiter), waiters.end());
+  if (waiters.empty()) {
+    node.waitersByTrack.erase(waitersIt);
+  }
+}
+
 folly::coro::Task<Publisher::SubscribeResult>
 MoQRelay::subscribeToExistingRelaySubscription(
     SubscribeRequest subReq,

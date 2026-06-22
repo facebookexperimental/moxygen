@@ -10,6 +10,7 @@
 #include "moxygen/MoQSession.h"
 #include "moxygen/relay/MoQCache.h"
 #include "moxygen/relay/MoQForwarder.h"
+#include "moxygen/util/TimedBaton.h"
 
 #include <folly/container/F14Set.h>
 
@@ -271,9 +272,49 @@ class MoQRelay : public Publisher,
       const TrackNamespace& trackNamespace,
       NamespaceNode* node);
 
+  struct PendingRendezvous {
+    SubscribeRequest subReq;
+    std::shared_ptr<TrackConsumer> consumer;
+    std::shared_ptr<MoQSession> downstreamSession;
+
+    // The baton is signaled when one of the following happens:
+    // (1) A peer PUBLISHes the exact track
+    // (2) A peer PUBLISH_NAMESPACEs a namespace that contains the track
+    TimedBaton baton;
+  };
+
+  struct PendingRendezvousNode {
+    using WaiterList = std::vector<std::shared_ptr<PendingRendezvous>>;
+
+    bool empty() const {
+      return children.empty() && waitersByTrack.empty();
+    }
+
+    folly::F14FastMap<std::string, std::unique_ptr<PendingRendezvousNode>>
+        children;
+    folly::F14FastMap<std::string, WaiterList> waitersByTrack;
+  };
+
+  void addPendingRendezvous(
+      const FullTrackName& ftn,
+      const std::shared_ptr<PendingRendezvous>& waiter);
+  PendingRendezvousNode& findOrCreatePendingRendezvousNode(
+      const TrackNamespace& ns);
+
+  void erasePendingRendezvous(
+      const FullTrackName& ftn,
+      const std::shared_ptr<PendingRendezvous>& waiter);
+
+  void erasePendingRendezvousFromNode(
+      PendingRendezvousNode& node,
+      const FullTrackName& ftn,
+      size_t namespaceIndex,
+      const std::shared_ptr<PendingRendezvous>& waiter);
+
   TrackNamespace allowedNamespacePrefix_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>
       subscriptions_;
+  PendingRendezvousNode pendingRendezvousRoot_;
 
   std::shared_ptr<TrackConsumer> getSubscribeWriteback(
       const FullTrackName& ftn,
