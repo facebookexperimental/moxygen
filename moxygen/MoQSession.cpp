@@ -4869,6 +4869,8 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
     TrackStatus trackStatus,
     std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
   auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->trackStatus(trackStatus)));
