@@ -6417,11 +6417,6 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  std::unique_ptr<folly::IOBuf> payload;
-  if (logger_) {
-    payload = datagram->clone();
-  }
-
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
 
   readBuf.append(std::move(datagram));
@@ -6436,13 +6431,27 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
+  remainingLength -= type->second;
+
+  if (isPaddingDatagramType(*negotiatedVersion_, type->first)) {
+    auto paddingResult = parsePaddingData(cursor, remainingLength);
+    if (paddingResult.hasError()) {
+      XLOG(ERR) << __func__ << " Bad padding datagram";
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    }
+    return;
+  }
+
+  std::unique_ptr<folly::IOBuf> payload;
+  if (logger_) {
+    payload = readBuf.front()->clone();
+  }
 
   if (!isValidDatagramType(*negotiatedVersion_, type->first)) {
     XLOG(ERR) << __func__ << " Bad datagram header type=" << type->first;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  remainingLength -= type->second;
   auto res = parser.parseDatagramObjectHeader(
       cursor, DatagramType(type->first), remainingLength);
   if (res.hasError()) {

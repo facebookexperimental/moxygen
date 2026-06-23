@@ -693,6 +693,41 @@ CO_TEST_P_X(MoQSessionTest, DatagramBeforeSetup) {
   EXPECT_TRUE(clientWt_->isSessionClosed());
   co_return;
 }
+CO_TEST_P_X(Draft18Test, PaddingDatagramIsDiscarded) {
+  co_await setupMoQSession();
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writer.writePaddingDatagram(writeBuf, 8);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    co_return;
+  }
+
+  clientSession_->onDatagram(writeBuf.move());
+
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_return;
+}
+CO_TEST_P_X(Draft18Test, PaddingDatagramWithNonZeroByteClosesSession) {
+  co_await setupMoQSession();
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writer.writePaddingDatagram(writeBuf, 0);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    co_return;
+  }
+  const uint8_t invalidPadding = 0x01;
+  writeBuf.append(&invalidPadding, sizeof(invalidPadding));
+
+  clientSession_->onDatagram(writeBuf.move());
+
+  EXPECT_TRUE(clientWt_->isSessionClosed());
+  co_return;
+}
 CO_TEST_P_X(MoQSessionTest, EmptyUnidirectionalStream) {
   co_await setupMoQSession();
 
