@@ -40,23 +40,26 @@ CURRENT_SECTION=""
 
 # Check arguments
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 <relay_url> [versions] [Q]"
+    echo "Usage: $0 <relay_url> [versions] [Q|X]"
     echo "Example: $0 http://localhost:9999"
-    echo "         $0 http://localhost:9999 16 Q"
+    echo "         $0 http://localhost:9999 16 Q   # raw QUIC"
+    echo "         $0 http://localhost:9999 16 X   # QMUX-on-TCP"
     echo "         $0 http://localhost:9999 14,16"
     exit 1
 fi
 
 RELAY_URL="$1"
 
-# Transport flag: default to webtransport
+# Transport flag: default to HTTP/3 + WebTransport (Q = raw QUIC, X = QMUX-on-TCP)
 # Versions flag: default to empty (all supported)
-TRANSPORT_FLAG="--quic_transport=False"
+TRANSPORT_FLAG="--transport=h3wt"
 VERSION_FLAG=""
 shift 1
 for arg in "$@"; do
     if [ "$arg" = "Q" ]; then
-        TRANSPORT_FLAG="--quic_transport=True"
+        TRANSPORT_FLAG="--transport=quic"
+    elif [ "$arg" = "X" ]; then
+        TRANSPORT_FLAG="--transport=qmux"
     elif [[ "$arg" =~ ^[0-9,]+$ ]]; then
         VERSION_FLAG="--versions=$arg"
     fi

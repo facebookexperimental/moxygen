@@ -7,11 +7,12 @@
 #pragma once
 
 #include <moxygen/events/MoQFollyExecutorImpl.h>
-#include "moxygen/MoQClient.h"
+#include "moxygen/MoQClientBase.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/Subscriber.h"
 #include "moxygen/mlog/MLogger.h"
 #include "moxygen/moqtest/Types.h"
+#include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
 
@@ -43,7 +44,7 @@ class MoQTestClient {
   MoQTestClient(
       folly::EventBase* evb,
       proxygen::URL url,
-      bool useQuicTransport);
+      samples::TransportType transportType);
 
   ~MoQTestClient() {}
 
@@ -123,7 +124,7 @@ class MoQTestClient {
   ObjectReceiverCallback objectReceiverCallback_{*this};
 
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
-  std::unique_ptr<MoQClient> moqClient_;
+  std::unique_ptr<MoQClientBase> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;
 

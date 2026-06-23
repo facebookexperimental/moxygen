@@ -9,6 +9,7 @@
 #include "folly/io/async/ScopedEventBaseThread.h"
 #include "moxygen/mlog/FileMLogger.h"
 #include "moxygen/moqtest/MoQTestClient.h"
+#include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
 
@@ -67,10 +68,16 @@ DEFINE_bool(
     false,
     "Log to mlog file.  Default is false.  If true, will log to mlog file");
 DEFINE_string(mlog_path, moxygen::kDefaultClientFilePath, "Path to mlog file.");
+DEFINE_string(
+    transport,
+    "h3wt",
+    "Client transport: 'quic' (raw QUIC), 'h3wt' (HTTP/3 + WebTransport, "
+    "default), 'qmux' (QMUX-on-TCP, TLS via Fizz mandatory).");
 DEFINE_bool(
     quic_transport,
     false,
-    "Use QUIC transport instead of WebTransport");
+    "DEPRECATED: use --transport=quic (or --transport=h3wt) instead. "
+    "Selects raw QUIC vs WebTransport.");
 DEFINE_string(
     versions,
     "",
@@ -83,6 +90,8 @@ DEFINE_uint64(
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
   folly::Init init(&argc, &argv);
+  auto transportType =
+      moxygen::samples::selectClientTransport("transport", "quic_transport");
 
   folly::EventBase evb;
   XLOG(INFO) << "Starting MoQTestClient";
@@ -116,7 +125,7 @@ int main(int argc, char** argv) {
 
   auto url = proxygen::URL(FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
-      std::make_shared<moxygen::MoQTestClient>(&evb, url, FLAGS_quic_transport);
+      std::make_shared<moxygen::MoQTestClient>(&evb, url, transportType);
 
   std::shared_ptr<moxygen::MLogger> logger;
   if (FLAGS_log) {

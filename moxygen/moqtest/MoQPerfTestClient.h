@@ -13,11 +13,11 @@
 #include <folly/io/async/EventBase.h>
 #include <proxygen/lib/utils/URL.h>
 
-#include "moxygen/MoQClient.h"
-#include "moxygen/MoQWebTransportClient.h"
+#include "moxygen/MoQClientBase.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/Types.h"
+#include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
 
@@ -31,7 +31,7 @@ class SubscriberState {
       size_t id,
       std::shared_ptr<MoQFollyExecutorImpl> executor,
       const proxygen::URL& url,
-      bool useQuicTransport);
+      samples::TransportType transportType);
 
   ~SubscriberState();
 
@@ -95,7 +95,7 @@ class MoQPerfTestClient {
   MoQPerfTestClient(
       folly::EventBase* evb,
       proxygen::URL url,
-      bool useQuicTransport,
+      samples::TransportType transportType,
       uint32_t durationSeconds,
       uint32_t maxSubscribersPerSecond,
       uint32_t maxSubscribers,
@@ -147,7 +147,7 @@ class MoQPerfTestClient {
   // Configuration
   folly::EventBase* evb_;
   proxygen::URL url_;
-  bool useQuicTransport_;
+  samples::TransportType transportType_;
   uint32_t durationSeconds_;
   uint32_t maxSubscribersPerSecond_;
   uint32_t maxSubscribers_;

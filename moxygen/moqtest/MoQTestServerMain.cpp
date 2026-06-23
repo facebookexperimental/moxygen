@@ -12,6 +12,7 @@
 #include "moxygen/mlog/FileMLoggerFactory.h"
 #include "moxygen/moqtest/MoQTestServer.h"
 #include "moxygen/moqtest/Utils.h"
+#include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
 
@@ -28,10 +29,17 @@ DEFINE_int32(
     relay_transaction_timeout,
     1200000,
     "Relay transaction timeout (s)");
+DEFINE_string(
+    transport,
+    "h3wt",
+    "Relay-client transport (used when --relay_url is set): 'quic' (raw QUIC), "
+    "'h3wt' (HTTP/3 + WebTransport, default), 'qmux' (QMUX-on-TCP, TLS via "
+    "Fizz mandatory).");
 DEFINE_bool(
     quic_transport,
     false,
-    "Use raw QUIC transport instead of WebTransport (relay client only)");
+    "DEPRECATED: use --transport=quic (or --transport=h3wt) instead. "
+    "Selects raw QUIC vs WebTransport for the relay client.");
 DEFINE_string(cert, "", "Path to TLS certificate file");
 DEFINE_string(key, "", "Path to TLS private key file");
 DEFINE_string(
@@ -83,10 +91,8 @@ int main(int argc, char** argv) {
         server, "/test", std::move(fizzContext), std::move(config));
   }
 
-  // MoQTestServer owns single-threaded Publisher state that both the QUIC and
-  // QMUX stacks drive through the same shared instance. Run both listeners on
-  // one shared worker EventBase so publisher callbacks are serialized onto a
-  // single thread rather than racing across each stack's own worker pool.
+  // MoQTestServer publisher state is single-threaded; share one worker EB
+  // across stacks (and reuse it for the relay client when --relay_url is set).
   folly::ScopedEventBaseThread worker("MoQTestWorker");
   std::vector<folly::EventBase*> workerEvbs{worker.getEventBase()};
   folly::SocketAddress addr("::", FLAGS_port);
@@ -97,17 +103,17 @@ int main(int argc, char** argv) {
     qmuxServer->start(addr, workerEvbs);
   }
 
-  // If relay URL provided, connect as relay client. The relay client only
-  // attaches over QUIC/WebTransport today (--qmux on the relay-client side
-  // is intentionally not plumbed here), so this requires --quic.
+  // If relay URL provided, connect as relay client. Relay-client transport
+  // comes from --transport (or the deprecated --quic_transport).
   if (!FLAGS_relay_url.empty()) {
-    XLOG_IF(FATAL, !FLAGS_quic)
-        << "--relay_url requires --quic (relay client transport)";
+    auto transportType =
+        moxygen::samples::selectClientTransport("transport", "quic_transport");
     if (!server->startRelayClient(
+            worker.getEventBase(),
             FLAGS_relay_url,
             FLAGS_relay_connect_timeout,
             FLAGS_relay_transaction_timeout,
-            FLAGS_quic_transport)) {
+            transportType)) {
       XLOG(ERR) << "Failed to start relay client";
       return 1;
     }

@@ -9,15 +9,15 @@
 #include <utility>
 
 #include <folly/container/F14Map.h>
-#include "moxygen/MoQClient.h"
+#include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQQmuxServer.h"
 #include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQServer.h"
-#include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/Publisher.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/Types.h"
 #include "moxygen/relay/MoQForwarder.h"
+#include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
 
@@ -77,12 +77,15 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
 
   void removeSubscription(SubKey key);
 
-  // Relay client support
+  // Relay client support. Workers come from an externally-supplied EventBase
+  // (use the QUIC server's worker pool when QUIC is running, otherwise the
+  // QMUX server's worker pool).
   bool startRelayClient(
+      folly::EventBase* workerEvb,
       const std::string& relayUrl,
       int32_t connectTimeout,
       int32_t transactionTimeout,
-      bool useQuicTransport);
+      samples::TransportType transportType);
 
   // Subscribing Methods
   virtual folly::coro::Task<SubscribeResult> subscribe(
@@ -150,7 +153,7 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
 
   // Relay client connection (if using relay mode)
   std::string versions_;
-  std::unique_ptr<MoQClient> relayClient_;
+  std::unique_ptr<MoQClientBase> relayClient_;
   std::shared_ptr<MoQRelaySession> relaySession_;
   std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;

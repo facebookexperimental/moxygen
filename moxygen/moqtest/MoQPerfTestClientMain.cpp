@@ -18,15 +18,22 @@
 #include <folly/logging/xlog.h>
 
 #include "moxygen/moqtest/MoQPerfTestClient.h"
+#include "moxygen/samples/util/Utils.h"
 
 // Declared in MoQPerfTestClient.cpp.
 DECLARE_string(versions);
 
 DEFINE_string(relay_url, "https://localhost:9999", "Relay URL to connect to");
+DEFINE_string(
+    transport,
+    "h3wt",
+    "Client transport: 'quic' (raw QUIC), 'h3wt' (HTTP/3 + WebTransport, "
+    "default), 'qmux' (QMUX-on-TCP, TLS via Fizz mandatory).");
 DEFINE_bool(
     quic_transport,
     false,
-    "Use QUIC transport instead of WebTransport");
+    "DEPRECATED: use --transport=quic (or --transport=h3wt) instead. "
+    "Selects raw QUIC vs WebTransport.");
 DEFINE_uint32(num_threads, 1, "Number of client threads to run");
 DEFINE_uint32(duration, 60, "Test duration in seconds");
 DEFINE_uint32(
@@ -162,11 +169,16 @@ folly::coro::Task<void> aggregateStats(
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, false);
   folly::Init init(&argc, &argv);
+  auto transportType =
+      moxygen::samples::selectClientTransport("transport", "quic_transport");
+  const char* transportName =
+      transportType == moxygen::samples::TransportType::QMUX   ? "QMUX"
+      : transportType == moxygen::samples::TransportType::QUIC ? "QUIC"
+                                                               : "WebTransport";
 
   XLOG(INFO) << "MoQ Performance Test Client (Multi-threaded)";
   XLOG(INFO) << "Relay URL: " << FLAGS_relay_url;
-  XLOG(INFO) << "Transport: "
-             << (FLAGS_quic_transport ? "QUIC" : "WebTransport");
+  XLOG(INFO) << "Transport: " << transportName;
   if (FLAGS_versions.empty()) {
     XLOG(INFO) << "MoQ versions: (all supported)";
   } else {
@@ -216,7 +228,7 @@ int main(int argc, char** argv) {
       auto client = std::make_unique<moxygen::MoQPerfTestClient>(
           evb.get(),
           url,
-          FLAGS_quic_transport,
+          transportType,
           FLAGS_duration,
           subscriberRampPerThread,
           subscriberMaxPerThread,

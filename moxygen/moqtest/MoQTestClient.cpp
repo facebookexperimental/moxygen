@@ -7,9 +7,8 @@
 #include "moxygen/moqtest/MoQTestClient.h"
 
 #include <utility>
-#include "moxygen/MoQClient.h"
-#include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/moqtest/Utils.h"
+#include "moxygen/samples/util/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
 namespace moxygen {
@@ -25,21 +24,15 @@ const uint64_t kDefaultEndGroup = 10;
 MoQTestClient::MoQTestClient(
     folly::EventBase* evb,
     proxygen::URL url,
-    bool useQuicTransport)
+    samples::TransportType transportType)
     : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
       moqClient_(
-          useQuicTransport
-              ? std::make_unique<MoQClient>(
-                    moqExecutor_,
-                    std::move(url),
-                    std::make_shared<
-                        test::InsecureVerifierDangerousDoNotUseInProduction>())
-              : std::make_unique<MoQWebTransportClient>(
-                    moqExecutor_,
-                    std::move(url),
-                    std::make_shared<
-                        test::
-                            InsecureVerifierDangerousDoNotUseInProduction>())),
+          samples::makeRelayClientTransport(
+              moqExecutor_,
+              std::move(url),
+              std::make_shared<
+                  test::InsecureVerifierDangerousDoNotUseInProduction>(),
+              transportType)),
 
       subReceiver_(
           std::make_shared<ObjectReceiver>(

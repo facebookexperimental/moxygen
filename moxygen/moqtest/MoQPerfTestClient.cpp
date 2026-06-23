@@ -44,30 +44,23 @@ SubscriberState::SubscriberState(
     size_t id,
     std::shared_ptr<MoQFollyExecutorImpl> executor,
     const proxygen::URL& url,
-    bool useQuicTransport)
+    samples::TransportType transportType)
     : testClient_(client),
       id_(id),
       moqExecutor_(std::move(executor)),
+      moqClient_(
+          samples::makeRelayClientTransport(
+              moqExecutor_,
+              url,
+              std::make_shared<
+                  test::InsecureVerifierDangerousDoNotUseInProduction>(),
+              transportType)),
       receiver_(
           std::make_shared<ObjectReceiver>(
               ObjectReceiver::SUBSCRIBE,
               std::shared_ptr<ObjectReceiverCallback>(
                   std::shared_ptr<void>(),
-                  &callback_))) {
-  if (useQuicTransport) {
-    moqClient_ = std::make_unique<MoQClient>(
-        moqExecutor_,
-        url,
-        std::make_shared<
-            test::InsecureVerifierDangerousDoNotUseInProduction>());
-  } else {
-    moqClient_ = std::make_unique<MoQWebTransportClient>(
-        moqExecutor_,
-        url,
-        std::make_shared<
-            test::InsecureVerifierDangerousDoNotUseInProduction>());
-  }
-}
+                  &callback_))) {}
 
 SubscriberState::~SubscriberState() {
   try {
@@ -276,7 +269,7 @@ void SubscriberState::Callback::onAllDataReceived() {
 MoQPerfTestClient::MoQPerfTestClient(
     folly::EventBase* evb,
     proxygen::URL url,
-    bool useQuicTransport,
+    samples::TransportType transportType,
     uint32_t durationSeconds,
     uint32_t maxSubscribersPerSecond,
     uint32_t maxSubscribers,
@@ -286,7 +279,7 @@ MoQPerfTestClient::MoQPerfTestClient(
     uint32_t objectsPerGroup)
     : evb_(evb),
       url_(std::move(url)),
-      useQuicTransport_(useQuicTransport),
+      transportType_(transportType),
       durationSeconds_(durationSeconds),
       maxSubscribersPerSecond_(maxSubscribersPerSecond),
       maxSubscribers_(maxSubscribers),
@@ -412,7 +405,7 @@ folly::coro::Task<void> MoQPerfTestClient::addSubscriber() {
 
   try {
     auto subscriber = std::make_unique<SubscriberState>(
-        *this, id, sharedExecutor_, url_, useQuicTransport_);
+        *this, id, sharedExecutor_, url_, transportType_);
 
     // Connect the subscriber
     co_await subscriber->connect();

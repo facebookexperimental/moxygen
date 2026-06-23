@@ -47,8 +47,8 @@ target_link_libraries(
   moqtest_client PUBLIC
   moqtest_utils
   moxygen_mlog_file_mlogger
-  moxygen_moq_webtransport_client
   moxygen_moq_relay_session
+  moxygen_samples_util_qmux_relay_utils
   Folly::folly_init_init
 )
 
@@ -74,8 +74,8 @@ target_link_libraries(
   moxygen_moq_qmux_server
   moxygen_moq_server
   moxygen_moq_relay_session
-  moxygen_moq_webtransport_client
   moxygen_relay_moq_forwarder
+  moxygen_samples_util_qmux_relay_utils
 )
 
 install(
@@ -137,7 +137,7 @@ target_compile_options(
 target_link_libraries(
   moqperf_test_client PUBLIC
   moqtest_utils
-  moxygen_moq_webtransport_client
+  moxygen_samples_util_qmux_relay_utils
   Folly::folly_init_init
   Folly::folly_io_async_scoped_event_base_thread
 )

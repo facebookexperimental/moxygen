@@ -9,6 +9,7 @@
 #include <folly/logging/xlog.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include "moxygen/moqtest/Utils.h"
+#include "moxygen/samples/util/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
 std::string kEndpointName = "/test";
@@ -709,42 +710,33 @@ folly::coro::Task<void> MoQTestServer::doRelaySetup(
 }
 
 bool MoQTestServer::startRelayClient(
+    folly::EventBase* workerEvb,
     const std::string& relayUrl,
     int32_t connectTimeout,
     int32_t transactionTimeout,
-    bool useQuicTransport) {
+    samples::TransportType transportType) {
   proxygen::URL url(relayUrl);
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid relay url: " << relayUrl;
     return false;
   }
 
-  // Get event base and create executor
-  auto evb = getWorkerEvbs()[0];
+  // Create executor wrapping the caller-supplied EB.
   if (!moqEvb_) {
-    moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(evb);
+    moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(workerEvb);
   }
 
-  // Create client connection with MoQRelaySession factory
-  if (useQuicTransport) {
-    relayClient_ = std::make_unique<MoQClient>(
-        moqEvb_,
-        url,
-        MoQRelaySession::createRelaySessionFactory(),
-        std::make_shared<
-            test::InsecureVerifierDangerousDoNotUseInProduction>());
-  } else {
-    relayClient_ = std::make_unique<MoQWebTransportClient>(
-        moqEvb_,
-        url,
-        MoQRelaySession::createRelaySessionFactory(),
-        std::make_shared<
-            test::InsecureVerifierDangerousDoNotUseInProduction>());
-  }
+  // Create client connection with MoQRelaySession factory.
+  relayClient_ = samples::makeRelayClientTransport(
+      moqEvb_,
+      std::move(url),
+      MoQRelaySession::createRelaySessionFactory(),
+      std::make_shared<test::InsecureVerifierDangerousDoNotUseInProduction>(),
+      transportType);
 
   // Start async relay setup (schedule on evb, don't block)
   co_withExecutor(
-      evb, doRelaySetup(relayUrl, connectTimeout, transactionTimeout))
+      workerEvb, doRelaySetup(relayUrl, connectTimeout, transactionTimeout))
       .start();
 
   return true;
