@@ -1011,19 +1011,89 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
 
   auto upstreamSession =
       findPublishNamespaceSession(subReq.fullTrackName.trackNamespace);
-  if (!upstreamSession) {
-    // no such namespace has been published
+  if (upstreamSession) {
+    co_return co_await subscribeToFirstRelaySubscription(
+        std::move(subReq),
+        std::move(consumer),
+        std::move(session),
+        std::move(upstreamSession));
+  }
+
+  // If we've reached this point, it means that the track isn't being PUBLISHed,
+  // and there is no namespace being published that contains the track.
+  auto downstreamVersion =
+      session ? session->getNegotiatedVersion() : std::optional<uint64_t>{};
+  const bool rendezvousEligible = downstreamVersion.has_value() &&
+      getDraftMajorVersion(*downstreamVersion) >= 18;
+  if (!rendezvousEligible) {
     co_return folly::makeUnexpected(SubscribeError(
         {subReq.requestID,
          SubscribeErrorCode::DOES_NOT_EXIST,
          "no such namespace or track"}));
   }
 
+  auto rendezvousTimeoutMs =
+      getFirstIntParam(subReq.params, TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
+  if (!rendezvousTimeoutMs.has_value() || *rendezvousTimeoutMs == 0) {
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         SubscribeErrorCode::DOES_NOT_EXIST,
+         "no such namespace or track"}));
+  }
+
+  auto ftn = subReq.fullTrackName;
+  auto waiter = std::make_shared<PendingRendezvous>();
+  waiter->subReq = subReq;
+  waiter->consumer = consumer;
+  waiter->downstreamSession = session;
+  addPendingRendezvous(ftn, waiter);
+
+  auto cleanup = folly::makeGuard(
+      [this, ftn, waiter] { erasePendingRendezvous(ftn, waiter); });
+
+  auto waitRes = co_await folly::coro::co_awaitTry(
+      waiter->baton.wait(std::chrono::milliseconds(*rendezvousTimeoutMs)));
+
+  if (waitRes.hasException()) {
+    if (waitRes.template hasException<folly::FutureTimeout>()) {
+      co_return folly::makeUnexpected(SubscribeError(
+          {subReq.requestID,
+           SubscribeErrorCode::TIMEOUT,
+           "rendezvous timeout expired"}));
+    }
+    if (waitRes.template hasException<folly::OperationCancelled>()) {
+      co_yield folly::coro::co_stopped_may_throw;
+    }
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         folly::to<std::string>(
+             "rendezvous wait failed: ",
+             waitRes.exception().what().toStdString())}));
+  }
+
+  // If we've gotten to this point, it means that one of the following is
+  // true:
+  // (1) Some upstream is PUBLISHing the exact track
+  // (2) Some upstream is publishing a namespace that contains this track
+  auto resolvedUpstream =
+      findPublishNamespaceSession(subReq.fullTrackName.trackNamespace);
+  auto existingSubscription = subscriptions_.find(subReq.fullTrackName);
+  if (!resolvedUpstream && existingSubscription == subscriptions_.end()) {
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         SubscribeErrorCode::DOES_NOT_EXIST,
+         "publisher no longer available"}));
+  }
+  if (existingSubscription != subscriptions_.end()) {
+    co_return co_await subscribeToExistingRelaySubscription(
+        std::move(subReq), std::move(consumer), std::move(session));
+  }
   co_return co_await subscribeToFirstRelaySubscription(
       std::move(subReq),
       std::move(consumer),
       std::move(session),
-      std::move(upstreamSession));
+      std::move(resolvedUpstream));
 }
 
 MoQRelay::PendingRendezvousNode& MoQRelay::findOrCreatePendingRendezvousNode(
