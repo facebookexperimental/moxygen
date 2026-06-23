@@ -8,7 +8,10 @@
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -394,6 +397,30 @@ std::optional<FetchObjectDeltaFields> computeFetchObjectDeltaFieldsForWrite(
   return fields;
 }
 
+void appendZeroPadding(
+    folly::IOBufQueue& writeBuf,
+    uint64_t paddingLength,
+    size_t& size,
+    bool& error) {
+  constexpr size_t kPaddingChunkSize = 4096;
+
+  if (paddingLength >
+      static_cast<uint64_t>(std::numeric_limits<size_t>::max() - size)) {
+    error = true;
+    return;
+  }
+  while (paddingLength > 0) {
+    auto chunkSize = static_cast<size_t>(
+        std::min<uint64_t>(paddingLength, kPaddingChunkSize));
+    auto padding = folly::IOBuf::create(chunkSize);
+    padding->append(chunkSize);
+    std::memset(padding->writableData(), 0, chunkSize);
+    writeBuf.append(std::move(padding));
+    paddingLength -= chunkSize;
+    size += chunkSize;
+  }
+}
+
 } // namespace
 
 namespace moxygen {
@@ -406,6 +433,31 @@ bool datagramObjectIdZero(uint64_t version, DatagramType datagramType);
 void writeSize(uint16_t* sizePtr, size_t size, bool& error, uint64_t versionIn);
 
 bool includeSetupParam(uint64_t version, SetupKey key);
+
+bool isPaddingStreamType(uint64_t version, uint64_t streamType) {
+  return getDraftMajorVersion(version) >= 18 &&
+      streamType == folly::to_underlying(StreamType::PADDING);
+}
+
+bool isPaddingDatagramType(uint64_t version, uint64_t datagramType) {
+  return getDraftMajorVersion(version) >= 18 &&
+      datagramType == folly::to_underlying(DatagramType::PADDING);
+}
+
+folly::Expected<folly::Unit, ErrorCode> parsePaddingData(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept {
+  while (length > 0) {
+    if (!cursor.canAdvance(1)) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    if (cursor.readBE<uint8_t>() != 0) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    --length;
+  }
+  return folly::unit;
+}
 
 // Test-only helper: QUIC varint length prefix + fixed string. Production code
 // should call MoQFrameParser::parseFixedString to dispatch on negotiated
@@ -4252,6 +4304,43 @@ WriteResult MoQFrameWriter::writeFetchHeader(
   // putting this here for completeness.
   resetWriterFetchContext();
 
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writePaddingStream(
+    folly::IOBufQueue& writeBuf,
+    uint64_t paddingLength) const noexcept {
+  XCHECK(version_.has_value()) << "The version must be set before writing";
+  if (!isPaddingStreamType(
+          *version_, folly::to_underlying(StreamType::PADDING))) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, folly::to_underlying(StreamType::PADDING), size, error);
+  appendZeroPadding(writeBuf, paddingLength, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  return size;
+}
+
+WriteResult MoQFrameWriter::writePaddingDatagram(
+    folly::IOBufQueue& writeBuf,
+    uint64_t paddingLength) const noexcept {
+  XCHECK(version_.has_value()) << "The version must be set before writing";
+  if (!isPaddingDatagramType(
+          *version_, folly::to_underlying(DatagramType::PADDING))) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  size_t size = 0;
+  bool error = false;
+  writeVarint(
+      writeBuf, folly::to_underlying(DatagramType::PADDING), size, error);
+  appendZeroPadding(writeBuf, paddingLength, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }

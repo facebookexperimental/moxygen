@@ -4441,6 +4441,81 @@ class MoQFramerV18Test : public ::testing::Test {
   }
 };
 
+TEST_F(MoQFramerV18Test, PaddingTypesAreDraft18Only) {
+  EXPECT_TRUE(isPaddingStreamType(
+      kVersionDraft18, folly::to_underlying(StreamType::PADDING)));
+  EXPECT_FALSE(isPaddingStreamType(
+      kVersionDraft17, folly::to_underlying(StreamType::PADDING)));
+
+  EXPECT_TRUE(isPaddingDatagramType(
+      kVersionDraft18, folly::to_underlying(DatagramType::PADDING)));
+  EXPECT_FALSE(isPaddingDatagramType(
+      kVersionDraft17, folly::to_underlying(DatagramType::PADDING)));
+}
+
+TEST_F(MoQFramerV18Test, WritePaddingStream) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  auto result = writer_.writePaddingStream(writeBuf, 3);
+
+  ASSERT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  EXPECT_EQ(*result, serialized->computeChainDataLength());
+  folly::io::Cursor cursor(serialized.get());
+  auto type = parser_.decodeVarint(cursor);
+  ASSERT_TRUE(type.has_value());
+  EXPECT_EQ(type->first, folly::to_underlying(StreamType::PADDING));
+
+  size_t remainingLength = cursor.totalLength();
+  EXPECT_TRUE(parsePaddingData(cursor, remainingLength).hasValue());
+  EXPECT_EQ(remainingLength, 0);
+  EXPECT_EQ(cursor.totalLength(), 0);
+}
+
+TEST_F(MoQFramerV18Test, WritePaddingDatagram) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  auto result = writer_.writePaddingDatagram(writeBuf, 0);
+
+  ASSERT_TRUE(result.hasValue());
+  auto serialized = writeBuf.move();
+  EXPECT_EQ(*result, serialized->computeChainDataLength());
+  folly::io::Cursor cursor(serialized.get());
+  auto type = parser_.decodeVarint(cursor);
+  ASSERT_TRUE(type.has_value());
+  EXPECT_EQ(type->first, folly::to_underlying(DatagramType::PADDING));
+
+  size_t remainingLength = cursor.totalLength();
+  EXPECT_TRUE(parsePaddingData(cursor, remainingLength).hasValue());
+  EXPECT_EQ(remainingLength, 0);
+}
+
+TEST_F(MoQFramerV18Test, PaddingDataRejectsNonZeroBytes) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  const uint8_t invalidPadding[] = {0x00, 0x01};
+  writeBuf.append(invalidPadding, sizeof(invalidPadding));
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  size_t remainingLength = serialized->computeChainDataLength();
+  auto result = parsePaddingData(cursor, remainingLength);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST_F(MoQFramerV18Test, Draft17WriterRejectsPadding) {
+  MoQFrameWriter draft17Writer;
+  draft17Writer.initializeVersion(kVersionDraft17);
+  folly::IOBufQueue streamBuf{folly::IOBufQueue::cacheChainLength()};
+  folly::IOBufQueue datagramBuf{folly::IOBufQueue::cacheChainLength()};
+
+  EXPECT_TRUE(draft17Writer.writePaddingStream(streamBuf, 1).hasError());
+  EXPECT_TRUE(draft17Writer.writePaddingDatagram(datagramBuf, 1).hasError());
+  EXPECT_TRUE(streamBuf.empty());
+  EXPECT_TRUE(datagramBuf.empty());
+}
+
 TEST_F(MoQFramerV18Test, PublishOkUsesRequestOkWireType) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 

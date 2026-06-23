@@ -59,6 +59,11 @@ inline StreamType getSubgroupStreamType(
 }
 
 bool isValidSubgroupType(uint64_t version, uint64_t streamType);
+bool isPaddingStreamType(uint64_t version, uint64_t streamType);
+bool isPaddingDatagramType(uint64_t version, uint64_t datagramType);
+folly::Expected<folly::Unit, ErrorCode> parsePaddingData(
+    folly::io::Cursor& cursor,
+    size_t& length) noexcept;
 
 inline SubgroupOptions getSubgroupOptions(
     uint64_t version,
@@ -562,6 +567,14 @@ class MoQFrameWriter {
 
   WriteResult writeFetchHeader(folly::IOBufQueue& writeBuf, RequestID requestID)
       const noexcept;
+
+  WriteResult writePaddingStream(
+      folly::IOBufQueue& writeBuf,
+      uint64_t paddingLength) const noexcept;
+
+  WriteResult writePaddingDatagram(
+      folly::IOBufQueue& writeBuf,
+      uint64_t paddingLength) const noexcept;
 
   WriteResult writeStreamHeader(
       folly::IOBufQueue& writeBuf,
