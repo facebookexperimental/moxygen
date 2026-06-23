@@ -50,3 +50,5 @@ moxygen_add_library(moxygen_mlog_file_mlogger_factory
     moxygen_mlog_file_mlogger
     moxygen_mlog_mlogger_factory
 )
+
+add_subdirectory(test)

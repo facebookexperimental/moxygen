@@ -9,10 +9,6 @@
 
 namespace moxygen {
 
-void MLogger::setPath(const std::string& path) {
-  path_ = path;
-}
-
 void MLogger::setDcid(const quic::ConnectionId& dcid) {
   dcid_ = dcid;
 }

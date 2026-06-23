@@ -218,8 +218,6 @@ class MLogger {
       const ObjectHeader& header,
       Payload payload);
 
-  void setPath(const std::string& path);
-
   // Setter APIs for connection metadata (used by ScubaMLogger)
   void setDcid(const quic::ConnectionId& dcid);
   void setSrcCid(const quic::ConnectionId& srcCid);
@@ -232,7 +230,6 @@ class MLogger {
   // Core members accessible to subclasses
   VantagePoint vantagePoint_;
   std::vector<MLogEvent> logs_;
-  std::string path_ = kDefaultLoggerFilePath;
   MLogEventCreator eventCreator_ = MLogEventCreator();
 
   // Connection metadata (populated via setters, consumed by ScubaMLogger)

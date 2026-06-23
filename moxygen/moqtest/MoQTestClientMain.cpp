@@ -129,9 +129,8 @@ int main(int argc, char** argv) {
 
   std::shared_ptr<moxygen::MLogger> logger;
   if (FLAGS_log) {
-    logger =
-        std::make_shared<moxygen::FileMLogger>(moxygen::VantagePoint::CLIENT);
-    logger->setPath(FLAGS_mlog_path);
+    logger = std::make_shared<moxygen::FileMLogger>(
+        moxygen::VantagePoint::CLIENT, FLAGS_mlog_path);
     client->setLogger(logger);
   }
 

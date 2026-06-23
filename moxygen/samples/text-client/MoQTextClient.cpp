@@ -444,8 +444,8 @@ int main(int argc, char* argv[]) {
   proxygen::URL url(FLAGS_connect_url);
   std::shared_ptr<MLogger> logger;
   if (!FLAGS_mlog_path.empty()) {
-    logger = std::make_shared<FileMLogger>(VantagePoint::CLIENT);
-    logger->setPath(FLAGS_mlog_path);
+    logger =
+        std::make_shared<FileMLogger>(VantagePoint::CLIENT, FLAGS_mlog_path);
   }
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
