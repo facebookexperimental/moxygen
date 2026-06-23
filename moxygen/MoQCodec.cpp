@@ -183,6 +183,8 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         streamType_ = StreamType(type->first);
         if (streamType_ == StreamType::FETCH_HEADER) {
           parseState_ = ParseState::FETCH_HEADER;
+        } else if (isPaddingStreamType(*version, type->first)) {
+          parseState_ = ParseState::PADDING_STREAM;
         } else if (isValidSubgroupType(*version, type->first)) {
           parseState_ = ParseState::OBJECT_STREAM;
           subgroupOptions_ = getSubgroupOptions(*version, streamType_);
@@ -193,6 +195,20 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
                     << (uint64_t)type->first << " on streamID=" << streamId_;
           connError_.emplace(ErrorCode::PROTOCOL_VIOLATION);
           break;
+        }
+        break;
+      }
+      case ParseState::PADDING_STREAM: {
+        size_t remainingLength = ingress_.chainLength() - totalBytesConsumed;
+        auto res = parsePaddingData(cursor, remainingLength);
+        if (res.hasError()) {
+          XLOG(DBG4) << __func__ << " " << uint32_t(res.error());
+          connError_ = res.error();
+          break;
+        }
+        totalBytesConsumed = ingress_.chainLength();
+        if (endOfStream) {
+          parseState_ = ParseState::STREAM_FIN_DELIVERED;
         }
         break;
       }
@@ -415,6 +431,9 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
   }
   trimStart();
   size_t remainingLength = ingress_.chainLength();
+  if (endOfStream && parseState_ == ParseState::PADDING_STREAM && !connError_) {
+    parseState_ = ParseState::STREAM_FIN_DELIVERED;
+  }
   if (endOfStream && parseState_ != ParseState::STREAM_FIN_DELIVERED &&
       !connError_ && callback_) {
     callback_->onEndOfStream();

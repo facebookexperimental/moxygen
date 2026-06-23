@@ -275,6 +275,84 @@ TEST_P(MoQCodecTest, AllObject) {
   objectStreamCodec_.onIngress(std::move(allMsgs), true);
 }
 
+TEST(MoQCodecPaddingTest, PaddingStreamIsDiscarded) {
+  testing::StrictMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(kVersionDraft18);
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writer.writePaddingStream(writeBuf, 5);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    return;
+  }
+
+  EXPECT_EQ(
+      codec.onIngress(writeBuf.move(), true), MoQCodec::ParseResult::CONTINUE);
+}
+
+TEST(MoQCodecPaddingTest, PaddingStreamCanArriveInChunks) {
+  testing::StrictMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(kVersionDraft18);
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writer.writePaddingStream(writeBuf, 3);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    return;
+  }
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  readBuf.append(writeBuf.move());
+
+  while (!readBuf.empty()) {
+    EXPECT_EQ(
+        codec.onIngress(readBuf.split(1), false),
+        MoQCodec::ParseResult::CONTINUE);
+  }
+  EXPECT_EQ(codec.onIngress(nullptr, true), MoQCodec::ParseResult::CONTINUE);
+}
+
+TEST(MoQCodecPaddingTest, ZeroLengthPaddingStreamIsDiscarded) {
+  testing::StrictMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(kVersionDraft18);
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writer.writePaddingStream(writeBuf, 0);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    return;
+  }
+
+  EXPECT_EQ(
+      codec.onIngress(writeBuf.move(), true), MoQCodec::ParseResult::CONTINUE);
+}
+
+TEST(MoQCodecPaddingTest, PaddingStreamRejectsNonZeroBytes) {
+  testing::StrictMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(kVersionDraft18);
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto result = writer.writePaddingStream(writeBuf, 0);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    return;
+  }
+  const uint8_t invalidPadding = 0x01;
+  writeBuf.append(&invalidPadding, sizeof(invalidPadding));
+
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  EXPECT_EQ(
+      codec.onIngress(writeBuf.move(), true),
+      MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
 TEST_P(MoQCodecTest, Underflow) {
   testUnderflow(MoQControlCodec::Direction::CLIENT);
   testUnderflow(MoQControlCodec::Direction::SERVER);
