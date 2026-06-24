@@ -1444,6 +1444,43 @@ void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
+namespace {
+// SUBSCRIBE_NAMESPACE wants a NamespacePublishHandle, but the PUBLISH-only
+// fallback never receives NAMESPACE messages, so a no-op handle suffices.
+class NoopNamespacePublishHandle : public Publisher::NamespacePublishHandle {
+ public:
+  void namespaceMsg(const TrackNamespace&) override {}
+  void namespaceDoneMsg(const TrackNamespace&) override {}
+};
+
+// Adapts a SUBSCRIBE_NAMESPACE handle to the SUBSCRIBE_TRACKS handle interface
+// for the draft 16-17 fallback, so callers see a uniform return type.
+class NamespaceBackedSubscribeTracksHandle
+    : public Publisher::SubscribeTracksHandle {
+ public:
+  explicit NamespaceBackedSubscribeTracksHandle(
+      std::shared_ptr<Publisher::SubscribeNamespaceHandle> inner)
+      : Publisher::SubscribeTracksHandle(inner->subscribeNamespaceOk()),
+        inner_(std::move(inner)) {}
+
+  void unsubscribeTracks() override {
+    inner_->unsubscribeNamespace();
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported"});
+  }
+
+ private:
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle> inner_;
+};
+} // namespace
+
 // Draft 18+: SUBSCRIBE_TRACKS subscriber methods
 folly::coro::Task<Publisher::SubscribeTracksResult>
 MoQRelaySession::subscribeTracks(
@@ -1452,10 +1489,23 @@ MoQRelaySession::subscribeTracks(
   XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
              << " sess=" << this;
   if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
-    co_return folly::makeUnexpected(SubscribeTracksError(
-        {RequestID(0),
-         SubscribeTracksErrorCode::NOT_SUPPORTED,
-         "SUBSCRIBE_TRACKS requires draft 18+"}));
+    // SUBSCRIBE_TRACKS doesn't exist before draft 18; fall back to
+    // SUBSCRIBE_NAMESPACE, which has the same effect (the publisher PUBLISHes
+    // matching tracks). On draft 16-17 the PUBLISH option requests this
+    // explicitly; on draft 14-15 there is no options field and the legacy
+    // behavior already includes PUBLISH, so the option is simply ignored.
+    SubscribeNamespace subNs;
+    subNs.trackNamespacePrefix = subTracks.trackNamespacePrefix;
+    subNs.forward = subTracks.forward;
+    subNs.params = subTracks.params;
+    subNs.options = SubscribeNamespaceOptions::PUBLISH;
+    auto res = co_await subscribeNamespace(
+        std::move(subNs), std::make_shared<NoopNamespacePublishHandle>());
+    if (res.hasError()) {
+      co_return folly::makeUnexpected(res.error());
+    }
+    co_return std::make_shared<NamespaceBackedSubscribeTracksHandle>(
+        std::move(res.value()));
   }
   // Mirror subscribe/subscribeNamespace/publishNamespace: don't start a new
   // local request after we've received a GOAWAY.
