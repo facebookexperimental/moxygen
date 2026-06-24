@@ -473,7 +473,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   }
 
   // Call the sendObjectsForForwardPreferenceThree method
-  auto task = server_->sendDatagram(sub, params_, mockConsumer);
+  auto task = server_->sendDatagram(sub.requestID, params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));

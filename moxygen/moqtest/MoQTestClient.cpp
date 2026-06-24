@@ -26,10 +26,13 @@ MoQTestClient::MoQTestClient(
     proxygen::URL url,
     samples::TransportType transportType)
     : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
+      // Use a MoQRelaySession so the client can send SUBSCRIBE_TRACKS (the base
+      // session does not implement it).
       moqClient_(
           samples::makeRelayClientTransport(
               moqExecutor_,
               std::move(url),
+              MoQRelaySession::createRelaySessionFactory(),
               std::make_shared<
                   test::InsecureVerifierDangerousDoNotUseInProduction>(),
               transportType)),
@@ -83,8 +86,8 @@ folly::coro::Task<void> MoQTestClient::connect(
   co_await moqClient_->setupMoQSession(
       std::chrono::milliseconds(FLAGS_connect_timeout),
       std::chrono::seconds(FLAGS_transaction_timeout),
-      nullptr,
-      nullptr,
+      /*publishHandler=*/nullptr,
+      /*subscribeHandler=*/shared_from_this(),
       [] {
         quic::TransportSettings ts;
         ts.orderedReadCallbacks = true;
@@ -152,6 +155,76 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
                 res.error().reasonPhrase)));
   }
 
+  co_return trackNamespace.value();
+}
+
+Subscriber::PublishResult MoQTestClient::publish(
+    PublishRequest pub,
+    std::shared_ptr<SubscriptionHandle> handle) {
+  XLOG(INFO) << "MoQTest: received PUBLISH for ns="
+             << pub.fullTrackName.trackNamespace;
+  // Keep the handle so data-validation failures can unsubscribe.
+  if (handle) {
+    subHandle_ = std::move(handle);
+  }
+
+  PublishOk ok;
+  ok.requestID = pub.requestID;
+  ok.forward = true;
+  ok.subscriberPriority = kDefaultPriority;
+  ok.groupOrder = GroupOrder::Default;
+  ok.locType = LocationType::AbsoluteStart;
+  ok.start = AbsoluteLocation(0, 0);
+
+  return Subscriber::PublishConsumerAndReplyTask{
+      subReceiver_,
+      folly::coro::makeTask(
+          folly::Expected<PublishOk, PublishError>(std::move(ok)))};
+}
+
+folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribeTracks(
+    MoQTestParameters params) {
+  auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
+  if (trackNamespace.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! Reason: Error Converting Parameters to TrackNamespace: "
+        << trackNamespace.error().what();
+    moqClient_->moqSession_->drain();
+    co_yield folly::coro::co_error(trackNamespace.error());
+  }
+
+  auto relaySession =
+      std::dynamic_pointer_cast<MoQRelaySession>(moqClient_->moqSession_);
+  if (!relaySession) {
+    co_yield folly::coro::co_error(
+        std::runtime_error("Session does not support SUBSCRIBE_TRACKS"));
+  }
+
+  receivingType_ = ReceivingType::SUBSCRIBE;
+  publishMode_ = true;
+  initializeExpecteds(params);
+
+  SubscribeTracks subTracks;
+  subTracks.requestID = kDefaultRequestId;
+  requestID_ = kDefaultRequestId;
+  subTracks.trackNamespacePrefix = trackNamespace.value();
+  subTracks.forward = true;
+
+  auto res = co_await relaySession->subscribeTracks(subTracks);
+  if (res.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! Reason: Error in SubscribeTracks. "
+        << "Error code: " << static_cast<uint64_t>(res.error().errorCode)
+        << ", Reason: " << res.error().reasonPhrase;
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "Error code: ",
+                static_cast<uint64_t>(res.error().errorCode),
+                ", Reason: ",
+                res.error().reasonPhrase)));
+  }
+  subscribeTracksHandle_ = res.value();
   co_return trackNamespace.value();
 }
 
@@ -281,8 +354,14 @@ void MoQTestClient::onError(ResetStreamErrorCode) {
 void MoQTestClient::onAllDataReceived() {
   XLOG(DBG1) << "MoQTest DEBUGGING: onAllDataReceived";
   // Ensure subHandle_ is reset at the end of this function, even if an early
-  // return occurs
-  auto subHandleResetGuard = folly::makeGuard([this] { subHandle_.reset(); });
+  // return occurs. In PUBLISH mode, also drain now that the track is done so
+  // the event loop can exit.
+  auto subHandleResetGuard = folly::makeGuard([this] {
+    subHandle_.reset();
+    if (publishMode_) {
+      moqClient_->moqSession_->drain();
+    }
+  });
 
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
     // For datagrams, some drops are allowed based on datagramDropPercentage

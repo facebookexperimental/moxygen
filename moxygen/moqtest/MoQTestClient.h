@@ -8,6 +8,7 @@
 
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClientBase.h"
+#include "moxygen/MoQRelaySession.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/Subscriber.h"
 #include "moxygen/mlog/MLogger.h"
@@ -39,18 +40,21 @@ enum AdjustedExpectedResult : int {
   ERROR_RECEIVING_DATA = 2
 };
 
-class MoQTestClient {
+// MoQTestClient is also a Subscriber so it can receive server-initiated
+// PUBLISH (the response to SUBSCRIBE_TRACKS).
+class MoQTestClient : public Subscriber,
+                      public std::enable_shared_from_this<MoQTestClient> {
  public:
   MoQTestClient(
       folly::EventBase* evb,
       proxygen::URL url,
       samples::TransportType transportType);
 
-  ~MoQTestClient() {}
+  ~MoQTestClient() override {}
 
   MoQTestClient(const MoQTestClient&) = delete;
   MoQTestClient& operator=(const MoQTestClient&) = delete;
-  MoQTestClient(MoQTestClient&&) = default;
+  MoQTestClient(MoQTestClient&&) = delete;
   MoQTestClient& operator=(MoQTestClient&&) = delete;
 
   folly::coro::Task<void> connect(
@@ -60,12 +64,24 @@ class MoQTestClient {
   folly::coro::Task<moxygen::TrackNamespace> subscribe(
       MoQTestParameters params);
 
+  // Sends SUBSCRIBE_TRACKS; the server replies with a PUBLISH that this client
+  // validates like a SUBSCRIBE. Only works when the whole namespace is
+  // specified.
+  folly::coro::Task<moxygen::TrackNamespace> subscribeTracks(
+      MoQTestParameters params);
+
   folly::coro::Task<moxygen::TrackNamespace> fetch(MoQTestParameters params);
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
 
   folly::coro::Task<void> trackStatus(TrackStatus req);
   void subscribeUpdate(SubscribeUpdate update);
+
+  // Subscriber: handle an incoming PUBLISH by returning the receiver that
+  // validates the published track.
+  PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> handle) override;
 
  private:
   folly::coro::Task<void> doSubscribeUpdate(
@@ -133,6 +149,11 @@ class MoQTestClient {
   MoQTestParameters params_;
   RequestID requestID_{};
 
+  // True when the track is delivered via server-initiated PUBLISH (the response
+  // to SUBSCRIBE_TRACKS). In that mode we can't drain the session up front (it
+  // would reject the incoming PUBLISH), so we drain once the track completes.
+  bool publishMode_{false};
+
   // Holds Current Request Group, SubGroup, and objectId (updated based on
   // expected data)
   uint64_t expectedGroup_{};
@@ -154,6 +175,7 @@ class MoQTestClient {
   // Handles
   std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
   std::shared_ptr<Publisher::FetchHandle> fetchHandle_;
+  std::shared_ptr<Publisher::SubscribeTracksHandle> subscribeTracksHandle_;
 
   // Subscription Data Validation functions
   void initializeExpecteds(MoQTestParameters& params);

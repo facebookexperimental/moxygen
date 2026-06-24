@@ -77,6 +77,12 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
 
   void removeSubscription(SubKey key);
 
+  // Incoming client sessions must be MoQRelaySessions so they dispatch
+  // SUBSCRIBE_NAMESPACE/SUBSCRIBE_TRACKS to this publish handler.
+  std::shared_ptr<MoQSession> createSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      std::shared_ptr<MoQExecutor> executor) override;
+
   // Relay client support. Workers come from an externally-supplied EventBase
   // (use the QUIC server's worker pool when QUIC is running, otherwise the
   // QMUX server's worker pool).
@@ -96,6 +102,27 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback);
 
+  // SUBSCRIBE_NAMESPACE (PUBLISH/BOTH) and SUBSCRIBE_TRACKS both trigger a
+  // server-initiated PUBLISH. They only work when the *whole* namespace is
+  // specified (i.e. it decodes to a full set of MoQTestParameters), since the
+  // server must know exactly which track to publish.
+  virtual folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
+      SubscribeNamespace subNs,
+      std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
+
+  virtual folly::coro::Task<SubscribeTracksResult> subscribeTracks(
+      SubscribeTracks subTracks,
+      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+          nullptr) override;
+
+  // Emits track data (the same data SUBSCRIBE would deliver) according to the
+  // forwarding preference, then publishDone. Shared by onSubscribe and the
+  // PUBLISH path.
+  folly::coro::Task<void> sendTrackData(
+      MoQTestParameters params,
+      RequestID requestID,
+      std::shared_ptr<TrackConsumer> callback);
+
   folly::coro::Task<void> sendOneSubgroupPerGroup(
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
@@ -109,7 +136,7 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       std::shared_ptr<TrackConsumer> callback);
 
   folly::coro::Task<void> sendDatagram(
-      SubscribeRequest sub,
+      RequestID requestID,
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
 
@@ -145,6 +172,15 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       const std::string& relayUrl,
       int32_t connectTimeout,
       int32_t transactionTimeout);
+
+  // Initiates a server PUBLISH for the track encoded by params and streams the
+  // track data, keyed under SubKey{session, requestID} for cancellation.
+  folly::coro::Task<void> doPublish(
+      std::shared_ptr<MoQSession> session,
+      MoQTestParameters params,
+      TrackNamespace trackNamespace,
+      RequestID requestID,
+      bool forward);
 
   struct SubscriptionState {
     std::shared_ptr<MoQForwarder> forwarder;
