@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/Function.h>
 #include <folly/coro/SharedPromise.h>
 #include "moxygen/MoQSession.h"
 #include "moxygen/relay/MoQCache.h"
@@ -310,6 +311,15 @@ class MoQRelay : public Publisher,
       const FullTrackName& ftn,
       size_t namespaceIndex,
       const std::shared_ptr<PendingRendezvous>& waiter);
+  static void wakePendingRendezvousSubtree(PendingRendezvousNode& node);
+
+  void applyFnAtNamespaceNode(
+      const TrackNamespace& ns,
+      folly::FunctionRef<void(PendingRendezvousNode&)> onNode);
+
+  void wakePendingRendezvousForTrack(const FullTrackName& ftn);
+
+  void wakePendingRendezvousUnderNamespace(const TrackNamespace& ns);
 
   TrackNamespace allowedNamespacePrefix_;
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>

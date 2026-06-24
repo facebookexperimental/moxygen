@@ -222,6 +222,8 @@ MoQRelay::publishNamespace(
       }
     }
   }
+
+  wakePendingRendezvousUnderNamespace(ann.trackNamespace);
   co_return nodePtr;
 }
 
@@ -552,6 +554,8 @@ Subscriber::PublishResult MoQRelay::publish(
       shared_from_this(), pub.fullTrackName, forwarder);
   std::shared_ptr<TrackConsumer> filter =
       std::static_pointer_cast<TrackConsumer>(filterImpl);
+
+  wakePendingRendezvousForTrack(pub.fullTrackName);
 
   return PublishConsumerAndReplyTask{
       filter, // Return filter, not forwarder directly
@@ -1152,6 +1156,68 @@ void MoQRelay::erasePendingRendezvousFromNode(
   if (waiters.empty()) {
     node.waitersByTrack.erase(waitersIt);
   }
+}
+
+void MoQRelay::wakePendingRendezvousSubtree(PendingRendezvousNode& node) {
+  for (auto& [_, trackWaiters] : node.waitersByTrack) {
+    for (auto& waiter : trackWaiters) {
+      waiter->baton.signal();
+    }
+  }
+  for (auto& [_, child] : node.children) {
+    wakePendingRendezvousSubtree(*child);
+  }
+  node.waitersByTrack.clear();
+  node.children.clear();
+}
+
+void MoQRelay::applyFnAtNamespaceNode(
+    const TrackNamespace& ns,
+    folly::FunctionRef<void(PendingRendezvousNode&)> onNode) {
+  auto* node = &pendingRendezvousRoot_;
+
+  // We need to keep track of the path because we need to remove empty
+  // nodes when we are done with signaling.
+  std::vector<std::pair<PendingRendezvousNode*, std::string>> path;
+  bool foundNamespace = true;
+  for (const auto& part : ns.trackNamespace) {
+    auto childIt = node->children.find(part);
+    if (childIt == node->children.end()) {
+      foundNamespace = false;
+      break;
+    }
+    path.emplace_back(node, part);
+    node = childIt->second.get();
+  }
+
+  if (foundNamespace) {
+    onNode(*node);
+  }
+
+  for (auto it = path.rbegin(); it != path.rend() && node->empty(); ++it) {
+    auto* parent = it->first;
+    parent->children.erase(it->second);
+    node = parent;
+  }
+}
+
+void MoQRelay::wakePendingRendezvousForTrack(const FullTrackName& ftn) {
+  applyFnAtNamespaceNode(
+      ftn.trackNamespace, [&ftn](PendingRendezvousNode& node) {
+        auto waitersIt = node.waitersByTrack.find(ftn.trackName);
+        if (waitersIt != node.waitersByTrack.end()) {
+          for (auto& waiter : waitersIt->second) {
+            waiter->baton.signal();
+          }
+          node.waitersByTrack.erase(waitersIt);
+        }
+      });
+}
+
+void MoQRelay::wakePendingRendezvousUnderNamespace(const TrackNamespace& ns) {
+  applyFnAtNamespaceNode(ns, [](PendingRendezvousNode& node) {
+    wakePendingRendezvousSubtree(node);
+  });
 }
 
 folly::coro::Task<Publisher::SubscribeResult>
