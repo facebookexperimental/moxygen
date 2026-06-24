@@ -54,6 +54,10 @@ DEFINE_uint64(
     delivery_timeout,
     0,
     "Delivery timeout in milliseconds (0 = disabled)");
+DEFINE_uint64(
+    rendezvous_timeout,
+    0,
+    "Rendezvous timeout in milliseconds (0 = disabled, draft 18+ only)");
 DEFINE_bool(
     insecure,
     false,
@@ -106,6 +110,23 @@ SubParams flags2params() {
     return result;
   }
   return result;
+}
+
+void addRendezvousTimeoutParamIfSupported(
+    SubscribeRequest& sub,
+    std::optional<uint64_t> negotiatedVersion) {
+  if (FLAGS_rendezvous_timeout == 0 || !negotiatedVersion.has_value()) {
+    return;
+  }
+  auto majorVersion = getDraftMajorVersion(*negotiatedVersion);
+  if (majorVersion < 18) {
+    return;
+  }
+  sub.params.setMajorVersion(majorVersion);
+  auto insertResult = sub.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT),
+      FLAGS_rendezvous_timeout));
+  XCHECK(insertResult.hasValue());
 }
 
 class TextHandler : public ObjectReceiverCallback {
@@ -289,6 +310,9 @@ class MoQTextClient : public Subscriber,
 
         co_return;
       }
+
+      addRendezvousTimeoutParamIfSupported(
+          sub, moqClient_.getSession()->getNegotiatedVersion());
 
       Publisher::SubscribeResult track;
       if (FLAGS_jafetch || FLAGS_jrfetch) {
