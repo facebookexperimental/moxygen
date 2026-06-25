@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <folly/container/F14Map.h>
+#include <folly/futures/ThreadWheelTimekeeper.h>
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQQmuxServer.h"
 #include "moxygen/MoQRelaySession.h"
@@ -74,6 +75,11 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       clientSession->setLogger(std::move(logger));
     }
   }
+
+  // Drains the relay-client session (when --relay_url is set) so the relay
+  // sees a clean close instead of an idle timeout. Must run on the worker
+  // EventBase. Listening sessions are torn down by stop().
+  void gracefulShutdown();
 
   void removeSubscription(SubKey key);
 
@@ -173,6 +179,9 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       int32_t connectTimeout,
       int32_t transactionTimeout);
 
+  // Inter-object delay using the server-owned timekeeper.
+  folly::coro::Task<void> delay(uint64_t ms);
+
   // Initiates a server PUBLISH for the track encoded by params and streams the
   // track data, keyed under SubKey{session, requestID} for cancellation.
   folly::coro::Task<void> doPublish(
@@ -195,6 +204,9 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
   folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
       activeSubscriptions_;
+  // Server-owned timekeeper for inter-object delays. Avoids the global
+  // Timekeeper singleton, which can crash if used during process teardown.
+  folly::ThreadWheelTimekeeper timekeeper_;
   bool includeTimestampExtension_{false};
 };
 

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/coro/Baton.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQRelaySession.h"
@@ -73,6 +74,14 @@ class MoQTestClient : public Subscriber,
   folly::coro::Task<moxygen::TrackNamespace> fetch(MoQTestParameters params);
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
+
+  // Drains the session so the peer sees a clean close; the event loop exits
+  // once the session finishes closing.
+  void shutdown();
+
+  // Completes when the track finishes, validation fails, or shutdown() runs.
+  // Request coroutines await this so their completion marks "all done".
+  folly::coro::Baton doneBaton_;
 
   folly::coro::Task<void> trackStatus(TrackStatus req);
   void subscribeUpdate(SubscribeUpdate update);

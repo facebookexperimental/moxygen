@@ -54,6 +54,27 @@ void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   moqClient_->setLogger(logger);
 }
 
+void MoQTestClient::shutdown() {
+  // Cancel the active request first: drain() only closes once there are no
+  // active subscriptions, otherwise it waits for the whole track.
+  if (subHandle_) {
+    subHandle_->unsubscribe();
+    subHandle_.reset();
+  }
+  if (fetchHandle_) {
+    fetchHandle_->fetchCancel();
+    fetchHandle_.reset();
+  }
+  if (subscribeTracksHandle_) {
+    subscribeTracksHandle_->unsubscribeTracks();
+    subscribeTracksHandle_.reset();
+  }
+  if (moqClient_->moqSession_) {
+    moqClient_->moqSession_->drain();
+  }
+  doneBaton_.post();
+}
+
 folly::coro::Task<void> MoQTestClient::doSubscribeUpdate(
     std::shared_ptr<Publisher::SubscriptionHandle> handle,
     RequestUpdate update) {
@@ -155,6 +176,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
                 res.error().reasonPhrase)));
   }
 
+  co_await doneBaton_;
   co_return trackNamespace.value();
 }
 
@@ -225,6 +247,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribeTracks(
                 res.error().reasonPhrase)));
   }
   subscribeTracksHandle_ = res.value();
+  co_await doneBaton_;
   co_return trackNamespace.value();
 }
 
@@ -274,6 +297,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
                 res.error().reasonPhrase)));
   }
 
+  co_await doneBaton_;
   co_return trackNamespace.value();
 }
 
@@ -293,6 +317,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
       fetchHandle_->fetchCancel();
     }
     moqClient_->moqSession_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    doneBaton_.post();
     return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
   }
 
@@ -353,14 +378,13 @@ void MoQTestClient::onError(ResetStreamErrorCode) {
 }
 void MoQTestClient::onAllDataReceived() {
   XLOG(DBG1) << "MoQTest DEBUGGING: onAllDataReceived";
-  // Ensure subHandle_ is reset at the end of this function, even if an early
-  // return occurs. In PUBLISH mode, also drain now that the track is done so
-  // the event loop can exit.
+  // In PUBLISH mode we couldn't drain up front, so drain here for a clean close.
   auto subHandleResetGuard = folly::makeGuard([this] {
     subHandle_.reset();
     if (publishMode_) {
       moqClient_->moqSession_->drain();
     }
+    doneBaton_.post();
   });
 
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
