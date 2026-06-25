@@ -9,6 +9,7 @@ moxygen_add_library(moxygen_util_quic_connector
     QuicConnector.cpp
   DEPS
     mvfst::mvfst_client
+    mvfst::mvfst_common_address_quic_socket_address_bridge
     mvfst::mvfst_common_events_folly_eventbase
     mvfst::mvfst_common_udpsocket_folly_async_udp_socket
     mvfst::mvfst_fizz_client_handshake

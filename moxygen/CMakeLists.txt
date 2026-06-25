@@ -19,12 +19,12 @@ moxygen_add_library(moxygen_moq_types
     moxygen_moq_versions
     Folly::folly_container_f14_hash
     Folly::folly_conv
-    Folly::folly_logging_logging
     Folly::folly_string
   EXPORTED_DEPS
     Folly::folly_expected
     Folly::folly_hash_hash
     Folly::folly_io_iobuf
+    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moq_varint
@@ -42,7 +42,6 @@ moxygen_add_library(moxygen_moq_framer
     MoQFramer.cpp
   DEPS
     Folly::folly_lang_bits
-    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_moq_token_cache
     moxygen_moq_types
@@ -52,6 +51,7 @@ moxygen_add_library(moxygen_moq_framer
     mvfst::mvfst_exception
     mvfst::mvfst_folly_utils
     Folly::folly_io_iobuf
+    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_moq_codec
@@ -146,6 +146,8 @@ moxygen_add_library(moxygen_moq_server
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
+    mvfst::mvfst_common_address_quic_socket_address_bridge
+    Folly::folly_logging_logging
     Folly::folly_net_net_ops
     Folly::folly_portability
     Folly::folly_string
@@ -182,6 +184,7 @@ moxygen_add_library(moxygen_moqclient_base
   SRCS
     MoQClientBase.cpp
   DEPS
+    mvfst::mvfst_common_address_quic_socket_address_bridge
     Folly::folly_coro_error
     Folly::folly_string
   EXPORTED_DEPS
@@ -219,6 +222,7 @@ moxygen_add_library(moxygen_moq_qmux_client
     moxygen_qmux_utils
     proxygen::proxygen_transport_qmux_qmux_connector
     Folly::folly_coro_baton
+    Folly::folly_coro_current_executor
     Folly::folly_coro_task
     Folly::folly_io_async_async_socket
     Folly::folly_io_coro_socket
@@ -272,6 +276,7 @@ moxygen_add_library(moxygen_moq_webtransport_client
     proxygen::proxygen_http_hq_connector
     proxygen::proxygen_http_session_quic_protocol_info
     proxygen::proxygen_http_webtransport_httpwebtransport
+    mvfst::mvfst_common_address_quic_socket_address_bridge
     Folly::folly_string
   EXPORTED_DEPS
     moxygen_events_moq_folly_executor_impl

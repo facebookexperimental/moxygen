@@ -29,8 +29,12 @@ moxygen_add_library(moxygen_mlog_file_mlogger
     FileMLogger.cpp
   DEPS
     Folly::folly_json_dynamic
+    Folly::folly_logging_logging
+    Folly::folly_random
   EXPORTED_DEPS
     moxygen_mlog_mlogger
+    Folly::folly_executor
+    Folly::folly_futures_core
 )
 
 moxygen_add_library(moxygen_mlog_mlog_events
@@ -49,6 +53,7 @@ moxygen_add_library(moxygen_mlog_file_mlogger_factory
   EXPORTED_DEPS
     moxygen_mlog_file_mlogger
     moxygen_mlog_mlogger_factory
+    Folly::folly_executor
 )
 
 add_subdirectory(test)

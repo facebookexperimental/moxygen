@@ -9,6 +9,7 @@ moxygen_add_library(moxygen_flv_parser_flv_common
     FlvCommon.cpp
   EXPORTED_DEPS
     Folly::folly_io_iobuf
+    Folly::folly_logging_logging
 )
 
 moxygen_add_library(moxygen_flv_parser_flv_stream_parser
@@ -34,6 +35,8 @@ moxygen_add_library(moxygen_flv_parser_flv_reader
 moxygen_add_library(moxygen_flv_parser_flv_coder
   SRCS
     FlvCoder.cpp
+  DEPS
+    Folly::folly_logging_logging
   EXPORTED_DEPS
     moxygen_flv_parser_flv_common
     Folly::folly_io_iobuf
