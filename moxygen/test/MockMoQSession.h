@@ -63,6 +63,12 @@ class MockMoQSession : public MoQSession {
       (override));
 
   MOCK_METHOD(
+      folly::coro::Task<Publisher::FetchResult>,
+      fetch,
+      (Fetch, std::shared_ptr<FetchConsumer>),
+      (override));
+
+  MOCK_METHOD(
       std::optional<uint64_t>,
       getNegotiatedVersion,
       (),
