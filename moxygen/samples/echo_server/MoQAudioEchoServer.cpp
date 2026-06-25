@@ -10,8 +10,6 @@
 
 #include <optional>
 
-#include <moxygen/MoQFramer.h>
-
 namespace moxygen {
 
 MoQAudioEchoServer::MoQAudioEchoServer(

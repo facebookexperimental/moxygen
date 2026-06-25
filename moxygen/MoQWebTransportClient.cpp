@@ -11,7 +11,6 @@
 #include <proxygen/lib/http/session/QuicProtocolInfo.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <quic/common/address/QuicSocketAddressBridge.h>
-#include <moxygen/MoQFramer.h>
 
 namespace {
 
