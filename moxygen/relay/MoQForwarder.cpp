@@ -719,6 +719,9 @@ void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
   if (!forwarder) {
     return;
   }
+  // PUBLISH-served subscriptions carry the real id only after PUBLISH_OK; a
+  // later joining fetch matches against it in resolveJoiningFetch.
+  requestID = pubOk.requestID;
   // Update subscriber range from PUBLISH_OK
   std::optional<AbsoluteLocation> end;
   if (pubOk.endGroup) {
