@@ -1332,8 +1332,11 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  auto publishHandle = std::make_shared<MoQNamespacePublishHandle>(
-      subNsReply, *negotiatedVersion_);
+  std::shared_ptr<MoQNamespacePublishHandle> publishHandle;
+  if (getDraftMajorVersion(*negotiatedVersion_) >= 16) {
+    publishHandle = std::make_shared<MoQNamespacePublishHandle>(
+        subNsReply, *negotiatedVersion_);
+  }
   auto subAnnResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
       publishHandler_->subscribeNamespace(subAnn, publishHandle)));
