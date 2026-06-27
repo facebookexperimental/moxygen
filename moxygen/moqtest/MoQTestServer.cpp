@@ -51,6 +51,29 @@ MoQTestServer::MoQTestServer(
           kEndpointName),
       versions_(versions) {}
 
+std::shared_ptr<MoQSession> MoQTestServer::createSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    std::shared_ptr<MoQExecutor> executor) {
+  return std::make_shared<MoQRelaySession>(
+      std::move(wt), *this, std::move(executor));
+}
+
+folly::coro::Task<void> MoQTestServer::delay(uint64_t ms) {
+  co_await folly::coro::sleep(std::chrono::milliseconds(ms), &timekeeper_);
+}
+
+void MoQTestServer::gracefulShutdown() {
+  // Cancel in-flight send coroutines so they stop co_await'ing on the folly
+  // Timekeeper, which would otherwise crash if recreated during teardown.
+  for (auto& [key, state] : activeSubscriptions_) {
+    state.cancelSource.requestCancellation();
+  }
+  publishNamespaceHandle_.reset();
+  if (relaySession_) {
+    relaySession_->drain();
+  }
+}
+
 void MoQTestServer::removeSubscription(SubKey key) {
   auto it = activeSubscriptions_.find(key);
   if (it != activeSubscriptions_.end()) {
@@ -119,8 +142,13 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
       &sub.fullTrackName.trackNamespace);
   XCHECK(res.hasValue())
       << "Only valid params must be passed into this function";
-  MoQTestParameters params = res.value();
+  co_await sendTrackData(res.value(), sub.requestID, std::move(callback));
+}
 
+folly::coro::Task<void> MoQTestServer::sendTrackData(
+    MoQTestParameters params,
+    RequestID requestID,
+    std::shared_ptr<TrackConsumer> callback) {
   // Publish Objects in Accordance to params
 
   // Publisher Delivery Timeout (To be implemented later)
@@ -144,7 +172,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
     }
 
     case (ForwardingPreference::DATAGRAM): {
-      co_await MoQTestServer::sendDatagram(sub, params, callback);
+      co_await MoQTestServer::sendDatagram(requestID, params, callback);
       break;
     }
 
@@ -157,7 +185,7 @@ folly::coro::Task<void> MoQTestServer::onSubscribe(
   // Default PublishDone For Now
 
   PublishDone done;
-  done.requestID = sub.requestID;
+  done.requestID = requestID;
   done.statusCode = PublishDoneStatusCode::TRACK_ENDED;
   done.reasonPhrase = kDefaultPublishDoneReason;
   callback->publishDone(std::move(done));
@@ -209,8 +237,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
 
     // If SubGroup Hasn't Been Ended Already
@@ -265,8 +292,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
   co_return;
@@ -344,8 +370,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
 
     // If SubGroup Hasn't Been Ended Already
@@ -362,10 +387,10 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
 }
 
 folly::coro::Task<void> MoQTestServer::sendDatagram(
-    SubscribeRequest sub,
+    RequestID requestID,
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
-  auto alias = TrackAlias(sub.requestID.value);
+  auto alias = TrackAlias(requestID.value);
   callback->setTrackAlias(alias);
   auto token = co_await folly::coro::co_current_cancellation_token;
   // Iterate through Objects
@@ -379,7 +404,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       if (token.isCancellationRequested()) {
         // Instead of returning an error, callback->publishDone with error
         PublishDone done;
-        done.requestID = sub.requestID;
+        done.requestID = requestID;
         done.reasonPhrase = "Datagram Subscription Cancelled";
         done.statusCode = PublishDoneStatusCode::INTERNAL_ERROR;
         callback->publishDone(std::move(done));
@@ -407,7 +432,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       if (res.hasError()) {
         // If sending datagram fails, callback->publishDone with error
         PublishDone done;
-        done.requestID = sub.requestID;
+        done.requestID = requestID;
         done.reasonPhrase = "Error Sending Datagram Objects";
         done.statusCode = PublishDoneStatusCode::INTERNAL_ERROR;
         callback->publishDone(std::move(done));
@@ -415,10 +440,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       }
 
       // Set Delay Based on Object Frequency
-      co_await co_withExecutor(
-          folly::getGlobalCPUExecutor(),
-          folly::coro::sleep(
-              std::chrono::milliseconds(params.objectFrequency)));
+      co_await delay(params.objectFrequency);
     }
   }
 
@@ -544,8 +566,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
 
@@ -596,8 +617,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
 
@@ -654,13 +674,215 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
 
   // Inform Consumer that fetch is completed
   callback->endOfFetch();
+}
+
+namespace {
+const std::string kPublishTrackName = "test";
+
+// Handle returned for SUBSCRIBE_NAMESPACE; cancels the in-flight PUBLISH on
+// UNSUBSCRIBE_NAMESPACE.
+class TestSubscribeNamespaceHandle : public Publisher::SubscribeNamespaceHandle {
+ public:
+  TestSubscribeNamespaceHandle(
+      std::weak_ptr<MoQTestServer> server,
+      MoQTestServer::SubKey key,
+      SubscribeNamespaceOk ok)
+      : Publisher::SubscribeNamespaceHandle(std::move(ok)),
+        server_(std::move(server)),
+        key_(key) {}
+
+  void unsubscribeNamespace() override {
+    if (auto s = server_.lock()) {
+      s->removeSubscription(key_);
+    }
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported"});
+  }
+
+ private:
+  std::weak_ptr<MoQTestServer> server_;
+  MoQTestServer::SubKey key_;
+};
+
+// Handle returned for SUBSCRIBE_TRACKS; cancels the in-flight PUBLISH on
+// UNSUBSCRIBE_TRACKS.
+class TestSubscribeTracksHandle : public Publisher::SubscribeTracksHandle {
+ public:
+  TestSubscribeTracksHandle(
+      std::weak_ptr<MoQTestServer> server,
+      MoQTestServer::SubKey key,
+      SubscribeTracksOk ok)
+      : Publisher::SubscribeTracksHandle(std::move(ok)),
+        server_(std::move(server)),
+        key_(key) {}
+
+  void unsubscribeTracks() override {
+    if (auto s = server_.lock()) {
+      s->removeSubscription(key_);
+    }
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate reqUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported"});
+  }
+
+ private:
+  std::weak_ptr<MoQTestServer> server_;
+  MoQTestServer::SubKey key_;
+};
+} // namespace
+
+folly::coro::Task<MoQSession::SubscribeNamespaceResult>
+MoQTestServer::subscribeNamespace(
+    SubscribeNamespace subNs,
+    std::shared_ptr<NamespacePublishHandle> /*namespacePublishHandle*/) {
+  XLOG(INFO) << "Received SubscribeNamespace prefix="
+             << subNs.trackNamespacePrefix
+             << " options=" << static_cast<int>(subNs.options);
+
+  // PUBLISH only works when the whole namespace is specified, i.e. it decodes
+  // to a full set of moq-test parameters.
+  TrackNamespace ns = subNs.trackNamespacePrefix;
+  auto res = convertTrackNamespaceToMoqTestParam(&ns);
+  if (res.hasError()) {
+    co_return folly::makeUnexpected(
+        SubscribeNamespaceError{
+            subNs.requestID,
+            SubscribeNamespaceErrorCode::NAMESPACE_PREFIX_UNKNOWN,
+            "Namespace must fully specify moq-test parameters"});
+  }
+
+  auto session = MoQSession::getRequestSession();
+  SubKey subKey{session.get(), subNs.requestID.value};
+
+  // Only PUBLISH/BOTH trigger a server-initiated PUBLISH.
+  if (subNs.options == SubscribeNamespaceOptions::PUBLISH ||
+      subNs.options == SubscribeNamespaceOptions::BOTH) {
+    co_withExecutor(
+        co_await folly::coro::co_current_executor,
+        doPublish(session, res.value(), ns, subNs.requestID, subNs.forward))
+        .start();
+  }
+
+  co_return std::make_shared<TestSubscribeNamespaceHandle>(
+      std::static_pointer_cast<MoQTestServer>(shared_from_this()),
+      subKey,
+      SubscribeNamespaceOk{subNs.requestID});
+}
+
+folly::coro::Task<MoQSession::SubscribeTracksResult>
+MoQTestServer::subscribeTracks(
+    SubscribeTracks subTracks,
+    std::shared_ptr<PublishBlockedHandle> /*publishBlockedHandle*/) {
+  XLOG(INFO) << "Received SubscribeTracks prefix="
+             << subTracks.trackNamespacePrefix;
+
+  TrackNamespace ns = subTracks.trackNamespacePrefix;
+  auto res = convertTrackNamespaceToMoqTestParam(&ns);
+  if (res.hasError()) {
+    co_return folly::makeUnexpected(
+        SubscribeTracksError{
+            subTracks.requestID,
+            SubscribeTracksErrorCode::NAMESPACE_PREFIX_UNKNOWN,
+            "Namespace must fully specify moq-test parameters"});
+  }
+
+  auto session = MoQSession::getRequestSession();
+  SubKey subKey{session.get(), subTracks.requestID.value};
+  co_withExecutor(
+      co_await folly::coro::co_current_executor,
+      doPublish(
+          session, res.value(), ns, subTracks.requestID, subTracks.forward))
+      .start();
+
+  co_return std::make_shared<TestSubscribeTracksHandle>(
+      std::static_pointer_cast<MoQTestServer>(shared_from_this()),
+      subKey,
+      SubscribeTracksOk{subTracks.requestID});
+}
+
+folly::coro::Task<void> MoQTestServer::doPublish(
+    std::shared_ptr<MoQSession> session,
+    MoQTestParameters params,
+    TrackNamespace trackNamespace,
+    RequestID requestID,
+    bool forward) {
+  FullTrackName ftn;
+  ftn.trackNamespace = std::move(trackNamespace);
+  ftn.trackName = kPublishTrackName;
+
+  auto forwarder = std::make_shared<MoQForwarder>(ftn);
+  forwarder->setTrackAlias(TrackAlias(requestID.value));
+
+  SubKey subKey{session.get(), requestID.value};
+  auto& state = activeSubscriptions_[subKey];
+  state.forwarder = forwarder;
+  auto token = state.cancelSource.getToken();
+
+  struct EmptyCb : public MoQForwarder::Callback {
+    std::weak_ptr<MoQTestServer> server;
+    SubKey key;
+    void onEmpty(MoQForwarder*) override {
+      if (auto s = server.lock()) {
+        s->removeSubscription(key);
+      }
+    }
+  };
+  auto cb = std::make_shared<EmptyCb>();
+  cb->server = std::static_pointer_cast<MoQTestServer>(shared_from_this());
+  cb->key = subKey;
+  forwarder->setCallback(std::move(cb));
+
+  auto subscriber = forwarder->addSubscriber(session, forward);
+  if (!subscriber) {
+    XLOG(ERR) << "PUBLISH failed: addSubscriber returned null";
+    removeSubscription(subKey);
+    co_return;
+  }
+  auto guard =
+      folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
+
+  auto publishResponse =
+      session->publish(subscriber->getPublishRequest(), subscriber);
+  if (publishResponse.hasError()) {
+    XLOG(ERR) << "PUBLISH failed: " << publishResponse.error().reasonPhrase;
+    co_return;
+  }
+  subscriber->trackConsumer = std::move(publishResponse.value().consumer);
+
+  auto pubResult =
+      co_await co_awaitTry(std::move(publishResponse.value().reply));
+  if (pubResult.hasException()) {
+    XLOG(ERR) << "PUBLISH failed: " << pubResult.exception().what();
+    co_return;
+  }
+  if (pubResult.value().hasError()) {
+    XLOG(ERR) << "PUBLISH rejected: " << pubResult.value().error().reasonPhrase;
+    co_return;
+  }
+  guard.dismiss();
+  subscriber->onPublishOk(pubResult.value().value());
+
+  co_await co_withCancellation(
+      token, sendTrackData(params, requestID, forwarder));
 }
 
 folly::coro::Task<void> MoQTestServer::doRelaySetup(

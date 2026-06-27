@@ -5,6 +5,8 @@
  */
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/io/async/AsyncSignalHandler.h>
+#include <csignal>
 #include "folly/init/Init.h"
 #include "folly/io/async/ScopedEventBaseThread.h"
 #include "moxygen/mlog/FileMLogger.h"
@@ -62,7 +64,9 @@ DEFINE_uint64(
 DEFINE_string(
     request,
     "subscribe",
-    "Request Type: must be one of \"subscribe\" or \"fetch\"");
+    "Request Type: one of \"subscribe\", \"fetch\" or \"publish\". "
+    "\"publish\" asks the server to PUBLISH the track (via SUBSCRIBE_TRACKS) "
+    "and only works when the whole namespace is specified.");
 DEFINE_bool(
     log,
     false,
@@ -134,6 +138,30 @@ int main(int argc, char** argv) {
     client->setLogger(logger);
   }
 
+  // Drain on SIGINT/SIGTERM. We don't terminate the loop here: draining closes
+  // the session, which flushes CONNECTION_CLOSE and lets evb.loop() return.
+  class SigHandler : public folly::AsyncSignalHandler {
+   public:
+    SigHandler(folly::EventBase* evb, std::shared_ptr<moxygen::MoQTestClient> c)
+        : folly::AsyncSignalHandler(evb), client_(std::move(c)) {
+      registerSignalHandler(SIGINT);
+      registerSignalHandler(SIGTERM);
+    }
+    void signalReceived(int) noexcept override {
+      client_->shutdown();
+      unreg();
+    }
+
+    void unreg() {
+      unregisterSignalHandler(SIGINT);
+      unregisterSignalHandler(SIGTERM);
+    }
+
+   private:
+    std::shared_ptr<moxygen::MoQTestClient> client_;
+  };
+  SigHandler sigHandler(&evb, client);
+
   try {
     // Connect Client to Server
     XLOG(INFO) << "Connecting to " << url.getHostAndPort();
@@ -142,16 +170,28 @@ int main(int argc, char** argv) {
             &evb, client->connect(&evb, FLAGS_versions)),
         &evb);
 
+    // Unregister the signal handler when the request completes so evb.loop()
+    // can return; the handler is what otherwise keeps the loop alive.
+    auto onComplete = [&sigHandler](auto&&) { sigHandler.unreg(); };
     if (FLAGS_request == "subscribe") {
       XLOG(INFO) << "Subscribing to " << url.getHostAndPort();
-      // Test a Subscribe Call
       folly::coro::co_withExecutor(&evb, client->subscribe(defaultMoqParams))
-          .start();
+          .start()
+          .via(&evb)
+          .thenTry(onComplete);
     } else if (FLAGS_request == "fetch") {
       XLOG(INFO) << "Fetching from " << url.getHostAndPort();
-      // Test a Fetch Call
       folly::coro::co_withExecutor(&evb, client->fetch(defaultMoqParams))
-          .start();
+          .start()
+          .via(&evb)
+          .thenTry(onComplete);
+    } else if (FLAGS_request == "publish") {
+      XLOG(INFO) << "Requesting PUBLISH from " << url.getHostAndPort();
+      folly::coro::co_withExecutor(
+          &evb, client->subscribeTracks(defaultMoqParams))
+          .start()
+          .via(&evb)
+          .thenTry(onComplete);
     } else {
       XLOG(ERR) << "Invalid Request Type: " << FLAGS_request;
     }

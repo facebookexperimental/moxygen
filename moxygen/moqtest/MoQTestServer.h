@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <folly/container/F14Map.h>
+#include <folly/futures/ThreadWheelTimekeeper.h>
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQQmuxServer.h"
 #include "moxygen/MoQRelaySession.h"
@@ -75,7 +76,18 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
     }
   }
 
+  // Drains the relay-client session (when --relay_url is set) so the relay
+  // sees a clean close instead of an idle timeout. Must run on the worker
+  // EventBase. Listening sessions are torn down by stop().
+  void gracefulShutdown();
+
   void removeSubscription(SubKey key);
+
+  // Incoming client sessions must be MoQRelaySessions so they dispatch
+  // SUBSCRIBE_NAMESPACE/SUBSCRIBE_TRACKS to this publish handler.
+  std::shared_ptr<MoQSession> createSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      std::shared_ptr<MoQExecutor> executor) override;
 
   // Relay client support. Workers come from an externally-supplied EventBase
   // (use the QUIC server's worker pool when QUIC is running, otherwise the
@@ -96,6 +108,27 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback);
 
+  // SUBSCRIBE_NAMESPACE (PUBLISH/BOTH) and SUBSCRIBE_TRACKS both trigger a
+  // server-initiated PUBLISH. They only work when the *whole* namespace is
+  // specified (i.e. it decodes to a full set of MoQTestParameters), since the
+  // server must know exactly which track to publish.
+  virtual folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
+      SubscribeNamespace subNs,
+      std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
+
+  virtual folly::coro::Task<SubscribeTracksResult> subscribeTracks(
+      SubscribeTracks subTracks,
+      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+          nullptr) override;
+
+  // Emits track data (the same data SUBSCRIBE would deliver) according to the
+  // forwarding preference, then publishDone. Shared by onSubscribe and the
+  // PUBLISH path.
+  folly::coro::Task<void> sendTrackData(
+      MoQTestParameters params,
+      RequestID requestID,
+      std::shared_ptr<TrackConsumer> callback);
+
   folly::coro::Task<void> sendOneSubgroupPerGroup(
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
@@ -109,7 +142,7 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       std::shared_ptr<TrackConsumer> callback);
 
   folly::coro::Task<void> sendDatagram(
-      SubscribeRequest sub,
+      RequestID requestID,
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
 
@@ -146,6 +179,18 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       int32_t connectTimeout,
       int32_t transactionTimeout);
 
+  // Inter-object delay using the server-owned timekeeper.
+  folly::coro::Task<void> delay(uint64_t ms);
+
+  // Initiates a server PUBLISH for the track encoded by params and streams the
+  // track data, keyed under SubKey{session, requestID} for cancellation.
+  folly::coro::Task<void> doPublish(
+      std::shared_ptr<MoQSession> session,
+      MoQTestParameters params,
+      TrackNamespace trackNamespace,
+      RequestID requestID,
+      bool forward);
+
   struct SubscriptionState {
     std::shared_ptr<MoQForwarder> forwarder;
     folly::CancellationSource cancelSource;
@@ -159,6 +204,9 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
   folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
       activeSubscriptions_;
+  // Server-owned timekeeper for inter-object delays. Avoids the global
+  // Timekeeper singleton, which can crash if used during process teardown.
+  folly::ThreadWheelTimekeeper timekeeper_;
   bool includeTimestampExtension_{false};
 };
 
