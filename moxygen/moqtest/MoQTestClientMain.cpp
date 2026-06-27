@@ -62,7 +62,9 @@ DEFINE_uint64(
 DEFINE_string(
     request,
     "subscribe",
-    "Request Type: must be one of \"subscribe\" or \"fetch\"");
+    "Request Type: one of \"subscribe\", \"fetch\" or \"publish\". "
+    "\"publish\" asks the server to PUBLISH the track (via SUBSCRIBE_TRACKS) "
+    "and only works when the whole namespace is specified.");
 DEFINE_bool(
     log,
     false,
@@ -151,6 +153,11 @@ int main(int argc, char** argv) {
       XLOG(INFO) << "Fetching from " << url.getHostAndPort();
       // Test a Fetch Call
       folly::coro::co_withExecutor(&evb, client->fetch(defaultMoqParams))
+          .start();
+    } else if (FLAGS_request == "publish") {
+      XLOG(INFO) << "Requesting PUBLISH from " << url.getHostAndPort();
+      folly::coro::co_withExecutor(
+          &evb, client->subscribeTracks(defaultMoqParams))
           .start();
     } else {
       XLOG(ERR) << "Invalid Request Type: " << FLAGS_request;
