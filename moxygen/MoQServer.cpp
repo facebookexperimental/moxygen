@@ -104,6 +104,8 @@ MoQServer::MoQServer(
 
   factory_ = std::make_unique<HQServerTransportFactory>(
       params_, [this](HTTPMessage*) { return new Handler(*this); }, nullptr);
+  factory_->setQLoggerFactory(
+      [this](quic::VantagePoint vp) { return makeQLogger(vp); });
 
   // Configure 0-RTT early data handler with server's default params
   constexpr uint64_t kDefaultMaxRequestID = 100;
