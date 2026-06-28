@@ -1220,4 +1220,46 @@ TEST_F(MoQForwarderTest, SubscriberDetachedOnForwarderDestruction) {
   subscriber->onPublishOk(pubOk);
 }
 
+// Test: destroying the forwarder while a subgroup is still open resets the
+// downstream subgroup consumer. The SubgroupForwarder must reset open consumers
+// during detach(), while subscribers are still reachable: once forwarder_ is
+// null, forEachSubscriberSubgroup bails and any later reset() is lost, leaving
+// the consumer without its required terminal.
+TEST_F(MoQForwarderTest, SubgroupConsumersResetOnForwarderDestruction) {
+  auto session = createMockSession();
+  auto consumer = createMockConsumer();
+
+  std::shared_ptr<MockSubgroupConsumer> sg;
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sg = createMockSubgroupConsumer();
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(sg);
+      });
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto subscriber = addSubscriber(*forwarder, session, consumer, RequestID(1));
+  ASSERT_NE(subscriber, nullptr);
+
+  // Open a subgroup, leaving the downstream consumer attached to the
+  // subscriber. The publisher keeps its handle to the SubgroupForwarder.
+  auto sgRes = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto pubSg = *sgRes;
+  ASSERT_NE(sg, nullptr);
+
+  // Destroying the forwarder detaches the open subgroup; the still-attached
+  // downstream consumer must be reset so its stream is properly terminated.
+  EXPECT_CALL(*sg, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  forwarder.reset();
+
+  // Resetting the publisher's now-detached handle is a safe no-op (the consumer
+  // was already reset during detach, so no second reset is delivered).
+  pubSg->reset(ResetStreamErrorCode::SESSION_CLOSED);
+}
+
 } // namespace moxygen::test

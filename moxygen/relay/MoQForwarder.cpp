@@ -807,6 +807,17 @@ MoQForwarder::SubgroupForwarder::SubgroupForwarder(
       options_(options) {}
 
 void MoQForwarder::SubgroupForwarder::detach() {
+  // Reset still-open subgroup consumers while subscribers are reachable: once
+  // forwarder_ is null, forEachSubscriberSubgroup bails and a later reset() is
+  // lost, leaving the consumer without its required terminal.
+  if (forwarder_) {
+    forwarder_->forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
+      auto it = sub->subgroups.find(identifier_);
+      if (it != sub->subgroups.end() && it->second) {
+        it->second->reset(ResetStreamErrorCode::SESSION_CLOSED);
+      }
+    });
+  }
   forwarder_ = nullptr;
 }
 
