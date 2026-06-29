@@ -868,6 +868,8 @@ CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamBeforeSetup) {
         baton.post();
         return folly::unit;
       });
+  // unsubscribe() cancels the subscription; its open subgroup is reset.
+  EXPECT_CALL(*sgConsumer, reset(_));
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
   auto res =

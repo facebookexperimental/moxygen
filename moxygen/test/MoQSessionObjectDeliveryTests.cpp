@@ -1057,6 +1057,56 @@ CO_TEST_P_X(MoQSessionTest, ObjectCallbackErrorResetsSubgroupConsumer) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Cleanup must reset an open subgroup. The session is closed with a subgroup
+// still open; cleanup() cancels the subscribe state, and isCancelled() must not
+// then suppress reset() on the open subgroup consumer. Reverting the
+// isCancelled() change hangs this test on resetBaton.
+//
+// Note: FakeSharedWebTransport's close also resets the peer's streams, so the
+// read loop here can wake via that error too; this exercises the cleanup/reset
+// contract but does not isolate the rh-token-cancel-without-error wake.
+CO_TEST_P_X(MoQSessionTest, OpenSubgroupResetDuringSessionCleanup) {
+  co_await setupMoQSession();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub, sub] {
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      // Leave the subgroup OPEN: no endOfSubgroup, no publishDone.
+      sgp->object(0, moxygen::test::makeBuf(10));
+    });
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton objectReceived;
+  folly::coro::Baton resetBaton;
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false)).WillOnce([&](auto...) {
+    objectReceived.post();
+    return folly::unit;
+  });
+  // cleanup() delivers PUBLISH_DONE before cancelling the loop.
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, reset(_)).WillOnce([&](auto) {
+    resetBaton.post();
+    return folly::unit;
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  // Subgroup is open and the read loop is parked on readStreamData().
+  co_await objectReceived;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+  co_await resetBaton;
+}
+
 namespace {
 class NullLogger : public MLogger {
  public:

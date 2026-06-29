@@ -487,6 +487,9 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
       }));
   EXPECT_CALL(*sg, object(_, _, _, _))
       .WillRepeatedly(testing::Return(folly::unit));
+  // Unsubscribe cancels the subscription; its still-open subgroup is owed a
+  // terminal reset().
+  EXPECT_CALL(*sg, reset(_));
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   co_await subgroupCreated;
