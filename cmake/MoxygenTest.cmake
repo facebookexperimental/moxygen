@@ -45,11 +45,9 @@ function(moxygen_add_test)
       "${_MOXYGEN_COMMON_COMPILE_OPTIONS}"
     )
 
-    gtest_add_tests(TARGET ${MOXYGEN_TEST_TARGET}
+    gtest_discover_tests(${MOXYGEN_TEST_TARGET}
                     EXTRA_ARGS "${MOXYGEN_TEST_EXTRA_ARGS}"
                     WORKING_DIRECTORY ${MOXYGEN_TEST_WORKING_DIRECTORY}
                     TEST_PREFIX ${MOXYGEN_TEST_PREFIX}
-                    TEST_LIST MOXYGEN_TEST_CASES)
-
-    set_tests_properties(${MOXYGEN_TEST_CASES} PROPERTIES TIMEOUT 120)
+                    PROPERTIES TIMEOUT 120)
 endfunction()
