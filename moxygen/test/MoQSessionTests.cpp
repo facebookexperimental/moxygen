@@ -1182,7 +1182,9 @@ CO_TEST_P_X(MoQSessionDeleteFromCallbackTest, DeleteFromPublishDoneCallback) {
   EXPECT_FALSE(clientSession_);
   EXPECT_TRUE(weakSession.expired()) << "Session should have been deleted";
 
-  // Clean up: close server session
+  // serverWt_ still holds a raw peer pointer to the freed client; drop it so
+  // closing the server doesn't call onSessionEnd() on the dead session.
+  serverWt_->setPeerHandler(nullptr);
   if (serverSession_) {
     serverSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
@@ -1237,7 +1239,9 @@ CO_TEST_P_X(
 
   // If we get here without crashing, the fix is working
 
-  // Clean up: close server session
+  // serverWt_ still holds a raw peer pointer to the freed client; drop it so
+  // closing the server doesn't call onSessionEnd() on the dead session.
+  serverWt_->setPeerHandler(nullptr);
   if (serverSession_) {
     serverSession_->close(SessionCloseErrorCode::NO_ERROR);
   }
