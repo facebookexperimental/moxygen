@@ -470,6 +470,10 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
   MOCK_METHOD(void, onPublishError, (PublishErrorCode), (override));
 
   MOCK_METHOD(void, onPublishSuccess, (), (override));
+
+  MOCK_METHOD(void, onSubgroupReset, (ResetStreamErrorCode), (override));
+
+  MOCK_METHOD(void, recordObjectAckLatency, (uint64_t), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -539,6 +543,8 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onPublishOk, (), (override));
 
   MOCK_METHOD(void, onPublishError, (PublishErrorCode), (override));
+
+  MOCK_METHOD(void, onSubgroupReset, (ResetStreamErrorCode), (override));
 };
 
 } // namespace moxygen

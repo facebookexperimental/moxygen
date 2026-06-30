@@ -446,6 +446,10 @@ class MoQSession : public Subscriber,
       return session_ ? session_->getTransportInfo() : quic::TransportInfo();
     }
 
+    MoQPublisherStatsCallback* getPublisherStatsCallback() const {
+      return session_ ? session_->publisherStatsCallback_.get() : nullptr;
+    }
+
     void setReplyContext(std::shared_ptr<ReplyContext> ctx) {
       replyContext_ = std::move(ctx);
     }

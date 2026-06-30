@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/MoQSession.h"
+#include <folly/Chrono.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
 #include <quic/common/CircularDeque.h>
@@ -294,6 +295,9 @@ class StreamPublisherImpl
     if (streamType_ != StreamType::FETCH_HEADER) {
       maybeTrackAlias = trackAlias_;
     }
+    auto* pubStats =
+        publisher_ ? publisher_->getPublisherStatsCallback() : nullptr;
+    auto now = folly::chrono::coarse_steady_clock::now();
     while (!pendingDeliveries_.empty() &&
            pendingDeliveries_.front().endOffset <= offset) {
       auto& pendingDelivery = pendingDeliveries_.front();
@@ -305,6 +309,12 @@ class StreamPublisherImpl
             pendingDelivery.subgroupId,
             pendingDelivery.objectId);
       }
+
+      auto latencyUsec = std::chrono::duration_cast<std::chrono::microseconds>(
+                             now - pendingDelivery.enqueuedAt)
+                             .count();
+      MOQ_PUBLISHER_STATS(
+          pubStats, recordObjectAckLatency, uint64_t(latencyUsec));
 
       // Cancel delivery timeout timer when object is successfully delivered
       if (deliveryTimer_) {
@@ -378,9 +388,19 @@ class StreamPublisherImpl
     uint64_t subgroupId;
     uint64_t objectId;
     uint64_t endOffset;
+    folly::chrono::coarse_steady_clock::time_point enqueuedAt;
 
-    ObjectDeliveryInfo(uint64_t g, uint64_t sg, uint64_t o, uint64_t offset)
-        : groupId(g), subgroupId(sg), objectId(o), endOffset(offset) {}
+    ObjectDeliveryInfo(
+        uint64_t g,
+        uint64_t sg,
+        uint64_t o,
+        uint64_t offset,
+        folly::chrono::coarse_steady_clock::time_point enq)
+        : groupId(g),
+          subgroupId(sg),
+          objectId(o),
+          endOffset(offset),
+          enqueuedAt(enq) {}
   };
   quic::CircularDeque<ObjectDeliveryInfo> pendingDeliveries_;
 
@@ -673,10 +693,16 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
   if (!writeBuf_.empty() || finStream) {
     deliveryCallback = this;
 
-    if ((deliveryCallback_ || deliveryTimer_) && endObject) {
+    bool trackForStats =
+        publisher_ && publisher_->getPublisherStatsCallback() != nullptr;
+    if ((deliveryCallback_ || deliveryTimer_ || trackForStats) && endObject) {
       uint64_t endOffset = bytesWritten_ + writeBuf_.chainLength() - 1;
       pendingDeliveries_.emplace_back(
-          header_.group, header_.subgroup, header_.id, endOffset);
+          header_.group,
+          header_.subgroup,
+          header_.id,
+          endOffset,
+          folly::chrono::coarse_steady_clock::now());
     }
 
     bytesWritten_ += writeBuf_.chainLength();
@@ -932,6 +958,10 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
   if (!writeBuf_.empty()) {
     // TODO: stream header is pending, reliable reset?
     XLOG(WARN) << "Stream header pending on subgroup=" << header_;
+  }
+  if (publisher_) {
+    MOQ_PUBLISHER_STATS(
+        publisher_->getPublisherStatsCallback(), onSubgroupReset, error);
   }
   // Cancel all delivery timeout timers for this stream since it's being reset
   if (deliveryTimer_) {
@@ -3650,6 +3680,9 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
         if (!dcb.reset(errorCode)) {
           XLOG(ERR) << __func__ << " terminating for unknown "
                     << "stream id=" << id << " sess=" << this;
+        } else {
+          MOQ_SUBSCRIBER_STATS(
+              subscriberStatsCallback_, onSubgroupReset, errorCode);
         }
         // Per the WebTransport contract, the StreamReadHandle is invalid once
         // readStreamData() yields an exception (peer reset, session close, or

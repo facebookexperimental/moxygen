@@ -158,6 +158,14 @@ class MoQStatsCallback {
    * onSubscriptionBegin, so the difference is a non-negative gauge.
    */
   virtual void onSubscriptionEnd() = 0;
+
+  /*
+   * A subgroup/data stream was reset; errorCode carries the cause (e.g.
+   * DELIVERY_TIMEOUT).
+   * Publisher: we reset an outbound subgroup.
+   * Subscriber: a peer reset an inbound stream to us.
+   */
+  virtual void onSubgroupReset(ResetStreamErrorCode errorCode) = 0;
 };
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {
@@ -173,6 +181,10 @@ class MoQPublisherStatsCallback : public MoQStatsCallback {
 
   // Called when PUBLISH receives PUBLISH_OK response
   virtual void onPublishSuccess() = 0;
+
+  // Time from enqueue (handed to QUIC) until the object's bytes are acked.
+  // Subgroup/stream path only; datagrams have no ack mechanism.
+  virtual void recordObjectAckLatency(uint64_t latencyUsec) = 0;
 };
 
 class MoQSubscriberStatsCallback : public MoQStatsCallback {
