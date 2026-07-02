@@ -28,12 +28,13 @@ on:
         options:
           - macos-15-arm64
           - ubuntu-22.04-amd64
+          - ubuntu-24.04-amd64
         default: macos-15-arm64
 
 jobs:
   build:
     name: dev build (${{ inputs.target }})
-    runs-on: ${{ inputs.target == 'macos-15-arm64' && 'macos-15' || 'ubuntu-22.04' }}
+    runs-on: ${{ inputs.target == 'macos-15-arm64' && 'macos-15' || inputs.target == 'ubuntu-24.04-amd64' && 'ubuntu-24.04' || 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@v4
 

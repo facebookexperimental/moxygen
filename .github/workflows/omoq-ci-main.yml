@@ -140,6 +140,12 @@ jobs:
             debug_artifact: moxygen-ubuntu-22.04-amd64-dbg.tar.gz
             container: ""
 
+          - name: ubuntu-24.04-amd64
+            runner: ubuntu-24.04
+            artifact: moxygen-ubuntu-24.04-amd64.tar.gz
+            debug_artifact: moxygen-ubuntu-24.04-amd64-dbg.tar.gz
+            container: ""
+
           - name: macos-15-arm64
             runner: macos-15
             artifact: moxygen-macos-15-arm64.tar.gz

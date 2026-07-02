@@ -100,9 +100,21 @@ elif [[ -f /etc/os-release ]]; then
             install_fedora
             ;;
         *)
-            echo "Unsupported Linux distribution: $ID"
-            echo "Please install dependencies manually (see README.md)"
-            exit 1
+            # Derivatives (Linux Mint, Pop!_OS, LMDE, Rocky, Alma, ...)
+            # report their own ID; dispatch on ID_LIKE instead.
+            case " ${ID_LIKE:-} " in
+                *" ubuntu "*|*" debian "*)
+                    install_ubuntu
+                    ;;
+                *" fedora "*|*" rhel "*|*" centos "*)
+                    install_fedora
+                    ;;
+                *)
+                    echo "Unsupported Linux distribution: $ID (ID_LIKE='${ID_LIKE:-}')"
+                    echo "Please install dependencies manually (see README.md)"
+                    exit 1
+                    ;;
+            esac
             ;;
     esac
 else
