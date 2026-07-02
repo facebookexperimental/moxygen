@@ -73,8 +73,18 @@ add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 # from the in-tree path (e.g. moxygen.MoQSession) instead of an absolute
 # "_deps/...-src/..." when moxygen is consumed via FetchContent. Mirrors the
 # pattern folly applies to its own sources.
+#
+# Use CMAKE_CURRENT_SOURCE_DIR / _BINARY_DIR (moxygen's own roots), NOT
+# CMAKE_SOURCE_DIR / _BINARY_DIR. When moxygen is not the top-level project
+# (standalone/ wrapper build, or a FetchContent/add_subdirectory consumer such
+# as a relay), CMAKE_SOURCE_DIR points at the OUTER project, which is not a
+# prefix of moxygen's source paths — so nothing gets stripped and categories
+# fall back to the full absolute __FILE__ (e.g. home.runner.work.moxygen...),
+# making `--logging=moxygen=...` match nothing. CMAKE_CURRENT_SOURCE_DIR always
+# resolves to moxygen's own root here, so `.../moxygen/moxygen/MoQSession.cpp`
+# correctly strips to the `moxygen.MoQSession` category in every build layout.
 add_compile_definitions(
-  "FOLLY_XLOG_STRIP_PREFIXES=\"${CMAKE_SOURCE_DIR}:${CMAKE_BINARY_DIR}\""
+  "FOLLY_XLOG_STRIP_PREFIXES=\"${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_BINARY_DIR}\""
 )
 find_package(gflags REQUIRED)
 find_package(Zstd REQUIRED)
