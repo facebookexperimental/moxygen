@@ -210,8 +210,11 @@ set(FETCHCONTENT_QUIET OFF)
 # googletest 1.12+ required for move-only WillOnce support
 # (Ubuntu 22.04 ships 1.11 which doesn't support this)
 if(BUILD_TESTS)
-    # Try to find system googletest first
-    find_package(GTest 1.12.1 QUIET)
+    # Try to find system googletest first. CONFIG mode only: consumers of the
+    # installed tree (e.g. moqx) do find_package(GTest REQUIRED CONFIG), so a
+    # module-mode-only system googletest (libs/headers without cmake package
+    # config) must not short-circuit the FetchContent bundling below.
+    find_package(GTest 1.12.1 QUIET CONFIG)
 
     if(GTest_FOUND)
         message(STATUS "Using system googletest ${GTest_VERSION}")
