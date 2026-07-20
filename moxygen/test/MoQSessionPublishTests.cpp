@@ -964,7 +964,8 @@ CO_TEST_P_X(
 
   // Server replies with a much larger subscriber delivery timeout.
   EXPECT_CALL(*serverSubscriber, publish(_, _))
-      .WillOnce([](const PublishRequest& p, auto) -> Subscriber::PublishResult {
+      .WillOnce([kSubscriberTimeoutMs](
+                    const PublishRequest& p, auto) -> Subscriber::PublishResult {
         auto consumer =
             std::make_shared<testing::NiceMock<MockTrackConsumer>>();
         ON_CALL(*consumer, setTrackAlias(_))
