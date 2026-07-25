@@ -16,6 +16,7 @@
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
+#include "moxygen/moqtest/LatencyHistogram.h"
 #include "moxygen/moqtest/Types.h"
 #include "moxygen/samples/util/Utils.h"
 
@@ -131,6 +132,9 @@ class MoQPerfTestClient {
 
   TestResults getResults() const;
 
+  // Safe to call from any thread: reads the atomic bucket counters.
+  LatencyHistogram snapshotLatencyHist() const;
+
   void completed();
   void recordReset();
   void recordFailure();
@@ -183,6 +187,12 @@ class MoQPerfTestClient {
   mutable std::atomic<uint64_t> intervalLatencyMin_{
       std::numeric_limits<uint64_t>::max()};
   mutable std::atomic<uint64_t> intervalLatencyMax_{0};
+  // Cumulative latency histogram (whole run). Atomic so snapshotLatencyHist()
+  // can read it from the aggregation thread without hopping onto evb_.
+  std::array<std::atomic<uint64_t>, LatencyHistogram::kNumBuckets>
+      latencyBuckets_{};
+  std::atomic<uint64_t> latencyHistSum_{0};
+  std::atomic<uint64_t> latencyHistCount_{0};
 };
 
 } // namespace moxygen
