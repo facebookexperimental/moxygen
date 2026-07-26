@@ -3,6 +3,23 @@
 # LICENSE file in the root directory of this source tree.
 
 cmake_minimum_required(VERSION 3.16)
+
+# Pin CMAKE_OSX_SYSROOT to the CommandLineTools SDK BEFORE project() so the
+# compiler probe records this sysroot. Setting it after project()/enable_
+# language() doesn't reach the compiler's baked sysroot — which folly et al.
+# pick up via xcrun-style discovery and bake into IMPORTED_LOCATION of
+# exported target configs. The CommandLineTools SDK lives at a stable path
+# present on every dev mac and CI runner, unlike the versioned
+# /Applications/Xcode_X.Y.app/.../SDKs/MacOSX.sdk that xcrun resolves to on
+# hosts with Xcode installed. Plain EXISTS check works on any host — the
+# path is macOS-only.
+if(EXISTS "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+    if(NOT DEFINED CMAKE_OSX_SYSROOT)
+        set(CMAKE_OSX_SYSROOT
+            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" CACHE PATH "")
+    endif()
+endif()
+
 project(moxygen-standalone VERSION 1.0.0 LANGUAGES CXX C)
 
 # Disable CMake user package registry to prevent picking up stale getdeps builds
@@ -19,11 +36,41 @@ add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 # Options
 # =============================================================================
 option(BUILD_TESTS "Build tests" ON)
+option(BUILD_SAMPLES "Build moxygen sample executables and test tools" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
+option(BUNDLE_DEPS "Build all dep targets for artifact bundling" OFF)
+# INSTALL_DEPS=ON builds and installs all transitive deps (folly, fizz, etc.)
+# without requiring static system libs. Implied by BUNDLE_DEPS.
+option(INSTALL_DEPS "Build and install all transitive dep targets" OFF)
+option(BUILD_PICOQUIC "Build with picoquic transport support" ON)
+
+# When ON, statically link glog/gflags/double-conversion into the bundled
+# artifact. OFF (default) preserves the legacy behavior where these libs
+# stay dynamic so consumers' find_package(Glog) etc. resolve to the same
+# system .so. ON is intended for portable production tarballs that need to
+# run across Ubuntu/Debian/RHEL releases without matching SONAMEs.
+option(BUNDLE_DEPS_STATIC_SYSLIBS
+    "Static-link glog/gflags/double-conversion in BUNDLE_DEPS artifact" OFF)
 
 # =============================================================================
 # Linking preferences
 # =============================================================================
+
+# When building artifacts for distribution, prefer static system libraries
+# so the tarball consumers only need libc/libstdc++/libssl at runtime.
+if(BUNDLE_DEPS)
+    # MODULE-mode find_package() and find_library() respect this.
+    # Linux only: macOS/homebrew doesn't ship .a for zlib, fmt, etc.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    endif()
+
+    # sodium: prefer static on Linux (FetchContent deps handle their own)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(sodium_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    endif()
+    set(Boost_USE_STATIC_LIBS ON)
+endif()
 
 find_package(ZLIB REQUIRED)
 find_library(ZSTD_LIBRARY NAMES zstd)
@@ -61,6 +108,7 @@ read_rev_hash("facebookincubator" "fizz" FIZZ_REV)
 read_rev_hash("facebook" "wangle" WANGLE_REV)
 read_rev_hash("facebook" "mvfst" MVFST_REV)
 read_rev_hash("facebook" "proxygen" PROXYGEN_REV)
+read_rev_hash("openmoq" "picoquic" PICOQUIC_REV)
 
 # =============================================================================
 # System Dependencies (must be pre-installed)
@@ -85,12 +133,52 @@ if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
     endif()
 endif()
 
+# Same brew-Cellar-versioning problem as openssl: find_package(Sodium) bakes
+# /opt/homebrew/Cellar/libsodium/<version>/... into fizz-targets.cmake
+# INTERFACE_INCLUDE_DIRECTORIES, so the install tree breaks after
+# `brew upgrade libsodium`. Steer through brew's stable opt-symlink.
+# Note: FindSodium.cmake (in build/fbcode_builder/CMake/) uses lowercase
+# `sodium_*` cache variables (sodium_INCLUDE_DIR, sodium_LIBRARY_RELEASE),
+# not the FindOpenSSL-style uppercase convention.
+if(APPLE AND (NOT DEFINED sodium_INCLUDE_DIR OR NOT DEFINED sodium_LIBRARY_RELEASE))
+    if(NOT DEFINED _brew_prefix)
+        execute_process(COMMAND brew --prefix
+            OUTPUT_VARIABLE _brew_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    endif()
+    if(_brew_prefix AND EXISTS "${_brew_prefix}/opt/libsodium")
+        if(NOT DEFINED sodium_INCLUDE_DIR)
+            set(sodium_INCLUDE_DIR
+                "${_brew_prefix}/opt/libsodium/include" CACHE PATH "")
+        endif()
+        if(NOT DEFINED sodium_LIBRARY_RELEASE)
+            set(sodium_LIBRARY_RELEASE
+                "${_brew_prefix}/opt/libsodium/lib/libsodium.dylib"
+                CACHE FILEPATH "")
+        endif()
+    endif()
+endif()
+
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
+# Default (BUNDLE_DEPS_STATIC_SYSLIBS=OFF): prefer .so for these libs so
+# folly-targets.cmake hardcodes .so paths. Consumers' own find_package(Glog)
+# then resolve to the same .so — no dual-linkage under ASAN.
+# BUNDLE_DEPS_STATIC_SYSLIBS=ON: omit the override so the BUNDLE_DEPS
+# .a preference applies, statically linking glog/gflags/double-conversion
+# into the artifact for cross-distro portability.
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        AND NOT BUNDLE_DEPS_STATIC_SYSLIBS)
+    set(_saved_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".so;.a")
+endif()
 find_package(gflags CONFIG REQUIRED)
 find_package(Glog REQUIRED)
-find_package(fmt CONFIG REQUIRED)
 find_package(double-conversion CONFIG REQUIRED)
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        AND NOT BUNDLE_DEPS_STATIC_SYSLIBS)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES "${_saved_suffixes}")
+endif()
 find_package(Boost 1.70 REQUIRED COMPONENTS
     context filesystem program_options regex)
 find_package(ZLIB REQUIRED)
@@ -98,8 +186,20 @@ find_package(Zstd REQUIRED)
 find_package(LibEvent REQUIRED)
 find_package(Sodium REQUIRED)
 
-# Check for libunwind to decide if we need lzma for symbolization
-find_package(LibUnwind QUIET)
+# Check for libunwind to decide if we need lzma for symbolization.
+# When BUNDLE_DEPS is on, CMAKE_FIND_LIBRARY_SUFFIXES=".a" would cause
+# folly to pick up libunwind.a which on Ubuntu/Debian x86_64 is not
+# compiled with -fPIC (PIE link failure). Find it here with .so preference
+# so the result is cached; folly's internal find_package(LibUnwind) is
+# then skipped via _FETCHCONTENT_PROVIDED_DEPS below.
+if(BUNDLE_DEPS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_saved_find_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".so;.a")
+    find_package(LibUnwind QUIET)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES "${_saved_find_suffixes}")
+else()
+    find_package(LibUnwind QUIET)
+endif()
 
 # =============================================================================
 # FetchContent: Meta OSS Dependencies (using pinned hashes)
@@ -141,10 +241,14 @@ if(BUILD_TESTS)
     endif()
 endif()
 
-# Save original BUILD_TESTS value, then disable for fetched dependencies
+# Save original BUILD_TESTS/BUILD_SAMPLES/BUILD_TESTING values, then disable for fetched dependencies
 set(_MOXYGEN_BUILD_TESTS ${BUILD_TESTS})
+set(_MOXYGEN_BUILD_SAMPLES ${BUILD_SAMPLES})
+set(_MOXYGEN_BUILD_TESTING ${BUILD_TESTING})
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 
 message(STATUS "Fetching Meta OSS dependencies using pinned revisions...")
 
@@ -152,6 +256,7 @@ message(STATUS "Fetching Meta OSS dependencies using pinned revisions...")
 FetchContent_Declare(fast_float
     GIT_REPOSITORY https://github.com/fastfloat/fast_float.git
     GIT_TAG v8.0.0
+    GIT_SHALLOW ON
 )
 FetchContent_GetProperties(fast_float)
 if(NOT fast_float_POPULATED)
@@ -159,6 +264,14 @@ if(NOT fast_float_POPULATED)
 endif()
 set(FASTFLOAT_INCLUDE_DIR
     "${fast_float_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+
+# fmt: build from source to guarantee static libfmt.a.
+# Ubuntu 22.04's libfmt-dev only ships .so; CONFIG-mode find_package
+# hardcodes .so paths, so CMAKE_FIND_LIBRARY_SUFFIXES can't help.
+FetchContent_Declare(fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+    GIT_TAG 10.2.1
+)
 
 # Allow overriding folly repo/rev via -DFOLLY_REPO_OVERRIDE and
 # -DFOLLY_REV_OVERRIDE
@@ -200,14 +313,44 @@ FetchContent_Declare(fizz
     GIT_TAG ${_FIZZ_REV}
 )
 
+# Allow overriding wangle repo/rev via -DWANGLE_REPO_OVERRIDE and
+# -DWANGLE_REV_OVERRIDE
+set(WANGLE_REPO_OVERRIDE "" CACHE STRING "Override wangle git repository URL")
+set(WANGLE_REV_OVERRIDE "" CACHE STRING "Override wangle git revision")
+if(WANGLE_REPO_OVERRIDE)
+    set(_WANGLE_REPO "${WANGLE_REPO_OVERRIDE}")
+else()
+    set(_WANGLE_REPO "https://github.com/facebook/wangle.git")
+endif()
+if(WANGLE_REV_OVERRIDE)
+    set(_WANGLE_REV "${WANGLE_REV_OVERRIDE}")
+else()
+    set(_WANGLE_REV "${WANGLE_REV}")
+endif()
+
 FetchContent_Declare(wangle
-    GIT_REPOSITORY https://github.com/facebook/wangle.git
-    GIT_TAG ${WANGLE_REV}
+    GIT_REPOSITORY ${_WANGLE_REPO}
+    GIT_TAG ${_WANGLE_REV}
 )
 
+# Allow overriding mvfst repo/rev via -DMVFST_REPO_OVERRIDE and
+# -DMVFST_REV_OVERRIDE
+set(MVFST_REPO_OVERRIDE "" CACHE STRING "Override mvfst git repository URL")
+set(MVFST_REV_OVERRIDE "" CACHE STRING "Override mvfst git revision")
+if(MVFST_REPO_OVERRIDE)
+    set(_MVFST_REPO "${MVFST_REPO_OVERRIDE}")
+else()
+    set(_MVFST_REPO "https://github.com/facebook/mvfst.git")
+endif()
+if(MVFST_REV_OVERRIDE)
+    set(_MVFST_REV "${MVFST_REV_OVERRIDE}")
+else()
+    set(_MVFST_REV "${MVFST_REV}")
+endif()
+
 FetchContent_Declare(mvfst
-    GIT_REPOSITORY https://github.com/facebook/mvfst.git
-    GIT_TAG ${MVFST_REV}
+    GIT_REPOSITORY ${_MVFST_REPO}
+    GIT_TAG ${_MVFST_REV}
 )
 
 # Allow overriding proxygen repo/rev via -DPROXYGEN_REPO_OVERRIDE and
@@ -231,8 +374,17 @@ FetchContent_Declare(proxygen
     GIT_TAG ${_PROXYGEN_REV}
 )
 
-# Populate and add dependencies with EXCLUDE_FROM_ALL so only moxygen
-# targets are in 'all'
+if(BUILD_PICOQUIC)
+    # Pinned to a SHA on openmoq/picoquic main; auto-bumped by
+    # .github/workflows/omoq-picoquic-bump.yml (opens a PR when the pin
+    # falls behind openmoq/picoquic main; CI gates the merge).
+    FetchContent_Declare(picoquic
+        GIT_REPOSITORY https://github.com/openmoq/picoquic.git
+        GIT_TAG ${PICOQUIC_REV}
+    )
+endif()
+
+
 # Override find_package for deps we provide via FetchContent, since sub-projects
 # (fizz, wangle, mvfst, proxygen) call find_package(folly),
 # find_package(fizz), etc.
@@ -240,7 +392,15 @@ FetchContent_Declare(proxygen
 # Also skip optional compression codecs not needed for moxygen.
 # Skip lzma unless libunwind is available (lzma is used for symbolization).
 set(_FETCHCONTENT_PROVIDED_DEPS folly fizz wangle mvfst proxygen GTest GMock
-    BZip2 LZ4 Snappy glog Glog)
+    BZip2 LZ4 Snappy glog Glog fmt Fmt)
+if(BUILD_PICOQUIC)
+    list(APPEND _FETCHCONTENT_PROVIDED_DEPS picoquic)
+endif()
+# When BUNDLE_DEPS is on, we already found libunwind with .so preference
+# above. Skip folly's internal re-find to prevent it picking up .a.
+if(BUNDLE_DEPS)
+    list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibUnwind)
+endif()
 if(NOT LibUnwind_FOUND)
     list(APPEND _FETCHCONTENT_PROVIDED_DEPS LibLZMA)
     message(STATUS "LibUnwind not found, disabling lzma")
@@ -256,44 +416,114 @@ macro(find_package PKG_NAME)
     endif()
 endmacro()
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/apply-patches.cmake)
+
+# --- Logging backend for bundled Meta deps (openmoq/moqx#339) ---
+# Drive each dep's logging shim toward folly XLOG so the bundled standalone
+# build produces a homogeneous xlog stack. Each cache var below is a
+# forward-compatible no-op until the corresponding upstream shim lands AND
+# the dep's rev pin advances past that merge:
+#   - fizz:     facebookincubator/fizz#168  (LANDED)
+#   - wangle:   facebook/wangle#252         (LANDED)
+#   - mvfst:    facebook/mvfst#456          (LANDED)
+#   - proxygen: afrind WIP, no PR yet       (add PRX_LOGGING_* here when up)
+option(MOXYGEN_LOGGING_FOLLY_XLOG
+       "Configure bundled Meta deps (fizz/wangle/mvfst) to use folly XLOG" ON)
+if(MOXYGEN_LOGGING_FOLLY_XLOG)
+    set(FIZZ_LOGGING_BACKEND "XLOG" CACHE STRING "" FORCE)
+    set(WANGLE_LOGGING_BACKEND "XLOG" CACHE STRING "" FORCE)
+    set(MVFST_LOGGING_BACKEND "XLOG" CACHE STRING "" FORCE)
+endif()
+
+# When BUNDLE_DEPS or INSTALL_DEPS is ON, build all dep targets so they can be
+# installed. BUNDLE_DEPS additionally prefers static system libs for distribution.
+if(BUNDLE_DEPS OR INSTALL_DEPS)
+    set(_EXCLUDE_FLAG "")
+else()
+    set(_EXCLUDE_FLAG EXCLUDE_FROM_ALL)
+endif()
+
+# Each Meta dep uses CMAKE_INSTALL_DIR (CACHE STRING) for its cmake config
+# install path. Since they all share the same variable name, the first one
+# (folly) wins and the rest inherit "lib/cmake/folly". We force-set before
+# each add_subdirectory so configs land in lib/cmake/<dep>/.
+FetchContent_GetProperties(fmt)
+if(NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
+    apply_dep_patches(fmt "${fmt_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/fmt" CACHE STRING "" FORCE)
+    add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR} ${_EXCLUDE_FLAG})
+endif()
+# Tell folly's folly-deps.cmake that fmt is already configured so it
+# doesn't fall back to FindFmt.cmake (which would conflict with the
+# ALIAS target created by fmt's own CMakeLists.txt).
+set(fmt_FOUND TRUE)
+set(fmt_CONFIG "${fmt_SOURCE_DIR}/CMakeLists.txt")
+
 FetchContent_GetProperties(folly)
 if(NOT folly_POPULATED)
     FetchContent_Populate(folly)
-    add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(folly "${folly_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/folly" CACHE STRING "" FORCE)
+    add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(fizz)
 if(NOT fizz_POPULATED)
     FetchContent_Populate(fizz)
-    add_subdirectory(
-        ${fizz_SOURCE_DIR}/fizz ${fizz_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(fizz "${fizz_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/fizz" CACHE STRING "" FORCE)
+    add_subdirectory(${fizz_SOURCE_DIR}/fizz ${fizz_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(wangle)
 if(NOT wangle_POPULATED)
     FetchContent_Populate(wangle)
-    add_subdirectory(
-        ${wangle_SOURCE_DIR}/wangle ${wangle_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(wangle "${wangle_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/wangle" CACHE STRING "" FORCE)
+    add_subdirectory(${wangle_SOURCE_DIR}/wangle ${wangle_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(mvfst)
 if(NOT mvfst_POPULATED)
     FetchContent_Populate(mvfst)
-    add_subdirectory(${mvfst_SOURCE_DIR} ${mvfst_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(mvfst "${mvfst_SOURCE_DIR}")
+    # mvfst uses CMAKE_INSTALL_MODULE_DIR, not CMAKE_INSTALL_DIR — no conflict
+    add_subdirectory(${mvfst_SOURCE_DIR} ${mvfst_BINARY_DIR} ${_EXCLUDE_FLAG})
 endif()
 
 FetchContent_GetProperties(proxygen)
 if(NOT proxygen_POPULATED)
     FetchContent_Populate(proxygen)
-    add_subdirectory(
-        ${proxygen_SOURCE_DIR} ${proxygen_BINARY_DIR} EXCLUDE_FROM_ALL)
+    apply_dep_patches(proxygen "${proxygen_SOURCE_DIR}")
+    set(CMAKE_INSTALL_DIR "lib/cmake/proxygen" CACHE STRING "" FORCE)
+    add_subdirectory(${proxygen_SOURCE_DIR} ${proxygen_BINARY_DIR} ${_EXCLUDE_FLAG})
+endif()
+
+if(BUILD_PICOQUIC)
+    # Save and override settings for picoquic build
+    set(_SAVED_BUILD_TESTING ${BUILD_TESTING})
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(PICOQUIC_FETCH_PTLS ON CACHE BOOL "Build picotls from source" FORCE)
+
+    FetchContent_GetProperties(picoquic)
+    if(NOT picoquic_POPULATED)
+        FetchContent_Populate(picoquic)
+        # No EXCLUDE_FROM_ALL: picoquic's own install rules must be reachable
+        # so that picoquic-core and picotls libs are installed alongside moxygen.
+        add_subdirectory(${picoquic_SOURCE_DIR} ${picoquic_BINARY_DIR})
+    endif()
+
+    set(BUILD_TESTING ${_SAVED_BUILD_TESTING} CACHE BOOL "" FORCE)
 endif()
 
 # =============================================================================
 # Moxygen
 # =============================================================================
-# Re-enable tests for moxygen itself
+# Re-enable tests and samples for moxygen itself
 set(BUILD_TESTS ${_MOXYGEN_BUILD_TESTS} CACHE BOOL "" FORCE)
+set(BUILD_SAMPLES ${_MOXYGEN_BUILD_SAMPLES} CACHE BOOL "" FORCE)
+set(BUILD_TESTING ${_MOXYGEN_BUILD_TESTING} CACHE BOOL "" FORCE)
 
 # Set MOXYGEN_FBCODE_ROOT to match what main CMakeLists.txt expects
 set(MOXYGEN_FBCODE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -319,28 +549,28 @@ endif()
 # Include moxygen's main CMakeLists.txt
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../moxygen moxygen)
 
+moxygen_install_headers(moxygen ${CMAKE_CURRENT_SOURCE_DIR}/../moxygen)
+
 # =============================================================================
 # Installation (mirrors main CMakeLists.txt)
 # =============================================================================
 set(LIB_INSTALL_DIR "lib" CACHE STRING "Library install directory")
-set(CMAKE_INSTALL_DIR
-    "${LIB_INSTALL_DIR}/cmake/moxygen/"
-    CACHE STRING "CMake config install directory")
+set(_MOXYGEN_CMAKE_INSTALL_DIR "${LIB_INSTALL_DIR}/cmake/moxygen/")
 
 install(
     EXPORT moxygen-exports
     FILE moxygen-targets.cmake
     NAMESPACE moxygen::
-    DESTINATION ${CMAKE_INSTALL_DIR}
+    DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/moxygen-config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/moxygen-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_DIR}
+    INSTALL_DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )
 install(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/moxygen-config.cmake
-    DESTINATION ${CMAKE_INSTALL_DIR}
+    DESTINATION ${_MOXYGEN_CMAKE_INSTALL_DIR}
 )

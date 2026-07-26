@@ -12,12 +12,23 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+# fmt must be found before folly: folly-targets.cmake references fmt::fmt in
+# Folly::folly_deps INTERFACE_LINK_LIBRARIES, and CMake >= 3.24 validates
+# imported-target dependencies at load time (before folly-config.cmake's own
+# find_dependency(fmt) is reached).
+find_dependency(fmt)
 find_dependency(folly)
 find_dependency(fizz)
 find_dependency(wangle)
 find_dependency(mvfst)
 find_dependency(proxygen)
 find_dependency(Glog)
+
+# === OpenMOQ ===
+if(@BUILD_PICOQUIC@)
+    find_dependency(picoquic)
+endif()
+# === End OpenMOQ ===
 
 if(NOT TARGET moxygen::moxygen_moq)
     include("${CMAKE_CURRENT_LIST_DIR}/moxygen-targets.cmake")
