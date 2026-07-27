@@ -333,8 +333,8 @@ jobs:
             xargs -0 -n1 -P 6 -I{} gh release upload "$TAG" --repo "$REPO" {} --clobber
 
   # ════════════════════════════════════════════════════════════════════════════
-  # Finalize: flip draft → published once all assets are up. Runs only if
-  # both upload jobs succeeded.
+  # Finalize: confirm the release is fully published once all assets are
+  # up. Runs only if both upload jobs succeeded.
   # ════════════════════════════════════════════════════════════════════════════
 
   finalize:
@@ -359,4 +359,8 @@ jobs:
           # would mark a hotfix patch from a release/vM.m branch as
           # latest even when a newer vM.(m+1) line exists.
           echo "Released: $TAG"
-          gh release view "$TAG" --repo "$REPO" --json isLatest,isPrerelease,name --jq '"isLatest=\(.isLatest) isPrerelease=\(.isPrerelease) name=\(.name)"'
+          # isLatest is not a --json field on `gh release view` (only on
+          # `gh release list`), so derive it from the releases/latest API.
+          gh release view "$TAG" --repo "$REPO" --json isPrerelease,name --jq '"isPrerelease=\(.isPrerelease) name=\(.name)"'
+          LATEST=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+          echo "isLatest=$([ "$LATEST" = "$TAG" ] && echo true || echo false) (latest=$LATEST)"
