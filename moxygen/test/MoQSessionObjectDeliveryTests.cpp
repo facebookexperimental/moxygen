@@ -1104,6 +1104,128 @@ CO_TEST_P_X(MoQSessionTest, ObjectCallbackErrorResetsSubgroupConsumer) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Cleanup must reset an open subgroup. The session is closed with a subgroup
+// still open; cleanup() cancels the subscribe state, and isCancelled() must not
+// then suppress reset() on the open subgroup consumer. Reverting the
+// isCancelled() change hangs this test on resetBaton.
+//
+// Note: FakeSharedWebTransport's close also resets the peer's streams, so the
+// read loop here can wake via that error too; this exercises the cleanup/reset
+// contract but does not isolate the rh-token-cancel-without-error wake.
+CO_TEST_P_X(MoQSessionTest, OpenSubgroupResetDuringSessionCleanup) {
+  co_await setupMoQSession();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub, sub] {
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      // Leave the subgroup OPEN: no endOfSubgroup, no publishDone.
+      sgp->object(0, moxygen::test::makeBuf(10));
+    });
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton objectReceived;
+  folly::coro::Baton resetBaton;
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false)).WillOnce([&](auto...) {
+    objectReceived.post();
+    return folly::unit;
+  });
+  // cleanup() delivers PUBLISH_DONE before cancelling the loop.
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg1, reset(_)).WillOnce([&](auto) {
+    resetBaton.post();
+    return folly::unit;
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  // Subgroup is open and the read loop is parked on readStreamData().
+  co_await objectReceived;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+  co_await resetBaton;
+}
+
+// When two objects arrive in the same ingress and the app calls
+// unsubscribe() from the first object's callback, the second object must
+// NOT be delivered. obj0 is sent normally to fire beginSubgroup; obj1+obj2
+// are then batched into a single onIngress via setImmediateDelivery(false)
+// + deliverInflightData(). Does NOT assert reset() fires: on this path it
+// reaches sg1 via the parser's ERROR_TERMINATE branch regardless of the
+// fix, so the assertion would not differentiate.
+CO_TEST_P_X(MoQSessionTest, UnsubscribeInObjectCallbackSuppressesNextObject) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> sgConsumer;
+  std::shared_ptr<MockSubscriptionHandle> mockHandle;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    sgConsumer = pub->beginSubgroup(0, 0, 0).value();
+    sgConsumer->object(0, moxygen::test::makeBuf(10));
+    mockHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return mockHandle;
+  });
+
+  auto sg1 = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  folly::coro::Baton obj0Delivered;
+  folly::coro::Baton obj1Done;
+  bool obj2Delivered = false;
+  std::shared_ptr<Subscriber::SubscriptionHandle> subHandle;
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, _)).WillOnce([&](auto...) {
+    obj0Delivered.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*sg1, object(1, _, _, _)).WillOnce([&](auto...) {
+    subHandle->unsubscribe();
+    obj1Done.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*sg1, object(2, _, _, _)).WillRepeatedly([&](auto...) {
+    obj2Delivered = true;
+    return folly::unit;
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  subHandle = res.value();
+
+  EXPECT_CALL(*mockHandle, unsubscribe()).WillRepeatedly(testing::Return());
+
+  // After obj0, the data stream's write handle exists in
+  // serverWt_->writeHandles; pause delivery, write obj1+obj2, flush as one
+  // buffer so the subscriber's onIngress sees both objects in a single call.
+  co_await obj0Delivered;
+  eventBase_.runInEventBaseThread([sgConsumer, this] {
+    auto dataWh = serverWt_->writeHandles.rbegin()->second;
+    dataWh->setImmediateDelivery(false);
+    sgConsumer->object(1, moxygen::test::makeBuf(10));
+    sgConsumer->object(2, moxygen::test::makeBuf(10));
+    dataWh->deliverInflightData();
+  });
+
+  // Yield after obj1's callback so the read loop can attempt obj2.
+  co_await obj1Done;
+  for (int i = 0; i < 20; ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+
+  EXPECT_FALSE(obj2Delivered)
+      << "object 2 must not be delivered after unsubscribe()";
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 namespace {
 class NullLogger : public MLogger {
  public:
