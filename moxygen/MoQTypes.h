@@ -486,12 +486,30 @@ struct SubscriptionFilter {
       : filterType(ft), location(loc), endGroup(std::move(eg)) {}
 };
 
+// TRACK_FILTER parameter for SUBSCRIBE_NAMESPACE (0x29)
+// Used to filter tracks based on a property value, selecting the top N tracks.
+struct TrackFilter {
+  uint64_t propertyType{0}; // Property type to filter on (e.g., audio level)
+  uint64_t maxSelected{0};  // Maximum number of tracks to select (N)
+
+  TrackFilter() = default;
+  TrackFilter(uint64_t pt, uint64_t ms) : propertyType(pt), maxSelected(ms) {}
+
+  bool operator==(const TrackFilter& other) const {
+    return propertyType == other.propertyType && maxSelected == other.maxSelected;
+  }
+};
+
+// TODO: Consider refactoring to std::variant<std::string, uint64_t,
+// AuthToken, SubscriptionFilter, TrackFilter, AbsoluteLocation> to
+// reduce memory footprint and clarify semantics.
 struct Parameter {
   uint64_t key = 0;
   std::string asString;
   uint64_t asUint64 = 0;
   AuthToken asAuthToken;
   SubscriptionFilter asSubscriptionFilter;
+  TrackFilter asTrackFilter;
   std::optional<AbsoluteLocation> largestObject;
 
   // Constructors for Parameter for each type, provided the key and the type
@@ -503,6 +521,7 @@ struct Parameter {
         asUint64(0),
         asAuthToken(),
         asSubscriptionFilter(),
+        asTrackFilter(),
         largestObject() {}
 
   // uint64_t parameter
@@ -512,6 +531,7 @@ struct Parameter {
         asUint64(uint64),
         asAuthToken(),
         asSubscriptionFilter(),
+        asTrackFilter(),
         largestObject() {}
 
   // AuthToken parameter
@@ -521,6 +541,7 @@ struct Parameter {
         asUint64(0),
         asAuthToken(token),
         asSubscriptionFilter(),
+        asTrackFilter(),
         largestObject() {}
 
   // SubscriptionFilter parameter
@@ -530,6 +551,17 @@ struct Parameter {
         asUint64(0),
         asAuthToken(),
         asSubscriptionFilter(filter),
+        asTrackFilter(),
+        largestObject() {}
+
+  // TrackFilter parameter
+  Parameter(uint64_t keyIn, const TrackFilter& filter)
+      : key(keyIn),
+        asString(),
+        asUint64(0),
+        asAuthToken(),
+        asSubscriptionFilter(),
+        asTrackFilter(filter),
         largestObject() {}
 
   // LargestObject parameter (std::optional<AbsoluteLocation>)
@@ -539,6 +571,7 @@ struct Parameter {
         asUint64(0),
         asAuthToken(),
         asSubscriptionFilter(),
+        asTrackFilter(),
         largestObject(loc) {}
 
   // Default constructor
@@ -567,6 +600,7 @@ enum class TrackRequestParamKey : uint64_t {
   LARGEST_OBJECT = 0x9,
   FILL_TIMEOUT = 0x0A,
   FORWARD = 0x10,
+  TRACK_FILTER = 0x29,
   NEW_GROUP_REQUEST = 0x32,
   TRACK_NAMESPACE_PREFIX = 0x34,
 };
