@@ -20,6 +20,7 @@
 
 #include <moxygen/MoQClientMobile.h>
 #include <moxygen/ObjectReceiver.h>
+#include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
 DEFINE_string(track_namespace, "", "Track Namespace");
@@ -56,6 +57,10 @@ DEFINE_uint64(
     delivery_timeout,
     0,
     "Delivery timeout in milliseconds (0 = disabled)");
+DEFINE_bool(
+    insecure,
+    false,
+    "Use insecure verifier (skip certificate validation)");
 
 namespace {
 using namespace moxygen;
@@ -159,8 +164,13 @@ class MoQTextClientMobile
   MoQTextClientMobile(
       std::shared_ptr<MoQLibevExecutorImpl> evb,
       proxygen::URL url,
-      FullTrackName ftn)
-      : moqClient_(std::make_unique<MoQClientMobile>(evb, std::move(url))),
+      FullTrackName ftn,
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
+      : moqClient_(
+            std::make_unique<MoQClientMobile>(
+                evb,
+                std::move(url),
+                std::move(verifier))),
         fullTrackName_(std::move(ftn)) {}
 
   // Response To PUBLISH
@@ -404,8 +414,17 @@ int main(int argc, char* argv[]) {
       std::make_shared<MoQLibevExecutorImpl>(
           std::make_unique<EvLoopWeak>(evLoop));
 
+  std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr;
+  if (FLAGS_insecure) {
+    verifier = std::make_shared<
+        moxygen::test::InsecureVerifierDangerousDoNotUseInProduction>();
+  }
+
   auto textClient = std::make_shared<MoQTextClientMobile>(
-      moqEvb, std::move(url), moxygen::FullTrackName({ns, FLAGS_track_name}));
+      moqEvb,
+      std::move(url),
+      moxygen::FullTrackName({ns, FLAGS_track_name}),
+      verifier);
 
   auto subParams = flags2params();
   std::vector<Parameter> params{};
