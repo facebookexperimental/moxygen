@@ -982,9 +982,10 @@ struct ObjectHeader {
 struct DatagramObjectHeader {
   TrackAlias trackAlias;
   ObjectHeader objectHeader;
+  bool endOfGroup{false};
 
-  DatagramObjectHeader(TrackAlias alias, ObjectHeader header)
-      : trackAlias(alias), objectHeader(std::move(header)) {}
+  DatagramObjectHeader(TrackAlias alias, ObjectHeader header, bool eog = false)
+      : trackAlias(alias), objectHeader(std::move(header)), endOfGroup(eog) {}
 };
 
 std::ostream& operator<<(std::ostream& os, const ObjectHeader& type);

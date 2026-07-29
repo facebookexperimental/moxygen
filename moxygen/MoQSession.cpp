@@ -6601,7 +6601,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
       if (!objHeader.objectHeader.priority.has_value()) {
         objHeader.objectHeader.priority = state->getPublisherPriority();
       }
-      callback->datagram(objHeader.objectHeader, readBuf.move());
+      callback->datagram(
+          objHeader.objectHeader, readBuf.move(), objHeader.endOfGroup);
     }
   }
 }
