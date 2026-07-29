@@ -13,7 +13,11 @@ MoQLibevExecutorImpl::MoQLibevExecutorImpl(
     : quic::LibevQuicEventBase(std::move(loop)) {}
 
 void MoQLibevExecutorImpl::add(folly::Func func) {
-  runInLoop(std::move(func).asStdFunction(), /*thisIteration=*/false);
+  if (isInEventBaseThread()) {
+    runInLoop(std::move(func).asStdFunction(), /*thisIteration=*/false);
+  } else {
+    runInEventBaseThread(std::move(func).asStdFunction());
+  }
 }
 
 void MoQLibevExecutorImpl::scheduleTimeout(
