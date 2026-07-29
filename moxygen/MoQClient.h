@@ -25,22 +25,6 @@ class MoQClient : public MoQClientBase {
             std::move(verifier),
             useQuicWtSession) {}
 
-  [[nodiscard]] quic::
-      Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>
-      getConnectionFlowControl() const {
-    if (const auto* quicSocket = getQuicSocket()) {
-      return quicSocket->getConnectionFlowControl();
-    }
-    return quic::make_unexpected(quic::LocalErrorCode::CONNECTION_CLOSED);
-  }
-
-  [[nodiscard]] std::optional<quic::TransportInfo> getTransportInfo() const {
-    if (const auto* quicSocket = getQuicSocket()) {
-      return quicSocket->getTransportInfo();
-    }
-    return std::nullopt;
-  }
-
   MoQClient(
       std::shared_ptr<MoQExecutor> exec,
       proxygen::URL url,

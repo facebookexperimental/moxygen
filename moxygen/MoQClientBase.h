@@ -81,6 +81,22 @@ class MoQClientBase {
     return moqHandshakeTime_;
   }
 
+  [[nodiscard]] quic::
+      Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>
+      getConnectionFlowControl() const {
+    if (const auto* quicSocket = getQuicSocket()) {
+      return quicSocket->getConnectionFlowControl();
+    }
+    return quic::make_unexpected(quic::LocalErrorCode::CONNECTION_CLOSED);
+  }
+
+  [[nodiscard]] std::optional<quic::TransportInfo> getTransportInfo() const {
+    if (const auto* quicSocket = getQuicSocket()) {
+      return quicSocket->getTransportInfo();
+    }
+    return std::nullopt;
+  }
+
   std::shared_ptr<MoQSession> moqSession_;
   virtual folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,

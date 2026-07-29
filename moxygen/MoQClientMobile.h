@@ -20,8 +20,26 @@ class MoQClientMobile : public MoQClientBase {
   MoQClientMobile(
       std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
       proxygen::URL url,
+      std::shared_ptr<fizz::CertificateVerifier> verifier)
+      : MoQClientBase(
+            moqEvb,
+            std::move(url),
+            std::move(verifier),
+            /*useQuicWtSession=*/true),
+        moqlibevEvb_(std::move(moqEvb)) {}
+
+  MoQClientMobile(
+      std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
+      proxygen::URL url,
+      SessionFactory sessionFactory,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
-      : MoQClientBase(moqEvb, url, std::move(verifier)), moqlibevEvb_(moqEvb) {}
+      : MoQClientBase(
+            moqEvb,
+            std::move(url),
+            std::move(sessionFactory),
+            std::move(verifier),
+            /*useQuicWtSession=*/true),
+        moqlibevEvb_(std::move(moqEvb)) {}
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
