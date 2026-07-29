@@ -6,40 +6,21 @@
 
 #pragma once
 
-#include <moxygen/events/MoQLibevExecutorImpl.h>
-
 #include <folly/coro/Task.h>
 #include <proxygen/lib/utils/URL.h>
 #include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClientBase.h>
 
 namespace moxygen {
+class MoQLibevExecutorImpl;
 
 class MoQClientMobile : public MoQClientBase {
  public:
   MoQClientMobile(
       std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
       proxygen::URL url,
-      std::shared_ptr<fizz::CertificateVerifier> verifier)
-      : MoQClientBase(
-            moqEvb,
-            std::move(url),
-            std::move(verifier),
-            /*useQuicWtSession=*/true),
-        moqlibevEvb_(std::move(moqEvb)) {}
-
-  MoQClientMobile(
-      std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
-      proxygen::URL url,
-      SessionFactory sessionFactory,
-      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
-      : MoQClientBase(
-            moqEvb,
-            std::move(url),
-            std::move(sessionFactory),
-            std::move(verifier),
-            /*useQuicWtSession=*/true),
-        moqlibevEvb_(std::move(moqEvb)) {}
+      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
+      bool useQuicWtSession = true);
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(

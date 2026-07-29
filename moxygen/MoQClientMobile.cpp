@@ -4,11 +4,23 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <moxygen/MoQClientMobile.h>
+
+#include <folly/coro/Promise.h>
+#include <folly/coro/Timeout.h>
+
+// libev and libevent both define these macros; libevent arrives via the folly
+// and MoQClientMobile.h headers above. Undef them before the libev-backed
+// headers below so ev.h can define them cleanly (see MoQTextClientMobile.cpp).
+#undef EV_READ
+#undef EV_WRITE
+#undef EV_TIMEOUT
+#undef EV_SIGNAL
+#undef EVLOOP_NONBLOCK
+
 #include <quic/common/address/QuicSocketAddressBridge.h>
 #include <quic/common/udpsocket/LibevQuicAsyncUDPSocket.h>
-
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
-#include <moxygen/MoQClientMobile.h>
 #include <moxygen/events/MoQLibevExecutorImpl.h>
 
 namespace {
@@ -70,6 +82,18 @@ class QuicConnectCB : public quic::QuicSocket::ConnectionSetupCallback {
 } // namespace
 
 namespace moxygen {
+
+MoQClientMobile::MoQClientMobile(
+    std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
+    proxygen::URL url,
+    std::shared_ptr<fizz::CertificateVerifier> verifier,
+    bool useQuicWtSession)
+    : MoQClientBase(
+          moqEvb,
+          std::move(url),
+          std::move(verifier),
+          useQuicWtSession),
+      moqlibevEvb_(std::move(moqEvb)) {}
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQClientMobile::connectQuic(
