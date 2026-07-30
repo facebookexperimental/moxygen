@@ -447,6 +447,7 @@ namespace moxygen {
 bool datagramTypeHasExtensions(uint64_t version, DatagramType streamType);
 bool datagramTypeIsStatus(uint64_t version, DatagramType streamType);
 bool datagramObjectIdZero(uint64_t version, DatagramType datagramType);
+bool datagramTypeEndOfGroup(uint64_t version, DatagramType datagramType);
 
 void writeSize(uint16_t* sizePtr, size_t size, bool& error, uint64_t versionIn);
 
@@ -1233,6 +1234,16 @@ bool datagramPriorityPresent(uint64_t version, DatagramType datagramType) {
   return !(folly::to_underlying(datagramType) & DG_PRIORITY_NOT_PRESENT);
 }
 
+bool datagramTypeEndOfGroup(uint64_t version, DatagramType datagramType) {
+  // The end-of-group bit (DG_HAS_END_OF_GROUP == 0x2) shares its value with
+  // DG_HAS_STATUS_V11, and status datagrams (DG_IS_STATUS == 0x20) never carry
+  // it, so only interpret the bit for non-status object datagrams.
+  if (datagramTypeIsStatus(version, datagramType)) {
+    return false;
+  }
+  return (folly::to_underlying(datagramType) & DG_HAS_END_OF_GROUP);
+}
+
 folly::Expected<DatagramObjectHeader, ErrorCode>
 MoQFrameParser::parseDatagramObjectHeader(
     folly::io::Cursor& cursor,
@@ -1313,7 +1324,9 @@ MoQFrameParser::parseDatagramObjectHeader(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return DatagramObjectHeader(
-      TrackAlias(trackAlias->first), std::move(objectHeader));
+      TrackAlias(trackAlias->first),
+      std::move(objectHeader),
+      datagramTypeEndOfGroup(*version_, datagramType));
 }
 
 folly::Expected<

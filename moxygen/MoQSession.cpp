@@ -2333,6 +2333,9 @@ void MoQSession::cleanup() {
     sub->subscribeError({/*TrackReceiveState fills in subId*/ 0,
                          SubscribeErrorCode::INTERNAL_ERROR,
                          "session closed"});
+    // Wake read loops parked in readStreamData: the transport may cancel
+    // the read handle without enqueuing an error, leaking the consumer.
+    sub->cancel();
   }
   subTracks_.clear();
   // We parse a publishDone after cleanup
@@ -3527,12 +3530,14 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     session_->close(error);
   }
 
-  // Called by read loop on read error (eg: RESET_STREAM)
+  // Called by read loop on read error (eg: RESET_STREAM). Fires reset() on
+  // a still-open consumer even if the subscription was cancelled — the
+  // MoQConsumers contract requires exactly one terminal callback.
   bool reset(ResetStreamErrorCode error) {
     if (!subscribeState_ && !fetchState_) {
       return false;
     }
-    if (!isCancelled()) {
+    if (hasOpenConsumer()) {
       // ignoring error from reset?
       invokeCallbackNoGroup(
           &SubgroupConsumer::reset, &FetchConsumer::reset, error);
@@ -3553,6 +3558,15 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       return !subgroupCallback_ || subscribeState_->isCancelled();
     }
     return true;
+  }
+
+  // Like isCancelled() but ignores subscription cancellation: a cancelled
+  // subscription still owes its open consumer the terminal callback.
+  bool hasOpenConsumer() const {
+    if (fetchState_) {
+      return fetchState_->getFetchCallback() != nullptr;
+    }
+    return subgroupCallback_ != nullptr;
   }
 
   void endOfSubgroup(bool deliverCallback = false) {
@@ -6587,7 +6601,8 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
       if (!objHeader.objectHeader.priority.has_value()) {
         objHeader.objectHeader.priority = state->getPublisherPriority();
       }
-      callback->datagram(objHeader.objectHeader, readBuf.move());
+      callback->datagram(
+          objHeader.objectHeader, readBuf.move(), objHeader.endOfGroup);
     }
   }
 }

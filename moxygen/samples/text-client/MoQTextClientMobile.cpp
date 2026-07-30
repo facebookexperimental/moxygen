@@ -20,6 +20,7 @@
 
 #include <moxygen/MoQClientMobile.h>
 #include <moxygen/ObjectReceiver.h>
+#include <moxygen/events/MoQLibevExecutorImpl.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");

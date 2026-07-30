@@ -4809,6 +4809,48 @@ TEST_F(MoQFramerV18Test, WritePaddingDatagram) {
   EXPECT_EQ(remainingLength, 0);
 }
 
+TEST_F(MoQFramerV18Test, DatagramEndOfGroupRoundTrips) {
+  // Regression test: the END_OF_GROUP bit must survive serialize -> parse.
+  for (bool endOfGroup : {false, true}) {
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    auto result = writer_.writeDatagramObject(
+        writeBuf,
+        TrackAlias(22), // trackAlias
+        {33,            // group
+         0,             // subgroup
+         44,            // id
+         55,            // priority
+         ObjectStatus::NORMAL,
+         noExtensions(),
+         8},
+        folly::IOBuf::copyBuffer("datagram"),
+        endOfGroup);
+    ASSERT_TRUE(result.hasValue());
+    auto serialized = writeBuf.move();
+
+    // The END_OF_GROUP bit (0x2) must actually be present in the first wire
+    // byte (the datagram type varint) when endOfGroup is set.
+    uint8_t firstWireByte = *serialized->data();
+    EXPECT_EQ(bool(firstWireByte & DG_HAS_END_OF_GROUP), endOfGroup)
+        << "wire byte=0x" << std::hex << int(firstWireByte)
+        << " endOfGroup=" << std::dec << endOfGroup;
+
+    folly::io::Cursor cursor(serialized.get());
+    auto dgType = parser_.decodeVarint(cursor);
+    ASSERT_TRUE(dgType.has_value());
+    EXPECT_EQ(
+        dgType->first,
+        folly::to_underlying(
+            getDatagramType(kVersionDraft18, false, false, endOfGroup, false)));
+    auto length = cursor.totalLength();
+    auto parseResult = parser_.parseDatagramObjectHeader(
+        cursor, DatagramType(dgType->first), length);
+    ASSERT_TRUE(parseResult.hasValue());
+    EXPECT_EQ(parseResult->endOfGroup, endOfGroup)
+        << "END_OF_GROUP bit lost for endOfGroup=" << endOfGroup;
+  }
+}
+
 TEST_F(MoQFramerV18Test, PaddingDataRejectsNonZeroBytes) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   const uint8_t invalidPadding[] = {0x00, 0x01};
