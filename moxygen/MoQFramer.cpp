@@ -2139,9 +2139,8 @@ folly::Expected<RequestUpdate, ErrorCode> MoQFrameParser::parseRequestUpdate(
     requestUpdate.forward = (forwardFlag == 1);
     length--;
   } else {
-    // For draft >= 15, set default priority to 128
-    // It will be overridden in handleRequestSpecificParams if present
-    requestUpdate.priority = kDefaultPriority;
+    // For draft >= 15, priority rides the SUBSCRIBER_PRIORITY param; leave it
+    // unset here so an omitted param means "unchanged" (set below if present).
     // For draft >= 15, forward field is left unset (std::nullopt) by default
     // It will be set in handleRequestSpecificParams only if FORWARD param
     // present This allows existing forward state to be preserved when param is
@@ -2188,9 +2187,11 @@ void MoQFrameParser::handleRequestSpecificParams(
       }
     }
 
-    // SUBSCRIBER_PRIORITY
-    handleSubscriberPriorityParam(
-        requestUpdate.priority, requestSpecificParams);
+    // SUBSCRIBER_PRIORITY: absent means unchanged, so leave priority unset.
+    if (auto maybePriority = getFirstIntParam(
+            requestSpecificParams, TrackRequestParamKey::SUBSCRIBER_PRIORITY)) {
+      requestUpdate.priority = static_cast<uint8_t>(*maybePriority);
+    }
 
     // FORWARD
     handleForwardParam(requestUpdate.forward, requestSpecificParams);
@@ -5481,11 +5482,16 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
       requestSpecificParams.push_back(subscriptionFilterParam);
     }
 
-    if (update.priority != kDefaultPriority) {
+    // Emit SUBSCRIBER_PRIORITY whenever the update carries a priority,
+    // including the default value, so an explicit priority is distinguishable
+    // from an omitted one on the wire. An absent priority is left off and read
+    // back as "unchanged" (e.g. an explicit 128 must still override an earlier
+    // 129).
+    if (update.priority.has_value()) {
       Parameter priorityParam;
       priorityParam.key =
           folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
-      priorityParam.asUint64 = update.priority;
+      priorityParam.asUint64 = *update.priority;
       requestSpecificParams.push_back(priorityParam);
     }
 
@@ -5517,7 +5523,8 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
     writeVarint(writeBuf, update.start->object, size, error);
     writeVarint(writeBuf, *update.endGroup, size, error);
 
-    writeBuf.append(&update.priority, 1);
+    uint8_t priorityByte = update.priority.value_or(kDefaultPriority);
+    writeBuf.append(&priorityByte, 1);
     size += 1;
 
     // For draft < 15, forward is mandatory and always set during parsing

@@ -4071,7 +4071,11 @@ void MoQSession::handleSubscribeRequestUpdate(
     return;
   }
 
-  trackPublisher->setSubPriority(requestUpdate.priority);
+  // An update that omits priority leaves it unchanged, so only apply an
+  // explicit value; otherwise the current subscriber priority is preserved.
+  if (requestUpdate.priority) {
+    trackPublisher->setSubPriority(*requestUpdate.priority);
+  }
   trackPublisher->onRequestUpdate(std::move(requestUpdate));
 }
 

@@ -423,10 +423,10 @@ CO_TEST_P_X(
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      initialStart,     // Keep start the same
-      initialEndGroup,  // Keep endGroup the same
-      kDefaultPriority, // Change only priority
-      initialForward,   // Keep forward the same
+      initialStart,         // Keep start the same
+      initialEndGroup,      // Keep endGroup the same
+      kDefaultPriority + 1, // Change only priority (non-default so it is sent)
+      initialForward,       // Keep forward the same
   };
 
   EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
@@ -445,7 +445,7 @@ CO_TEST_P_X(
         EXPECT_EQ(actualUpdate.forward, initialForward)
             << "Forward should be preserved";
         // Verify only priority changed
-        EXPECT_EQ(actualUpdate.priority, kDefaultPriority)
+        EXPECT_EQ(actualUpdate.priority, kDefaultPriority + 1)
             << "Priority should be updated";
         subscribeUpdateInvoked.post();
       });
@@ -455,6 +455,75 @@ CO_TEST_P_X(
               RequestOk{.requestID = subscribeUpdate.existingRequestID}));
   co_await subscribeHandler->requestUpdate(subscribeUpdate);
   co_await subscribeUpdateInvoked;
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A sequence of REQUEST_UPDATEs threads priority through correctly: a
+// non-default value changes it (128 -> 129); an update that omits priority
+// leaves it unchanged (129 -> 129); and explicitly setting the default changes
+// it (129 -> 128) rather than being dropped as if omitted.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdatePriorityTransitions) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(3);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(3);
+
+  // Capture the priority the application observes for each update, in order.
+  std::vector<std::optional<uint8_t>> observed;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillRepeatedly([&observed](const RequestUpdate& u) {
+        observed.push_back(u.priority);
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillRepeatedly(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  const auto majorVersion = getDraftMajorVersion(getServerSelectedVersion());
+  auto sendUpdate =
+      [&](std::optional<uint8_t> priority) -> folly::coro::Task<void> {
+    RequestUpdate update;
+    update.priority = priority;
+    update.forward = true;
+    update.params.setMajorVersion(majorVersion);
+    auto result = co_await subscribeHandler->requestUpdate(std::move(update));
+    EXPECT_TRUE(result.hasValue());
+  };
+
+  co_await sendUpdate(kDefaultPriority + 1); // 128 -> 129
+  co_await sendUpdate(std::nullopt);         // 129 -> 129 (omitted, unchanged)
+  co_await sendUpdate(kDefaultPriority);     // 129 -> 128 (explicit default)
+
+  EXPECT_EQ(observed.size(), 3u);
+  if (observed.size() == 3) {
+    EXPECT_EQ(
+        observed[0], kDefaultPriority + 1);   // explicit non-default applied
+    EXPECT_EQ(observed[1], std::nullopt);     // omitted => leave unchanged
+    EXPECT_EQ(observed[2], kDefaultPriority); // explicit default applied
+  }
+
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
   co_await publishDone_;

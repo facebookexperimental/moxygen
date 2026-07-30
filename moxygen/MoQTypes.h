@@ -1157,7 +1157,7 @@ struct RequestUpdate {
   RequestID existingRequestID;
   std::optional<AbsoluteLocation> start;
   std::optional<uint64_t> endGroup;
-  uint8_t priority{kDefaultPriority};
+  std::optional<uint8_t> priority;
   // Draft 15+: Optional forward field. When absent, existing forward state is
   // preserved. For earlier drafts, this is always set during parsing.
   std::optional<bool> forward;
