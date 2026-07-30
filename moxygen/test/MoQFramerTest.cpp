@@ -1859,6 +1859,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   EXPECT_EQ(parseResult->start->group, 0);
   EXPECT_EQ(parseResult->start->object, 0);
   EXPECT_EQ(parseResult->endGroup, 0);
+  // An explicit priority (even the default) is serialized and round-trips.
   EXPECT_EQ(parseResult->priority, kDefaultPriority);
   // Verify forward field is NOT set (preserves existing state per draft 15+)
   EXPECT_FALSE(parseResult->forward.has_value());

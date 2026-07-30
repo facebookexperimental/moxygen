@@ -273,7 +273,9 @@ void MLogger::logSubscribeUpdate(
   if (req.endGroup.has_value()) {
     baseMsg->endGroup = req.endGroup.value();
   }
-  baseMsg->subscriberPriority = req.priority;
+  if (req.priority.has_value()) {
+    baseMsg->subscriberPriority = req.priority.value();
+  }
   baseMsg->forward = req.forward.value_or(false) ? 1 : 0;
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
