@@ -4,6 +4,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <array>
+#include <stdexcept>
+
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 using namespace moxygen;
@@ -523,6 +526,744 @@ CO_TEST_P_X(Draft18Test, SubscribeRequestUpdatePriorityTransitions) {
     EXPECT_EQ(observed[1], std::nullopt);     // omitted => leave unchanged
     EXPECT_EQ(observed[2], kDefaultPriority); // explicit default applied
   }
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// =============================================================================
+// SUBSCRIBE REQUEST_UPDATE coalescing tests (draft 18+)
+//
+// Draft: "A receiver of multiple REQUEST_UPDATE messages on the same stream MAY
+// coalesce their processing by applying only the cumulative result [...] The
+// receiver MUST still send a REQUEST_OK for each successful update, but it is
+// not required to process intermediate states individually."
+// =============================================================================
+
+// Fire kNumUpdates REQUEST_UPDATEs back-to-back on the same subscription
+// without awaiting each, so all of them reach the server before the first
+// queued handler runs. results[i]/updateDone[i] capture each update's
+// REQUEST_OK/REQUEST_ERROR.
+namespace {
+constexpr int kNumCoalescedUpdates = 3;
+
+folly::coro::Task<void> fireCoalescedUpdates(
+    folly::Executor* executor,
+    const std::shared_ptr<Publisher::SubscriptionHandle>& handle,
+    uint64_t majorVersion,
+    std::array<folly::coro::Baton, kNumCoalescedUpdates>& updateDone,
+    std::array<
+        std::optional<folly::Expected<RequestOk, RequestError>>,
+        kNumCoalescedUpdates>& results) {
+  for (int i = 0; i < kNumCoalescedUpdates; ++i) {
+    folly::coro::co_withExecutor(
+        executor, folly::coro::co_invoke([&, i]() -> folly::coro::Task<void> {
+          RequestUpdate update;
+          // A distinct, increasing priority per update lets the test identify
+          // which one was applied. The last fired gets the highest requestID,
+          // so it is the newest.
+          update.priority = static_cast<uint8_t>(kDefaultPriority + i);
+          update.forward = true;
+          update.params.setMajorVersion(majorVersion);
+          results[i] = co_await handle->requestUpdate(std::move(update));
+          updateDone[i].post();
+        }))
+        .start();
+  }
+  for (int i = 0; i < kNumCoalescedUpdates; ++i) {
+    co_await updateDone[i];
+  }
+}
+} // namespace
+
+// Several REQUEST_UPDATEs queued before any is processed collapse to a single
+// application call for the newest update, yet every update is still
+// acknowledged with a REQUEST_OK. Because later values override earlier ones,
+// that single call observes the newest update's parameters.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateCoalescesToNewest) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  // Every update is sent and received, so the stat fires once per update on
+  // both peers even though only one is applied.
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+
+  // The application handler runs exactly once, for the newest update.
+  int observedPriority = -1;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillOnce([&observedPriority](const RequestUpdate& u) {
+        observedPriority = u.priority.value_or(-1);
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  std::array<folly::coro::Baton, kNumCoalescedUpdates> updateDone;
+  std::array<
+      std::optional<folly::Expected<RequestOk, RequestError>>,
+      kNumCoalescedUpdates>
+      results;
+  co_await fireCoalescedUpdates(
+      MoQExecutor_.get(),
+      subscribeHandler,
+      getDraftMajorVersion(getServerSelectedVersion()),
+      updateDone,
+      results);
+
+  // The newest update (highest request ID = last fired) is the one applied.
+  EXPECT_EQ(observedPriority, kDefaultPriority + kNumCoalescedUpdates - 1);
+  // Every update — superseded or not — was acknowledged with a REQUEST_OK.
+  for (int i = 0; i < kNumCoalescedUpdates; ++i) {
+    EXPECT_TRUE(results[i].has_value() && results[i]->hasValue())
+        << "update " << i << " should have been acknowledged with REQUEST_OK";
+  }
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Coalescing applies the CUMULATIVE result, not just the newest update's own
+// fields: a field set by an earlier (superseded) update survives when the
+// newest update is silent about it. Here the first update turns forward off and
+// the newest changes only priority, so the single applied update must carry
+// both.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateCoalescesCumulatively) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(2);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(2);
+
+  // Only the newest update is applied; it must carry forward=false (from the
+  // first update) and the priority from the second.
+  std::optional<bool> observedForward;
+  int observedPriority = -1;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillOnce([&observedForward, &observedPriority](const RequestUpdate& u) {
+        observedForward = u.forward;
+        observedPriority = u.priority.value_or(-1);
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  const auto majorVersion = getDraftMajorVersion(getServerSelectedVersion());
+  std::array<folly::coro::Baton, 2> updateDone;
+  std::array<std::optional<folly::Expected<RequestOk, RequestError>>, 2>
+      results;
+
+  // Fire both updates back-to-back so both reach the server before the first
+  // queued handler runs (the last fired gets the higher requestID = newest).
+  auto fire = [&](int i, std::optional<bool> forward, uint8_t priority) {
+    folly::coro::co_withExecutor(
+        MoQExecutor_.get(),
+        folly::coro::co_invoke(
+            [&, i, forward, priority]() -> folly::coro::Task<void> {
+              RequestUpdate update;
+              update.priority = priority;
+              update.forward = forward;
+              update.params.setMajorVersion(majorVersion);
+              results[i] =
+                  co_await subscribeHandler->requestUpdate(std::move(update));
+              updateDone[i].post();
+            }))
+        .start();
+  };
+  fire(0, /*forward=*/false, kDefaultPriority + 1);
+  fire(1, /*forward=*/std::nullopt, kDefaultPriority + 7);
+  co_await updateDone[0];
+  co_await updateDone[1];
+
+  // Cumulative: forward from update 0, priority from the newest update 1.
+  EXPECT_EQ(observedForward, false);
+  EXPECT_EQ(observedPriority, kDefaultPriority + 7);
+  EXPECT_TRUE(results[0].has_value() && results[0]->hasValue());
+  EXPECT_TRUE(results[1].has_value() && results[1]->hasValue());
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Regression: an explicit priority equal to the default must still override an
+// earlier update's priority through coalescing — the default is a real value on
+// the wire, not treated as "omitted". Earlier update sets 129; the newest sets
+// the default explicitly, and the default must win.
+CO_TEST_P_X(
+    Draft18Test,
+    SubscribeRequestUpdateCoalescesExplicitDefaultPriority) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(2);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(2);
+
+  int observedPriority = -1;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillOnce([&observedPriority](const RequestUpdate& u) {
+        observedPriority = u.priority.value_or(-1);
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  const auto majorVersion = getDraftMajorVersion(getServerSelectedVersion());
+  std::array<folly::coro::Baton, 2> updateDone;
+  std::array<std::optional<folly::Expected<RequestOk, RequestError>>, 2>
+      results;
+
+  // Update 0 sets priority 129; update 1 (newest) explicitly sets the default.
+  auto fire = [&](int i, uint8_t priority) {
+    folly::coro::co_withExecutor(
+        MoQExecutor_.get(),
+        folly::coro::co_invoke([&, i, priority]() -> folly::coro::Task<void> {
+          RequestUpdate update;
+          update.priority = priority;
+          update.forward = true;
+          update.params.setMajorVersion(majorVersion);
+          results[i] =
+              co_await subscribeHandler->requestUpdate(std::move(update));
+          updateDone[i].post();
+        }))
+        .start();
+  };
+  fire(0, kDefaultPriority + 1);
+  fire(1, kDefaultPriority);
+  co_await updateDone[0];
+  co_await updateDone[1];
+
+  // The newest update's explicit default wins over the earlier non-default.
+  EXPECT_EQ(observedPriority, kDefaultPriority);
+  EXPECT_TRUE(results[0].has_value() && results[0]->hasValue());
+  EXPECT_TRUE(results[1].has_value() && results[1]->hasValue());
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Regression: the coalescing accumulator must not persist across bursts. Once
+// an update applies, a later update that is silent about a field must NOT
+// inherit that field from the earlier (already-applied) update.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateCoalescingResetsBetweenBursts) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(2);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(2);
+
+  // One handler call per burst; capture the forward each observed.
+  std::vector<std::optional<bool>> observedForward;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillRepeatedly([&observedForward](const RequestUpdate& u) {
+        observedForward.push_back(u.forward);
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillRepeatedly(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  const auto majorVersion = getDraftMajorVersion(getServerSelectedVersion());
+
+  // Burst 1 (awaited to completion) turns forward off.
+  RequestUpdate first;
+  first.forward = false;
+  first.params.setMajorVersion(majorVersion);
+  auto r1 = co_await subscribeHandler->requestUpdate(std::move(first));
+  EXPECT_TRUE(r1.hasValue());
+
+  // Burst 2 changes only priority and says nothing about forward.
+  RequestUpdate second;
+  second.priority = kDefaultPriority + 3;
+  second.params.setMajorVersion(majorVersion);
+  auto r2 = co_await subscribeHandler->requestUpdate(std::move(second));
+  EXPECT_TRUE(r2.hasValue());
+
+  // Burst 2 must not inherit burst 1's forward=false.
+  EXPECT_EQ(observedForward.size(), 2u);
+  if (observedForward.size() == 2) {
+    EXPECT_EQ(observedForward[0], false);
+    EXPECT_EQ(observedForward[1], std::nullopt);
+  }
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// REQUEST_UPDATE_OK must report the CURRENT largest object, which advances as
+// objects publish, rather than the value frozen at SUBSCRIBE_OK time.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateReportsCurrentLargest) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        // Subscribe-time largest is {0, 0}.
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  // Publish an object past the subscribe-time largest, advancing the tracker.
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+  auto pubRes = trackConsumer->datagram(
+      ObjectHeader{5, 0, 3}, moxygen::test::makeBuf(10), /*lastInGroup=*/false);
+  EXPECT_FALSE(pubRes.hasError());
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(1);
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  RequestUpdate update;
+  update.priority = kDefaultPriority + 1;
+  update.forward = true;
+  update.params.setMajorVersion(
+      getDraftMajorVersion(getServerSelectedVersion()));
+  auto result = co_await subscribeHandler->requestUpdate(std::move(update));
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasValue()) {
+    std::optional<AbsoluteLocation> reportedLargest;
+    for (const auto& param : result.value().requestSpecificParams) {
+      if (param.key ==
+          folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT)) {
+        reportedLargest = param.largestObject;
+        break;
+      }
+    }
+    // The current largest ({5,3}), not the subscribe-time {0,0}.
+    EXPECT_EQ(reportedLargest, (AbsoluteLocation{5, 3}));
+  }
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Per draft, a failed coalesced update yields a single REQUEST_ERROR and no
+// REQUEST_OK. The held acks for the superseded updates are dropped rather than
+// sent — acking them before the coalesced result was known was the bug. The
+// applied update surfaces the error and the subscription tears down with
+// PUBLISH_DONE(UPDATE_FAILED), so every coalesced update resolves as an error.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateCoalescedFailureReportedOnce) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  expectSubscribe(
+      [&mockSubscriptionHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+
+  // Only the newest update is applied, and the application rejects it.
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(1);
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(
+              folly::makeUnexpected(
+                  RequestError{
+                      subscribeRequest.requestID,
+                      RequestErrorCode::NOT_SUPPORTED,
+                      "rejected"})));
+
+  // A failed REQUEST_UPDATE terminates the subscription.
+  std::optional<PublishDoneStatusCode> pubDoneCode;
+  folly::coro::Baton pubDone;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&pubDoneCode, &pubDone](const PublishDone& done) {
+        pubDoneCode = done.statusCode;
+        pubDone.post();
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+
+  std::array<folly::coro::Baton, kNumCoalescedUpdates> updateDone;
+  std::array<
+      std::optional<folly::Expected<RequestOk, RequestError>>,
+      kNumCoalescedUpdates>
+      results;
+  co_await fireCoalescedUpdates(
+      MoQExecutor_.get(),
+      subscribeHandler,
+      getDraftMajorVersion(getServerSelectedVersion()),
+      updateDone,
+      results);
+  co_await pubDone;
+
+  // No update is acked with a REQUEST_OK: the held OKs are dropped, not sent,
+  // so nothing is acknowledged before the coalesced result was known. The
+  // applied update surfaces the application's error; the rest resolve as errors
+  // when the subscription tears down.
+  for (int i = 0; i < kNumCoalescedUpdates; ++i) {
+    EXPECT_TRUE(results[i].has_value() && results[i]->hasError())
+        << "update " << i << " must not be acked with REQUEST_OK on failure";
+  }
+  EXPECT_EQ(pubDoneCode, PublishDoneStatusCode::UPDATE_FAILED);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Regression: when the application handler throws, handleRequestUpdate must
+// convert the exception into a single REQUEST_ERROR and stop, rather than
+// falling through and dereferencing the exception-holding folly::Try (which
+// rethrows and would crash the detached handler).
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateHandlerThrowsReportsError) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  expectSubscribe(
+      [&mockSubscriptionHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(1);
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(testing::Throw(std::runtime_error("boom")));
+
+  std::optional<PublishDoneStatusCode> pubDoneCode;
+  folly::coro::Baton pubDone;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&pubDoneCode, &pubDone](const PublishDone& done) {
+        pubDoneCode = done.statusCode;
+        pubDone.post();
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+
+  RequestUpdate update;
+  update.priority = kDefaultPriority + 1;
+  update.forward = true;
+  update.params.setMajorVersion(
+      getDraftMajorVersion(getServerSelectedVersion()));
+  auto result = co_await subscribeHandler->requestUpdate(std::move(update));
+  EXPECT_TRUE(result.hasError());
+  if (result.hasError()) {
+    EXPECT_EQ(result.error().errorCode, RequestErrorCode::INTERNAL_ERROR);
+  }
+  co_await pubDone;
+  EXPECT_EQ(pubDoneCode, PublishDoneStatusCode::UPDATE_FAILED);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Coalesced-burst counterpart to the throw case: when the newest (merged)
+// handler throws, the held OKs for the superseded updates must be dropped, not
+// left buffered, so a single REQUEST_ERROR is sent and no update is acked OK.
+CO_TEST_P_X(
+    Draft18Test,
+    SubscribeRequestUpdateCoalescedHandlerThrowsDropsHeldOks) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  expectSubscribe(
+      [&mockSubscriptionHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+
+  // Only the newest (merged) update is applied, and its handler throws.
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled).Times(1);
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(testing::Throw(std::runtime_error("boom")));
+
+  std::optional<PublishDoneStatusCode> pubDoneCode;
+  folly::coro::Baton pubDone;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&pubDoneCode, &pubDone](const PublishDone& done) {
+        pubDoneCode = done.statusCode;
+        pubDone.post();
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+
+  std::array<folly::coro::Baton, kNumCoalescedUpdates> updateDone;
+  std::array<
+      std::optional<folly::Expected<RequestOk, RequestError>>,
+      kNumCoalescedUpdates>
+      results;
+  co_await fireCoalescedUpdates(
+      MoQExecutor_.get(),
+      subscribeHandler,
+      getDraftMajorVersion(getServerSelectedVersion()),
+      updateDone,
+      results);
+  co_await pubDone;
+
+  // The thrown exception becomes a single REQUEST_ERROR; the held OKs are
+  // dropped, so no coalesced update is acked with a REQUEST_OK.
+  for (int i = 0; i < kNumCoalescedUpdates; ++i) {
+    EXPECT_TRUE(results[i].has_value() && results[i]->hasError())
+        << "update " << i << " must not be acked with REQUEST_OK when the "
+        << "coalesced handler throws";
+  }
+  EXPECT_EQ(pubDoneCode, PublishDoneStatusCode::UPDATE_FAILED);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A SubscriptionHandle whose async requestUpdate blocks on a per-invocation
+// baton, so a test can hold the application handler mid-flight and control
+// exactly when it completes. Invocations are numbered in call order.
+namespace {
+class BlockingRequestUpdateHandle : public MockSubscriptionHandle {
+ public:
+  using MockSubscriptionHandle::MockSubscriptionHandle;
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    const int index = nextInvocation_++;
+    requestUpdateCalled(update);
+    invoked[index].post();
+    co_await release[index];
+    co_return requestUpdateResult();
+  }
+
+  std::array<folly::coro::Baton, 3> invoked;
+  std::array<folly::coro::Baton, 3> release;
+
+ private:
+  int nextInvocation_{0};
+};
+} // namespace
+
+// An in-flight update must not flush a later, still-processing coalesced
+// burst's held REQUEST_OKs. Update A is applied on its own; while its
+// application handler is suspended, B and C arrive and coalesce (C is newest, B
+// is superseded so B's REQUEST_OK is held on requestOks_). When A completes it
+// must send only A's REQUEST_OK — B's held OK belongs to the B+C burst and must
+// not be flushed until that burst's handler completes. The newest-burst handler
+// snapshots requestOks_ before awaiting, so A's completion sees only its own
+// OK.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateInFlightDoesNotFlushLaterBurst) {
+  co_await setupMoQSession();
+  std::shared_ptr<BlockingRequestUpdateHandle> handle;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&handle, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        SubscribeOk ok;
+        ok.requestID = sub.requestID;
+        ok.trackAlias = TrackAlias(sub.requestID.value);
+        ok.expires = std::chrono::milliseconds(0);
+        ok.groupOrder = GroupOrder::OldestFirst;
+        ok.largest = AbsoluteLocation{0, 0};
+        handle = std::make_shared<BlockingRequestUpdateHandle>(std::move(ok));
+        co_return handle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  // Three updates are received (A, then B and C), so the stat fires three
+  // times.
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(3);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(3);
+
+  // Exactly two application-handler invocations: one for A, one for the merged
+  // B+C burst (B is superseded and never reaches the handler).
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(2);
+  EXPECT_CALL(*handle, requestUpdateResult)
+      .WillRepeatedly(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  const auto majorVersion = getDraftMajorVersion(getServerSelectedVersion());
+
+  // Fire an update without awaiting; results[i] captures its REQUEST_OK/ERROR
+  // once the peer acknowledges it.
+  std::array<std::optional<folly::Expected<RequestOk, RequestError>>, 3>
+      results;
+  std::array<folly::coro::Baton, 3> done;
+  auto fire = [&](int i, uint8_t priority) {
+    folly::coro::co_withExecutor(
+        MoQExecutor_.get(),
+        folly::coro::co_invoke([&, i, priority]() -> folly::coro::Task<void> {
+          RequestUpdate update;
+          update.priority = priority;
+          update.forward = true;
+          update.params.setMajorVersion(majorVersion);
+          results[i] =
+              co_await subscribeHandler->requestUpdate(std::move(update));
+          done[i].post();
+        }))
+        .start();
+  };
+
+  // A is its own burst. Wait until its application handler is running (which
+  // means it has already reset the accumulator and snapshotted the held OKs).
+  fire(0, kDefaultPriority + 1);
+  co_await handle->invoked[0];
+
+  // B then C arrive while A is in flight; they coalesce, so B's REQUEST_OK is
+  // held on requestOks_. Wait until the merged burst's handler is running.
+  fire(1, kDefaultPriority + 2);
+  fire(2, kDefaultPriority + 3);
+  co_await handle->invoked[1];
+
+  // Release A. It resolves on its own and must flush only A's REQUEST_OK.
+  handle->release[0].post();
+  co_await done[0];
+  EXPECT_TRUE(results[0].has_value() && results[0]->hasValue());
+
+  // Give A's completion room to (incorrectly) flush the held OKs. The B+C burst
+  // is still suspended, so neither B nor C may be acknowledged yet.
+  co_await rescheduleN(4);
+  EXPECT_FALSE(results[1].has_value())
+      << "B was acked when A completed, before the B+C burst finished";
+  EXPECT_FALSE(results[2].has_value())
+      << "C was acked when A completed, before the B+C burst finished";
+
+  // Release the B+C burst; now B and C are both acknowledged.
+  handle->release[1].post();
+  co_await done[1];
+  co_await done[2];
+  EXPECT_TRUE(results[1].has_value() && results[1]->hasValue());
+  EXPECT_TRUE(results[2].has_value() && results[2]->hasValue());
 
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));

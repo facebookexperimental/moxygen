@@ -407,6 +407,9 @@ class MoQSession : public Subscriber,
 
     virtual void onStreamCreated() {}
 
+    // Advance the tracked largest published object as objects are written.
+    virtual void updateLargest(const AbsoluteLocation& /*location*/) {}
+
     virtual void onStreamComplete(const ObjectHeader& finalHeader) = 0;
 
     virtual void onTooManyBytesBuffered() = 0;

@@ -676,7 +676,12 @@ StreamPublisherImpl::writeCurrentObject(
       header_,
       std::move(payload),
       forwardingPreferenceIsDatagram);
-  return writeToStream(finStream, entireObjectWritten);
+  auto writeResult = writeToStream(finStream, entireObjectWritten);
+  // Only advance the largest once the full object has been written to the wire.
+  if (writeResult.hasValue() && entireObjectWritten) {
+    publisher_->updateLargest({header_.group, objectID});
+  }
+  return writeResult;
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
@@ -1073,6 +1078,37 @@ class ControlStreamReplyContext : public ReplyContext {
   moxygen::TimedBaton& controlWriteEvent_;
 };
 
+// Fold a newer REQUEST_UPDATE into an accumulated one for draft-18+ coalescing:
+// later values win; absent optional fields keep the earlier value.
+void mergeRequestUpdate(RequestUpdate& latest, const RequestUpdate& incoming) {
+  latest.requestID = incoming.requestID;
+  latest.existingRequestID = incoming.existingRequestID;
+  if (incoming.priority) {
+    latest.priority = incoming.priority;
+  }
+  if (incoming.start) {
+    latest.start = incoming.start;
+  }
+  if (incoming.endGroup) {
+    latest.endGroup = incoming.endGroup;
+  }
+  if (incoming.forward) {
+    latest.forward = incoming.forward;
+  }
+  // Upsert params by key: a later value replaces an earlier one of that key,
+  // while params only the earlier update carried are preserved.
+  for (const auto& param : incoming.params) {
+    latest.params.eraseAllParamsOfType(
+        static_cast<TrackRequestParamKey>(param.key));
+  }
+  for (const auto& param : incoming.params) {
+    auto result = latest.params.insertParam(param);
+    if (result.hasError()) {
+      XLOG(ERR) << "mergeRequestUpdate: param not allowed, key=" << param.key;
+    }
+  }
+}
+
 } // namespace
 
 class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
@@ -1130,6 +1166,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     if (!trackAlias_) {
       trackAlias_ = handle->subscribeOk().trackAlias;
     }
+    // Seed the largest from SUBSCRIBE_OK when present; the PUBLISH path's
+    // handle carries none.
+    if (handle->hasSubscribeOk()) {
+      largest_ = handle->subscribeOk().largest;
+    }
     subscriptionHandle_ = std::move(handle);
     if (pendingPublishDone_) {
       // If publishDone is called before publishHandler_->subscribe() returns,
@@ -1146,6 +1187,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   // PublisherImpl overrides
   void onStreamCreated() override {
     streamCount_++;
+  }
+
+  void updateLargest(const AbsoluteLocation& location) override {
+    if (!largest_ || location > *largest_) {
+      largest_ = location;
+    }
   }
 
   void onStreamComplete(const ObjectHeader& finalHeader) override;
@@ -1173,6 +1220,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
     auto trackPubImpl =
         std::static_pointer_cast<TrackPublisherImpl>(shared_from_this());
+
+    // Accumulate the cumulative newest update so older queued ones coalesce.
+    // Only tracked for draft 18+, where handleRequestUpdate consumes/resets it;
+    // pre-18 there is no coalescing, so avoid growing state that is never read.
+    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18) {
+      if (latestRequest_.has_value()) {
+        mergeRequestUpdate(latestRequest_.value(), requestUpdate);
+      } else {
+        latestRequest_ = requestUpdate;
+      }
+    }
 
     // Handle asynchronously with shared ownership to prevent use-after-free
     // if session closes before completion
@@ -1203,6 +1261,28 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
     auto updateRequestID = requestUpdate.requestID;
     auto existingRequestID = requestID_;
+    bool canCoalesce =
+        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
+
+    // A newer update supersedes this one: ack it, but skip re-applying its
+    // intermediate state (draft 18+ coalescing).
+    if (canCoalesce && latestRequest_.has_value() &&
+        updateRequestID != latestRequest_.value().requestID) {
+      RequestOk requestOk{.requestID = updateRequestID, .trackProperties = {}};
+      requestOks_.push_back(requestOk);
+      co_return;
+    }
+
+    // Newest update of the burst: take the cumulative merged view so fields set
+    // by earlier (superseded) updates are not lost, and reset the accumulator
+    // so the next burst starts fresh instead of folding into stale state.
+    std::vector<RequestOk> currentOks;
+    if (canCoalesce && latestRequest_.has_value()) {
+      requestUpdate = std::move(latestRequest_.value());
+      currentOks = std::move(requestOks_);
+      latestRequest_.reset();
+      requestOks_.clear();
+    }
 
     // Update delivery timeout if present
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
@@ -1259,18 +1339,21 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         updateErr.requestID = updateRequestID; // In case app got it wrong
         session_->requestUpdateError(updateErr, existingRequestID);
       } else {
-        // send REQUEST_OK with LARGEST_OBJECT if available
-        // TODO: Do we relay the params we got from the app?
-        std::vector<Parameter> requestSpecificParams;
-        if (subscriptionHandle_->subscribeOk().largest) {
-          requestSpecificParams.emplace_back(
-              folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
-              subscriptionHandle_->subscribeOk().largest.value());
-        }
+        // Add final RequestOk
         RequestOk requestOk{
-            .requestID = updateRequestID,
-            .requestSpecificParams = std::move(requestSpecificParams)};
-        session_->requestUpdateOk(requestOk, existingRequestID);
+            .requestID = updateRequestID, .trackProperties = {}};
+        currentOks.push_back(requestOk);
+
+        for (RequestOk reqOk : currentOks) {
+          // send REQUEST_OK with the current LARGEST_OBJECT if available
+          std::vector<Parameter> requestSpecificParams;
+          if (largest_) {
+            reqOk.requestSpecificParams.emplace_back(
+                folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
+                largest_.value());
+          }
+          session_->requestUpdateOk(reqOk, existingRequestID);
+        }
       }
     }
   }
@@ -1413,6 +1496,19 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   bool forward_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
   MoQDeliveryTimeoutManager deliveryTimeoutManager_;
+
+  // Cumulative newest REQUEST_UPDATE; older queued handlers coalesce into it.
+  folly::Optional<RequestUpdate> latestRequest_;
+
+  // On coalesce REQUEST_UPDATES, the REQUEST_OKs for each update will be held
+  // until either the update is successful in which each will be sent, or the
+  // update results in an error, in which only a single REQUEST_ERROR will be
+  // sent
+  std::vector<RequestOk> requestOks_;
+
+  // Largest object published so far; advances as objects are written and is
+  // reported in REQUEST_UPDATE acks. Seeded from the SUBSCRIBE_OK largest.
+  std::optional<AbsoluteLocation> largest_;
 };
 
 class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
@@ -1775,6 +1871,8 @@ MoQSession::TrackPublisherImpl::datagram(
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::WRITE_ERROR, "sendDatagram failed"));
   }
+  // Only advance the largest after the datagram is actually sent.
+  updateLargest({header.group, header.id});
   return folly::unit;
 }
 
