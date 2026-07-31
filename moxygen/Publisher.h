@@ -54,6 +54,12 @@ class SubscriptionHandle {
     return *subscribeOk_;
   }
 
+  // Whether a SUBSCRIBE_OK is present. PUBLISH handles carry none, so callers
+  // must check before dereferencing subscribeOk().
+  bool hasSubscribeOk() const {
+    return subscribeOk_.has_value();
+  }
+
  protected:
   void setSubscribeOk(SubscribeOk subOk) {
     subscribeOk_ = std::move(subOk);
