@@ -7,6 +7,7 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
+#include <quic/logging/QLogger.h>
 #include <moxygen/MoQEarlyDataHandler.h>
 #include <moxygen/MoQServerBase.h>
 #include <quic/logging/QLogger.h>
