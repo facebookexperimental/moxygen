@@ -7,9 +7,11 @@
 #include <atomic>
 #include <iomanip>
 #include <memory>
+#include <sstream>
 #include <thread>
 #include <vector>
 
+#include <folly/FileUtil.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -51,6 +53,12 @@ DEFINE_uint32(
     "Size of other objects in group (P-frame)");
 DEFINE_uint32(delivery_timeout, 500, "Delivery timeout in milliseconds");
 DEFINE_uint32(objects_per_group, 30, "Number of objects per group");
+DEFINE_string(
+    metrics_out,
+    "",
+    "If set, write Prometheus .prom metrics (including the end-to-end latency "
+    "histogram) to this path once per second, for a node_exporter textfile "
+    "collector to scrape");
 
 // Shared stats structure for cross-thread aggregation
 struct SharedStats {
@@ -61,11 +69,107 @@ struct SharedStats {
   std::atomic<bool> trackEnded{false};
 };
 
+namespace {
+
+struct PerfPromSnapshot {
+  uint32_t subscribers{0};
+  double throughputMbps{0.0};
+  uint64_t totalObjects{0};
+  uint64_t totalBytes{0};
+  uint32_t totalResets{0};
+  uint32_t totalFailures{0};
+  double avgLatencyMs{0.0};
+  moxygen::LatencyHistogram latency;
+};
+
+std::string escapeLabelValue(const std::string& v) {
+  std::string out;
+  out.reserve(v.size());
+  for (char c : v) {
+    if (c == '\\' || c == '"') {
+      out.push_back('\\');
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+// Rewrite the whole .prom file each tick. Buckets are cumulative over the run,
+// so Prometheus rate()/histogram_quantile() work across scrapes. writeFileAtomic
+// does the temp-write + rename the textfile collector requires.
+void writePromFile(
+    const std::string& path,
+    const std::string& labels,
+    const PerfPromSnapshot& s) {
+  std::ostringstream os;
+  auto gauge = [&](const char* name, const char* help, double value) {
+    os << "# HELP " << name << " " << help << "\n"
+       << "# TYPE " << name << " gauge\n"
+       << name << "{" << labels << "} " << value << "\n";
+  };
+  auto counter = [&](const char* name, const char* help, uint64_t value) {
+    os << "# HELP " << name << " " << help << "\n"
+       << "# TYPE " << name << " counter\n"
+       << name << "{" << labels << "} " << value << "\n";
+  };
+
+  gauge("moqperf_subscribers", "Active subscribers", s.subscribers);
+  gauge(
+      "moqperf_throughput_mbps",
+      "Interval throughput in Mbps",
+      s.throughputMbps);
+  counter("moqperf_objects_total", "Objects received", s.totalObjects);
+  counter("moqperf_bytes_total", "Bytes received", s.totalBytes);
+  counter("moqperf_resets_total", "Subgroup resets", s.totalResets);
+  counter("moqperf_failures_total", "Subscribe failures", s.totalFailures);
+  gauge(
+      "moqperf_latency_avg_ms",
+      "Run-average end-to-end object latency in ms",
+      s.avgLatencyMs);
+
+  const char* h = "moqperf_object_latency_seconds";
+  os << "# HELP " << h << " End-to-end object latency in seconds\n"
+     << "# TYPE " << h << " histogram\n";
+  auto cum = s.latency.cumulative();
+  for (size_t i = 0; i < moxygen::LatencyHistogram::kNumBounds; ++i) {
+    double leSec = static_cast<double>(moxygen::kLatencyBucketsMs[i]) / 1000.0;
+    os << h << "_bucket{" << labels << ",le=\"" << leSec << "\"} " << cum[i]
+       << "\n";
+  }
+  os << h << "_bucket{" << labels << ",le=\"+Inf\"} "
+     << cum[moxygen::LatencyHistogram::kNumBounds] << "\n";
+  os << h << "_sum{" << labels << "} "
+     << (static_cast<double>(s.latency.sum()) / 1000.0) << "\n";
+  os << h << "_count{" << labels << "} " << s.latency.count() << "\n";
+
+  auto data = os.str();
+  try {
+    folly::writeFileAtomic(path, folly::StringPiece(data));
+  } catch (const std::exception& ex) {
+    XLOG(ERR) << "Failed to write metrics file " << path << ": " << ex.what();
+  }
+}
+
+// Sum every client's cumulative latency histogram. Safe from any thread:
+// snapshotLatencyHist() reads atomic counters, no EventBase hop.
+moxygen::LatencyHistogram mergeLatency(
+    const std::vector<std::unique_ptr<moxygen::MoQPerfTestClient>>& clients) {
+  moxygen::LatencyHistogram hist;
+  for (const auto& client : clients) {
+    hist.merge(client->snapshotLatencyHist());
+  }
+  return hist;
+}
+
+} // namespace
+
 // Stats aggregation coroutine
 folly::coro::Task<void> aggregateStats(
     const std::vector<std::unique_ptr<moxygen::MoQPerfTestClient>>& clients,
     std::shared_ptr<SharedStats> sharedStats,
-    folly::CancellationToken cancelToken) {
+    folly::CancellationToken cancelToken,
+    std::string metricsOut,
+    std::string promLabels) {
   auto startTime = std::chrono::steady_clock::now();
   uint64_t lastTotalObjects = 0;
   uint64_t lastTotalBytes = 0;
@@ -157,6 +261,19 @@ folly::coro::Task<void> aggregateStats(
                << " total"
                << " | Done: " << totalCompleted << "/" << clients.size();
 
+    if (!metricsOut.empty()) {
+      PerfPromSnapshot snap;
+      snap.subscribers = currentSubscribers;
+      snap.throughputMbps = mbps;
+      snap.totalObjects = totalObjects;
+      snap.totalBytes = totalBytes;
+      snap.totalResets = totalResets;
+      snap.totalFailures = totalFailures;
+      snap.avgLatencyMs = runAvgLatencyMs;
+      snap.latency = mergeLatency(clients);
+      writePromFile(metricsOut, promLabels, snap);
+    }
+
     // Check if all threads have completed
     if (totalCompleted >= clients.size()) {
       XLOG(INFO) << "[AGGREGATE] All tracks ended - stopping stats aggregation";
@@ -207,6 +324,15 @@ int main(int argc, char** argv) {
              << "/sec; Max subscribers (per thread): "
              << subscriberMaxPerThread;
 
+  std::string versionsLabel = FLAGS_versions.empty() ? "all" : FLAGS_versions;
+  std::ostringstream labelStream;
+  labelStream << "transport=\"" << escapeLabelValue(transportName) << "\""
+              << ",subs=\"" << FLAGS_subscriber_max << "\""
+              << ",first_object_size=\"" << FLAGS_first_object_size << "\""
+              << ",other_object_size=\"" << FLAGS_other_object_size << "\""
+              << ",versions=\"" << escapeLabelValue(versionsLabel) << "\"";
+  std::string promLabels = labelStream.str();
+
   try {
     auto url = proxygen::URL(FLAGS_relay_url);
     auto sharedStats = std::make_shared<SharedStats>();
@@ -246,7 +372,12 @@ int main(int argc, char** argv) {
     folly::ScopedEventBaseThread statsThread;
     folly::coro::co_withExecutor(
         statsThread.getEventBase(),
-        aggregateStats(clients, sharedStats, cancelSource.getToken()))
+        aggregateStats(
+            clients,
+            sharedStats,
+            cancelSource.getToken(),
+            FLAGS_metrics_out,
+            promLabels))
         .start();
 
     // Wait for all client tasks to complete
@@ -281,17 +412,32 @@ int main(int argc, char** argv) {
     auto duration = clients[0]->getResults().durationSeconds;
     XLOG(INFO) << "  Duration: " << duration << " seconds";
 
+    double throughputMbps = 0.0;
     if (totalBytes > 0 && duration > 0) {
       double mbytes = static_cast<double>(totalBytes) / (1024.0 * 1024.0);
-      double throughputMbps = (mbytes * 8.0) / static_cast<double>(duration);
+      throughputMbps = (mbytes * 8.0) / static_cast<double>(duration);
       XLOG(INFO) << "  Throughput: " << throughputMbps << " Mbps";
     }
 
+    double avgLatencyMs = 0.0;
     if (latencyObjects > 0) {
-      double avgLatencyMs = static_cast<double>(totalLatencyMs) /
+      avgLatencyMs = static_cast<double>(totalLatencyMs) /
           static_cast<double>(latencyObjects);
       XLOG(INFO) << "  Avg Object Latency: " << avgLatencyMs << " ms ("
                  << latencyObjects << " objects measured)";
+    }
+
+    // Client threads are already joined (executor->stop()), so the histograms
+    // are quiescent here; write one last snapshot to capture the final tail.
+    if (!FLAGS_metrics_out.empty()) {
+      PerfPromSnapshot snap;
+      snap.throughputMbps = throughputMbps;
+      snap.totalObjects = sharedStats->totalObjects.load();
+      snap.totalBytes = totalBytes;
+      snap.totalResets = sharedStats->totalResets.load();
+      snap.avgLatencyMs = avgLatencyMs;
+      snap.latency = mergeLatency(clients);
+      writePromFile(FLAGS_metrics_out, promLabels, snap);
     }
 
     if (sharedStats->trackEnded.load()) {
