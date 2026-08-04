@@ -4,7 +4,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/SocketAddress.h>
 #include <folly/base64.h>
+#include <folly/coro/CurrentExecutor.h>
 #include <folly/coro/Sleep.h>
 #include <folly/init/Init.h>
 #include <folly/logging/xlog.h>
@@ -18,6 +20,7 @@
 #undef EV_SIGNAL
 #undef EVLOOP_NONBLOCK
 
+#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <moxygen/MoQClientMobile.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/events/MoQLibevExecutorImpl.h>
@@ -65,6 +68,23 @@ DEFINE_bool(
 
 namespace {
 using namespace moxygen;
+
+class PreResolvedAddressResolver final : public MoQQuicAddressResolver {
+ public:
+  explicit PreResolvedAddressResolver(quic::SocketAddress address)
+      : address_(std::move(address)) {}
+
+  folly::coro::Task<quic::SocketAddress> resolveAddress(
+      std::string /*host*/,
+      uint16_t /*port*/,
+      std::chrono::milliseconds /*timeout*/) override {
+    co_await folly::coro::co_safe_point;
+    co_return address_;
+  }
+
+ private:
+  quic::SocketAddress address_;
+};
 
 struct SubParams {
   LocationType locType;
@@ -166,12 +186,15 @@ class MoQTextClientMobile
       std::shared_ptr<MoQLibevExecutorImpl> evb,
       proxygen::URL url,
       FullTrackName ftn,
+      std::shared_ptr<MoQQuicAddressResolver> addressResolver,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr)
       : moqClient_(
             std::make_unique<MoQClientMobile>(
                 evb,
                 std::move(url),
-                std::move(verifier))),
+                std::move(verifier),
+                /*useQuicWtSession=*/true,
+                std::move(addressResolver))),
         fullTrackName_(std::move(ftn)) {}
 
   // Response To PUBLISH
@@ -410,6 +433,18 @@ int main(int argc, char* argv[]) {
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
 
+  std::shared_ptr<MoQQuicAddressResolver> addressResolver;
+  try {
+    const folly::SocketAddress address(
+        url.getHost(), url.getPort(), true /* allowNameLookup */);
+    addressResolver = std::make_shared<PreResolvedAddressResolver>(
+        quic::fromFollySocketAddress<quic::SocketAddress>(address));
+  } catch (const std::exception& ex) {
+    XLOG(ERR) << "Failed to resolve " << url.getHost() << ": "
+              << folly::exceptionStr(ex);
+    return 1;
+  }
+
   struct ev_loop* evLoop = ev_loop_new(0);
   std::shared_ptr<MoQLibevExecutorImpl> moqEvb =
       std::make_shared<MoQLibevExecutorImpl>(
@@ -425,6 +460,7 @@ int main(int argc, char* argv[]) {
       moqEvb,
       std::move(url),
       moxygen::FullTrackName({ns, FLAGS_track_name}),
+      std::move(addressResolver),
       verifier);
 
   auto subParams = flags2params();

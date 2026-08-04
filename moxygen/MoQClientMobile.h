@@ -10,6 +10,7 @@
 #include <proxygen/lib/utils/URL.h>
 #include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClientBase.h>
+#include <moxygen/MoQQuicAddressResolver.h>
 
 namespace moxygen {
 class MoQLibevExecutorImpl;
@@ -20,7 +21,8 @@ class MoQClientMobile : public MoQClientBase {
       std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
       proxygen::URL url,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
-      bool useQuicWtSession = true);
+      bool useQuicWtSession = true,
+      std::shared_ptr<MoQQuicAddressResolver> addressResolver = nullptr);
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
@@ -31,6 +33,7 @@ class MoQClientMobile : public MoQClientBase {
 
  private:
   std::shared_ptr<MoQLibevExecutorImpl> moqlibevEvb_;
+  std::shared_ptr<MoQQuicAddressResolver> addressResolver_;
 };
 
 } // namespace moxygen
