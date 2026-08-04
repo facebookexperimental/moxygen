@@ -11,6 +11,8 @@
 #include <folly/coro/Promise.h>
 #include <folly/coro/Timeout.h>
 
+#include <stdexcept>
+
 // libev and libevent both define these macros; libevent arrives via the folly
 // and MoQClientMobile.h headers above. Undef them before the libev-backed
 // headers below so ev.h can define them cleanly (see MoQTextClientMobile.cpp).
@@ -20,7 +22,6 @@
 #undef EV_SIGNAL
 #undef EVLOOP_NONBLOCK
 
-#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <quic/common/udpsocket/LibevQuicAsyncUDPSocket.h>
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
 #include <moxygen/events/MoQLibevExecutorImpl.h>
@@ -95,7 +96,11 @@ MoQClientMobile::MoQClientMobile(
           std::move(verifier),
           useQuicWtSession),
       moqlibevEvb_(std::move(moqEvb)),
-      addressResolver_(std::move(addressResolver)) {}
+      addressResolver_(std::move(addressResolver)) {
+  if (!addressResolver_) {
+    throw std::invalid_argument("MoQClientMobile requires an address resolver");
+  }
+}
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQClientMobile::connectQuic(
@@ -104,29 +109,21 @@ MoQClientMobile::connectQuic(
     const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
   const auto connectDeadline = std::chrono::steady_clock::now() + timeoutMs;
-  quic::SocketAddress connectAddr;
-  if (addressResolver_) {
-    // DNS and QUIC share the caller's total connection budget. A DNS lookup
-    // that consumes it leaves no time for the handshake.
-    auto resolveResult = co_await folly::coro::co_awaitTry(
-        folly::coro::timeout(
-            addressResolver_->resolveAddress(
-                url_.getHost(), url_.getPort(), timeoutMs),
-            timeoutMs));
-    if (resolveResult.hasException<folly::OperationCancelled>()) {
-      // Cancellation is a stopped completion, not a connection failure.
-      co_yield folly::coro::co_stopped_may_throw;
-    }
-    if (resolveResult.hasException()) {
-      co_yield folly::coro::co_error(std::move(resolveResult).exception());
-    }
-    connectAddr = std::move(resolveResult).value();
-  } else {
-    const folly::SocketAddress fallbackAddr(
-        url_.getHost(), url_.getPort(), true); // blocking DNS
-    connectAddr =
-        quic::fromFollySocketAddress<quic::SocketAddress>(fallbackAddr);
+  // DNS and QUIC share the caller's total connection budget. A DNS lookup
+  // that consumes it leaves no time for the handshake.
+  auto resolveResult = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(
+          addressResolver_->resolveAddress(
+              url_.getHost(), url_.getPort(), timeoutMs),
+          timeoutMs));
+  if (resolveResult.hasException<folly::OperationCancelled>()) {
+    // Cancellation is a stopped completion, not a connection failure.
+    co_yield folly::coro::co_stopped_may_throw;
   }
+  if (resolveResult.hasException()) {
+    co_yield folly::coro::co_error(std::move(resolveResult).exception());
+  }
+  auto connectAddr = std::move(resolveResult).value();
 
   if (std::chrono::steady_clock::now() >= connectDeadline) {
     co_yield folly::coro::co_error(
