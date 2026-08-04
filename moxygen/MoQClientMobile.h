@@ -24,7 +24,6 @@ class MoQClientMobile : public MoQClientBase {
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
-      folly::SocketAddress connectAddr,
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
       const std::vector<std::string>& alpns,

@@ -97,11 +97,12 @@ MoQClientMobile::MoQClientMobile(
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQClientMobile::connectQuic(
-    folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
     const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
+  auto connectAddr = folly::SocketAddress(
+      url_.getHost(), url_.getPort(), true); // blocking DNS
   auto sock = std::make_unique<quic::LibevQuicAsyncUDPSocket>(moqlibevEvb_);
   // Set UDP socket buffer sizes to 1 MB
   constexpr int kUdpBufferSize = 1024 * 1024; // 1 MB

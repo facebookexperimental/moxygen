@@ -29,13 +29,8 @@ folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
   auto quicConnectStart = std::chrono::steady_clock::now();
 
   // Establish QUIC connection with multiple ALPN options
-  auto quicClient = co_await connectQuic(
-      folly::SocketAddress(
-          url_.getHost(), url_.getPort(), true), // blocking DNS,
-      connect_timeout,
-      verifier_,
-      alpn,
-      transportSettings);
+  auto quicClient =
+      co_await connectQuic(connect_timeout, verifier_, alpn, transportSettings);
 
   transportConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - quicConnectStart);

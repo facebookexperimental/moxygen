@@ -203,7 +203,6 @@ folly::AsyncTransport* MoQQmuxClient::getUnderlyingTransport() const {
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQQmuxClient::connectQuic(
-    folly::SocketAddress /*connectAddr*/,
     std::chrono::milliseconds /*timeoutMs*/,
     std::shared_ptr<fizz::CertificateVerifier> /*verifier*/,
     const std::vector<std::string>& /*alpns*/,

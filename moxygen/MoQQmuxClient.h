@@ -57,7 +57,6 @@ class MoQQmuxClient : public MoQClientBase {
   // its default setupMoQSession(), which we override above; this implementation
   // exists solely to satisfy the pure-virtual contract.
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
-      folly::SocketAddress connectAddr,
       std::chrono::milliseconds timeoutMs,
       std::shared_ptr<fizz::CertificateVerifier> verifier,
       const std::vector<std::string>& alpns,
