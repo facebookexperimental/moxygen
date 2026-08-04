@@ -20,9 +20,9 @@ class MoQClientMobile : public MoQClientBase {
   MoQClientMobile(
       std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
       proxygen::URL url,
-      std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr,
-      bool useQuicWtSession = true,
-      std::shared_ptr<MoQQuicAddressResolver> addressResolver = nullptr);
+      std::shared_ptr<fizz::CertificateVerifier> verifier,
+      bool useQuicWtSession,
+      std::shared_ptr<MoQQuicAddressResolver> addressResolver);
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
