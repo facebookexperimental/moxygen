@@ -6,8 +6,12 @@
 
 #include <moxygen/MoQClientMobile.h>
 
+#include <folly/OperationCancelled.h>
+#include <folly/coro/Error.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Timeout.h>
+
+#include <stdexcept>
 
 // libev and libevent both define these macros; libevent arrives via the folly
 // and MoQClientMobile.h headers above. Undef them before the libev-backed
@@ -18,7 +22,6 @@
 #undef EV_SIGNAL
 #undef EVLOOP_NONBLOCK
 
-#include <quic/common/address/QuicSocketAddressBridge.h>
 #include <quic/common/udpsocket/LibevQuicAsyncUDPSocket.h>
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
 #include <moxygen/events/MoQLibevExecutorImpl.h>
@@ -67,10 +70,8 @@ class QuicConnectCB : public quic::QuicSocket::ConnectionSetupCallback {
   void onReplaySafe() noexcept override {}
   void onTransportReady() noexcept override {
     if (cancellationToken_.isCancellationRequested()) {
-      quicConnectErr(
-          quic::QuicTransportException(
-              "Connection has been cancelled",
-              quic::TransportErrorCode::INTERNAL_ERROR));
+      quicConnectErr(folly::OperationCancelled{});
+      return;
     }
     promise_.setValue(folly::unit);
   }
@@ -87,21 +88,50 @@ MoQClientMobile::MoQClientMobile(
     std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
     proxygen::URL url,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
-    bool useQuicWtSession)
+    bool useQuicWtSession,
+    std::shared_ptr<MoQQuicAddressResolver> addressResolver)
     : MoQClientBase(
           moqEvb,
           std::move(url),
           std::move(verifier),
           useQuicWtSession),
-      moqlibevEvb_(std::move(moqEvb)) {}
+      moqlibevEvb_(std::move(moqEvb)),
+      addressResolver_(std::move(addressResolver)) {
+  if (!addressResolver_) {
+    throw std::invalid_argument("MoQClientMobile requires an address resolver");
+  }
+}
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQClientMobile::connectQuic(
-    folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
     const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
+  const auto connectDeadline = std::chrono::steady_clock::now() + timeoutMs;
+  // DNS and QUIC share the caller's total connection budget. A DNS lookup
+  // that consumes it leaves no time for the handshake.
+  auto resolveResult = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(
+          addressResolver_->resolveAddress(
+              url_.getHost(), url_.getPort(), timeoutMs),
+          timeoutMs));
+  if (resolveResult.hasException<folly::OperationCancelled>()) {
+    // Cancellation is a stopped completion, not a connection failure.
+    co_yield folly::coro::co_stopped_may_throw;
+  }
+  if (resolveResult.hasException()) {
+    co_yield folly::coro::co_error(std::move(resolveResult).exception());
+  }
+  auto connectAddr = std::move(resolveResult).value();
+
+  if (std::chrono::steady_clock::now() >= connectDeadline) {
+    co_yield folly::coro::co_error(
+        quic::QuicInternalException(
+            "Connection timed out during DNS resolution",
+            quic::LocalErrorCode::CONNECT_FAILED));
+  }
+
   auto sock = std::make_unique<quic::LibevQuicAsyncUDPSocket>(moqlibevEvb_);
   // Set UDP socket buffer sizes to 1 MB
   constexpr int kUdpBufferSize = 1024 * 1024; // 1 MB
@@ -118,21 +148,32 @@ MoQClientMobile::connectQuic(
           .build(),
       /*connectionIdSize=*/0);
   quicClient->setTransportSettings(transportSettings);
-  quicClient->addNewPeerAddress(
-      quic::fromFollySocketAddress<quic::SocketAddress>(connectAddr));
+  quicClient->addNewPeerAddress(std::move(connectAddr));
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
+  quicClient->setHostname(url_.getHost());
   folly::CancellationToken cancellationToken =
       co_await folly::coro::co_current_cancellation_token;
   QuicConnectCB cb(quicClient, std::move(cancellationToken));
   quicClient->start(&cb, nullptr);
+  const auto quicStartedAt = std::chrono::steady_clock::now();
+  // Preserve a zero budget so the normal timeout path still detaches the
+  // callback and closes the transport.
+  const auto remainingTimeout = connectDeadline > quicStartedAt
+      ? std::chrono::ceil<std::chrono::microseconds>(
+            connectDeadline - quicStartedAt)
+      : std::chrono::microseconds::zero();
   auto res = co_await co_awaitTry(
-      folly::coro::timeout(std::move(cb.future), timeoutMs));
+      folly::coro::timeout(std::move(cb.future), remainingTimeout));
   quicClient->setConnectionSetupCallback(nullptr);
   if (res.hasException()) {
+    const bool cancelled = res.hasException<folly::OperationCancelled>();
     quic::ApplicationErrorCode err(0);
     auto errString = folly::exceptionStr(res.exception()).toStdString();
     quicClient->close(
         quic::QuicError(quic::QuicErrorCode(err), std::string(errString)));
+    if (cancelled) {
+      co_yield folly::coro::co_stopped_may_throw;
+    }
     co_yield folly::coro::co_error(
         quic::QuicInternalException(
             std::move(errString), quic::LocalErrorCode::CONNECT_FAILED));

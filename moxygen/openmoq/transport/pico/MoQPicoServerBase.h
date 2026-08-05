@@ -7,6 +7,7 @@
 #pragma once
 
 #include <moxygen/MoQServerBase.h>
+#include <moxygen/events/MoQExecutor.h>
 #include <moxygen/openmoq/transport/pico/PicoQuicStatsCallback.h>
 #include <moxygen/openmoq/transport/pico/PicoTransportConfig.h>
 #include <memory>
@@ -22,7 +23,6 @@ typedef struct st_picohttp_server_path_item_t picohttp_server_path_item_t;
 
 namespace moxygen {
 
-class MoQExecutor;
 class PicoWebTransportBase;
 class PicoH3WebTransport;
 
