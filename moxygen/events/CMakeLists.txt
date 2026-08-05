@@ -6,8 +6,7 @@
 
 moxygen_add_library(moxygen_events_moq_executor
   EXPORTED_DEPS
-    mvfst::mvfst_common_events_eventbase
-    Folly::folly_executor
+    mvfst::mvfst_common_events_quic_executor
 )
 
 moxygen_add_library(moxygen_events_moq_delivery_timer
