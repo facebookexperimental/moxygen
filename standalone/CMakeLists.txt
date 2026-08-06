@@ -74,6 +74,9 @@ endif()
 
 find_package(ZLIB REQUIRED)
 find_library(ZSTD_LIBRARY NAMES zstd)
+# Ubuntu 24.04 names the static lib libcares_static.a; seed the cache var so
+# fbcode_builder's FindCares (NAMES cares only) accepts it under .a-only search.
+find_library(CARES_LIBRARIES NAMES cares cares_static)
 
 # =============================================================================
 # Read pinned commit hashes from github_hashes (same as getdeps uses)
