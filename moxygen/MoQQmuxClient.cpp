@@ -14,6 +14,7 @@
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/coro/Transport.h>
 #include <folly/logging/xlog.h>
+#include <proxygen/lib/transport/qmux/FollyQmuxTransport.h>
 #include <proxygen/lib/transport/qmux/QmuxConnector.h>
 #include <moxygen/QmuxUtils.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
@@ -163,8 +164,9 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
     negotiatedProtocol_ = std::move(stdAlpn);
   }
 
-  auto transport = std::make_unique<folly::coro::Transport>(
-      evb, folly::AsyncTransport::UniquePtr(std::move(fizzClient)));
+  auto transport = std::make_unique<proxygen::qmux::FollyQmuxTransport>(
+      std::make_unique<folly::coro::Transport>(
+          evb, folly::AsyncTransport::UniquePtr(std::move(fizzClient))));
 
   // Calculate the remaining timeout budget.
   auto elapsedSoFar = std::chrono::duration_cast<std::chrono::milliseconds>(
