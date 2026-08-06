@@ -29,6 +29,17 @@ moxygen_add_test(TARGET MoQForwarderTest
     Folly::folly_coro_gtest_helpers
 )
 
+moxygen_add_test(TARGET OpenMOQForwarderTest
+  PREFIX "OpenMOQForwarder"
+  SOURCES
+    OpenMOQForwarderTest.cpp
+  DEPENDS
+    moxygen_relay_moq_forwarder
+    moqtestutils
+    testmain
+    Folly::folly_coro_gtest_helpers
+)
+
 moxygen_add_test(TARGET MoQRelayTest
   PREFIX "MoQRelay"
   SOURCES
