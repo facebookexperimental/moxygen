@@ -544,6 +544,83 @@ TEST_P(MoQFramerTest, ParseDatagramNormal) {
   EXPECT_EQ(parseResult->objectHeader.length, 8);
 }
 
+TEST_P(MoQFramerTest, DatagramObjectHeaderIsMarkedAsDatagram) {
+  // A receiver must be able to tell from the parsed header that the object
+  // arrived on a datagram, for both normal and status datagrams.
+  for (auto status : {ObjectStatus::NORMAL, ObjectStatus::END_OF_GROUP}) {
+    const bool isStatus = (status != ObjectStatus::NORMAL);
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    auto result = writer_.writeDatagramObject(
+        writeBuf,
+        TrackAlias(22), // trackAlias
+        {33,            // group
+         0,             // subgroup
+         44,            // id
+         55,            // priority
+         status,
+         noExtensions(),
+         isStatus ? 0u : 8u},
+        isStatus ? nullptr : folly::IOBuf::copyBuffer("datagram"));
+    ASSERT_TRUE(result.hasValue());
+    auto serialized = writeBuf.move();
+    folly::io::Cursor cursor(serialized.get());
+
+    auto dgType = parseDatagramType(cursor);
+    ASSERT_EQ(
+        dgType, getDatagramType(GetParam(), isStatus, false, false, false));
+    auto length = cursor.totalLength();
+    auto parseResult =
+        parser_.parseDatagramObjectHeader(cursor, dgType, length);
+    ASSERT_TRUE(parseResult.hasValue());
+    EXPECT_TRUE(parseResult->objectHeader.forwardingPreferenceIsDatagram)
+        << "status=" << uint64_t(status);
+  }
+}
+
+TEST_P(MoQFramerTest, SubgroupObjectHeaderIsNotMarkedAsDatagram) {
+  ObjectHeader objectHeader = {
+      33, // group
+      0,  // subgroup
+      44, // id
+      55, // priority
+      ObjectStatus::NORMAL,
+      noExtensions(),
+      4};
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto streamType =
+      getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false, false);
+  ASSERT_TRUE(writer_
+                  .writeSubgroupHeader(
+                      writeBuf,
+                      TrackAlias(22),
+                      objectHeader,
+                      SubgroupIDFormat::Zero,
+                      false)
+                  .hasValue());
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      streamType,
+                      objectHeader,
+                      folly::IOBuf::copyBuffer("EFGH"))
+                  .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ASSERT_EQ(parseStreamType(cursor), streamType);
+  auto sgOptions = getSubgroupOptions(GetParam(), streamType);
+  auto headerResult =
+      parser_.parseSubgroupHeader(cursor, cursor.totalLength(), sgOptions);
+  ASSERT_TRUE(headerResult.hasValue());
+  auto parseResult = parser_.parseSubgroupObjectHeader(
+      cursor,
+      cursor.totalLength(),
+      headerResult->value.objectHeader,
+      sgOptions);
+  ASSERT_TRUE(parseResult.hasValue());
+  EXPECT_FALSE(parseResult->value.forwardingPreferenceIsDatagram);
+}
+
 TEST(MoQFramerTest, ParseServerSetupQuicIntegerLength) {
   // Malformed server setup, see that we don't crash
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
