@@ -180,7 +180,7 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
   qmuxSession_ = co_await folly::coro::co_withExecutor(
       executor,
       proxygen::qmux::QmuxConnector::connect(
-          evb,
+          exec_,
           proxygen::qmux::WtDir::Client,
           qmuxParamsFromTransportSettings(transportSettings),
           std::move(transport),

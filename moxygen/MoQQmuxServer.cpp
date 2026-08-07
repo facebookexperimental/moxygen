@@ -438,7 +438,7 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
 
   auto sessionResult = co_await folly::coro::co_awaitTry(
       proxygen::qmux::QmuxConnector::connect(
-          workerEvb,
+          executor,
           proxygen::qmux::WtDir::Server,
           config_.selfTransportParams,
           std::move(transport),
