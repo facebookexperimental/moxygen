@@ -401,6 +401,13 @@ class MoQSession : public Subscriber,
       session_ = session;
     }
 
+    // Priority for one schedulable element of this request, encoded from the
+    // subscriber priority, publisher priority and group order.
+    quic::PriorityQueue::Priority elementPriority(
+        uint64_t groupId,
+        uint64_t subgroupId,
+        uint8_t pubPri) const;
+
     virtual void terminatePublish(
         PublishDone pubDone,
         ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
@@ -907,6 +914,9 @@ class MoQSession : public Subscriber,
   // Returns nullptr only when the request can no longer be found.
   virtual ReplyContext* getRequestUpdateReplyContext(
       RequestID existingRequestID);
+
+  // Priority for a control or request stream.
+  quic::PriorityQueue::Priority controlPriority() const;
 
   // REQUEST_UPDATE handler (protected for subclass access)
   void onRequestUpdate(RequestUpdate requestUpdate) override;
