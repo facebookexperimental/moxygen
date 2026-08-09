@@ -341,6 +341,13 @@ get_filename_component(_MOXYGEN_REPO_ROOT
 add_compile_options(-fmacro-prefix-map=${_MOXYGEN_REPO_ROOT}/=)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../moxygen moxygen)
 
+# XLOG category regression test; drives the sample binaries, so register it only
+# when they are built.
+if(BUILD_TESTS AND TARGET moqdateserver AND TARGET moqtextclient)
+  enable_testing()
+  add_subdirectory(test)
+endif()
+
 # =============================================================================
 # Installation (mirrors main CMakeLists.txt)
 # =============================================================================
