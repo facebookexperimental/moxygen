@@ -16,7 +16,6 @@ std::string kEndpointName = "/test";
 
 namespace moxygen {
 
-const int kDefaultExpires = 0;
 const std::string kDefaultPublishDoneReason = "Testing";
 
 folly::coro::Task<MoQTestFetchHandle::RequestUpdateResult>
