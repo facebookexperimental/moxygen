@@ -8,6 +8,7 @@
 
 #include <fizz/protocol/CertificateVerifier.h>
 #include <proxygen/lib/transport/qmux/QmuxSession.h>
+#include <proxygen/lib/transport/qmux/QmuxTransport.h>
 #include <moxygen/MoQClientBase.h>
 
 namespace folly {
@@ -15,6 +16,21 @@ class AsyncTransport;
 }
 
 namespace moxygen {
+
+struct QmuxTransportConnectResult {
+  std::unique_ptr<proxygen::qmux::QmuxTransport> transport;
+  std::optional<std::string> negotiatedProtocol;
+};
+
+class QmuxTransportFactory {
+ public:
+  virtual ~QmuxTransportFactory() = default;
+
+  virtual folly::coro::Task<QmuxTransportConnectResult> createQmuxTransport(
+      const proxygen::URL& url,
+      std::chrono::milliseconds connectTimeout,
+      const std::vector<std::string>& alpns) = 0;
+};
 
 // MoQClient that runs the MoQ session over a QMUX-on-TCP transport instead of
 // QUIC.  The base WebTransport surface that MoQSession programs against is
@@ -47,9 +63,8 @@ class MoQQmuxClient : public MoQClientBase {
       const quic::TransportSettings& transportSettings,
       const std::vector<std::string>& alpns = {}) override;
 
-  // Returns the underlying byte-stream transport (Fizz-over-TCP) carrying the
-  // QMUX session, or nullptr before setup completes / after teardown. Used to
-  // surface TCP-level transport stats; the transport is owned by the session.
+  // Returns the underlying byte-stream transport carrying the QMUX session, or
+  // nullptr when the transport does not expose a folly::AsyncTransport.
   folly::AsyncTransport* getUnderlyingTransport() const;
 
  protected:
@@ -63,6 +78,7 @@ class MoQQmuxClient : public MoQClientBase {
       const quic::TransportSettings& transportSettings) override;
 
  private:
+  std::shared_ptr<QmuxTransportFactory> transportFactory_;
   proxygen::qmux::QmuxSession::Ptr qmuxSession_;
 };
 

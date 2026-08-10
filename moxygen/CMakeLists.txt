@@ -217,6 +217,7 @@ moxygen_add_library(moxygen_moqclient
 
 moxygen_add_library(moxygen_moq_qmux_client
   SRCS
+    MoQFollyQmuxTransportFactory.cpp
     MoQQmuxClient.cpp
   DEPS
     moxygen_events_moq_folly_executor_impl
@@ -232,6 +233,7 @@ moxygen_add_library(moxygen_moq_qmux_client
   EXPORTED_DEPS
     moxygen_moqclient_base
     proxygen::proxygen_transport_qmux_qmux_session
+    proxygen::proxygen_transport_qmux_qmux_transport
     fizz::fizz
 )
 
