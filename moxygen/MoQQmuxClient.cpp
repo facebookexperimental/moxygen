@@ -20,9 +20,20 @@ MoQQmuxClient::MoQQmuxClient(
     std::shared_ptr<MoQExecutor> exec,
     proxygen::URL url,
     std::shared_ptr<fizz::CertificateVerifier> verifier)
-    : MoQClientBase(exec, std::move(url)),
-      transportFactory_(
-          makeFollyQmuxTransportFactory(std::move(exec), std::move(verifier))) {
+    : MoQQmuxClient(
+          exec,
+          std::move(url),
+          makeFollyQmuxTransportFactory(exec, std::move(verifier))) {}
+
+MoQQmuxClient::MoQQmuxClient(
+    std::shared_ptr<MoQExecutor> exec,
+    proxygen::URL url,
+    std::shared_ptr<QmuxTransportFactory> transportFactory)
+    : MoQClientBase(std::move(exec), std::move(url)),
+      transportFactory_(std::move(transportFactory)) {
+  if (!transportFactory_) {
+    throw std::invalid_argument("MoQQmuxClient requires a transport factory");
+  }
 }
 
 MoQQmuxClient::MoQQmuxClient(
@@ -30,9 +41,22 @@ MoQQmuxClient::MoQQmuxClient(
     proxygen::URL url,
     SessionFactory sessionFactory,
     std::shared_ptr<fizz::CertificateVerifier> verifier)
-    : MoQClientBase(exec, std::move(url), std::move(sessionFactory)),
-      transportFactory_(
-          makeFollyQmuxTransportFactory(std::move(exec), std::move(verifier))) {
+    : MoQQmuxClient(
+          exec,
+          std::move(url),
+          std::move(sessionFactory),
+          makeFollyQmuxTransportFactory(exec, std::move(verifier))) {}
+
+MoQQmuxClient::MoQQmuxClient(
+    std::shared_ptr<MoQExecutor> exec,
+    proxygen::URL url,
+    SessionFactory sessionFactory,
+    std::shared_ptr<QmuxTransportFactory> transportFactory)
+    : MoQClientBase(std::move(exec), std::move(url), std::move(sessionFactory)),
+      transportFactory_(std::move(transportFactory)) {
+  if (!transportFactory_) {
+    throw std::invalid_argument("MoQQmuxClient requires a transport factory");
+  }
 }
 
 MoQQmuxClient::~MoQQmuxClient() {

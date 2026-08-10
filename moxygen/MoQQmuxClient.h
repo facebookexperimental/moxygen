@@ -43,6 +43,11 @@ class MoQQmuxClient : public MoQClientBase {
       proxygen::URL url,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
 
+  MoQQmuxClient(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      std::shared_ptr<QmuxTransportFactory> transportFactory);
+
   // Overload that lets the caller install a custom session factory, e.g.
   // MoQRelaySession::createRelaySessionFactory() to enable publishNamespace /
   // subscribeNamespace on the resulting session. Mirrors the corresponding
@@ -52,6 +57,12 @@ class MoQQmuxClient : public MoQClientBase {
       proxygen::URL url,
       SessionFactory sessionFactory,
       std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr);
+
+  MoQQmuxClient(
+      std::shared_ptr<MoQExecutor> exec,
+      proxygen::URL url,
+      SessionFactory sessionFactory,
+      std::shared_ptr<QmuxTransportFactory> transportFactory);
 
   ~MoQQmuxClient() override;
 
