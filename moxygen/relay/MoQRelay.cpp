@@ -1710,11 +1710,12 @@ MoQRelay::subscribeToFirstRelaySubscription(
         TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
   }
 
-  subReq.priority = kDefaultUpstreamPriority;
-  subReq.groupOrder = GroupOrder::Default;
+  auto upstreamSubReq = subReq;
+  upstreamSubReq.priority = kDefaultUpstreamPriority;
+  upstreamSubReq.groupOrder = GroupOrder::Default;
   // We only subscribe upstream with LargestObject. This is to satisfy other
   // subscribers that join with narrower filters
-  subReq.locType = LocationType::LargestObject;
+  upstreamSubReq.locType = LocationType::LargestObject;
   auto forwarder =
       std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
   forwarder->setCallback(shared_from_this());
@@ -1734,6 +1735,10 @@ MoQRelay::subscribeToFirstRelaySubscription(
     }
   });
   // Add subscriber first in case objects come before subscribe OK.
+  // Unlike subscribeToExistingRelaySubscription, an AbsoluteRange entirely in
+  // the past isn't rejected with INVALID_RANGE here: the forwarder has no
+  // largest() until the SUBSCRIBE_OK below, so the subscription just ends once
+  // largest is known instead of telling the subscriber to FETCH.
   auto subscriber = forwarder->addSubscriber(
       std::move(downstreamSession), subReq, std::move(consumer));
   if (!subscriber) {
@@ -1749,11 +1754,11 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // As per the spec, we must set forward = true in the subscribe request
   // to the upstream.
   // But should we if this is forward=0?
-  subReq.forward = forwarder->numForwardingSubscribers() > 0;
+  upstreamSubReq.forward = forwarder->numForwardingSubscribers() > 0;
 
   emplaceRes.first->second.requestID = upstreamSession->peekNextRequestID();
   auto subRes = co_await upstreamSession->subscribe(
-      subReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
+      upstreamSubReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
   if (subRes.hasError()) {
     co_return folly::makeUnexpected(SubscribeError(
         {subReq.requestID,
