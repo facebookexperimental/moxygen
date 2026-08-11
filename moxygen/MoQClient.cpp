@@ -15,6 +15,12 @@ MoQClient::connectQuic(
     std::shared_ptr<fizz::CertificateVerifier> verifier,
     const std::vector<std::string>& alpns,
     const quic::TransportSettings& transportSettings) {
+  auto ts = transportSettings;
+  // Priority schedule datagrams with streams rather than ahead of them, and
+  // prefer new datagrams when the buffers are full.
+  ts.datagramConfig.scheduleDatagramsWithStreams = true;
+  ts.datagramConfig.recvDropOldDataFirst = true;
+  ts.datagramConfig.sendDropOldDataFirst = true;
   auto quicClient = co_await QuicConnector::connectQuic(
       exec_->getTypedExecutor<MoQFollyExecutorImpl>()->getBackingEventBase(),
       folly::SocketAddress(
@@ -22,7 +28,7 @@ MoQClient::connectQuic(
       timeoutMs,
       verifier,
       alpns,
-      transportSettings,
+      ts,
       pskCache_,
       url_.getHost(),
       earlyDataHandler_);

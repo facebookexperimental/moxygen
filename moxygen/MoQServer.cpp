@@ -84,6 +84,15 @@ MoQServer::MoQServer(
         .advertisedInitialBidiRemoteStreamFlowControlWindow = 1024 * 1024;
     params_.transportSettings.advertisedInitialUniStreamFlowControlWindow =
         1024 * 1024;
+    // Priority schedule datagrams with streams rather than ahead of them,
+    // buffer more than the default 75, and prefer new datagrams when full.
+    params_.transportSettings.datagramConfig.enabled = true;
+    params_.transportSettings.datagramConfig.scheduleDatagramsWithStreams =
+        true;
+    params_.transportSettings.datagramConfig.readBufSize = 1024;
+    params_.transportSettings.datagramConfig.writeBufSize = 1024;
+    params_.transportSettings.datagramConfig.recvDropOldDataFirst = true;
+    params_.transportSettings.datagramConfig.sendDropOldDataFirst = true;
   }
 
   // UDP socket buffer sizes
