@@ -2629,6 +2629,7 @@ void MoQSession::close(
   if (closed_) {
     return;
   }
+  closeResult_ = CloseResult{error, wtError};
   closed_ = true;
   if (closeCallback_) {
     XLOG(DBG1) << "Calling close callback";
