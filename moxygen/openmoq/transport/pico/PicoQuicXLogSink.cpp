@@ -20,6 +20,11 @@ extern "C" {
 #include "picoquic_unified_log.h"
 }
 
+// Route this TU's XLOG() calls to the "quic.picoquic" category operators target
+// (--logging=quic.picoquic=DBG3), overriding the __FILE__-derived default. Must
+// be at global scope, once per TU — the macro reopens namespace folly.
+XLOG_SET_CATEGORY_NAME("quic.picoquic")
+
 namespace moxygen::openmoq::pico {
 namespace {
 
