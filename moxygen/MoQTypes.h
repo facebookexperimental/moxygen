@@ -13,6 +13,7 @@
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <algorithm>
 #include <limits>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -744,6 +745,56 @@ inline std::string getFirstStringParam(
 void applySetupParameters(
     SetupParameters& params,
     const std::vector<SetupParameter>& extraParams);
+
+// A protocol extension that is off unless the two SETUPs negotiate it on. Each
+// extension owns one bit; MoQSession::kSetupExtensions says how a bit is won.
+enum class SetupExtension : uint32_t {
+  None = 0,
+  // Extensions add a bit here, e.g. Foo = 1u << 0.
+};
+
+// The set of extensions in force on a session.
+class SetupExtensions {
+ public:
+  SetupExtensions() = default;
+
+  bool has(SetupExtension extension) const {
+    auto bit = folly::to_underlying(extension);
+    return bit != 0 && (bits_ & bit) == bit;
+  }
+
+  void add(SetupExtension extension) {
+    bits_ |= folly::to_underlying(extension);
+  }
+
+  bool empty() const {
+    return bits_ == 0;
+  }
+
+  bool operator==(const SetupExtensions& other) const {
+    return bits_ == other.bits_;
+  }
+
+ private:
+  uint32_t bits_{0};
+};
+
+// Decides whether one extension is on, given both SETUPs and the negotiated
+// draft. Free to look at values rather than presence, to apply an asymmetric
+// rule, and to turn itself off on drafts it doesn't apply to.
+using SetupExtensionNegotiator = std::function<bool(
+    const SetupParameters& local,
+    const SetupParameters& peer,
+    uint64_t version)>;
+
+// Ties an extension bit to the rule that wins it.
+struct SetupExtensionDescriptor {
+  SetupExtension extension;
+  SetupExtensionNegotiator negotiate;
+};
+
+// Negotiator for the simplest rule: both peers carry `key`, whatever its value.
+SetupExtensionNegotiator bothAdvertise(uint64_t key);
 
 struct Setup {
   SetupParameters params{FrameType::CLIENT_SETUP};

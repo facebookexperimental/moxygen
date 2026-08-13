@@ -46,6 +46,166 @@ TEST_P(MoQVersionNegotiationTest, Setup) {
   folly::coro::blockingWait(setupMoQSession(), getExecutor());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Tests for MoQSession::computeNegotiatedExtensions(). The shipped table is
+// empty, so these inject their own descriptors.
+class SetupExtensionsTest : public ::testing::Test {
+ protected:
+  static constexpr auto kExtA = static_cast<SetupExtension>(1u << 0);
+  static constexpr auto kExtB = static_cast<SetupExtension>(1u << 1);
+  static constexpr uint64_t kKeyA = 0x40B55;
+  static constexpr uint64_t kKeyB = 0x40B56;
+  static constexpr uint64_t kVersion = kVersionDraft18;
+
+  const std::vector<SetupExtensionDescriptor> mutualFlags_{
+      {kExtA, bothAdvertise(kKeyA)},
+      {kExtB, bothAdvertise(kKeyB)}};
+
+  static SetupParameters params(std::vector<SetupParameter> setupParams) {
+    SetupParameters result(FrameType::CLIENT_SETUP);
+    for (auto& param : setupParams) {
+      result.insertParam(std::move(param));
+    }
+    return result;
+  }
+
+  static SetupParameter flag(uint64_t key) {
+    return SetupParameter(key, std::string{});
+  }
+};
+
+TEST_F(SetupExtensionsTest, MutualFlagNegotiatesWhenBothAdvertise) {
+  auto extensions = MoQSession::computeNegotiatedExtensions(
+      params({flag(kKeyA)}), params({flag(kKeyA)}), kVersion, mutualFlags_);
+  EXPECT_TRUE(extensions.has(kExtA));
+  EXPECT_FALSE(extensions.has(kExtB));
+}
+
+TEST_F(SetupExtensionsTest, MutualFlagNeedsBothSides) {
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  params({flag(kKeyA)}), params({}), kVersion, mutualFlags_)
+                  .empty());
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  params({}), params({flag(kKeyA)}), kVersion, mutualFlags_)
+                  .empty());
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  params({}), params({}), kVersion, mutualFlags_)
+                  .empty());
+}
+
+TEST_F(SetupExtensionsTest, ExtensionsAreIndependent) {
+  auto extensions = MoQSession::computeNegotiatedExtensions(
+      params({flag(kKeyA), flag(kKeyB)}),
+      params({flag(kKeyB)}),
+      kVersion,
+      mutualFlags_);
+  EXPECT_FALSE(extensions.has(kExtA));
+  EXPECT_TRUE(extensions.has(kExtB));
+  EXPECT_FALSE(extensions.empty());
+}
+
+TEST_F(SetupExtensionsTest, UnrelatedSetupParamsDoNotNegotiate) {
+  auto maxRequestID = params(
+      {SetupParameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 8)});
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  maxRequestID, maxRequestID, kVersion, mutualFlags_)
+                  .empty());
+}
+
+// A rule can inspect values, be asymmetric, and depend on the draft -- the
+// point of taking a negotiator rather than a key.
+TEST_F(SetupExtensionsTest, RuleCanNegotiateOnValue) {
+  const std::vector<SetupExtensionDescriptor> byValue{
+      {kExtA,
+       [](const SetupParameters& local,
+          const SetupParameters& peer,
+          uint64_t) {
+         const auto* localParam = local.getFirstParam(kKeyA);
+         const auto* peerParam = peer.getFirstParam(kKeyA);
+         return localParam && peerParam &&
+             std::min(localParam->asUint64, peerParam->asUint64) > 0;
+       }}};
+
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  params({SetupParameter(kKeyA, 4)}),
+                  params({SetupParameter(kKeyA, 2)}),
+                  kVersion,
+                  byValue)
+                  .has(kExtA));
+  EXPECT_FALSE(MoQSession::computeNegotiatedExtensions(
+                   params({SetupParameter(kKeyA, 4)}),
+                   params({SetupParameter(kKeyA, 0)}),
+                   kVersion,
+                   byValue)
+                   .has(kExtA));
+}
+
+// Modelled on the auth token cache: my advertisement governs what I receive,
+// the peer's governs what I send, so the two directions can differ.
+TEST_F(SetupExtensionsTest, RuleCanBeAsymmetric) {
+  const std::vector<SetupExtensionDescriptor> perDirection{
+      {kExtA,
+       [](const SetupParameters& local, const SetupParameters&, uint64_t) {
+         return local.hasParam(kKeyA);
+       }},
+      {kExtB,
+       [](const SetupParameters&, const SetupParameters& peer, uint64_t) {
+         return peer.hasParam(kKeyA);
+       }}};
+
+  auto extensions = MoQSession::computeNegotiatedExtensions(
+      params({flag(kKeyA)}), params({}), kVersion, perDirection);
+  EXPECT_TRUE(extensions.has(kExtA));
+  EXPECT_FALSE(extensions.has(kExtB));
+}
+
+TEST_F(SetupExtensionsTest, RuleCanDependOnVersion) {
+  const std::vector<SetupExtensionDescriptor> v18Only{
+      {kExtA,
+       [](const SetupParameters& local,
+          const SetupParameters& peer,
+          uint64_t version) {
+         return getDraftMajorVersion(version) >= 18 && local.hasParam(kKeyA) &&
+             peer.hasParam(kKeyA);
+       }}};
+
+  auto both = params({flag(kKeyA)});
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  both, both, kVersionDraft18, v18Only)
+                  .has(kExtA));
+  EXPECT_FALSE(MoQSession::computeNegotiatedExtensions(
+                   both, both, kVersionDraft17, v18Only)
+                   .has(kExtA));
+}
+
+TEST_F(SetupExtensionsTest, NoneIsNeverHeld) {
+  auto extensions = MoQSession::computeNegotiatedExtensions(
+      params({flag(kKeyA)}), params({flag(kKeyA)}), kVersion, mutualFlags_);
+  EXPECT_FALSE(extensions.has(SetupExtension::None));
+  EXPECT_FALSE(SetupExtensions().has(SetupExtension::None));
+}
+
+TEST_F(SetupExtensionsTest, ShippedTableNegotiatesNothingYet) {
+  EXPECT_TRUE(MoQSession::kSetupExtensions().empty());
+  EXPECT_TRUE(MoQSession::computeNegotiatedExtensions(
+                  params({flag(kKeyA)}), params({flag(kKeyA)}), kVersion)
+                  .empty());
+}
+
+// Both halves of the setup exchange are retained on both endpoints, which is
+// what extension negotiation runs on.
+TEST_P(MoQVersionNegotiationTest, SetupParamsRetainedOnBothEndpoints) {
+  folly::coro::blockingWait(setupMoQSession(), getExecutor());
+  for (auto* session : {clientSession_.get(), serverSession_.get()}) {
+    ASSERT_TRUE(session->getLocalSetupParams().has_value());
+    ASSERT_TRUE(session->getPeerSetupParams().has_value());
+    EXPECT_TRUE(session->getLocalSetupParams()->hasParam(
+        folly::to_underlying(SetupKey::MAX_REQUEST_ID)));
+    EXPECT_TRUE(session->getPeerSetupParams()->hasParam(
+        folly::to_underlying(SetupKey::MAX_REQUEST_ID)));
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 using CurrentVersionOnly = MoQSessionTest;
 
 CO_TEST_P_X(CurrentVersionOnly, SetupTimeout) {

@@ -1538,9 +1538,10 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
  public:
   MoQNamespacePublishHandle(
       std::shared_ptr<SubNSReply> subNsReply,
-      uint64_t negotiatedVersion)
+      uint64_t negotiatedVersion,
+      SetupExtensions extensions)
       : subNsReply_(std::move(subNsReply)) {
-    moqFrameWriter_.initializeVersion(negotiatedVersion);
+    moqFrameWriter_.initializeVersion(negotiatedVersion, extensions);
   }
 
   void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override {
@@ -1577,7 +1578,7 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
   std::shared_ptr<MoQNamespacePublishHandle> publishHandle;
   if (getDraftMajorVersion(*negotiatedVersion_) >= 16) {
     publishHandle = std::make_shared<MoQNamespacePublishHandle>(
-        subNsReply, *negotiatedVersion_);
+        subNsReply, *negotiatedVersion_, getNegotiatedExtensions());
   }
   auto subAnnResult = co_await co_awaitTry(co_withCancellation(
       cancellationSource_.getToken(),
