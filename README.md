@@ -1,133 +1,182 @@
 # moxygen
 
-This is an experimental media MOQ relay (AKA: CDN node) based on [MOQT](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/). It can be used in conjunction with following live encoder and player [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player). Both repos allows us create a live streaming platform where we can control latency and quality (and others), so we can test scenarios from ultra low latency live (video call) to high quality (and high scale) live.
+[![linux](https://github.com/facebookexperimental/moxygen/actions/workflows/getdeps_linux.yml/badge.svg)](https://github.com/facebookexperimental/moxygen/actions/workflows/getdeps_linux.yml)
+[![mac](https://github.com/facebookexperimental/moxygen/actions/workflows/getdeps_mac.yml/badge.svg)](https://github.com/facebookexperimental/moxygen/actions/workflows/getdeps_mac.yml)
+[![standalone](https://github.com/facebookexperimental/moxygen/actions/workflows/standalone.yml/badge.svg)](https://github.com/facebookexperimental/moxygen/actions/workflows/standalone.yml)
+
+moxygen is a C++ implementation of [Media over QUIC Transport
+(MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/). It provides a
+library for building MoQT publishers, subscribers, and relays, along with a working
+relay server, sample applications, and protocol conformance and interop tooling.
+
+The library is transport-agnostic — WebTransport, raw QUIC, or QMUX-on-TCP —
+coroutine-based, and built on [folly](https://github.com/facebook/folly),
+[mvfst](https://github.com/facebook/mvfst), and
+[proxygen](https://github.com/facebook/proxygen).
 
 ![moq-basic-block-diagram](./pics/basic_block_diagram.png)
-Fig1: Basic block diagram
 
-In the following figure you can see an overview of the relay architecture
+## Documentation
 
-TODO
-Fig2: Relay architecture overview
+| Document | Contents |
+|----------|----------|
+| [QUICKSTART.md](./QUICKSTART.md) | Run a publisher, a relay, and a subscriber in a few minutes |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | API model — control plane, data plane, sessions, threading |
+| [READMOQMEDIA.md](./READMOQMEDIA.md) | Streaming real audio and video with ffmpeg and a browser player |
+| [standalone/README.md](./standalone/README.md) | The CMake `FetchContent` build |
+| [moxygen/moqtest/CONFORMANCE_README.md](./moxygen/moqtest/CONFORMANCE_README.md) | The conformance test suite |
 
+## Protocol support
 
-See also [ARCHITECTURE.md](https://github.com/facebookexperimental/moxygen/blob/main/ARCHITECTURE.md)
+| Draft | Status |
+|-------|--------|
+| draft-18 | Supported, in experimental interop testing. |
+| draft-16 | Supported. |
+| draft-15 | Deprecated, scheduled for removal. |
+| draft-14 | Deprecated, scheduled for removal. |
 
-## Installation
+New integrations should target draft-16 until draft-18 interop testing completes.
 
-- Set environment variables
-```
-eval $(./build/fbcode_builder/getdeps.py env --src-dir moxygen:. moxygen)
-```
+Version negotiation happens over ALPN, using either standard (`moqt-NN`) or
+Meta-specific ALPNs. The binaries accept `--versions` to restrict the offered set
+(for example `--versions 16,18`); the default offers everything supported. See
+[`moxygen/MoQVersions.h`](./moxygen/MoQVersions.h) for the version and ALPN constants.
 
-- Build it
-```
-./build/fbcode_builder/getdeps.py build moxygen
-```
+## Repository layout
 
-## Rebuild
-If you need to modify the code and rebuild it, you can do:
-```
-./build/fbcode_builder/getdeps.py build moxygen --src-dir=.
-```
+| Path | Contents |
+|------|----------|
+| `moxygen/` | Core library — session, framer, codec, types, consumers |
+| `moxygen/relay/` | Relay, forwarder, cache, and the `moqrelayserver` binary |
+| `moxygen/samples/` | Date server, text client, chat client, FLV streamer and receiver |
+| `moxygen/moqtest/` | `moq-test-00` client and server, conformance suite, interop client |
+| `moxygen/moq_mi/` | MoQ Media Interop packaging ([draft-cenzano-moq-media-interop](https://datatracker.ietf.org/doc/draft-cenzano-moq-media-interop/)) |
+| `moxygen/flv_parser/` | FLV mux and demux used by the media samples |
+| `moxygen/mlog/` | Structured protocol logging |
 
-Follwing cmd can be a little faster if you do not need to rebuilt dependencies:
-```
-./build/fbcode_builder/getdeps.py build moxygen --src-dir=. --no-deps
-```
+## Building
 
-## Test preconditions
-- Generate self signed certificate for the server applications
 ```
-cd scripts
-./create-server-certs.sh
-```
-
-### Get build directory
-```
-MOXYGEN_BUILD_PATH=`./build/fbcode_builder/getdeps.py show-build-dir moxygen`
-```
-
-### Test with date server
-
-- Execute date server (from project root dir)
-```
-$MOXYGEN_BUILD_PATH/moxygen/samples/date/moqdateserver -port 4433 -cert ./certs/certificate.pem -key ./certs/certificate.key --logging DBG1
+git clone https://github.com/facebookexperimental/moxygen.git
+cd moxygen
 ```
 
-- Execute text client
-```
-$MOXYGEN_BUILD_PATH/moxygen/samples/text-client/moqtextclient --insecure --connect_url "https://localhost:4433/moq-date" --track_namespace "moq-date" --track_name "date"
-```
+There are two ways to build moxygen. Both read the same pinned dependency revisions
+from `build/deps/github_hashes/`, so they produce the same versions of folly, fizz,
+wangle, mvfst, and proxygen — they differ in what they build for you and what kind of
+build tree you end up with.
 
-Note: the `--insecure` flag is ONLY required to connect to servers with self-signed certificates, similar to `curl -k``. It should never be used in production
+| | Standalone CMake | getdeps |
+|---|------------------|---------|
+| Third-party dependencies | Must be installed first via `standalone/install-system-deps.sh` | Built or installed for you, including boost, zstd, double-conversion, and the rest |
+| Meta dependencies | Fetched at the pinned revisions via CMake `FetchContent` | Built from the same pinned revisions |
+| Build tree | An ordinary CMake tree you can point an IDE or `compile_commands.json` at | getdeps scratch directory; binaries under `show-inst-dir` |
+| Building against a local dependency checkout | `FETCHCONTENT_SOURCE_DIR_<NAME>` substitutes your own folly, mvfst, proxygen, and so on | Not directly supported |
+| Available in | The GitHub repo only — it needs `build/deps/github_hashes/` | The GitHub repo and fbsource |
+| Covered by CI | `standalone` job | Linux and macOS jobs |
 
-- You should see an output like:
+Use the standalone build if you want a normal CMake workflow, or you are co-developing
+moxygen alongside a dependency. Use getdeps if you want the path most likely to work
+unattended, or you are packaging moxygen. The Docker image below is not a third build
+system — it runs getdeps inside a container and ships only the relay.
+
+### Standalone CMake
+
+Fetches the pinned dependency revisions using CMake's `FetchContent` and produces a
+plain CMake build tree. See [standalone/README.md](./standalone/README.md) for
+dependency overrides, build caching, and troubleshooting.
+
 ```
-I1007 12:05:46.516857 3558180 MoQTextClient.cpp:191] run
-I1007 12:05:46.579533 3558180 MoQTextClient.cpp:250] Largest={29331065, 47}
-47
-48
-49
-50
-51
-52
-53
-54
-55
-56
-57
-58
-59
-ObjectStatus=3
-int extension=1977
-data extension=AQIDBAU=
-2025-10-07 12:06:
-0
-1
-2
+./standalone/install-system-deps.sh
+cmake -B _build -S standalone -G Ninja
+cmake --build _build -j$(nproc)
 ```
 
-## Test with media streamer and media receiver
+Binaries land in the build tree mirroring the source layout, for example
+`_build/moxygen/relay/moqrelayserver` and
+`_build/moxygen/samples/text-client/moqtextclient`.
 
-To simplify testing MOQ at media level we added the following binaries to the repo `MoQFlvStreamerClient` and `MoQFlvReceiverClient`.
+Run the tests with:
 
-![moq-relay-streamer-receiver](./pics/moq_streamer_receiver.png)
-Fig3: MoQFlvStreamerClient, MoQFlvReceiverClient, and moxygen
-
-- `MoQFlvStreamerClient`: Convert any FLV (h264 / AAC-LC) file or stream (fifo) into MOQ, publishing it to a relay using MoqMi packager (see RFC [draft-cenzano-moq-media-interop](https://datatracker.ietf.org/doc/draft-cenzano-moq-media-interop/))
-
-- `MoQFlvReceiverClient`: Subscribes to a relay for a video and audio track, demuxes them from MoqMi (expecting h264 / AAC-LC), transmuxes them to FLV and saves that to disc (or stream using fifo)
-
-They work with FLV packager. Since [ffmpeg](https://www.ffmpeg.org/ffmpeg.html) is able to mux and / or demux this packager in low latency and real time very nice you can build a huge variety of tests set ups, for more information and examples take a look to [READMOQMEDIA.md](./READMOQMEDIA.md)
-
-## Test with web media client
-- You can use [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) as encoder (publisher), and also as player (consumer)
-
-- You need to install that website ([moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)) in a https server (apache2 recommended)
-   - It will requiere to enable cross origin isolation (see [link](https://stackoverflow.com/questions/76077439/enabling-cross-origin-isolation-on-the-apache2-web-server)) on the player side
-
-- To start the relay you can do (from project root dir)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert ./certs/certificate.pem --key ./certs/certificate.key --endpoint "/moq" --logging=DBG1  --port 4433
+ctest --test-dir _build
 ```
 
-## Local test with web media client
+The first configure downloads roughly 500MB of dependency source. To avoid
+re-downloading it on a clean build, set `-DFETCHCONTENT_BASE_DIR` to a shared location.
 
-Assuming all running in localhost
+### getdeps
 
-- Execute (from project root dir)
+Builds moxygen and its Meta dependencies from the same pinned revisions, and also
+builds or installs the third-party dependencies. This is the build exercised by the
+Linux and macOS CI jobs, and the one the Docker image uses.
+
 ```
-$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
+./build/fbcode_builder/getdeps.py install-system-deps --recursive moxygen
+./build/fbcode_builder/getdeps.py build --allow-system-packages --src-dir=. moxygen
 ```
 
-Note: [moq-encoder-player] indicate the root directory of that project. So you need to use those certs to enable connections from Chrome to localhost
+Once the dependencies are built, rebuild just moxygen with:
 
-- Start client (MACOS)
-Run MOQ encoder / player in the browser locally
-   - Open a Chrome window and follow the instructions you will find in [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player)
+```
+./build/fbcode_builder/getdeps.py build --src-dir=. --no-deps moxygen
+```
 
+Binaries are installed under:
+
+```
+MOXYGEN_BIN=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen)/bin
+```
+
+Run the tests with:
+
+```
+./build/fbcode_builder/getdeps.py test --src-dir=. moxygen
+```
+
+### Docker
+
+Builds a container image running the relay server, and requires no local toolchain.
+The header of [docker/Dockerfile](./docker/Dockerfile) documents the supported
+environment variables and certificate mounts.
+
+```
+docker build -t moqrelay -f docker/Dockerfile .
+docker run --rm -p 4433:4433/udp moqrelay
+```
+
+### Using moxygen from another CMake project
+
+moxygen installs a CMake package. After building and installing, use
+`find_package(moxygen REQUIRED)` and link the targets you need, such as
+`moxygen::moxygen_moq` or `moxygen::moxygen_relay_moq_relay`. moxygen can also be
+consumed directly via `FetchContent` or `add_subdirectory`.
+
+## Testing and interop
+
+- **Unit tests** — `getdeps.py test moxygen`, or `ctest --test-dir _build` for the
+  standalone build.
+- **Conformance suite** — 50 scenarios driving `moqtest_client` against a relay,
+  covering forwarding preferences, group and object layouts, extensions, and
+  end-of-group markers. See
+  [CONFORMANCE_README.md](./moxygen/moqtest/CONFORMANCE_README.md).
+- **`moqtest_server` and `moqtest_client`** — an implementation of the `moq-test-00`
+  parameterized test protocol, for testing against other MoQT implementations.
+- **Interop client** — `moxygen/moqtest/interop/`, exercised in CI by the
+  `docker-interop-client` workflow.
+- **`moqperf_test_client`** — throughput and latency measurement.
+
+## Related projects
+
+- [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) —
+  a browser-based MoQT encoder and player built on WebCodecs. See
+  [READMOQMEDIA.md](./READMOQMEDIA.md) for how to run it against moxygen.
+
+## Contributing
+
+Issues and pull requests are welcome. moxygen is developed inside Meta's monorepo and
+mirrored to GitHub, so accepted changes land internally first and then appear here.
 
 ## License
 
-moxygen is released under the [MIT License](https://github.com/facebookexperimental/moqxygen/blob/main/LICENSE).
+moxygen is licensed under the Apache License 2.0. See [LICENSE](./LICENSE).
