@@ -1323,6 +1323,7 @@ MoQFrameParser::parseDatagramObjectHeader(
   if (!isValidStatusForExtensions(objectHeader)) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
+  objectHeader.forwardingPreferenceIsDatagram = true;
   return DatagramObjectHeader(
       TrackAlias(trackAlias->first),
       std::move(objectHeader),

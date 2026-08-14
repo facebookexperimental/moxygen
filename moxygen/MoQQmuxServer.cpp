@@ -18,6 +18,7 @@
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/io/coro/Transport.h>
 #include <folly/logging/xlog.h>
+#include <proxygen/lib/transport/qmux/FollyQmuxTransport.h>
 #include <proxygen/lib/transport/qmux/QmuxConnector.h>
 #include <moxygen/MoQVersions.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
@@ -431,12 +432,13 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
   auto executor = findExecutorFor(workerEvb);
   CHECK(executor)
       << "runQmuxAndSession: workerEvb is not in this server's pool";
-  auto transport = std::make_unique<folly::coro::Transport>(
-      workerEvb, std::move(fizzCompletedTransport));
+  auto transport = std::make_unique<proxygen::qmux::FollyQmuxTransport>(
+      std::make_unique<folly::coro::Transport>(
+          workerEvb, std::move(fizzCompletedTransport)));
 
   auto sessionResult = co_await folly::coro::co_awaitTry(
       proxygen::qmux::QmuxConnector::connect(
-          workerEvb,
+          executor,
           proxygen::qmux::WtDir::Server,
           config_.selfTransportParams,
           std::move(transport),

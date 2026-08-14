@@ -217,10 +217,12 @@ moxygen_add_library(moxygen_moqclient
 
 moxygen_add_library(moxygen_moq_qmux_client
   SRCS
+    MoQFollyQmuxTransportFactory.cpp
     MoQQmuxClient.cpp
   DEPS
     moxygen_events_moq_folly_executor_impl
     moxygen_qmux_utils
+    proxygen::proxygen_transport_qmux_folly_qmux_transport
     proxygen::proxygen_transport_qmux_qmux_connector
     Folly::folly_coro_baton
     Folly::folly_coro_current_executor
@@ -231,6 +233,7 @@ moxygen_add_library(moxygen_moq_qmux_client
   EXPORTED_DEPS
     moxygen_moqclient_base
     proxygen::proxygen_transport_qmux_qmux_session
+    proxygen::proxygen_transport_qmux_qmux_transport
     fizz::fizz
 )
 
@@ -240,6 +243,7 @@ moxygen_add_library(moxygen_moq_qmux_server
   DEPS
     moxygen_events_moq_folly_executor_impl
     moxygen_moq_versions
+    proxygen::proxygen_transport_qmux_folly_qmux_transport
     proxygen::proxygen_transport_qmux_qmux_connector
     Folly::folly_coro_baton
     Folly::folly_coro_current_executor

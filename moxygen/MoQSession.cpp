@@ -1038,12 +1038,13 @@ StreamPublisherImpl::ensureWriteHandle() {
   }
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
-  // publisher group order is not known here, but it shouldn't matter
-  // Currently sets group=0 for FETCH priority bits
-  auto pri = getStreamPriority(
-      0, 0, publisher_->subPriority(), 0, GroupOrder::OldestFirst);
-  stream.value()->setPriority(
-      quic::HTTPPriorityQueue::Priority(pri.urgency, false, pri.order));
+  // For FETCH, ensureWrite comes from validatePublish or endOfFetch.
+  // In the former case, header_ is valid and the priority is set based
+  // on the first published object.  If the stream is empty, defaults are used
+  stream.value()->setPriority(publisher_->elementPriority(
+      header_.group,
+      header_.subgroup,
+      header_.priority.value_or(kDefaultPriority)));
   setWriteHandle(*stream);
   return folly::unit;
 }
@@ -1694,10 +1695,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
   session_->onSubscriptionStreamOpened();
-  auto pri = getStreamPriority(
-      groupID, subgroupID, subPriority_, pubPriority, groupOrder_);
   stream.value()->setPriority(
-      quic::HTTPPriorityQueue::Priority(pri.urgency, false, pri.order));
+      elementPriority(groupID, subgroupID, pubPriority));
 
   // Get effective timeout to pass to StreamPublisherImpl
   auto effectiveTimeout = deliveryTimeoutManager_.getEffectiveTimeout();
@@ -2475,9 +2474,22 @@ const folly::RequestToken& MoQSession::sessionRequestToken() {
   return token;
 }
 
+quic::PriorityQueue::Priority MoQSession::PublisherImpl::elementPriority(
+    uint64_t groupId,
+    uint64_t subgroupId,
+    uint8_t pubPri) const {
+  auto pri =
+      getStreamPriority(groupId, subgroupId, subPriority_, pubPri, groupOrder_);
+  return quic::HTTPPriorityQueue::Priority(pri.urgency, false, pri.order);
+}
+
+quic::PriorityQueue::Priority MoQSession::controlPriority() const {
+  return quic::HTTPPriorityQueue::Priority(0, false, 0);
+}
+
 void MoQSession::startControlWriteLoop(
     proxygen::WebTransport::StreamWriteHandle* writeHandle) {
-  writeHandle->setPriority(quic::HTTPPriorityQueue::Priority(0, false, 0));
+  writeHandle->setPriority(controlPriority());
   if (logger_) {
     logger_->logStreamTypeSet(
         writeHandle->getID(), MOQTStreamType::CONTROL, Owner::LOCAL);
@@ -2621,6 +2633,7 @@ void MoQSession::close(
   if (closed_) {
     return;
   }
+  closeResult_ = CloseResult{error, wtError};
   closed_ = true;
   if (closeCallback_) {
     XLOG(DBG1) << "Calling close callback";
@@ -3183,6 +3196,7 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
       return folly::makeUnexpected(
           SendRequestError{bidiStream.error(), "Failed to create bidi stream"});
     }
+    bidiStream->writeHandle->setPriority(controlPriority());
     bidiStream->writeHandle->writeStreamData(
         writeBuf.move(), /*fin=*/false, nullptr);
     auto* cb = senderCallback ? senderCallback.get() : this;
@@ -6439,7 +6453,7 @@ void MoQSession::handleClientSetup(
           bh.readHandle->getID(), MOQTStreamType::CONTROL, Owner::REMOTE);
     }
 
-    bh.writeHandle->setPriority(quic::HTTPPriorityQueue::Priority(0, false, 0));
+    bh.writeHandle->setPriority(controlPriority());
     co_withExecutor(
         exec_.get(),
         co_withCancellation(
@@ -6590,6 +6604,7 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
         close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
         co_return;
       }
+      bh.writeHandle->setPriority(controlPriority());
       auto control = std::make_shared<BidiStreamControl>(
           bh.writeHandle,
           cancellationSource_.getToken(),

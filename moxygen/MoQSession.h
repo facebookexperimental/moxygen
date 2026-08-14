@@ -140,6 +140,11 @@ class MoQSession : public Subscriber,
                    public proxygen::WebTransportHandler,
                    public std::enable_shared_from_this<MoQSession> {
  public:
+  struct CloseResult {
+    SessionCloseErrorCode error;
+    folly::Optional<uint32_t> wtError;
+  };
+
   struct MoQSessionRequestData : public folly::RequestData {
     explicit MoQSessionRequestData(std::shared_ptr<MoQSession> s)
         : session(std::move(s)) {}
@@ -184,6 +189,10 @@ class MoQSession : public Subscriber,
 
   bool isClosed() const {
     return closed_;
+  }
+
+  const std::optional<CloseResult>& getCloseResult() const {
+    return closeResult_;
   }
 
   void setAuthority(std::string a) {
@@ -400,6 +409,13 @@ class MoQSession : public Subscriber,
     void setSession(MoQSession* session) {
       session_ = session;
     }
+
+    // Priority for one schedulable element of this request, encoded from the
+    // subscriber priority, publisher priority and group order.
+    quic::PriorityQueue::Priority elementPriority(
+        uint64_t groupId,
+        uint64_t subgroupId,
+        uint8_t pubPri) const;
 
     virtual void terminatePublish(
         PublishDone pubDone,
@@ -938,6 +954,9 @@ class MoQSession : public Subscriber,
   virtual ReplyContext* getRequestUpdateReplyContext(
       RequestID existingRequestID);
 
+  // Priority for a control or request stream.
+  quic::PriorityQueue::Priority controlPriority() const;
+
   // REQUEST_UPDATE handler (protected for subclass access)
   void onRequestUpdate(RequestUpdate requestUpdate) override;
 
@@ -1260,6 +1279,7 @@ class MoQSession : public Subscriber,
   mutable quic::TransportInfo cachedTransportInfo_;
   mutable std::chrono::steady_clock::time_point lastTransportInfoUpdate_{};
   std::unique_ptr<GoawayTimeoutCallback> goawayTimeout_;
+  std::optional<CloseResult> closeResult_;
   bool closed_{false};
   std::string authority_;
   std::string path_;

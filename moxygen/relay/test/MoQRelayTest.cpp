@@ -1489,6 +1489,66 @@ TEST_F(MoQRelayTest, RelaySubscribePropagatesDynamicGroupsToAllSubscribers) {
   removeSession(subscriber2);
 }
 
+// Test: the upstream SUBSCRIBE is normalized to Default group order and
+// LargestObject, but the first downstream subscriber keeps the group order and
+// range it asked for.
+TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(1);
+  upstreamOk.expires = std::chrono::milliseconds(0);
+  upstreamOk.groupOrder = GroupOrder::OldestFirst;
+
+  SubscribeRequest upstreamReq;
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([&upstreamReq, upstreamOk](
+                    SubscribeRequest req, auto /*consumer*/) {
+        upstreamReq = std::move(req);
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+
+  SubscribeRequest sub;
+  sub.fullTrackName = kTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.groupOrder = GroupOrder::NewestFirst;
+  sub.locType = LocationType::AbsoluteRange;
+  sub.start = AbsoluteLocation{4, 0};
+  sub.endGroup = 9;
+
+  auto consumer = createMockConsumer();
+  std::shared_ptr<SubscriptionHandle> handle{nullptr};
+  withSessionContext(subscriberSession, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->subscribe(std::move(sub), consumer), exec_.get());
+    ASSERT_TRUE(res.hasValue());
+    handle = *res;
+  });
+  ASSERT_NE(handle, nullptr);
+  getOrCreateMockState(subscriberSession)->subscribeHandles.push_back(handle);
+
+  EXPECT_EQ(upstreamReq.groupOrder, GroupOrder::Default);
+  EXPECT_EQ(upstreamReq.locType, LocationType::LargestObject);
+
+  EXPECT_EQ(handle->subscribeOk().groupOrder, GroupOrder::NewestFirst);
+  auto* subscriber = dynamic_cast<MoQForwarder::Subscriber*>(handle.get());
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{4, 0}));
+  EXPECT_EQ(subscriber->range.end, (AbsoluteLocation{9, 0}));
+
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
+}
+
 TEST_F(MoQRelayTest, ExactNamespaceSubscriberReceivesPublishNamespace) {
   auto subscriber = createMockSession();
   auto publisher = createMockSession();

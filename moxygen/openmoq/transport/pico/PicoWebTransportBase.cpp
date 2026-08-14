@@ -54,13 +54,15 @@ PicoWebTransportBase::PicoWebTransportBase(
   wtConfig.selfMaxStreamsBidi = std::numeric_limits<uint64_t>::max();
   wtConfig.selfMaxStreamsUni = std::numeric_limits<uint64_t>::max();
   wtConfig.selfMaxConnData = std::numeric_limits<uint64_t>::max();
-  wtConfig.selfMaxStreamDataBidi = std::numeric_limits<uint64_t>::max();
+  wtConfig.selfMaxStreamDataBidiLocal = std::numeric_limits<uint64_t>::max();
+  wtConfig.selfMaxStreamDataBidiRemote = std::numeric_limits<uint64_t>::max();
   wtConfig.selfMaxStreamDataUni = std::numeric_limits<uint64_t>::max();
 
   wtConfig.peerMaxStreamsBidi = std::numeric_limits<uint64_t>::max();
   wtConfig.peerMaxStreamsUni = std::numeric_limits<uint64_t>::max();
   wtConfig.peerMaxConnData = std::numeric_limits<uint64_t>::max();
-  wtConfig.peerMaxStreamDataBidi = std::numeric_limits<uint64_t>::max();
+  wtConfig.peerMaxStreamDataBidiLocal = std::numeric_limits<uint64_t>::max();
+  wtConfig.peerMaxStreamDataBidiRemote = std::numeric_limits<uint64_t>::max();
   wtConfig.peerMaxStreamDataUni = std::numeric_limits<uint64_t>::max();
 
   auto dir = isClient_ ? proxygen::detail::WtDir::Client
