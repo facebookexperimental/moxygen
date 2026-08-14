@@ -10,8 +10,12 @@
 #include <folly/executors/ManualExecutor.h>
 #include <folly/portability/GTest.h>
 #include <quic/codec/QuicConnectionId.h>
+#include <stdlib.h>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -20,13 +24,19 @@ namespace moxygen {
 class FileMLoggerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    // Each test gets an isolated temp dir derived from testing::TempDir()
-    dir_ = fs::path(testing::TempDir()) / "mlog_test";
-    fs::create_directories(dir_);
+    // mkdtemp, not a fixed name: test runners execute test cases in
+    // concurrent processes that share TMPDIR, so a fixed name is shared state.
+    std::string tmpl =
+        (fs::path(testing::TempDir()) / "mlog_test_XXXXXX").string();
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    ASSERT_NE(::mkdtemp(buf.data()), nullptr) << "mkdtemp failed for " << tmpl;
+    dir_ = fs::path(buf.data());
   }
 
   void TearDown() override {
-    fs::remove_all(dir_);
+    std::error_code ec;
+    fs::remove_all(dir_, ec);
   }
 
   // Helper: create a ConnectionId from fixed bytes
