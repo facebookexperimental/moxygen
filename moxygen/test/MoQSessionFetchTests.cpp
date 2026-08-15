@@ -759,3 +759,40 @@ CO_TEST_P_X(Draft18Test, NoFetchCancelAfterFetchComplete) {
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Regression: FETCH publishers live in pubTracks_ but never fire
+// onSubscriptionBegin, so session close must not decrement the active gauge.
+CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForInFlightFetchAtClose) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawFetch;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
+        serverSawFetch.post();
+        co_await releaseHandler;
+        co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+      });
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd()).Times(0);
+
+  folly::coro::Baton fetchReturned;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        co_await clientSession_->fetch(
+            getFetch({0, 0}, {0, 1}), fetchCallback_);
+        fetchReturned.post();
+      }))
+      .start();
+
+  // The FetchPublisherImpl is in the server's pubTracks_ and stays there:
+  // the handler never returns, so neither fetchOk nor fetchError fires.
+  co_await serverSawFetch;
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  releaseHandler.post();
+  // The detached coro captures test locals by reference; it must finish first.
+  co_await fetchReturned;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
