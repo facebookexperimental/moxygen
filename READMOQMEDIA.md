@@ -11,6 +11,36 @@ Remember that ffmpeg allows you to install capture cards and playback cards (suc
 ![moq-to-sdi](./pics/sdi-to-moq.png)
 Fig2: Ingest SDI and send it via MOQ
 
+## Prerequisites
+
+Build moxygen as described in [README.md](./README.md#building), and put the binary
+directory in an environment variable — the examples below use it throughout:
+
+```
+MOXYGEN_BIN=$(./build/fbcode_builder/getdeps.py show-inst-dir moxygen)/bin
+```
+
+You also need [ffmpeg](https://www.ffmpeg.org/ffmpeg.html), which mux and demux FLV in
+real time, and a certificate for the relay. See
+[QUICKSTART.md](./QUICKSTART.md#a-note-on---insecure) for the certificate options; the
+examples here use `--insecure` on the clients, and either a generated certificate or
+the one shipped with `moq-encoder-player` on the relay.
+
+### Browser encoder and player (moq-encoder-player)
+
+Some of the examples below use
+[moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player), a
+browser-based MoQT encoder and player built on WebCodecs.
+
+- Serve that project from an HTTPS web server; apache2 is recommended.
+- Enable cross-origin isolation on the player side (see
+  [this answer](https://stackoverflow.com/questions/76077439/enabling-cross-origin-isolation-on-the-apache2-web-server)),
+  which WebCodecs requires.
+- Chrome must trust the certificate the relay presents. The simplest way to arrange
+  that locally is to start the relay with the certificate from the
+  `moq-encoder-player` checkout, as the examples below do. `--insecure` does not help
+  here, because it controls moxygen's own validation, not the browser's.
+
 ### `MoQFlvStreamerClient`
 Convert any FLV (h264 / AAC-LC) file or stream (fifo) into MOQ, publishing it to a relay using MoqMi packager (see RFC [draft-cenzano-moq-media-interop](https://datatracker.ietf.org/doc/draft-cenzano-moq-media-interop/))
 
@@ -67,10 +97,10 @@ Important you follow the next steps in order (when fifo pipes are involved is im
 
 - Start relay (terminal1)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert ./certs/certificate.pem --key ./certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
+$MOXYGEN_BIN/moqrelayserver --cert ./certs/certificate.pem --key ./certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
-Note: Look at [README.md](./README.md) on how to generate certificates
+Note: Look at [QUICKSTART.md](./QUICKSTART.md#a-note-on---insecure) on how to generate certificates
 
 - Stream FLV live stream in real time to a fifo (Speed = x1) (terminal2)
 ```
@@ -83,7 +113,7 @@ Note: fontfile location can change depending on OS
 
 - Connect streamer to that fifo (terminal3)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/samples/flv_streamer_client/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
+$MOXYGEN_BIN/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
 This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will publish the namespace `flvstreamer` (default value) to the relay
 
@@ -94,7 +124,7 @@ Assuming we already did all specified in [Stream VOD file simulating live stream
 
 - Start receiver (terminal4)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/samples/flv_receiver_client/moqflvreceiverclient --insecure --flv_outpath ~/Movies/my-moq-out.flv --logging DBG1
+$MOXYGEN_BIN/moqflvreceiverclient --insecure --flv_outpath ~/Movies/my-moq-out.flv --logging DBG1
 ```
 This will subscribe to video `video0` and audio `audio0` tracks from `flvstreamer` namespace (default values), demux the data from MOQMi, and mux it into valid FLV data. It is expecting 1 video in h264 and 1 audio in AAC-LC.
 
@@ -131,7 +161,7 @@ ffplay ~/Movies/fifo-out.flv
 
 - Start receiver (terminal5)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/samples/flv_receiver_client/moqflvreceiverclient --insecure --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
+$MOXYGEN_BIN/moqflvreceiverclient --insecure --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
 ```
 
 ![Live playback](./pics/moq-streamer-play.png)
@@ -141,7 +171,7 @@ Fig3: Live playback via ffplay
 
 Assuming you have moxygen running in localhost with following params (terminal1):
 ```
-$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
+$MOXYGEN_BIN/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
 - Stream FLV live stream in real time to a fifo (Speed = x1) (terminal2)
@@ -155,11 +185,11 @@ Note: fontfile location can change depending on OS
 
 - Connect streamer to that fifo (terminal3)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/samples/flv_streamer_client/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
+$MOXYGEN_BIN/moqflvstreamerclient --insecure --input_flv_file ~/Movies/fifo.flv --logging DBG1
 ```
 This will read and demux FLV data (expecting 1 video in h264 and 1 audio in AAC-LC) and will publish the namespace `flvstreamer` (default value) to the relay
 
-- Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [this instructions](./README.md#local-test-with-web-media-client)
+- Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [these instructions](#browser-encoder-and-player-moq-encoder-player)
 
 - Open player page `http://localhost:8080/src-player/?local` (assuming port 8080 for webserver)
     - Set "Namespace" to `flvstreamer`
@@ -173,10 +203,10 @@ Fig4: Live playback in the brower using Webcodecs
 
 Assuming you have moxygen running in localhost with following params:
 ```
-$MOXYGEN_BUILD_PATH/moxygen/relay/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
+$MOXYGEN_BIN/moqrelayserver --cert [moq-encoder-player]/certs/certificate.pem --key [moq-encoder-player]/certs/certificate.key --endpoint "/moq" --logging=DBG4  --port 4433
 ```
 
-- Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [this instructions](./README.md#local-test-with-web-media-client)
+- Install [moq-encoder-player](https://github.com/facebookexperimental/moq-encoder-player) following [these instructions](#browser-encoder-and-player-moq-encoder-player)
 
 - Open encoder page `http://localhost:8080/src-encoder/?local` (assuming port 8080 for webserver)
     - Set "Namespace" to `flvstreamer`
@@ -199,7 +229,7 @@ ffplay ~/Movies/fifo-out.flv
 
 - Start receiver (terminal5)
 ```
-$MOXYGEN_BUILD_PATH/moxygen/samples/flv_receiver_client/moqflvreceiverclient --insecure --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
+$MOXYGEN_BIN/moqflvreceiverclient --insecure --flv_outpath ~/Movies/fifo-out.flv --logging DBG1
 ```
 
 You should see /listen now live playback from browser to ffplay

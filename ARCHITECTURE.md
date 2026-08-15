@@ -7,7 +7,7 @@
 The library is designed around two key principles:
 
 1. **Symmetric APIs**: Publisher and Subscriber interfaces are symmetric, enabling components to be easily chained together for filtering, proxying, and relay scenarios
-2. **Transport Agnostic**: Core protocol logic is decoupled from transport via the `proxygen::WebTransport` interface, supporting HTTP/3 WebTransport, native QUIC, and alternative implementations like PicoQuic
+2. **Transport Agnostic**: Core protocol logic is decoupled from transport via the `proxygen::WebTransport` interface, supporting WebTransport, native QUIC, as well as custom implementations
 
 ## Core Architecture
 
@@ -36,7 +36,7 @@ The `Subscriber` interface represents a component that can receive track namespa
 - **`publish()`**: Handles incoming PUBLISH requests from peers (synchronous API returning both consumer and async reply)
 
 The symmetric design means:
-- **Subscribers call `subscribe()`** on sessia publisher to request data
+- **Subscribers call `subscribe()`** on a publisher to request data
 - **Publishers implement `subscribe()`** to handle incoming subscription requests
 - This symmetry enables **chaining**: output from one component feeds into the next
 
@@ -161,15 +161,15 @@ The core protocol logic is separated from transport via the `proxygen::WebTransp
 
 This abstraction allows moxygen to work with multiple QUIC implementations:
 
-### HTTP/3 WebTransport (Default)
+### WebTransport (Default)
 
-**MoQClient** and **MoQServer** use Proxygen's HTTP/3 WebTransport implementation:
+**MoQClient** and **MoQServer** use Proxygen's WebTransport implementation:
 
 - **MoQClient**: Connects to HTTP/3 servers via `proxygen::URL`
-  - Performs QUIC connection and HTTP/3 WebTransport session setup
+  - Performs QUIC connection and WebTransport session setup
   - Returns a `MoQSession` ready for MOQT communication
 
-- **MoQServer**: Accepts HTTP/3 WebTransport connections
+- **MoQServer**: Accepts WebTransport connections
   - Listens on a socket address
   - Handles `/connect` requests for WebTransport
   - Creates `MoQSession` for each accepted connection
