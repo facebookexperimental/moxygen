@@ -1373,6 +1373,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       deliveryTimeoutManager_.setSubscriberTimeout(
           std::chrono::milliseconds(*timeoutValue));
     }
+    session_->beginSubscriptionStat(*this);
+  }
+
+  // A deferred publishDone stops writes but still sends SUBSCRIBE_OK.
+  bool publishEnded() const {
+    return isDone() || pendingPublishDone_.has_value();
   }
 
   void publishSent(const PublishRequest& publish) {
@@ -1392,6 +1398,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     if (timeout.has_value() && shouldApplyDeliveryTimeout(timeout->count())) {
       deliveryTimeoutManager_.setPublisherTimeout(*timeout);
     }
+    session_->beginSubscriptionStat(*this);
   }
 
   void setForward(bool forward) {
@@ -1492,8 +1499,6 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       std::shared_ptr<StreamPublisherImpl>>
       subgroups_;
   uint64_t streamCount_{0};
-  enum class State { OPEN, DONE };
-  State state_{State::OPEN};
   bool forward_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
   MoQDeliveryTimeoutManager deliveryTimeoutManager_;
@@ -1673,7 +1678,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   }
 
   auto wt = getWebTransport();
-  if (!wt || state_ != State::OPEN) {
+  if (!wt || publishEnded()) {
     XLOG(ERR) << "Trying to publish after publishDone";
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Publish after publishDone"));
@@ -1723,7 +1728,7 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
 folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
 MoQSession::TrackPublisherImpl::awaitStreamCredit() {
   auto wt = getWebTransport();
-  if (!wt || state_ != State::OPEN) {
+  if (!wt || publishEnded()) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "awaitStreamCredit after publishDone"));
   }
@@ -1829,7 +1834,7 @@ MoQSession::TrackPublisherImpl::datagram(
         "Cannot send datagrams for subscriptions with forward flag set to false"));
   }
   auto wt = getWebTransport();
-  if (!wt || state_ != State::OPEN) {
+  if (!wt || publishEnded()) {
     XLOG(ERR) << "Trying to publish after publishDone";
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Publish after publishDone"));
@@ -1877,11 +1882,10 @@ MoQSession::TrackPublisherImpl::datagram(
 
 folly::Expected<folly::Unit, MoQPublishError>
 MoQSession::TrackPublisherImpl::publishDone(PublishDone pubDone) {
-  if (state_ != State::OPEN || !session_) {
+  if (publishEnded() || !session_) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "publishDone twice or after close"));
   }
-  state_ = State::DONE;
   pubDone.requestID = requestID_;
   if (!subscriptionHandle_) {
     // publishDone called from inside the subscribe handler,
@@ -2409,7 +2413,7 @@ void MoQSession::cleanup() {
     if (const auto& control = pubTrack->bidiControl()) {
       control->disarmOnPeerTermination();
     }
-    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
+    endSubscriptionStat(*pubTrack);
     pubTrack->terminatePublish(
         PublishDone(
             {requestID,
@@ -4240,15 +4244,16 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
               << " sess=" << this;
     return;
   }
+  // Holds a ref so the erase below can't destroy it out from under the stat.
   auto trackPublisher =
-      dynamic_cast<TrackPublisherImpl*>(pubTrackIt->second.get());
+      std::dynamic_pointer_cast<TrackPublisherImpl>(pubTrackIt->second);
   if (!trackPublisher) {
     XLOG(ERR) << "RequestID in Unsubscribe is for a FETCH, id="
               << unsubscribe.requestID << " sess=" << this;
   } else {
     trackPublisher->unsubscribe();
     if (pubTracks_.erase(unsubscribe.requestID)) {
-      MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
+      endSubscriptionStat(*trackPublisher);
       retireRequestID(/*signalWriteLoop=*/true);
       checkForCloseOnDrain();
     } // else, the caller invoked publishDone, which isn't needed but fine
@@ -4285,7 +4290,6 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
     pendingPublishTracks_.erase(trackIt->second->fullTrackName());
-    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   }
   // No disarm: PUBLISH_OK is non-terminal; publishDone's flush(fin) disarms.
 
@@ -5769,7 +5773,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
 void MoQSession::sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscribeSuccess);
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
   auto res = moqFrameWriter_.writeSubscribeOk(ctx.writeBuf(), subOk);
   if (!res) {
     XLOG(ERR) << "writeSubscribeOk failed sess=" << this;
@@ -5860,6 +5863,18 @@ void MoQSession::unsubscribe(
   checkForCloseOnDrain();
 }
 
+void MoQSession::beginSubscriptionStat(PublisherImpl& pubTrack) {
+  if (pubTrack.markEstablished()) {
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionBegin);
+  }
+}
+
+void MoQSession::endSubscriptionStat(PublisherImpl& pubTrack) {
+  if (pubTrack.markDone()) {
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
+  }
+}
+
 void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
@@ -5870,7 +5885,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
               << " sess=" << this;
     return;
   }
-  MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
+  endSubscriptionStat(*it->second);
   auto* ctx = it->second->replyContext();
   SCOPE_EXIT {
     pubTracks_.erase(it);

@@ -30,3 +30,10 @@ moqflvreceiverclient
 FlvParserTests
 MoQMiTests
 DeJitterTests
+
+# IDE / tooling
+.claude/
+.vscode/
+
+# Downstream test hook (the blanket *.cmake rule above would swallow it)
+!standalone/test/local.cmake
