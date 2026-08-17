@@ -37,6 +37,10 @@ set(GITHUB_HASHES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../build/deps/github_hashes")
 function(read_rev_hash ORG PROJECT OUT_VAR)
     set(REV_FILE "${GITHUB_HASHES_DIR}/${ORG}/${PROJECT}-rev.txt")
     if(EXISTS "${REV_FILE}")
+        # Re-run configure when a pin moves, so FetchContent re-resolves the dep
+        # instead of silently building the previously fetched revision.
+        set_property(DIRECTORY APPEND PROPERTY
+            CMAKE_CONFIGURE_DEPENDS "${REV_FILE}")
         file(READ "${REV_FILE}" REV_CONTENT)
         # Format: "Subproject commit <40-char-hash>"
         string(
