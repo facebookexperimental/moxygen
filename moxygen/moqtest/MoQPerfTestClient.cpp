@@ -492,6 +492,11 @@ std::optional<AbsoluteLocation> MoQPerfTestClient::getLargestObjectSeen()
 }
 
 void MoQPerfTestClient::recordLatency(uint64_t latencyMs) {
+  latencyBuckets_[LatencyHistogram::bucketIndex(latencyMs)].fetch_add(
+      1, std::memory_order_relaxed);
+  latencyHistSum_.fetch_add(latencyMs, std::memory_order_relaxed);
+  latencyHistCount_.fetch_add(1, std::memory_order_relaxed);
+
   intervalLatencySum_.fetch_add(latencyMs, std::memory_order_relaxed);
   intervalLatencyCount_.fetch_add(1, std::memory_order_relaxed);
 
@@ -544,6 +549,16 @@ MoQPerfTestClient::TestResults MoQPerfTestClient::getResults() const {
   results.durationSeconds = elapsed;
 
   return results;
+}
+
+LatencyHistogram MoQPerfTestClient::snapshotLatencyHist() const {
+  LatencyHistogram hist;
+  for (size_t i = 0; i < latencyBuckets_.size(); ++i) {
+    hist.addRawBucket(i, latencyBuckets_[i].load(std::memory_order_relaxed));
+  }
+  hist.addSum(latencyHistSum_.load(std::memory_order_relaxed));
+  hist.addCount(latencyHistCount_.load(std::memory_order_relaxed));
+  return hist;
 }
 
 } // namespace moxygen

@@ -15,6 +15,7 @@ install_ubuntu() {
         cmake \
         ninja-build \
         git \
+        pkg-config \
         libssl-dev \
         libunwind-dev \
         libgoogle-glog-dev \
@@ -23,10 +24,16 @@ install_ubuntu() {
         libevent-dev \
         libsodium-dev \
         libzstd-dev \
-        libboost-all-dev \
+        libboost-dev \
+        libboost-context-dev \
+        libboost-filesystem-dev \
+        libboost-program-options-dev \
+        libboost-regex-dev \
+        libboost-thread-dev \
         libfmt-dev \
         zlib1g-dev \
         libc-ares-dev \
+        python3 \
         gperf
 }
 
@@ -46,6 +53,7 @@ install_fedora() {
         fmt-devel \
         zlib-devel \
         c-ares-devel \
+        python3 \
         gperf
     # ninja-build is available on Fedora but not CentOS/RHEL base repos.
     # Try to install it; if unavailable, warn with alternatives.
@@ -75,7 +83,8 @@ install_macos() {
         boost \
         fmt \
         c-ares \
-        gperf
+        gperf \
+        brotli
 }
 
 # Detect OS - check macOS first
@@ -91,9 +100,21 @@ elif [[ -f /etc/os-release ]]; then
             install_fedora
             ;;
         *)
-            echo "Unsupported Linux distribution: $ID"
-            echo "Please install dependencies manually (see README.md)"
-            exit 1
+            # Derivatives (Linux Mint, Pop!_OS, LMDE, Rocky, Alma, ...)
+            # report their own ID; dispatch on ID_LIKE instead.
+            case " ${ID_LIKE:-} " in
+                *" ubuntu "*|*" debian "*)
+                    install_ubuntu
+                    ;;
+                *" fedora "*|*" rhel "*|*" centos "*)
+                    install_fedora
+                    ;;
+                *)
+                    echo "Unsupported Linux distribution: $ID (ID_LIKE='${ID_LIKE:-}')"
+                    echo "Please install dependencies manually (see README.md)"
+                    exit 1
+                    ;;
+            esac
             ;;
     esac
 else
