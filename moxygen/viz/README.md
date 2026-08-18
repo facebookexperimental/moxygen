@@ -23,9 +23,15 @@ This tool visualizes MoQ Transport sessions by parsing QLOG JSON files containin
 ### Interactive Features
 - **Pan & Zoom**: Mouse wheel zoom, drag to pan timeline
 - **Event Filtering**: Show/hide specific event types
-- **Hover Details**: Detailed tooltips with event information
+- **Per-Track Selection**: Toggle individual client- or server-published tracks
+- **Hover Details**: Detailed event tooltips, plus a hover-tooltip that shows
+  the full name of long track labels that would otherwise be truncated
 - **Click Details**: Persistent detail panel with full event data
 - **Size Visualization**: Bar height proportional to object size
+
+### Dependencies
+- None. The tool ships a small `$`-compatible DOM helper inline, so it works
+  from a local filesystem or an air-gapped host with no CDN access.
 
 ### Visual Encoding
 - **Color Coding**:
@@ -65,8 +71,9 @@ viz/
    python3 -m http.server 8000  # Serve locally
    ```
 
-2. **Load QLOG data**:
-   - Click "Upload MoQ QLOG JSON file" and select your `.qlog` file
+2. **Load MoQ log data**:
+   - Click "Upload MoQ QLOG JSON file" and select a `.json`, `.qlog`, `.log`,
+     or `.txt` file (either JSON-SEQ QLOG or NDJSON — see formats below)
    - Or click "Load Example Data" to see sample visualization
 
 3. **Interact with the timeline**:
@@ -76,9 +83,11 @@ viz/
    - **Filter**: Use checkboxes to show/hide event types
    - **Details**: Hover over events for tooltips, click for persistent details
 
-### QLOG File Format
+### Input Formats
 
-The tool expects QLOG JSON files conforming to the MoQ QLOG Events specification:
+Two formats are accepted; the parser auto-detects based on the file contents.
+
+**JSON-SEQ QLOG** — conforms to the MoQ QLOG Events specification:
 
 ```json
 {
@@ -95,6 +104,19 @@ The tool expects QLOG JSON files conforming to the MoQ QLOG Events specification
   }]
 }
 ```
+
+**NDJSON** — one event per line, as written by `mlog::FileMLogger`:
+
+```
+{"vantagePoint":"client","name":"moqt:control_message_created","time":0.0,"data":{...}}
+{"vantagePoint":"server","name":"moqt:control_message_parsed","time":0.1,"data":{...}}
+```
+
+For NDJSON input, the parser reconstructs track names from `track_alias`
+values on `subgroup_header`/`fetch_header`/`object_datagram` events by
+walking the `subscribe` and `subscribe_ok` control messages that establish
+the alias-to-name mapping, so track labels are meaningful even when only
+the alias appears on data events.
 
 ### Supported MoQ Events
 
