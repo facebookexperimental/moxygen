@@ -52,6 +52,32 @@ option(BUILD_PICOQUIC "Build with picoquic transport support" ON)
 option(BUNDLE_DEPS_STATIC_SYSLIBS
     "Static-link glog/gflags/double-conversion in BUNDLE_DEPS artifact" OFF)
 
+# Consumers of the resulting archives must build with the same -fsanitize= flags.
+set(MOXYGEN_SANITIZER "" CACHE STRING
+    "Sanitizer flavor(s) for all layers: asan, tsan, ubsan; combine with +")
+if(MOXYGEN_SANITIZER)
+    string(REPLACE "+" ";" _san_tokens "${MOXYGEN_SANITIZER}")
+    set(_san_flags "")
+    foreach(_san IN LISTS _san_tokens)
+        if(_san STREQUAL "asan")
+            list(APPEND _san_flags -fsanitize=address)
+        elseif(_san STREQUAL "tsan")
+            list(APPEND _san_flags -fsanitize=thread)
+        elseif(_san STREQUAL "ubsan")
+            list(APPEND _san_flags -fsanitize=undefined)
+        else()
+            message(FATAL_ERROR
+                "MOXYGEN_SANITIZER: unknown token '${_san}' "
+                "(expected asan, tsan, or ubsan)")
+        endif()
+    endforeach()
+    if("asan" IN_LIST _san_tokens AND "tsan" IN_LIST _san_tokens)
+        message(FATAL_ERROR "MOXYGEN_SANITIZER: asan and tsan cannot be combined")
+    endif()
+    add_compile_options(${_san_flags} -fno-omit-frame-pointer)
+    add_link_options(${_san_flags})
+endif()
+
 # =============================================================================
 # Linking preferences
 # =============================================================================

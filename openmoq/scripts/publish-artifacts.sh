@@ -132,6 +132,8 @@ else
   git push origin ":refs/tags/$TAG" 2>/dev/null || true
 
   # Create as pre-release so it doesn't show as "Latest release"
+  # --target must stay an explicit sha: downstream fetchers verify
+  # target_commitish; gh defaults to a branch name for existing tags.
   # shellcheck disable=SC2086
   gh release create "$TAG" \
     --target "$SHA" \

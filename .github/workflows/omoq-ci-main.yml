@@ -146,6 +146,23 @@ jobs:
             debug_artifact: moxygen-ubuntu-24.04-amd64-dbg.tar.gz
             container: ""
 
+          # Sanitizer flavors: Debug is ABI (folly kIsDebug); consumers must match.
+          - name: ubuntu-24.04-amd64-asan
+            runner: ubuntu-24.04
+            artifact: moxygen-ubuntu-24.04-amd64-asan.tar.gz
+            debug_artifact: moxygen-ubuntu-24.04-amd64-asan-dbg.tar.gz
+            container: ""
+            sanitizer: asan
+            build_type: Debug
+
+          - name: ubuntu-24.04-amd64-tsan
+            runner: ubuntu-24.04
+            artifact: moxygen-ubuntu-24.04-amd64-tsan.tar.gz
+            debug_artifact: moxygen-ubuntu-24.04-amd64-tsan-dbg.tar.gz
+            container: ""
+            sanitizer: tsan
+            build_type: Debug
+
           - name: macos-15-arm64
             runner: macos-15
             artifact: moxygen-macos-15-arm64.tar.gz
@@ -214,10 +231,13 @@ jobs:
             # Self-hosted without container: use home dir
             EXTRA_FLAGS+=(-DFETCHCONTENT_BASE_DIR="$HOME/.cache/moxygen-publish-${{ matrix.name }}/_deps")
           fi
+          if [ -n "${{ matrix.sanitizer }}" ]; then
+            EXTRA_FLAGS+=(-DMOXYGEN_SANITIZER="${{ matrix.sanitizer }}")
+          fi
           cmake -B _build -S standalone -G Ninja \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type || 'RelWithDebInfo' }} \
             -DBUILD_TESTING=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUNDLE_DEPS=ON \
