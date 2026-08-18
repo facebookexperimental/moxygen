@@ -1202,3 +1202,62 @@ CO_TEST_P_X(MoQSessionTest, PublishDuplicatesPendingSubscribe) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Regression: a PUBLISH still awaiting PUBLISH_OK is in pubTracks_ but was
+// never counted, so session close must not decrement the active gauge.
+CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForPublishPendingOkAtClose) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  folly::coro::Baton replyBlocked;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&replyBlocked](
+              const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto consumer = std::make_shared<MockTrackConsumer>();
+            EXPECT_CALL(*consumer, setTrackAlias(_))
+                .WillRepeatedly(
+                    testing::Return(
+                        folly::Expected<folly::Unit, MoQPublishError>(
+                            folly::unit)));
+            EXPECT_CALL(*consumer, publishDone(_))
+                .WillRepeatedly(testing::Return(folly::unit));
+            auto requestID = actualPub.requestID;
+            return Subscriber::PublishConsumerAndReplyTask{
+                std::static_pointer_cast<TrackConsumer>(consumer),
+                folly::coro::co_invoke(
+                    [&replyBlocked, requestID]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await replyBlocked;
+                      co_return folly::makeUnexpected(
+                          PublishError{
+                              requestID,
+                              PublishErrorCode::INTERNAL_ERROR,
+                              "never accepted"});
+                    })};
+          });
+
+  EXPECT_CALL(*clientPublisherStatsCallback_, onSubscriptionBegin()).Times(0);
+  EXPECT_CALL(*clientPublisherStatsCallback_, onSubscriptionEnd()).Times(0);
+
+  auto handle = makePublishHandle();
+  auto result = clientSession_->publish(
+      PublishRequest{
+          RequestID(0),
+          FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+          TrackAlias(100),
+          GroupOrder::Default,
+          AbsoluteLocation{0, 100},
+          true,
+      },
+      handle);
+  EXPECT_TRUE(result.hasValue());
+
+  // PUBLISH is on the wire and in pubTracks_; PUBLISH_OK never arrives.
+  co_await rescheduleN(5);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  replyBlocked.post();
+}
