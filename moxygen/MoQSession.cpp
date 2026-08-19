@@ -3735,6 +3735,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   auto rhToken = readHandle->getCancelToken();
   XLOG(DBG1) << __func__ << " id=" << id << " sess=" << this;
   bool isSubscriptionStream = false;
+  std::optional<folly::CancellationCallback> fetchCancelCb;
   auto g = folly::makeGuard([func = __func__, this, id, &isSubscriptionStream] {
     XLOG(DBG1) << "exit " << func << " id=" << id << " sess=" << this;
     if (isSubscriptionStream) {
@@ -3822,15 +3823,22 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   };
 
   // Lambda for onFetch
-  auto onFetchFunc = [this, &token, &codec](RequestID requestID) {
-    auto state = getFetchTrackReceiveState(requestID);
-    if (state) {
-      // FetchTrackReceiveState lifecycle now controls read loop
-      token = state->getCancelToken();
-      codec.setFetchGroupOrder(state->getFetchGroupOrder());
-    }
-    return state;
-  };
+  auto onFetchFunc =
+      [this, &token, &codec, &fetchCancelCb, &readHandle](RequestID requestID) {
+        auto state = getFetchTrackReceiveState(requestID);
+        if (state) {
+          // FetchTrackReceiveState lifecycle now controls read loop
+          token = state->getCancelToken();
+          fetchCancelCb.emplace(token, [&readHandle] {
+            if (readHandle) {
+              readHandle->stopSending(0);
+              readHandle = nullptr;
+            }
+          });
+          codec.setFetchGroupOrder(state->getFetchGroupOrder());
+        }
+        return state;
+      };
 
   detail::ObjectStreamCallback dcb(this, onSubgroupFunc, onFetchFunc);
   if (logger_) {

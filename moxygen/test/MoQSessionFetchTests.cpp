@@ -694,6 +694,40 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamStopSending) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(Draft18Test, FetchCancelStopsDataStream) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(0, 0, 0, moxygen::test::makeBuf(100));
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(*fetchCallback_, object(_, _, _, _, _, false, _)).WillOnce([&] {
+    objectReceived.post();
+    return folly::unit;
+  });
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_TRUE(res.hasValue());
+  co_await objectReceived;
+
+  auto dataStream = serverWt_->writeHandles.at(serverObjectStreamId());
+  auto* dataWriteHandle =
+      static_cast<proxygen::WebTransport::StreamWriteHandle*>(dataStream.get());
+  std::optional<uint32_t> stopSendingCode;
+  folly::CancellationCallback stopSendingCallback(
+      dataWriteHandle->getCancelToken(), [&] {
+        if (auto* exception = dataWriteHandle->exception()) {
+          stopSendingCode = exception->error;
+        }
+      });
+
+  res.value()->fetchCancel();
+  EXPECT_EQ(stopSendingCode, 0);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Subscriber-initiated fetchCancel() (RST write + STOP_SENDING read) must
 // reach the publisher's fetchCancel handle — peer-initiated path's mirror.
 CO_TEST_P_X(Draft18Test, FetchBidiStreamFetchCancel) {
