@@ -9,21 +9,11 @@
 #include <folly/coro/CurrentExecutor.h>
 #include <folly/logging/xlog.h>
 #include <proxygen/lib/transport/qmux/QmuxConnector.h>
-#include <moxygen/MoQFollyQmuxTransportFactory.h>
 #include <moxygen/QmuxUtils.h>
 
 #include <stdexcept>
 
 namespace moxygen {
-
-MoQQmuxClient::MoQQmuxClient(
-    std::shared_ptr<MoQExecutor> exec,
-    proxygen::URL url,
-    std::shared_ptr<fizz::CertificateVerifier> verifier)
-    : MoQQmuxClient(
-          exec,
-          std::move(url),
-          makeFollyQmuxTransportFactory(exec, std::move(verifier))) {}
 
 MoQQmuxClient::MoQQmuxClient(
     std::shared_ptr<MoQExecutor> exec,
@@ -35,17 +25,6 @@ MoQQmuxClient::MoQQmuxClient(
     throw std::invalid_argument("MoQQmuxClient requires a transport factory");
   }
 }
-
-MoQQmuxClient::MoQQmuxClient(
-    std::shared_ptr<MoQExecutor> exec,
-    proxygen::URL url,
-    SessionFactory sessionFactory,
-    std::shared_ptr<fizz::CertificateVerifier> verifier)
-    : MoQQmuxClient(
-          exec,
-          std::move(url),
-          std::move(sessionFactory),
-          makeFollyQmuxTransportFactory(exec, std::move(verifier))) {}
 
 MoQQmuxClient::MoQQmuxClient(
     std::shared_ptr<MoQExecutor> exec,

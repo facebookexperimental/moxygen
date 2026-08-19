@@ -10,6 +10,7 @@
 #include <folly/logging/xlog.h>
 #include <folly/portability/GFlags.h>
 #include <moxygen/MoQClient.h>
+#include <moxygen/MoQFollyQmuxTransportFactory.h>
 #include <moxygen/MoQQmuxClient.h>
 #include <moxygen/MoQRelaySession.h>
 #include <moxygen/MoQWebTransportClient.h>
@@ -78,12 +79,15 @@ std::unique_ptr<MoQClientBase> makeRelayClientTransport(
     std::shared_ptr<fizz::CertificateVerifier> verifier,
     TransportType transportType) {
   switch (transportType) {
-    case TransportType::QMUX:
+    case TransportType::QMUX: {
+      auto transportFactory =
+          makeFollyQmuxTransportFactory(executor, std::move(verifier));
       return std::make_unique<MoQQmuxClient>(
           std::move(executor),
           std::move(url),
           std::move(sessionFactory),
-          std::move(verifier));
+          std::move(transportFactory));
+    }
     case TransportType::QUIC:
       return std::make_unique<MoQClient>(
           std::move(executor),

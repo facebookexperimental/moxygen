@@ -6,6 +6,7 @@ moxygen_add_library(moxygen_samples_util_qmux_relay_utils
   SRCS
     Utils.cpp
   DEPS
+    moxygen_moq_folly_qmux_transport_factory
     moxygen_moq_qmux_client
     moxygen_moq_relay_session
     moxygen_moq_webtransport_client
