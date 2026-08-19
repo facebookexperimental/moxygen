@@ -883,8 +883,12 @@ MoQForwarder::SubgroupForwarder::removeSubgroupAndCheckEmpty() {
   if (!forwarder_) {
     return folly::unit;
   }
-  forwarder_->subgroups_.erase(identifier_);
-  forwarder_->checkAndFireOnEmpty();
+  auto* forwarder = forwarder_;
+  // Must detach before erasing: checkAndFireOnEmpty() can destroy the forwarder
+  // via onEmpty(), and ~MoQForwarder only detaches subgroups still in the map.
+  detach();
+  forwarder->subgroups_.erase(identifier_);
+  forwarder->checkAndFireOnEmpty();
   return folly::unit;
 }
 

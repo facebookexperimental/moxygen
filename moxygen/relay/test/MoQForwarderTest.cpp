@@ -1085,6 +1085,47 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
   EXPECT_EQ(forwarder, nullptr);
 }
 
+// Test: A hard subgroup error removes the last subscriber, which removes the
+// subgroup, which fires onEmpty and destroys the forwarder.  An upstream owner
+// still holding the SubgroupForwarder (e.g. MoQCache's writeback) then delivers
+// the terminal reset() - that must not touch the destroyed forwarder.
+TEST_F(MoQForwarderTest, SubgroupDetachedWhenErrorDestroysForwarder) {
+  auto session = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<ForwarderDestroyingCallback>(forwarder);
+  forwarder->setCallback(callback);
+
+  auto consumer = createMockConsumer();
+  auto sg = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(sg)));
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*sg, object(0, _, _, false))
+      .WillOnce(Return(
+          folly::makeUnexpected(MoQPublishError(
+              MoQPublishError::WRITE_ERROR,
+              "Write after stream complete or reset"))));
+
+  addSubscriber(*forwarder, session, consumer, RequestID(1));
+
+  auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+  auto subgroup = *subgroupRes;
+
+  // The hard error tears down the subscriber and then the whole forwarder.
+  EXPECT_CALL(*sg, reset(_)).Times(1);
+  EXPECT_TRUE(subgroup->object(0, nullptr, noExtensions(), false).hasError());
+  ASSERT_EQ(forwarder, nullptr);
+
+  // The subgroup outlived the forwarder, so it must be detached.
+  auto objRes = subgroup->object(1, nullptr, noExtensions(), false);
+  ASSERT_TRUE(objRes.hasError());
+  EXPECT_EQ(objRes.error().msg, "Forwarder detached");
+  subgroup->reset(ResetStreamErrorCode::CANCELLED);
+}
+
 // Test: Extensions set on the forwarder are included in SubscribeOk for all
 // subscribers.
 TEST_F(MoQForwarderTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
