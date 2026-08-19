@@ -14,7 +14,7 @@ buck2 build fbcode//ti/experimental/moxygen/media_server:moq_media_server
 ## Start the server
 
 ```
-buck2 run fbcode//ti/experimental/moxygen/media_server:moq_media_server -- --input /path/to/catalog.json --port 60100 --fragment_interval_ms 1000
+buck2 run fbcode//ti/experimental/moxygen/media_server:moq_media_server -- --input /path/to/catalog.json --port 60100 --fragment_interval_ms 1000 --insecure
 ```
 
 Flags:

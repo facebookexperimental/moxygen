@@ -45,7 +45,7 @@
 #include <vector>
 
 DEFINE_string(connect_url, "moqt://localhost:9779", "Server connect URL");
-DEFINE_string(track_namespace, "moq-media", "Track namespace");
+DEFINE_string(track_namespace, "file/moq-media", "Track namespace");
 DEFINE_string(track_namespace_delimiter, "/", "Track namespace delimiter");
 DEFINE_string(
     output,
@@ -103,6 +103,7 @@ class Mp4Handler : public ObjectReceiverCallback {
   void onEndOfStream() override {}
 
   void onError(ResetStreamErrorCode error) override {
+    failed_ = true;
     XLOG(WARN) << "[Mp4Receiver] stream error=" << folly::to_underlying(error);
     baton.post();
   }
@@ -146,15 +147,20 @@ class Mp4Handler : public ObjectReceiverCallback {
     return objects_.size();
   }
 
+  bool failed() const {
+    return failed_;
+  }
+
   folly::coro::Baton baton;
 
  private:
   std::string init_;
   std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::string> objects_;
+  bool failed_{false};
 };
 
-// Collects the catalog document (a single retained object) and unblocks after
-// the FETCH stream completes.
+// Collects the catalog document (a single retained object) and unblocks when it
+// arrives.
 class CatalogHandler : public ObjectReceiverCallback {
  public:
   FlowControlState onObject(
@@ -163,6 +169,9 @@ class CatalogHandler : public ObjectReceiverCallback {
       Payload payload) override {
     if (payload) {
       bytes += payload->moveToFbString().toStdString();
+      // ObjectReceiver delivers a complete MoQ object in each callback, and
+      // the joining FETCH returns exactly one retained catalog object.
+      baton.post();
     }
     return FlowControlState::UNBLOCKED;
   }
@@ -238,7 +247,8 @@ class MoQMp4Receiver {
                                      : samples::TransportType::WEB_TRANSPORT)) {
   }
 
-  folly::coro::Task<void> run(TrackNamespace ns) noexcept {
+  folly::coro::Task<bool> run(TrackNamespace ns) noexcept {
+    bool success = true;
     try {
       auto alpns = getMoqtProtocols(FLAGS_versions, true);
       co_await moqClient_.setup(
@@ -254,7 +264,8 @@ class MoQMp4Receiver {
       auto catalog = co_await fetchCatalog(ns);
       if (!catalog || catalog->tracks.empty()) {
         XLOG(ERR) << "[Mp4Receiver] no catalog / no tracks; aborting";
-        co_return;
+        closeSession();
+        co_return false;
       }
       XLOG(INFO) << "[Mp4Receiver] catalog tracks=" << catalog->tracks.size();
 
@@ -281,6 +292,7 @@ class MoQMp4Receiver {
         auto res =
             co_await moqClient_.getSession()->subscribe(sub, dl->receiver);
         if (res.hasError()) {
+          success = false;
           XLOG(ERR) << "[Mp4Receiver] subscribe track=" << track.name
                     << " failed reason=" << res.error().reasonPhrase;
           continue;
@@ -293,7 +305,8 @@ class MoQMp4Receiver {
       }
       if (downloads_.empty()) {
         XLOG(ERR) << "[Mp4Receiver] no tracks subscribed; aborting";
-        co_return;
+        closeSession();
+        co_return false;
       }
 
       XLOG(INFO) << "[Mp4Receiver] waiting for end-of-stream on "
@@ -318,21 +331,25 @@ class MoQMp4Receiver {
         XLOG(INFO) << "[Mp4Receiver] all tracks ended";
       }
     } catch (const std::exception& ex) {
+      success = false;
       XLOG(ERR) << "[Mp4Receiver] " << folly::exceptionStr(ex);
     }
 
     for (const auto& dl : downloads_) {
+      if (dl->handler->failed()) {
+        success = false;
+      }
       const auto total = dl->handler->writeTo(dl->output);
       if (!total) {
+        success = false;
         continue;
       }
       XLOG(INFO) << "[Mp4Receiver] track=" << dl->name
                  << " wrote objects=" << dl->handler->count()
                  << " bytes=" << *total << " to " << dl->output;
     }
-    if (moqClient_.getSession()) {
-      moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
-    }
+    closeSession();
+    co_return success;
   }
 
   // Unblocks run() so it writes output and exits. Used by the signal handler
@@ -354,6 +371,12 @@ class MoQMp4Receiver {
     std::shared_ptr<ObjectReceiver> receiver;
     std::shared_ptr<Publisher::SubscriptionHandle> sub;
   };
+
+  void closeSession() {
+    if (moqClient_.getSession()) {
+      moqClient_.getSession()->close(SessionCloseErrorCode::NO_ERROR);
+    }
+  }
 
   // Gets the catalog via SUBSCRIBE + joining FETCH(0) (MSF/CMSF): the subscribe
   // leg carries future updates, the joining fetch delivers the current catalog
@@ -458,6 +481,7 @@ int main(int argc, char* argv[]) {
       FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   auto client = std::make_shared<MoQMp4Receiver>(
       moqEvb, std::move(url), std::move(verifier));
+  int exitCode = EXIT_FAILURE;
 
   // Graceful Ctrl-C: post the end-of-stream baton so run() writes and exits.
   class SigHandler : public folly::AsyncSignalHandler {
@@ -479,7 +503,12 @@ int main(int argc, char* argv[]) {
   folly::coro::co_withExecutor(&eventBase, client->run(std::move(ns)))
       .start()
       .via(&eventBase)
-      .thenTry([&eventBase](auto&&) { eventBase.terminateLoopSoon(); });
+      .thenTry([&eventBase, &exitCode](auto&& result) {
+        if (result.hasValue() && result.value()) {
+          exitCode = EXIT_SUCCESS;
+        }
+        eventBase.terminateLoopSoon();
+      });
   eventBase.loopForever();
-  return 0;
+  return exitCode;
 }

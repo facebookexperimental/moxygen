@@ -21,11 +21,11 @@ moxygen_add_library(moxygen_moq_types
     Folly::folly_conv
     Folly::folly_string
   EXPORTED_DEPS
+    proxygen::proxygen_http_webtransport
     Folly::folly_expected
     Folly::folly_hash_hash
     Folly::folly_io_iobuf
     Folly::folly_logging_logging
-    proxygen::proxygen_http_webtransport
 )
 
 moxygen_add_library(moxygen_moq_varint
@@ -78,6 +78,7 @@ moxygen_add_library(moxygen_moq
     moxygen_events_moq_delivery_timeout_manager
     mvfst::mvfst_common_circular_deque
     mvfst::mvfst_priority_http_priority_queue
+    Folly::folly_chrono
     Folly::folly_coro_collect
     Folly::folly_coro_future_util
     Folly::folly_utility
@@ -143,6 +144,7 @@ moxygen_add_library(moxygen_moq_server
     MoQServer.cpp
   DEPS
     moxygen_events_moq_folly_executor_impl
+    moxygen_moq_types
     proxygen::proxygen_http_session_hq_session
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quic_wt_session
@@ -157,6 +159,7 @@ moxygen_add_library(moxygen_moq_server
     moxygen_moq_early_data_handler
     moxygen_moq_server_base
     proxygen::proxygen_hq_server
+    mvfst::mvfst_logging_qlogger
     Folly::folly_init_init
     Folly::folly_io_async_async_base
     Folly::folly_io_async_event_base_manager
@@ -179,6 +182,12 @@ moxygen_add_library(moxygen_qmux_utils
   EXPORTED_DEPS
     proxygen::proxygen_transport_qmux_qmux_framer
     mvfst::mvfst_state_transport_settings
+)
+
+moxygen_add_library(moxygen_moq_quic_address_resolver
+  EXPORTED_DEPS
+    mvfst::mvfst_config
+    Folly::folly_coro_task
 )
 
 moxygen_add_library(moxygen_moqclient_base
@@ -285,7 +294,6 @@ moxygen_add_library(moxygen_moq_webtransport_client
   SRCS
     MoQWebTransportClient.cpp
   DEPS
-    moxygen_moq_framer
     proxygen::proxygen_http_hq_connector
     proxygen::proxygen_http_session_quic_protocol_info
     proxygen::proxygen_http_webtransport_httpwebtransport
@@ -331,6 +339,7 @@ add_subdirectory(util)
 add_subdirectory(relay)
 
 if(BUILD_SAMPLES)
+  add_subdirectory(media_server)
   add_subdirectory(moqtest)
   add_subdirectory(samples)
 endif()
