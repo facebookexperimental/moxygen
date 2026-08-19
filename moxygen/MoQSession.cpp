@@ -451,7 +451,8 @@ class StreamPublisherImpl
   void setWriteHandle(proxygen::WebTransport::StreamWriteHandle* writeHandle);
 
   folly::Expected<folly::Unit, MoQPublishError> validatePublish(
-      uint64_t objectID);
+      uint64_t objectID,
+      const Extensions& extensions);
   folly::Expected<ObjectPublishStatus, MoQPublishError>
   validateObjectPublishAndUpdateState(folly::IOBuf* payload, bool finStream);
   folly::Expected<folly::Unit, MoQPublishError> objectImpl(
@@ -478,6 +479,7 @@ class StreamPublisherImpl
   std::optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   StreamType streamType_;
+  bool includeExtensions_{true}; // Subgroups only, FETCH always allows them
   TrackAlias trackAlias_{0}; // Store track alias separately from ObjectHeader
   ObjectHeader header_;
   std::optional<uint64_t> currentLengthRemaining_;
@@ -568,6 +570,7 @@ StreamPublisherImpl::StreamPublisherImpl(
       endOfGroup,
       sgPriority.has_value(),
       beginsWithFirstObject);
+  includeExtensions_ = includeExtensions;
   trackAlias_ = alias;
   setWriteHandle(writeHandle);
   setGroupAndSubgroup(groupID, subgroupID);
@@ -638,7 +641,16 @@ void StreamPublisherImpl::onStreamComplete() {
 }
 
 folly::Expected<folly::Unit, MoQPublishError>
-StreamPublisherImpl::validatePublish(uint64_t objectID) {
+StreamPublisherImpl::validatePublish(
+    uint64_t objectID,
+    const Extensions& extensions) {
+  if (!includeExtensions_ && !extensions.empty()) {
+    XLOG(ERR) << "Extensions on a subgroup opened without them sgp=" << this;
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR,
+        "Extensions on a subgroup opened with includeExtensions=false"));
+  }
   if (currentLengthRemaining_) {
     XLOG(ERR) << "Still publishing previous object sgp=" << this;
     reset(ResetStreamErrorCode::INTERNAL_ERROR);
@@ -798,7 +810,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
   }
-  auto validateRes = validatePublish(objectID);
+  auto validateRes = validatePublish(objectID, extensions);
   if (!validateRes) {
     return validateRes;
   }
@@ -841,7 +853,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
   }
-  auto validateRes = validatePublish(objectID);
+  auto validateRes = validatePublish(objectID, extensions);
   if (!validateRes) {
     return validateRes;
   }
@@ -933,7 +945,7 @@ StreamPublisherImpl::publishStatus(
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
   }
-  auto validateRes = validatePublish(objectID);
+  auto validateRes = validatePublish(objectID, extensions);
   if (!validateRes) {
     return validateRes;
   }

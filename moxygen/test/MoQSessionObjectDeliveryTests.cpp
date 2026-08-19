@@ -15,16 +15,18 @@ namespace moxygen { namespace test {
 
 // Implementation of object validation test helper
 folly::coro::Task<void> MoQSessionTest::publishValidationTest(
-    TestLogicFn testLogic) {
+    TestLogicFn testLogic,
+    TrackConsumer::BeginSubgroupOptions beginOptions) {
   co_await setupMoQSession();
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
   expectSubscribe(
-      [this, testLogic, sg1](auto sub, auto pub) -> TaskSubscribeResult {
+      [this, testLogic, sg1, beginOptions](
+          auto sub, auto pub) -> TaskSubscribeResult {
         EXPECT_CALL(
             *serverPublisherStatsCallback_, onSubscriptionStreamOpened());
         EXPECT_CALL(
             *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
-        auto sgp = pub->beginSubgroup(0, 0, 0).value();
+        auto sgp = pub->beginSubgroup(0, 0, 0, beginOptions).value();
         eventBase_.add([testLogic, sub, pub, sgp, sg1]() {
           testLogic(sub, pub, sgp, sg1);
         });
@@ -100,6 +102,29 @@ CO_TEST_P_X(MoQSessionTest, ObjectPayloadEarlyFin) {
 
     pub->publishDone(getTrackEndedPublishDone(sub.requestID));
   });
+}
+CO_TEST_P_X(MoQSessionTest, ExtensionsOnSubgroupWithoutExtensions) {
+  // Publishing an object with extensions on a subgroup opened with
+  // includeExtensions=false is an API error.
+  TrackConsumer::BeginSubgroupOptions beginOptions;
+  beginOptions.includeExtensions = false;
+  co_await publishValidationTest(
+      [](auto sub, auto pub, auto sgp, auto sgc) {
+        EXPECT_CALL(*sgc, object(0, _, _, false))
+            .WillOnce(testing::Return(folly::unit));
+        EXPECT_TRUE(sgp->object(0, test::makeBuf(10)).hasValue());
+
+        Extensions extensions;
+        extensions.insertMutableExtension(Extension(0, 42));
+        EXPECT_EQ(
+            sgp->object(1, test::makeBuf(10), std::move(extensions))
+                .error()
+                .code,
+            MoQPublishError::API_ERROR);
+
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+      },
+      beginOptions);
 }
 CO_TEST_P_X(MoQSessionTest, PublisherResetAfterBeginObject) {
   co_await publishValidationTest([](auto sub, auto pub, auto sgp, auto sgc) {

@@ -255,7 +255,9 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
       std::shared_ptr<TrackConsumer> pub,
       std::shared_ptr<SubgroupConsumer> sgp,
       std::shared_ptr<MockSubgroupConsumer> sgc)>;
-  folly::coro::Task<void> publishValidationTest(TestLogicFn testLogic);
+  folly::coro::Task<void> publishValidationTest(
+      TestLogicFn testLogic,
+      TrackConsumer::BeginSubgroupOptions beginOptions = {});
 
   folly::coro::Task<void> rescheduleN(int n);
 
