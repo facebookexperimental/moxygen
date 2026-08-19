@@ -2718,9 +2718,13 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
-  setup.params.insertParam(SetupParameter(
-      {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-       getMoQTImplementationString()}));
+  // Don't duplicate a key the application already set via addSetupParameter().
+  if (!setup.params.hasParam(
+          folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION))) {
+    setup.params.insertParam(SetupParameter(
+        {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
+         getMoQTImplementationString()}));
+  }
 
   uint64_t setupSerializationVersion = kVersionDraft14;
   if (negotiatedVersion_) {

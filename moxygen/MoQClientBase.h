@@ -20,6 +20,7 @@
 #include <moxygen/mlog/MLogger.h>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace moxygen {
 
@@ -129,6 +130,13 @@ class MoQClientBase {
     earlyDataHandler_ = handler;
   }
 
+  // Adds a parameter to every SETUP, replacing (not duplicating) any parameter
+  // this class would otherwise send with the same key. Call before setting up
+  // the session.
+  void addSetupParameter(SetupParameter parameter) {
+    setupParams_.emplace_back(std::move(parameter));
+  }
+
   void goaway(const Goaway& goaway);
   std::shared_ptr<MLogger> logger_ = nullptr;
 
@@ -154,6 +162,7 @@ class MoQClientBase {
 
   std::shared_ptr<MoQExecutor> exec_;
   proxygen::URL url_;
+  std::vector<SetupParameter> setupParams_;
   SessionFactory sessionFactory_;
   std::shared_ptr<proxygen::QuicWebTransport> quicWebTransport_;
   std::shared_ptr<proxygen::QuicWtSession> quicWtSession_;
