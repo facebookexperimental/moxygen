@@ -58,11 +58,12 @@ SubscriberState::SubscriberState(
       receiver_(
           std::make_shared<ObjectReceiver>(
               ObjectReceiver::SUBSCRIBE,
-              std::shared_ptr<ObjectReceiverCallback>(
-                  std::shared_ptr<void>(),
-                  &callback_))) {}
+              callback_)) {}
 
 SubscriberState::~SubscriberState() {
+  // The session may still hold subgroup receivers referencing callback_;
+  // detach first so any late callback can't touch this destroyed object.
+  callback_->detach();
   try {
     // Unsubscribe if we have a valid subHandle_
     if (subHandle_) {
@@ -193,9 +194,12 @@ ObjectReceiverCallback::FlowControlState SubscriberState::Callback::onObject(
     std::optional<TrackAlias> /* trackAlias */,
     const ObjectHeader& objHeader,
     Payload payload) {
-  state_.objectsReceived_++;
+  if (!state_) {
+    return FlowControlState::UNBLOCKED;
+  }
+  state_->objectsReceived_++;
   if (payload) {
-    state_.bytesReceived_ += payload->computeChainDataLength();
+    state_->bytesReceived_ += payload->computeChainDataLength();
   }
 
   if (auto sendTs =
@@ -205,15 +209,15 @@ ObjectReceiverCallback::FlowControlState SubscriberState::Callback::onObject(
                          .count();
     if (nowMs >= *sendTs) {
       uint64_t latencyMs = nowMs - *sendTs;
-      state_.totalLatencyMs_ += latencyMs;
-      state_.latencyObjects_++;
-      state_.testClient_.recordLatency(latencyMs);
+      state_->totalLatencyMs_ += latencyMs;
+      state_->latencyObjects_++;
+      state_->testClient_.recordLatency(latencyMs);
     }
   }
 
   // Update largest object seen for track restart detection
   AbsoluteLocation location(objHeader.group, objHeader.id);
-  state_.testClient_.updateLargestObjectSeen(location);
+  state_->testClient_.updateLargestObjectSeen(location);
 
   return FlowControlState::UNBLOCKED;
 }
@@ -229,37 +233,46 @@ void SubscriberState::Callback::onEndOfStream() {
 }
 
 void SubscriberState::Callback::onError(ResetStreamErrorCode code) {
-  XLOG(ERR) << "Subscriber " << state_.id_
+  if (!state_) {
+    return;
+  }
+  XLOG(ERR) << "Subscriber " << state_->id_
             << " received stream reset: " << static_cast<uint64_t>(code);
   // Don't unsubscribe immediately - let removeSubscriber handle it
-  state_.testClient_.recordReset();
+  state_->testClient_.recordReset();
 }
 
 void SubscriberState::Callback::onPublishDone(PublishDone done) {
-  XLOG(DBG1) << "Subscriber " << state_.id_
+  if (!state_) {
+    return;
+  }
+  XLOG(DBG1) << "Subscriber " << state_->id_
              << " received PublishDone - status: "
              << static_cast<uint32_t>(done.statusCode)
              << ", reason: " << done.reasonPhrase;
 
   // Library has already cleaned up subscription state; just release our handle
-  state_.subHandle_.reset();
+  state_->subHandle_.reset();
 
   // Only signal completion if track ended naturally
   if (done.statusCode == PublishDoneStatusCode::TRACK_ENDED) {
-    XLOG(DBG1) << "Subscriber " << state_.id_ << " - track ended naturally";
-    state_.testClient_.completed();
+    XLOG(DBG1) << "Subscriber " << state_->id_ << " - track ended naturally";
+    state_->testClient_.completed();
   } else {
     // Other status codes (errors, going away, etc.) don't end the test
-    XLOG(DBG1) << "Subscriber " << state_.id_
+    XLOG(DBG1) << "Subscriber " << state_->id_
                << " - PublishDone with non-TRACK_ENDED status, not ending test";
   }
 }
 
 void SubscriberState::Callback::onAllDataReceived() {
-  XLOG(DBG1) << "Subscriber " << state_.id_
+  if (!state_) {
+    return;
+  }
+  XLOG(DBG1) << "Subscriber " << state_->id_
              << " - all data received, removing subscriber";
   // Remove this subscriber from the client's map now that all streams are done
-  state_.testClient_.removeSubscriber(state_.id_);
+  state_->testClient_.removeSubscriber(state_->id_);
 }
 
 // ============================================================================
