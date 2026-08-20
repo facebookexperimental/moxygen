@@ -466,4 +466,25 @@ Fetch::Fetch(
   }
 }
 
+SetupExtensionNegotiator bothAdvertise(uint64_t key) {
+  return [key](
+             const SetupParameters& local,
+             const SetupParameters& peer,
+             uint64_t /*version*/) {
+    return local.hasParam(key) && peer.hasParam(key);
+  };
+}
+
+void applySetupParameters(
+    SetupParameters& params,
+    const std::vector<SetupParameter>& extraParams) {
+  for (const auto& param : extraParams) {
+    params.eraseAllParamsOfType(param.key);
+    auto result = params.insertParam(param);
+    if (result.hasError()) {
+      XLOG(ERR) << "Setup param not allowed, key=" << param.key;
+    }
+  }
+}
+
 } // namespace moxygen
