@@ -1329,8 +1329,13 @@ CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
   EXPECT_EQ(updateResult.error().errorCode, RequestErrorCode::NOT_SUPPORTED);
 
   // Complete the fetch
-  EXPECT_CALL(*fetchCallback_, endOfFetch());
+  folly::coro::Baton fetchComplete;
+  EXPECT_CALL(*fetchCallback_, endOfFetch()).WillOnce([&] {
+    fetchComplete.post();
+    return folly::unit;
+  });
   fetchPubCaptured->endOfFetch();
+  co_await fetchComplete;
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -1524,6 +1529,7 @@ CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNullSessionAfterAwait) {
   // fetchComplete -> session_ = null.  The cancellation token is also
   // triggered, but co_awaitTry catches the OperationCancelled — execution
   // continues to the dereference of session_ without a null check.
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 
   // Post the baton — the coroutine resumes.  Without the fix, this crashes

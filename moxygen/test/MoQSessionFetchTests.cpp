@@ -410,6 +410,7 @@ CO_TEST_P_X(MoQSessionTest, FetchBadLength) {
       co_await folly::coro::timeout(
           std::move(contract.second), std::chrono::milliseconds(100)),
       folly::FutureTimeout);
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(PreDraft18Test, FetchOverLimit) {
@@ -436,6 +437,8 @@ CO_TEST_P_X(PreDraft18Test, FetchOverLimit) {
   EXPECT_CALL(
       *clientSubscriberStatsCallback_,
       onFetchError(FetchErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*fetchCallback1, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  EXPECT_CALL(*fetchCallback2, reset(ResetStreamErrorCode::SESSION_CLOSED));
   res = co_await clientSession_->fetch(fetch, fetchCallback3);
   EXPECT_TRUE(res.hasError());
 }
@@ -470,6 +473,8 @@ CO_TEST_P_X(Draft18Test, FetchOverBidiStreamLimit) {
   EXPECT_TRUE(blocked.hasError());
   EXPECT_EQ(blocked.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
 
+  EXPECT_CALL(*fetchCb, reset(ResetStreamErrorCode::SESSION_CLOSED))
+      .Times(kLimit);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, FetchOutOfOrder) {
@@ -691,6 +696,7 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamStopSending) {
   clientWt_->readHandles.at(0)->stopSending(0);
   co_await cancelBaton;
 
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
@@ -750,6 +756,71 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamFetchCancel) {
   co_await cancelBaton;
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, FetchSessionCleanupBeforeDataStreamOpens) {
+  co_await setupMoQSession();
+
+  expectFetch([](Fetch fetch, auto /*fetchPub*/) -> TaskFetchResult {
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  folly::coro::Baton resetBaton;
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED))
+      .WillOnce([&] { resetBaton.post(); });
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await resetBaton;
+}
+
+CO_TEST_P_X(Draft18Test, FetchSessionCleanupWithOpenDataStream) {
+  co_await setupMoQSession();
+
+  expectFetch([this](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    eventBase_.add([fetchPub = std::move(fetchPub)] {
+      EXPECT_TRUE(
+          fetchPub
+              ->object(
+                  0, 0, 0, moxygen::test::makeBuf(100), noExtensions(), false)
+              .hasValue());
+    });
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false, _))
+      .WillOnce([&] {
+        objectReceived.post();
+        return folly::unit;
+      });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_TRUE(res.hasValue());
+  co_await objectReceived;
+
+  folly::coro::Baton resetBaton;
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED))
+      .WillOnce([&] { resetBaton.post(); });
+  auto dataStream = serverWt_->writeHandles.at(serverObjectStreamId());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await resetBaton;
+
+  auto* dataException = dataStream->writeException();
+  EXPECT_NE(dataException, nullptr);
+  if (dataException) {
+    EXPECT_EQ(
+        dataException->error,
+        folly::to_underlying(ResetStreamErrorCode::SESSION_CLOSED));
+  }
 }
 
 // Once the FETCH data stream FINs, peer STOP_SENDING on the bidi is

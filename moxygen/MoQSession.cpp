@@ -2224,6 +2224,10 @@ class MoQSession::FetchTrackReceiveState
     return fetchGroupOrder_;
   }
 
+  uint32_t dataStreamCancelCode() const {
+    return dataStreamCancelCode_;
+  }
+
   void resetFetchCallback(MoQSession* session) {
     callback_.reset();
     if (fetchOkAndAllDataReceived()) {
@@ -2246,8 +2250,25 @@ class MoQSession::FetchTrackReceiveState
     resetFetchCallback(session);
   }
 
+  void sessionClosed() {
+    if (!fetchEstablished_) {
+      return;
+    }
+    auto callback = std::exchange(callback_, nullptr);
+    if (bidiControl_) {
+      bidiControl_->cancel(ResetStreamErrorCode::SESSION_CLOSED);
+    }
+    dataStreamCancelCode_ =
+        folly::to_underlying(ResetStreamErrorCode::SESSION_CLOSED);
+    cancelSource_.requestCancellation();
+    if (callback) {
+      callback->reset(ResetStreamErrorCode::SESSION_CLOSED);
+    }
+  }
+
   void fetchOK(FetchOk ok) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
+    fetchEstablished_ = true;
     promise_.setValue(std::move(ok));
   }
 
@@ -2280,6 +2301,8 @@ class MoQSession::FetchTrackReceiveState
   GroupOrder fetchGroupOrder_;
   folly::coro::Promise<FetchResult> promise_;
   uint64_t currentStreamId_{0};
+  uint32_t dataStreamCancelCode_{0};
+  bool fetchEstablished_{false};
 };
 
 const std::shared_ptr<BidiStreamControl>&
@@ -2409,13 +2432,14 @@ MoQSession::~MoQSession() {
 
 void MoQSession::cleanup() {
   cancelGoawayTimeout();
-  // Each loop disarms its entry's bidi control before tearing it down so a
-  // peer close mid-shutdown can't race the canonical error delivery.
-  // fetches_ has no per-entry destroy loop, so it needs an upfront pass.
-  for (auto& [reqID, fetch] : fetches_) {
+  while (!fetches_.empty()) {
+    auto it = fetches_.begin();
+    auto fetch = std::move(it->second);
+    fetches_.erase(it);
     if (const auto& control = fetch->bidiControl()) {
       control->disarmOnPeerTermination();
     }
+    fetch->sessionClosed();
   }
   while (!pubTracks_.empty()) {
     auto it = pubTracks_.begin();
@@ -2453,10 +2477,6 @@ void MoQSession::cleanup() {
   subTracks_.clear();
   // We parse a publishDone after cleanup
   reqIdToTrackAlias_.clear();
-  // TODO: there needs to be a way to queue an error in TrackReceiveState,
-  // both from here, when close races the FETCH stream, and from readLoop
-  // where we get a reset.
-  fetches_.clear();
   for (auto& [reqID, pendingState] : pendingRequests_) {
     if (const auto& control = pendingState->bidiControl()) {
       control->disarmOnPeerTermination();
@@ -3735,6 +3755,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   auto rhToken = readHandle->getCancelToken();
   XLOG(DBG1) << __func__ << " id=" << id << " sess=" << this;
   bool isSubscriptionStream = false;
+  std::shared_ptr<FetchTrackReceiveState> fetchState;
   std::optional<folly::CancellationCallback> fetchCancelCb;
   auto g = folly::makeGuard([func = __func__, this, id, &isSubscriptionStream] {
     XLOG(DBG1) << "exit " << func << " id=" << id << " sess=" << this;
@@ -3824,14 +3845,16 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
 
   // Lambda for onFetch
   auto onFetchFunc =
-      [this, &token, &codec, &fetchCancelCb, &readHandle](RequestID requestID) {
+      [this, &token, &codec, &fetchState, &fetchCancelCb, &readHandle](
+          RequestID requestID) {
         auto state = getFetchTrackReceiveState(requestID);
         if (state) {
           // FetchTrackReceiveState lifecycle now controls read loop
+          fetchState = state;
           token = state->getCancelToken();
-          fetchCancelCb.emplace(token, [&readHandle] {
-            if (readHandle) {
-              readHandle->stopSending(0);
+          fetchCancelCb.emplace(token, [&readHandle, &fetchState] {
+            if (readHandle && fetchState) {
+              readHandle->stopSending(fetchState->dataStreamCancelCode());
               readHandle = nullptr;
             }
           });
