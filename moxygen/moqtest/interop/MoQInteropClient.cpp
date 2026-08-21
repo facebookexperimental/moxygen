@@ -11,6 +11,7 @@
 #include <folly/coro/Sleep.h>
 #include <folly/coro/Timeout.h>
 #include "moxygen/MoQRelaySession.h"
+#include "moxygen/MoQVersions.h"
 #include "moxygen/MoQWebTransportClient.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 
@@ -102,12 +103,15 @@ class SimplePublisher : public moxygen::Publisher {
 
 namespace moxygen {
 
-// ALPN preference list, ordered highest-preference first.
-// "moq-00" is the legacy ALPN used by drafts < 15 (see kAlpnMoqtLegacy in
-// MoQVersions.h) and is what moq-rs and some other implementations offer for
-// draft-14 raw-QUIC handshakes. Including it here lets the interop client
-// negotiate with those servers.
-const std::vector<std::string> kInteropAlpns = {"moqt-16", "moqt-14", "moq-00"};
+namespace {
+void recordNegotiatedVersion(
+    InteropTestResult& result,
+    const MoQClient& client) {
+  if (client.moqSession_) {
+    result.negotiatedVersion = client.moqSession_->getNegotiatedVersion();
+  }
+}
+} // namespace
 
 MoQInteropClient::MoQInteropClient(
     folly::EventBase* evb,
@@ -115,13 +119,15 @@ MoQInteropClient::MoQInteropClient(
     bool useQuicTransport,
     bool tlsDisableVerify,
     std::chrono::milliseconds connectTimeout,
-    std::chrono::milliseconds transactionTimeout)
+    std::chrono::milliseconds transactionTimeout,
+    const std::string& versions)
     : evb_(evb),
       url_(std::move(url)),
       useQuicTransport_(useQuicTransport),
       tlsDisableVerify_(tlsDisableVerify),
       connectTimeout_(connectTimeout),
       transactionTimeout_(transactionTimeout),
+      alpns_(getMoqtProtocols(versions, /*useStandard=*/true)),
       moqExecutor_(std::make_unique<MoQFollyExecutorImpl>(evb)) {}
 
 folly::coro::Task<std::unique_ptr<MoQClient>>
@@ -143,12 +149,7 @@ MoQInteropClient::createAndSetupSession() {
   auto totalTimeout = connectTimeout_ + transactionTimeout_;
   co_await folly::coro::timeout(
       moqClient->setupMoQSession(
-          connectTimeout_,
-          transactionTimeout_,
-          nullptr,
-          nullptr,
-          ts,
-          kInteropAlpns),
+          connectTimeout_, transactionTimeout_, nullptr, nullptr, ts, alpns_),
       totalTimeout);
 
   co_return std::move(moqClient);
@@ -185,7 +186,7 @@ MoQInteropClient::createAndSetupRelaySession() {
           publishHandler,
           nullptr,
           ts,
-          kInteropAlpns),
+          alpns_),
       totalTimeout);
 
   co_return std::move(moqClient);
@@ -220,8 +221,10 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testSetupOnly() {
             nullptr, // no publish handler
             nullptr, // no subscribe handler
             ts,
-            kInteropAlpns),
+            alpns_),
         totalTimeout);
+
+    recordNegotiatedVersion(result, *moqClient);
 
     // SETUP exchange completed successfully - close gracefully
     if (moqClient->moqSession_) {
@@ -257,6 +260,7 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceOnly() {
 
   try {
     auto moqClient = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *moqClient);
 
     PublishNamespace pn;
     pn.trackNamespace = TrackNamespace({"moq-test"}, {"interop"});
@@ -297,6 +301,7 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testSubscribeError() {
 
   try {
     auto moqClient = co_await createAndSetupSession();
+    recordNegotiatedVersion(result, *moqClient);
 
     FullTrackName ftn{TrackNamespace({"nonexistent"}), "no-such-track"};
     auto sub = SubscribeRequest::make(ftn);
@@ -349,6 +354,7 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceSubscribe() {
   try {
     // Set up publisher and announce
     publisher = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *publisher);
 
     PublishNamespace pn;
     pn.trackNamespace = TrackNamespace({"moq-interop-test"});
@@ -426,6 +432,7 @@ MoQInteropClient::testPublishNamespaceDone() {
 
   try {
     auto moqClient = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *moqClient);
 
     PublishNamespace pn;
     pn.trackNamespace =
@@ -477,6 +484,7 @@ MoQInteropClient::testSubscribeBeforeAnnounce() {
   try {
     // Step 1: Connect subscriber first
     subscriber = co_await createAndSetupSession();
+    recordNegotiatedVersion(result, *subscriber);
 
     FullTrackName ftn{
         TrackNamespace(std::vector<std::string>{"moq-test", "interop"}),
