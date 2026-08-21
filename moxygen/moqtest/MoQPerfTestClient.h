@@ -59,10 +59,17 @@ class SubscriberState {
   bool hasError_{false};
 
  private:
-  // ObjectReceiverCallback implementation
+  // ObjectReceiverCallback implementation.
+  // The MoQ session keeps subgroup receivers (and therefore this callback)
+  // alive past SubscriberState destruction, so detach() severs the back
+  // pointer and later callbacks become no-ops.
   class Callback : public ObjectReceiverCallback {
    public:
-    explicit Callback(SubscriberState& state) : state_(state) {}
+    explicit Callback(SubscriberState& state) : state_(&state) {}
+
+    void detach() {
+      state_ = nullptr;
+    }
 
     FlowControlState onObject(
         std::optional<TrackAlias> trackAlias,
@@ -79,10 +86,10 @@ class SubscriberState {
     void onAllDataReceived() override;
 
    private:
-    SubscriberState& state_;
+    SubscriberState* state_;
   };
 
-  Callback callback_{*this};
+  std::shared_ptr<Callback> callback_{std::make_shared<Callback>(*this)};
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClientBase> moqClient_;
   std::shared_ptr<ObjectReceiver> receiver_;
