@@ -289,6 +289,15 @@ class MoQSession : public Subscriber,
 
   void goaway(Goaway goaway) override;
 
+  // Draft-18 request-stream GOAWAY (per-request migration): ask the peer to
+  // migrate the single established request `requestID` to `newSessionUri`
+  // (empty = current session). Writes a GOAWAY on that request's reply stream;
+  // does NOT drain the session or tear down the request.
+  void requestStreamGoaway(
+      RequestID requestID,
+      std::string newSessionUri,
+      std::chrono::milliseconds timeout);
+
   folly::coro::Task<Setup> setup(Setup setup);
   folly::Expected<folly::Unit, quic::TransportErrorCode> sendSetup(Setup setup);
   folly::coro::Task<Setup> awaitPeerSetup();
@@ -519,6 +528,10 @@ class MoQSession : public Subscriber,
       return wasEstablished;
     }
 
+    bool markRequestStreamGoawaySent() {
+      return !std::exchange(requestStreamGoawaySent_, true);
+    }
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -533,6 +546,7 @@ class MoQSession : public Subscriber,
     std::shared_ptr<ReplyContext> replyContext_;
     std::shared_ptr<BidiStreamControl> bidiControl_;
     State state_{State::PENDING};
+    bool requestStreamGoawaySent_{false};
   };
 
   void onNewUniStream(

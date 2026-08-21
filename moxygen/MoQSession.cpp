@@ -2621,6 +2621,68 @@ void MoQSession::goaway(Goaway goaway) {
   }
 }
 
+void MoQSession::requestStreamGoaway(
+    RequestID requestID,
+    std::string newSessionUri,
+    std::chrono::milliseconds timeout) {
+  XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
+
+  // Request-stream GOAWAY (per-request migration) is a draft-18+ feature.
+  auto negotiatedVersion = getNegotiatedVersion();
+  if (!negotiatedVersion || getDraftMajorVersion(*negotiatedVersion) < 18) {
+    XLOG(ERR) << "request-stream GOAWAY on pre-draft-18 session sess=" << this;
+    return;
+  }
+
+  XCHECK_LE(newSessionUri.size(), kMaxGoawayUriLength)
+      << "request-stream GOAWAY newSessionUri must not exceed 8192 bytes";
+
+  // Spec draft-18 §10.4: only a server may advertise a new session URI. Clear
+  // it rather than emit an illegal client URI; this is a local-misuse guard, so
+  // do not close the session.
+  if (dir_ != MoQControlCodec::Direction::SERVER && !newSessionUri.empty()) {
+    XLOG(ERR) << "client may not advertise request-stream GOAWAY newSessionUri "
+              << "sess=" << this;
+    newSessionUri.clear();
+  }
+
+  auto it = pubTracks_.find(requestID);
+  if (it == pubTracks_.end()) {
+    XLOG(ERR) << "request-stream GOAWAY for unknown request id=" << requestID
+              << " sess=" << this;
+    return;
+  }
+  auto* ctx = it->second->replyContext();
+  if (!ctx) {
+    XLOG(ERR) << "request-stream GOAWAY: no reply context for id=" << requestID
+              << " sess=" << this;
+    return;
+  }
+  if (!it->second->markRequestStreamGoawaySent()) {
+    XLOG(ERR) << "duplicate request-stream GOAWAY for id=" << requestID
+              << " sess=" << this;
+    return;
+  }
+  // Writing after the reply stream is closed is a silent no-op in the reply
+  // context, so no explicit closed-stream check is needed here.
+
+  Goaway g;
+  g.newSessionUri = std::move(newSessionUri);
+  g.timeout = static_cast<uint64_t>(timeout.count());
+  g.requestID = std::nullopt;
+  auto res =
+      moqFrameWriter_.writeGoaway(ctx->writeBuf(), g, /*onRequestStream=*/true);
+  if (!res) {
+    XLOG(ERR) << "writeGoaway on request stream failed sess=" << this;
+    return;
+  }
+  ctx->flush(/*fin=*/false);
+
+  if (logger_) {
+    logger_->logGoaway(g);
+  }
+}
+
 void MoQSession::checkForCloseOnDrain() {
   if (draining_ && !hasOpenRequestsForDrain()) {
     close(SessionCloseErrorCode::NO_ERROR);
