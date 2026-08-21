@@ -5750,9 +5750,13 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       buf,
       FrameType::SUBSCRIBE_OK,
       /*postTerminal=*/
+      // GOAWAY is admitted on the reply stream so the responder can ask us to
+      // migrate this request. Responder-side admission stays deferred until
+      // PUBLISH-initiated migration lands.
       {FrameType::PUBLISH_DONE,
        FrameType::REQUEST_OK,
-       FrameType::REQUEST_ERROR},
+       FrameType::REQUEST_ERROR,
+       FrameType::GOAWAY},
       reqID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
@@ -6219,7 +6223,10 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   auto sendResult = sendRequest(
       writeBuf,
       FrameType::FETCH_OK,
-      /*postTerminal=*/{FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
+      // GOAWAY is admitted here too; responder-side admission is deferred until
+      // PUBLISH-initiated migration lands.
+      /*postTerminal=*/
+      {FrameType::REQUEST_OK, FrameType::REQUEST_ERROR, FrameType::GOAWAY},
       reqID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
