@@ -13,6 +13,7 @@
 #include "moxygen/moqtest/MoQTestServer.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/samples/util/Utils.h"
+#include "moxygen/util/SignalHandler.h"
 
 namespace moxygen {
 
@@ -132,6 +133,18 @@ int main(int argc, char** argv) {
     return 0;
   } else {
     folly::EventBase evb;
+    // On SIGINT/SIGTERM, drain the relay-client session (which lives on the
+    // worker EB) before tearing down so the relay sees a clean close.
+    moxygen::SignalHandler signalHandler(&evb, [&](int) {
+      worker.getEventBase()->runInEventBaseThreadAndWait(
+          [&server] { server->gracefulShutdown(); });
+    });
     evb.loopForever();
+    if (FLAGS_quic) {
+      server->stop();
+    }
+    if (qmuxServer) {
+      qmuxServer->stop();
+    }
   }
 }

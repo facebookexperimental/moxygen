@@ -50,6 +50,22 @@ MoQTestServer::MoQTestServer(
           kEndpointName),
       versions_(versions) {}
 
+folly::coro::Task<void> MoQTestServer::delay(uint64_t ms) {
+  co_await folly::coro::sleep(std::chrono::milliseconds(ms), &timekeeper_);
+}
+
+void MoQTestServer::gracefulShutdown() {
+  // Cancel in-flight send coroutines so they stop co_await'ing on the folly
+  // Timekeeper, which would otherwise crash if recreated during teardown.
+  for (auto& [key, state] : activeSubscriptions_) {
+    state.cancelSource.requestCancellation();
+  }
+  publishNamespaceHandle_.reset();
+  if (relaySession_) {
+    relaySession_->drain();
+  }
+}
+
 void MoQTestServer::removeSubscription(SubKey key) {
   auto it = activeSubscriptions_.find(key);
   if (it != activeSubscriptions_.end()) {
@@ -208,8 +224,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
 
     // If SubGroup Hasn't Been Ended Already
@@ -264,8 +279,7 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
   co_return;
@@ -343,8 +357,7 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
 
     // If SubGroup Hasn't Been Ended Already
@@ -414,10 +427,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       }
 
       // Set Delay Based on Object Frequency
-      co_await co_withExecutor(
-          folly::getGlobalCPUExecutor(),
-          folly::coro::sleep(
-              std::chrono::milliseconds(params.objectFrequency)));
+      co_await delay(params.objectFrequency);
     }
   }
 
@@ -543,8 +553,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
 
@@ -595,8 +604,7 @@ folly::coro::Task<void> MoQTestServer::fetchOneSubgroupPerObject(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
 
@@ -653,8 +661,7 @@ folly::coro::Task<void> MoQTestServer::fetchTwoSubgroupsPerGroup(
       }
 
       // Set Delay Based on Object Frequency
-      co_await folly::coro::sleep(
-          std::chrono::milliseconds(params.objectFrequency));
+      co_await delay(params.objectFrequency);
     }
   }
 
