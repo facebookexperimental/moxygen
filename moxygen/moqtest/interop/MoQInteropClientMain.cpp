@@ -4,15 +4,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/String.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/init/Init.h>
-#include <folly/logging/xlog.h>
 #include <gflags/gflags.h>
 #include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
 
+#include "moxygen/MoQVersions.h"
 #include "moxygen/moqtest/interop/MoQInteropClient.h"
 
 // CLI flags (also settable via environment variables)
@@ -27,6 +28,11 @@ DEFINE_bool(
     false,
     "Disable TLS certificate verification (env: TLS_DISABLE_VERIFY=1)");
 DEFINE_bool(verbose, false, "Enable verbose output (env: VERBOSE=1)");
+DEFINE_string(
+    versions,
+    "",
+    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all "
+    "supported. (env: MOQT_VERSIONS)");
 DEFINE_int32(connect_timeout, 2000, "Connect timeout in milliseconds");
 DEFINE_int32(transaction_timeout, 2000, "Transaction timeout in milliseconds");
 
@@ -59,6 +65,13 @@ void applyEnvVarDefaults() {
     const char* verboseEnv = std::getenv("VERBOSE");
     if (verboseEnv && std::string(verboseEnv) == "1") {
       FLAGS_verbose = true;
+    }
+  }
+
+  if (FLAGS_versions.empty()) {
+    const char* versionsEnv = std::getenv("MOQT_VERSIONS");
+    if (versionsEnv && versionsEnv[0] != '\0') {
+      FLAGS_versions = versionsEnv;
     }
   }
 }
@@ -118,6 +131,17 @@ void printTapResult(
   // YAML diagnostic block
   std::cout << "  ---" << std::endl;
   std::cout << "  duration_ms: " << result.duration.count() << std::endl;
+  if (result.negotiatedVersion) {
+    std::cout << "  negotiated_version: draft-"
+              << moxygen::getDraftMajorVersion(*result.negotiatedVersion)
+              << std::endl;
+  }
+  if (result.divergentNegotiatedVersion) {
+    std::cout << "  negotiated_version_divergent: draft-"
+              << moxygen::getDraftMajorVersion(
+                     *result.divergentNegotiatedVersion)
+              << std::endl;
+  }
   if (!result.message.empty()) {
     if (result.passed) {
       std::cout << "  info: " << result.message << std::endl;
@@ -181,6 +205,10 @@ int main(int argc, char** argv) {
   std::cout << "# Relay: " << FLAGS_relay << std::endl;
   std::cout << "# Transport: " << (useQuic ? "QUIC" : "WebTransport")
             << std::endl;
+  std::cout << "# Offered ALPNs: "
+            << folly::join(
+                   ", ", moxygen::getMoqtProtocols(FLAGS_versions, true))
+            << std::endl;
   std::cout << "1.." << testsToRun.size() << std::endl;
 
   folly::EventBase evb;
@@ -190,7 +218,8 @@ int main(int argc, char** argv) {
       useQuic,
       FLAGS_tls_disable_verify,
       std::chrono::milliseconds(FLAGS_connect_timeout),
-      std::chrono::milliseconds(FLAGS_transaction_timeout));
+      std::chrono::milliseconds(FLAGS_transaction_timeout),
+      FLAGS_versions);
 
   int failed = 0;
 

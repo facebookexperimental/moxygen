@@ -9,7 +9,10 @@
 #include <folly/coro/Task.h>
 #include <proxygen/lib/utils/URL.h>
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <vector>
 #include "moxygen/MoQClient.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 
@@ -20,6 +23,11 @@ struct InteropTestResult {
   std::string testName;
   std::chrono::milliseconds duration{0};
   std::string message;
+  // Draft negotiated on the wire, not the one requested.
+  std::optional<uint64_t> negotiatedVersion;
+  // Set only if a later session in the same test negotiated a different draft,
+  // which makes negotiatedVersion unrepresentative.
+  std::optional<uint64_t> divergentNegotiatedVersion;
 };
 
 class MoQInteropClient {
@@ -30,7 +38,8 @@ class MoQInteropClient {
       bool useQuicTransport,
       bool tlsDisableVerify,
       std::chrono::milliseconds connectTimeout,
-      std::chrono::milliseconds transactionTimeout);
+      std::chrono::milliseconds transactionTimeout,
+      const std::string& versions = "");
 
   ~MoQInteropClient() = default;
 
@@ -60,6 +69,7 @@ class MoQInteropClient {
   bool tlsDisableVerify_;
   std::chrono::milliseconds connectTimeout_;
   std::chrono::milliseconds transactionTimeout_;
+  std::vector<std::string> alpns_;
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
 };
 
