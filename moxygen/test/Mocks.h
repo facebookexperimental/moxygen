@@ -136,6 +136,8 @@ class MockTrackConsumer : public TrackConsumer {
       publishDone,
       (PublishDone),
       (override));
+
+  MOCK_METHOD(void, goaway, (Goaway), (override));
 };
 
 class MockFetchConsumer : public FetchConsumer {
@@ -179,6 +181,8 @@ class MockFetchConsumer : public FetchConsumer {
       (override));
 
   MOCK_METHOD(void, reset, (ResetStreamErrorCode), (override));
+
+  MOCK_METHOD(void, goaway, (Goaway), (override));
 
   MOCK_METHOD(
       (folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>),

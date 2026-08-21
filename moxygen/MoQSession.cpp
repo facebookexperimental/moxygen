@@ -24,6 +24,9 @@ namespace {
 using namespace moxygen;
 constexpr uint64_t kMaxSendTokenCacheSize(1024);
 
+// Draft-18 §10.4: GOAWAY newSessionUri MUST NOT exceed 8192 bytes.
+constexpr uint64_t kMaxGoawayUriLength(8192);
+
 // Bit allocations for 32-bit order: sub=5, pub=8, group=14, subgroup=5
 constexpr uint32_t kSubPriBits = 5;
 constexpr uint32_t kPubPriBits = 8;
@@ -1963,11 +1966,20 @@ class MoQSession::TrackReceiveStateBase {
     return bidiControl_;
   }
 
+  // Marks that a draft-18 request-stream GOAWAY has been delivered for this
+  // request. Returns true the first time (newly marked); false if one was
+  // already delivered (a second is a protocol violation). The flag lives with
+  // the per-request state, so it is freed automatically on teardown.
+  bool markRequestStreamGoawaySeen() {
+    return !std::exchange(requestStreamGoawaySeen_, true);
+  }
+
  protected:
   FullTrackName fullTrackName_;
   RequestID requestID_;
   folly::CancellationSource cancelSource_;
   std::shared_ptr<BidiStreamControl> bidiControl_;
+  bool requestStreamGoawaySeen_{false};
 };
 
 class MoQSession::SubscribeTrackReceiveState
@@ -5465,6 +5477,85 @@ void MoQSession::onGoaway(Goaway goaway) {
   if (subscribeHandler_ &&
       typeid(subscribeHandler_.get()) != typeid(publishHandler_.get())) {
     subscribeHandler_->goaway(goaway);
+  }
+}
+
+void MoQSession::onRequestStreamGoaway(RequestID requestID, Goaway goaway) {
+  XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
+
+  if (logger_) {
+    logger_->logGoaway(goaway, ControlMessageType::PARSED);
+  }
+
+  // Request-stream GOAWAY (per-request migration) is a draft-18+ feature.
+  auto negotiatedVersion = getNegotiatedVersion();
+  if (!negotiatedVersion || getDraftMajorVersion(*negotiatedVersion) < 18) {
+    XLOG(ERR) << "request-stream GOAWAY on pre-draft-18 session sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  // Spec draft-18 §10.4: only a server may advertise a new session URI.
+  if (dir_ == MoQControlCodec::Direction::SERVER &&
+      !goaway.newSessionUri.empty()) {
+    XLOG(ERR) << "Server received request-stream GOAWAY newSessionUri sess="
+              << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+  if (goaway.newSessionUri.size() > kMaxGoawayUriLength) {
+    XLOG(ERR) << "request-stream GOAWAY newSessionUri too long len="
+              << goaway.newSessionUri.size() << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  // Resolve the consumer from the stream's RequestID (goaway.requestID is unset
+  // on a request stream). A SUBSCRIBE request maps via reqIdToTrackAlias_; a
+  // FETCH request lives directly in fetches_.
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  std::shared_ptr<FetchConsumer> fetchConsumer;
+  TrackReceiveStateBase* receiveState = nullptr;
+  auto aliasIt = reqIdToTrackAlias_.find(requestID);
+  if (aliasIt != reqIdToTrackAlias_.end()) {
+    if (auto state = getSubscribeTrackReceiveState(aliasIt->second)) {
+      trackConsumer = state->getSubscribeCallback();
+      receiveState = state.get();
+    }
+  } else {
+    auto fetchIt = fetches_.find(requestID);
+    if (fetchIt != fetches_.end()) {
+      fetchConsumer = fetchIt->second->getFetchCallback();
+      receiveState = fetchIt->second.get();
+    }
+  }
+
+  if (!trackConsumer && !fetchConsumer) {
+    // A GOAWAY racing after the app already re-issued and tore down the request
+    // is expected; do not close the session.
+    XLOG(DBG1) << "request-stream GOAWAY for unknown request id=" << requestID
+               << " sess=" << this;
+    return;
+  }
+
+  // Spec draft-18: more than one GOAWAY on a single request stream is a
+  // session-level protocol violation. The dedup flag lives on the per-request
+  // receive state, so it is freed automatically when the request is torn down.
+  if (receiveState && !receiveState->markRequestStreamGoawaySeen()) {
+    XLOG(ERR) << "Multiple request-stream GOAWAYs for request id=" << requestID
+              << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return;
+  }
+
+  // Surface the migration request to the application. GOAWAY does not impact
+  // subscription state; the app drives teardown.
+  folly::RequestContextScopeGuard guard;
+  setRequestSession();
+  if (trackConsumer) {
+    trackConsumer->goaway(std::move(goaway));
+  } else {
+    fetchConsumer->goaway(std::move(goaway));
   }
 }
 

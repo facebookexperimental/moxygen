@@ -188,6 +188,12 @@ class TrackConsumer {
   virtual folly::Expected<folly::Unit, MoQPublishError> publishDone(
       PublishDone pubDone) = 0;
 
+  // Draft-18 request-stream GOAWAY: the publisher requests migration of THIS
+  // subscription/fetch. The app SHOULD re-issue on goaway.newSessionUri (or the
+  // current session if empty) and then tear down this request
+  // (unsubscribe()/fetchCancel()). goaway.requestID is unset (implicit).
+  virtual void goaway(Goaway /*goaway*/) {}
+
   // Set a callback to be notified when objects are delivered.
   virtual void setDeliveryCallback(std::shared_ptr<DeliveryCallback> callback) {
     // Default implementation is a no-op. This is only implemented by the
@@ -276,6 +282,12 @@ class FetchConsumer {
   // consumer is writing, this resets the transport stream with the given error
   // code.  The stream will be reliably delivered up to the last checkpoint().
   virtual void reset(ResetStreamErrorCode error) = 0;
+
+  // Draft-18 request-stream GOAWAY: the publisher requests migration of THIS
+  // subscription/fetch. The app SHOULD re-issue on goaway.newSessionUri (or the
+  // current session if empty) and then tear down this request
+  // (unsubscribe()/fetchCancel()). goaway.requestID is unset (implicit).
+  virtual void goaway(Goaway /*goaway*/) {}
 
   // Wait for the fetch to become writable
   virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>

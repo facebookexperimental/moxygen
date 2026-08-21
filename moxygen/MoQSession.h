@@ -767,6 +767,7 @@ class MoQSession : public Subscriber,
   void onTrackStatusOk(TrackStatusOk trackStatusOk) override;
   void onTrackStatusError(TrackStatusError trackStatusError) override;
   void onGoaway(Goaway goaway) override;
+  void onRequestStreamGoaway(RequestID requestID, Goaway goaway) override;
   void onConnectionError(ErrorCode error) override;
 
   // PublishNamespace callback methods - default implementations for simple

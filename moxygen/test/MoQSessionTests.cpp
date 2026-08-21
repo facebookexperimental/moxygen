@@ -675,6 +675,129 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
 
   subscribeHandler->unsubscribe();
 }
+
+// Draft-18 request-stream GOAWAY (per-request migration). These exercise
+// MoQSession::onRequestStreamGoaway: the codec already routes a GOAWAY received
+// on an established request stream here. The first client-initiated request has
+// internal RequestID 0, which keys subTracks_/reqIdToTrackAlias_/fetches_.
+class Draft18RequestStreamGoawayTest : public MoQSessionTest {
+ protected:
+  // Internal RequestID of the first client-initiated request.
+  const RequestID kFirstRequestID{0};
+
+  // onRequestStreamGoaway is a ControlCallback override; the codec invokes it
+  // on a GOAWAY received on an established request stream. Reach it through the
+  // public base interface to mirror that dispatch path.
+  static void deliverRequestStreamGoaway(
+      const std::shared_ptr<MoQSession>& session,
+      RequestID requestID,
+      Goaway goaway) {
+    static_cast<MoQControlCodec::ControlCallback&>(*session)
+        .onRequestStreamGoaway(requestID, std::move(goaway));
+  }
+
+  folly::coro::Task<std::shared_ptr<Publisher::SubscriptionHandle>>
+  openClientSubscription() {
+    co_await setupMoQSession();
+    expectSubscribe([](auto sub, auto /* pub */) -> TaskSubscribeResult {
+      co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    });
+    auto result = co_await clientSession_->subscribe(
+        getSubscribe(kTestTrackName), subscribeCallback_);
+    EXPECT_FALSE(result.hasError());
+    if (result.hasError()) {
+      co_return nullptr;
+    }
+    co_return result.value();
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft18RequestStreamGoawayTest,
+    Draft18RequestStreamGoawayTest,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+CO_TEST_P_X(
+    Draft18RequestStreamGoawayTest,
+    SurfacesMigrationToSubscribeConsumer) {
+  auto subscription = co_await openClientSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  Goaway received;
+  EXPECT_CALL(*subscribeCallback_, goaway(_))
+      .WillOnce(testing::Invoke([&received](Goaway goaway) {
+        received = std::move(goaway);
+      }));
+
+  Goaway goaway;
+  goaway.newSessionUri = "moqt://relay-b.example/path";
+  goaway.timeout = 5000;
+  deliverRequestStreamGoaway(clientSession_, kFirstRequestID, goaway);
+
+  // Surfaced verbatim; GOAWAY does not impact subscription state, so the
+  // handle remains usable.
+  EXPECT_EQ(received.newSessionUri, "moqt://relay-b.example/path");
+  EXPECT_EQ(received.timeout, 5000);
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+
+  subscription->unsubscribe();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestStreamGoawayTest,
+    ServerRejectsRequestStreamGoawayWithUri) {
+  co_await setupMoQSession();
+
+  // A client must not advertise a new session URI; a server receiving one on a
+  // request stream MUST treat it as a protocol violation.
+  Goaway goaway;
+  goaway.newSessionUri = "moqt://relay-b.example/path";
+  deliverRequestStreamGoaway(serverSession_, RequestID(2), goaway);
+
+  EXPECT_TRUE(serverSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18RequestStreamGoawayTest, UnknownRequestIsNoOp) {
+  co_await setupMoQSession();
+
+  // No request has been established, so the lookup misses. A GOAWAY racing
+  // after teardown is expected: no callback, no close, no crash.
+  Goaway goaway;
+  goaway.timeout = 5000;
+  deliverRequestStreamGoaway(clientSession_, kFirstRequestID, goaway);
+
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestStreamGoawayTest,
+    SecondRequestStreamGoawayClosesSession) {
+  auto subscription = co_await openClientSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  EXPECT_CALL(*subscribeCallback_, goaway(_)).Times(1);
+  // The protocol-violation close tears down the open subscription, which
+  // delivers PUBLISH_DONE to the consumer.
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  Goaway goaway;
+  goaway.timeout = 5000;
+  deliverRequestStreamGoaway(clientSession_, kFirstRequestID, goaway);
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+
+  // More than one GOAWAY on a single request stream is a protocol violation.
+  deliverRequestStreamGoaway(clientSession_, kFirstRequestID, goaway);
+  EXPECT_TRUE(clientSession_->isClosed());
+}
+
 CO_TEST_P_X(MoQSessionTest, UniStreamBeforeSetup) {
   if (useUniControlStreams(getServerSelectedVersion())) {
     // Draft 18+ uses uni streams for control, so receiving one before
