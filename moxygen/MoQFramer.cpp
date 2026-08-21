@@ -3032,7 +3032,8 @@ MoQFrameParser::parseTrackStatusError(folly::io::Cursor& cursor, size_t length)
 
 folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     folly::io::Cursor& cursor,
-    size_t length) const noexcept {
+    size_t length,
+    bool onRequestStream) const noexcept {
   Goaway goaway;
   auto res = parseFixedString(cursor, length);
   if (!res) {
@@ -3048,13 +3049,17 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     length -= timeout->second;
     goaway.timeout = timeout->first;
 
-    auto requestID = decodeVarint(cursor, length);
-    if (!requestID) {
-      XLOG(DBG4) << "parseGoaway: UNDERFLOW on requestID";
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    // Per draft 18, the Request ID is present only when GOAWAY is sent on the
+    // control stream; a request-stream GOAWAY omits it entirely.
+    if (!onRequestStream) {
+      auto requestID = decodeVarint(cursor, length);
+      if (!requestID) {
+        XLOG(DBG4) << "parseGoaway: UNDERFLOW on requestID";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= requestID->second;
+      goaway.requestID = RequestID(requestID->first);
     }
-    length -= requestID->second;
-    goaway.requestID = RequestID(requestID->first);
   }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -5991,7 +5996,8 @@ WriteResult MoQFrameWriter::writeTrackStatusError(
 
 WriteResult MoQFrameWriter::writeGoaway(
     folly::IOBufQueue& writeBuf,
-    const Goaway& goaway) const noexcept {
+    const Goaway& goaway,
+    bool onRequestStream) const noexcept {
   XCHECK(version_.has_value()) << "Version needs to be set to write Goaway";
   size_t size = 0;
   bool error = false;
@@ -6000,9 +6006,10 @@ WriteResult MoQFrameWriter::writeGoaway(
   if (getDraftMajorVersion(*version_) >= 18) {
     writeVarint(writeBuf, goaway.timeout, size, error);
     // Per draft 18, Request ID is present only when GOAWAY is sent on the
-    // control stream. Callers signal request-stream GOAWAY by leaving
-    // requestID unset.
-    if (goaway.requestID.has_value()) {
+    // control stream; a request-stream GOAWAY omits it entirely.
+    XCHECK(onRequestStream || goaway.requestID.has_value())
+        << "RequestID required for draft-18+ control-stream GOAWAY";
+    if (!onRequestStream) {
       writeVarint(writeBuf, goaway.requestID->value, size, error);
     }
   }

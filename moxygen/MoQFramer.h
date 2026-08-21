@@ -243,7 +243,8 @@ class MoQFrameParser {
 
   folly::Expected<Goaway, ErrorCode> parseGoaway(
       folly::io::Cursor& cursor,
-      size_t length) const noexcept;
+      size_t length,
+      bool onRequestStream = false) const noexcept;
 
   folly::Expected<MaxRequestID, ErrorCode> parseMaxRequestID(
       folly::io::Cursor& cursor,
@@ -686,8 +687,10 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const TrackStatusError& trackStatusError) const noexcept;
 
-  WriteResult writeGoaway(folly::IOBufQueue& writeBuf, const Goaway& goaway)
-      const noexcept;
+  WriteResult writeGoaway(
+      folly::IOBufQueue& writeBuf,
+      const Goaway& goaway,
+      bool onRequestStream = false) const noexcept;
 
   WriteResult writeSubscribeNamespace(
       folly::IOBufQueue& writeBuf,

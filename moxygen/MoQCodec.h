@@ -100,6 +100,13 @@ class MoQControlCodec : public MoQCodec {
     virtual void onNamespaceDone(NamespaceDone) {}
     virtual void onTrackStatusError(TrackStatusError) {}
     virtual void onGoaway(Goaway) {}
+    // Draft-18 GOAWAY received on a request (bidi) stream — individual request
+    // migration. requestID identifies the request via the stream it arrived on
+    // (the wire form carries no Request ID). Default no-op; per-request
+    // handling is added separately.
+    virtual void onRequestStreamGoaway(
+        RequestID /*requestID*/,
+        Goaway /*goaway*/) {}
     // Draft 18+ only.
     virtual void onSubscribeTracks(SubscribeTracks) {}
     // Draft 18+ only.

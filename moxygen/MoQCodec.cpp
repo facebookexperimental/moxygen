@@ -885,10 +885,22 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::GOAWAY: {
-      auto res = moqFrameParser_.parseGoaway(cursor, curFrameLength_);
+      auto streamReqID = getStreamRequestID();
+      // Per-request migration (request-stream GOAWAY) is draft-18+ only and is
+      // identified by the stream carrying a RequestID; otherwise this is the
+      // session-level (control-stream) GOAWAY.
+      const bool onRequestStream = streamReqID.has_value() &&
+          negotiatedVersion_ && getDraftMajorVersion(*negotiatedVersion_) >= 18;
+      auto res = moqFrameParser_.parseGoaway(
+          cursor, curFrameLength_, /*onRequestStream=*/onRequestStream);
       if (res) {
         if (callback_) {
-          callback_->onGoaway(std::move(res.value()));
+          if (onRequestStream) {
+            callback_->onRequestStreamGoaway(
+                *streamReqID, std::move(res.value()));
+          } else {
+            callback_->onGoaway(std::move(res.value()));
+          }
         }
       } else {
         return folly::makeUnexpected(res.error());
