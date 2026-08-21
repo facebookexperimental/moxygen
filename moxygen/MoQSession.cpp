@@ -599,9 +599,11 @@ StreamPublisherImpl::StreamPublisherImpl(
       writeBuf_,
       trackAlias_,
       header_,
-      format,
-      includeExtensions,
-      beginsWithFirstObject);
+      SubgroupOptions{
+          .hasExtensions = includeExtensions,
+          .subgroupIDFormat = format,
+          .hasEndOfGroup = endOfGroup,
+          .beginsWithFirstObject = beginsWithFirstObject});
 }
 
 // Private methods

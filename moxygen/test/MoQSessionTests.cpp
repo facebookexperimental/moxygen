@@ -1283,7 +1283,8 @@ CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamBeforeSetup) {
   TrackAlias trackAlias(0); // will match requestID 0
   ObjectHeader objHeader(0, 0, 0, 0, ObjectStatus::NORMAL);
   objHeader.length = 5;
-  writer.writeSubgroupHeader(dataBuf, trackAlias, objHeader);
+  writer.writeSubgroupHeader(
+      dataBuf, trackAlias, objHeader, SubgroupOptions{.hasExtensions = true});
   writer.writeStreamObject(
       dataBuf,
       getSubgroupStreamType(

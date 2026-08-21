@@ -391,7 +391,8 @@ TEST_P(MoQCodecTest, UnderflowObjects) {
 
 TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writeSingleObjectStream(
+  writeSingleObjectStream(
+      moqFrameWriter_,
       writeBuf,
       TrackAlias(1),
       ObjectHeader(2, 3, 4, 5, 11),
@@ -410,7 +411,8 @@ TEST_P(MoQCodecTest, ObjectStreamPayloadFin) {
 
 TEST_P(MoQCodecTest, ObjectStreamPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writeSingleObjectStream(
+  writeSingleObjectStream(
+      moqFrameWriter_,
       writeBuf,
       TrackAlias(1),
       ObjectHeader(2, 3, 4, 5, 11),
@@ -431,7 +433,8 @@ TEST_P(MoQCodecTest, ObjectStreamPayload) {
 
 TEST_P(MoQCodecTest, EmptyObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writeSingleObjectStream(
+  writeSingleObjectStream(
+      moqFrameWriter_,
       writeBuf,
       TrackAlias(1),
       ObjectHeader(2, 3, 4, 5, ObjectStatus::END_OF_GROUP),
@@ -454,7 +457,7 @@ TEST_P(MoQCodecTest, EmptyObjectPayload) {
 TEST_P(MoQCodecTest, TruncatedObject) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5), SubgroupOptions{});
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG,
@@ -472,7 +475,10 @@ TEST_P(MoQCodecTest, TruncatedObject) {
 TEST_P(MoQCodecTest, TruncatedObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5),
+      SubgroupOptions{.hasExtensions = true});
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG_EXT,
@@ -683,7 +689,7 @@ TEST_P(MoQCodecTest, SubgroupHeaderWithEOF) {
 
   // Write a subgroup header with extensions
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5), SubgroupOptions{});
   EXPECT_TRUE(res);
 
   // Expect only onSubgroup and onEndOfStream
@@ -702,9 +708,7 @@ TEST_P(MoQCodecTest, FirstObjectSubgroupOption) {
       writeBuf,
       TrackAlias(1),
       ObjectHeader(2, 3, 4, 5),
-      SubgroupIDFormat::Present,
-      /*includeExtensions=*/true,
-      /*beginsWithFirstObject=*/true);
+      SubgroupOptions{.beginsWithFirstObject = true});
   ASSERT_TRUE(res);
 
   const bool expectedBeginsWithFirstObject =
@@ -732,7 +736,10 @@ TEST_P(MoQCodecTest, FirstObjectSubgroupOption) {
 TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectBegin) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5),
+      SubgroupOptions{.hasExtensions = true});
   // First object - will trigger ERROR_TERMINATE
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
@@ -778,7 +785,10 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectBegin) {
 TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectPayload) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5),
+      SubgroupOptions{.hasExtensions = true});
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG_EXT,
@@ -819,7 +829,10 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectPayload) {
 TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5),
+      SubgroupOptions{.hasExtensions = true});
   // First object with status - will trigger ERROR_TERMINATE
   ObjectHeader statusObj(2, 3, 4, 5);
   statusObj.status = ObjectStatus::END_OF_GROUP;
@@ -865,7 +878,7 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnObjectStatus) {
 TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnSubgroup) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5));
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 4, 5), SubgroupOptions{});
   res = moqFrameWriter_.writeStreamObject(
       writeBuf,
       StreamType::SUBGROUP_HEADER_SG,
@@ -932,7 +945,8 @@ TEST_P(MoQCodecTest, CallbackReturnsErrorTerminateOnFetchHeader) {
 // Test that callbacks returning CONTINUE work as expected
 TEST_P(MoQCodecTest, CallbackReturnsContinue) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writeSingleObjectStream(
+  writeSingleObjectStream(
+      moqFrameWriter_,
       writeBuf,
       TrackAlias(1),
       ObjectHeader(2, 3, 4, 5, 11),
@@ -963,11 +977,7 @@ TEST_P(MoQCodecTest, CallbackReturnsContinue) {
 TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubgroupHeader(
-      writeBuf,
-      TrackAlias(1),
-      ObjectHeader(2, 3, 0, 5),
-      SubgroupIDFormat::Present,
-      false);
+      writeBuf, TrackAlias(1), ObjectHeader(2, 3, 0, 5), SubgroupOptions{});
 
   // Write a zero-length NORMAL object
   ObjectHeader zeroLenObj(0, 0, 4, 0);

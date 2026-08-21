@@ -31,6 +31,17 @@ inline std::unique_ptr<folly::IOBuf> writeAllMessages(
   return buf;
 }
 
+// Writes a subgroup stream carrying a single object.  Only tests build these,
+// so the derivation of the header options lives here rather than on
+// MoQFrameWriter.
+WriteResult writeSingleObjectStream(
+    const MoQFrameWriter& moqFrameWriter,
+    folly::IOBufQueue& writeBuf,
+    TrackAlias trackAlias,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload,
+    bool endOfGroup = false);
+
 std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size = 10);
 
 std::vector<Extension> getTestExtensions();

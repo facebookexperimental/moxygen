@@ -13,6 +13,36 @@
 
 namespace moxygen::test {
 
+WriteResult writeSingleObjectStream(
+    const MoQFrameWriter& moqFrameWriter,
+    folly::IOBufQueue& writeBuf,
+    TrackAlias trackAlias,
+    const ObjectHeader& objectHeader,
+    std::unique_ptr<folly::IOBuf> objectPayload,
+    bool endOfGroup) {
+  bool hasExtensions = objectHeader.extensions.size() > 0;
+  auto res = moqFrameWriter.writeSubgroupHeader(
+      writeBuf,
+      trackAlias,
+      objectHeader,
+      SubgroupOptions{
+          .hasExtensions = hasExtensions,
+          .subgroupIDFormat = objectHeader.subgroup == objectHeader.id
+              ? SubgroupIDFormat::FirstObject
+              : SubgroupIDFormat::Present,
+          .hasEndOfGroup = endOfGroup,
+          .beginsWithFirstObject = true});
+  if (!res) {
+    return res;
+  }
+  return moqFrameWriter.writeStreamObject(
+      writeBuf,
+      hasExtensions ? StreamType::SUBGROUP_HEADER_SG_EXT
+                    : StreamType::SUBGROUP_HEADER_SG,
+      objectHeader,
+      std::move(objectPayload));
+}
+
 std::vector<Extension> getTestExtensions() {
   static uint8_t extTestBuff[3] = {0x01, 0x02, 0x03};
   static std::vector<Extension> extensions = {
@@ -319,7 +349,7 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   ObjectHeader obj(2, 3, 4, 5);
   auto res = moqFrameWriter.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+      writeBuf, TrackAlias(1), obj, SubgroupOptions{.hasExtensions = true});
   obj.length = 11;
   res = moqFrameWriter.writeStreamObject(
       writeBuf,

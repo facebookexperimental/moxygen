@@ -4350,9 +4350,7 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
     folly::IOBufQueue& writeBuf,
     TrackAlias trackAlias,
     const ObjectHeader& objectHeader,
-    SubgroupIDFormat format,
-    bool includeExtensions,
-    bool beginsWithFirstObject) const noexcept {
+    const SubgroupOptions& options) const noexcept {
   size_t size = 0;
   bool error = false;
 
@@ -4364,11 +4362,12 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
 
   auto streamType = getSubgroupStreamType(
       *version_,
-      objectHeader.subgroup == 0 ? SubgroupIDFormat::Zero : format,
-      includeExtensions,
-      /*endOfGroup=*/false,
+      objectHeader.subgroup == 0 ? SubgroupIDFormat::Zero
+                                 : options.subgroupIDFormat,
+      options.hasExtensions,
+      options.hasEndOfGroup,
       priorityPresent,
-      beginsWithFirstObject);
+      options.beginsWithFirstObject);
   auto streamTypeInt = folly::to_underlying(streamType);
   writeVarint(writeBuf, streamTypeInt, size, error);
   writeVarint(writeBuf, trackAlias.value, size, error);
@@ -4448,32 +4447,6 @@ WriteResult MoQFrameWriter::writePaddingDatagram(
 void MoQFrameWriter::setFetchGroupOrder(GroupOrder groupOrder) noexcept {
   fetchGroupOrder_ =
       groupOrder == GroupOrder::Default ? GroupOrder::OldestFirst : groupOrder;
-}
-
-WriteResult MoQFrameWriter::writeSingleObjectStream(
-    folly::IOBufQueue& writeBuf,
-    TrackAlias trackAlias,
-    const ObjectHeader& objectHeader,
-    std::unique_ptr<folly::IOBuf> objectPayload) const noexcept {
-  bool hasExtensions = objectHeader.extensions.size() > 0;
-  auto res = writeSubgroupHeader(
-      writeBuf,
-      trackAlias,
-      objectHeader,
-      objectHeader.subgroup == objectHeader.id ? SubgroupIDFormat::FirstObject
-                                               : SubgroupIDFormat::Present,
-      hasExtensions,
-      /*beginsWithFirstObject=*/true);
-  if (res) {
-    return writeStreamObject(
-        writeBuf,
-        hasExtensions ? StreamType::SUBGROUP_HEADER_SG_EXT
-                      : StreamType::SUBGROUP_HEADER_SG,
-        objectHeader,
-        std::move(objectPayload));
-  } else {
-    return res;
-  }
 }
 
 void MoQFrameWriter::writeKeyValuePairs(

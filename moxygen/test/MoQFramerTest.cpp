@@ -659,14 +659,14 @@ TEST_P(MoQFramerTest, SubgroupObjectHeaderIsNotMarkedAsDatagram) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto streamType =
       getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false, false);
-  ASSERT_TRUE(writer_
-                  .writeSubgroupHeader(
-                      writeBuf,
-                      TrackAlias(22),
-                      objectHeader,
-                      SubgroupIDFormat::Zero,
-                      false)
-                  .hasValue());
+  ASSERT_TRUE(
+      writer_
+          .writeSubgroupHeader(
+              writeBuf,
+              TrackAlias(22),
+              objectHeader,
+              SubgroupOptions{.subgroupIDFormat = SubgroupIDFormat::Zero})
+          .hasValue());
   ASSERT_TRUE(writer_
                   .writeStreamObject(
                       writeBuf,
@@ -1056,8 +1056,7 @@ TEST_P(MoQFramerTest, ParseStreamHeader) {
       writeBuf,
       TrackAlias(22),
       expectedObjectHeader,
-      SubgroupIDFormat::Zero,
-      false);
+      SubgroupOptions{.subgroupIDFormat = SubgroupIDFormat::Zero});
   EXPECT_TRUE(result.hasValue());
   result = writer_.writeStreamObject(
       writeBuf,
@@ -1396,7 +1395,8 @@ TEST_P(MoQFramerTest, All) {
 
 TEST_P(MoQFramerTest, SingleObjectStream) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writer_.writeSingleObjectStream(
+  auto result = moxygen::test::writeSingleObjectStream(
+      writer_,
       writeBuf,
       TrackAlias(22), // trackAlias
       ObjectHeader(
@@ -1439,6 +1439,31 @@ TEST_P(MoQFramerTest, SingleObjectStream) {
   EXPECT_EQ(parseResult->value.status, ObjectStatus::NORMAL);
   EXPECT_EQ(*parseResult->value.length, 4);
   cursor.skip(*parseResult->value.length);
+
+  // The same stream ending its group differs only in the type byte.
+  MoQFrameWriter eogWriter;
+  eogWriter.initializeVersion(GetParam());
+  folly::IOBufQueue eogBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(
+      moxygen::test::writeSingleObjectStream(
+          eogWriter,
+          eogBuf,
+          TrackAlias(22),
+          ObjectHeader(33, 44, 44, 55, 4),
+          folly::IOBuf::copyBuffer("abcd"),
+          /*endOfGroup=*/true)
+          .hasValue());
+  auto eogSerialized = eogBuf.move();
+  folly::io::Cursor eogCursor(eogSerialized.get());
+  EXPECT_EQ(
+      parseStreamType(eogCursor),
+      getSubgroupStreamType(
+          GetParam(),
+          SubgroupIDFormat::FirstObject,
+          /*includeExtensions=*/false,
+          /*endOfGroup=*/true,
+          /*priorityPresent=*/true,
+          /*beginsWithFirstObject=*/true));
 }
 
 TEST_P(MoQFramerTest, ParseTrackStatus) {
@@ -2054,7 +2079,7 @@ TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
 
   // Write subgroup header (includeExtensions=true) and the stream object
   auto res = writer_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+      writeBuf, TrackAlias(1), obj, SubgroupOptions{.hasExtensions = true});
   EXPECT_TRUE(res.hasValue());
   res = writer_.writeStreamObject(
       writeBuf, StreamType::SUBGROUP_HEADER_SG_EXT, obj, nullptr);
@@ -2766,7 +2791,7 @@ TEST_P(MoQFramerTest, SubgroupObjectWithExtensionsAndNonNormalStatus) {
   auto streamType =
       getSubgroupStreamType(GetParam(), SubgroupIDFormat::Present, true, false);
   auto headerResult = writer_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+      writeBuf, TrackAlias(1), obj, SubgroupOptions{.hasExtensions = true});
   EXPECT_TRUE(headerResult.hasValue());
 
   auto objResult =
@@ -3505,7 +3530,7 @@ void testSubgroupPriorityRoundTrip(
       100, 50, 200, priority, ObjectStatus::NORMAL, noExtensions(), 0};
 
   auto result = writer.writeSubgroupHeader(
-      writeBuf, TrackAlias(25), objHeader, SubgroupIDFormat::Present, false);
+      writeBuf, TrackAlias(25), objHeader, SubgroupOptions{});
   EXPECT_TRUE(result.hasValue());
 
   auto serialized = writeBuf.move();
@@ -3552,9 +3577,7 @@ TEST(MoQFramerTest, FirstObjectSubgroupHeaderRoundTripDraft18) {
       writeBuf,
       TrackAlias(25),
       objHeader,
-      SubgroupIDFormat::Present,
-      /*includeExtensions=*/false,
-      /*beginsWithFirstObject=*/true);
+      SubgroupOptions{.beginsWithFirstObject = true});
   ASSERT_TRUE(result.hasValue());
 
   auto serialized = writeBuf.move();
@@ -3586,9 +3609,7 @@ TEST(MoQFramerTest, FirstObjectSubgroupHeaderIgnoredBeforeDraft18) {
       writeBuf,
       TrackAlias(25),
       objHeader,
-      SubgroupIDFormat::Present,
-      /*includeExtensions=*/false,
-      /*beginsWithFirstObject=*/true);
+      SubgroupOptions{.beginsWithFirstObject = true});
   ASSERT_TRUE(result.hasValue());
 
   auto serialized = writeBuf.move();
@@ -4637,7 +4658,7 @@ TEST_P(MoQFramerV16PlusTest, ExtensionBlockLengthWithDeltaEncoding) {
   auto streamType =
       getSubgroupStreamType(GetParam(), SubgroupIDFormat::Present, true, false);
   auto res = writer_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Present, true);
+      writeBuf, TrackAlias(1), obj, SubgroupOptions{.hasExtensions = true});
   ASSERT_TRUE(res.hasValue());
   res = writer_.writeStreamObject(
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("AAAA"));
@@ -6558,7 +6579,10 @@ TEST_P(MoQFramerTest, SubgroupObjectUnderflowDoesNotCorruptDeltaState) {
   ObjectHeader obj(1, 0, 0, 128, ObjectStatus::NORMAL, noExtensions(), 4);
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writer_.writeSubgroupHeader(
-      writeBuf, TrackAlias(1), obj, SubgroupIDFormat::Zero, false);
+      writeBuf,
+      TrackAlias(1),
+      obj,
+      SubgroupOptions{.subgroupIDFormat = SubgroupIDFormat::Zero});
   writer_.writeStreamObject(
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("AAAA"));
   obj.id = 1;

@@ -566,13 +566,13 @@ WriteResult writeServerSetup(
 // are version-agnostic, so we are leaving them out of the MoQFrameWriter.
 class MoQFrameWriter {
  public:
+  // options.priorityPresent is ignored; objectHeader.priority decides whether
+  // the priority byte is written.
   WriteResult writeSubgroupHeader(
       folly::IOBufQueue& writeBuf,
       TrackAlias trackAlias,
       const ObjectHeader& objectHeader,
-      SubgroupIDFormat format = SubgroupIDFormat::Present,
-      bool includeExtensions = true,
-      bool beginsWithFirstObject = false) const noexcept;
+      const SubgroupOptions& options) const noexcept;
 
   WriteResult writeFetchHeader(folly::IOBufQueue& writeBuf, RequestID requestID)
       const noexcept;
@@ -604,12 +604,6 @@ class MoQFrameWriter {
       const ObjectHeader& objectHeader,
       std::unique_ptr<folly::IOBuf> objectPayload,
       bool forwardingPreferenceIsDatagram = false) const noexcept;
-
-  WriteResult writeSingleObjectStream(
-      folly::IOBufQueue& writeBuf,
-      TrackAlias trackAlias,
-      const ObjectHeader& objectHeader,
-      std::unique_ptr<folly::IOBuf> objectPayload) const noexcept;
 
   WriteResult writeSubscribeRequest(
       folly::IOBufQueue& writeBuf,

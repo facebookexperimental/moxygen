@@ -262,6 +262,45 @@ CO_TEST_P_X(MoQSessionTest, SubgroupWireFormatHintsRoundTrip) {
   co_await publishDone_;
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, SubgroupEndOfGroupHintRoundTrips) {
+  // containsLastInGroup selects an *_EOG subgroup stream type, so the
+  // subscriber learns the group ends on this subgroup before the last object
+  // arrives.
+  co_await setupMoQSession();
+  expectSubscribe(
+      [this](auto sub, auto pub) -> TaskSubscribeResult {
+        eventBase_.add([pub, sub] {
+          TrackConsumer::BeginSubgroupOptions options;
+          options.containsLastInGroup = true;
+          auto sgp = pub->beginSubgroup(0, 0, 0, options).value();
+          sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
+        co_return makeSubscribeOkResult(sub);
+      },
+      MoQControlCodec::Direction::CLIENT);
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, _, _))
+      .WillOnce([&sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    const TrackConsumer::BeginSubgroupOptions& opts) {
+        EXPECT_TRUE(opts.containsLastInGroup);
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+  EXPECT_CALL(*sg, object(0, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+
+  expectPublishDone(MoQControlCodec::Direction::SERVER);
+  auto res = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, AdvertisedPublisherPriorityRoundTrips) {
   // The publisher advertises a non-default priority on the SubscribeOk (a
   // track property extension from draft 16, a param before that) and then
@@ -348,8 +387,7 @@ CO_TEST_P_X(MoQSessionTest, ElidedPriorityResolvesToAdvertisedPriority) {
       dataBuf,
       res.value()->subscribeOk().trackAlias,
       objHeader,
-      SubgroupIDFormat::Present,
-      false);
+      SubgroupOptions{});
   writer.writeStreamObject(
       dataBuf,
       getSubgroupStreamType(
