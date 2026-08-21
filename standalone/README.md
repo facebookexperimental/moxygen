@@ -70,6 +70,7 @@ use identical dependency versions.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `BUILD_TESTS` | `ON` | Build test executables |
+| `BUILD_MOQTEST` | `ON` | Build the moqtest client, server and perf executables |
 | `BUILD_SHARED_LIBS` | `OFF` | Build shared libraries (discouraged) |
 
 ## Build Caching

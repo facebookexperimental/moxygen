@@ -96,6 +96,11 @@ option(BUILD_SAMPLES
   ON
 )
 
+option(BUILD_MOQTEST
+  "If enabled, build the moqtest client, server and perf executables."
+  ON
+)
+
 list(APPEND
   _MOXYGEN_COMMON_COMPILE_OPTIONS
   -Wall
