@@ -374,18 +374,9 @@ class MoQSession : public Subscriber,
         Priority subPriority,
         GroupOrder groupOrder,
         uint64_t version,
-        uint64_t bytesBufferedThreshold)
-        : session_(session),
-          fullTrackName_(std::move(ftn)),
-          requestID_(requestID),
-          subPriority_(subPriority),
-          groupOrder_(groupOrder),
-          version_(version),
-          bytesBufferedThreshold_(bytesBufferedThreshold) {
-      moqFrameWriter_.initializeVersion(version);
-    }
+        uint64_t bytesBufferedThreshold);
 
-    virtual ~PublisherImpl() = default;
+    virtual ~PublisherImpl();
 
     const FullTrackName& fullTrackName() const {
       return fullTrackName_;
@@ -429,6 +420,12 @@ class MoQSession : public Subscriber,
     virtual void terminatePublish(
         PublishDone pubDone,
         ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
+
+    // Spec draft-18 §10.4: on request-stream GOAWAY timeout, reset the request
+    // (bidi) stream and the data streams with the given code (no PUBLISH_DONE),
+    // then clean up publisher state. Parallels terminatePublish but resets the
+    // request stream instead of gracefully closing it.
+    virtual void resetForGoaway(ResetStreamErrorCode code) = 0;
 
     virtual void onStreamCreated() {}
 
@@ -532,6 +529,13 @@ class MoQSession : public Subscriber,
       return !std::exchange(requestStreamGoawaySent_, true);
     }
 
+    // Spec draft-18 §10.4: after sending a request-stream GOAWAY, the sender
+    // SHOULD reset the stream with GOING_AWAY once the advertised timeout
+    // elapses. Arming is the caller's responsibility (only when timeout > 0);
+    // the timer is cancelled on any teardown via ~PublisherImpl.
+    void armGoawayResetTimer(std::chrono::milliseconds timeout);
+    void cancelGoawayResetTimer();
+
    protected:
     MoQSession* session_{nullptr};
     FullTrackName fullTrackName_;
@@ -547,6 +551,11 @@ class MoQSession : public Subscriber,
     std::shared_ptr<BidiStreamControl> bidiControl_;
     State state_{State::PENDING};
     bool requestStreamGoawaySent_{false};
+
+   private:
+    class GoawayResetTimeoutCallback;
+    void onGoawayResetTimerExpired();
+    std::unique_ptr<GoawayResetTimeoutCallback> goawayResetTimer_;
   };
 
   void onNewUniStream(
@@ -799,6 +808,12 @@ class MoQSession : public Subscriber,
 
   void sendMaxRequestID(bool signalWriteLoop);
   void fetchComplete(RequestID requestID);
+
+  // Drop a SUBSCRIBE publisher's state after its request stream was reset for a
+  // request-stream GOAWAY timeout. Mirrors onUnsubscribe's accounting (stats,
+  // retireRequestID, checkForCloseOnDrain) but emits no PUBLISH_DONE, since the
+  // reset itself signals the subscriber.
+  void cleanupSubscribePublisherAfterGoawayReset(RequestID requestID);
 
   // Get the max requestID from the setup params. If MAX_REQUEST_ID key
   // is not present, we default to 0 as specified. 0 means that the peer

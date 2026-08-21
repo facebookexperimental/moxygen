@@ -1450,6 +1450,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     }
   }
 
+  void resetForGoaway(ResetStreamErrorCode code) override {
+    resetAllSubgroups(code);
+    subscriptionHandle_.reset();
+    if (replyContext_) {
+      replyContext_->cancel(code);
+    }
+    if (auto session = std::exchange(session_, nullptr)) {
+      session->cleanupSubscribePublisherAfterGoawayReset(requestID_);
+    }
+  }
+
   void resetAllSubgroups(ResetStreamErrorCode code) {
     while (!subgroups_.empty()) {
       auto it = subgroups_.begin();
@@ -1580,6 +1591,15 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
 
   void terminatePublish(PublishDone, ResetStreamErrorCode error) override {
     reset(error);
+  }
+
+  void resetForGoaway(ResetStreamErrorCode code) override {
+    // Reset the request (bidi) stream first; reset() below resets the data
+    // stream and drives fetchComplete -> pubTracks_.erase + retireRequestID.
+    if (replyContext_) {
+      replyContext_->cancel(code);
+    }
+    reset(code);
   }
 
   void reset(ResetStreamErrorCode error) {
@@ -2681,6 +2701,12 @@ void MoQSession::requestStreamGoaway(
   if (logger_) {
     logger_->logGoaway(g);
   }
+
+  // Spec draft-18 §10.4: a timeout of 0 means "no specific timeout", so the
+  // sender does not schedule a reset. Arm only for a positive timeout.
+  if (timeout.count() > 0) {
+    it->second->armGoawayResetTimer(timeout);
+  }
 }
 
 void MoQSession::checkForCloseOnDrain() {
@@ -2707,6 +2733,94 @@ void MoQSession::cancelGoawayTimeout() {
     goawayTimeout_->cancelTimerCallback();
     goawayTimeout_.reset();
   }
+}
+
+// Per-request reset timer (draft-18 §10.4). Owned by the PublisherImpl whose
+// request stream it resets, so any teardown path that destroys the
+// PublisherImpl cancels it via ~PublisherImpl. The expiry callback re-hops to
+// the executor and re-checks a weak_ptr to the PublisherImpl, so it cannot fire
+// on freed state even though the reset itself destroys the PublisherImpl (and
+// this timer).
+class MoQSession::PublisherImpl::GoawayResetTimeoutCallback
+    : public quic::QuicTimerCallback {
+ public:
+  explicit GoawayResetTimeoutCallback(PublisherImpl& publisher)
+      : publisher_(publisher) {}
+
+  void timeoutExpired() noexcept override {
+    auto exec = publisher_.getExecutor();
+    if (!exec) {
+      return;
+    }
+    auto weakPublisher = publisher_.weak_from_this();
+    exec->add([weakPublisher = std::move(weakPublisher)]() mutable {
+      if (auto publisher = weakPublisher.lock()) {
+        publisher->onGoawayResetTimerExpired();
+      }
+    });
+  }
+
+  void callbackCanceled() noexcept override {
+    XLOG(DBG4) << "request-stream GOAWAY reset timeout canceled pub="
+               << &publisher_;
+  }
+
+ private:
+  PublisherImpl& publisher_;
+};
+
+void MoQSession::PublisherImpl::armGoawayResetTimer(
+    std::chrono::milliseconds timeout) {
+  cancelGoawayResetTimer();
+  auto exec = getExecutor();
+  if (!exec) {
+    XLOG(ERR) << "request-stream GOAWAY reset timer: no executor pub=" << this;
+    return;
+  }
+  goawayResetTimer_ = std::make_unique<GoawayResetTimeoutCallback>(*this);
+  XLOG(DBG1) << "Scheduling request-stream GOAWAY reset timeoutMs="
+             << timeout.count() << " pub=" << this;
+  exec->scheduleTimeout(goawayResetTimer_.get(), timeout);
+}
+
+void MoQSession::PublisherImpl::cancelGoawayResetTimer() {
+  if (goawayResetTimer_) {
+    goawayResetTimer_->cancelTimerCallback();
+    goawayResetTimer_.reset();
+  }
+}
+
+void MoQSession::PublisherImpl::onGoawayResetTimerExpired() {
+  XLOG(DBG1) << "request-stream GOAWAY reset timer expired, resetting stream "
+             << "id=" << requestID_ << " pub=" << this;
+  // Spec draft-18 §10.4: reset the request (bidi) stream and data streams with
+  // GOING_AWAY -- do NOT send PUBLISH_DONE. resetForGoaway also cleans up the
+  // publisher state (pubTracks_.erase + accounting). Safe to destroy this
+  // PublisherImpl here: the expiry callback holds a shared_ptr for the call's
+  // duration (see GoawayResetTimeoutCallback).
+  resetForGoaway(ResetStreamErrorCode::GOING_AWAY);
+}
+
+MoQSession::PublisherImpl::PublisherImpl(
+    MoQSession* session,
+    FullTrackName ftn,
+    RequestID requestID,
+    Priority subPriority,
+    GroupOrder groupOrder,
+    uint64_t version,
+    uint64_t bytesBufferedThreshold)
+    : session_(session),
+      fullTrackName_(std::move(ftn)),
+      requestID_(requestID),
+      subPriority_(subPriority),
+      groupOrder_(groupOrder),
+      version_(version),
+      bytesBufferedThreshold_(bytesBufferedThreshold) {
+  moqFrameWriter_.initializeVersion(version);
+}
+
+MoQSession::PublisherImpl::~PublisherImpl() {
+  cancelGoawayResetTimer();
 }
 
 void MoQSession::onGoawayTimeoutExpired() {
@@ -6230,6 +6344,16 @@ void MoQSession::fetchComplete(RequestID requestID) {
   pubTracks_.erase(it);
   retireRequestID(/*signalWriteLoop=*/true);
   checkForCloseOnDrain();
+}
+
+void MoQSession::cleanupSubscribePublisherAfterGoawayReset(
+    RequestID requestID) {
+  XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
+  if (pubTracks_.erase(requestID)) {
+    MOQ_PUBLISHER_STATS(publisherStatsCallback_, onSubscriptionEnd);
+    retireRequestID(/*signalWriteLoop=*/true);
+    checkForCloseOnDrain();
+  }
 }
 
 void MoQSession::requestUpdate(
