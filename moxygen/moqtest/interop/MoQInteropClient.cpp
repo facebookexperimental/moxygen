@@ -103,11 +103,16 @@ class SimplePublisher : public moxygen::Publisher {
 namespace moxygen {
 
 // ALPN preference list, ordered highest-preference first.
+// "moqt-18" is the standard ALPN for draft-18 (uni control streams; see
+// kAlpnMoqtDraft18 in MoQVersions.h). It is listed first so that negotiation
+// lands on draft-18 whenever the server supports it.
+// "moqt-16" and "moqt-14" cover the draft-16 and draft-14 wire formats.
 // "moq-00" is the legacy ALPN used by drafts < 15 (see kAlpnMoqtLegacy in
 // MoQVersions.h) and is what moq-rs and some other implementations offer for
 // draft-14 raw-QUIC handshakes. Including it here lets the interop client
 // negotiate with those servers.
-const std::vector<std::string> kInteropAlpns = {"moqt-16", "moqt-14", "moq-00"};
+const std::vector<std::string> kInteropAlpns = {
+    "moqt-18", "moqt-16", "moqt-14", "moq-00"};
 
 MoQInteropClient::MoQInteropClient(
     folly::EventBase* evb,
