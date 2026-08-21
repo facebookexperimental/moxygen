@@ -406,6 +406,43 @@ class MoQRelayTest : public ::testing::Test {
     return handle;
   }
 
+  // Assert that a SUBSCRIBE for `ftn` from `subscriber` is routed upstream to
+  // `publisher`, both at the lookup level and end to end.
+  void expectSubscribeRoutesTo(
+      const std::shared_ptr<MockMoQSession>& publisher,
+      const std::shared_ptr<MoQSession>& subscriber,
+      const FullTrackName& ftn) {
+    EXPECT_EQ(
+        relay_->findPublishNamespaceSession(ftn.trackNamespace), publisher);
+
+    SubscribeOk upstreamOk;
+    upstreamOk.requestID = RequestID(1);
+    upstreamOk.trackAlias = TrackAlias(1);
+    upstreamOk.expires = std::chrono::milliseconds(0);
+    upstreamOk.groupOrder = GroupOrder::Default;
+    EXPECT_CALL(*publisher, subscribe(_, _))
+        .WillOnce([upstreamOk](const auto& /*req*/, auto /*consumer*/) {
+          auto handle =
+              std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+          return folly::coro::makeTask<Publisher::SubscribeResult>(
+              folly::
+                  Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                      handle));
+        });
+
+    SubscribeRequest sub;
+    sub.fullTrackName = ftn;
+    sub.requestID = RequestID(1);
+    sub.locType = LocationType::LargestObject;
+    auto consumer = createMockConsumer();
+    withSessionContext(subscriber, [&]() {
+      auto res = folly::coro::blockingWait(
+          relay_->subscribe(std::move(sub), consumer), exec_.get());
+      ASSERT_TRUE(res.hasValue()) << "SUBSCRIBE " << ftn << " failed";
+      getOrCreateMockState(subscriber)->subscribeHandles.push_back(*res);
+    });
+  }
+
   std::shared_ptr<TestMoQExecutor> exec_;
   std::shared_ptr<MoQRelay> relay_;
 };
@@ -1678,6 +1715,54 @@ TEST_F(MoQRelayTest, TrackStatusViaPrefixMatching) {
 
   removeSession(publisher);
   removeSession(requester);
+}
+
+// Test: a PUBLISH into a deeper namespace must not hide the publisher of a
+// broader ancestor namespace. The PUBLISH creates intermediate tree nodes that
+// have no publisher of their own; a SUBSCRIBE that descends into one of them
+// and then diverges still belongs to the ancestor's publisher.
+TEST_F(MoQRelayTest, SubscribeRoutesPastPublishCreatedNode) {
+  auto publisher = createMockSession();
+  auto subscriber = createMockSession();
+
+  TrackNamespace broadNs{{"test", "broad"}};
+  FullTrackName deepTrack{TrackNamespace{{"test", "broad", "deep"}}, "deep1"};
+  FullTrackName divergentTrack{
+      TrackNamespace{{"test", "broad", "deep", "other"}}, "track1"};
+
+  doPublishNamespace(publisher, broadNs);
+  // Creates test/broad/deep with a publish but no source session.
+  doPublish(publisher, deepTrack);
+
+  expectSubscribeRoutesTo(publisher, subscriber, divergentTrack);
+
+  removeSession(subscriber);
+  exec_->drive();
+  removeSession(publisher);
+}
+
+// Test: same as above, but the intermediate nodes are created by a
+// SUBSCRIBE_NAMESPACE for a deeper prefix rather than by a PUBLISH.
+TEST_F(MoQRelayTest, SubscribeRoutesPastSubscribeNamespaceCreatedNode) {
+  auto publisher = createMockSession();
+  auto namespaceSubscriber = createMockSession();
+  auto subscriber = createMockSession();
+
+  TrackNamespace broadNs{{"test", "broad"}};
+  TrackNamespace deepNs{{"test", "broad", "deep"}};
+  FullTrackName divergentTrack{
+      TrackNamespace{{"test", "broad", "deep", "other"}}, "track1"};
+
+  doPublishNamespace(publisher, broadNs);
+  // Creates test/broad/deep with a namespace subscriber but no source session.
+  doSubscribeNamespace(namespaceSubscriber, deepNs);
+
+  expectSubscribeRoutesTo(publisher, subscriber, divergentTrack);
+
+  removeSession(subscriber);
+  exec_->drive();
+  removeSession(namespaceSubscriber);
+  removeSession(publisher);
 }
 
 // ============================================================

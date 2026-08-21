@@ -183,35 +183,29 @@ class MoQRelay : public Publisher,
   // `children` and `sessions` are populated.
   NamespaceNode publishNamespaceRoot_{*this};
   NamespaceNode tracksSubscriberRoot_{*this};
-  enum class MatchType { Exact, Prefix };
   std::shared_ptr<NamespaceNode> findNamespaceNode(
       const TrackNamespace& ns,
       bool createMissingNodes = false,
-      MatchType matchType = MatchType::Exact,
       std::vector<std::pair<
           std::shared_ptr<MoQSession>,
           NamespaceNode::NamespaceSubscriberInfo>>* sessions = nullptr) {
-    return findInTree(
-        publishNamespaceRoot_, ns, createMissingNodes, matchType, sessions);
+    return findInTree(publishNamespaceRoot_, ns, createMissingNodes, sessions);
   }
 
   // Draft 18+: same lookup, but in the tracks-subscriber tree.
   std::shared_ptr<NamespaceNode> findTracksSubscriberNode(
       const TrackNamespace& ns,
       bool createMissingNodes = false,
-      MatchType matchType = MatchType::Exact,
       std::vector<std::pair<
           std::shared_ptr<MoQSession>,
           NamespaceNode::NamespaceSubscriberInfo>>* sessions = nullptr) {
-    return findInTree(
-        tracksSubscriberRoot_, ns, createMissingNodes, matchType, sessions);
+    return findInTree(tracksSubscriberRoot_, ns, createMissingNodes, sessions);
   }
 
   std::shared_ptr<NamespaceNode> findInTree(
       NamespaceNode& root,
       const TrackNamespace& ns,
       bool createMissingNodes,
-      MatchType matchType,
       std::vector<std::pair<
           std::shared_ptr<MoQSession>,
           NamespaceNode::NamespaceSubscriberInfo>>* sessions);

@@ -59,7 +59,6 @@ std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findInTree(
     NamespaceNode& root,
     const TrackNamespace& ns,
     bool createMissingNodes,
-    MatchType matchType,
     std::vector<std::pair<
         std::shared_ptr<MoQSession>,
         NamespaceNode::NamespaceSubscriberInfo>>* sessions) {
@@ -79,8 +78,6 @@ std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findInTree(
         nodePtr->children.emplace(name, node);
         // Don't increment yet - only when content is actually added
         nodePtr = std::move(node);
-      } else if (matchType == MatchType::Prefix && nodePtr.get() != &root) {
-        return nodePtr;
       } else {
         XLOG(ERR) << "prefix not found in tree";
         return nullptr;
@@ -148,10 +145,7 @@ MoQRelay::publishNamespace(
       NamespaceNode::NamespaceSubscriberInfo>>
       sessions;
   auto nodePtr = findNamespaceNode(
-      ann.trackNamespace,
-      /*createMissingNodes=*/true,
-      MatchType::Exact,
-      &sessions);
+      ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
 
   // Log if there is already a session that has publishNamespace-d this track
   if (nodePtr->sourceSession) {
@@ -343,11 +337,7 @@ void MoQRelay::publishNamespaceDone(
       std::shared_ptr<MoQSession>,
       NamespaceNode::NamespaceSubscriberInfo>>
       sessions;
-  findNamespaceNode(
-      trackNamespace,
-      /*createMissingNodes=*/false,
-      MatchType::Exact,
-      &sessions);
+  findNamespaceNode(trackNamespace, /*createMissingNodes=*/false, &sessions);
   // Also include sessions at the target node itself
   for (const auto& [sessionPtr, info] : nodePtr->sessions) {
     sessions.emplace_back(sessionPtr, info);
@@ -453,7 +443,6 @@ Subscriber::PublishResult MoQRelay::publish(
   auto nodePtr = findNamespaceNode(
       pub.fullTrackName.trackNamespace,
       /*createMissingNodes=*/true,
-      MatchType::Exact,
       &sessions);
   // Extract session pointers with their subscriber info from the map
   for (const auto& [sessionPtr, info] : nodePtr->sessions) {
@@ -470,7 +459,6 @@ Subscriber::PublishResult MoQRelay::publish(
   if (auto tracksNode = findTracksSubscriberNode(
           pub.fullTrackName.trackNamespace,
           /*createMissingNodes=*/false,
-          MatchType::Exact,
           &tracksSessions)) {
     for (const auto& [sessionPtr, info] : tracksNode->sessions) {
       tracksSessions.emplace_back(sessionPtr, info);
@@ -857,8 +845,7 @@ void MoQRelay::publishExistingMatchingNamespaces(
     const TrackNamespace* skipUnderPrefix) {
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
-  if (auto nodePtr = findNamespaceNode(
-          prefix, /*createMissingNodes=*/false, MatchType::Exact)) {
+  if (auto nodePtr = findNamespaceNode(prefix, /*createMissingNodes=*/false)) {
     nodes.emplace_back(prefix, nodePtr);
   }
   while (!nodes.empty()) {
@@ -1039,9 +1026,7 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
   if (auto pubNode = findNamespaceNode(
-          subTracks.trackNamespacePrefix,
-          /*createMissingNodes=*/false,
-          MatchType::Exact)) {
+          subTracks.trackNamespacePrefix, /*createMissingNodes=*/false)) {
     nodes.emplace_back(subTracks.trackNamespacePrefix, pubNode);
   }
   while (!nodes.empty()) {
@@ -1092,8 +1077,7 @@ void MoQRelay::publishExistingMatchingTracks(
     const TrackNamespace* skipUnderPrefix) {
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
-  if (auto pubNode = findNamespaceNode(
-          prefix, /*createMissingNodes=*/false, MatchType::Exact)) {
+  if (auto pubNode = findNamespaceNode(prefix, /*createMissingNodes=*/false)) {
     nodes.emplace_back(prefix, pubNode);
   }
   while (!nodes.empty()) {
@@ -1168,7 +1152,6 @@ MoQRelay::updateSubscriptionPrefix(
       root,
       oldPrefix,
       /*createMissingNodes=*/false,
-      MatchType::Exact,
       /*sessions=*/nullptr);
   if (!oldNode) {
     return folly::makeUnexpected(RequestErrorCode::INTERNAL_ERROR);
@@ -1192,7 +1175,6 @@ MoQRelay::updateSubscriptionPrefix(
         root,
         prefix,
         /*createMissingNodes=*/true,
-        MatchType::Exact,
         /*sessions=*/nullptr);
     bool wasEmpty = !node->hasLocalSessions();
     subInfo.trackNamespacePrefix = prefix;
@@ -1375,22 +1357,32 @@ std::shared_ptr<MoQSession> MoQRelay::findPublishNamespaceSession(
     const TrackNamespace& ns) {
   /*
    * This function is called from subscribe() and fetch().
-   * We use MatchType::Prefix here because the relay routes SUBSCRIBE and FETCH
-   * to the publisher who published the closest matching broader
-   * namespace, not necessarily the exact match.
+   * The relay routes SUBSCRIBE and FETCH to the publisher who published the
+   * closest matching broader namespace, not necessarily the exact match, so
+   * this walks the path and keeps the deepest publisher it passes. Nodes are
+   * also created by publish() and subscribeNamespace(), which leave
+   * sourceSession null; those must not shadow a publishing ancestor.
    */
-  auto nodePtr =
-      findNamespaceNode(ns, /*createMissingNodes=*/false, MatchType::Prefix);
-  if (!nodePtr) {
-    return nullptr;
+  std::shared_ptr<MoQSession> deepestPublisher =
+      publishNamespaceRoot_.sourceSession;
+  const auto* nodePtr = &publishNamespaceRoot_;
+  for (const auto& name : ns.trackNamespace) {
+    auto it = nodePtr->children.find(name);
+    if (it == nodePtr->children.end()) {
+      break;
+    }
+    nodePtr = it->second.get();
+    if (nodePtr->sourceSession) {
+      deepestPublisher = nodePtr->sourceSession;
+    }
   }
-  return nodePtr->sourceSession;
+  return deepestPublisher;
 }
 
 MoQRelay::PublishState MoQRelay::findPublishState(const FullTrackName& ftn) {
   PublishState state;
-  auto nodePtr = findNamespaceNode(
-      ftn.trackNamespace, /*createMissingNodes=*/false, MatchType::Exact);
+  auto nodePtr =
+      findNamespaceNode(ftn.trackNamespace, /*createMissingNodes=*/false);
 
   if (!nodePtr) {
     // Node doesn't exist - tree was properly pruned
