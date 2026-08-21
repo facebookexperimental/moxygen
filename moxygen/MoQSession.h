@@ -826,10 +826,15 @@ class MoQSession : public Subscriber,
       const SetupParameters& params);
   void setPublisherPriorityFromParams(
       const TrackRequestParameters& params,
+      const Extensions& trackProperties,
       const std::shared_ptr<TrackPublisherImpl>& trackPublisher);
   void setPublisherPriorityFromParams(
       const TrackRequestParameters& params,
+      const Extensions& trackProperties,
       const std::shared_ptr<SubscribeTrackReceiveState>& trackPublisher);
+  void applyResolvedPublisherPriority(
+      std::optional<uint64_t> advertised,
+      const std::shared_ptr<SubscribeTrackReceiveState>& trackReceiveState);
 
  protected:
   // Protected members and methods for MoQRelaySession subclass access

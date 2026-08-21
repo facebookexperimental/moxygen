@@ -47,7 +47,8 @@ std::optional<uint64_t> getIntExtension(const Msg& msg, uint64_t type) {
   return msg.extensions.getIntExtension(type);
 }
 
-// Overload for Extensions directly
+// Lets the getters below be called with a bare Extensions, which the relay
+// does when it only has the track properties and not the message.
 inline std::optional<uint64_t> getIntExtension(
     const Extensions& extensions,
     uint64_t type) {
@@ -142,14 +143,25 @@ std::optional<std::chrono::milliseconds> getPublisherMaxCacheDuration(
   return std::nullopt;
 }
 
-// PUBLISHER_PRIORITY getter
+// PUBLISHER_PRIORITY getter.  A value too wide for the wire is logged and
+// reported as absent, so callers fall back as they would for a peer that
+// advertised nothing.
+inline std::optional<uint8_t> getPublisherPriority(
+    const Extensions& extensions) {
+  auto val = extensions.getIntExtension(kPublisherPriorityExtensionType);
+  if (!val) {
+    return std::nullopt;
+  }
+  if (*val > kMaxPriority) {
+    XLOG(WARN) << "Invalid publisher priority extension: " << *val;
+    return std::nullopt;
+  }
+  return static_cast<uint8_t>(*val);
+}
+
 template <typename Msg>
 std::optional<uint8_t> getPublisherPriority(const Msg& msg) {
-  auto val = detail::getIntExtension(msg, kPublisherPriorityExtensionType);
-  if (val && *val <= 255) {
-    return static_cast<uint8_t>(*val);
-  }
-  return std::nullopt;
+  return getPublisherPriority(msg.extensions);
 }
 
 // GROUP_ORDER getter

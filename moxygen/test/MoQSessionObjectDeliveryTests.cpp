@@ -262,6 +262,110 @@ CO_TEST_P_X(MoQSessionTest, SubgroupWireFormatHintsRoundTrip) {
   co_await publishDone_;
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, AdvertisedPublisherPriorityRoundTrips) {
+  // The publisher advertises a non-default priority on the SubscribeOk (a
+  // track property extension from draft 16, a param before that) and then
+  // publishes at exactly that priority, so draft-15+ elides it from the
+  // subgroup header.  Both ends have to resolve the advertised value: if only
+  // the sender honours it, the subscriber backfills the protocol default and
+  // the two disagree about every object's priority.
+  constexpr uint8_t kAdvertisedPriority = 100;
+  auto majorVersion = getDraftMajorVersion(GetParam().serverVersion);
+  co_await setupMoQSession();
+  expectSubscribe(
+      [this, majorVersion, priority = kAdvertisedPriority](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        eventBase_.add([pub, sub, priority] {
+          auto sgp = pub->beginSubgroup(0, 0, priority).value();
+          sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
+        co_return makeSubscribeOkResult(
+            sub, std::nullopt, priority, majorVersion);
+      },
+      MoQControlCodec::Direction::CLIENT);
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kAdvertisedPriority, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+
+  expectPublishDone(MoQControlCodec::Direction::SERVER);
+  auto res = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+CO_TEST_P_X(MoQSessionTest, ElidedPriorityResolvesToAdvertisedPriority) {
+  // A conforming peer that advertises a publisher priority may omit it from
+  // every subgroup header.  Write such a header by hand -- a moxygen publisher
+  // only elides once it has resolved the advertised value, which is the very
+  // thing under test -- and check the subscriber recovers the advertised
+  // priority rather than falling back to the protocol default.
+  constexpr uint8_t kAdvertisedPriority = 100;
+  auto version = GetParam().serverVersion;
+  if (getDraftMajorVersion(version) < 16) {
+    // Before draft 16 the priority rides a param, not a track property
+    co_return;
+  }
+  co_await setupMoQSession();
+
+  expectSubscribe(
+      [version, priority = kAdvertisedPriority](
+          auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        co_return makeSubscribeOkResult(
+            sub,
+            AbsoluteLocation{0, 0},
+            priority,
+            getDraftMajorVersion(version));
+      },
+      MoQControlCodec::Direction::CLIENT);
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, kAdvertisedPriority, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, _))
+      .WillOnce([&](auto, auto, const auto&, auto) {
+        objectReceived.post();
+        return folly::unit;
+      });
+  EXPECT_CALL(*sg, reset(_));
+
+  auto res = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  // Publisher side writes a subgroup whose header carries no priority
+  auto wh = CHECK_NOTNULL(clientWt_->createUniStream().value_or(nullptr));
+  folly::IOBufQueue dataBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  ObjectHeader objHeader(0, 0, 0, std::nullopt, ObjectStatus::NORMAL);
+  objHeader.length = 5;
+  writer.writeSubgroupHeader(
+      dataBuf,
+      res.value()->subscribeOk().trackAlias,
+      objHeader,
+      SubgroupIDFormat::Present,
+      false);
+  writer.writeStreamObject(
+      dataBuf,
+      getSubgroupStreamType(
+          version,
+          SubgroupIDFormat::Present,
+          false,
+          false,
+          /*priorityPresent=*/false),
+      objHeader,
+      makeBuf(5));
+  wh->writeStreamData(dataBuf.move(), false, nullptr);
+
+  co_await objectReceived;
+  res.value()->unsubscribe();
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, MixSubgroupsAndDatagrams) {
   // Test that subgroups and datagrams can be mixed on the same track
   co_await setupMoQSession();

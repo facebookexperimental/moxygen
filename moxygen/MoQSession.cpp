@@ -4305,7 +4305,8 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     auto subOk = subHandle->subscribeOk();
     subOk.requestID = requestID;
 
-    setPublisherPriorityFromParams(subOk.params, trackPublisher);
+    setPublisherPriorityFromParams(
+        subOk.params, subOk.extensions, trackPublisher);
     trackPublisher->subscribeOkSent(subOk);
 
     // TODO: verify TrackAlias is unique
@@ -4314,43 +4315,64 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   }
 }
 
+// Extensions are canonical; the param fallback only fires for a locally built
+// message that set the raw param.
+static std::optional<uint64_t> getPublisherPriorityProperty(
+    const Extensions& trackProperties,
+    const TrackRequestParameters& params) {
+  auto publisherPriority = getPublisherPriority(trackProperties);
+  if (publisherPriority) {
+    return *publisherPriority;
+  }
+  return getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
+}
+
+// nullopt leaves the priority unset, which disables elision on the publisher.
+static std::optional<uint8_t> toPublisherPriority(uint64_t advertised) {
+  if (advertised > kMaxPriority) {
+    XLOG(WARN) << "Invalid publisher priority value: " << advertised;
+    return std::nullopt;
+  }
+  return static_cast<uint8_t>(advertised);
+}
+
 void MoQSession::setPublisherPriorityFromParams(
     const TrackRequestParameters& params,
+    const Extensions& trackProperties,
     const std::shared_ptr<TrackPublisherImpl>& trackPublisher) {
-  // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    auto publisherPriority =
-        getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
-    if (publisherPriority) {
-      if (*publisherPriority <= 255) {
-        trackPublisher->setPublisherPriority(
-            static_cast<uint8_t>(*publisherPriority));
-      } else {
-        XLOG(WARN) << "Invalid priority value: "
-                   << static_cast<uint64_t>(*publisherPriority);
-      }
-    } else {
-      trackPublisher->setPublisherPriority(kDefaultPriority);
-    }
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 15) {
+    return;
+  }
+  auto advertised = getPublisherPriorityProperty(trackProperties, params);
+  if (!advertised) {
+    // Naming the default lets objects published at it elide the priority byte.
+    trackPublisher->setPublisherPriority(kDefaultPriority);
+    return;
+  }
+  auto publisherPriority = toPublisherPriority(*advertised);
+  if (publisherPriority) {
+    trackPublisher->setPublisherPriority(*publisherPriority);
   }
 }
 
 void MoQSession::setPublisherPriorityFromParams(
     const TrackRequestParameters& params,
+    const Extensions& trackProperties,
     const std::shared_ptr<SubscribeTrackReceiveState>& trackReceiveState) {
-  // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    auto publisherPriority =
-        getFirstIntParam(params, TrackRequestParamKey::PUBLISHER_PRIORITY);
-    if (publisherPriority) {
-      if (*publisherPriority <= 255) {
-        trackReceiveState->setPublisherPriority(
-            static_cast<uint8_t>(*publisherPriority));
-      } else {
-        XLOG(ERR) << "Invalid priority value: "
-                  << static_cast<uint64_t>(*publisherPriority);
-      }
-    }
+  applyResolvedPublisherPriority(
+      getPublisherPriorityProperty(trackProperties, params), trackReceiveState);
+}
+
+// No default needed here; the receive state reads unset as kDefaultPriority.
+void MoQSession::applyResolvedPublisherPriority(
+    std::optional<uint64_t> advertised,
+    const std::shared_ptr<SubscribeTrackReceiveState>& trackReceiveState) {
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 15 || !advertised) {
+    return;
+  }
+  auto publisherPriority = toPublisherPriority(*advertised);
+  if (publisherPriority) {
+    trackReceiveState->setPublisherPriority(*publisherPriority);
   }
 }
 
@@ -4686,7 +4708,8 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
   }
   auto trackAlias = subOk.trackAlias;
-  setPublisherPriorityFromParams(subOk.params, trackReceiveState);
+  setPublisherPriorityFromParams(
+      subOk.params, subOk.extensions, trackReceiveState);
   trackReceiveState->processSubscribeOK(std::move(subOk));
   if (trackReceiveState->getSubscribeCallback()) {
     trackReceiveState->getSubscribeCallback()->setTrackAlias(trackAlias);
@@ -4884,11 +4907,12 @@ folly::coro::Task<void> MoQSession::handlePublish(
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  // Capture params before moving publish
+  // Read what we need before publish is moved; copying Extensions clones IOBufs
   auto requestID = publish.requestID;
   auto alias = publish.trackAlias;
   auto ftn = publish.fullTrackName;
-  auto params = publish.params;
+  auto publisherPriority =
+      getPublisherPriorityProperty(publish.extensions, publish.params);
 
   // PubError if error occurs
   auto publishErr =
@@ -4925,8 +4949,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
         auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
             ftn, requestID, initiator.consumer, this, alias, logger_, true);
 
-        // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
-        setPublisherPriorityFromParams(params, trackReceiveState);
+        applyResolvedPublisherPriority(publisherPriority, trackReceiveState);
 
         initiator.consumer->setTrackAlias(alias);
         subTracks_.emplace(alias, trackReceiveState);
@@ -5859,8 +5882,7 @@ Subscriber::PublishResult MoQSession::publish(
   // Set publishHandle in trackPublisher so it can cancel on unsubscribes
   trackPublisher->setSubscriptionHandle(std::move(handle));
 
-  // Extract PUBLISHER_PRIORITY parameter if present (version 15+)
-  setPublisherPriorityFromParams(pub.params, trackPublisher);
+  setPublisherPriorityFromParams(pub.params, pub.extensions, trackPublisher);
 
   // Set reply context so sendPublishDone can write on the correct stream
   auto& control = sendResult.value();

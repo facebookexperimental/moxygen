@@ -21,6 +21,7 @@ namespace moxygen {
 //////// Constants ////////
 const size_t kMaxNamespaceLength = 32;
 const uint8_t kDefaultPriority = 128;
+const uint64_t kMaxPriority = 255;
 
 // From QUIC, until MOQ supports 64 bit varint
 constexpr uint64_t kEightByteLimit = 0x3FFFFFFFFFFFFFFF;
