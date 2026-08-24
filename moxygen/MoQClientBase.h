@@ -81,6 +81,28 @@ class MoQClientBase {
     return moqHandshakeTime_;
   }
 
+  // True once a QUIC transport is established. False for transports that are
+  // not QUIC at all, such as QMUX, and before the connect completes. Lets a
+  // client report the transport a session actually ended up on rather than the
+  // one its config asked for.
+  [[nodiscard]] bool hasQuicTransport() const {
+    return getQuicSocket() != nullptr;
+  }
+
+  // True when the session runs over a QuicWtSession rather than the older
+  // QuicWebTransport path.
+  [[nodiscard]] bool usesQuicWtSession() const {
+    return quicWtSession_ != nullptr;
+  }
+
+  // Empty until the transport negotiates one, and for transports that do not
+  // negotiate a protocol at all. Exposed so clients can report which ALPN a
+  // session actually ended up on.
+  [[nodiscard]] const std::optional<std::string>& getNegotiatedProtocol()
+      const {
+    return negotiatedProtocol_;
+  }
+
   [[nodiscard]] quic::
       Expected<quic::QuicSocketLite::FlowControlState, quic::LocalErrorCode>
       getConnectionFlowControl() const {
