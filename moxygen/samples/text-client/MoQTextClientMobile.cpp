@@ -409,8 +409,8 @@ class MoQTextClientMobile
 
 using namespace moxygen;
 
-struct EvLoopWeak : public quic::LibevQuicEventBase::EvLoopWeak {
-  explicit EvLoopWeak(struct ev_loop* evLoop) : evLoop_(evLoop) {}
+struct EvLoop : public quic::LibevQuicEventBase::EvLoopHolder {
+  explicit EvLoop(struct ev_loop* evLoop) : evLoop_(evLoop) {}
   struct ev_loop* get() override {
     return evLoop_;
   }
@@ -447,8 +447,7 @@ int main(int argc, char* argv[]) {
 
   struct ev_loop* evLoop = ev_loop_new(0);
   std::shared_ptr<MoQLibevExecutorImpl> moqEvb =
-      std::make_shared<MoQLibevExecutorImpl>(
-          std::make_unique<EvLoopWeak>(evLoop));
+      std::make_shared<MoQLibevExecutorImpl>(std::make_unique<EvLoop>(evLoop));
 
   std::shared_ptr<fizz::CertificateVerifier> verifier = nullptr;
   if (FLAGS_insecure) {

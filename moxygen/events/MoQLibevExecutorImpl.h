@@ -17,7 +17,7 @@ class MoQLibevExecutorImpl : public MoQExecutor,
                              public quic::LibevQuicEventBase {
  public:
   explicit MoQLibevExecutorImpl(
-      std::unique_ptr<quic::LibevQuicEventBase::EvLoopWeak> loop);
+      std::unique_ptr<quic::LibevQuicEventBase::EvLoopHolder> loop);
 
   // Implementation of folly::Executor::add
   void add(folly::Func func) override;

@@ -21,7 +21,7 @@
 
 namespace moxygen { namespace {
 
-class EvLoop : public quic::LibevQuicEventBase::EvLoopWeak {
+class EvLoop : public quic::LibevQuicEventBase::EvLoopHolder {
  public:
   EvLoop() : loop_(ev_loop_new(0)) {}
 

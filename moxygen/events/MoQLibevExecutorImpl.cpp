@@ -9,7 +9,7 @@
 namespace moxygen {
 
 MoQLibevExecutorImpl::MoQLibevExecutorImpl(
-    std::unique_ptr<quic::LibevQuicEventBase::EvLoopWeak> loop)
+    std::unique_ptr<quic::LibevQuicEventBase::EvLoopHolder> loop)
     : quic::LibevQuicEventBase(std::move(loop)) {}
 
 void MoQLibevExecutorImpl::add(folly::Func func) {
