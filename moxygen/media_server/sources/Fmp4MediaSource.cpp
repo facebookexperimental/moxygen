@@ -17,16 +17,76 @@
 #include <glob.h>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <optional>
 #include <utility>
 
 namespace moxygen::media_server {
 
+// One media-to-wall-clock mapping shared by every track in this file-backed
+// broadcast. It is accessed only on the media server's EventBase.
+class Fmp4PlaybackTimeline {
+ public:
+  using Clock = std::chrono::steady_clock;
+
+  struct Window {
+    Clock::time_point start;
+    Clock::time_point end;
+  };
+
+  void addTrack() {
+    ++activeTracks_;
+  }
+
+  void removeTrack() {
+    if (activeTracks_ > 0 && --activeTracks_ == 0) {
+      epoch_.reset();
+      mediaOrigin_.reset();
+    }
+  }
+
+  Window windowFor(
+      std::chrono::nanoseconds mediaTime,
+      std::chrono::milliseconds width) {
+    if (!epoch_) {
+      epoch_ = Clock::now();
+      mediaOrigin_ = mediaTime;
+    }
+
+    const auto offset = mediaTime - *mediaOrigin_;
+    const auto widthNs =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(width);
+    const auto offsetNs = offset.count();
+    // Integer division truncates negative values toward zero; adjust it to
+    // floor so every timestamp maps to a half-open [start, end) window.
+    const int64_t windowIndex = offsetNs >= 0
+        ? offsetNs / widthNs.count()
+        : -((-offsetNs + widthNs.count() - 1) / widthNs.count());
+    const auto start = *epoch_ + widthNs * windowIndex;
+    return Window{start, start + widthNs};
+  }
+
+  std::chrono::nanoseconds currentMediaTime() const {
+    return *mediaOrigin_ +
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            Clock::now() - *epoch_);
+  }
+
+ private:
+  size_t activeTracks_{0};
+  std::optional<Clock::time_point> epoch_;
+  std::optional<std::chrono::nanoseconds> mediaOrigin_;
+};
+
 namespace {
+
+constexpr uint64_t kNanosecondsPerSecond = 1'000'000'000;
 
 uint32_t readBE32(const uint8_t* p) {
   return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
@@ -41,23 +101,120 @@ uint64_t readBE64(const uint8_t* p) {
   return v;
 }
 
+struct BoxRange {
+  size_t payloadStart;
+  size_t end;
+};
+
+std::optional<BoxRange>
+getBoxRange(const uint8_t* d, size_t off, size_t limit) {
+  if (off + 8 > limit) {
+    return std::nullopt;
+  }
+  uint64_t size = readBE32(d + off);
+  size_t headerSize = 8;
+  if (size == 1) {
+    if (off + 16 > limit) {
+      return std::nullopt;
+    }
+    size = readBE64(d + off + 8);
+    headerSize = 16;
+  } else if (size == 0) {
+    size = limit - off;
+  }
+  if (size < headerSize || size > limit - off) {
+    return std::nullopt;
+  }
+  return BoxRange{off + headerSize, off + static_cast<size_t>(size)};
+}
+
 // Find the first child box of `type` within [start, end); npos if absent.
 size_t findBox(const uint8_t* d, size_t start, size_t end, const char* type) {
   size_t off = start;
   while (off + 8 <= end) {
-    uint64_t size = readBE32(d + off);
-    if (size == 1 && off + 16 <= end) {
-      size = readBE64(d + off + 8);
-    }
-    if (size < 8 || off + size > end) {
+    auto range = getBoxRange(d, off, end);
+    if (!range) {
       break;
     }
     if (std::memcmp(d + off + 4, type, 4) == 0) {
       return off;
     }
-    off += size;
+    off = range->end;
   }
   return std::string::npos;
+}
+
+uint32_t extractTrackTimescale(const std::string& init) {
+  const auto* d = reinterpret_cast<const uint8_t*>(init.data());
+  const size_t len = init.size();
+  const size_t moovOff = findBox(d, 0, len, "moov");
+  if (moovOff == std::string::npos) {
+    return 0;
+  }
+  auto moov = getBoxRange(d, moovOff, len);
+  if (!moov) {
+    return 0;
+  }
+  const size_t trakOff = findBox(d, moov->payloadStart, moov->end, "trak");
+  if (trakOff == std::string::npos) {
+    return 0;
+  }
+  auto trak = getBoxRange(d, trakOff, moov->end);
+  if (!trak) {
+    return 0;
+  }
+  const size_t mdiaOff = findBox(d, trak->payloadStart, trak->end, "mdia");
+  if (mdiaOff == std::string::npos) {
+    return 0;
+  }
+  auto mdia = getBoxRange(d, mdiaOff, trak->end);
+  if (!mdia) {
+    return 0;
+  }
+  const size_t mdhdOff = findBox(d, mdia->payloadStart, mdia->end, "mdhd");
+  if (mdhdOff == std::string::npos) {
+    return 0;
+  }
+  auto mdhd = getBoxRange(d, mdhdOff, mdia->end);
+  if (!mdhd || mdhd->payloadStart + 4 > mdhd->end) {
+    return 0;
+  }
+  const uint8_t version = d[mdhd->payloadStart];
+  const size_t timescaleOff = mdhd->payloadStart + 4 + (version == 1 ? 16 : 8);
+  if (version > 1 || timescaleOff + 4 > mdhd->end) {
+    return 0;
+  }
+  return readBE32(d + timescaleOff);
+}
+
+std::chrono::nanoseconds mediaTime(uint64_t ticks, uint32_t timescale) {
+  const uint64_t wholeSeconds = ticks / timescale;
+  const uint64_t remainder = ticks % timescale;
+  const uint64_t fractionalNs = remainder * kNanosecondsPerSecond / timescale;
+  if (wholeSeconds >
+      (static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) -
+       fractionalNs) /
+          kNanosecondsPerSecond) {
+    return std::chrono::nanoseconds::max();
+  }
+  return std::chrono::nanoseconds(
+      wholeSeconds * kNanosecondsPerSecond + fractionalNs);
+}
+
+uint64_t mediaTicks(std::chrono::nanoseconds time, uint32_t timescale) {
+  if (time <= std::chrono::nanoseconds::zero()) {
+    return 0;
+  }
+  const uint64_t ns = time.count();
+  const uint64_t wholeSeconds = ns / kNanosecondsPerSecond;
+  const uint64_t remainder = ns % kNanosecondsPerSecond;
+  if (wholeSeconds > (std::numeric_limits<uint64_t>::max() -
+                      remainder * timescale / kNanosecondsPerSecond) /
+          timescale) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return wholeSeconds * timescale +
+      remainder * timescale / kNanosecondsPerSecond;
 }
 
 // Extract a fragment's presentation-time anchor from moof -> traf -> tfdt
@@ -135,6 +292,7 @@ struct Fragment {
 struct ParsedMp4 {
   std::string init; // ftyp + moov
   std::vector<Fragment> fragments;
+  uint32_t timescale{0};
 };
 
 // Read + natural-sort + concatenate the files matching `pattern` (e.g.
@@ -206,6 +364,7 @@ ParsedMp4 parseFragmentedMp4Bytes(const std::string& data) {
 
   ParsedMp4 out;
   out.init = data.substr(0, firstMoof == std::string::npos ? len : firstMoof);
+  out.timescale = extractTrackTimescale(out.init);
   for (size_t i = 0; i < boxes.size(); ++i) {
     if (boxes[i].type != "moof") {
       continue;
@@ -326,11 +485,14 @@ class Fmp4Track : public SegmentSource {
       const std::string& role,
       ParsedMp4 parsed,
       std::chrono::milliseconds interval,
+      std::shared_ptr<Fmp4PlaybackTimeline> timeline,
       bool loop)
       : spec_(specForRole(name, role)),
         parsed_(std::move(parsed)),
         interval_(interval),
+        timeline_(std::move(timeline)),
         loop_(loop) {
+    timeline_->addTrack();
     XLOG(INFO) << "[Fmp4Source] track=" << spec_.name << " role=" << role
                << " initBytes=" << parsed_.init.size()
                << " fragments=" << parsed_.fragments.size() << " firstPts="
@@ -338,7 +500,12 @@ class Fmp4Track : public SegmentSource {
                                              : parsed_.fragments.front().pts)
                << " lastPts="
                << (parsed_.fragments.empty() ? 0 : parsed_.fragments.back().pts)
-               << " loop=" << loop_;
+               << " timescale=" << parsed_.timescale
+               << " windowMs=" << interval_.count() << " loop=" << loop_;
+  }
+
+  ~Fmp4Track() override {
+    timeline_->removeTrack();
   }
 
   const TrackSpec& spec() const override {
@@ -346,15 +513,45 @@ class Fmp4Track : public SegmentSource {
   }
 
   folly::coro::AsyncGenerator<MediaObject&&> objects() override {
-    // group id = the fragment's segmentStartPts. When looping, offset each pass
-    // by loopSpan so group ids stay strictly monotonic, and rewrite each
-    // fragment's tfdt by the same offset so the decode timeline stays monotonic
-    // too (else the decoder jumps backward at the loop boundary and stalls).
     const uint64_t span = loopSpan();
     uint64_t base = 0;
+    (void)timeline_->windowFor(
+        mediaTime(parsed_.fragments.front().pts, parsed_.timescale), interval_);
+    if (loop_) {
+      const uint64_t currentTicks =
+          mediaTicks(timeline_->currentMediaTime(), parsed_.timescale);
+      const uint64_t firstPts = parsed_.fragments.front().pts;
+      if (currentTicks > firstPts) {
+        base = ((currentTicks - firstPts) / span) * span;
+      }
+    }
+
+    size_t skipped = 0;
     do {
       for (const auto& fragment : parsed_.fragments) {
         const uint64_t group = base + fragment.pts;
+        auto window = timeline_->windowFor(
+            mediaTime(group, parsed_.timescale), interval_);
+        auto now = Fmp4PlaybackTimeline::Clock::now();
+        if (now >= window.end) {
+          ++skipped;
+          continue;
+        }
+        if (now < window.start) {
+          co_await folly::coro::sleep(
+              std::chrono::duration_cast<folly::HighResDuration>(
+                  window.start - now));
+        }
+        if (Fmp4PlaybackTimeline::Clock::now() >= window.end) {
+          ++skipped;
+          continue;
+        }
+        if (skipped > 0) {
+          XLOG(INFO) << "[Fmp4Source] track=" << spec_.name
+                     << " skipped expired fragments=" << skipped;
+          skipped = 0;
+        }
+
         std::string bytes = fragment.bytes;
         if (base != 0) {
           rewriteBaseMediaDecodeTime(bytes, group);
@@ -366,10 +563,13 @@ class Fmp4Track : public SegmentSource {
           recent_.pop_front();
         }
         co_yield makeObject(group, bytes);
-        co_await folly::coro::sleep(interval_);
       }
       base += span;
     } while (loop_);
+    if (skipped > 0) {
+      XLOG(INFO) << "[Fmp4Source] track=" << spec_.name
+                 << " skipped expired fragments=" << skipped;
+    }
   }
 
   folly::coro::AsyncGenerator<MediaObject&&> fetch(
@@ -390,20 +590,24 @@ class Fmp4Track : public SegmentSource {
   }
 
  private:
-  // Monotonic offset per loop pass = span of one pass (last pts + one gap).
   uint64_t loopSpan() const {
-    if (parsed_.fragments.empty()) {
-      return 1;
-    }
+    const auto& first = parsed_.fragments.front();
+    const auto& last = parsed_.fragments.back();
     const uint64_t gap = parsed_.fragments.size() >= 2
-        ? parsed_.fragments[1].pts - parsed_.fragments[0].pts
-        : parsed_.fragments.back().pts + 1;
-    return parsed_.fragments.back().pts + gap;
+        ? last.pts - parsed_.fragments[parsed_.fragments.size() - 2].pts
+        : std::max<uint64_t>(
+              1,
+              mediaTicks(
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      interval_),
+                  parsed_.timescale));
+    return last.pts - first.pts + gap;
   }
 
   TrackSpec spec_;
   ParsedMp4 parsed_;
   std::chrono::milliseconds interval_;
+  std::shared_ptr<Fmp4PlaybackTimeline> timeline_;
   bool loop_;
   static constexpr size_t kRecentGops = 3;
   std::deque<std::pair<uint64_t, std::string>> recent_;
@@ -416,8 +620,11 @@ Fmp4MediaSource::Fmp4MediaSource(
     std::chrono::milliseconds fragmentInterval,
     bool loop)
     : catalogPath_(std::move(catalogPath)),
+      timeline_(std::make_shared<Fmp4PlaybackTimeline>()),
       fragmentInterval_(fragmentInterval),
-      loop_(loop) {}
+      loop_(loop) {
+  XCHECK_GT(fragmentInterval_.count(), 0);
+}
 
 std::string Fmp4MediaSource::catalog() {
   // Assemble the served catalog: authored metadata + each track's init segment
@@ -474,8 +681,25 @@ std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
                  << " has no media fragments: " << path;
       return nullptr;
     }
+    if (parsed.timescale == 0) {
+      XLOG(WARN) << "[Fmp4Source] openTrack " << trackName
+                 << " has no valid mdhd timescale: " << path;
+      return nullptr;
+    }
+    for (size_t i = 1; i < parsed.fragments.size(); ++i) {
+      if (parsed.fragments[i].pts <= parsed.fragments[i - 1].pts) {
+        XLOG(WARN) << "[Fmp4Source] openTrack " << trackName
+                   << " has non-monotonic fragment timestamps: " << path;
+        return nullptr;
+      }
+    }
     return std::make_shared<Fmp4Track>(
-        track.name, track.role, std::move(parsed), fragmentInterval_, loop_);
+        track.name,
+        track.role,
+        std::move(parsed),
+        fragmentInterval_,
+        timeline_,
+        loop_);
   }
   XLOG(WARN) << "[Fmp4Source] openTrack " << trackName << " not in catalog";
   return nullptr;

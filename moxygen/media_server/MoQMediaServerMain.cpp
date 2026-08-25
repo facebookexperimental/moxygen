@@ -36,7 +36,7 @@ DEFINE_string(
     "",
     "Catalog JSON for the file backend (required). Any namespace with first "
     "tuple field 'file' is served from it, e.g. file-<id>--video0.");
-DEFINE_int32(fragment_interval_ms, 1000, "fMP4 per-fragment pacing (ms)");
+DEFINE_int32(fragment_interval_ms, 1000, "fMP4 playback window width (ms)");
 DEFINE_bool(loop, false, "Loop the fMP4 source forever");
 
 namespace {
@@ -55,6 +55,7 @@ int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
 
   XCHECK(!FLAGS_input.empty()) << "--input is required";
+  XCHECK_GT(FLAGS_fragment_interval_ms, 0);
 
   folly::ScopedEventBaseThread worker("MoQMediaWorker");
   auto* workerEvb = worker.getEventBase();

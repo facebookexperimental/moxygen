@@ -22,7 +22,8 @@ Flags:
 - `--input` (required): catalog JSON for the `file` backend. Any namespace whose
   first tuple field is `file` (e.g. `file-<id>--video0`) is served from it.
 - `--port` (default `9779`): QUIC/WebTransport listen port.
-- `--fragment_interval_ms` (default `1000`): per-fragment pacing.
+- `--fragment_interval_ms` (default `1000`): media-time window width used to
+  pace fragments on the shared playback clock.
 - `--loop` (default off): loop the source forever (live); omit for a finite
   one-shot that ends after one pass.
 

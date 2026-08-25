@@ -14,6 +14,8 @@
 
 namespace moxygen::media_server {
 
+class Fmp4PlaybackTimeline;
+
 // A file-backed broadcast: a catalog-metadata JSON that lists tracks, each
 // backed by its own fragmented-MP4 file (the per-track `sourceFile`, resolved
 // next to the catalog). Everything is resolved on demand via openTrack(name):
@@ -22,8 +24,9 @@ namespace moxygen::media_server {
 //    and inline each track's init segment (ftyp+moov, base64) into an MSF/CMSF
 //    catalog document, wrapped in a static single-object CatalogSource.
 //  - a media track: parse one track's fMP4 into a per-track SegmentSource (init
-//    split off, each moof+mdat a fragment grouped by segmentStartPts). nullptr
-//    if not listed.
+//    split off, each moof+mdat a fragment grouped by segmentStartPts). Track
+//    timescales normalize those timestamps onto a shared playback timeline.
+//    nullptr if not listed.
 //
 // Nothing is parsed at construction; the object just remembers where to look.
 class Fmp4MediaSource {
@@ -41,6 +44,7 @@ class Fmp4MediaSource {
   std::string catalog();
 
   std::string catalogPath_;
+  std::shared_ptr<Fmp4PlaybackTimeline> timeline_;
   std::chrono::milliseconds fragmentInterval_;
   bool loop_;
 };
