@@ -1220,6 +1220,43 @@ TEST_F(MoQRelayTest, FetchEmptyNamespaceAcceptedV18) {
   removeSession(session);
 }
 
+TEST_F(MoQRelayTest, FetchPrefersExactTrackOverNamespace) {
+  auto namespacePublisher = createMockSession();
+  auto exactTrackPublisher = createMockSession();
+  auto fetchSession = createMockSession();
+
+  doPublishNamespace(namespacePublisher, kTestNamespace);
+  doPublish(exactTrackPublisher, kTestTrackName);
+
+  EXPECT_CALL(*namespacePublisher, fetch(_, _)).Times(0);
+  EXPECT_CALL(*exactTrackPublisher, fetch(_, _))
+      .WillOnce([](Fetch fetch, std::shared_ptr<FetchConsumer>) {
+        EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            std::make_shared<NiceMock<MockFetchHandle>>(FetchOk{
+                RequestID(0),
+                GroupOrder::OldestFirst,
+                0,
+                AbsoluteLocation{1, 0}}));
+      });
+
+  Fetch fetch(
+      RequestID(0),
+      kTestTrackName,
+      AbsoluteLocation{0, 0},
+      AbsoluteLocation{1, 0});
+  auto consumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  withSessionContext(fetchSession, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->fetch(std::move(fetch), consumer), exec_.get());
+    EXPECT_TRUE(res.hasValue());
+  });
+
+  removeSession(fetchSession);
+  removeSession(exactTrackPublisher);
+  removeSession(namespacePublisher);
+}
+
 TEST_F(MoQRelayTest, TrackStatusEmptyNamespaceRejectedPreV18) {
   // draft-16 still rejects: zero-field namespaces are a draft-18 feature.
   auto session = createMockSession();

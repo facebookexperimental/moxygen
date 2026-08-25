@@ -1828,14 +1828,14 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     }
   }
 
-  auto upstreamSession =
-      findPublishNamespaceSession(fetch.fullTrackName.trackNamespace);
+  std::shared_ptr<MoQSession> upstreamSession;
+  auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
+  if (subscriptionIt != subscriptions_.end()) {
+    upstreamSession = subscriptionIt->second.upstream;
+  }
   if (!upstreamSession) {
-    // Attempt to find matching upstream subscription (from publish)
-    auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
-    if (subscriptionIt != subscriptions_.end()) {
-      upstreamSession = subscriptionIt->second.upstream;
-    }
+    upstreamSession =
+        findPublishNamespaceSession(fetch.fullTrackName.trackNamespace);
     if (!upstreamSession) {
       co_return folly::makeUnexpected(FetchError(
           {fetch.requestID,
