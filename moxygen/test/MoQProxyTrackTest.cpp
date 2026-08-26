@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
@@ -37,6 +38,9 @@ class TestUpstreamProvider final : public MoQUpstreamProvider {
     receivedTrackName = fullTrackName;
     receivedParams = params;
     receivedHasFallbackProvider = hasFallbackProvider;
+    if (gate) {
+      co_await *gate;
+    }
     if (error) {
       co_return folly::makeUnexpected(MoQUpstreamProviderError{*error});
     }
@@ -48,10 +52,17 @@ class TestUpstreamProvider final : public MoQUpstreamProvider {
   std::optional<TrackRequestParameters> receivedParams;
   std::optional<bool> receivedHasFallbackProvider;
   std::optional<std::string> error;
+  folly::coro::Baton* gate{nullptr};
 
  private:
   std::shared_ptr<MoQSession> session_;
 };
+
+folly::coro::Task<void> saveSubscribeResult(
+    folly::coro::Task<Publisher::SubscribeResult> task,
+    std::optional<Publisher::SubscribeResult>& result) {
+  result = co_await std::move(task);
+}
 
 class MoQProxyTrackTest : public Test {
  protected:
@@ -139,6 +150,56 @@ TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
   EXPECT_EQ(result.value()->subscribeOk().largest, AbsoluteLocation(10, 2));
 
   result.value()->unsubscribe();
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  track_.reset();
+}
+
+TEST_F(MoQProxyTrackTest, ConcurrentSubscribersShareUpstreamSubscription) {
+  folly::coro::Baton providerGate;
+  provider_->gate = &providerGate;
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+
+  std::optional<Publisher::SubscribeResult> firstResult;
+  std::optional<Publisher::SubscribeResult> secondResult;
+  auto firstSession = makeDownstreamSession();
+  auto secondSession = makeDownstreamSession();
+  folly::coro::co_withExecutor(
+      executor_.get(),
+      saveSubscribeResult(
+          track_->subscribe(
+              makeSubscribeRequest(RequestID(1)), makeConsumer(), firstSession),
+          firstResult))
+      .start();
+  eventBase_.loopOnce();
+  folly::coro::co_withExecutor(
+      executor_.get(),
+      saveSubscribeResult(
+          track_->subscribe(
+              makeSubscribeRequest(RequestID(2)),
+              makeConsumer(),
+              secondSession),
+          secondResult))
+      .start();
+  eventBase_.loopOnce();
+
+  EXPECT_EQ(provider_->calls, 1);
+  providerGate.post();
+  eventBase_.loop();
+
+  ASSERT_TRUE(firstResult.has_value());
+  ASSERT_TRUE(firstResult->hasValue());
+  ASSERT_TRUE(secondResult.has_value());
+  ASSERT_TRUE(secondResult->hasValue());
+  EXPECT_EQ(provider_->calls, 1);
+
+  firstResult->value()->unsubscribe();
+  secondResult->value()->unsubscribe();
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   track_.reset();
 }

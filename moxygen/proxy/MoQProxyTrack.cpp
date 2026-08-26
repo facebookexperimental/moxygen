@@ -133,19 +133,47 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
             SubscribeErrorCode::INTERNAL_ERROR,
             "subscriber session and consumer are required"});
   }
-  if (subscriptionStarted_) {
+  if (state_ == State::IDLE) {
+    co_return co_await handleFirstSubscription(
+        std::move(subscribeRequest),
+        std::move(consumer),
+        std::move(downstreamSession));
+  }
+
+  if (state_ == State::CONNECTING) {
+    co_await upstreamSubscriptionReadyPromise_.getFuture();
+  }
+
+  if (upstreamSubscriptionFailure_) {
+    co_return folly::makeUnexpected(makeSubscribeError(
+        subscribeRequest.requestID, *upstreamSubscriptionFailure_));
+  }
+  if (state_ != State::READY) {
     co_return folly::makeUnexpected(
         SubscribeError{
             subscribeRequest.requestID,
-            SubscribeErrorCode::DUPLICATE_SUBSCRIPTION,
-            "proxy track already has a subscription"});
+            SubscribeErrorCode::DOES_NOT_EXIST,
+            "upstream subscription is no longer available"});
   }
 
-  subscriptionStarted_ = true;
+  co_return addSubscriber(
+      subscribeRequest, std::move(consumer), std::move(downstreamSession));
+}
+
+folly::coro::Task<Publisher::SubscribeResult>
+MoQProxyTrack::handleFirstSubscription(
+    SubscribeRequest subscribeRequest,
+    std::shared_ptr<TrackConsumer> consumer,
+    std::shared_ptr<MoQSession> downstreamSession) {
+  state_ = State::CONNECTING;
   auto subscriberResult =
       addSubscriber(subscribeRequest, std::move(consumer), downstreamSession);
   if (subscriberResult.hasError()) {
-    subscriptionStarted_ = false;
+    state_ = State::FAILED;
+    completeUpstreamEstablishment(
+        UpstreamEstablishmentFailure{
+            subscriberResult.error().errorCode,
+            subscriberResult.error().reasonPhrase});
     co_return subscriberResult;
   }
 
@@ -153,7 +181,12 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
   auto failure =
       co_await establishUpstream(subscribeRequest, downstreamSession);
   if (failure) {
-    subscriptionStarted_ = false;
+    completeUpstreamEstablishment(
+        UpstreamEstablishmentFailure{
+            failure->errorCode,
+            failure->reasonPhrase,
+        });
+    state_ = State::FAILED;
     // Roll back the subscriber registered before upstream establishment.
     subscriber->unsubscribe();
     co_return folly::makeUnexpected(std::move(*failure));
@@ -166,6 +199,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
     downstreamHandle->updateLargest(*largest);
   }
   downstreamHandle->refreshSubscribeOk();
+  state_ = State::READY;
+  completeUpstreamEstablishment(std::nullopt);
   co_return subscriber;
 }
 
@@ -173,6 +208,16 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
     const SubscribeRequest& subscribeRequest,
     std::shared_ptr<TrackConsumer> consumer,
     std::shared_ptr<MoQSession> downstreamSession) {
+  if (forwarder_->largest() &&
+      subscribeRequest.locType == LocationType::AbsoluteRange &&
+      subscribeRequest.endGroup < forwarder_->largest()->group) {
+    return folly::makeUnexpected(
+        SubscribeError{
+            subscribeRequest.requestID,
+            SubscribeErrorCode::INVALID_RANGE,
+            "range is no longer available"});
+  }
+
   auto subscriber = forwarder_->addSubscriber(
       std::move(downstreamSession), subscribeRequest, std::move(consumer));
   if (!subscriber) {
@@ -256,6 +301,7 @@ MoQProxyTrack::establishWithProvider(
   upstreamRequest.priority = kDefaultPriority;
   upstreamRequest.groupOrder = GroupOrder::Default;
   upstreamRequest.locType = LocationType::LargestObject;
+  upstreamRequest.forward = forwarder_->numForwardingSubscribers() > 0;
 
   auto downstreamVersion = downstreamSession->getNegotiatedVersion();
   auto upstreamVersion = upstreamSession->getNegotiatedVersion();
@@ -297,6 +343,22 @@ MoQProxyTrack::establishWithProvider(
       .session = std::move(upstreamSession),
       .handle = std::move(upstreamHandle),
   };
+}
+
+SubscribeError MoQProxyTrack::makeSubscribeError(
+    RequestID requestID,
+    const UpstreamEstablishmentFailure& failure) const {
+  return SubscribeError{requestID, failure.errorCode, failure.reasonPhrase};
+}
+
+void MoQProxyTrack::completeUpstreamEstablishment(
+    std::optional<UpstreamEstablishmentFailure> failure) {
+  if (upstreamSubscriptionPromiseResolved_) {
+    return;
+  }
+  upstreamSubscriptionPromiseResolved_ = true;
+  upstreamSubscriptionFailure_ = std::move(failure);
+  upstreamSubscriptionReadyPromise_.setValue(folly::unit);
 }
 
 } // namespace moxygen

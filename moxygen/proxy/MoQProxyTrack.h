@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/Expected.h>
+#include <folly/coro/SharedPromise.h>
 #include <folly/coro/Task.h>
 #include <memory>
 #include <optional>
@@ -43,6 +44,13 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       std::shared_ptr<MoQSession> downstreamSession);
 
  private:
+  enum class State { IDLE, CONNECTING, READY, FAILED };
+
+  struct UpstreamEstablishmentFailure {
+    SubscribeErrorCode errorCode;
+    std::string reasonPhrase;
+  };
+
   struct EstablishedUpstream {
     std::shared_ptr<MoQSession> session;
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
@@ -56,6 +64,11 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   MoQProxyTrack(
       FullTrackName fullTrackName,
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
+
+  folly::coro::Task<Publisher::SubscribeResult> handleFirstSubscription(
+      SubscribeRequest subscribeRequest,
+      std::shared_ptr<TrackConsumer> consumer,
+      std::shared_ptr<MoQSession> downstreamSession);
 
   Publisher::SubscribeResult addSubscriber(
       const SubscribeRequest& subscribeRequest,
@@ -72,12 +85,22 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       const std::shared_ptr<MoQSession>& downstreamSession,
       bool hasFallbackProvider);
 
+  SubscribeError makeSubscribeError(
+      RequestID requestID,
+      const UpstreamEstablishmentFailure& failure) const;
+
+  void completeUpstreamEstablishment(
+      std::optional<UpstreamEstablishmentFailure> failure);
+
   FullTrackName fullTrackName_;
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
   std::shared_ptr<MoQForwarder> forwarder_;
   std::shared_ptr<MoQSession> upstreamSession_;
   std::shared_ptr<Publisher::SubscriptionHandle> upstreamHandle_;
-  bool subscriptionStarted_{false};
+  folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
+  std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;
+  State state_{State::IDLE};
+  bool upstreamSubscriptionPromiseResolved_{false};
 };
 
 } // namespace moxygen
