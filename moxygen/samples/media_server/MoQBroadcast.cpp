@@ -4,11 +4,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/media_server/MoQBroadcast.h>
+#include <moxygen/samples/media_server/MoQBroadcast.h>
 
 #include <moxygen/MoQSession.h>
-#include <moxygen/media_server/MediaCatalog.h>
-#include <moxygen/media_server/PublishLoop.h>
+#include <moxygen/samples/media_server/MediaCatalog.h>
+#include <moxygen/samples/media_server/PublishLoop.h>
 
 #include <folly/CancellationToken.h>
 #include <folly/coro/Task.h>

@@ -6,8 +6,8 @@
 
 #pragma once
 
-#include <moxygen/media_server/MediaSourceResolver.h>
-#include <moxygen/media_server/sources/Fmp4MediaSource.h>
+#include <moxygen/samples/media_server/MediaSourceResolver.h>
+#include <moxygen/samples/media_server/sources/Fmp4MediaSource.h>
 
 #include <chrono>
 #include <memory>

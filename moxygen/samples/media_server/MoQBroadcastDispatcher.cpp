@@ -4,7 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/media_server/MoQBroadcastDispatcher.h>
+#include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
 
 #include <folly/coro/Task.h>
 #include <folly/logging/xlog.h>

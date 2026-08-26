@@ -7,9 +7,9 @@
 #pragma once
 
 #include <moxygen/MoQTypes.h>
-#include <moxygen/media_server/BroadcastFactory.h>
-#include <moxygen/media_server/MediaSourceResolver.h>
-#include <moxygen/media_server/MoQBroadcast.h>
+#include <moxygen/samples/media_server/BroadcastFactory.h>
+#include <moxygen/samples/media_server/MediaSourceResolver.h>
+#include <moxygen/samples/media_server/MoQBroadcast.h>
 
 #include <folly/Executor.h>
 

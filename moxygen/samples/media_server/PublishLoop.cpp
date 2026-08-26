@@ -4,7 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/media_server/PublishLoop.h>
+#include <moxygen/samples/media_server/PublishLoop.h>
 
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/MoQPublishError.h>

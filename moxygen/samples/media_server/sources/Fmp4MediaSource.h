@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <moxygen/media_server/MoQMediaSource.h>
+#include <moxygen/samples/media_server/MoQMediaSource.h>
 
 #include <chrono>
 #include <memory>

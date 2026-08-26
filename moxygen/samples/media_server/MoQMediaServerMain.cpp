@@ -5,9 +5,9 @@
  */
 
 #include <moxygen/MoQVersions.h>
-#include <moxygen/media_server/MoQBroadcastDispatcher.h>
-#include <moxygen/media_server/MoQBroadcastFactory.h>
-#include <moxygen/media_server/MoQMediaServer.h>
+#include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
+#include <moxygen/samples/media_server/MoQBroadcastFactory.h>
+#include <moxygen/samples/media_server/MoQMediaServer.h>
 #include <moxygen/util/SignalHandler.h>
 
 #include <proxygen/httpserver/samples/hq/FizzContext.h>

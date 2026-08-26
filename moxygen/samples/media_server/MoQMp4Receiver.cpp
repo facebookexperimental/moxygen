@@ -16,8 +16,8 @@
 #include <moxygen/MoQVersions.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
-#include <moxygen/media_server/MediaCatalog.h>
 #include <moxygen/relay/MoQRelayClient.h>
+#include <moxygen/samples/media_server/MediaCatalog.h>
 #include <moxygen/samples/util/Utils.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 

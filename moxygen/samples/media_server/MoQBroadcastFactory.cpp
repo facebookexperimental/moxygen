@@ -4,9 +4,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/media_server/MoQBroadcastFactory.h>
+#include <moxygen/samples/media_server/MoQBroadcastFactory.h>
 
-#include <moxygen/media_server/sources/FileMediaSourceResolver.h>
+#include <moxygen/samples/media_server/sources/FileMediaSourceResolver.h>
 
 #include <utility>
 

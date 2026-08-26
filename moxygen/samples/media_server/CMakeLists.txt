@@ -4,7 +4,7 @@
 
 # Manually maintained - has moq_media_server + moq_mp4_receiver binaries
 
-moxygen_add_library(moxygen_media_server_media_catalog
+moxygen_add_library(moxygen_samples_media_server_media_catalog
   SRCS
     MediaCatalog.cpp
   DEPS
@@ -14,7 +14,7 @@ moxygen_add_library(moxygen_media_server_media_catalog
     Folly::folly_range
 )
 
-moxygen_add_library(moxygen_media_server
+moxygen_add_library(moxygen_samples_media_server
   SRCS
     MoQBroadcast.cpp
     MoQBroadcastDispatcher.cpp
@@ -29,7 +29,7 @@ moxygen_add_library(moxygen_media_server
     Folly::folly_coro_sleep
     Folly::folly_coro_with_cancellation
   EXPORTED_DEPS
-    moxygen_media_server_media_catalog
+    moxygen_samples_media_server_media_catalog
     moxygen_moq
     moxygen_moq_server
     moxygen_moq_types
@@ -66,7 +66,7 @@ target_compile_options(
 )
 target_link_libraries(
   moq_media_server PUBLIC
-  moxygen_media_server
+  moxygen_samples_media_server
   moxygen_moq_server
   moxygen_moq_versions
   moxygen_util_signal_handler
@@ -106,7 +106,7 @@ target_compile_options(
 )
 target_link_libraries(
   moq_mp4_receiver PUBLIC
-  moxygen_media_server_media_catalog
+  moxygen_samples_media_server_media_catalog
   moxygen_events_moq_folly_executor_impl
   moxygen_moq_obj_receiver
   moxygen_moq_versions

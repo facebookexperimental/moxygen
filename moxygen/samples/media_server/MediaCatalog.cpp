@@ -4,7 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/media_server/MediaCatalog.h>
+#include <moxygen/samples/media_server/MediaCatalog.h>
 
 #include <folly/dynamic.h>
 #include <folly/json.h>

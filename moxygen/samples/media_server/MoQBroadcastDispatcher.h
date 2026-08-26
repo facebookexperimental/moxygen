@@ -7,8 +7,8 @@
 #pragma once
 
 #include <moxygen/Publisher.h>
-#include <moxygen/media_server/BroadcastFactory.h>
-#include <moxygen/media_server/MoQBroadcast.h>
+#include <moxygen/samples/media_server/BroadcastFactory.h>
+#include <moxygen/samples/media_server/MoQBroadcast.h>
 
 #include <folly/Executor.h>
 #include <folly/coro/Task.h>

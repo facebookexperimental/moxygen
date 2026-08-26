@@ -4,10 +4,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/media_server/sources/Fmp4MediaSource.h>
+#include <moxygen/samples/media_server/sources/Fmp4MediaSource.h>
 
-#include <moxygen/media_server/MediaCatalog.h>
-#include <moxygen/media_server/sources/CatalogSource.h>
+#include <moxygen/samples/media_server/MediaCatalog.h>
+#include <moxygen/samples/media_server/sources/CatalogSource.h>
 
 #include <folly/base64.h>
 #include <folly/coro/Sleep.h>

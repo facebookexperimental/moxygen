@@ -8,13 +8,13 @@ their first tuple field (`file` -> local disk today; `oil` -> FBMS later).
 ## Build
 
 ```
-buck2 build fbcode//ti/experimental/moxygen/media_server:moq_media_server
+buck2 build fbcode//ti/experimental/moxygen/samples/media_server:moq_media_server
 ```
 
 ## Start the server
 
 ```
-buck2 run fbcode//ti/experimental/moxygen/media_server:moq_media_server -- --input /path/to/catalog.json --port 60100 --fragment_interval_ms 1000 --insecure
+buck2 run fbcode//ti/experimental/moxygen/samples/media_server:moq_media_server -- --input /path/to/catalog.json --port 60100 --fragment_interval_ms 1000 --insecure
 ```
 
 Flags:
@@ -38,7 +38,7 @@ Start the server, then run the reference subscriber, which discovers the catalog
 and writes each track to disk:
 
 ```
-buck2 run fbcode//ti/experimental/moxygen/media_server:moq_mp4_receiver -- --connect_url moqt://localhost:60100 --track_namespace file/moq-media --track_namespace_delimiter / --output /tmp/moq_out --duration_s 0
+buck2 run fbcode//ti/experimental/moxygen/samples/media_server:moq_mp4_receiver -- --connect_url moqt://localhost:60100 --track_namespace file/moq-media --track_namespace_delimiter / --output /tmp/moq_out --duration_s 0
 ```
 
 It writes `/tmp/moq_out.<track>.mp4` per track (e.g. `video0`, `audio0`).

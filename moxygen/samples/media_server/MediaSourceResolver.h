@@ -7,7 +7,7 @@
 #pragma once
 
 #include <moxygen/MoQTypes.h>
-#include <moxygen/media_server/MoQMediaSource.h>
+#include <moxygen/samples/media_server/MoQMediaSource.h>
 
 #include <folly/coro/Task.h>
 

@@ -7,7 +7,7 @@
 #pragma once
 
 #include <moxygen/MoQServer.h>
-#include <moxygen/media_server/MoQBroadcastDispatcher.h>
+#include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
 
 #include <folly/logging/xlog.h>
 
