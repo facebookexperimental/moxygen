@@ -6,10 +6,12 @@
 
 #pragma once
 
+#include <folly/Expected.h>
 #include <folly/coro/Task.h>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "moxygen/Publisher.h"
 #include "moxygen/proxy/MoQUpstreamProvider.h"
@@ -24,7 +26,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
  public:
   static std::shared_ptr<MoQProxyTrack> create(
       FullTrackName fullTrackName,
-      std::shared_ptr<MoQUpstreamProvider> upstreamProvider);
+      std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
 
   ~MoQProxyTrack();
 
@@ -41,11 +43,19 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       std::shared_ptr<MoQSession> downstreamSession);
 
  private:
+  struct EstablishedUpstream {
+    std::shared_ptr<MoQSession> session;
+    std::shared_ptr<Publisher::SubscriptionHandle> handle;
+  };
+
+  using UpstreamEstablishmentResult =
+      folly::Expected<EstablishedUpstream, SubscribeError>;
+
   class DownstreamSubscriptionHandle;
 
   MoQProxyTrack(
       FullTrackName fullTrackName,
-      std::shared_ptr<MoQUpstreamProvider> upstreamProvider);
+      std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
 
   Publisher::SubscribeResult addSubscriber(
       const SubscribeRequest& subscribeRequest,
@@ -56,8 +66,14 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       const SubscribeRequest& subscribeRequest,
       const std::shared_ptr<MoQSession>& downstreamSession);
 
+  folly::coro::Task<UpstreamEstablishmentResult> establishWithProvider(
+      const std::shared_ptr<MoQUpstreamProvider>& upstreamProvider,
+      const SubscribeRequest& subscribeRequest,
+      const std::shared_ptr<MoQSession>& downstreamSession,
+      bool hasFallbackProvider);
+
   FullTrackName fullTrackName_;
-  std::shared_ptr<MoQUpstreamProvider> upstreamProvider_;
+  std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
   std::shared_ptr<MoQForwarder> forwarder_;
   std::shared_ptr<MoQSession> upstreamSession_;
   std::shared_ptr<Publisher::SubscriptionHandle> upstreamHandle_;

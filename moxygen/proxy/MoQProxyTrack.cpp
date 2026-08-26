@@ -16,14 +16,15 @@
 namespace moxygen {
 namespace {
 
-SubscribeError makeUpstreamFailure(
+folly::Unexpected<SubscribeError> makeUpstreamFailure(
     const SubscribeRequest& request,
     SubscribeErrorCode errorCode,
     std::string reasonPhrase) {
-  return SubscribeError{request.requestID, errorCode, std::move(reasonPhrase)};
+  return folly::makeUnexpected(
+      SubscribeError{request.requestID, errorCode, std::move(reasonPhrase)});
 }
 
-SubscribeError makeUpstreamFailure(
+folly::Unexpected<SubscribeError> makeUpstreamFailure(
     const SubscribeRequest& request,
     std::string reasonPhrase) {
   return makeUpstreamFailure(
@@ -80,18 +81,22 @@ class MoQProxyTrack::DownstreamSubscriptionHandle final
 
 std::shared_ptr<MoQProxyTrack> MoQProxyTrack::create(
     FullTrackName fullTrackName,
-    std::shared_ptr<MoQUpstreamProvider> upstreamProvider) {
-  return std::shared_ptr<MoQProxyTrack>(
-      new MoQProxyTrack(std::move(fullTrackName), std::move(upstreamProvider)));
+    std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders) {
+  return std::shared_ptr<MoQProxyTrack>(new MoQProxyTrack(
+      std::move(fullTrackName), std::move(upstreamProviders)));
 }
 
 MoQProxyTrack::MoQProxyTrack(
     FullTrackName fullTrackName,
-    std::shared_ptr<MoQUpstreamProvider> upstreamProvider)
+    std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders)
     : fullTrackName_(std::move(fullTrackName)),
-      upstreamProvider_(std::move(upstreamProvider)),
+      upstreamProviders_(std::move(upstreamProviders)),
       forwarder_(std::make_shared<MoQForwarder>(fullTrackName_)) {
-  XCHECK(upstreamProvider_) << "MoQProxyTrack requires an upstream provider";
+  XCHECK(!upstreamProviders_.empty())
+      << "MoQProxyTrack requires upstream providers";
+  for (const auto& provider : upstreamProviders_) {
+    XCHECK(provider) << "MoQProxyTrack requires non-null upstream providers";
+  }
 }
 
 MoQProxyTrack::~MoQProxyTrack() {
@@ -184,9 +189,45 @@ folly::coro::Task<std::optional<SubscribeError>>
 MoQProxyTrack::establishUpstream(
     const SubscribeRequest& subscribeRequest,
     const std::shared_ptr<MoQSession>& downstreamSession) {
+  std::optional<SubscribeError> lastFailure;
+  for (size_t providerIndex = 0; providerIndex < upstreamProviders_.size();
+       ++providerIndex) {
+    const auto& upstreamProvider = upstreamProviders_[providerIndex];
+    const bool hasFallbackProvider =
+        providerIndex + 1 < upstreamProviders_.size();
+    auto result = co_await establishWithProvider(
+        upstreamProvider,
+        subscribeRequest,
+        downstreamSession,
+        hasFallbackProvider);
+    if (result.hasError()) {
+      lastFailure = std::move(result.error());
+      continue;
+    }
+
+    auto establishedUpstream = std::move(result.value());
+    const auto& subscribeOk = establishedUpstream.handle->subscribeOk();
+    if (subscribeOk.largest) {
+      forwarder_->updateLargest(
+          subscribeOk.largest->group, subscribeOk.largest->object);
+    }
+    forwarder_->setExtensions(subscribeOk.extensions);
+    upstreamSession_ = std::move(establishedUpstream.session);
+    upstreamHandle_ = std::move(establishedUpstream.handle);
+    co_return std::nullopt;
+  }
+  co_return lastFailure;
+}
+
+folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
+MoQProxyTrack::establishWithProvider(
+    const std::shared_ptr<MoQUpstreamProvider>& upstreamProvider,
+    const SubscribeRequest& subscribeRequest,
+    const std::shared_ptr<MoQSession>& downstreamSession,
+    bool hasFallbackProvider) {
   auto sessionResult =
-      co_await folly::coro::co_awaitTry(upstreamProvider_->getSession(
-          fullTrackName_, subscribeRequest.params, false));
+      co_await folly::coro::co_awaitTry(upstreamProvider->getSession(
+          fullTrackName_, subscribeRequest.params, hasFallbackProvider));
   if (sessionResult.hasException()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
@@ -252,15 +293,10 @@ MoQProxyTrack::establishUpstream(
         subscribeRequest, "upstream subscribe returned an invalid handle");
   }
 
-  const auto& subscribeOk = upstreamHandle->subscribeOk();
-  if (subscribeOk.largest) {
-    forwarder_->updateLargest(
-        subscribeOk.largest->group, subscribeOk.largest->object);
-  }
-  forwarder_->setExtensions(subscribeOk.extensions);
-  upstreamSession_ = std::move(upstreamSession);
-  upstreamHandle_ = std::move(upstreamHandle);
-  co_return std::nullopt;
+  co_return EstablishedUpstream{
+      .session = std::move(upstreamSession),
+      .handle = std::move(upstreamHandle),
+  };
 }
 
 } // namespace moxygen

@@ -62,7 +62,7 @@ class MoQProxyTrackTest : public Test {
     ON_CALL(*upstreamSession_, getNegotiatedVersion())
         .WillByDefault(Return(kVersionDraftCurrent));
     provider_ = std::make_shared<TestUpstreamProvider>(upstreamSession_);
-    track_ = MoQProxyTrack::create(kTrackName, provider_);
+    track_ = MoQProxyTrack::create(kTrackName, {provider_});
   }
 
   std::shared_ptr<NiceMock<test::MockMoQSession>> makeDownstreamSession() {
@@ -159,6 +159,36 @@ TEST_F(MoQProxyTrackTest, ProviderFailureIsReturnedDownstream) {
   EXPECT_THAT(result.error().reasonPhrase, HasSubstr("no upstream available"));
 }
 
+TEST_F(MoQProxyTrackTest, ProviderFailureFallsBackToNextProvider) {
+  auto primaryProvider =
+      std::make_shared<TestUpstreamProvider>(upstreamSession_);
+  primaryProvider->error = "primary unavailable";
+  track_ = MoQProxyTrack::create(kTrackName, {primaryProvider, provider_});
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(5)),
+          makeConsumer(),
+          makeDownstreamSession()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(primaryProvider->calls, 1);
+  EXPECT_EQ(provider_->calls, 1);
+  EXPECT_EQ(primaryProvider->receivedHasFallbackProvider, true);
+  EXPECT_EQ(provider_->receivedHasFallbackProvider, false);
+  result.value()->unsubscribe();
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  track_.reset();
+}
+
 TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorIsReturnedDownstream) {
   EXPECT_CALL(*upstreamSession_, subscribe(_, _))
       .WillOnce(Invoke(
@@ -182,6 +212,48 @@ TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorIsReturnedDownstream) {
   EXPECT_EQ(result.error().requestID, RequestID(9));
   EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::UNAUTHORIZED);
   EXPECT_THAT(result.error().reasonPhrase, HasSubstr("denied"));
+}
+
+TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorFallsBackToNextProvider) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  ON_CALL(*fallbackSession, getNegotiatedVersion())
+      .WillByDefault(Return(kVersionDraftCurrent));
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(fallbackSession);
+  track_ = MoQProxyTrack::create(kTrackName, {provider_, fallbackProvider});
+
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return folly::makeUnexpected(
+                SubscribeError{
+                    RequestID(100),
+                    SubscribeErrorCode::UNAUTHORIZED,
+                    "primary denied"});
+          }));
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*fallbackSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(10)),
+          makeConsumer(),
+          makeDownstreamSession()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(provider_->calls, 1);
+  EXPECT_EQ(fallbackProvider->calls, 1);
+  result.value()->unsubscribe();
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  track_.reset();
 }
 
 TEST_F(MoQProxyTrackTest, DownstreamRequestUpdateIsNotSupported) {
