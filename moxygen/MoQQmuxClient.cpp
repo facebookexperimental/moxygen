@@ -56,9 +56,19 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
              << url_.getHostAndPortOmitDefault();
   auto connectStart = std::chrono::steady_clock::now();
 
-  auto connectResult = co_await folly::coro::co_withExecutor(
-      executor,
-      transportFactory_->createQmuxTransport(url_, connectTimeout, alpns));
+  QmuxTransportConnectResult connectResult;
+  if (adoptedTransport_) {
+    // The caller connected it, so there is nothing to dial.
+    XLOG(DBG1) << "MoQQmuxClient: adopting a caller-supplied transport";
+    connectResult.transport = std::move(adoptedTransport_);
+    connectResult.negotiatedProtocol = std::move(adoptedProtocol_);
+    adoptedTransport_.reset();
+    adoptedProtocol_.reset();
+  } else {
+    connectResult = co_await folly::coro::co_withExecutor(
+        executor,
+        transportFactory_->createQmuxTransport(url_, connectTimeout, alpns));
+  }
   if (!connectResult.transport) {
     co_yield folly::coro::co_error(
         std::runtime_error("QMUX transport factory returned no transport"));

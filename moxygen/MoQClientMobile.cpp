@@ -102,6 +102,24 @@ MoQClientMobile::MoQClientMobile(
   }
 }
 
+MoQClientMobile::MoQClientMobile(
+    std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
+    proxygen::URL url,
+    std::shared_ptr<quic::QuicClientTransport> transport,
+    bool useQuicWtSession)
+    : MoQClientBase(
+          moqEvb,
+          std::move(url),
+          /*verifier=*/nullptr,
+          useQuicWtSession),
+      moqlibevEvb_(std::move(moqEvb)) {
+  if (!transport) {
+    throw std::invalid_argument(
+        "MoQClientMobile requires a non-null adopted transport");
+  }
+  setTransport(std::move(transport));
+}
+
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 MoQClientMobile::connectQuic(
     std::chrono::milliseconds timeoutMs,

@@ -52,6 +52,19 @@ class MoQQmuxClient : public MoQClientBase {
       SessionFactory sessionFactory,
       std::shared_ptr<QmuxTransportFactory> transportFactory);
 
+  // Adopts an already-connected byte-stream transport instead of dialling
+  // one. `negotiatedProtocol` is the ALPN the caller's handshake settled on,
+  // which QMUX needs to pick the MoQ draft. Call before setupMoQSession().
+  //
+  // The QUIC-side equivalent is MoQClientBase::setTransport(); this is a
+  // separate name because the transports are unrelated types.
+  void setQmuxTransport(
+      std::unique_ptr<proxygen::qmux::QmuxTransport> transport,
+      std::optional<std::string> negotiatedProtocol = std::nullopt) {
+    adoptedTransport_ = std::move(transport);
+    adoptedProtocol_ = std::move(negotiatedProtocol);
+  }
+
   ~MoQQmuxClient() override;
 
   folly::coro::Task<void> setupMoQSession(
@@ -78,6 +91,10 @@ class MoQQmuxClient : public MoQClientBase {
 
  private:
   std::shared_ptr<QmuxTransportFactory> transportFactory_;
+  // Non-null when the caller supplied a connected transport; consumed by the
+  // first session setup.
+  std::unique_ptr<proxygen::qmux::QmuxTransport> adoptedTransport_;
+  std::optional<std::string> adoptedProtocol_;
   proxygen::qmux::QmuxSession::Ptr qmuxSession_;
 };
 

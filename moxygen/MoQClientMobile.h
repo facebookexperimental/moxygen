@@ -8,6 +8,7 @@
 
 #include <folly/coro/Task.h>
 #include <proxygen/lib/utils/URL.h>
+#include <quic/client/QuicClientTransport.h>
 #include <quic/state/TransportSettings.h>
 #include <moxygen/MoQClientBase.h>
 #include <moxygen/MoQQuicAddressResolver.h>
@@ -23,6 +24,14 @@ class MoQClientMobile : public MoQClientBase {
       std::shared_ptr<fizz::CertificateVerifier> verifier,
       bool useQuicWtSession,
       std::shared_ptr<MoQQuicAddressResolver> addressResolver);
+
+  // Adopts an already-connected transport. Nothing is resolved or dialled, so
+  // no address resolver is required and connectQuic() is never reached.
+  MoQClientMobile(
+      std::shared_ptr<MoQLibevExecutorImpl> moqEvb,
+      proxygen::URL url,
+      std::shared_ptr<quic::QuicClientTransport> transport,
+      bool useQuicWtSession = false);
 
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(

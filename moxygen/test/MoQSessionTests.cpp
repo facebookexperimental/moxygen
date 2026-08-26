@@ -4,6 +4,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <quic/client/QuicClientTransport.h>
+#include <quic/common/events/FollyQuicEventBase.h>
+#include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
+#include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 #include <quic/api/test/MockQuicSocket.h>
@@ -1436,12 +1440,18 @@ class DummyMoQClientBase : public MoQClientBase {
     MoQClientBase::goaway(goaway);
   }
 
+  int connectQuicCalls{0};
+
  protected:
   folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuic(
       std::chrono::milliseconds /*timeoutMs*/,
       std::shared_ptr<fizz::CertificateVerifier> /*verifier*/,
       const std::vector<std::string>& /*alpns*/,
       const quic::TransportSettings& /*transportSettings*/) override {
+    ++connectQuicCalls;
+    // Throw rather than returning null: the setup path dereferences whatever
+    // comes back, so a null transport would take the process with it.
+    throw std::runtime_error("DummyMoQClientBase does not dial");
     co_return nullptr;
   }
 };
@@ -1484,6 +1494,59 @@ TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
   client.test_onNewUniStream(readH.get());
   client.test_onDatagram(folly::IOBuf::copyBuffer("hi"));
   client.test_goaway(Goaway{"/newSession"});
+}
+
+// A caller-supplied transport is adopted rather than dialled, so the client
+// never reaches connectQuic(). Setup goes on to fail against this unstarted
+// transport, which is fine -- the branch under test is which one supplies it.
+TEST(MoQClientBaseTest, AdoptedTransportSkipsConnectQuic) {
+  folly::EventBase evb;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
+  proxygen::URL url("https://example.com:443/");
+
+  DummyMoQClientBase client(exec, url);
+  auto qEvb = std::make_shared<quic::FollyQuicEventBase>(&evb);
+  // An unstarted transport is enough: the branch under test only decides who
+  // supplies one. A mock would need quic/client/test/Mocks.h, which the OSS
+  // mvfst install does not ship, breaking the getdeps build of moxygen.
+  client.setTransport(
+      quic::QuicClientTransport::newClient(
+          qEvb,
+          std::make_unique<quic::FollyQuicAsyncUDPSocket>(qEvb),
+          quic::FizzClientQuicHandshakeContext::Builder()
+              .setFizzClientContext(
+                  std::make_shared<fizz::client::FizzClientContext>())
+              .build(),
+          /*connectionIdSize=*/0));
+
+  folly::coro::blockingWait(
+      folly::coro::co_awaitTry(client.connectAndSendSetup(
+          std::chrono::seconds(1),
+          std::chrono::seconds(1),
+          /*publishHandler=*/nullptr,
+          /*subscribeHandler=*/nullptr,
+          quic::TransportSettings{})));
+
+  EXPECT_EQ(client.connectQuicCalls, 0);
+}
+
+// Without one, the client dials as before.
+TEST(MoQClientBaseTest, NoAdoptedTransportStillDials) {
+  folly::EventBase evb;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&evb);
+  proxygen::URL url("https://example.com:443/");
+
+  DummyMoQClientBase client(exec, url);
+
+  folly::coro::blockingWait(
+      folly::coro::co_awaitTry(client.connectAndSendSetup(
+          std::chrono::seconds(1),
+          std::chrono::seconds(1),
+          /*publishHandler=*/nullptr,
+          /*subscribeHandler=*/nullptr,
+          quic::TransportSettings{})));
+
+  EXPECT_EQ(client.connectQuicCalls, 1);
 }
 
 TEST(MoQClientTest, TransportStatsUnavailableAfterSessionClose) {

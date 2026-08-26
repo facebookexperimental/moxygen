@@ -26,14 +26,24 @@ folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
       alpns.empty() ? getDefaultMoqtProtocols(false) : alpns;
   XLOG(DBG1) << "MoQClientBase: QUIC ALPNs: " << folly::join(", ", alpn);
 
-  auto quicConnectStart = std::chrono::steady_clock::now();
+  std::shared_ptr<quic::QuicClientTransport> quicClient;
+  if (adoptedTransport_) {
+    // The caller connected it, so there is nothing to dial and no connect
+    // time of ours to record.
+    quicClient = std::move(adoptedTransport_);
+    adoptedTransport_.reset();
+    XLOG(DBG1) << "MoQClientBase: adopting a caller-supplied QUIC transport";
+  } else {
+    auto quicConnectStart = std::chrono::steady_clock::now();
 
-  // Establish QUIC connection with multiple ALPN options
-  auto quicClient =
-      co_await connectQuic(connect_timeout, verifier_, alpn, transportSettings);
+    // Establish QUIC connection with multiple ALPN options
+    quicClient = co_await connectQuic(
+        connect_timeout, verifier_, alpn, transportSettings);
 
-  transportConnectTime_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - quicConnectStart);
+    transportConnectTime_ =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - quicConnectStart);
+  }
 
   if (logger_) {
     if (auto scid = quicClient->getClientConnectionId()) {

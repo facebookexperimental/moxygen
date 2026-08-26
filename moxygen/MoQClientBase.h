@@ -143,6 +143,17 @@ class MoQClientBase {
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
 
+  // Adopt an already-connected transport instead of dialling one. When set,
+  // session setup skips connectQuic() entirely, so the caller decides how the
+  // connection is established -- racing QUIC against a fallback, reusing a
+  // pooled transport, or anything else. Call before setupMoQSession().
+  //
+  // Ownership transfers to this client, which closes the transport when it is
+  // destroyed, exactly as if it had dialled the connection itself.
+  void setTransport(std::shared_ptr<quic::QuicClientTransport> transport) {
+    adoptedTransport_ = std::move(transport);
+  }
+
   void setPskCache(std::shared_ptr<quic::QuicPskCache> pskCache) {
     pskCache_ = std::move(pskCache);
   }
@@ -183,6 +194,9 @@ class MoQClientBase {
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
   std::shared_ptr<quic::QuicPskCache> pskCache_;
   MoQEarlyDataHandler* earlyDataHandler_{nullptr};
+  // Non-null when the caller supplied a connected transport; consumed by the
+  // first session setup.
+  std::shared_ptr<quic::QuicClientTransport> adoptedTransport_;
   bool useQuicWtSession_{false};
   std::chrono::milliseconds transportConnectTime_{0};
   std::chrono::milliseconds moqHandshakeTime_{0};
