@@ -4437,11 +4437,6 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
 void MoQSession::handleSubscribeRequestUpdate(
     RequestUpdate requestUpdate,
     std::shared_ptr<TrackPublisherImpl> trackPublisher) {
-  if (!publishHandler_) {
-    XLOG(DBG1) << __func__ << " No publisher callback set";
-    return;
-  }
-
   // An update that omits priority leaves it unchanged, so only apply an
   // explicit value; otherwise the current subscriber priority is preserved.
   if (requestUpdate.priority) {
