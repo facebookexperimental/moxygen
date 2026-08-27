@@ -7,7 +7,7 @@
 #include <folly/portability/GTest.h>
 #include "folly/Expected.h"
 #include "folly/coro/BlockingWait.h"
-#include "moxygen/moqtest/MoQTestServer.h"
+#include "moxygen/moqtest/MoQTestPublisher.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/test/MockMoQSession.h"
 #include "moxygen/test/Mocks.h"
@@ -58,8 +58,8 @@ class MoQTrackServerTest : public testing::Test {
 
   moxygen::MoQTestParameters params_;
   moxygen::TrackNamespace track_;
-  std::shared_ptr<moxygen::MoQTestServer> server_{
-      std::make_shared<moxygen::MoQTestServer>()};
+  std::shared_ptr<moxygen::MoQTestPublisher> publisher_{
+      std::make_shared<moxygen::MoQTestPublisher>()};
 };
 
 } // namespace
@@ -75,7 +75,7 @@ TEST_F(
   req.fullTrackName.trackNamespace = track_;
 
   // Call the subscribe method
-  auto task = server_->subscribe(req, nullptr);
+  auto task = publisher_->subscribe(req, nullptr);
 
   // Wait for the coroutine to complete and get the result
   auto result = folly::coro::blockingWait(std::move(task));
@@ -131,7 +131,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
   }
 
   // Call the onSubscribe method
-  auto task = server_->sendOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->sendOneSubgroupPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -206,7 +206,7 @@ TEST_F(
   }
 
   // Call the onSubscribe method
-  auto task = server_->sendOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->sendOneSubgroupPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -247,7 +247,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
   }
 
   // Call the onSubscribe method
-  auto task = server_->sendOneSubgroupPerObject(params_, mockConsumer);
+  auto task = publisher_->sendOneSubgroupPerObject(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -324,7 +324,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
   }
 
   // Call the onSubscribe method
-  auto task = server_->sendTwoSubgroupsPerGroup(params_, mockConsumer);
+  auto task = publisher_->sendTwoSubgroupsPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -408,7 +408,7 @@ TEST_F(
   }
 
   // Call the onSubscribe method
-  auto task = server_->sendTwoSubgroupsPerGroup(params_, mockConsumer);
+  auto task = publisher_->sendTwoSubgroupsPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -474,7 +474,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   }
 
   // Call the sendObjectsForForwardPreferenceThree method
-  auto task = server_->sendDatagram(sub, params_, mockConsumer);
+  auto task = publisher_->sendDatagram(sub, params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -491,7 +491,7 @@ TEST_F(
   req.fullTrackName.trackNamespace = track_;
 
   // Call the subscribe method
-  auto task = server_->fetch(req, nullptr);
+  auto task = publisher_->fetch(req, nullptr);
 
   // Wait for the coroutine to complete and get the result
   auto result = folly::coro::blockingWait(std::move(task));
@@ -556,7 +556,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = server_->fetchOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -636,7 +636,7 @@ TEST_F(
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = server_->fetchOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -693,7 +693,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = server_->fetchOneSubgroupPerObject(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerObject(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -746,7 +746,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = server_->fetchOneSubgroupPerObject(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerObject(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -814,7 +814,7 @@ TEST_F(
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = server_->fetchTwoSubgroupsPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchTwoSubgroupsPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -879,7 +879,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
                   folly::unit)));
 
   // Call the fetchDatagram method
-  auto task = server_->fetchDatagram(params_, mockConsumer);
+  auto task = publisher_->fetchDatagram(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -1042,7 +1042,7 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingOneSubgroupPerGroup) {
   SubgroupOptionsRecorder recorder(mockConsumer);
 
   folly::coro::blockingWait(
-      server_->sendOneSubgroupPerGroup(params_, mockConsumer));
+      publisher_->sendOneSubgroupPerGroup(params_, mockConsumer));
 
   ASSERT_EQ(recorder.numSubgroups(), 1);
   // Subgroup 0 is implied by the stream type, the track has no extensions, and
@@ -1061,7 +1061,7 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingClaimsExtensionsWhenConfigured) {
   SubgroupOptionsRecorder recorder(mockConsumer);
 
   folly::coro::blockingWait(
-      server_->sendOneSubgroupPerGroup(params_, mockConsumer));
+      publisher_->sendOneSubgroupPerGroup(params_, mockConsumer));
 
   EXPECT_TRUE(recorder[0].includeExtensions);
 }
@@ -1073,7 +1073,7 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingOneSubgroupPerObject) {
   SubgroupOptionsRecorder recorder(mockConsumer);
 
   folly::coro::blockingWait(
-      server_->sendOneSubgroupPerObject(params_, mockConsumer));
+      publisher_->sendOneSubgroupPerObject(params_, mockConsumer));
 
   // Objects 0 and 1 each get their own subgroup, numbered after the object.
   ASSERT_EQ(recorder.numSubgroups(), 2);
@@ -1094,7 +1094,7 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingTwoSubgroupsPerGroup) {
   SubgroupOptionsRecorder recorder(mockConsumer);
 
   folly::coro::blockingWait(
-      server_->sendTwoSubgroupsPerGroup(params_, mockConsumer));
+      publisher_->sendTwoSubgroupsPerGroup(params_, mockConsumer));
 
   ASSERT_EQ(recorder.numSubgroups(), 2);
   // Objects 0 and 2 land on subgroup 0, object 1 on subgroup 1.
@@ -1115,7 +1115,7 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingFallsBackToExplicitSubgroupID) {
   SubgroupOptionsRecorder recorder(mockConsumer);
 
   folly::coro::blockingWait(
-      server_->sendTwoSubgroupsPerGroup(params_, mockConsumer));
+      publisher_->sendTwoSubgroupsPerGroup(params_, mockConsumer));
 
   ASSERT_EQ(recorder.numSubgroups(), 2);
   // Objects 0 and 6 land on subgroup 0, object 3 on subgroup 1.  Subgroup 1
@@ -1152,7 +1152,8 @@ TEST_F(MoQTrackServerTest, DatagramSignalsEndOfGroupOnLastObject) {
         return folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
       });
 
-  folly::coro::blockingWait(server_->sendDatagram(sub, params_, mockConsumer));
+  folly::coro::blockingWait(
+      publisher_->sendDatagram(sub, params_, mockConsumer));
 
   // Two groups of objects 0..2; only object 2 ends its group.
   const std::vector<std::pair<uint64_t, bool>> expected{

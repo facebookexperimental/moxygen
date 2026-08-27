@@ -8,68 +8,31 @@
 
 #include <utility>
 
-#include <folly/container/F14Map.h>
-#include <folly/futures/ThreadWheelTimekeeper.h>
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQQmuxServer.h"
 #include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQServer.h"
-#include "moxygen/Publisher.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
-#include "moxygen/moqtest/Types.h"
-#include "moxygen/relay/MoQForwarder.h"
+#include "moxygen/moqtest/MoQTestPublisher.h"
 #include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
 
-class MoQTestFetchHandle : public Publisher::FetchHandle {
+// QUIC/WebTransport listener for moq-test. Track data comes from the supplied
+// MoQTestPublisher, which is shared with MoQTestQmuxServer when both listeners
+// are enabled.
+class MoQTestServer : public moxygen::MoQServer {
  public:
-  MoQTestFetchHandle(
-      const FetchOk& ok,
-      folly::CancellationSource cancellationSource)
-      : Publisher::FetchHandle(ok),
-        fetchOk_(ok),
-        cancelSource_(std::move(cancellationSource)) {}
-
-  virtual void fetchCancel() override;
-  using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
-  virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
-      RequestUpdate reqUpdate) override;
-
- private:
-  FetchOk fetchOk_;
-  folly::CancellationSource cancelSource_;
-};
-
-class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
- public:
-  struct SubKey {
-    MoQSession* session;
-    uint64_t requestID;
-    bool operator==(const SubKey& o) const {
-      return session == o.session && requestID == o.requestID;
-    }
-    struct Hash {
-      size_t operator()(const SubKey& k) const {
-        return folly::hash::hash_combine(k.session, k.requestID);
-      }
-    };
-  };
-
-  MoQTestServer(
+  explicit MoQTestServer(
+      std::shared_ptr<MoQTestPublisher> publisher,
       const std::string& cert = "",
       const std::string& key = "",
       const std::string& versions = "");
 
-  void setIncludeTimestampExtension(bool include) {
-    includeTimestampExtension_ = include;
-  }
-
-  //  Override onNewSession to set publisher handler to be this object
+  //  Override onNewSession to set publisher handler
   virtual void onNewSession(
       std::shared_ptr<MoQSession> clientSession) override {
-    clientSession->setPublishHandler(
-        std::static_pointer_cast<MoQTestServer>(shared_from_this()));
+    clientSession->setPublishHandler(publisher_);
     // Use server-level logger if set, otherwise try factory
     if (auto logger = createLogger()) {
       clientSession->setLogger(std::move(logger));
@@ -81,8 +44,6 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
   // EventBase. Listening sessions are torn down by stop().
   void gracefulShutdown();
 
-  void removeSubscription(SubKey key);
-
   // Relay client support. Workers come from an externally-supplied EventBase
   // (use the QUIC server's worker pool when QUIC is running, otherwise the
   // QMUX server's worker pool).
@@ -93,72 +54,13 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
       int32_t transactionTimeout,
       samples::TransportType transportType);
 
-  // Subscribing Methods
-  virtual folly::coro::Task<SubscribeResult> subscribe(
-      SubscribeRequest sub,
-      std::shared_ptr<TrackConsumer> callback) override;
-
-  folly::coro::Task<void> onSubscribe(
-      SubscribeRequest sub,
-      std::shared_ptr<TrackConsumer> callback);
-
-  folly::coro::Task<void> sendOneSubgroupPerGroup(
-      MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
-
-  folly::coro::Task<void> sendOneSubgroupPerObject(
-      MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
-
-  folly::coro::Task<void> sendTwoSubgroupsPerGroup(
-      MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
-
-  folly::coro::Task<void> sendDatagram(
-      SubscribeRequest sub,
-      MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
-
-  // Fetching Methods
-  virtual folly::coro::Task<FetchResult> fetch(
-      Fetch fetch,
-      std::shared_ptr<FetchConsumer> fetchCallback) override;
-
-  folly::coro::Task<void> onFetch(
-      Fetch fetch,
-      std::shared_ptr<FetchConsumer> callback);
-
-  folly::coro::Task<void> fetchOneSubgroupPerGroup(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback);
-
-  folly::coro::Task<void> fetchOneSubgroupPerObject(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback);
-
-  folly::coro::Task<void> fetchTwoSubgroupsPerGroup(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback);
-
-  folly::coro::Task<void> fetchDatagram(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback) {
-    co_return co_await fetchOneSubgroupPerObject(params, std::move(callback));
-  }
-
  private:
   folly::coro::Task<void> doRelaySetup(
       const std::string& relayUrl,
       int32_t connectTimeout,
       int32_t transactionTimeout);
 
-  // Inter-object delay using the server-owned timekeeper.
-  folly::coro::Task<void> delay(uint64_t ms);
-
-  struct SubscriptionState {
-    std::shared_ptr<MoQForwarder> forwarder;
-    folly::CancellationSource cancelSource;
-  };
+  std::shared_ptr<MoQTestPublisher> publisher_;
 
   // Relay client connection (if using relay mode)
   std::string versions_;
@@ -166,22 +68,13 @@ class MoQTestServer : public moxygen::Publisher, public moxygen::MoQServer {
   std::shared_ptr<MoQRelaySession> relaySession_;
   std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
-  folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
-      activeSubscriptions_;
-  // Server-owned timekeeper for inter-object delays. Avoids the global
-  // Timekeeper singleton, which can crash if used during process teardown.
-  folly::ThreadWheelTimekeeper timekeeper_;
-  bool includeTimestampExtension_{false};
 };
 
-// QMUX-on-TCP variant of MoQTestServer. Holds a shared MoQTestServer purely
-// for its Publisher implementation (subscribe/fetch). The wrapped instance
-// does NOT need to also be started as a QUIC server — constructing it just
-// to use as a publisher is fine.
+// QMUX-on-TCP variant of MoQTestServer, sharing its MoQTestPublisher.
 class MoQTestQmuxServer : public MoQQmuxServer {
  public:
   MoQTestQmuxServer(
-      std::shared_ptr<MoQTestServer> publisher,
+      std::shared_ptr<MoQTestPublisher> publisher,
       std::string endpoint,
       std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
       Config config = {})
@@ -199,7 +92,7 @@ class MoQTestQmuxServer : public MoQQmuxServer {
   }
 
  private:
-  std::shared_ptr<MoQTestServer> publisher_;
+  std::shared_ptr<MoQTestPublisher> publisher_;
 };
 
 } // namespace moxygen

@@ -11,7 +11,7 @@ moxygen_add_test(TARGET MoQTrackServerTests
   SOURCES
     MoQTrackServerTest.cpp
   DEPENDS
-    moxygen_moq_test_server
+    moxygen_moq_test_publisher
     moqtestutils
     testmain
     Folly::folly_coro_gtest_helpers

@@ -69,12 +69,13 @@ int main(int argc, char** argv) {
   XLOG_IF(FATAL, !FLAGS_quic && !FLAGS_qmux)
       << "At least one of --quic or --qmux must be enabled";
 
-  // MoQTestServer owns the Publisher state (subscriptions, etc.) regardless
-  // of whether its own QUIC listener is started. The QMUX server, when
-  // enabled, points at it for publisher callbacks.
+  // One publisher holds the track-generation state (subscriptions, etc.) and
+  // is shared by whichever listeners are enabled.
+  auto publisher = std::make_shared<moxygen::MoQTestPublisher>();
+  publisher->setIncludeTimestampExtension(FLAGS_include_timestamp_extension);
+
   auto server = std::make_shared<moxygen::MoQTestServer>(
-      FLAGS_cert, FLAGS_key, FLAGS_versions);
-  server->setIncludeTimestampExtension(FLAGS_include_timestamp_extension);
+      publisher, FLAGS_cert, FLAGS_key, FLAGS_versions);
 
   std::shared_ptr<moxygen::MoQTestQmuxServer> qmuxServer;
   if (FLAGS_qmux) {
@@ -89,11 +90,11 @@ int main(int argc, char** argv) {
     config.selfTransportParams =
         moxygen::qmuxParamsFromTransportSettings(quic::TransportSettings{});
     qmuxServer = std::make_shared<moxygen::MoQTestQmuxServer>(
-        server, "/test", std::move(fizzContext), std::move(config));
+        publisher, "/test", std::move(fizzContext), std::move(config));
   }
 
-  // MoQTestServer publisher state is single-threaded; share one worker EB
-  // across stacks (and reuse it for the relay client when --relay_url is set).
+  // Publisher state is single-threaded; share one worker EB across stacks
+  // (and reuse it for the relay client when --relay_url is set).
   folly::ScopedEventBaseThread worker("MoQTestWorker");
   std::vector<folly::EventBase*> workerEvbs{worker.getEventBase()};
   folly::SocketAddress addr("::", FLAGS_port);

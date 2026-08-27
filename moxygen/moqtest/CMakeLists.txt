@@ -60,6 +60,28 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
+# moxygen_moq_test_publisher library (track generation; no listener/transport)
+add_library(moxygen_moq_test_publisher MoQTestPublisher.cpp)
+target_include_directories(
+  moxygen_moq_test_publisher PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+target_compile_options(
+  moxygen_moq_test_publisher PRIVATE
+  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+target_link_libraries(
+  moxygen_moq_test_publisher PUBLIC
+  moqtest_utils
+  moxygen_relay_moq_forwarder
+)
+
+install(
+    TARGETS moxygen_moq_test_publisher
+    EXPORT moxygen-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+)
+
 # moxygen_moq_test_server library (shared by executable and unit tests)
 add_library(moxygen_moq_test_server MoQTestServer.cpp)
 target_include_directories(
@@ -71,11 +93,10 @@ target_compile_options(
 )
 target_link_libraries(
   moxygen_moq_test_server PUBLIC
-  moqtest_utils
+  moxygen_moq_test_publisher
   moxygen_moq_qmux_server
   moxygen_moq_server
   moxygen_moq_relay_session
-  moxygen_relay_moq_forwarder
   moxygen_samples_util_qmux_relay_utils
 )
 
