@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/moqtest/MoQTestServer.h"
+#include <folly/coro/Task.h>
 #include <folly/logging/xlog.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include "moxygen/samples/util/Utils.h"
@@ -38,55 +39,48 @@ MoQTestServer::MoQTestServer(
 
 void MoQTestServer::gracefulShutdown() {
   publisher_->cancelAll();
-  publishNamespaceHandle_.reset();
-  if (relaySession_) {
-    relaySession_->drain();
+  if (relayClient_) {
+    if (auto session = relayClient_->getSession()) {
+      session->drain();
+    }
   }
 }
 
 folly::coro::Task<void> MoQTestServer::doRelaySetup(
-    const std::string& relayUrl,
     int32_t connectTimeout,
     int32_t transactionTimeout) {
-  // Setup MoQ session on the client
-  co_await relayClient_->setupMoQSession(
+  // Every argument that outlives a suspend point below is a named local.  gcc
+  // 11 ICEs in build_special_member_call when it has to materialize a
+  // temporary with a non-trivial destructor into the coroutine frame.
+  const quic::TransportSettings transportSettings;
+  const auto alpns = getMoqtProtocols(versions_, true);
+  auto setupResult = co_await folly::coro::co_awaitTry(relayClient_->setup(
+      /*publisher=*/publisher_,
+      /*subscriber=*/nullptr,
       std::chrono::milliseconds(connectTimeout),
       std::chrono::milliseconds(transactionTimeout),
-      /*publishHandler=*/publisher_,
-      /*subscribeHandler=*/nullptr,
-      quic::TransportSettings(),
-      getMoqtProtocols(versions_, true));
-
-  // Get the session
-  relaySession_ =
-      std::dynamic_pointer_cast<MoQRelaySession>(relayClient_->moqSession_);
-  if (!relaySession_) {
-    XLOG(ERR) << "Failed to get MoQRelaySession";
+      transportSettings,
+      alpns));
+  if (setupResult.hasException()) {
+    // Nothing observes this coroutine, so an escaping exception would leave
+    // the server silently detached from the relay.
+    XLOG(ERR) << "Relay setup failed: " << setupResult.exception().what();
     co_return;
   }
 
-  // Send PUBLISH_NAMESPACE for the base namespace "moq-test-00"
-  PublishNamespace publishNamespace;
-  publishNamespace.trackNamespace = TrackNamespace("moq-test-00", "/");
-
-  auto publishNamespaceResult =
-      co_await relaySession_->publishNamespace(publishNamespace);
-  if (publishNamespaceResult.hasError()) {
-    XLOG(ERR) << "Failed to publishNamespace namespace: "
-              << publishNamespaceResult.error().reasonPhrase;
+  auto session = relayClient_->getSession();
+  if (!session) {
+    XLOG(ERR) << "Failed to establish relay session";
     co_return;
   }
-
-  // Store publishNamespace handle to keep it alive
-  publishNamespaceHandle_ = publishNamespaceResult.value();
-
-  XLOG(INFO) << "Successfully published namespace 'moq-test-00' to relay at "
-             << relayUrl;
 
   // Pass session to onNewSession to treat it like any other client
-  onNewSession(relaySession_);
+  onNewSession(session);
 
-  co_return;
+  // Publishes 'moq-test-00' and then keeps the session alive with a periodic
+  // ping, so an idle relay doesn't time us out.
+  std::vector<TrackNamespace> namespaces{TrackNamespace("moq-test-00", "/")};
+  co_await relayClient_->run(publisher_, std::move(namespaces));
 }
 
 bool MoQTestServer::startRelayClient(
@@ -106,17 +100,18 @@ bool MoQTestServer::startRelayClient(
     moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(workerEvb);
   }
 
-  // Create client connection with MoQRelaySession factory.
-  relayClient_ = samples::makeRelayClientTransport(
+  // The relay-session factory is required so the session supports
+  // publishNamespace.
+  relayClient_ = std::make_unique<
+      MoQRelayClient>(samples::makeRelayClientTransport(
       moqEvb_,
       std::move(url),
       MoQRelaySession::createRelaySessionFactory(),
       std::make_shared<test::InsecureVerifierDangerousDoNotUseInProduction>(),
-      transportType);
+      transportType));
 
   // Start async relay setup (schedule on evb, don't block)
-  co_withExecutor(
-      workerEvb, doRelaySetup(relayUrl, connectTimeout, transactionTimeout))
+  co_withExecutor(workerEvb, doRelaySetup(connectTimeout, transactionTimeout))
       .start();
 
   return true;

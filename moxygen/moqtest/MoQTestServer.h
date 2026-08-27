@@ -8,12 +8,11 @@
 
 #include <utility>
 
-#include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQQmuxServer.h"
-#include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQServer.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/MoQTestPublisher.h"
+#include "moxygen/relay/MoQRelayClient.h"
 #include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
@@ -56,17 +55,14 @@ class MoQTestServer : public moxygen::MoQServer {
 
  private:
   folly::coro::Task<void> doRelaySetup(
-      const std::string& relayUrl,
       int32_t connectTimeout,
       int32_t transactionTimeout);
 
   std::shared_ptr<MoQTestPublisher> publisher_;
 
-  // Relay client connection (if using relay mode)
+  // Upstream session to the relay (if using relay mode)
   std::string versions_;
-  std::unique_ptr<MoQClientBase> relayClient_;
-  std::shared_ptr<MoQRelaySession> relaySession_;
-  std::shared_ptr<Subscriber::PublishNamespaceHandle> publishNamespaceHandle_;
+  std::unique_ptr<MoQRelayClient> relayClient_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 
