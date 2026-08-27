@@ -227,6 +227,81 @@ TEST_F(MoQForwarderTest, ForwarderOnlyCreatesSubgroupsBeforeObjectData) {
   EXPECT_TRUE(subgroup->endOfSubgroup().hasValue());
 }
 
+// Test: the subgroup ID encoding a subscriber gets depends on where its stream
+// starts. The implicit "subgroup ID = first object ID" form is only correct for
+// a stream whose opening object has the subgroup ID for its object ID.
+TEST_F(MoQForwarderTest, SubgroupIDFormatDependsOnJoinPoint) {
+  auto captureBeginSubgroup =
+      [this](moxygen::TrackConsumer::BeginSubgroupOptions& captured) {
+        auto consumer = createMockConsumer();
+        EXPECT_CALL(*consumer, beginSubgroup(0, 4, _, _))
+            .WillOnce(
+                [this, &captured](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions options) {
+                  captured = options;
+                  auto sg = createMockSubgroupConsumer();
+                  ON_CALL(*sg, object(_, _, _, _))
+                      .WillByDefault(Return(
+                          folly::makeExpected<MoQPublishError>(folly::unit)));
+                  return subgroupConsumerResult(sg);
+                });
+        return consumer;
+      };
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+
+  moxygen::TrackConsumer::BeginSubgroupOptions atOpen;
+  auto atOpenConsumer = captureBeginSubgroup(atOpen);
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder, createMockSession(), atOpenConsumer, RequestID(1)),
+      nullptr);
+
+  moxygen::TrackConsumer::BeginSubgroupOptions publishOptions;
+  publishOptions.beginsWithFirstObject = true;
+  publishOptions.subgroupIDFormat = SubgroupIDFormat::FirstObject;
+  auto sgRes = forwarder->beginSubgroup(0, 4, 0, publishOptions);
+  ASSERT_TRUE(sgRes.hasValue());
+  auto subgroup = *sgRes;
+
+  // Joins after the subgroup opened but before its first object arrives.
+  moxygen::TrackConsumer::BeginSubgroupOptions beforeFirstObject;
+  auto beforeFirstObjectConsumer = captureBeginSubgroup(beforeFirstObject);
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder,
+          createMockSession(),
+          beforeFirstObjectConsumer,
+          RequestID(2)),
+      nullptr);
+
+  EXPECT_TRUE(subgroup->object(4, test::makeBuf(10)).hasValue());
+
+  moxygen::TrackConsumer::BeginSubgroupOptions midSubgroup;
+  auto midSubgroupConsumer = captureBeginSubgroup(midSubgroup);
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder, createMockSession(), midSubgroupConsumer, RequestID(3)),
+      nullptr);
+
+  EXPECT_TRUE(subgroup->object(5, test::makeBuf(10)).hasValue());
+
+  // Both of these streams open on object 4, which is the subgroup ID, so they
+  // keep the implicit encoding.
+  EXPECT_EQ(atOpen.subgroupIDFormat, SubgroupIDFormat::FirstObject);
+  EXPECT_TRUE(atOpen.beginsWithFirstObject);
+  EXPECT_EQ(beforeFirstObject.subgroupIDFormat, SubgroupIDFormat::FirstObject);
+  EXPECT_TRUE(beforeFirstObject.beginsWithFirstObject);
+
+  // This one opens on object 5, which would decode as subgroup 5, so it has to
+  // carry the subgroup ID.
+  EXPECT_EQ(midSubgroup.subgroupIDFormat, SubgroupIDFormat::Present);
+  EXPECT_FALSE(midSubgroup.beginsWithFirstObject);
+}
+
 // Test: Graceful session draining - publishDone drains subscribers but does
 // not reset open subgroups. Draining subscribers are removed when their last
 // subgroup closes.
