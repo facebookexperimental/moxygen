@@ -93,6 +93,19 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestServer::subscribe(
   auto forwarder = std::make_shared<MoQForwarder>(sub.fullTrackName);
   forwarder->setTrackAlias(TrackAlias(sub.requestID.value));
 
+  // Advertise the priority even-numbered groups are published at, so the
+  // draft-15+ subgroup and datagram encodings elide it for those and write it
+  // explicitly for the odd ones.  The framer downgrades the extension to a
+  // PUBLISHER_PRIORITY param for draft 15; earlier drafts have no way to carry
+  // it, so the priority always stays on the wire instead.
+  auto version = session->getNegotiatedVersion();
+  if (version && getDraftMajorVersion(*version) >= 15) {
+    Extensions trackProperties;
+    trackProperties.insertMutableExtension(
+        Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
+    forwarder->setExtensions(std::move(trackProperties));
+  }
+
   SubKey subKey{session.get(), sub.requestID.value};
   auto& state = activeSubscriptions_[subKey];
   state.forwarder = forwarder;
@@ -183,12 +196,13 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerGroup(
     std::shared_ptr<TrackConsumer> callback) {
   // Iterate through Groups
   auto token = co_await folly::coro::co_current_cancellation_token;
+  const auto subgroupOptions =
+      subgroupOptionsFor(params, 0, includeTimestampExtension_);
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
-    // Begin a New Subgroup (Default Priority)
-    auto maybeSubConsumer =
-        callback->beginSubgroup(groupNum, 0, kDefaultPriority);
+    auto maybeSubConsumer = callback->beginSubgroup(
+        groupNum, 0, publisherPriorityForGroup(groupNum), subgroupOptions);
     auto subConsumer = maybeSubConsumer->get();
 
     // Iterate Through Objects in SubGroup
@@ -249,9 +263,11 @@ folly::coro::Task<void> MoQTestServer::sendOneSubgroupPerObject(
       if (token.isCancellationRequested()) {
         co_return;
       }
-      // Begin a New Subgroup per object (Default Priority)
-      auto maybeSubConsumer =
-          callback->beginSubgroup(groupNum, objectId, kDefaultPriority);
+      auto maybeSubConsumer = callback->beginSubgroup(
+          groupNum,
+          objectId,
+          publisherPriorityForGroup(groupNum),
+          subgroupOptionsFor(params, objectId, includeTimestampExtension_));
       auto subConsumer = maybeSubConsumer->get();
       // Find Object Size
       int objectSize = moxygen::getObjectSize(objectId, &params);
@@ -300,7 +316,13 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
         (params.objectsPerGroup > 1 && params.objectIncrement % 2 == 1)) {
       // we have at least one even object
       subConsumers.push_back(
-          callback->beginSubgroup(groupNum, 0, kDefaultPriority).value());
+          callback
+              ->beginSubgroup(
+                  groupNum,
+                  0,
+                  publisherPriorityForGroup(groupNum),
+                  subgroupOptionsFor(params, 0, includeTimestampExtension_))
+              .value());
     } else {
       subConsumers.push_back(nullptr);
     }
@@ -309,7 +331,13 @@ folly::coro::Task<void> MoQTestServer::sendTwoSubgroupsPerGroup(
         (params.objectsPerGroup > 1 && params.objectIncrement % 2 == 1)) {
       // we have at least one odd object
       subConsumers.push_back(
-          callback->beginSubgroup(groupNum, 1, kDefaultPriority).value());
+          callback
+              ->beginSubgroup(
+                  groupNum,
+                  1,
+                  publisherPriorityForGroup(groupNum),
+                  subgroupOptionsFor(params, 1, includeTimestampExtension_))
+              .value());
     } else {
       subConsumers.push_back(nullptr);
     }
@@ -380,6 +408,7 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
   auto alias = TrackAlias(sub.requestID.value);
   callback->setTrackAlias(alias);
   auto token = co_await folly::coro::co_current_cancellation_token;
+  const auto lastObject = lastObjectInGroup(params);
   // Iterate through Objects
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
@@ -413,9 +442,11 @@ folly::coro::Task<void> MoQTestServer::sendDatagram(
       ObjectHeader header;
       header.group = groupNum;
       header.id = objectId;
+      header.priority = publisherPriorityForGroup(groupNum);
       header.extensions = Extensions(extensions, {});
 
-      auto res = callback->datagram(header, std::move(objectPayload), false);
+      auto res = callback->datagram(
+          header, std::move(objectPayload), objectId == lastObject);
       if (res.hasError()) {
         // If sending datagram fails, callback->publishDone with error
         PublishDone done;

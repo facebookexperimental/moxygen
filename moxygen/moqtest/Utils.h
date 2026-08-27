@@ -5,6 +5,7 @@
  */
 
 #include <folly/Expected.h>
+#include "moxygen/MoQConsumers.h"
 #include "moxygen/MoQFramer.h"
 #include "moxygen/moqtest/Types.h"
 
@@ -14,6 +15,12 @@ namespace moxygen {
 // Even type => integer extension. Value is large enough to avoid collision with
 // test integer extensions (which use 2 * testIntegerExtension).
 constexpr uint64_t kTimestampExtensionType = 0xC000;
+
+// The priority the server advertises as the track's publisher priority.  It is
+// deliberately not kDefaultPriority, so a subscriber that mishandles the
+// draft-15+ priority elision surfaces the protocol default instead of this
+// value.
+constexpr uint8_t kMoQTestPublisherPriority = 200;
 
 folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
     const MoQTestParameters& track);
@@ -30,6 +37,31 @@ std::vector<Extension> getExtensions(
     bool includeTimestamp = false);
 
 int getObjectSize(uint64_t objectId, MoQTestParameters* params);
+
+// The priority every subgroup and datagram of `groupNumber` is published at.
+// Alternating on the group makes half the track match the advertised publisher
+// priority, so it is elided from the wire, and half differ, so it is written
+// explicitly.  Group parity is independent of the subgroup ID, the extension
+// bit and the end-of-group bit, so both encodings appear for every other
+// header shape a track produces.
+uint8_t publisherPriorityForGroup(uint64_t groupNumber);
+
+// Highest object ID a group actually carries.  This is only lastObjectInTrack
+// when objectIncrement divides the range evenly.
+uint64_t lastObjectInGroup(const MoQTestParameters& params);
+
+// True when `subgroupID` is the subgroup that carries a group's last object,
+// and so must signal end-of-group.
+bool subgroupCarriesLastObject(
+    const MoQTestParameters& params,
+    uint64_t subgroupID);
+
+// The most compact subgroup header encoding a publisher can use for
+// `subgroupID` given the track parameters.
+BeginSubgroupOptions subgroupOptionsFor(
+    const MoQTestParameters& params,
+    uint64_t subgroupID,
+    bool includeTimestampExtension = false);
 
 bool validatePayload(int objectSize, std::string payload);
 

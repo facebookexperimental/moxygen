@@ -35,17 +35,19 @@ MoQTestClient::MoQTestClient(
               transportType)),
 
       subReceiver_(
-          std::make_shared<ObjectReceiver>(
+          std::make_shared<VerifyingObjectReceiver>(
               ObjectReceiver::SUBSCRIBE,
               std::shared_ptr<ObjectReceiverCallback>(
                   std::shared_ptr<void>(),
-                  &objectReceiverCallback_))),
+                  &objectReceiverCallback_),
+              *this)),
       fetchReceiver_(
-          std::make_shared<ObjectReceiver>(
+          std::make_shared<VerifyingObjectReceiver>(
               ObjectReceiver::FETCH,
               std::shared_ptr<ObjectReceiverCallback>(
                   std::shared_ptr<void>(),
-                  &objectReceiverCallback_))) {}
+                  &objectReceiverCallback_),
+              *this)) {}
 
 void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   moqClient_->setLogger(logger);
@@ -307,6 +309,13 @@ void MoQTestClient::onAllDataReceived() {
     doneBaton_.post();
   });
 
+  if (semanticsFailed_) {
+    // The individual mismatches were already logged as they were detected
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! reason: Delivery Semantics Not Preserved";
+    return;
+  }
+
   if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
     // For datagrams, some drops are allowed based on datagramDropPercentage
     uint64_t totalExpected = (((params_.lastGroupInTrack - params_.startGroup) /
@@ -351,6 +360,100 @@ void MoQTestClient::onAllDataReceived() {
   XLOG(INFO) << "MoQTest verification result: SUCCESS! All Data Received";
 }
 
+uint64_t MoQTestClient::draftMajorVersion() const {
+  auto version = moqClient_->moqSession_->getNegotiatedVersion();
+  return version ? getDraftMajorVersion(*version) : 0;
+}
+
+void MoQTestClient::recordSemanticsFailure(const std::string& reason) {
+  semanticsFailed_ = true;
+  XLOG(ERR) << "MoQTest verification result: FAILURE! reason: " << reason;
+}
+
+void MoQTestClient::validateSubgroupHeader(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    Priority priority,
+    const TrackConsumer::BeginSubgroupOptions& options) {
+  if (receivingType_ != ReceivingType::SUBSCRIBE) {
+    // FETCH responses arrive on a fetch stream, which has no subgroup header
+    return;
+  }
+
+  auto expectEndOfGroup = subgroupCarriesLastObject(params_, subgroupID);
+  if (options.containsLastInGroup != expectEndOfGroup) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "End of Group Signal Mismatch for group=",
+            groupID,
+            " subgroup=",
+            subgroupID,
+            ": Actual=",
+            options.containsLastInGroup,
+            "  Expected=",
+            expectEndOfGroup));
+  }
+
+  // Every subgroup the test server opens starts at its own first object, but
+  // the draft only carries that signal from 18 onwards.
+  if (draftMajorVersion() >= 18 && !options.beginsWithFirstObject) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "Missing Begins With First Object Signal for group=",
+            groupID,
+            " subgroup=",
+            subgroupID));
+  }
+
+  // The publisher may elide the priority from the wire, but the value the
+  // subscriber ends up with must still be the one the publisher chose.
+  auto expectedPriority = publisherPriorityForGroup(groupID);
+  if (priority != expectedPriority) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "Subgroup Priority Mismatch for group=",
+            groupID,
+            " subgroup=",
+            subgroupID,
+            ": Actual=",
+            static_cast<uint64_t>(priority),
+            "  Expected=",
+            static_cast<uint64_t>(expectedPriority)));
+  }
+}
+
+void MoQTestClient::validateDatagramHeader(
+    const ObjectHeader& header,
+    bool endOfGroup) {
+  auto expectEndOfGroup = header.id == lastObjectInGroup(params_);
+  if (endOfGroup != expectEndOfGroup) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "Datagram End of Group Signal Mismatch for group=",
+            header.group,
+            " id=",
+            header.id,
+            ": Actual=",
+            endOfGroup,
+            "  Expected=",
+            expectEndOfGroup));
+  }
+
+  auto expectedPriority = publisherPriorityForGroup(header.group);
+  if (header.priority != expectedPriority) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "Datagram Priority Mismatch for group=",
+            header.group,
+            " id=",
+            header.id,
+            ": Actual=",
+            header.priority ? std::to_string(*header.priority) : "none",
+            "  Expected=",
+            static_cast<uint64_t>(expectedPriority)));
+  }
+}
+
 bool MoQTestClient::validateSubscribedData(
     const ObjectHeader& header,
     const std::string& payload) {
@@ -383,6 +486,9 @@ bool MoQTestClient::validateSubscribedData(
         return false;
       }
     } else if (header.group != expectedGroup_) {
+      // Can spuriously fail; groups are separate streams and may reorder.  The
+      // server publishes even and odd groups one priority apart, so every even
+      // group outranks every odd one and the halves can interleave.
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: Group Mismatch: Actual="
           << header.group << "  Expected=" << expectedGroup_;
@@ -641,6 +747,7 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
   }
   expectedSubgroup_ = 0;
   expectEndOfGroup_ = params.sendEndOfGroupMarkers;
+  semanticsFailed_ = false;
 
   // Initialize scoreboard with all expected (group, objectId) pairs
   expectedObjects_.clear();

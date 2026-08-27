@@ -178,12 +178,90 @@ std::vector<Extension> getExtensions(
   return extensions;
 }
 
+uint8_t publisherPriorityForGroup(uint64_t groupNumber) {
+  return kMoQTestPublisherPriority + (groupNumber % 2);
+}
+
 int getObjectSize(uint64_t objectId, MoQTestParameters* params) {
   if (objectId == params->startObject) {
     return params->sizeOfObjectZero;
   } else {
     return params->sizeOfObjectGreaterThanZero;
   }
+}
+
+namespace {
+
+bool trackHasExtensions(
+    const MoQTestParameters& params,
+    bool includeTimestampExtension) {
+  return params.testIntegerExtension >= 0 ||
+      params.testVariableExtension >= 0 || includeTimestampExtension;
+}
+
+uint64_t firstObjectInSubgroup(
+    const MoQTestParameters& params,
+    uint64_t subgroupID) {
+  switch (params.forwardingPreference) {
+    case ForwardingPreference::ONE_SUBGROUP_PER_OBJECT:
+      return subgroupID;
+    case ForwardingPreference::TWO_SUBGROUPS_PER_GROUP:
+      // Subgroup 0 carries the even object IDs and subgroup 1 the odd ones, so
+      // the subgroup that doesn't match startObject's parity starts one
+      // increment later.
+      return (subgroupID % 2 == params.startObject % 2)
+          ? params.startObject
+          : params.startObject + params.objectIncrement;
+    case ForwardingPreference::ONE_SUBGROUP_PER_GROUP:
+    case ForwardingPreference::DATAGRAM:
+      break;
+  }
+  return params.startObject;
+}
+
+} // namespace
+
+bool subgroupCarriesLastObject(
+    const MoQTestParameters& params,
+    uint64_t subgroupID) {
+  switch (params.forwardingPreference) {
+    case ForwardingPreference::ONE_SUBGROUP_PER_OBJECT:
+      return subgroupID == lastObjectInGroup(params);
+    case ForwardingPreference::TWO_SUBGROUPS_PER_GROUP:
+      return subgroupID == lastObjectInGroup(params) % 2;
+    case ForwardingPreference::ONE_SUBGROUP_PER_GROUP:
+    case ForwardingPreference::DATAGRAM:
+      break;
+  }
+  // The group's only subgroup necessarily carries its last object
+  return true;
+}
+
+uint64_t lastObjectInGroup(const MoQTestParameters& params) {
+  if (params.lastObjectInTrack <= params.startObject) {
+    return params.startObject;
+  }
+  auto steps =
+      (params.lastObjectInTrack - params.startObject) / params.objectIncrement;
+  return params.startObject + steps * params.objectIncrement;
+}
+
+BeginSubgroupOptions subgroupOptionsFor(
+    const MoQTestParameters& params,
+    uint64_t subgroupID,
+    bool includeTimestampExtension) {
+  const auto firstObject = firstObjectInSubgroup(params, subgroupID);
+  BeginSubgroupOptions options;
+  options.subgroupIDFormat = subgroupID == 0 ? SubgroupIDFormat::Zero
+      : subgroupID == firstObject            ? SubgroupIDFormat::FirstObject
+                                             : SubgroupIDFormat::Present;
+  options.includeExtensions =
+      trackHasExtensions(params, includeTimestampExtension);
+  options.containsLastInGroup = subgroupCarriesLastObject(params, subgroupID);
+  // The test server always opens a fresh subgroup and writes it from its first
+  // object; it never resumes one published elsewhere.
+  options.beginsWithFirstObject = true;
+  return options;
 }
 
 // Extension Validation Helper Functions

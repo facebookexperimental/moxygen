@@ -118,6 +118,41 @@ class MoQTestClient {
     MoQTestClient& client_;
   };
 
+  // Wraps ObjectReceiver to inspect the delivery semantics the publisher
+  // signalled -- which subgroup ends a group, whether a subgroup starts at the
+  // group's first object, and the datagram end-of-group marker -- none of
+  // which reach ObjectReceiverCallback.
+  class VerifyingObjectReceiver : public ObjectReceiver {
+   public:
+    VerifyingObjectReceiver(
+        Type type,
+        std::shared_ptr<moxygen::ObjectReceiverCallback> callback,
+        MoQTestClient& client)
+        : ObjectReceiver(type, std::move(callback)), client_(client) {}
+
+    folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
+    beginSubgroup(
+        uint64_t groupID,
+        uint64_t subgroupID,
+        Priority priority,
+        BeginSubgroupOptions options) override {
+      client_.validateSubgroupHeader(groupID, subgroupID, priority, options);
+      return ObjectReceiver::beginSubgroup(
+          groupID, subgroupID, priority, options);
+    }
+
+    folly::Expected<folly::Unit, MoQPublishError> datagram(
+        const ObjectHeader& header,
+        Payload payload,
+        bool endOfGroup) override {
+      client_.validateDatagramHeader(header, endOfGroup);
+      return ObjectReceiver::datagram(header, std::move(payload), endOfGroup);
+    }
+
+   private:
+    MoQTestClient& client_;
+  };
+
   // Override Vritual Functions for now to return basic print statements
   ObjectReceiverCallback::FlowControlState onObject(
       const std::optional<TrackAlias>& trackAlias,
@@ -156,6 +191,9 @@ class MoQTestClient {
   // Holds if current request expects end of group markers
   bool expectEndOfGroup_{};
 
+  // Set when a delivery-semantics check fails; suppresses the final SUCCESS
+  bool semanticsFailed_{false};
+
   // Holds Datagram Objects Recieved - (Only relevant for forwarding preference
   // 3)
   uint64_t datagramObjects_{};
@@ -163,6 +201,18 @@ class MoQTestClient {
   // Handles
   std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
   std::shared_ptr<Publisher::FetchHandle> fetchHandle_;
+
+  // Delivery semantics validation.  A relay is free to re-encode a subgroup
+  // header or datagram, so these check what the encoding means rather than
+  // which stream/datagram type byte was used.
+  void validateSubgroupHeader(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      const TrackConsumer::BeginSubgroupOptions& options);
+  void validateDatagramHeader(const ObjectHeader& header, bool endOfGroup);
+  void recordSemanticsFailure(const std::string& reason);
+  uint64_t draftMajorVersion() const;
 
   // Subscription Data Validation functions
   void initializeExpecteds(MoQTestParameters& params);
