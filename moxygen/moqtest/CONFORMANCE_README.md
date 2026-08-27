@@ -85,6 +85,7 @@ Tests MoQT extensions:
 - Variable extensions
 - Both extensions combined
 - Different extension IDs
+- Extensions on subgroups and on datagrams
 - Extensions with other features
 
 ### Section 7: Complex Scenarios (8 tests)

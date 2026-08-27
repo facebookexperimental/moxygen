@@ -222,11 +222,14 @@ echo -e "\n${YELLOW}=== SECTION 2: Object and Group Counts ===${NC}"
 set_section "2" "Object and Group Counts"
 
 # Test 9: Single object per group
+# last_object_in_track=0 makes object 0 the group's only object, so each
+# datagram is both object-ID-zero and end-of-group.
 run_test "Single object per group" \
     "subscribe" \
-    --forwarding_preference=0 \
+    --forwarding_preference=3 \
     --last_group=3 \
-    --objects_per_group=1
+    --objects_per_group=1 \
+    --last_object_in_track=0
 
 # Test 10: Many objects per group
 run_test "Many objects per group (20)" \
@@ -333,9 +336,13 @@ run_test "All large objects (8KB)" \
     --size_of_object_greater_than_zero=8192
 
 # Test 21: Mixed sizes with TWO_SUBGROUPS
+# Starting at object 3 puts subgroup 1's first object at 3, so its ID matches
+# neither zero nor the first object and has to be written explicitly.  The
+# group's last object is 6, so subgroup 0 is the one that ends the group.
 run_test "Mixed sizes with TWO_SUBGROUPS_PER_GROUP" \
     "subscribe" \
     --forwarding_preference=2 \
+    --start_object=3 \
     --last_group=1 \
     --objects_per_group=6 \
     --size_of_object_zero=2048 \
@@ -454,9 +461,13 @@ run_test "End of group markers with ONE_SUBGROUP_PER_OBJECT" \
     --send_end_of_group_markers=true
 
 # Test 33: End of group markers with TWO_SUBGROUPS
+# As in test 21, starting at object 3 forces an explicit subgroup ID on
+# subgroup 1.  Here the group's last object is 7, so subgroup 1 is also the
+# one that signals end of group.
 run_test "End of group markers with TWO_SUBGROUPS_PER_GROUP" \
     "subscribe" \
     --forwarding_preference=2 \
+    --start_object=3 \
     --last_group=2 \
     --objects_per_group=6 \
     --send_end_of_group_markers=true
@@ -503,20 +514,24 @@ run_test "Integer extension (ID=2)" \
     --objects_per_group=5 \
     --test_integer_extension=1
 
-# Test 38: Variable extension only
+# Test 38: Variable extension only, on single-object datagram groups
 run_test "Variable extension (ID=3)" \
     "subscribe" \
-    --forwarding_preference=0 \
-    --last_group=1 \
-    --objects_per_group=5 \
+    --forwarding_preference=3 \
+    --last_group=5 \
+    --objects_per_group=1 \
+    --last_object_in_track=0 \
     --test_variable_extension=1
 
 # Test 39: Both extensions
+# Subgroup 1 starts at object 3, so its ID is written explicitly; the group's
+# last object is 6, which leaves the end of group signal on subgroup 0.
 run_test "Both integer and variable extensions" \
     "subscribe" \
-    --forwarding_preference=0 \
+    --forwarding_preference=2 \
+    --start_object=3 \
     --last_group=1 \
-    --objects_per_group=5 \
+    --objects_per_group=6 \
     --test_integer_extension=1 \
     --test_variable_extension=1
 
@@ -574,15 +589,27 @@ run_test "Low frequency updates (2000ms)" \
     --object_frequency=2000
 
 # Test 45: Everything combined
+# An odd start object with an increment of 2 means every object lands in
+# subgroup 1, which starts at object 3 and so carries an explicit subgroup ID,
+# extensions and the end of group signal all at once.  last_object_in_track
+# has to be named explicitly: the default is object_increment *
+# (objects_per_group + 1) = 18, which an increment of 2 never lands on from an
+# odd start, so no object would ever be the group's last.  The group increment
+# is odd so the groups alternate parity, and with them the publisher priority,
+# which an even increment would pin to one value for the whole track.
+# last_group has the same constraint as last_object_in_track: the increment has
+# to divide the range, or the track ends on a group the subscriber isn't
+# waiting for.
 run_test "Complex: All features combined" \
     "subscribe" \
     --forwarding_preference=2 \
     --start_group=10 \
-    --start_object=2 \
-    --last_group=14 \
-    --group_increment=2 \
+    --start_object=3 \
+    --last_group=13 \
+    --group_increment=3 \
     --objects_per_group=8 \
     --object_increment=2 \
+    --last_object_in_track=17 \
     --size_of_object_zero=2048 \
     --size_of_object_greater_than_zero=512 \
     --send_end_of_group_markers=true \
@@ -623,6 +650,7 @@ run_test "Publisher delivery timeout (1000ms)" \
     --publisher_delivery_timeout=1000
 
 # Test 50: Stress test - DATAGRAM with small payload
+# Test 4 covers datagrams without extensions; this one carries them.
 run_test "Stress: DATAGRAM rapid delivery" \
     "subscribe" \
     --forwarding_preference=3 \
@@ -630,7 +658,9 @@ run_test "Stress: DATAGRAM rapid delivery" \
     --objects_per_group=10 \
     --size_of_object_zero=64 \
     --size_of_object_greater_than_zero=32 \
-    --object_frequency=50
+    --object_frequency=50 \
+    --test_integer_extension=1 \
+    --test_variable_extension=1
 
 # ============================================================================
 # Generate Report
