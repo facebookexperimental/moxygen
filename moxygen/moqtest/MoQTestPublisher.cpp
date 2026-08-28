@@ -5,8 +5,10 @@
  */
 
 #include "moxygen/moqtest/MoQTestPublisher.h"
+#include <folly/ScopeGuard.h>
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
+#include <vector>
 #include "moxygen/moqtest/Utils.h"
 
 namespace moxygen {
@@ -34,6 +36,13 @@ folly::coro::Task<void> MoQTestPublisher::delay(uint64_t ms) {
 void MoQTestPublisher::cancelAll() {
   for (auto& [key, state] : activeSubscriptions_) {
     state.cancelSource.requestCancellation();
+  }
+  // Move before cancelling: cancel() can resume a waiting publish inline, and
+  // that coroutine erases its own entry on the way out.
+  auto pending = std::move(pendingUnpauses_);
+  pendingUnpauses_.clear();
+  for (auto& p : pending) {
+    p->cancel();
   }
 }
 
@@ -118,8 +127,13 @@ folly::coro::Task<void> MoQTestPublisher::onSubscribe(
       &sub.fullTrackName.trackNamespace);
   XCHECK(res.hasValue())
       << "Only valid params must be passed into this function";
-  MoQTestParameters params = res.value();
+  co_await sendTrackData(res.value(), sub.requestID, std::move(callback));
+}
 
+folly::coro::Task<void> MoQTestPublisher::sendTrackData(
+    MoQTestParameters params,
+    RequestID requestID,
+    std::shared_ptr<TrackConsumer> callback) {
   // Publish Objects in Accordance to params
 
   // Publisher Delivery Timeout (To be implemented later)
@@ -143,7 +157,7 @@ folly::coro::Task<void> MoQTestPublisher::onSubscribe(
     }
 
     case (ForwardingPreference::DATAGRAM): {
-      co_await MoQTestPublisher::sendDatagram(sub, params, callback);
+      co_await MoQTestPublisher::sendDatagram(requestID, params, callback);
       break;
     }
 
@@ -156,10 +170,90 @@ folly::coro::Task<void> MoQTestPublisher::onSubscribe(
   // Default PublishDone For Now
 
   PublishDone done;
-  done.requestID = sub.requestID;
+  done.requestID = requestID;
   done.statusCode = PublishDoneStatusCode::TRACK_ENDED;
   done.reasonPhrase = kDefaultPublishDoneReason;
   callback->publishDone(std::move(done));
+}
+
+folly::coro::Task<folly::coro::Task<void>> MoQTestPublisher::startPublishTrack(
+    const std::shared_ptr<MoQSession>& session,
+    FullTrackName ftn,
+    MoQTestParameters params,
+    RequestID requestID) {
+  auto forwarder = std::make_shared<MoQForwarder>(std::move(ftn));
+  forwarder->setTrackAlias(TrackAlias(requestID.value));
+
+  // The track starts paused and is unpaused once the peer asks for data. When
+  // the subscriber registered before we published, PUBLISH_OK already carries
+  // forward=1 and this fires during onPublishOk; when we published first it
+  // fires on the peer's REQUEST_UPDATE. Generating objects before then would
+  // just discard them.
+  //
+  // Only the first unpause is honored. If the peer pauses again mid-track we
+  // keep generating and the forwarder drops the objects, which for a test
+  // publisher is simpler than parking and re-arming.
+  auto unpauseCb = std::make_shared<PendingUnpause>();
+  forwarder->setCallback(unpauseCb);
+  pendingUnpauses_.push_back(unpauseCb);
+
+  auto subscriber = forwarder->addSubscriber(session, /*forward=*/false);
+  if (!subscriber) {
+    co_yield folly::coro::co_error(
+        std::runtime_error("PUBLISH failed: addSubscriber returned null"));
+  }
+
+  auto publishResponse =
+      session->publish(subscriber->getPublishRequest(), subscriber);
+  if (publishResponse.hasError()) {
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "PUBLISH failed: ", publishResponse.error().reasonPhrase)));
+  }
+  subscriber->trackConsumer = std::move(publishResponse.value().consumer);
+
+  auto pubResult = co_await folly::coro::co_awaitTry(
+      std::move(publishResponse.value().reply));
+  if (pubResult.hasException()) {
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "PUBLISH failed: ", pubResult.exception().what())));
+  }
+  if (pubResult.value().hasError()) {
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "PUBLISH rejected: ", pubResult.value().error().reasonPhrase)));
+  }
+  subscriber->onPublishOk(pubResult.value().value());
+
+  co_return streamPublishedTrack(
+      std::move(unpauseCb), std::move(forwarder), params, requestID);
+}
+
+folly::coro::Task<void> MoQTestPublisher::streamPublishedTrack(
+    std::shared_ptr<PendingUnpause> unpauseCb,
+    std::shared_ptr<MoQForwarder> forwarder,
+    MoQTestParameters params,
+    RequestID requestID) {
+  // Drop the registration however this track ends, so a long-lived publisher
+  // doesn't accumulate one fulfilled entry per publish.
+  auto unregister = folly::makeGuard(
+      [this, unpauseCb] { std::erase(pendingUnpauses_, unpauseCb); });
+  co_await unpauseCb->unpaused.getFuture();
+  co_await sendTrackData(params, requestID, std::move(forwarder));
+}
+
+folly::coro::Task<void> MoQTestPublisher::publishTrack(
+    const std::shared_ptr<MoQSession>& session,
+    FullTrackName ftn,
+    MoQTestParameters params,
+    RequestID requestID) {
+  auto streamTask =
+      co_await startPublishTrack(session, std::move(ftn), params, requestID);
+  co_await std::move(streamTask);
 }
 
 folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerGroup(
@@ -372,10 +466,10 @@ folly::coro::Task<void> MoQTestPublisher::sendTwoSubgroupsPerGroup(
 }
 
 folly::coro::Task<void> MoQTestPublisher::sendDatagram(
-    SubscribeRequest sub,
+    RequestID requestID,
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
-  auto alias = TrackAlias(sub.requestID.value);
+  auto alias = TrackAlias(requestID.value);
   callback->setTrackAlias(alias);
   auto token = co_await folly::coro::co_current_cancellation_token;
   const auto lastObject = lastObjectInGroup(params);
@@ -390,7 +484,7 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
       if (token.isCancellationRequested()) {
         // Instead of returning an error, callback->publishDone with error
         PublishDone done;
-        done.requestID = sub.requestID;
+        done.requestID = requestID;
         done.reasonPhrase = "Datagram Subscription Cancelled";
         done.statusCode = PublishDoneStatusCode::INTERNAL_ERROR;
         callback->publishDone(std::move(done));
@@ -420,7 +514,7 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
       if (res.hasError()) {
         // If sending datagram fails, callback->publishDone with error
         PublishDone done;
-        done.requestID = sub.requestID;
+        done.requestID = requestID;
         done.reasonPhrase = "Error Sending Datagram Objects";
         done.statusCode = PublishDoneStatusCode::INTERNAL_ERROR;
         callback->publishDone(std::move(done));

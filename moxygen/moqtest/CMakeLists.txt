@@ -48,6 +48,7 @@ target_link_libraries(
   moqtest_utils
   moxygen_mlog_file_mlogger
   moxygen_moq_relay_session
+  moxygen_moq_test_publisher
   moxygen_samples_util_qmux_relay_utils
   Folly::folly_init_init
   Folly::folly_io_async_async_signal_handler

@@ -474,7 +474,7 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   }
 
   // Call the sendObjectsForForwardPreferenceThree method
-  auto task = publisher_->sendDatagram(sub, params_, mockConsumer);
+  auto task = publisher_->sendDatagram(sub.requestID, params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -1153,7 +1153,7 @@ TEST_F(MoQTrackServerTest, DatagramSignalsEndOfGroupOnLastObject) {
       });
 
   folly::coro::blockingWait(
-      publisher_->sendDatagram(sub, params_, mockConsumer));
+      publisher_->sendDatagram(sub.requestID, params_, mockConsumer));
 
   // Two groups of objects 0..2; only object 2 ends its group.
   const std::vector<std::pair<uint64_t, bool>> expected{

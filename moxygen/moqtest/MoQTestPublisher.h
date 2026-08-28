@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <folly/coro/SharedPromise.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include "moxygen/Publisher.h"
 #include "moxygen/moqtest/Types.h"
@@ -58,7 +59,9 @@ class MoQTestPublisher : public Publisher,
   }
 
   // Cancels in-flight send coroutines so they stop co_await'ing on the
-  // timekeeper, which would otherwise crash if recreated during teardown.
+  // timekeeper, which would otherwise crash if recreated during teardown, and
+  // releases any publishTrack that is still paused waiting for the peer to ask
+  // for data -- otherwise it would hold the session open forever.
   void cancelAll();
 
   void removeSubscription(SubKey key);
@@ -71,6 +74,32 @@ class MoQTestPublisher : public Publisher,
   folly::coro::Task<void> onSubscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback);
+
+  // Emits the track according to the forwarding preference, then publishDone.
+  // Shared by the SUBSCRIBE path and by callers that drive a server-initiated
+  // PUBLISH.
+  folly::coro::Task<void> sendTrackData(
+      MoQTestParameters params,
+      RequestID requestID,
+      std::shared_ptr<TrackConsumer> callback);
+
+  // Sends PUBLISH for the track on the given session and waits for PUBLISH_OK.
+  // The returned task streams the objects once the peer unpauses the track, so
+  // a caller that must act after the peer has accepted the PUBLISH -- such as
+  // sending the SUBSCRIBE_TRACKS that triggers the unpause -- can do so in
+  // between. No prior PUBLISH_NAMESPACE is required. Throws on failure.
+  folly::coro::Task<folly::coro::Task<void>> startPublishTrack(
+      const std::shared_ptr<MoQSession>& session,
+      FullTrackName ftn,
+      MoQTestParameters params,
+      RequestID requestID);
+
+  // startPublishTrack for callers with nothing to do in between.
+  folly::coro::Task<void> publishTrack(
+      const std::shared_ptr<MoQSession>& session,
+      FullTrackName ftn,
+      MoQTestParameters params,
+      RequestID requestID);
 
   folly::coro::Task<void> sendOneSubgroupPerGroup(
       MoQTestParameters params,
@@ -85,7 +114,7 @@ class MoQTestPublisher : public Publisher,
       std::shared_ptr<TrackConsumer> callback);
 
   folly::coro::Task<void> sendDatagram(
-      SubscribeRequest sub,
+      RequestID requestID,
       MoQTestParameters params,
       std::shared_ptr<TrackConsumer> callback);
 
@@ -117,6 +146,37 @@ class MoQTestPublisher : public Publisher,
   }
 
  private:
+  // Tracks one publishTrack that is paused waiting for the peer to ask for
+  // data. Registered so cancelAll() can release it during shutdown, where it
+  // completes with OperationCancelled and unwinds the publish.
+  struct PendingUnpause : public MoQForwarder::Callback {
+    folly::coro::SharedPromise<void> unpaused;
+
+    void onEmpty(MoQForwarder*) override {}
+
+    // forwardChanged can fire more than once as the flag toggles; only the
+    // first unpause matters here.
+    void forwardChanged(MoQForwarder*, bool forward) override {
+      if (forward && !unpaused.isFulfilled()) {
+        unpaused.setValue();
+      }
+    }
+
+    void cancel() {
+      if (!unpaused.isFulfilled()) {
+        unpaused.setException(
+            folly::make_exception_wrapper<folly::OperationCancelled>());
+      }
+    }
+  };
+
+  // Second phase of startPublishTrack.
+  folly::coro::Task<void> streamPublishedTrack(
+      std::shared_ptr<PendingUnpause> unpauseCb,
+      std::shared_ptr<MoQForwarder> forwarder,
+      MoQTestParameters params,
+      RequestID requestID);
+
   // Inter-object delay using the publisher-owned timekeeper.
   folly::coro::Task<void> delay(uint64_t ms);
 
@@ -127,6 +187,7 @@ class MoQTestPublisher : public Publisher,
 
   folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
       activeSubscriptions_;
+  std::vector<std::shared_ptr<PendingUnpause>> pendingUnpauses_;
   // Owned timekeeper for inter-object delays. Avoids the global Timekeeper
   // singleton, which can crash if used during process teardown.
   folly::ThreadWheelTimekeeper timekeeper_;

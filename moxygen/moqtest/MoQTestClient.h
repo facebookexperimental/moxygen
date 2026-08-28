@@ -9,9 +9,11 @@
 #include <folly/coro/Baton.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClientBase.h"
+#include "moxygen/MoQRelaySession.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/Subscriber.h"
 #include "moxygen/mlog/MLogger.h"
+#include "moxygen/moqtest/MoQTestPublisher.h"
 #include "moxygen/moqtest/Types.h"
 #include "moxygen/samples/util/Utils.h"
 
@@ -22,6 +24,11 @@ enum ReceivingType : int {
   FETCH = 1,
   UNKNOWN_RECEIVING_TYPE = 2
 };
+
+// Ordering between the SUBSCRIBE_TRACKS and the PUBLISH in publish mode. Each
+// exercises a different relay path: SubscribeFirst is answered by the relay's
+// PUBLISH fan-out, PublishFirst by its SUBSCRIBE_TRACKS backfill.
+enum class PublishOrder : int { SubscribeFirst = 0, PublishFirst = 1 };
 
 enum ExtensionErrorCode : int {
   INVALID_INT_EXTENSION = 0,
@@ -40,18 +47,36 @@ enum AdjustedExpectedResult : int {
   ERROR_RECEIVING_DATA = 2
 };
 
-class MoQTestClient {
+// MoQTestClient is also a Subscriber so it can receive the PUBLISH the relay
+// forwards in publish mode. It must be heap-allocated as a shared_ptr -- use
+// create() -- because it registers itself as a subscribe handler.
+class MoQTestClient : public Subscriber,
+                      public std::enable_shared_from_this<MoQTestClient> {
+ private:
+  struct PrivateTag {
+    explicit PrivateTag() = default;
+  };
+
  public:
+  static std::shared_ptr<MoQTestClient> create(
+      folly::EventBase* evb,
+      proxygen::URL url,
+      samples::TransportType transportType) {
+    return std::make_shared<MoQTestClient>(
+        PrivateTag{}, evb, std::move(url), transportType);
+  }
+
   MoQTestClient(
+      PrivateTag,
       folly::EventBase* evb,
       proxygen::URL url,
       samples::TransportType transportType);
 
-  ~MoQTestClient() {}
+  ~MoQTestClient() override {}
 
   MoQTestClient(const MoQTestClient&) = delete;
   MoQTestClient& operator=(const MoQTestClient&) = delete;
-  MoQTestClient(MoQTestClient&&) = default;
+  MoQTestClient(MoQTestClient&&) = delete;
   MoQTestClient& operator=(MoQTestClient&&) = delete;
 
   folly::coro::Task<void> connect(
@@ -63,7 +88,21 @@ class MoQTestClient {
 
   folly::coro::Task<moxygen::TrackNamespace> fetch(MoQTestParameters params);
 
+  // Asks the relay for the track via SUBSCRIBE_TRACKS, then opens a second
+  // session to the same endpoint and PUBLISHes it. The relay matches the two
+  // and forwards the objects back, which this client validates as it would a
+  // SUBSCRIBE. Requires a relay: a bare moqtest server will reject the PUBLISH.
+  folly::coro::Task<moxygen::TrackNamespace> publishTrack(
+      MoQTestParameters params,
+      const std::string& versions = "");
+
   void setLogger(const std::shared_ptr<MLogger>& logger);
+
+  // Subscriber: accept the relay's PUBLISH by handing back the receiver that
+  // validates the track.
+  PublishResult publish(
+      PublishRequest pub,
+      std::shared_ptr<SubscriptionHandle> handle) override;
 
   // Drains the session so the peer sees a clean close; the event loop exits
   // once the session finishes closing.
@@ -77,6 +116,16 @@ class MoQTestClient {
   void subscribeUpdate(SubscribeUpdate update);
 
  private:
+  // Brings up one session to url_ and returns its client. Used for both the
+  // subscriber session and, in publish mode, the publisher session.
+  folly::coro::Task<std::unique_ptr<MoQClientBase>> connectSession(
+      const std::string& versions,
+      std::shared_ptr<Publisher> publishHandler,
+      std::shared_ptr<Subscriber> subscribeHandler);
+
+  // Sends SUBSCRIBE_TRACKS for the namespace encoding the test parameters.
+  folly::coro::Task<void> subscribeTracks(const TrackNamespace& trackNamespace);
+
   folly::coro::Task<void> doSubscribeUpdate(
       std::shared_ptr<Publisher::SubscriptionHandle> handle,
       SubscribeUpdate update);
@@ -167,10 +216,19 @@ class MoQTestClient {
 
   ObjectReceiverCallback objectReceiverCallback_{*this};
 
+  proxygen::URL url_;
+  samples::TransportType transportType_;
+  // Sessions are created by connect(), which can run after setLogger().
+  std::shared_ptr<MLogger> logger_;
   std::shared_ptr<MoQFollyExecutorImpl> moqExecutor_;
   std::unique_ptr<MoQClientBase> moqClient_;
   std::shared_ptr<ObjectReceiver> subReceiver_;
   std::shared_ptr<ObjectReceiver> fetchReceiver_;
+
+  // Publish mode only: a second session to the same endpoint that acts as the
+  // origin, plus the generator that feeds it. Null in subscribe/fetch mode.
+  std::unique_ptr<MoQClientBase> pubClient_;
+  std::shared_ptr<MoQTestPublisher> publisher_;
 
   // Holds Current Request Parameters
   ReceivingType receivingType_ = ReceivingType::UNKNOWN_RECEIVING_TYPE;
@@ -201,6 +259,7 @@ class MoQTestClient {
   // Handles
   std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
   std::shared_ptr<Publisher::FetchHandle> fetchHandle_;
+  std::shared_ptr<Publisher::SubscribeTracksHandle> subscribeTracksHandle_;
 
   // Delivery semantics validation.  A relay is free to re-encode a subgroup
   // header or datagram, so these check what the encoding means rather than

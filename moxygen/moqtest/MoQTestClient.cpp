@@ -22,18 +22,13 @@ const LocationType kDefaultLocationType = LocationType::NextGroupStart;
 const uint64_t kDefaultEndGroup = 10;
 
 MoQTestClient::MoQTestClient(
+    PrivateTag,
     folly::EventBase* evb,
     proxygen::URL url,
     samples::TransportType transportType)
-    : moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
-      moqClient_(
-          samples::makeRelayClientTransport(
-              moqExecutor_,
-              std::move(url),
-              std::make_shared<
-                  test::InsecureVerifierDangerousDoNotUseInProduction>(),
-              transportType)),
-
+    : url_(std::move(url)),
+      transportType_(transportType),
+      moqExecutor_(std::make_shared<MoQFollyExecutorImpl>(evb)),
       subReceiver_(
           std::make_shared<VerifyingObjectReceiver>(
               ObjectReceiver::SUBSCRIBE,
@@ -50,7 +45,10 @@ MoQTestClient::MoQTestClient(
               *this)) {}
 
 void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
-  moqClient_->setLogger(logger);
+  logger_ = logger;
+  if (moqClient_) {
+    moqClient_->setLogger(logger);
+  }
 }
 
 void MoQTestClient::shutdown() {
@@ -64,8 +62,18 @@ void MoQTestClient::shutdown() {
     fetchHandle_->fetchCancel();
     fetchHandle_.reset();
   }
-  if (moqClient_->moqSession_) {
+  if (subscribeTracksHandle_) {
+    subscribeTracksHandle_->unsubscribeTracks();
+    subscribeTracksHandle_.reset();
+  }
+  if (publisher_) {
+    publisher_->cancelAll();
+  }
+  if (moqClient_ && moqClient_->moqSession_) {
     moqClient_->moqSession_->drain();
+  }
+  if (pubClient_ && pubClient_->moqSession_) {
+    pubClient_->moqSession_->drain();
   }
   doneBaton_.post();
 }
@@ -94,23 +102,44 @@ void MoQTestClient::subscribeUpdate(SubscribeUpdate update) {
   }
 }
 
-folly::coro::Task<void> MoQTestClient::connect(
-    folly::EventBase* evb,
-    const std::string& versions) {
-  auto alpns = getMoqtProtocols(versions, true);
+folly::coro::Task<std::unique_ptr<MoQClientBase>> MoQTestClient::connectSession(
+    const std::string& versions,
+    std::shared_ptr<Publisher> publishHandler,
+    std::shared_ptr<Subscriber> subscribeHandler) {
+  // The relay-session factory is required for SUBSCRIBE_TRACKS; a plain
+  // MoQSession does not implement it.
+  auto client = samples::makeRelayClientTransport(
+      moqExecutor_,
+      url_,
+      MoQRelaySession::createRelaySessionFactory(),
+      std::make_shared<test::InsecureVerifierDangerousDoNotUseInProduction>(),
+      transportType_);
 
-  co_await moqClient_->setupMoQSession(
+  co_await client->setupMoQSession(
       std::chrono::milliseconds(FLAGS_connect_timeout),
       std::chrono::seconds(FLAGS_transaction_timeout),
-      nullptr,
-      nullptr,
+      std::move(publishHandler),
+      std::move(subscribeHandler),
       [] {
         quic::TransportSettings ts;
         ts.orderedReadCallbacks = true;
         return ts;
       }(),
-      alpns);
+      getMoqtProtocols(versions, true));
 
+  co_return client;
+}
+
+folly::coro::Task<void> MoQTestClient::connect(
+    folly::EventBase* /*evb*/,
+    const std::string& versions) {
+  // Register as the subscribe handler so a relay-forwarded PUBLISH lands in
+  // publish(); harmless in subscribe/fetch mode, where none arrives.
+  moqClient_ = co_await connectSession(
+      versions, /*publishHandler=*/nullptr, shared_from_this());
+  if (logger_) {
+    moqClient_->setLogger(logger_);
+  }
   co_return;
 }
 
@@ -172,6 +201,112 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   }
 
   co_await doneBaton_;
+  co_return trackNamespace.value();
+}
+
+Subscriber::PublishResult MoQTestClient::publish(
+    PublishRequest pub,
+    std::shared_ptr<SubscriptionHandle> handle) {
+  XLOG(INFO) << "MoQTest: received PUBLISH for ns="
+             << pub.fullTrackName.trackNamespace;
+  // Keep the handle so a validation failure can unsubscribe.
+  if (handle) {
+    subHandle_ = std::move(handle);
+  }
+
+  PublishOk ok;
+  ok.requestID = pub.requestID;
+  ok.forward = true;
+  ok.subscriberPriority = kDefaultPriority;
+  ok.groupOrder = GroupOrder::Default;
+  ok.locType = LocationType::AbsoluteStart;
+  ok.start = AbsoluteLocation(0, 0);
+
+  return Subscriber::PublishConsumerAndReplyTask{
+      subReceiver_,
+      folly::coro::makeTask(
+          folly::Expected<PublishOk, PublishError>(std::move(ok)))};
+}
+
+folly::coro::Task<void> MoQTestClient::subscribeTracks(
+    const TrackNamespace& trackNamespace) {
+  auto relaySession =
+      std::dynamic_pointer_cast<MoQRelaySession>(moqClient_->moqSession_);
+  if (!relaySession) {
+    co_yield folly::coro::co_error(
+        std::runtime_error("Session does not support SUBSCRIBE_TRACKS"));
+  }
+
+  SubscribeTracks subTracks;
+  subTracks.requestID = kDefaultRequestId;
+  subTracks.trackNamespacePrefix = trackNamespace;
+  subTracks.forward = true;
+
+  auto res = co_await relaySession->subscribeTracks(subTracks);
+  if (res.hasError()) {
+    co_yield folly::coro::co_error(
+        std::runtime_error(
+            folly::to<std::string>(
+                "SUBSCRIBE_TRACKS failed. Error code: ",
+                static_cast<uint64_t>(res.error().errorCode),
+                ", Reason: ",
+                res.error().reasonPhrase)));
+  }
+  subscribeTracksHandle_ = res.value();
+}
+
+folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
+    MoQTestParameters params,
+    const std::string& versions) {
+  auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
+  if (trackNamespace.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: "
+        << "FAILURE! Reason: Error Converting Parameters to TrackNamespace: "
+        << trackNamespace.error().what();
+    moqClient_->moqSession_->drain();
+    co_yield folly::coro::co_error(trackNamespace.error());
+  }
+
+  receivingType_ = ReceivingType::SUBSCRIBE;
+  requestID_ = kDefaultRequestId;
+  initializeExpecteds(params);
+
+  auto onFailure = [this](const std::exception& ex) {
+    XLOG(ERR) << "MoQTest verification result: FAILURE! Reason: " << ex.what();
+    shutdown();
+  };
+
+  // Ask the relay for the track first, so it has a SUBSCRIBE_TRACKS subscriber
+  // registered when our PUBLISH arrives and answers with forward=1.
+  auto subRes = co_await folly::coro::co_awaitTry(
+      subscribeTracks(trackNamespace.value()));
+  if (subRes.hasException()) {
+    onFailure(std::runtime_error(subRes.exception().what().toStdString()));
+    co_return trackNamespace.value();
+  }
+
+  publisher_ = std::make_shared<MoQTestPublisher>();
+  pubClient_ = co_await connectSession(
+      versions, /*publishHandler=*/nullptr, /*subscribeHandler=*/nullptr);
+
+  FullTrackName ftn;
+  ftn.trackNamespace = trackNamespace.value();
+  ftn.trackName = kDefaultTrackName;
+  auto pubRes = co_await folly::coro::co_awaitTry(publisher_->publishTrack(
+      pubClient_->moqSession_,
+      std::move(ftn),
+      params,
+      RequestID(kDefaultRequestId)));
+  if (pubRes.hasException()) {
+    onFailure(std::runtime_error(pubRes.exception().what().toStdString()));
+    co_return trackNamespace.value();
+  }
+
+  co_await doneBaton_;
+  // Drained here rather than up front: draining the subscriber session before
+  // the PUBLISH arrives would reject it.
+  shutdown();
   co_return trackNamespace.value();
 }
 

@@ -64,7 +64,15 @@ DEFINE_uint64(
 DEFINE_string(
     request,
     "subscribe",
-    "Request Type: must be one of \"subscribe\" or \"fetch\"");
+    "Request Type: must be one of \"subscribe\", \"fetch\" or \"publish\". "
+    "\"publish\" asks the relay for the track via SUBSCRIBE_TRACKS and "
+    "PUBLISHes it on a second session to the same endpoint. It requires a "
+    "relay, and only works when the whole namespace is specified.");
+DEFINE_string(
+    publish_order,
+    "subscribe_first",
+    "With --request=publish, whether to send SUBSCRIBE_TRACKS before the "
+    "PUBLISH (\"subscribe_first\", the default) or after (\"publish_first\").");
 DEFINE_bool(
     log,
     false,
@@ -94,6 +102,21 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   auto transportType =
       moxygen::samples::selectClientTransport("transport", "quic_transport");
+
+  if (FLAGS_publish_order != "subscribe_first" &&
+      FLAGS_publish_order != "publish_first") {
+    XLOG(ERR) << "Invalid --publish_order: " << FLAGS_publish_order
+              << " (expected \"subscribe_first\" or \"publish_first\")";
+    return 1;
+  }
+  if (FLAGS_publish_order != "subscribe_first" && FLAGS_request != "publish") {
+    XLOG(ERR) << "--publish_order only applies with --request=publish";
+    return 1;
+  }
+  if (FLAGS_publish_order == "publish_first") {
+    XLOG(ERR) << "--publish_order=publish_first is not implemented yet";
+    return 1;
+  }
 
   folly::EventBase evb;
   XLOG(INFO) << "Starting MoQTestClient";
@@ -127,7 +150,7 @@ int main(int argc, char** argv) {
 
   auto url = proxygen::URL(FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
-      std::make_shared<moxygen::MoQTestClient>(&evb, url, transportType);
+      moxygen::MoQTestClient::create(&evb, url, transportType);
 
   std::shared_ptr<moxygen::MLogger> logger;
   if (FLAGS_log) {
@@ -180,6 +203,13 @@ int main(int argc, char** argv) {
     } else if (FLAGS_request == "fetch") {
       XLOG(INFO) << "Fetching from " << url.getHostAndPort();
       folly::coro::co_withExecutor(&evb, client->fetch(defaultMoqParams))
+          .start()
+          .via(&evb)
+          .thenTry(onComplete);
+    } else if (FLAGS_request == "publish") {
+      XLOG(INFO) << "Requesting PUBLISH from " << url.getHostAndPort();
+      folly::coro::co_withExecutor(
+          &evb, client->publishTrack(defaultMoqParams, FLAGS_versions))
           .start()
           .via(&evb)
           .thenTry(onComplete);
