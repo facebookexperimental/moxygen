@@ -113,10 +113,9 @@ int main(int argc, char** argv) {
     XLOG(ERR) << "--publish_order only applies with --request=publish";
     return 1;
   }
-  if (FLAGS_publish_order == "publish_first") {
-    XLOG(ERR) << "--publish_order=publish_first is not implemented yet";
-    return 1;
-  }
+  auto publishOrder = FLAGS_publish_order == "publish_first"
+      ? moxygen::PublishOrder::PublishFirst
+      : moxygen::PublishOrder::SubscribeFirst;
 
   folly::EventBase evb;
   XLOG(INFO) << "Starting MoQTestClient";
@@ -209,7 +208,8 @@ int main(int argc, char** argv) {
     } else if (FLAGS_request == "publish") {
       XLOG(INFO) << "Requesting PUBLISH from " << url.getHostAndPort();
       folly::coro::co_withExecutor(
-          &evb, client->publishTrack(defaultMoqParams, FLAGS_versions))
+          &evb,
+          client->publishTrack(defaultMoqParams, FLAGS_versions, publishOrder))
           .start()
           .via(&evb)
           .thenTry(onComplete);

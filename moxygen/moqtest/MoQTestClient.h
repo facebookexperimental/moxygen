@@ -94,7 +94,8 @@ class MoQTestClient : public Subscriber,
   // SUBSCRIBE. Requires a relay: a bare moqtest server will reject the PUBLISH.
   folly::coro::Task<moxygen::TrackNamespace> publishTrack(
       MoQTestParameters params,
-      const std::string& versions = "");
+      const std::string& versions = "",
+      PublishOrder order = PublishOrder::SubscribeFirst);
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
 

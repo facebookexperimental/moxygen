@@ -257,7 +257,8 @@ folly::coro::Task<void> MoQTestClient::subscribeTracks(
 
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
     MoQTestParameters params,
-    const std::string& versions) {
+    const std::string& versions,
+    PublishOrder order) {
   auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
   if (trackNamespace.hasError()) {
     XLOG(ERR)
@@ -277,13 +278,15 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
     shutdown();
   };
 
-  // Ask the relay for the track first, so it has a SUBSCRIBE_TRACKS subscriber
-  // registered when our PUBLISH arrives and answers with forward=1.
-  auto subRes = co_await folly::coro::co_awaitTry(
-      subscribeTracks(trackNamespace.value()));
-  if (subRes.hasException()) {
-    onFailure(std::runtime_error(subRes.exception().what().toStdString()));
-    co_return trackNamespace.value();
+  if (order == PublishOrder::SubscribeFirst) {
+    // The relay has a SUBSCRIBE_TRACKS subscriber registered when our PUBLISH
+    // arrives, so it answers with forward=1 and we stream immediately.
+    auto subRes = co_await folly::coro::co_awaitTry(
+        subscribeTracks(trackNamespace.value()));
+    if (subRes.hasException()) {
+      onFailure(std::runtime_error(subRes.exception().what().toStdString()));
+      co_return trackNamespace.value();
+    }
   }
 
   publisher_ = std::make_shared<MoQTestPublisher>();
@@ -293,11 +296,34 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
   FullTrackName ftn;
   ftn.trackNamespace = trackNamespace.value();
   ftn.trackName = kDefaultTrackName;
-  auto pubRes = co_await folly::coro::co_awaitTry(publisher_->publishTrack(
-      pubClient_->moqSession_,
-      std::move(ftn),
-      params,
-      RequestID(kDefaultRequestId)));
+  // The PUBLISH and the SUBSCRIBE_TRACKS travel on different sessions, so
+  // waiting for PUBLISH_OK is the only thing that puts them in a known order
+  // at the relay.
+  auto streamTask =
+      co_await folly::coro::co_awaitTry(publisher_->startPublishTrack(
+          pubClient_->moqSession_,
+          std::move(ftn),
+          params,
+          RequestID(kDefaultRequestId)));
+  if (streamTask.hasException()) {
+    onFailure(std::runtime_error(streamTask.exception().what().toStdString()));
+    co_return trackNamespace.value();
+  }
+
+  if (order == PublishOrder::PublishFirst) {
+    // Nothing was subscribed, so the relay answered PUBLISH_OK with forward=0
+    // and the track stays paused until SUBSCRIBE_TRACKS makes the relay send a
+    // REQUEST_UPDATE turning forwarding on.
+    auto subRes = co_await folly::coro::co_awaitTry(
+        subscribeTracks(trackNamespace.value()));
+    if (subRes.hasException()) {
+      onFailure(std::runtime_error(subRes.exception().what().toStdString()));
+      co_return trackNamespace.value();
+    }
+  }
+
+  auto pubRes =
+      co_await folly::coro::co_awaitTry(std::move(streamTask.value()));
   if (pubRes.hasException()) {
     onFailure(std::runtime_error(pubRes.exception().what().toStdString()));
     co_return trackNamespace.value();

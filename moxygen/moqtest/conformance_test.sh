@@ -720,6 +720,25 @@ run_test "PUBLISH with both extensions" \
     --test_integer_extension=1 \
     --test_variable_extension=1
 
+# Tests 57-58: PUBLISH before SUBSCRIBE_TRACKS. The relay answers PUBLISH_OK
+# with forward=0 and only asks for data once the SUBSCRIBE_TRACKS arrives, so
+# these cover its backfill path rather than its PUBLISH fan-out.
+run_test "PUBLISH before SUBSCRIBE_TRACKS" \
+    "publish" \
+    --publish_order=publish_first \
+    --forwarding_preference=0 \
+    --last_group=2 \
+    --objects_per_group=5
+
+run_test "PUBLISH before SUBSCRIBE_TRACKS with DATAGRAM" \
+    "publish" \
+    --publish_order=publish_first \
+    --forwarding_preference=3 \
+    --last_group=2 \
+    --objects_per_group=5 \
+    --size_of_object_zero=100 \
+    --size_of_object_greater_than_zero=50
+
 # ============================================================================
 # Generate Report
 # ============================================================================
