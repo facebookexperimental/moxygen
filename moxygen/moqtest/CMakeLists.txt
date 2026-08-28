@@ -83,6 +83,41 @@ install(
     LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 )
 
+# moqtest_publisher (standalone PUBLISH-only origin)
+add_executable(
+  moqtest_publisher
+  MoQTestPublisherMain.cpp
+)
+set_target_properties(
+  moqtest_publisher
+  PROPERTIES
+    BUILD_RPATH ${DEPS_LIBRARIES_DIR}
+    INSTALL_RPATH ${DEPS_LIBRARIES_DIR}
+)
+target_include_directories(
+  moqtest_publisher PUBLIC $<BUILD_INTERFACE:${MOXYGEN_FBCODE_ROOT}>
+)
+target_compile_options(
+  moqtest_publisher PRIVATE
+  ${_MOXYGEN_COMMON_COMPILE_OPTIONS}
+)
+target_link_libraries(
+  moqtest_publisher PUBLIC
+  moqtest_utils
+  moxygen_moq_test_publisher
+  moxygen_moq_relay_session
+  moxygen_samples_util_qmux_relay_utils
+  Folly::folly_init_init
+  Folly::folly_io_async_async_signal_handler
+)
+
+install(
+    TARGETS moqtest_publisher
+    EXPORT moxygen-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+)
+
 # moxygen_moq_test_server library (shared by executable and unit tests)
 add_library(moxygen_moq_test_server MoQTestServer.cpp)
 target_include_directories(
