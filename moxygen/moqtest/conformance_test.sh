@@ -663,6 +663,64 @@ run_test "Stress: DATAGRAM rapid delivery" \
     --test_variable_extension=1
 
 # ============================================================================
+# SECTION 8: PUBLISH (Tests 51-56)
+# ============================================================================
+# These ask the relay for the track with SUBSCRIBE_TRACKS and PUBLISH it on a
+# second session, so they exercise the relay's PUBLISH forwarding rather than
+# its SUBSCRIBE path. Object generation is shared with the subscribe cases
+# above, so this is a spot check of each forwarding preference rather than a
+# rerun of every parameter combination.
+echo -e "\n${YELLOW}=== SECTION 8: PUBLISH ===${NC}"
+set_section "8" "PUBLISH"
+
+# Test 51: ONE_SUBGROUP_PER_GROUP via PUBLISH
+run_test "PUBLISH with ONE_SUBGROUP_PER_GROUP" \
+    "publish" \
+    --forwarding_preference=0 \
+    --last_group=2 \
+    --objects_per_group=5
+
+# Test 52: ONE_SUBGROUP_PER_OBJECT via PUBLISH
+run_test "PUBLISH with ONE_SUBGROUP_PER_OBJECT" \
+    "publish" \
+    --forwarding_preference=1 \
+    --last_group=2 \
+    --objects_per_group=5
+
+# Test 53: TWO_SUBGROUPS_PER_GROUP via PUBLISH
+run_test "PUBLISH with TWO_SUBGROUPS_PER_GROUP" \
+    "publish" \
+    --forwarding_preference=2 \
+    --last_group=2 \
+    --objects_per_group=6
+
+# Test 54: DATAGRAM via PUBLISH
+run_test "PUBLISH with DATAGRAM" \
+    "publish" \
+    --forwarding_preference=3 \
+    --last_group=2 \
+    --objects_per_group=5 \
+    --size_of_object_zero=100 \
+    --size_of_object_greater_than_zero=50
+
+# Test 55: End of group markers via PUBLISH
+run_test "PUBLISH with end of group markers" \
+    "publish" \
+    --forwarding_preference=0 \
+    --last_group=2 \
+    --objects_per_group=4 \
+    --send_end_of_group_markers=true
+
+# Test 56: Extensions via PUBLISH
+run_test "PUBLISH with both extensions" \
+    "publish" \
+    --forwarding_preference=0 \
+    --last_group=2 \
+    --objects_per_group=4 \
+    --test_integer_extension=1 \
+    --test_variable_extension=1
+
+# ============================================================================
 # Generate Report
 # ============================================================================
 echo -e "\n${YELLOW}========================================${NC}"

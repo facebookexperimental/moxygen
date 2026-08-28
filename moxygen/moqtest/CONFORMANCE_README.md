@@ -2,7 +2,9 @@
 
 ## Overview
 
-The conformance test suite exercises the MoQTest client against a relay server to validate protocol compliance. It tests 50 different scenarios covering a wide range of MoQT functionality.
+The conformance test suite exercises the MoQTest client against a relay server to validate protocol compliance. It tests 56 different scenarios covering a wide range of MoQT functionality.
+
+Sections 1-7 pull tracks from an upstream `moqtest_server` with SUBSCRIBE and FETCH, so a server must be attached to the relay. Section 8 instead has the client PUBLISH the track itself on a second session, so it needs only the relay.
 
 ## Usage
 
@@ -14,7 +16,7 @@ MOXYGEN_DIR=`./build/fbcode_builder/getdeps.py show-build-dir moxygen` ./conform
 
 The script will:
 - Build the test client automatically
-- Run all 50 test cases
+- Run all 56 test cases
 - Display progress with color-coded results
 - Generate a timestamped report file
 - Exit with code 0 if all tests pass, 1 if any fail
@@ -40,7 +42,7 @@ The test suite provides:
 
 ## Test Coverage
 
-The 50 test cases are organized into 7 sections:
+The 56 test cases are organized into 8 sections:
 
 ### Section 1: Basic Forwarding Preferences (8 tests)
 Tests all four forwarding preferences with both subscribe and fetch:
@@ -95,6 +97,19 @@ Tests challenging combinations:
 - Large scale tests
 - Delivery timeouts
 - Stress testing
+
+### Section 8: PUBLISH (6 tests)
+Tests the relay forwarding a PUBLISH rather than answering a SUBSCRIBE. The
+client sends SUBSCRIBE_TRACKS, then opens a second session to the same relay
+endpoint and PUBLISHes the requested track, so the relay has to match the two
+and forward the objects back:
+- Each of the four forwarding preferences
+- End of group markers
+- Integer and variable extensions
+
+Object generation is shared with the subscribe path, so these are a spot check
+of the PUBLISH plumbing rather than a rerun of every parameter combination.
+These tests need only a relay; no upstream `moqtest_server` is involved.
 
 ## MoQTest Protocol Parameters
 
