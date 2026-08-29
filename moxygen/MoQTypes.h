@@ -1298,7 +1298,7 @@ struct Fetch {
   RequestID requestID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
-  GroupOrder groupOrder;
+  GroupOrder groupOrder{GroupOrder::Default};
   TrackRequestParameters params{FrameType::FETCH};
   std::variant<StandaloneFetch, JoiningFetch> args;
 };
