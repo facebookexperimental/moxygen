@@ -2260,6 +2260,12 @@ void MoQCache::evictTrack(const FullTrackName& ftn) {
     return;
   }
 
+  // ftn may alias a trackLRU_ node or the cache_ key, both destroyed below.
+  std::optional<FullTrackName> name;
+  if (XLOG_IS_ON(DBG1)) {
+    name = ftn;
+  }
+
   auto& track = *it->second;
   // Remove from LRU if present
   if (track.lruIter_.hasValue()) {
@@ -2274,7 +2280,7 @@ void MoQCache::evictTrack(const FullTrackName& ftn) {
 
   // Remove from cache
   cache_.erase(it);
-  XLOG(DBG1) << "Evicted track: " << ftn;
+  XLOG(DBG1) << "Evicted track: " << *name;
 }
 
 void MoQCache::evictOldestGroupsIfNeeded(CacheTrack& track) {
