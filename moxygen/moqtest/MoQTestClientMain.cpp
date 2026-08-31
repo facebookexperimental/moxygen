@@ -7,6 +7,7 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/io/async/AsyncSignalHandler.h>
 #include <csignal>
+#include <limits>
 #include "folly/init/Init.h"
 #include "folly/io/async/ScopedEventBaseThread.h"
 #include "moxygen/mlog/FileMLogger.h"
@@ -29,6 +30,24 @@ bool parseLocationFlag(
   if (parsed.hasError()) {
     XLOG(ERR) << "Invalid --" << flag << "=" << value << ": "
               << parsed.error().what();
+    return false;
+  }
+  out = parsed.value();
+  return true;
+}
+
+// Fills `out` from a signed integer flag, leaving it unset for an empty flag.
+bool parseInt64Flag(
+    const std::string& flag,
+    const std::string& value,
+    std::optional<int64_t>& out) {
+  if (value.empty()) {
+    return true;
+  }
+  auto parsed = folly::tryTo<int64_t>(value);
+  if (parsed.hasError()) {
+    XLOG(ERR) << "Invalid --" << flag << "=" << value
+              << ": expected an integer";
     return false;
   }
   out = parsed.value();
@@ -100,6 +119,13 @@ DEFINE_string(
     "PUBLISHes it on a second session to the same endpoint. It requires a "
     "relay, and only works when the whole namespace is specified.");
 DEFINE_string(
+    join_start,
+    "",
+    "With --request=subscribe, also send a joining FETCH that backfills what "
+    "ran before the subscription. A non-negative value is the absolute group "
+    "to fetch from; a negative value counts that many groups back from where "
+    "the subscription begins. Empty means a plain SUBSCRIBE.");
+DEFINE_string(
     publish_order,
     "subscribe_first",
     "With --request=publish, whether to send SUBSCRIBE_TRACKS before the "
@@ -158,6 +184,21 @@ int main(int argc, char** argv) {
   if ((startLocation || endLocation) && FLAGS_request != "fetch") {
     XLOG(ERR) << "--start_location/--end_location only apply with "
                  "--request=fetch";
+    return 1;
+  }
+
+  std::optional<int64_t> joinStart;
+  if (!parseInt64Flag("join_start", FLAGS_join_start, joinStart)) {
+    return 1;
+  }
+  if (joinStart && FLAGS_request != "subscribe") {
+    XLOG(ERR) << "--join_start only applies with --request=subscribe";
+    return 1;
+  }
+  // A negative value is negated to get the number of groups to count back,
+  // which INT64_MIN has no positive counterpart for.
+  if (joinStart == std::numeric_limits<int64_t>::min()) {
+    XLOG(ERR) << "--join_start=" << FLAGS_join_start << " is out of range";
     return 1;
   }
 
@@ -250,7 +291,15 @@ int main(int argc, char** argv) {
     // Unregister the signal handler when the request completes so evb.loop()
     // can return; the handler is what otherwise keeps the loop alive.
     auto onComplete = [&sigHandler](auto&&) { sigHandler.unreg(); };
-    if (FLAGS_request == "subscribe") {
+    if (FLAGS_request == "subscribe" && joinStart) {
+      XLOG(INFO) << "Joining from group " << *joinStart << " at "
+                 << url.getHostAndPort();
+      folly::coro::co_withExecutor(
+          &evb, client->join(defaultMoqParams, *joinStart))
+          .start()
+          .via(&evb)
+          .thenTry(onComplete);
+    } else if (FLAGS_request == "subscribe") {
       XLOG(INFO) << "Subscribing to " << url.getHostAndPort();
       folly::coro::co_withExecutor(&evb, client->subscribe(defaultMoqParams))
           .start()

@@ -92,6 +92,14 @@ class MoQTestClient : public Subscriber,
       MoQTestParameters params,
       std::optional<StandaloneFetch> range = std::nullopt);
 
+  // SUBSCRIBE plus a FETCH that backfills what ran before it, so a late
+  // subscriber still sees the whole track.  A non-negative `joinStart` is an
+  // absolute group to fetch from; a negative one counts that many groups back
+  // from where the subscription begins.
+  folly::coro::Task<moxygen::TrackNamespace> join(
+      MoQTestParameters params,
+      int64_t joinStart);
+
   // Asks the relay for the track via SUBSCRIBE_TRACKS, then opens a second
   // session to the same endpoint and PUBLISHes it. The relay matches the two
   // and forwards the objects back, which this client validates as it would a
@@ -145,6 +153,9 @@ class MoQTestClient : public Subscriber,
     bool expectEndOfGroup{};
     bool active{false};
     bool done{false};
+    // A joining subscription starts wherever the publisher had reached, which
+    // the client only learns from the first object it delivers.
+    bool seeded{true};
   };
 
   // An ObjectReceiverCallback implementation that forwards calls to a
@@ -321,13 +332,38 @@ class MoQTestClient : public Subscriber,
       const MoQTestParameters& params,
       const StandaloneFetch& range);
 
+  // The group a joining FETCH backfills from.  A relative join counts back
+  // from where the subscription begins, so it needs the reported Largest.
+  static uint64_t joiningStartGroup(
+      int64_t joinStart,
+      const AbsoluteLocation& largest);
+
+  // The client does not choose a joining FETCH's range, but it can reconstruct
+  // it: the backfill runs from `startGroup` up to the object the subscription
+  // reported as Largest.
+  void validateJoiningFetchOk(
+      const FetchOk& ok,
+      const MoQTestParameters& params,
+      const AbsoluteLocation& largest,
+      uint64_t startGroup);
+
+  // Drops expectations below `group`.  A join that does not reach back to the
+  // start of the track never delivers those, and neither half is at fault.
+  void trimExpectedBefore(uint64_t group);
+
   // Subscription Data Validation functions.  Expectations follow `window`,
   // which is the whole track except for a ranged FETCH.
   void initializeExpecteds(
       MoQTestParameters& params,
       MoQTestFetchWindow window);
   // Arms one half of the request and puts its cursor at the window's start.
-  void startReceiving(ReceiveState& state, ReceivingType type);
+  // `seeded` is false for a joining subscription, whose start the publisher
+  // chooses.
+  void
+  startReceiving(ReceiveState& state, ReceivingType type, bool seeded = true);
+
+  // Puts an unseeded cursor at the first object its half delivers.
+  void seedCursor(ReceiveState& state, const ObjectHeader& header);
   bool validateSubscribedData(
       ReceiveState& state,
       const ObjectHeader& header,

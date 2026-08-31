@@ -393,6 +393,105 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
   co_return trackNamespace.value();
 }
 
+folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
+    MoQTestParameters params,
+    int64_t joinStart) {
+  auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
+  if (trackNamespace.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! Reason: Error Converting Parameters to TrackNamespace: "
+        << trackNamespace.error().what();
+    moqClient_->moqSession_->drain();
+    co_yield folly::coro::co_error(trackNamespace.error());
+  }
+
+  SubscribeRequest sub;
+  sub.requestID = kDefaultRequestId;
+  requestID_ = kDefaultRequestId;
+  sub.fullTrackName = {trackNamespace.value(), kDefaultTrackName};
+  sub.groupOrder = kDefaultGroupOrder;
+  // The backfill ends on the object the subscription starts after, so the two
+  // halves only meet with no gap if the subscription starts at Largest.
+  sub.locType = LocationType::LargestObject;
+
+  if (params.deliveryTimeout > 0) {
+    sub.params.insertParam(
+        {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
+         params.deliveryTimeout});
+  }
+
+  const bool relative = joinStart < 0;
+  const uint64_t joiningStart =
+      relative ? static_cast<uint64_t>(-joinStart) : joinStart;
+
+  // Neither half starts where the client would guess: the publisher resolves
+  // the backfill against its own Largest, and the subscription picks up from
+  // there.
+  initializeExpecteds(params, resolveFetchWindow(params));
+  startReceiving(subState_, ReceivingType::SUBSCRIBE, /*seeded=*/false);
+  startReceiving(fetchState_, ReceivingType::FETCH, /*seeded=*/false);
+
+  auto res = co_await moqClient_->moqSession_->join(
+      sub,
+      subReceiver_,
+      joiningStart,
+      kDefaultPriority,
+      kDefaultGroupOrder,
+      {},
+      fetchReceiver_,
+      relative ? FetchType::RELATIVE_JOINING : FetchType::ABSOLUTE_JOINING);
+  moqClient_->moqSession_->drain();
+
+  if (res.subscribeResult.hasError()) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! Reason: Error Subscribing to receiver. "
+        << "Error code: "
+        << static_cast<uint64_t>(res.subscribeResult.error().errorCode)
+        << ", Reason: " << res.subscribeResult.error().reasonPhrase;
+    co_yield folly::coro::co_error(
+        std::runtime_error(res.subscribeResult.error().reasonPhrase));
+  }
+  subHandle_ = res.subscribeResult.value();
+
+  if (res.fetchResult.hasError()) {
+    // A subscription with no Largest gives the join nothing to anchor to, and
+    // covers the track from its start anyway.  The publisher reports that with
+    // more than one error code, so key off the anchor.
+    if (subHandle_->subscribeOk().largest) {
+      XLOG(ERR)
+          << "MoQTest verification result: FAILURE! Reason: Error Fetching to receiver. "
+          << "Error code: "
+          << static_cast<uint64_t>(res.fetchResult.error().errorCode)
+          << ", Reason: " << res.fetchResult.error().reasonPhrase;
+      co_yield folly::coro::co_error(
+          std::runtime_error(res.fetchResult.error().reasonPhrase));
+    }
+    XLOG(INFO) << "MoQTest: joining FETCH backfills nothing, subscription "
+               << "covers the whole track";
+    fetchState_ = ReceiveState{};
+    subState_.seeded = true;
+  } else {
+    fetchHandle_ = res.fetchResult.value();
+    const auto& largest = subHandle_->subscribeOk().largest;
+    if (!largest) {
+      recordSemanticsFailure(
+          "Joining FETCH accepted for a subscription with no Largest");
+    } else {
+      const uint64_t startGroup = joiningStartGroup(joinStart, *largest);
+      validateJoiningFetchOk(
+          fetchHandle_->fetchOk(), params, *largest, startGroup);
+      trimExpectedBefore(startGroup);
+      // Where the two halves met, so a caller can tell the join landed
+      // mid-track.
+      XLOG(INFO) << "MoQTest: joining FETCH backfills groups " << startGroup
+                 << ".." << largest->group;
+    }
+  }
+
+  co_await doneBaton_;
+  co_return trackNamespace.value();
+}
+
 ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     ReceiveState& state,
     const std::optional<TrackAlias>& /* trackAlias */,
@@ -569,6 +668,13 @@ void MoQTestClient::validateSubgroupHeader(
     return;
   }
 
+  // A joining subscription opens its first subgroup partway through a group,
+  // so neither the end-of-group signal nor the first-object signal describes a
+  // whole subgroup until the cursor has a position.
+  if (!state.seeded) {
+    return;
+  }
+
   auto expectEndOfGroup = subgroupCarriesLastObject(params_, subgroupID);
   if (options.containsLastInGroup != expectEndOfGroup) {
     recordSemanticsFailure(
@@ -670,6 +776,9 @@ bool MoQTestClient::validateSubscribedData(
     const ObjectHeader& header,
     const std::string& payload) {
   const auto preference = deliveredForwardingPreference(state);
+  if (!state.seeded) {
+    seedCursor(state, header);
+  }
   // Validate Group, Object Id, SubGroup (and End of Group Markers if
   // applicable)
   XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << state.expectedGroup
@@ -965,6 +1074,42 @@ void MoQTestClient::validateFetchOk(
   }
 }
 
+uint64_t MoQTestClient::joiningStartGroup(
+    int64_t joinStart,
+    const AbsoluteLocation& largest) {
+  if (joinStart >= 0) {
+    return static_cast<uint64_t>(joinStart);
+  }
+  const auto back = static_cast<uint64_t>(-joinStart);
+  return largest.group >= back ? largest.group - back : 0;
+}
+
+void MoQTestClient::trimExpectedBefore(uint64_t group) {
+  expectedObjects_.erase(
+      expectedObjects_.begin(), expectedObjects_.lower_bound({group, 0}));
+}
+
+void MoQTestClient::validateJoiningFetchOk(
+    const FetchOk& ok,
+    const MoQTestParameters& params,
+    const AbsoluteLocation& largest,
+    uint64_t startGroup) {
+  const StandaloneFetch range(
+      AbsoluteLocation{startGroup, 0},
+      AbsoluteLocation{largest.group, largest.object + 1});
+  auto expectedEnd = fetchEndLocation(params, range);
+  if (ok.endLocation != expectedEnd) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "Joining FETCH_OK End Location Mismatch: Actual=",
+            folly::to<std::string>(
+                ok.endLocation.group, ":", ok.endLocation.object),
+            "  Expected=",
+            folly::to<std::string>(
+                expectedEnd.group, ":", expectedEnd.object)));
+  }
+}
+
 void MoQTestClient::initializeExpecteds(
     MoQTestParameters& params,
     MoQTestFetchWindow window) {
@@ -980,13 +1125,32 @@ void MoQTestClient::initializeExpecteds(
   datagramObjects_ = 0;
 }
 
-void MoQTestClient::startReceiving(ReceiveState& state, ReceivingType type) {
+void MoQTestClient::seedCursor(
+    ReceiveState& state,
+    const ObjectHeader& header) {
+  state.seeded = true;
+  state.expectedGroup = header.group;
+  if (params_.forwardingPreference ==
+      ForwardingPreference::TWO_SUBGROUPS_PER_GROUP) {
+    state.subgroupToExpectedObjId[header.id % 2] = header.id;
+    state.subgroupToExpectedObjId[1 - (header.id % 2)] =
+        header.id + params_.objectIncrement;
+  } else {
+    state.subgroupToExpectedObjId[0] = header.id;
+  }
+}
+
+void MoQTestClient::startReceiving(
+    ReceiveState& state,
+    ReceivingType type,
+    bool seeded) {
   // An empty window carries the kLocationMax sentinel, and seeding the cursor
   // from it is what makes a stray object on such a fetch fail to match.
   const uint64_t firstObject = window_.first.object;
   state = ReceiveState{};
   state.type = type;
   state.active = true;
+  state.seeded = seeded;
   state.expectedGroup = window_.first.group;
   if (params_.forwardingPreference ==
       ForwardingPreference::TWO_SUBGROUPS_PER_GROUP) {
