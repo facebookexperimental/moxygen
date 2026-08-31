@@ -293,7 +293,7 @@ folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerGroup(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack ||
+      if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         std::string p = std::string(objectSize, 't');
@@ -350,7 +350,7 @@ folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerObject(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack ||
+      if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         std::string p = std::string(objectSize, 't');
@@ -428,7 +428,7 @@ folly::coro::Task<void> MoQTestPublisher::sendTwoSubgroupsPerGroup(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack ||
+      if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         int index = objectId % 2;
@@ -690,7 +690,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack || !sendEndOfGroupMarkers) {
+      if (objectId < lastObjectInGroup(params) || !sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
@@ -741,7 +741,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerObject(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack ||
+      if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         std::string p = std::string(objectSize, 't');
@@ -798,7 +798,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchTwoSubgroupsPerGroup(
       }
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack ||
+      if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         std::string p = std::string(objectSize, 't');

@@ -749,7 +749,7 @@ bool MoQTestClient::validateSubscribedData(
   }
 
   // Validate End of Group
-  if (header.id == params_.lastObjectInTrack && expectEndOfGroup_) {
+  if (header.id == lastObjectInGroup(params_) && expectEndOfGroup_) {
     if (header.status != ObjectStatus::END_OF_GROUP) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: End of Group Mismatch: Actual="

@@ -1241,6 +1241,56 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingFallsBackToExplicitSubgroupID) {
   EXPECT_FALSE(recorder[1].containsLastInGroup);
 }
 
+TEST_F(MoQTrackServerTest, EndOfGroupMarksTheLastObjectAGroupCarries) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  // Objects 0, 2 and 4 of each group.  The increment doesn't divide the range,
+  // so the group's last object is 4 while lastObjectInTrack is 5.
+  params_.lastGroupInTrack = 1;
+  params_.objectsPerGroup = 2;
+  params_.objectIncrement = 2;
+  params_.lastObjectInTrack = 5;
+  params_.sendEndOfGroupMarkers = true;
+
+  auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
+  // group, objectID
+  std::vector<std::pair<uint64_t, uint64_t>> objects;
+  std::vector<std::pair<uint64_t, uint64_t>> endOfGroups;
+  for (uint64_t group = 0; group <= params_.lastGroupInTrack; group++) {
+    auto mockSubgroup = std::make_shared<moxygen::MockSubgroupConsumer>();
+    EXPECT_CALL(*mockConsumer, beginSubgroup(group, 0, testing::_, testing::_))
+        .WillRepeatedly(testing::Return(mockSubgroup));
+    EXPECT_CALL(
+        *mockSubgroup, object(testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly(
+            [&objects, group](uint64_t objectId, auto, const auto&, auto) {
+              objects.emplace_back(group, objectId);
+              return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit);
+            });
+    EXPECT_CALL(*mockSubgroup, endOfGroup(testing::_))
+        .WillRepeatedly([&endOfGroups, group](uint64_t objectId) {
+          endOfGroups.emplace_back(group, objectId);
+          return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+              folly::unit);
+        });
+    EXPECT_CALL(*mockSubgroup, endOfSubgroup())
+        .WillRepeatedly(
+            ::testing::Return(
+                folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                    folly::unit)));
+  }
+
+  folly::coro::blockingWait(
+      publisher_->sendOneSubgroupPerGroup(params_, mockConsumer));
+
+  const std::vector<std::pair<uint64_t, uint64_t>> expectedObjects{
+      {0, 0}, {0, 2}, {1, 0}, {1, 2}};
+  const std::vector<std::pair<uint64_t, uint64_t>> expectedEndOfGroups{
+      {0, 4}, {1, 4}};
+  EXPECT_EQ(objects, expectedObjects);
+  EXPECT_EQ(endOfGroups, expectedEndOfGroups);
+}
+
 TEST_F(MoQTrackServerTest, DatagramSignalsEndOfGroupOnLastObject) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
   params_.forwardingPreference = moxygen::ForwardingPreference(3);
