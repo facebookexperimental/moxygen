@@ -323,7 +323,8 @@ folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerGroup(
         subConsumer->object(
             objectId,
             std::move(objectPayload),
-            Extensions(extensions, {}),
+            Extensions(
+                extensions, getGapExtensions(params, groupNum, objectId)),
             false);
       } else {
         subConsumer->endOfGroup(objectId);
@@ -380,7 +381,8 @@ folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerObject(
         subConsumer->object(
             objectId,
             std::move(objectPayload),
-            Extensions(extensions, {}),
+            Extensions(
+                extensions, getGapExtensions(params, groupNum, objectId)),
             true);
       } else {
         subConsumer->endOfGroup(objectId);
@@ -460,7 +462,8 @@ folly::coro::Task<void> MoQTestPublisher::sendTwoSubgroupsPerGroup(
         subConsumers[index]->object(
             objectId,
             std::move(objectPayload),
-            Extensions(extensions, {}),
+            Extensions(
+                extensions, getGapExtensions(params, groupNum, objectId)),
             false);
 
       } else {
@@ -541,7 +544,7 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
                 params.testIntegerExtension,
                 params.testVariableExtension,
                 includeTimestampExtension_),
-            {});
+            getGapExtensions(params, groupNum, objectId));
       }
 
       auto res = callback->datagram(
@@ -740,7 +743,8 @@ folly::coro::Task<void> MoQTestPublisher::fetchObjects(
             subgroupId,
             objectId,
             std::move(objectPayload),
-            Extensions(extensions, {}),
+            Extensions(
+                extensions, getGapExtensions(params, groupNum, objectId)),
             false,
             isDatagram);
       } else {

@@ -35,7 +35,8 @@ enum class PublishOrder : int { SubscribeFirst = 0, PublishFirst = 1 };
 enum ExtensionErrorCode : int {
   INVALID_INT_EXTENSION = 0,
   INVALID_VAR_EXTENSION = 1,
-  INVALID_EXTENSION_AMOUNT = 2
+  INVALID_EXTENSION_AMOUNT = 2,
+  INVALID_GAP_EXTENSION = 3
 };
 
 struct ExtensionError {
@@ -386,8 +387,10 @@ class MoQTestClient : public Subscriber,
       const ObjectHeader& header,
       const std::string& payload);
   folly::Expected<folly::Unit, ExtensionError> validateExtensions(
-      const std::vector<Extension>& extensions,
-      MoQTestParameters* params);
+      const Extensions& extensions,
+      MoQTestParameters* params,
+      uint64_t groupID,
+      uint64_t objectID);
 
   AdjustedExpectedResult adjustExpected(
       ReceiveState& state,

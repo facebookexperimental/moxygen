@@ -2,9 +2,9 @@
 
 ## Overview
 
-The conformance test suite exercises the MoQTest client against a relay server to validate protocol compliance. It tests 56 different scenarios covering a wide range of MoQT functionality.
+The conformance test suite exercises the MoQTest client against a relay server to validate protocol compliance. It tests 80 different scenarios covering a wide range of MoQT functionality.
 
-Sections 1-7 pull tracks from an upstream `moqtest_server` with SUBSCRIBE and FETCH, so a server must be attached to the relay. Section 8 instead has the client PUBLISH the track itself on a second session, so it needs only the relay.
+Sections 1-7 and 9-10 pull tracks from an upstream `moqtest_server` with SUBSCRIBE and FETCH, so a server must be attached to the relay. Section 8 instead has the client PUBLISH the track itself on a second session, so it needs only the relay.
 
 ## Usage
 
@@ -16,7 +16,7 @@ MOXYGEN_DIR=`./build/fbcode_builder/getdeps.py show-build-dir moxygen` ./conform
 
 The script will:
 - Build the test client automatically
-- Run all 56 test cases
+- Run all 80 test cases
 - Display progress with color-coded results
 - Generate a timestamped report file
 - Exit with code 0 if all tests pass, 1 if any fail
@@ -42,7 +42,7 @@ The test suite provides:
 
 ## Test Coverage
 
-The 56 test cases are organized into 8 sections:
+The 80 test cases are organized into 10 sections:
 
 ### Section 1: Basic Forwarding Preferences (8 tests)
 Tests all four forwarding preferences with both subscribe and fetch:
@@ -67,12 +67,20 @@ Tests different object sizes:
 - Single byte objects
 - Unequal object sizes
 
-### Section 4: Group and Object Increments (6 tests)
+### Section 4: Group and Object Increments (10 tests)
 Tests non-sequential numbering:
 - Group increments (2, 5, 10)
 - Object increments (2, 3, 5)
 - Combined increments
 - Sparse group distributions
+
+A track that skips group or object IDs advertises each hole with the Prior
+Group ID Gap and Prior Object ID Gap extensions, but only when it already
+declares a test extension: those headers set the extension bit for the whole
+track, so a track without one has to keep its no-extensions encoding. The
+section covers both sides of that for each forwarding preference that shapes
+the headers differently, and running the suite through a relay validates the
+relay cache's gap handling along with it.
 
 ### Section 5: End of Group Markers (6 tests)
 Tests the optional end-of-group marker feature:
@@ -111,6 +119,22 @@ Object generation is shared with the subscribe path, so these are a spot check
 of the PUBLISH plumbing rather than a rerun of every parameter combination.
 These tests need only a relay; no upstream `moqtest_server` is involved.
 
+### Section 9: FETCH Ranges (8 tests)
+Walks overlapping ranges of one track, so a relay that caches serves part of
+each later fetch out of cache and has to deliver the same objects either way.
+Run twice, once against a track that ends each group with a marker.
+
+### Section 10: Joining FETCH (9 tests)
+A joining FETCH backfills what ran before the subscription started, so the two
+halves together cover the track. A background subscriber holds the track open
+so the join lands mid-track, except for the last test, which checks that a join
+against a track that has published nothing backfills nothing.
+
+The track skips odd object IDs. That is the one place the two halves have to
+agree about a hole: a relay records the gap off the subscription that filled its
+cache and then serves it back over the backfill, which is the only coverage of
+those two paths meeting. Only the extensions test puts the gap on the wire.
+
 ## MoQTest Protocol Parameters
 
 The test suite exercises all 16 tuple fields of the moq-test-00 protocol:
@@ -146,8 +170,7 @@ The test suite covers:
 
 A joining FETCH combines the two: it backfills the part of the track that ran
 before the subscription started, so a client that arrives mid-track still sees
-the whole thing. The server serves joining FETCHes; the client does not send
-one yet, so there are no join tests in the suite.
+the whole thing. Section 10 covers it.
 
 ## Troubleshooting
 

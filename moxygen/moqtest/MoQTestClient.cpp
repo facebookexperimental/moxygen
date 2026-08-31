@@ -21,6 +21,39 @@ const GroupOrder kDefaultGroupOrder = GroupOrder::OldestFirst;
 const LocationType kDefaultLocationType = LocationType::NextGroupStart;
 const uint64_t kDefaultEndGroup = 10;
 
+namespace {
+
+std::string gapExtensionName(uint64_t type) {
+  switch (type) {
+    case kPriorGroupIdGapExtensionType:
+      return "priorGroupGap";
+    case kPriorObjectIdGapExtensionType:
+      return "priorObjectGap";
+    default:
+      return folly::to<std::string>("type", type);
+  }
+}
+
+// Renders a set of gap extensions for an error message, e.g.
+// "priorGroupGap=4 priorObjectGap=1".
+std::string describeGapExtensions(const std::vector<Extension>& extensions) {
+  if (extensions.empty()) {
+    return "none";
+  }
+  std::string description;
+  for (const auto& ext : extensions) {
+    if (!description.empty()) {
+      description += ' ';
+    }
+    description += gapExtensionName(ext.type);
+    description += ext.isOddType() ? "=<bytes>"
+                                   : folly::to<std::string>("=", ext.intValue);
+  }
+  return description;
+}
+
+} // namespace
+
 MoQTestClient::MoQTestClient(
     PrivateTag,
     folly::EventBase* evb,
@@ -844,7 +877,10 @@ bool MoQTestClient::validateSubscribedData(
   // applicable)
   XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << state.expectedGroup
              << " Expected ObjectId="
-             << state.subgroupToExpectedObjId[header.subgroup];
+             << (header.subgroup < state.subgroupToExpectedObjId.size()
+                     ? folly::to<std::string>(
+                           state.subgroupToExpectedObjId[header.subgroup])
+                     : std::string("n/a"));
   XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
              << " end of group markers=" << params_.sendEndOfGroupMarkers
              << " expected end of group markers=" << state.expectEndOfGroup;
@@ -968,7 +1004,7 @@ bool MoQTestClient::validateSubscribedData(
 
   // Validate Extensions have been made
   auto result =
-      validateExtensions(header.extensions.getMutableExtensions(), &params_);
+      validateExtensions(header.extensions, &params_, header.group, header.id);
   if (result.hasError()) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Extension Error="
@@ -1057,10 +1093,14 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForDatagram(
 }
 
 folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
-    const std::vector<Extension>& extensions,
-    MoQTestParameters* params) {
+    const Extensions& extensions,
+    MoQTestParameters* params,
+    uint64_t groupID,
+    uint64_t objectID) {
+  const auto& mutableExtensions = extensions.getMutableExtensions();
+
   // validate extension size
-  if (!validateExtensionSize(extensions, params)) {
+  if (!validateExtensionSize(mutableExtensions, params)) {
     int expectedAmount = (int)(params->testIntegerExtension >= 0) +
         (int)(params->testVariableExtension >= 0);
     ExtensionError error{
@@ -1069,14 +1109,29 @@ folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
             "Invalid Extensions Amount-> Expected size: ",
             expectedAmount,
             " Actual size: ",
-            extensions.size())};
+            mutableExtensions.size())};
+    return folly::makeUnexpected(error);
+  }
+
+  if (!validateGapExtensions(extensions, *params, groupID, objectID)) {
+    ExtensionError error{
+        ExtensionErrorCode::INVALID_GAP_EXTENSION,
+        folly::to<std::string>(
+            "Invalid Gap Extensions for group=",
+            groupID,
+            " object=",
+            objectID,
+            "-> Expected: ",
+            describeGapExtensions(getGapExtensions(*params, groupID, objectID)),
+            " Actual: ",
+            describeGapExtensions(extensions.getImmutableExtensions()))};
     return folly::makeUnexpected(error);
   }
 
   // Get Extensions
   Extension intExt;
   Extension varExt;
-  for (const Extension& ext : extensions) {
+  for (const Extension& ext : mutableExtensions) {
     if (ext.type % 2 == 0) {
       intExt = ext;
     } else {

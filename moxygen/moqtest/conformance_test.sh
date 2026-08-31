@@ -468,7 +468,7 @@ run_test "Very different object sizes" \
 
 
 # ============================================================================
-# SECTION 4: Increments (Tests 25-30)
+# SECTION 4: Increments (Tests 25-34)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 4: Group and Object Increments ===${NC}"
 set_section "4" "Group and Object Increments"
@@ -527,13 +527,68 @@ run_test "Large increments (group=10, object=5)" \
     --objects_per_group=15 \
     --object_increment=5
 
+# Tests 31-34: a publisher advertises its holes with the Prior Group ID Gap and
+# Prior Object ID Gap headers, but only on a track that already declares a test
+# extension -- those headers would otherwise set the extension bit for the whole
+# track and cost the cases above their no-extensions encodings.  Tests 27 and 29
+# already cover a gapped ONE_SUBGROUP_PER_OBJECT and TWO_SUBGROUPS_PER_GROUP
+# track without extensions, so these fill in the datagram half of that and the
+# three tracks that carry the gap headers.
+
+# Test 31: Datagram type byte with holes but no extension bit
+run_test "DATAGRAM with increments" \
+    "subscribe" \
+    --forwarding_preference=3 \
+    --start_group=2 \
+    --last_group=6 \
+    --group_increment=2 \
+    --objects_per_group=4 \
+    --object_increment=2
+
+# Test 32: Group gap from the leading offset (group 3) and from the increment
+# (groups 6 and 9), one subgroup per object
+run_test "Object subgroups with gap extensions" \
+    "subscribe" \
+    --forwarding_preference=1 \
+    --start_group=3 \
+    --last_group=9 \
+    --group_increment=3 \
+    --objects_per_group=4 \
+    --object_increment=2 \
+    --test_integer_extension=1
+
+# Test 33: Object gap from the leading offset (object 3) and from the increment.
+# As in test 50, an odd start object with an even increment never lands on the
+# default last_object_in_track of 12, so the track's end is named explicitly.
+run_test "Two subgroups with gap extensions" \
+    "subscribe" \
+    --forwarding_preference=2 \
+    --start_object=3 \
+    --last_group=4 \
+    --group_increment=2 \
+    --objects_per_group=6 \
+    --object_increment=2 \
+    --last_object_in_track=11 \
+    --test_integer_extension=1
+
+# Test 34: Test 31's track with the gap headers turned on
+run_test "DATAGRAM with gap extensions" \
+    "subscribe" \
+    --forwarding_preference=3 \
+    --start_group=2 \
+    --last_group=6 \
+    --group_increment=2 \
+    --objects_per_group=4 \
+    --object_increment=2 \
+    --test_integer_extension=1
+
 # ============================================================================
-# SECTION 5: End of Group Markers (Tests 31-37)
+# SECTION 5: End of Group Markers (Tests 35-41)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 5: End of Group Markers ===${NC}"
 set_section "5" "End of Group Markers"
 
-# Test 31: End of group markers - basic
+# Test 35: End of group markers - basic
 run_test "End of group markers - basic" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -541,7 +596,7 @@ run_test "End of group markers - basic" \
     --objects_per_group=5 \
     --send_end_of_group_markers=true
 
-# Test 32: End of group markers with ONE_SUBGROUP_PER_OBJECT
+# Test 36: End of group markers with ONE_SUBGROUP_PER_OBJECT
 run_test "End of group markers with ONE_SUBGROUP_PER_OBJECT" \
     "subscribe" \
     --forwarding_preference=1 \
@@ -549,7 +604,7 @@ run_test "End of group markers with ONE_SUBGROUP_PER_OBJECT" \
     --objects_per_group=4 \
     --send_end_of_group_markers=true
 
-# Test 33: End of group markers with TWO_SUBGROUPS
+# Test 37: End of group markers with TWO_SUBGROUPS
 # As in test 21, starting at object 3 forces an explicit subgroup ID on
 # subgroup 1.  Here the group's last object is 7, so subgroup 1 is also the
 # one that signals end of group.
@@ -561,7 +616,7 @@ run_test "End of group markers with TWO_SUBGROUPS_PER_GROUP" \
     --objects_per_group=6 \
     --send_end_of_group_markers=true
 
-# Test 34: FETCH with end of group markers
+# Test 38: FETCH with end of group markers
 if [ "$SKIP_FETCH" -ne 1 ]; then
 run_test "FETCH with end of group markers" \
     "fetch" \
@@ -572,7 +627,7 @@ run_test "FETCH with end of group markers" \
 fi
 
 
-# Test 35: End of group markers with object increment
+# Test 39: End of group markers with object increment
 run_test "End of group markers with object increment" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -581,7 +636,7 @@ run_test "End of group markers with object increment" \
     --object_increment=2 \
     --send_end_of_group_markers=true
 
-# Test 36: End of group markers with single object per group
+# Test 40: End of group markers with single object per group
 run_test "End of group markers with single object" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -589,7 +644,7 @@ run_test "End of group markers with single object" \
     --objects_per_group=1 \
     --send_end_of_group_markers=true
 
-# Test 37: End of group markers with DATAGRAM.  A datagram type byte carries
+# Test 41: End of group markers with DATAGRAM.  A datagram type byte carries
 # the end-of-group bit or an object status, so the marker arrives as a status
 # datagram with the bit clear -- and carries no extensions, unlike the payload
 # datagrams around it, which is what puts it on the wire differently.
@@ -603,12 +658,12 @@ run_test "End of group markers with DATAGRAM and extensions" \
     --send_end_of_group_markers=true
 
 # ============================================================================
-# SECTION 6: Extensions (Tests 38-43)
+# SECTION 6: Extensions (Tests 42-47)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 6: Extensions ===${NC}"
 set_section "6" "Extensions"
 
-# Test 37: Integer extension only
+# Test 42: Integer extension only
 run_test "Integer extension (ID=2)" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -616,7 +671,7 @@ run_test "Integer extension (ID=2)" \
     --objects_per_group=5 \
     --test_integer_extension=1
 
-# Test 38: Variable extension only, on single-object datagram groups
+# Test 43: Variable extension only, on single-object datagram groups
 run_test "Variable extension (ID=3)" \
     "subscribe" \
     --forwarding_preference=3 \
@@ -625,7 +680,7 @@ run_test "Variable extension (ID=3)" \
     --last_object_in_track=0 \
     --test_variable_extension=1
 
-# Test 39: Both extensions
+# Test 44: Both extensions
 # Subgroup 1 starts at object 3, so its ID is written explicitly; the group's
 # last object is 6, which leaves the end of group signal on subgroup 0.
 run_test "Both integer and variable extensions" \
@@ -637,7 +692,7 @@ run_test "Both integer and variable extensions" \
     --test_integer_extension=1 \
     --test_variable_extension=1
 
-# Test 40: Extensions with different IDs
+# Test 45: Extensions with different IDs
 run_test "Extensions with higher IDs" \
     "subscribe" \
     --forwarding_preference=1 \
@@ -646,7 +701,7 @@ run_test "Extensions with higher IDs" \
     --test_integer_extension=5 \
     --test_variable_extension=3
 
-# Test 41: Extensions with FETCH
+# Test 46: Extensions with FETCH
 if [ "$SKIP_FETCH" -ne 1 ]; then
 run_test "FETCH with extensions" \
     "fetch" \
@@ -658,7 +713,7 @@ run_test "FETCH with extensions" \
 fi
 
 
-# Test 42: Extensions with end of group markers
+# Test 47: Extensions with end of group markers
 run_test "Extensions with end of group markers" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -669,12 +724,12 @@ run_test "Extensions with end of group markers" \
     --send_end_of_group_markers=true
 
 # ============================================================================
-# SECTION 7: Complex Scenarios (Tests 44-51)
+# SECTION 7: Complex Scenarios (Tests 48-55)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 7: Complex Scenarios ===${NC}"
 set_section "7" "Complex Scenarios"
 
-# Test 43: High frequency updates
+# Test 48: High frequency updates
 run_test "High frequency updates (100ms)" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -682,7 +737,7 @@ run_test "High frequency updates (100ms)" \
     --objects_per_group=5 \
     --object_frequency=100
 
-# Test 44: Low frequency updates
+# Test 49: Low frequency updates
 run_test "Low frequency updates (2000ms)" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -690,7 +745,7 @@ run_test "Low frequency updates (2000ms)" \
     --objects_per_group=3 \
     --object_frequency=2000
 
-# Test 45: Everything combined
+# Test 50: Everything combined
 # An odd start object with an increment of 2 means every object lands in
 # subgroup 1, which starts at object 3 and so carries an explicit subgroup ID,
 # extensions and the end of group signal all at once.  last_object_in_track
@@ -718,7 +773,7 @@ run_test "Complex: All features combined" \
     --test_integer_extension=1 \
     --test_variable_extension=1
 
-# Test 46: Large scale test
+# Test 51: Large scale test
 run_test "Large scale: Many groups and objects" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -726,7 +781,7 @@ run_test "Large scale: Many groups and objects" \
     --objects_per_group=15 \
     --object_frequency=100
 
-# Test 47: Sparse groups (large increment)
+# Test 52: Sparse groups (large increment)
 run_test "Sparse groups with large increment" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -735,7 +790,7 @@ run_test "Sparse groups with large increment" \
     --group_increment=100 \
     --objects_per_group=3
 
-# Test 48: Delivery timeout test
+# Test 53: Delivery timeout test
 run_test "Delivery timeout (500ms)" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -743,7 +798,7 @@ run_test "Delivery timeout (500ms)" \
     --objects_per_group=5 \
     --delivery_timeout=500
 
-# Test 49: Publisher delivery timeout
+# Test 54: Publisher delivery timeout
 run_test "Publisher delivery timeout (1000ms)" \
     "subscribe" \
     --forwarding_preference=0 \
@@ -751,7 +806,7 @@ run_test "Publisher delivery timeout (1000ms)" \
     --objects_per_group=5 \
     --publisher_delivery_timeout=1000
 
-# Test 50: Stress test - DATAGRAM with small payload
+# Test 55: Stress test - DATAGRAM with small payload
 # Test 4 covers datagrams without extensions; this one carries them.
 run_test "Stress: DATAGRAM rapid delivery" \
     "subscribe" \
@@ -765,7 +820,7 @@ run_test "Stress: DATAGRAM rapid delivery" \
     --test_variable_extension=1
 
 # ============================================================================
-# SECTION 8: PUBLISH (Tests 52-57)
+# SECTION 8: PUBLISH (Tests 56-61)
 # ============================================================================
 # These ask the relay for the track with SUBSCRIBE_TRACKS and PUBLISH it on a
 # second session, so they exercise the relay's PUBLISH forwarding rather than
@@ -775,28 +830,28 @@ run_test "Stress: DATAGRAM rapid delivery" \
 echo -e "\n${YELLOW}=== SECTION 8: PUBLISH ===${NC}"
 set_section "8" "PUBLISH"
 
-# Test 51: ONE_SUBGROUP_PER_GROUP via PUBLISH
+# Test 56: ONE_SUBGROUP_PER_GROUP via PUBLISH
 run_test "PUBLISH with ONE_SUBGROUP_PER_GROUP" \
     "publish" \
     --forwarding_preference=0 \
     --last_group=2 \
     --objects_per_group=5
 
-# Test 52: ONE_SUBGROUP_PER_OBJECT via PUBLISH
+# Test 57: ONE_SUBGROUP_PER_OBJECT via PUBLISH
 run_test "PUBLISH with ONE_SUBGROUP_PER_OBJECT" \
     "publish" \
     --forwarding_preference=1 \
     --last_group=2 \
     --objects_per_group=5
 
-# Test 53: TWO_SUBGROUPS_PER_GROUP via PUBLISH
+# Test 58: TWO_SUBGROUPS_PER_GROUP via PUBLISH
 run_test "PUBLISH with TWO_SUBGROUPS_PER_GROUP" \
     "publish" \
     --forwarding_preference=2 \
     --last_group=2 \
     --objects_per_group=6
 
-# Test 54: DATAGRAM via PUBLISH
+# Test 59: DATAGRAM via PUBLISH
 run_test "PUBLISH with DATAGRAM" \
     "publish" \
     --forwarding_preference=3 \
@@ -805,7 +860,7 @@ run_test "PUBLISH with DATAGRAM" \
     --size_of_object_zero=100 \
     --size_of_object_greater_than_zero=50
 
-# Test 55: End of group markers via PUBLISH
+# Test 60: End of group markers via PUBLISH
 run_test "PUBLISH with end of group markers" \
     "publish" \
     --forwarding_preference=0 \
@@ -813,7 +868,7 @@ run_test "PUBLISH with end of group markers" \
     --objects_per_group=4 \
     --send_end_of_group_markers=true
 
-# Test 56: Extensions via PUBLISH
+# Test 61: Extensions via PUBLISH
 run_test "PUBLISH with both extensions" \
     "publish" \
     --forwarding_preference=0 \
@@ -822,7 +877,7 @@ run_test "PUBLISH with both extensions" \
     --test_integer_extension=1 \
     --test_variable_extension=1
 
-# Tests 57-58: PUBLISH before SUBSCRIBE_TRACKS. The relay answers PUBLISH_OK
+# Tests 62-63: PUBLISH before SUBSCRIBE_TRACKS. The relay answers PUBLISH_OK
 # with forward=0 and only asks for data once the SUBSCRIBE_TRACKS arrives, so
 # these cover its backfill path rather than its PUBLISH fan-out.
 run_test "PUBLISH before SUBSCRIBE_TRACKS" \
@@ -897,10 +952,18 @@ set_section "10" "Joining FETCH"
 # A joining FETCH backfills what ran before the subscription started, so the
 # two together cover the track.  Every test but the last runs against a track
 # a background subscriber is already holding open.
+#
+# The track skips odd object IDs, which is the one place the two halves have to
+# agree about a hole: a relay records the gap off the subscription that filled
+# its cache and then has to serve it back over the backfill.  Only the
+# extensions test puts the gap on the wire, so the rest walk the same holes
+# without the headers.
 
 # 16 groups of 6 objects at 50ms is a little under five seconds of track, so
-# it is still running when the join lands a second and a half in.
-JOIN_TRACK=(--last_group=15 --objects_per_group=5 --object_frequency=50)
+# it is still running when the join lands a second and a half in.  The object
+# increment doubles the IDs, not the count, so the timing is unchanged.
+JOIN_TRACK=(--last_group=15 --objects_per_group=5 --object_frequency=50 \
+    --object_increment=2)
 JOIN_DELAY=1.5
 
 run_join_test "Join from the start of the track" 0 backfill \
