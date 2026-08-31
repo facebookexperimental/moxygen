@@ -25,6 +25,12 @@ class TrackConsumer;
 
 class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
  public:
+  class Callback {
+   public:
+    virtual ~Callback() = default;
+    virtual void onNoSubscribers(MoQProxyTrack* track) = 0;
+  };
+
   static std::shared_ptr<MoQProxyTrack> create(
       FullTrackName fullTrackName,
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
@@ -38,13 +44,19 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     return fullTrackName_;
   }
 
+  void setCallback(std::weak_ptr<Callback> callback) {
+    callback_ = std::move(callback);
+  }
+
   folly::coro::Task<Publisher::SubscribeResult> subscribe(
       SubscribeRequest subscribeRequest,
       std::shared_ptr<TrackConsumer> consumer,
       std::shared_ptr<MoQSession> downstreamSession);
 
+  void close();
+
  private:
-  enum class State { IDLE, CONNECTING, READY, FAILED };
+  enum class State { IDLE, CONNECTING, READY, DRAINING, CLOSED };
 
   struct UpstreamEstablishmentFailure {
     SubscribeErrorCode errorCode;
@@ -60,6 +72,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       folly::Expected<EstablishedUpstream, SubscribeError>;
 
   class DownstreamSubscriptionHandle;
+  class ForwarderCallback;
 
   MoQProxyTrack(
       FullTrackName fullTrackName,
@@ -91,16 +104,21 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
 
   void completeUpstreamEstablishment(
       std::optional<UpstreamEstablishmentFailure> failure);
+  void onForwarderEmpty();
+  void onUpstreamPublishDone();
+  void notifyNoSubscribers();
 
   FullTrackName fullTrackName_;
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
   std::shared_ptr<MoQForwarder> forwarder_;
   std::shared_ptr<MoQSession> upstreamSession_;
   std::shared_ptr<Publisher::SubscriptionHandle> upstreamHandle_;
+  std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;
   State state_{State::IDLE};
   bool upstreamSubscriptionPromiseResolved_{false};
+  bool noSubscribersNotificationSent_{false};
 };
 
 } // namespace moxygen

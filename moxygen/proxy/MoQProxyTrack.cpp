@@ -79,11 +79,34 @@ class MoQProxyTrack::DownstreamSubscriptionHandle final
   std::shared_ptr<MoQForwarder::Subscriber> subscriber_;
 };
 
+class MoQProxyTrack::ForwarderCallback final : public MoQForwarder::Callback {
+ public:
+  explicit ForwarderCallback(std::weak_ptr<MoQProxyTrack> track)
+      : track_(std::move(track)) {}
+
+  void onEmpty(MoQForwarder*) override {
+    if (auto track = track_.lock()) {
+      track->onForwarderEmpty();
+    }
+  }
+
+  void onPublishDone(MoQForwarder*) override {
+    if (auto track = track_.lock()) {
+      track->onUpstreamPublishDone();
+    }
+  }
+
+ private:
+  std::weak_ptr<MoQProxyTrack> track_;
+};
+
 std::shared_ptr<MoQProxyTrack> MoQProxyTrack::create(
     FullTrackName fullTrackName,
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders) {
-  return std::shared_ptr<MoQProxyTrack>(new MoQProxyTrack(
+  auto track = std::shared_ptr<MoQProxyTrack>(new MoQProxyTrack(
       std::move(fullTrackName), std::move(upstreamProviders)));
+  track->forwarder_->setCallback(std::make_shared<ForwarderCallback>(track));
+  return track;
 }
 
 MoQProxyTrack::MoQProxyTrack(
@@ -100,6 +123,7 @@ MoQProxyTrack::MoQProxyTrack(
 }
 
 MoQProxyTrack::~MoQProxyTrack() {
+  forwarder_->setCallback(nullptr);
   if (auto handle = std::move(upstreamHandle_)) {
     handle->unsubscribe();
   }
@@ -169,11 +193,16 @@ MoQProxyTrack::handleFirstSubscription(
   auto subscriberResult =
       addSubscriber(subscribeRequest, std::move(consumer), downstreamSession);
   if (subscriberResult.hasError()) {
-    state_ = State::FAILED;
+    // If the first subscriber failed, set the state to CLOSED and notify
+    // the parent so that it can clean up this MoQProxyTrack (and potentially
+    // create a new one if and when another subscription to this track is
+    // made)
+    state_ = State::CLOSED;
     completeUpstreamEstablishment(
         UpstreamEstablishmentFailure{
             subscriberResult.error().errorCode,
             subscriberResult.error().reasonPhrase});
+    notifyNoSubscribers();
     co_return subscriberResult;
   }
 
@@ -181,17 +210,21 @@ MoQProxyTrack::handleFirstSubscription(
   auto failure =
       co_await establishUpstream(subscribeRequest, downstreamSession);
   if (failure) {
-    completeUpstreamEstablishment(
-        UpstreamEstablishmentFailure{
-            failure->errorCode,
-            failure->reasonPhrase,
-        });
-    state_ = State::FAILED;
+    if (!upstreamSubscriptionFailure_) {
+      completeUpstreamEstablishment(
+          UpstreamEstablishmentFailure{
+              failure->errorCode,
+              failure->reasonPhrase,
+          });
+    }
+    auto returnedFailure = upstreamSubscriptionFailure_
+        ? makeSubscribeError(
+              subscribeRequest.requestID, *upstreamSubscriptionFailure_)
+        : std::move(*failure);
     // Roll back the subscriber registered before upstream establishment.
     subscriber->unsubscribe();
-    co_return folly::makeUnexpected(std::move(*failure));
+    co_return folly::makeUnexpected(std::move(returnedFailure));
   }
-
   auto downstreamHandle =
       std::dynamic_pointer_cast<DownstreamSubscriptionHandle>(subscriber);
   XCHECK(downstreamHandle);
@@ -246,6 +279,9 @@ MoQProxyTrack::establishUpstream(
         downstreamSession,
         hasFallbackProvider);
     if (result.hasError()) {
+      if (state_ != State::CONNECTING) {
+        co_return std::move(result.error());
+      }
       lastFailure = std::move(result.error());
       continue;
     }
@@ -273,6 +309,12 @@ MoQProxyTrack::establishWithProvider(
   auto sessionResult =
       co_await folly::coro::co_awaitTry(upstreamProvider->getSession(
           fullTrackName_, subscribeRequest.params, hasFallbackProvider));
+  if (state_ != State::CONNECTING) {
+    co_return makeUpstreamFailure(
+        subscribeRequest,
+        SubscribeErrorCode::CANCELLED,
+        "proxy track closed while establishing the upstream");
+  }
   if (sessionResult.hasException()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
@@ -317,6 +359,17 @@ MoQProxyTrack::establishWithProvider(
 
   auto subscribeResult = co_await folly::coro::co_awaitTry(
       upstreamSession->subscribe(std::move(upstreamRequest), forwarder_));
+  if (state_ != State::CONNECTING) {
+    if (subscribeResult.hasValue() && subscribeResult->hasValue()) {
+      if (auto handle = std::move(subscribeResult->value())) {
+        handle->unsubscribe();
+      }
+    }
+    co_return makeUpstreamFailure(
+        subscribeRequest,
+        SubscribeErrorCode::CANCELLED,
+        "proxy track closed while establishing the subscription");
+  }
   if (subscribeResult.hasException()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
@@ -359,6 +412,74 @@ void MoQProxyTrack::completeUpstreamEstablishment(
   upstreamSubscriptionPromiseResolved_ = true;
   upstreamSubscriptionFailure_ = std::move(failure);
   upstreamSubscriptionReadyPromise_.setValue(folly::unit);
+}
+
+void MoQProxyTrack::onForwarderEmpty() {
+  if (state_ == State::CONNECTING) {
+    completeUpstreamEstablishment(
+        UpstreamEstablishmentFailure{
+            SubscribeErrorCode::CANCELLED,
+            "proxy track became empty while establishing the upstream"});
+  }
+  state_ = State::CLOSED;
+  if (auto handle = std::move(upstreamHandle_)) {
+    handle->unsubscribe();
+  }
+  upstreamSession_.reset();
+  notifyNoSubscribers();
+}
+
+void MoQProxyTrack::onUpstreamPublishDone() {
+  upstreamHandle_.reset();
+  upstreamSession_.reset();
+  if (state_ == State::CONNECTING) {
+    completeUpstreamEstablishment(
+        UpstreamEstablishmentFailure{
+            SubscribeErrorCode::DOES_NOT_EXIST,
+            "upstream ended while establishing the subscription"});
+  }
+  if (state_ != State::CLOSED) {
+    state_ = State::DRAINING;
+  }
+}
+
+void MoQProxyTrack::notifyNoSubscribers() {
+  if (noSubscribersNotificationSent_) {
+    return;
+  }
+  noSubscribersNotificationSent_ = true;
+  if (auto callback = callback_.lock()) {
+    callback->onNoSubscribers(this);
+  }
+}
+
+void MoQProxyTrack::close() {
+  if (state_ == State::CLOSED) {
+    return;
+  }
+  auto self = shared_from_this();
+  if (state_ == State::CONNECTING) {
+    completeUpstreamEstablishment(
+        UpstreamEstablishmentFailure{
+            SubscribeErrorCode::GOING_AWAY, "proxy track closed"});
+  }
+  state_ = State::DRAINING;
+  if (auto handle = std::move(upstreamHandle_)) {
+    handle->unsubscribe();
+  }
+  upstreamSession_.reset();
+
+  if (forwarder_->empty()) {
+    state_ = State::CLOSED;
+    notifyNoSubscribers();
+    return;
+  }
+  forwarder_->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::SESSION_CLOSED,
+          0,
+          "proxy track closed"});
 }
 
 } // namespace moxygen
