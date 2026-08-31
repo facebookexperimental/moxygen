@@ -70,6 +70,13 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
         std::runtime_error("Object Increment Cannot Be Zero"));
   }
 
+  // Tuple Field 9. Bounds how long a conformance run can sit waiting on the
+  // next object, on the publisher as well as the subscriber.
+  if (track.objectFrequency > kMaxObjectFrequencyMs) {
+    return folly::makeUnexpected(
+        std::runtime_error("Object Frequency Exceeds One Minute"));
+  }
+
   return folly::Unit();
 }
 

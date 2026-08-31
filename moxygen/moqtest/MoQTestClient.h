@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/coro/Baton.h>
+#include <folly/io/async/AsyncTimeout.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQRelaySession.h"
@@ -290,6 +291,12 @@ class MoQTestClient : public Subscriber,
   // reset that must not count against the track
   bool tearingDown_{false};
 
+  std::unique_ptr<folly::AsyncTimeout> objectTimeout_;
+  std::chrono::milliseconds objectTimeoutMs_{0};
+  // What objectTimeout_ is currently armed with, which adds the publish-done
+  // grace to objectTimeoutMs_ when that applies.
+  std::chrono::milliseconds armedTimeoutMs_{0};
+
   // Holds Datagram Objects Recieved - (Only relevant for forwarding preference
   // 3)
   uint64_t datagramObjects_{};
@@ -316,6 +323,13 @@ class MoQTestClient : public Subscriber,
   // callbacks are ignored, so a failure can't be followed by a SUCCESS from
   // whatever was still in flight.
   void failVerification(const std::string& reason);
+
+  // A publisher that goes quiet is as much a failure as one that sends the
+  // wrong thing, and without this the run would hang until the harness killed
+  // it.  Rearmed by every object, so it measures the gap between them.  Both
+  // must run on the executor's EventBase, which is where the timeout lives.
+  void armObjectTimeout();
+  void cancelObjectTimeout();
   uint64_t draftMajorVersion() const;
 
   // The shape the objects actually arrive in, which is not always the track's

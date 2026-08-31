@@ -78,6 +78,9 @@ void MoQTestClient::shutdown() {
   if (pubClient_ && pubClient_->moqSession_) {
     pubClient_->moqSession_->drain();
   }
+  // The run is over; a timeout left armed would report a failure verdict after
+  // the fact.
+  cancelObjectTimeout();
   doneBaton_.post();
 }
 
@@ -203,6 +206,9 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
                 res.error().reasonPhrase)));
   }
 
+  // Armed only once the peer has accepted, so connection setup is not counted
+  // against the gap between objects.
+  armObjectTimeout();
   co_await doneBaton_;
   co_return trackNamespace.value();
 }
@@ -325,6 +331,11 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
     }
   }
 
+  // Armed once the peer has accepted and, under PublishFirst, has been told to
+  // forward. Objects come back from the relay while the track streams, so
+  // arming after the stream task would leave that stretch unwatched.
+  armObjectTimeout();
+
   auto pubRes =
       co_await folly::coro::co_awaitTry(std::move(streamTask.value()));
   if (pubRes.hasException()) {
@@ -389,6 +400,9 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
                 res.error().reasonPhrase)));
   }
 
+  // Armed only once the peer has accepted, so connection setup is not counted
+  // against the gap between objects.
+  armObjectTimeout();
   co_await doneBaton_;
   co_return trackNamespace.value();
 }
@@ -488,6 +502,9 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
     }
   }
 
+  // Armed only once the peer has accepted, so connection setup is not counted
+  // against the gap between objects.
+  armObjectTimeout();
   co_await doneBaton_;
   co_return trackNamespace.value();
 }
@@ -510,6 +527,9 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
 
   // Adjust the expected data (If Still receiving data, leave unblocked)
   adjustExpected(state, params_, objHeader);
+  // Armed after the scoreboard is ticked off, so the last object gets the
+  // longer budget.
+  armObjectTimeout();
   return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
 }
 
@@ -558,6 +578,7 @@ void MoQTestClient::onObjectStatus(
     XLOG(DBG1)
         << "MoQTest DEBUGGING: onObjectStatus: No more data to be expected";
   }
+  armObjectTimeout();
 }
 
 void MoQTestClient::onEndOfStream() {
@@ -595,6 +616,9 @@ void MoQTestClient::onAllDataReceived(ReceiveState& state) {
       (fetchState_.active && !fetchState_.done)) {
     return;
   }
+
+  // Both halves are done, so there is no gap left to measure.
+  cancelObjectTimeout();
 
   // Whatever verdict the checks below reach, the request is over.
   auto doneGuard = folly::makeGuard([this] { doneBaton_.post(); });
@@ -647,11 +671,40 @@ uint64_t MoQTestClient::draftMajorVersion() const {
   return version ? getDraftMajorVersion(*version) : 0;
 }
 
+void MoQTestClient::armObjectTimeout() {
+  // Every request derives the budget in initializeExpecteds before it arms.
+  XCHECK_GT(objectTimeoutMs_.count(), 0);
+  armedTimeoutMs_ = objectTimeoutMs_;
+  // With an empty scoreboard the only thing left is the PUBLISH_DONE, and a
+  // peer that reports more streams than it opened leaves the session holding
+  // that for publishDoneStreamCountTimeout.
+  if (expectedObjects_.empty()) {
+    armedTimeoutMs_ +=
+        moqClient_->moqSession_->getMoqSettings().publishDoneStreamCountTimeout;
+  }
+  if (!objectTimeout_) {
+    objectTimeout_ = folly::AsyncTimeout::make(
+        *moqExecutor_->getBackingEventBase(), [this]() noexcept {
+          failVerification(
+              folly::to<std::string>(
+                  "No object received for ", armedTimeoutMs_.count(), "ms"));
+        });
+  }
+  objectTimeout_->scheduleTimeout(armedTimeoutMs_);
+}
+
+void MoQTestClient::cancelObjectTimeout() {
+  if (objectTimeout_) {
+    objectTimeout_->cancelTimeout();
+  }
+}
+
 void MoQTestClient::failVerification(const std::string& reason) {
   if (verificationFailed_) {
     return;
   }
   verificationFailed_ = true;
+  cancelObjectTimeout();
   XLOG(ERR) << "MoQTest verification result: FAILURE! reason: " << reason;
   cancelRequest();
   // Every check here is the peer sending something the draft says it should
@@ -1136,6 +1189,19 @@ void MoQTestClient::initializeExpecteds(
   fetchState_ = ReceiveState{};
 
   expectedObjects_ = expectedObjectsIn(params, window);
+
+  // One inter-object delay plus a second of slack for the network and the
+  // publisher's own scheduling.  A datagram track is allowed to drop objects,
+  // so the budget has to cover a run of every drop the verdict will forgive,
+  // or the timeout would fail a track the verdict would have passed.
+  uint64_t gapObjects = 1;
+  if (params.forwardingPreference == ForwardingPreference::DATAGRAM) {
+    gapObjects += std::max(
+        uint64_t{1},
+        expectedObjects_.size() * params.datagramDropPercentage / 100);
+  }
+  objectTimeoutMs_ =
+      std::chrono::milliseconds(params.objectFrequency * gapObjects + 1000);
 
   // Only relevant for Datagram Forwarding Preference
   datagramObjects_ = 0;
