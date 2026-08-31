@@ -601,6 +601,49 @@ CO_TEST_F(MoQCacheTest, TestFetchMissNoTrackUpstreamCompleteHit) {
   serveCacheRangeFromUpstream({0, 0}, {0, 10});
 }
 
+// An end object of 0 asks for all of the end group.  The cached path folds
+// that in, and the miss path has to agree or its range iterator runs out a
+// group early and the writeback keeps retiring an already-retired entry.
+CO_TEST_F(MoQCacheTest, TestFetchMissWholeEndGroup) {
+  expectUpstreamFetch({0, 0}, {2, 0}, 0, AbsoluteLocation{2, 10});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {2, 0}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  // Groups 0, 1 and 2 in full -- group 2 is inside the range, not past it.
+  expectFetchObjects({0, 0}, {3, 0}, true);
+  serveCacheRangeFromUpstream({0, 0}, {3, 0});
+}
+
+// A publisher that sends past the range it was given is misbehaving.  Reject
+// the overrun rather than caching it, forwarding it to a consumer that never
+// asked for it, or walking the writeback's bookkeeping off the end of the
+// range.
+CO_TEST_F(MoQCacheTest, TestFetchMissUpstreamOverrunsRange) {
+  expectUpstreamFetch({0, 0}, {1, 0}, 0, AbsoluteLocation{1, 10});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {1, 0}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  // {1, 0} on the wire asks for all of group 1, so groups 0 and 1 are in
+  // range.  Hold back the endOfFetch so the overrun lands on a live fetch.
+  expectFetchObjects({0, 0}, {2, 0}, false);
+  serveCacheRangeFromUpstream(
+      {0, 0}, {2, 0}, 10, 1, 1, /*endOfGroup=*/false, /*endOfFetch=*/false);
+
+  // consumer_ is a StrictMock with no expectation for a group 2 object, so
+  // this also asserts the overrun is not forwarded downstream.
+  auto overrun = upstreamFetchConsumer_->object(2, 0, 0, makeBuf(100));
+  EXPECT_TRUE(overrun.hasError());
+  if (overrun.hasError()) {
+    EXPECT_EQ(overrun.error().code, MoQPublishError::MALFORMED_TRACK);
+  }
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, AbsoluteLocation{2, 0}));
+
+  // A session tears the fetch stream down on that error.
+  EXPECT_CALL(*consumer_, reset(_));
+  upstreamFetchConsumer_->reset(ResetStreamErrorCode::MALFORMED_TRACK);
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchMissUpstreamCompleteHit) {
   // Test case for fetch when track is present, but no overlap
   populateCacheRange({0, 0}, {0, 1});
@@ -1193,8 +1236,9 @@ CO_TEST_F(MoQCacheTest, TestPopulateObjectUsingBeginObjectAndObjectPayload) {
 CO_TEST_F(MoQCacheTest, TestUpstreamFetchUsingBeginObjectAndObjectPayload) {
   // Test case for upstream fetch using beginObject and objectPayload
 
-  // Expect upstream fetch to be called with the specified range
-  expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 0})
+  // Expect upstream fetch to be called with the specified range.  Two objects
+  // are served below, so the range has to cover both.
+  expectUpstreamFetch({0, 0}, {0, 2}, 0, AbsoluteLocation{0, 0})
       .via(co_await folly::coro::co_current_executor)
       .thenTry([this](auto) {
         // Begin an object with a specific size
@@ -1217,7 +1261,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchUsingBeginObjectAndObjectPayload) {
       .WillOnce(Return(ObjectPublishStatus::DONE));
   // Perform the fetch
   auto res = co_await cache_.fetch(
-      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 0}));
 }
@@ -4303,5 +4347,33 @@ CO_TEST_F(MoQCacheTest, FetchWritebackObjectPayloadSkipsCacheAfterEviction) {
   // which exceeds 200 and wrongly evicts track2.
   cache_.setMaxCachedBytes(200);
   EXPECT_TRUE(cache_.hasTrack(track2));
+}
+
+// Test: a refused beginObject leaves nothing for the payload that follows to
+// attach to. An evicted track forwards straight downstream instead of caching,
+// so it needs the same guard as the caching path.
+CO_TEST_F(MoQCacheTest, FetchWritebackObjectPayloadAfterRefusedBeginObject) {
+  expectUpstreamFetch({0, 0}, {0, 1}, false, AbsoluteLocation{0, 1});
+
+  auto res =
+      co_await cache_.fetch(getFetch({0, 0}, {0, 1}), consumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  cache_.clear();
+
+  // Only {0, 0} was asked for, so object 5 overruns the range.  consumer_ is a
+  // StrictMock with no beginObject or objectPayload expectation, so this also
+  // asserts neither call reaches the downstream consumer.
+  auto begin = upstreamFetchConsumer_->beginObject(0, 0, 5, 300, makeBuf(50));
+  EXPECT_TRUE(begin.hasError());
+  if (begin.hasError()) {
+    EXPECT_EQ(begin.error().code, MoQPublishError::MALFORMED_TRACK);
+  }
+
+  auto payload = upstreamFetchConsumer_->objectPayload(makeBuf(100), false);
+  EXPECT_TRUE(payload.hasError());
+  if (payload.hasError()) {
+    EXPECT_EQ(payload.error().code, MoQPublishError::MALFORMED_TRACK);
+  }
 }
 } // namespace moxygen::test
