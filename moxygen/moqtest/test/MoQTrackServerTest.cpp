@@ -42,7 +42,8 @@ class MoQTrackServerTest : public testing::Test {
   }
 
   void CreateDefaultMoQTestParameters() {
-    params_.forwardingPreference = moxygen::ForwardingPreference(0);
+    params_.forwardingPreference =
+        moxygen::ForwardingPreference::ONE_SUBGROUP_PER_GROUP;
     params_.startGroup = 0;
     params_.startObject = 0;
     params_.lastGroupInTrack = 10;
@@ -283,7 +284,8 @@ TEST_F(
 
 TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(1);
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::ONE_SUBGROUP_PER_OBJECT;
 
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
@@ -324,7 +326,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
 
 TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(2);
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
   params_.lastObjectInTrack = 2;
   params_.objectsPerGroup = 2;
 
@@ -403,7 +406,8 @@ TEST_F(
     MoQTrackServerTest,
     ValidateSubscribeWithForwardPreferenceTwoWithEndOfGroupMarkers) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(2);
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
   params_.lastObjectInTrack = 2;
   params_.objectsPerGroup = 2;
   params_.sendEndOfGroupMarkers = true;
@@ -485,7 +489,7 @@ TEST_F(
 
 TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(3);
+  params_.forwardingPreference = moxygen::ForwardingPreference::DATAGRAM;
   params_.lastObjectInTrack = 1;
   params_.objectsPerGroup = 1;
   params_.lastGroupInTrack = 1;
@@ -706,6 +710,8 @@ TEST_F(
 
 TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::ONE_SUBGROUP_PER_OBJECT;
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
 
@@ -764,6 +770,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
 
 TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
 
@@ -809,7 +817,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerObject(
+  auto task = publisher_->fetchTwoSubgroupsPerGroup(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -820,6 +828,8 @@ TEST_F(
     MoQTrackServerTest,
     ValidateFetchWithForwardPreferenceTwoAndEndOfGroupMarkers) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
   params_.sendEndOfGroupMarkers = true;
   params_.objectsPerGroup = 10;
 
@@ -887,7 +897,7 @@ TEST_F(
 
 TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(3);
+  params_.forwardingPreference = moxygen::ForwardingPreference::DATAGRAM;
   params_.sendEndOfGroupMarkers = false;
 
   // Create a mock fetch consumer
@@ -1974,7 +1984,8 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingClaimsExtensionsWhenConfigured) {
 
 TEST_F(MoQTrackServerTest, SubgroupEncodingOneSubgroupPerObject) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(1);
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::ONE_SUBGROUP_PER_OBJECT;
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
   SubgroupOptionsRecorder recorder(mockConsumer);
 
@@ -1993,7 +2004,8 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingOneSubgroupPerObject) {
 
 TEST_F(MoQTrackServerTest, SubgroupEncodingTwoSubgroupsPerGroup) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(2);
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
   params_.lastObjectInTrack = 2;
   params_.objectsPerGroup = 2;
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
@@ -2013,7 +2025,8 @@ TEST_F(MoQTrackServerTest, SubgroupEncodingTwoSubgroupsPerGroup) {
 
 TEST_F(MoQTrackServerTest, SubgroupEncodingFallsBackToExplicitSubgroupID) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(2);
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
   params_.objectsPerGroup = 2;
   params_.objectIncrement = 3;
   params_.lastObjectInTrack = 6;
@@ -2084,7 +2097,7 @@ TEST_F(MoQTrackServerTest, EndOfGroupMarksTheLastObjectAGroupCarries) {
 
 TEST_F(MoQTrackServerTest, DatagramSignalsEndOfGroupOnLastObject) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  params_.forwardingPreference = moxygen::ForwardingPreference(3);
+  params_.forwardingPreference = moxygen::ForwardingPreference::DATAGRAM;
   params_.lastGroupInTrack = 1;
   params_.lastObjectInTrack = 2;
   params_.objectsPerGroup = 2;
