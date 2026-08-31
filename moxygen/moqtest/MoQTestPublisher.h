@@ -42,19 +42,6 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
 class MoQTestPublisher : public Publisher,
                          public std::enable_shared_from_this<MoQTestPublisher> {
  public:
-  struct SubKey {
-    MoQSession* session{nullptr};
-    uint64_t requestID{0};
-    bool operator==(const SubKey& o) const {
-      return session == o.session && requestID == o.requestID;
-    }
-    struct Hash {
-      size_t operator()(const SubKey& k) const {
-        return folly::hash::hash_combine(k.session, k.requestID);
-      }
-    };
-  };
-
   void setIncludeTimestampExtension(bool include) {
     includeTimestampExtension_ = include;
   }
@@ -65,16 +52,11 @@ class MoQTestPublisher : public Publisher,
   // ask for data -- otherwise it would hold the session open forever.
   void cancelAll();
 
-  void removeSubscription(SubKey key);
-
-  // Subscribing Methods
+  // Subscribing Methods.  Subscribers to the same track share one forwarder
+  // and one generator, so a late subscriber joins the track in progress.
   virtual folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> callback) override;
-
-  folly::coro::Task<void> onSubscribe(
-      SubscribeRequest sub,
-      std::shared_ptr<TrackConsumer> callback);
 
   // Emits the track according to the forwarding preference, then publishDone.
   // Shared by the SUBSCRIBE path and by callers that drive a server-initiated
@@ -171,6 +153,28 @@ class MoQTestPublisher : public Publisher,
     }
   };
 
+  // Drops the track from tracks_ when its last subscriber leaves or its
+  // generator finishes.
+  struct TrackCallback : public MoQForwarder::Callback {
+    std::weak_ptr<MoQTestPublisher> publisher;
+    FullTrackName ftn;
+
+    void onEmpty(MoQForwarder* forwarder) override {
+      retire(forwarder);
+    }
+
+    void onPublishDone(MoQForwarder* forwarder) override {
+      retire(forwarder);
+    }
+
+   private:
+    void retire(MoQForwarder* forwarder) {
+      if (auto p = publisher.lock()) {
+        p->retireTrack(ftn, forwarder);
+      }
+    }
+  };
+
   // Second phase of startPublishTrack.
   folly::coro::Task<void> streamPublishedTrack(
       std::shared_ptr<PendingUnpause> unpauseCb,
@@ -189,13 +193,33 @@ class MoQTestPublisher : public Publisher,
   // Inter-object delay using the publisher-owned timekeeper.
   folly::coro::Task<void> delay(uint64_t ms);
 
-  struct SubscriptionState {
+  // The forwarder every subscriber to `ftn` attaches to.  Deliberately leaves
+  // the track alias unset: addSubscriber then gives each subscriber its own
+  // request ID as the alias, which is what keeps aliases unique per session.
+  std::shared_ptr<MoQForwarder> makeForwarder(
+      const FullTrackName& ftn,
+      MoQSession& session);
+
+  // Generates the track and retires it from tracks_ however it ends.
+  folly::coro::Task<void> runTrack(
+      FullTrackName ftn,
+      std::shared_ptr<MoQForwarder> forwarder,
+      MoQTestParameters params,
+      RequestID requestID);
+
+  // Idempotent, and a no-op if the name now maps to a different forwarder.
+  void retireTrack(const FullTrackName& ftn, const MoQForwarder* forwarder);
+
+  struct TrackState {
     std::shared_ptr<MoQForwarder> forwarder;
     folly::CancellationSource cancelSource;
   };
 
-  folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
-      activeSubscriptions_;
+  // One entry per moq-test track being generated.  An entry exists only while
+  // its runTrack coroutine is alive, and that coroutine holds the forwarder
+  // alive, so retireTrack can release this reference from inside a forwarder
+  // callback without destroying the forwarder underneath itself.
+  folly::F14FastMap<FullTrackName, TrackState, FullTrackName::hash> tracks_;
   std::vector<std::shared_ptr<PendingUnpause>> pendingUnpauses_;
   // Cancellation sources for fetches that are still generating objects, so
   // cancelAll() reaches them the way it reaches subscriptions.

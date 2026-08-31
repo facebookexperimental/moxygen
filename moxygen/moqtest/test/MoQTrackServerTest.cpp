@@ -59,6 +59,45 @@ class MoQTrackServerTest : public testing::Test {
     params_.publisherDeliveryTimeout = 0;
   }
 
+  std::shared_ptr<moxygen::MoQSession> CreateSession() {
+    auto session =
+        std::make_shared<testing::NiceMock<moxygen::test::MockMoQSession>>();
+    ON_CALL(*session, getNegotiatedVersion())
+        .WillByDefault(
+            testing::Return(
+                std::optional<uint64_t>(moxygen::kVersionDraftCurrent)));
+    return session;
+  }
+
+  moxygen::SubscribeRequest MakeSubscribe(uint64_t requestID) {
+    moxygen::SubscribeRequest sub;
+    sub.requestID = moxygen::RequestID(requestID);
+    sub.fullTrackName = {track_, kDefaultTrackName};
+    sub.locType = moxygen::LocationType::NextGroupStart;
+    sub.forward = true;
+    return sub;
+  }
+
+  // subscribe() reads the requesting session out of the RequestContext, the
+  // way MoQSession sets it up for a real request.
+  folly::coro::Task<moxygen::Publisher::SubscribeResult> SubscribeAs(
+      std::shared_ptr<moxygen::MoQSession> session,
+      moxygen::SubscribeRequest sub,
+      std::shared_ptr<moxygen::TrackConsumer> consumer) {
+    folly::RequestContextScopeGuard guard;
+    folly::RequestContext::get()->setContextData(
+        SessionRequestToken(),
+        std::make_unique<moxygen::MoQSession::MoQSessionRequestData>(
+            std::move(session)));
+    co_return co_await publisher_->subscribe(
+        std::move(sub), std::move(consumer));
+  }
+
+  static const folly::RequestToken& SessionRequestToken() {
+    static folly::RequestToken token("moq_session");
+    return token;
+  }
+
   moxygen::MoQTestParameters params_;
   moxygen::TrackNamespace track_;
   std::shared_ptr<moxygen::MoQTestPublisher> publisher_{
@@ -435,18 +474,9 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceThree) {
   // Create a mock track consumer
   auto mockConsumer = std::make_shared<moxygen::MockTrackConsumer>();
 
-  // Expect setTrackAlias call
-  EXPECT_CALL(
-      *mockConsumer, setTrackAlias(moxygen::TrackAlias(sub.requestID.value)))
-      .WillOnce(
-          testing::Return(
-              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-                  folly::unit)));
-
   // Build Expect Calls
   for (int groupNum = 1; groupNum >= 0; groupNum--) {
     for (int objectId = 1; objectId >= 0; objectId--) {
-      // Set expectations for setTrackAlias and datagram
       moxygen::ObjectHeader expectedHeader;
       expectedHeader.group = groupNum;
       expectedHeader.id = objectId;
@@ -1442,6 +1472,178 @@ TEST_F(MoQTrackServerTest, RequestUpdateTogglesForward) {
     ASSERT_TRUE(sgRes.hasValue());
     EXPECT_TRUE((*sgRes)->endOfSubgroup().hasValue());
   }
+}
+
+// Forwarder sharing tests
+//
+// Every subscriber to a track attaches to one forwarder fed by one generator,
+// so a subscriber that arrives mid-track joins it in progress.
+
+namespace {
+
+// Mock track consumer that records the groups it is asked to open a subgroup
+// for, and posts `done` on publishDone.
+class GroupRecorder {
+ public:
+  GroupRecorder() {
+    auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+    ON_CALL(*consumer_, setTrackAlias(testing::_))
+        .WillByDefault(testing::Return(ok));
+    ON_CALL(*subgroup_, object(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(ok));
+    ON_CALL(*subgroup_, endOfGroup(testing::_))
+        .WillByDefault(testing::Return(ok));
+    ON_CALL(*subgroup_, endOfSubgroup()).WillByDefault(testing::Return(ok));
+
+    ON_CALL(*consumer_, publishDone(testing::_))
+        .WillByDefault([this](const auto&) {
+          done.post();
+          return folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+        });
+    ON_CALL(
+        *consumer_,
+        beginSubgroup(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault([this](uint64_t group, uint64_t, uint8_t, auto) {
+          groups_.push_back(group);
+          if (groups_.size() == groupTarget_) {
+            reachedTarget_.post();
+          }
+          return folly::makeExpected<moxygen::MoQPublishError>(
+              std::shared_ptr<moxygen::SubgroupConsumer>(subgroup_));
+        });
+  }
+
+  std::shared_ptr<moxygen::TrackConsumer> consumer() const {
+    return consumer_;
+  }
+
+  const std::vector<uint64_t>& groups() const {
+    return groups_;
+  }
+
+  folly::coro::Baton done;
+
+  // The generator runs on real time, so wait for its output, not the clock.
+  folly::coro::Task<void> waitForGroups(size_t count) {
+    if (groups_.size() >= count) {
+      co_return;
+    }
+    groupTarget_ = count;
+    reachedTarget_.reset();
+    co_await reachedTarget_;
+  }
+
+ private:
+  std::shared_ptr<testing::NiceMock<moxygen::MockTrackConsumer>> consumer_{
+      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>()};
+  std::shared_ptr<testing::NiceMock<moxygen::MockSubgroupConsumer>> subgroup_{
+      std::make_shared<testing::NiceMock<moxygen::MockSubgroupConsumer>>()};
+  std::vector<uint64_t> groups_;
+  folly::coro::Baton reachedTarget_;
+  size_t groupTarget_{0};
+};
+
+} // namespace
+
+CO_TEST_F(MoQTrackServerTest, LateSubscriberJoinsTheTrackInProgress) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  // 20 groups of two objects at 50ms each, so the track is still running when
+  // the second subscriber arrives.
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
+
+  GroupRecorder first;
+  auto firstRes =
+      co_await SubscribeAs(CreateSession(), MakeSubscribe(4), first.consumer());
+  CO_ASSERT_TRUE(firstRes.hasValue());
+  EXPECT_EQ(firstRes.value()->subscribeOk().trackAlias, moxygen::TrackAlias(4));
+  EXPECT_FALSE(firstRes.value()->subscribeOk().largest.has_value());
+
+  // Two groups in, so the second subscriber joins past the first's group.
+  co_await first.waitForGroups(2);
+
+  GroupRecorder second;
+  auto secondRes = co_await SubscribeAs(
+      CreateSession(), MakeSubscribe(7), second.consumer());
+  CO_ASSERT_TRUE(secondRes.hasValue());
+  // Each subscriber gets its own request ID as its alias, so a session that
+  // subscribes to several tracks is never handed the same alias twice.
+  EXPECT_EQ(
+      secondRes.value()->subscribeOk().trackAlias, moxygen::TrackAlias(7));
+  EXPECT_TRUE(secondRes.value()->subscribeOk().largest.has_value());
+
+  co_await second.waitForGroups(1);
+  publisher_->cancelAll();
+
+  const auto& firstGroups = first.groups();
+  const auto& secondGroups = second.groups();
+  CO_ASSERT_LE(secondGroups.size(), firstGroups.size());
+  EXPECT_GT(secondGroups.front(), firstGroups.front());
+  // One generator feeding both: the late subscriber's groups are the tail of
+  // what the first subscriber saw, not a second copy starting at group 0.
+  EXPECT_EQ(
+      secondGroups,
+      std::vector<uint64_t>(
+          firstGroups.end() - secondGroups.size(), firstGroups.end()));
+}
+
+CO_TEST_F(MoQTrackServerTest, TrackRestartsAfterItEnds) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[4] = "1";
+  track_.trackNamespace[9] = "1";
+
+  auto session = CreateSession();
+  GroupRecorder first;
+  auto firstRes =
+      co_await SubscribeAs(session, MakeSubscribe(0), first.consumer());
+  CO_ASSERT_TRUE(firstRes.hasValue());
+  co_await first.done;
+
+  // The finished track is retired, so this regenerates it rather than failing
+  // against a drained forwarder.
+  GroupRecorder second;
+  auto secondRes =
+      co_await SubscribeAs(session, MakeSubscribe(1), second.consumer());
+  CO_ASSERT_TRUE(secondRes.hasValue());
+  co_await second.done;
+  EXPECT_EQ(first.groups(), second.groups());
+}
+
+CO_TEST_F(MoQTrackServerTest, UnsubscribeStopsTheGenerator) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
+
+  GroupRecorder recorder;
+  auto res = co_await SubscribeAs(
+      CreateSession(), MakeSubscribe(0), recorder.consumer());
+  CO_ASSERT_TRUE(res.hasValue());
+  co_await recorder.waitForGroups(1);
+
+  res.value()->unsubscribe();
+  const auto groupsAtUnsubscribe = recorder.groups().size();
+  co_await folly::coro::sleep(std::chrono::milliseconds(300));
+  EXPECT_EQ(recorder.groups().size(), groupsAtUnsubscribe);
+}
+
+CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightTrack) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
+
+  GroupRecorder recorder;
+  auto res = co_await SubscribeAs(
+      CreateSession(), MakeSubscribe(0), recorder.consumer());
+  CO_ASSERT_TRUE(res.hasValue());
+  co_await recorder.waitForGroups(1);
+
+  publisher_->cancelAll();
+  // The generator checks for cancellation inside the object loop, so it can
+  // open one more group before it unwinds.
+  const auto groupsAtCancel = recorder.groups().size();
+  co_await folly::coro::sleep(std::chrono::milliseconds(300));
+  EXPECT_LE(recorder.groups().size(), groupsAtCancel + 1);
+  EXPECT_LT(recorder.groups().size(), 20u);
 }
 
 // Subgroup header encoding tests

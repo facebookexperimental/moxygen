@@ -34,7 +34,11 @@ folly::coro::Task<void> MoQTestPublisher::delay(uint64_t ms) {
 }
 
 void MoQTestPublisher::cancelAll() {
-  for (auto& [key, state] : activeSubscriptions_) {
+  // Move before cancelling: a generator that unwinds inline retires its own
+  // entry.
+  auto tracks = std::move(tracks_);
+  tracks_.clear();
+  for (auto& [ftn, state] : tracks) {
     state.cancelSource.requestCancellation();
   }
   // Move before cancelling: cancel() can resume a waiting publish inline, and
@@ -51,12 +55,42 @@ void MoQTestPublisher::cancelAll() {
   }
 }
 
-void MoQTestPublisher::removeSubscription(SubKey key) {
-  auto it = activeSubscriptions_.find(key);
-  if (it != activeSubscriptions_.end()) {
-    it->second.cancelSource.requestCancellation();
-    activeSubscriptions_.erase(it);
+std::shared_ptr<MoQForwarder> MoQTestPublisher::makeForwarder(
+    const FullTrackName& ftn,
+    MoQSession& session) {
+  auto forwarder = std::make_shared<MoQForwarder>(ftn);
+
+  // Advertise the priority even-numbered groups are published at, so the
+  // draft-15+ subgroup and datagram encodings elide it for those and write it
+  // explicitly for the odd ones.  The framer downgrades the extension to a
+  // PUBLISHER_PRIORITY param for draft 15; earlier drafts have no way to carry
+  // it, so the priority always stays on the wire instead.
+  auto version = session.getNegotiatedVersion();
+  if (version && getDraftMajorVersion(*version) >= 15) {
+    Extensions trackProperties;
+    trackProperties.insertMutableExtension(
+        Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
+    forwarder->setExtensions(std::move(trackProperties));
   }
+
+  auto cb = std::make_shared<TrackCallback>();
+  cb->publisher = shared_from_this();
+  cb->ftn = ftn;
+  forwarder->setCallback(std::move(cb));
+  return forwarder;
+}
+
+void MoQTestPublisher::retireTrack(
+    const FullTrackName& ftn,
+    const MoQForwarder* forwarder) {
+  auto it = tracks_.find(ftn);
+  // A track that ended and restarted has a different forwarder under the same
+  // name.
+  if (it == tracks_.end() || it->second.forwarder.get() != forwarder) {
+    return;
+  }
+  it->second.cancelSource.requestCancellation();
+  tracks_.erase(it);
 }
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQTestPublisher::subscribe(
@@ -75,64 +109,52 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestPublisher::subscribe(
   }
 
   auto session = MoQSession::getRequestSession();
-  auto forwarder = std::make_shared<MoQForwarder>(sub.fullTrackName);
-  forwarder->setTrackAlias(TrackAlias(sub.requestID.value));
-
-  // Advertise the priority even-numbered groups are published at, so the
-  // draft-15+ subgroup and datagram encodings elide it for those and write it
-  // explicitly for the odd ones.  The framer downgrades the extension to a
-  // PUBLISHER_PRIORITY param for draft 15; earlier drafts have no way to carry
-  // it, so the priority always stays on the wire instead.
-  auto version = session->getNegotiatedVersion();
-  if (version && getDraftMajorVersion(*version) >= 15) {
-    Extensions trackProperties;
-    trackProperties.insertMutableExtension(
-        Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
-    forwarder->setExtensions(std::move(trackProperties));
-  }
-
-  SubKey subKey{session.get(), sub.requestID.value};
-  auto& state = activeSubscriptions_[subKey];
-  state.forwarder = forwarder;
-  auto token = state.cancelSource.getToken();
-
-  struct EmptyCb : public MoQForwarder::Callback {
-    std::weak_ptr<MoQTestPublisher> publisher;
-    SubKey key;
-    void onEmpty(MoQForwarder*) override {
-      if (auto p = publisher.lock()) {
-        p->removeSubscription(key);
-      }
-    }
-  };
-  auto cb = std::make_shared<EmptyCb>();
-  cb->publisher = shared_from_this();
-  cb->key = subKey;
-  forwarder->setCallback(std::move(cb));
+  auto trackIt = tracks_.find(sub.fullTrackName);
+  const bool isNewTrack = (trackIt == tracks_.end());
+  auto forwarder = isNewTrack ? makeForwarder(sub.fullTrackName, *session)
+                              : trackIt->second.forwarder;
 
   auto subscriber = forwarder->addSubscriber(session, sub, std::move(callback));
+  if (!subscriber) {
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            sub.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "failed to add subscriber"});
+  }
+  if (!isNewTrack) {
+    co_return subscriber;
+  }
 
+  // Register only once the first subscriber is attached, so a failed subscribe
+  // can't leave an entry with no generator behind it.
+  auto* executor = co_await folly::coro::co_current_executor;
+  auto& state = tracks_[sub.fullTrackName];
+  state.forwarder = forwarder;
   co_withCancellation(
-      token,
+      state.cancelSource.getToken(),
       co_withExecutor(
-          co_await folly::coro::co_current_executor,
-          onSubscribe(sub, forwarder)))
+          executor,
+          runTrack(
+              sub.fullTrackName,
+              std::move(forwarder),
+              res.value(),
+              sub.requestID)))
       .start();
 
   co_return subscriber;
 }
 
-// Perform Co-routine
-folly::coro::Task<void> MoQTestPublisher::onSubscribe(
-    SubscribeRequest sub,
-    std::shared_ptr<TrackConsumer> callback) {
-  // Make a MoQTestParams (Only valid params are passed through from subscribe
-  // function)
-  auto res = moxygen::convertTrackNamespaceToMoqTestParam(
-      &sub.fullTrackName.trackNamespace);
-  XCHECK(res.hasValue())
-      << "Only valid params must be passed into this function";
-  co_await sendTrackData(res.value(), sub.requestID, std::move(callback));
+folly::coro::Task<void> MoQTestPublisher::runTrack(
+    FullTrackName ftn,
+    std::shared_ptr<MoQForwarder> forwarder,
+    MoQTestParameters params,
+    RequestID requestID) {
+  auto unregister =
+      folly::makeGuard([self = shared_from_this(), ftn, fwd = forwarder.get()] {
+        self->retireTrack(ftn, fwd);
+      });
+  co_await sendTrackData(params, requestID, forwarder);
 }
 
 folly::coro::Task<void> MoQTestPublisher::sendTrackData(
@@ -474,8 +496,6 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
     RequestID requestID,
     MoQTestParameters params,
     std::shared_ptr<TrackConsumer> callback) {
-  auto alias = TrackAlias(requestID.value);
-  callback->setTrackAlias(alias);
   auto token = co_await folly::coro::co_current_cancellation_token;
   const auto lastObject = lastObjectInGroup(params);
   // Iterate through Objects
