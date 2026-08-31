@@ -182,6 +182,13 @@ class MoQTestPublisher : public Publisher,
       MoQTestParameters params,
       RequestID requestID);
 
+  // The range a joining FETCH backfills: from the start it names up to where
+  // the caller's subscription begins.  Empty when that subscription already
+  // covers the track from the start.
+  folly::Expected<StandaloneFetch, FetchError> resolveJoiningFetch(
+      const Fetch& fetch,
+      const JoiningFetch& joining);
+
   // Runs onFetch and drops the fetch's cancellation source from
   // activeFetches_ however it ends.
   folly::coro::Task<void> runFetch(

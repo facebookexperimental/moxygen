@@ -93,6 +93,33 @@ class MoQTrackServerTest : public testing::Test {
         std::move(sub), std::move(consumer));
   }
 
+  // Only a joining FETCH reads the session; standalone fetches can call
+  // publisher_->fetch() directly.
+  folly::coro::Task<moxygen::Publisher::FetchResult> FetchAs(
+      std::shared_ptr<moxygen::MoQSession> session,
+      moxygen::Fetch fetch,
+      std::shared_ptr<moxygen::FetchConsumer> consumer) {
+    folly::RequestContextScopeGuard guard;
+    folly::RequestContext::get()->setContextData(
+        SessionRequestToken(),
+        std::make_unique<moxygen::MoQSession::MoQSessionRequestData>(
+            std::move(session)));
+    co_return co_await publisher_->fetch(std::move(fetch), std::move(consumer));
+  }
+
+  moxygen::Fetch MakeJoiningFetch(
+      uint64_t requestID,
+      uint64_t joiningRequestID,
+      uint64_t joiningStart,
+      moxygen::FetchType fetchType) {
+    moxygen::Fetch fetch;
+    fetch.requestID = moxygen::RequestID(requestID);
+    fetch.fullTrackName = {track_, kDefaultTrackName};
+    fetch.args = moxygen::JoiningFetch(
+        moxygen::RequestID(joiningRequestID), joiningStart, fetchType);
+    return fetch;
+  }
+
   static const folly::RequestToken& SessionRequestToken() {
     static folly::RequestToken token("moq_session");
     return token;
@@ -1366,18 +1393,283 @@ CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {
   EXPECT_EQ(objects, kObjectsBeforeCancel);
 }
 
-TEST_F(MoQTrackServerTest, FetchRejectsAJoiningRequest) {
+// Joining FETCH and forwarder sharing tests
+//
+// Every subscriber to a track attaches to one forwarder fed by one generator,
+// so a subscriber that arrives mid-track joins it in progress.  A joining
+// FETCH backfills what ran before it, so the two together cover the track.
+
+namespace {
+
+// A cancelled generator unwinds after the test body returns and can call its
+// consumer once more on the way out, so what the callbacks write to has to
+// outlive the recorder that reads it.
+template <typename Recorded>
+struct RecorderState {
+  Recorded recorded;
+  folly::coro::Baton done;
+};
+
+// Mock track consumer that records the groups it is asked to open a subgroup
+// for, and posts `done` on publishDone.
+class GroupRecorder {
+ public:
+  GroupRecorder() {
+    auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+    ON_CALL(*consumer_, setTrackAlias(testing::_))
+        .WillByDefault(testing::Return(ok));
+    ON_CALL(*subgroup_, object(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(ok));
+    ON_CALL(*subgroup_, endOfGroup(testing::_))
+        .WillByDefault(testing::Return(ok));
+    ON_CALL(*subgroup_, endOfSubgroup()).WillByDefault(testing::Return(ok));
+
+    ON_CALL(*consumer_, publishDone(testing::_))
+        .WillByDefault([state = state_](const auto&) {
+          state->done.post();
+          return folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+        });
+    ON_CALL(
+        *consumer_,
+        beginSubgroup(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault([state = state_, subgroup = subgroup_, wait = wait_](
+                           uint64_t group, uint64_t, uint8_t, auto) {
+          state->recorded.push_back(group);
+          if (state->recorded.size() == wait->target) {
+            wait->reached.post();
+          }
+          return folly::makeExpected<moxygen::MoQPublishError>(
+              std::shared_ptr<moxygen::SubgroupConsumer>(subgroup));
+        });
+  }
+
+  std::shared_ptr<moxygen::TrackConsumer> consumer() const {
+    return consumer_;
+  }
+
+  const std::vector<uint64_t>& groups() const {
+    return state_->recorded;
+  }
+
+  folly::coro::Baton& done() {
+    return state_->done;
+  }
+
+  // The generator runs on real time, so wait for its output, not the clock.
+  folly::coro::Task<void> waitForGroups(size_t count) {
+    if (state_->recorded.size() >= count) {
+      co_return;
+    }
+    wait_->target = count;
+    wait_->reached.reset();
+    co_await wait_->reached;
+  }
+
+ private:
+  // Shares the generator's lifetime for the same reason RecorderState does.
+  struct GroupWait {
+    folly::coro::Baton reached;
+    size_t target{0};
+  };
+
+  std::shared_ptr<RecorderState<std::vector<uint64_t>>> state_{
+      std::make_shared<RecorderState<std::vector<uint64_t>>>()};
+  std::shared_ptr<GroupWait> wait_{std::make_shared<GroupWait>()};
+  std::shared_ptr<testing::NiceMock<moxygen::MockTrackConsumer>> consumer_{
+      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>()};
+  std::shared_ptr<testing::NiceMock<moxygen::MockSubgroupConsumer>> subgroup_{
+      std::make_shared<testing::NiceMock<moxygen::MockSubgroupConsumer>>()};
+};
+
+// Mock fetch consumer that records the (group, object) pairs it receives and
+// posts `done` on endOfFetch.
+class FetchRecorder {
+ public:
+  FetchRecorder() {
+    ON_CALL(
+        *consumer_,
+        object(
+            testing::_,
+            testing::_,
+            testing::_,
+            testing::_,
+            testing::_,
+            testing::_,
+            testing::_))
+        .WillByDefault([state = state_](
+                           uint64_t group,
+                           uint64_t,
+                           uint64_t objectId,
+                           std::unique_ptr<folly::IOBuf>,
+                           const auto&,
+                           auto,
+                           bool) {
+          state->recorded.emplace_back(group, objectId);
+          return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+              folly::unit);
+        });
+    ON_CALL(*consumer_, endOfFetch()).WillByDefault([state = state_] {
+      state->done.post();
+      return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+          folly::unit);
+    });
+  }
+
+  std::shared_ptr<moxygen::FetchConsumer> consumer() const {
+    return consumer_;
+  }
+
+  const std::vector<std::pair<uint64_t, uint64_t>>& objects() const {
+    return state_->recorded;
+  }
+
+  folly::coro::Baton& done() {
+    return state_->done;
+  }
+
+ private:
+  using Objects = std::vector<std::pair<uint64_t, uint64_t>>;
+  std::shared_ptr<RecorderState<Objects>> state_{
+      std::make_shared<RecorderState<Objects>>()};
+  std::shared_ptr<testing::NiceMock<moxygen::MockFetchConsumer>> consumer_{
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>()};
+};
+
+} // namespace
+
+CO_TEST_F(MoQTrackServerTest, JoiningFetchBackfillsToTheSubscribePoint) {
   MoQTrackServerTest::CreateDefaultTrackNamespace();
-  moxygen::Fetch req;
-  req.requestID = 0;
-  req.fullTrackName.trackNamespace = track_;
-  req.args = moxygen::JoiningFetch(
-      moxygen::RequestID(1), 0, moxygen::FetchType::RELATIVE_JOINING);
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
 
-  auto result = folly::coro::blockingWait(publisher_->fetch(req, nullptr));
+  GroupRecorder first;
+  auto firstRes =
+      co_await SubscribeAs(CreateSession(), MakeSubscribe(3), first.consumer());
+  CO_ASSERT_TRUE(firstRes.hasValue());
 
-  ASSERT_TRUE(result.hasError());
-  EXPECT_EQ(result.error().errorCode, moxygen::FetchErrorCode::NOT_SUPPORTED);
+  // A second group means the first finished, so there is a Largest to anchor
+  // the join on.
+  co_await first.waitForGroups(2);
+
+  auto joiner = CreateSession();
+  GroupRecorder live;
+  auto subRes = co_await SubscribeAs(joiner, MakeSubscribe(5), live.consumer());
+  CO_ASSERT_TRUE(subRes.hasValue());
+  auto largest = subRes.value()->subscribeOk().largest;
+  CO_ASSERT_TRUE(largest.has_value());
+
+  FetchRecorder backfill;
+  auto fetchRes = co_await FetchAs(
+      joiner,
+      MakeJoiningFetch(6, 5, 0, moxygen::FetchType::ABSOLUTE_JOINING),
+      backfill.consumer());
+  CO_ASSERT_TRUE(fetchRes.hasValue());
+  co_await backfill.done();
+  publisher_->cancelAll();
+
+  // Not CO_ASSERT_FALSE: it forwards the condition to GTEST_TEST_BOOLEAN_
+  // without the negation ASSERT_FALSE applies, so it inverts against the
+  // googletest the open source build links.
+  CO_ASSERT_TRUE(!backfill.objects().empty());
+  // The backfill runs from the start of the track through the object the
+  // subscription began after, so the two halves abut with nothing in between.
+  EXPECT_EQ(
+      backfill.objects().front(), std::make_pair(uint64_t{0}, uint64_t{0}));
+  EXPECT_EQ(
+      backfill.objects().back(),
+      std::make_pair(largest->group, largest->object));
+}
+
+CO_TEST_F(MoQTrackServerTest, RelativeJoiningFetchCountsGroupsBack) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
+
+  GroupRecorder first;
+  auto firstRes =
+      co_await SubscribeAs(CreateSession(), MakeSubscribe(3), first.consumer());
+  CO_ASSERT_TRUE(firstRes.hasValue());
+  // Four groups in, so there are at least two behind Largest to count back to.
+  co_await first.waitForGroups(4);
+
+  auto joiner = CreateSession();
+  GroupRecorder live;
+  auto subRes = co_await SubscribeAs(joiner, MakeSubscribe(5), live.consumer());
+  CO_ASSERT_TRUE(subRes.hasValue());
+  auto largest = subRes.value()->subscribeOk().largest;
+  CO_ASSERT_TRUE(largest.has_value());
+  CO_ASSERT_GE(largest->group, 2u);
+
+  FetchRecorder backfill;
+  auto fetchRes = co_await FetchAs(
+      joiner,
+      MakeJoiningFetch(6, 5, 2, moxygen::FetchType::RELATIVE_JOINING),
+      backfill.consumer());
+  CO_ASSERT_TRUE(fetchRes.hasValue());
+  co_await backfill.done();
+  publisher_->cancelAll();
+
+  // Not CO_ASSERT_FALSE: it forwards the condition to GTEST_TEST_BOOLEAN_
+  // without the negation ASSERT_FALSE applies, so it inverts against the
+  // googletest the open source build links.
+  CO_ASSERT_TRUE(!backfill.objects().empty());
+  EXPECT_EQ(
+      backfill.objects().front(),
+      std::make_pair(largest->group - 2, uint64_t{0}));
+  EXPECT_EQ(
+      backfill.objects().back(),
+      std::make_pair(largest->group, largest->object));
+}
+
+// The sibling case, a join against a track that has published nothing, is in
+// the conformance suite: the generator starts with the subscription, so there
+// is no window here in which the track exists but has no Largest.
+CO_TEST_F(MoQTrackServerTest, JoiningFetchWithNoSubscriptionFails) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+
+  auto result = co_await FetchAs(
+      CreateSession(),
+      MakeJoiningFetch(1, 0, 0, moxygen::FetchType::ABSOLUTE_JOINING),
+      nullptr);
+
+  CO_ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, moxygen::FetchErrorCode::DOES_NOT_EXIST);
+}
+
+CO_TEST_F(MoQTrackServerTest, JoiningFetchIsNotPaced) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
+
+  GroupRecorder first;
+  auto firstRes =
+      co_await SubscribeAs(CreateSession(), MakeSubscribe(3), first.consumer());
+  CO_ASSERT_TRUE(firstRes.hasValue());
+  // Enough backlog that pacing the backfill would show up in the elapsed time.
+  co_await first.waitForGroups(4);
+
+  auto joiner = CreateSession();
+  GroupRecorder live;
+  auto subRes = co_await SubscribeAs(joiner, MakeSubscribe(5), live.consumer());
+  CO_ASSERT_TRUE(subRes.hasValue());
+
+  FetchRecorder backfill;
+  const auto started = std::chrono::steady_clock::now();
+  auto fetchRes = co_await FetchAs(
+      joiner,
+      MakeJoiningFetch(6, 5, 0, moxygen::FetchType::ABSOLUTE_JOINING),
+      backfill.consumer());
+  CO_ASSERT_TRUE(fetchRes.hasValue());
+  co_await backfill.done();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - started)
+                           .count();
+  publisher_->cancelAll();
+
+  // Paced at the track's own 50ms the backfill could never catch the
+  // subscription up.
+  CO_ASSERT_GE(backfill.objects().size(), 4u);
+  EXPECT_LT(elapsed, static_cast<int64_t>(backfill.objects().size()) * 50 / 2);
 }
 
 TEST_F(MoQTrackServerTest, FetchRejectsDescendingGroupOrder) {
@@ -1479,72 +1771,6 @@ TEST_F(MoQTrackServerTest, RequestUpdateTogglesForward) {
 // Every subscriber to a track attaches to one forwarder fed by one generator,
 // so a subscriber that arrives mid-track joins it in progress.
 
-namespace {
-
-// Mock track consumer that records the groups it is asked to open a subgroup
-// for, and posts `done` on publishDone.
-class GroupRecorder {
- public:
-  GroupRecorder() {
-    auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
-    ON_CALL(*consumer_, setTrackAlias(testing::_))
-        .WillByDefault(testing::Return(ok));
-    ON_CALL(*subgroup_, object(testing::_, testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(ok));
-    ON_CALL(*subgroup_, endOfGroup(testing::_))
-        .WillByDefault(testing::Return(ok));
-    ON_CALL(*subgroup_, endOfSubgroup()).WillByDefault(testing::Return(ok));
-
-    ON_CALL(*consumer_, publishDone(testing::_))
-        .WillByDefault([this](const auto&) {
-          done.post();
-          return folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
-        });
-    ON_CALL(
-        *consumer_,
-        beginSubgroup(testing::_, testing::_, testing::_, testing::_))
-        .WillByDefault([this](uint64_t group, uint64_t, uint8_t, auto) {
-          groups_.push_back(group);
-          if (groups_.size() == groupTarget_) {
-            reachedTarget_.post();
-          }
-          return folly::makeExpected<moxygen::MoQPublishError>(
-              std::shared_ptr<moxygen::SubgroupConsumer>(subgroup_));
-        });
-  }
-
-  std::shared_ptr<moxygen::TrackConsumer> consumer() const {
-    return consumer_;
-  }
-
-  const std::vector<uint64_t>& groups() const {
-    return groups_;
-  }
-
-  folly::coro::Baton done;
-
-  // The generator runs on real time, so wait for its output, not the clock.
-  folly::coro::Task<void> waitForGroups(size_t count) {
-    if (groups_.size() >= count) {
-      co_return;
-    }
-    groupTarget_ = count;
-    reachedTarget_.reset();
-    co_await reachedTarget_;
-  }
-
- private:
-  std::shared_ptr<testing::NiceMock<moxygen::MockTrackConsumer>> consumer_{
-      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>()};
-  std::shared_ptr<testing::NiceMock<moxygen::MockSubgroupConsumer>> subgroup_{
-      std::make_shared<testing::NiceMock<moxygen::MockSubgroupConsumer>>()};
-  std::vector<uint64_t> groups_;
-  folly::coro::Baton reachedTarget_;
-  size_t groupTarget_{0};
-};
-
-} // namespace
-
 CO_TEST_F(MoQTrackServerTest, LateSubscriberJoinsTheTrackInProgress) {
   MoQTrackServerTest::CreateDefaultTrackNamespace();
   // 20 groups of two objects at 50ms each, so the track is still running when
@@ -1597,7 +1823,7 @@ CO_TEST_F(MoQTrackServerTest, TrackRestartsAfterItEnds) {
   auto firstRes =
       co_await SubscribeAs(session, MakeSubscribe(0), first.consumer());
   CO_ASSERT_TRUE(firstRes.hasValue());
-  co_await first.done;
+  co_await first.done();
 
   // The finished track is retired, so this regenerates it rather than failing
   // against a drained forwarder.
@@ -1605,7 +1831,7 @@ CO_TEST_F(MoQTrackServerTest, TrackRestartsAfterItEnds) {
   auto secondRes =
       co_await SubscribeAs(session, MakeSubscribe(1), second.consumer());
   CO_ASSERT_TRUE(secondRes.hasValue());
-  co_await second.done;
+  co_await second.done();
   EXPECT_EQ(first.groups(), second.groups());
 }
 

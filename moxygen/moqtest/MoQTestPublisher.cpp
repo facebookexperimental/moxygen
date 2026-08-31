@@ -566,6 +566,38 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
   co_return;
 }
 
+folly::Expected<StandaloneFetch, FetchError>
+MoQTestPublisher::resolveJoiningFetch(
+    const Fetch& fetch,
+    const JoiningFetch& joining) {
+  auto trackIt = tracks_.find(fetch.fullTrackName);
+  if (trackIt == tracks_.end()) {
+    return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::DOES_NOT_EXIST,
+            "No subscription for joining FETCH"});
+  }
+  auto& forwarder = *trackIt->second.forwarder;
+  // A joining FETCH is anchored on the subscription's Largest, so a track that
+  // has published nothing has nothing to anchor to.
+  if (!forwarder.largest()) {
+    return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::INVALID_RANGE,
+            "No objects published for track"});
+  }
+  auto range =
+      forwarder.resolveJoiningFetch(MoQSession::getRequestSession(), joining);
+  if (range.hasError()) {
+    auto error = range.error();
+    error.requestID = fetch.requestID;
+    return folly::makeUnexpected(error);
+  }
+  return StandaloneFetch(range->start, range->end);
+}
+
 // Fetch Methods
 folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
     Fetch fetch,
@@ -581,14 +613,6 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
     co_return folly::makeUnexpected(error);
   }
 
-  auto [standalone, joining] = fetchType(fetch);
-  if (!standalone) {
-    co_return folly::makeUnexpected(
-        FetchError{
-            fetch.requestID,
-            FetchErrorCode::NOT_SUPPORTED,
-            "Joining FETCH not supported"});
-  }
   // The generators only walk the track forwards.
   if (fetch.groupOrder == GroupOrder::NewestFirst) {
     co_return folly::makeUnexpected(
@@ -598,13 +622,30 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
             "Descending group order not supported"});
   }
 
-  const auto params = res.value();
+  auto [standalone, joining] = fetchType(fetch);
+  const bool isJoining = joining != nullptr;
+  if (isJoining) {
+    auto range = resolveJoiningFetch(fetch, *joining);
+    if (range.hasError()) {
+      co_return folly::makeUnexpected(range.error());
+    }
+    fetch.args = range.value();
+    standalone = fetchType(fetch).first;
+  }
+
+  auto params = res.value();
   const auto window = resolveFetchWindow(params, *standalone);
-  XLOG(INFO) << "FETCH " << standalone->start << ".." << standalone->end;
+  XLOG(INFO) << (isJoining ? "Joining FETCH " : "FETCH ") << standalone->start
+             << ".." << standalone->end;
   if (window.empty()) {
     XLOG(INFO) << "Requested range misses the track, sending no objects";
   } else {
     XLOG(INFO) << "Serving " << window.first << ".." << window.last;
+  }
+
+  // A backfill paced at the live rate would never catch the subscription up.
+  if (isJoining) {
+    params.objectFrequency = 0;
   }
 
   auto cancelSource = std::make_shared<folly::CancellationSource>();

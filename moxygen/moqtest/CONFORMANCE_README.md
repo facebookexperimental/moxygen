@@ -138,43 +138,16 @@ The test suite exercises all 16 tuple fields of the moq-test-00 protocol:
 
 FETCH tests are currently skipped
 
-## Future Enhancements: Join Support
+## Join Support
 
-### Planned Feature
-
-Currently the test suite covers:
+The test suite covers:
 - `subscribe` - Live subscription to a track
 - `fetch` - Retrieve historical data from a track
 
-**Planned addition**: Support for `join` - Combines fetch + subscribe to catch up on historical data while subscribing to live updates.
-
-### Join Implementation Plan
-
-See detailed plan in the memory file, but key changes include:
-
-1. **MoQTestClient.h** - Add join() method and separate receivers
-2. **MoQTestClient.cpp** - Implement join() using MoQSession::join()
-3. **MoQTestClientMain.cpp** - Add --request=join and joining_start parameter
-4. **conformance_test.sh** - Add Section 8 with join-specific tests
-
-### Join Test Scenarios (Proposed)
-
-Section 8 would add 10-15 tests covering:
-- Basic join (fetch historical + subscribe live)
-- Join with different forwarding preferences
-- Join at various start points (early, middle, recent)
-- Join with end of group markers
-- Join with extensions
-- Join with large historical data sets
-- Validation of proper boundary handling (no gaps/duplicates)
-
-### Why Join is Important
-
-The join operation is critical for:
-- **Late joiners**: Clients connecting mid-stream who need context
-- **Resilience**: Recovering from brief disconnections without data loss
-- **Efficient catchup**: Getting historical data while staying live
-- **Real-world scenarios**: Most production uses need both past and present data
+A joining FETCH combines the two: it backfills the part of the track that ran
+before the subscription started, so a client that arrives mid-track still sees
+the whole thing. The server serves joining FETCHes; the client does not send
+one yet, so there are no join tests in the suite.
 
 ## Troubleshooting
 
