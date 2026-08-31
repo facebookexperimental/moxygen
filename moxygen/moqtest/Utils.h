@@ -99,6 +99,10 @@ struct MoQTestFetchWindow {
 // subscriber will reject a conformant response.
 ForwardingPreference fetchForwardingPreference(ForwardingPreference preference);
 
+// The subgroup a fetched object is delivered on, which follows the track's
+// fetch forwarding preference.
+uint64_t fetchSubgroupID(const MoQTestParameters& params, uint64_t objectID);
+
 // A FETCH for everything the track will ever produce.
 StandaloneFetch wholeTrackFetch(const MoQTestParameters& params);
 

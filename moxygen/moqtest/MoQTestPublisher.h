@@ -111,19 +111,10 @@ class MoQTestPublisher : public Publisher,
       MoQTestFetchWindow window,
       std::shared_ptr<FetchConsumer> callback);
 
-  // The fetch generators emit every object the window covers and then end the
-  // fetch.  An empty window emits nothing.
-  folly::coro::Task<void> fetchOneSubgroupPerGroup(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback,
-      MoQTestFetchWindow window);
-
-  folly::coro::Task<void> fetchOneSubgroupPerObject(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback,
-      MoQTestFetchWindow window);
-
-  folly::coro::Task<void> fetchTwoSubgroupsPerGroup(
+  // Emits every object the window covers and then ends the fetch.  The
+  // subgroup each object lands on follows the track's fetch forwarding
+  // preference; see fetchSubgroupID.
+  folly::coro::Task<void> fetchObjects(
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback,
       MoQTestFetchWindow window);

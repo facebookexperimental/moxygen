@@ -620,7 +620,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerGroup(
+  auto task = publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -701,7 +701,7 @@ TEST_F(
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerGroup(
+  auto task = publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -761,7 +761,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerObject(
+  auto task = publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -817,7 +817,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchTwoSubgroupsPerGroup(
+  auto task = publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -888,7 +888,7 @@ TEST_F(
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchTwoSubgroupsPerGroup(
+  auto task = publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -956,7 +956,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
                   folly::unit)));
 
   // Datagram tracks fetch back through the one-subgroup-per-group generator
-  auto task = publisher_->fetchOneSubgroupPerGroup(
+  auto task = publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
@@ -994,7 +994,7 @@ TEST_F(MoQTrackServerTest, FetchOfADatagramTrackSkipsEndOfGroupMarkers) {
               folly::Expected<folly::Unit, moxygen::MoQPublishError>(
                   folly::unit)));
 
-  folly::coro::blockingWait(publisher_->fetchOneSubgroupPerGroup(
+  folly::coro::blockingWait(publisher_->fetchObjects(
       params_, mockConsumer, moxygen::resolveFetchWindow(params_)));
 }
 
@@ -1042,7 +1042,7 @@ TEST_F(MoQTrackServerTest, FetchGeneratorOnlyEmitsObjectsInsideTheWindow) {
   auto window = moxygen::resolveFetchWindow(
       params_, moxygen::StandaloneFetch({2, 1}, {4, 1}));
   folly::coro::blockingWait(
-      publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer, window));
+      publisher_->fetchObjects(params_, mockConsumer, window));
 
   // Object 0 keeps sizeOfObjectZero even though the window opens on object 1.
   const std::vector<std::tuple<uint64_t, uint64_t, size_t>> expected{
@@ -1072,7 +1072,7 @@ TEST_F(MoQTrackServerTest, FetchGeneratorEmitsNothingForAnEmptyWindow) {
                   folly::unit)));
 
   // A default window selects nothing, so the loop bounds must exclude {0, 0}.
-  folly::coro::blockingWait(publisher_->fetchOneSubgroupPerGroup(
+  folly::coro::blockingWait(publisher_->fetchObjects(
       params_, mockConsumer, moxygen::MoQTestFetchWindow{}));
 }
 
@@ -1119,7 +1119,7 @@ TEST_F(MoQTrackServerTest, FetchTwoSubgroupsWindowKeepsObjectParity) {
   auto window = moxygen::resolveFetchWindow(
       params_, moxygen::StandaloneFetch({1, 3}, {2, 2}));
   folly::coro::blockingWait(
-      publisher_->fetchTwoSubgroupsPerGroup(params_, mockConsumer, window));
+      publisher_->fetchObjects(params_, mockConsumer, window));
 
   const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> expected{
       {1, 1, 3}, {1, 0, 4}, {2, 0, 0}, {2, 1, 1}};
@@ -1176,7 +1176,7 @@ TEST_F(MoQTrackServerTest, FetchWindowTruncatingAGroupSkipsItsEndOfGroup) {
   auto window = moxygen::resolveFetchWindow(
       params_, moxygen::StandaloneFetch({1, 0}, {2, 3}));
   folly::coro::blockingWait(
-      publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer, window));
+      publisher_->fetchObjects(params_, mockConsumer, window));
 
   const std::vector<std::pair<uint64_t, uint64_t>> expectedObjects{
       {1, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 0}, {2, 1}, {2, 2}};

@@ -371,6 +371,19 @@ ForwardingPreference fetchForwardingPreference(
       : preference;
 }
 
+uint64_t fetchSubgroupID(const MoQTestParameters& params, uint64_t objectID) {
+  switch (fetchForwardingPreference(params.forwardingPreference)) {
+    case ForwardingPreference::ONE_SUBGROUP_PER_OBJECT:
+      return objectID;
+    case ForwardingPreference::TWO_SUBGROUPS_PER_GROUP:
+      return objectID % 2;
+    case ForwardingPreference::ONE_SUBGROUP_PER_GROUP:
+    case ForwardingPreference::DATAGRAM:
+      break;
+  }
+  return 0;
+}
+
 StandaloneFetch wholeTrackFetch(const MoQTestParameters& params) {
   return StandaloneFetch(
       AbsoluteLocation{params.startGroup, params.startObject},

@@ -693,46 +693,19 @@ folly::coro::Task<void> MoQTestPublisher::onFetch(
     co_return;
   }
 
-  // Publish Objects in Accordance to params
-
   // Publisher Delivery Timeout (To be implemented later)
 
-  // Switch based on forwarding preference
-  switch (fetchForwardingPreference(params.forwardingPreference)) {
-    // fetchForwardingPreference() remaps DATAGRAM to one subgroup per group.
-    case (ForwardingPreference::DATAGRAM):
-    case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      co_await fetchOneSubgroupPerGroup(params, fetchCallback, window);
-      break;
-    }
-
-    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
-      co_await fetchOneSubgroupPerObject(params, fetchCallback, window);
-      break;
-    }
-
-    case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
-      co_await fetchTwoSubgroupsPerGroup(params, fetchCallback, window);
-      break;
-    }
-
-    default: {
-      break;
-    }
-  }
-
-  co_return;
+  co_await fetchObjects(params, std::move(fetchCallback), window);
 }
 
-folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
+folly::coro::Task<void> MoQTestPublisher::fetchObjects(
     MoQTestParameters params,
     std::shared_ptr<FetchConsumer> callback,
     MoQTestFetchWindow window) {
-  // Iterate through Groups
   auto token = co_await folly::coro::co_current_cancellation_token;
   // A datagram track fetches back through here because its objects have no
   // subgroup.  From draft 16 the flag tells the framer to omit the subgroup
-  // field entirely; on draft 15 there is no flag and the 0 below is written.
+  // field entirely; on draft 15 there is no flag and subgroup 0 is written.
   const bool isDatagram =
       params.forwardingPreference == ForwardingPreference::DATAGRAM;
   // FetchConsumer::endOfGroup() has no datagram flag to set, so a marker here
@@ -742,7 +715,6 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
       params.sendEndOfGroupMarkers && !isDatagram;
   for (uint64_t groupNum = window.first.group; groupNum <= window.last.group;
        groupNum += params.groupIncrement) {
-    // Iterate Through Objects in SubGroup
     const uint64_t lastObject = window.lastObjectIn(groupNum);
     for (uint64_t objectId = window.firstObjectIn(groupNum);
          objectId <= lastObject;
@@ -750,10 +722,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
       if (token.isCancellationRequested()) {
         co_return;
       }
-      // Find Object Size
-      int objectSize = getObjectSize(objectId, &params);
-
-      // Add Integer/Variable Extensions if needed
+      const uint64_t subgroupId = fetchSubgroupID(params, objectId);
       std::vector<Extension> extensions = getExtensions(
           params.testIntegerExtension,
           params.testVariableExtension,
@@ -762,123 +731,17 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
       if (objectId < lastObjectInGroup(params) || !sendEndOfGroupMarkers) {
-        // Begin Delivering Object With Payload
-        std::string p = std::string(objectSize, 't');
-        auto objectPayload = folly::IOBuf::copyBuffer(p);
-        callback->object(
-            groupNum,
-            0 /* subgroupId */,
-            objectId,
-            std::move(objectPayload),
-            Extensions(extensions, {}),
-            false,
-            isDatagram);
-      } else {
-        callback->endOfGroup(groupNum, 0 /* subgroupId */, objectId, false);
-      }
-
-      // Set Delay Based on Object Frequency
-      co_await delay(params.objectFrequency);
-    }
-  }
-
-  // Inform Consumer that fetch is completed
-  callback->endOfFetch();
-}
-
-folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerObject(
-    MoQTestParameters params,
-    std::shared_ptr<FetchConsumer> callback,
-    MoQTestFetchWindow window) {
-  // Iterate through Groups
-  auto token = co_await folly::coro::co_current_cancellation_token;
-  for (uint64_t groupNum = window.first.group; groupNum <= window.last.group;
-       groupNum += params.groupIncrement) {
-    // Iterate Through Objects
-    const uint64_t lastObject = window.lastObjectIn(groupNum);
-    for (uint64_t objectId = window.firstObjectIn(groupNum);
-         objectId <= lastObject;
-         objectId += params.objectIncrement) {
-      if (token.isCancellationRequested()) {
-        co_return;
-      }
-      // Find Object Size
-      int objectSize = getObjectSize(objectId, &params);
-
-      // Add Integer/Variable Extensions if needed
-      std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension,
-          params.testVariableExtension,
-          includeTimestampExtension_);
-
-      // If there are send end of group markers and j == lastObjectID, send
-      // the end of group
-      if (objectId < lastObjectInGroup(params) ||
-          !params.sendEndOfGroupMarkers) {
-        // Begin Delivering Object With Payload
-        std::string p = std::string(objectSize, 't');
-        auto objectPayload = folly::IOBuf::copyBuffer(p);
-        callback->object(
-            groupNum,
-            objectId,
-            objectId,
-            std::move(objectPayload),
-            Extensions(extensions, {}),
-            false);
-      } else {
-        callback->endOfGroup(groupNum, objectId, objectId, false);
-      }
-
-      // Set Delay Based on Object Frequency
-      co_await delay(params.objectFrequency);
-    }
-  }
-
-  // Inform Consumer that fetch is completed
-  callback->endOfFetch();
-}
-
-folly::coro::Task<void> MoQTestPublisher::fetchTwoSubgroupsPerGroup(
-    MoQTestParameters params,
-    std::shared_ptr<FetchConsumer> callback,
-    MoQTestFetchWindow window) {
-  // Iterate through Groups
-  auto token = co_await folly::coro::co_current_cancellation_token;
-  for (uint64_t groupNum = window.first.group; groupNum <= window.last.group;
-       groupNum += params.groupIncrement) {
-    // Iterate Through Objects in SubGroup
-    const uint64_t lastObject = window.lastObjectIn(groupNum);
-    for (uint64_t objectId = window.firstObjectIn(groupNum);
-         objectId <= lastObject;
-         objectId += params.objectIncrement) {
-      if (token.isCancellationRequested()) {
-        co_return;
-      }
-      // Find Object Size
-      int objectSize = getObjectSize(objectId, &params);
-
-      // Add Integer/Variable Extensions if needed
-      std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension,
-          params.testVariableExtension,
-          includeTimestampExtension_);
-
-      // The same split the subscribe path uses.
-      const uint64_t subgroupId = objectId % 2;
-      // If there are send end of group markers and j == lastObjectID, send
-      // the end of group
-      if (objectId < lastObjectInGroup(params) ||
-          !params.sendEndOfGroupMarkers) {
-        // Begin Delivering Object With Payload
-        std::string p = std::string(objectSize, 't');
-        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        int objectSize = getObjectSize(objectId, &params);
+        auto objectPayload =
+            folly::IOBuf::copyBuffer(std::string(objectSize, 't'));
         callback->object(
             groupNum,
             subgroupId,
             objectId,
             std::move(objectPayload),
             Extensions(extensions, {}),
-            false);
+            false,
+            isDatagram);
       } else {
         callback->endOfGroup(groupNum, subgroupId, objectId, false);
       }
