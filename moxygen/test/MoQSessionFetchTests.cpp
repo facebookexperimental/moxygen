@@ -778,7 +778,7 @@ CO_TEST_P_X(Draft18Test, FetchSessionCleanupBeforeDataStreamOpens) {
   co_await resetBaton;
 }
 
-CO_TEST_P_X(Draft18Test, FetchSessionCleanupWithOpenDataStream) {
+CO_TEST_P_X(MoQSessionTest, FetchSessionCleanupWithOpenDataStream) {
   co_await setupMoQSession();
 
   expectFetch([this](Fetch fetch, auto fetchPub) -> TaskFetchResult {
@@ -817,9 +817,9 @@ CO_TEST_P_X(Draft18Test, FetchSessionCleanupWithOpenDataStream) {
   auto* dataException = dataStream->writeException();
   EXPECT_NE(dataException, nullptr);
   if (dataException) {
-    EXPECT_EQ(
-        dataException->error,
-        folly::to_underlying(ResetStreamErrorCode::SESSION_CLOSED));
+    const uint32_t expectedWireCode =
+        getDraftMajorVersion(getServerSelectedVersion()) >= 18 ? 0x3 : 0x2;
+    EXPECT_EQ(dataException->error, expectedWireCode);
   }
 }
 

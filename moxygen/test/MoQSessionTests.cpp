@@ -956,6 +956,8 @@ CO_TEST_P_X(
   // it as a subscription end. This firing proves there is no pubTracks_ leak.
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd()).Times(1);
 
+  auto requestStream = serverWt_->writeHandles.at(0);
+
   // 1ms real timeout; the event loop driven by the test fires it.
   serverSession_->requestStreamGoaway(
       kFirstRequestID,
@@ -964,6 +966,11 @@ CO_TEST_P_X(
   co_await publishDoneReceived;
 
   EXPECT_EQ(received.statusCode, PublishDoneStatusCode::SUBSCRIPTION_ENDED);
+  auto requestError = requestStream->getWriteErr();
+  EXPECT_TRUE(requestError.has_value());
+  if (requestError) {
+    EXPECT_EQ(*requestError, 0x4);
+  }
   // The reset tears down the request but does not close the session.
   EXPECT_FALSE(clientWt_->isSessionClosed());
   EXPECT_FALSE(serverSession_->isClosed());
@@ -1004,6 +1011,7 @@ CO_TEST_P_X(
   EXPECT_FALSE(res.hasError());
   // Wait until the FETCH data stream is open at the subscriber.
   co_await objectReceived;
+  auto dataStream = serverWt_->writeHandles.at(serverObjectStreamId());
 
   EXPECT_CALL(*fetchCallback_, goaway(_)).WillOnce(testing::Return());
   folly::coro::Baton resetReceived;
@@ -1021,6 +1029,11 @@ CO_TEST_P_X(
   co_await resetReceived;
 
   EXPECT_EQ(resetCode, ResetStreamErrorCode::GOING_AWAY);
+  auto dataError = dataStream->getWriteErr();
+  EXPECT_TRUE(dataError.has_value());
+  if (dataError) {
+    EXPECT_EQ(*dataError, 0x4);
+  }
   EXPECT_FALSE(clientWt_->isSessionClosed());
   EXPECT_FALSE(serverSession_->isClosed());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

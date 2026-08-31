@@ -14,9 +14,11 @@ namespace moxygen {
 BidiStreamControl::BidiStreamControl(
     proxygen::WebTransport::StreamWriteHandle* writeHandle,
     folly::CancellationToken sessionShutdownToken,
+    uint64_t negotiatedVersion,
     bool finIsCancellation)
     : writeHandle_(writeHandle),
       sessionShutdownToken_(std::move(sessionShutdownToken)),
+      negotiatedVersion_(negotiatedVersion),
       finIsCancellation_(finIsCancellation) {
   if (writeHandle_) {
     writeCancelCb_.emplace(
@@ -71,9 +73,9 @@ void BidiStreamControl::write(std::unique_ptr<folly::IOBuf> data, bool fin) {
 
 void BidiStreamControl::cancel(ResetStreamErrorCode code) {
   onPeerTerminationFn_ = nullptr;
-  readCancelCode_ = folly::to_underlying(code);
+  readCancelCode_ = toWireResetStreamErrorCode(code, negotiatedVersion_);
   if (writeHandle_) {
-    writeHandle_->resetStream(folly::to_underlying(code));
+    writeHandle_->resetStream(readCancelCode_);
     onLocalWriteClose();
   }
   readCancelSource_.requestCancellation();

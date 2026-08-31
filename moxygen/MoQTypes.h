@@ -92,9 +92,8 @@ enum class PublishDoneStatusCode : uint32_t {
   TRACK_ENDED = 0x2,
   SUBSCRIPTION_ENDED = 0x3,
   GOING_AWAY = 0x4,
-  TOO_FAR_BEHIND = 0x5, // use tooFarBehindCode(version) on the wire
+  TOO_FAR_BEHIND = 0x5,
   EXPIRED = 0x6,
-  TOO_FAR_BEHIND_16 = 0x6, // draft <= 16 value, swapped with EXPIRED in d18
   UPDATE_FAILED = 0x8,
   EXCESSIVE_LOAD = 0x9,
   MALFORMED_TRACK = 0x12,
@@ -102,9 +101,14 @@ enum class PublishDoneStatusCode : uint32_t {
   SESSION_CLOSED = std::numeric_limits<uint32_t>::max()
 };
 
-// Returns the on-wire PUBLISH_DONE code for TOO_FAR_BEHIND for
-// negotiatedVersion
-PublishDoneStatusCode tooFarBehindCode(uint64_t negotiatedVersion);
+// PublishDoneStatusCode stores semantic values; use these conversions at wire
+// boundaries because EXPIRED and TOO_FAR_BEHIND changed in draft 18.
+uint32_t toWirePublishDoneStatusCode(
+    PublishDoneStatusCode statusCode,
+    uint64_t negotiatedVersion);
+PublishDoneStatusCode fromWirePublishDoneStatusCode(
+    uint32_t statusCode,
+    uint64_t negotiatedVersion);
 
 enum class TrackStatusCode : uint32_t {
   IN_PROGRESS = 0x0,
@@ -166,6 +170,15 @@ enum class ResetStreamErrorCode : uint32_t {
   EXCESSIVE_LOAD = 0x9,        // draft 18+
   MALFORMED_TRACK = 0x12,      // track violated protocol ordering constraints
 };
+
+// ResetStreamErrorCode stores draft-18 semantic values; use these conversions
+// at wire boundaries to preserve the deployed legacy registry.
+uint32_t toWireResetStreamErrorCode(
+    ResetStreamErrorCode errorCode,
+    uint64_t negotiatedVersion);
+ResetStreamErrorCode fromWireResetStreamErrorCode(
+    uint32_t errorCode,
+    uint64_t negotiatedVersion);
 
 enum class FrameType : uint64_t {
   SUBSCRIBE_UPDATE = 2,

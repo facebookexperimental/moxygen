@@ -32,6 +32,7 @@ class BidiStreamControl {
   explicit BidiStreamControl(
       proxygen::WebTransport::StreamWriteHandle* writeHandle,
       folly::CancellationToken sessionShutdownToken,
+      uint64_t negotiatedVersion,
       bool finIsCancellation = true);
 
   ~BidiStreamControl() = default;
@@ -126,6 +127,7 @@ class BidiStreamControl {
   // Used to suppress firePeerTermination() during shutdown; cleanup() can't
   // always reach this control to clear it directly.
   folly::CancellationToken sessionShutdownToken_;
+  uint64_t negotiatedVersion_;
   uint32_t readCancelCode_{0};
   folly::Function<void(RequestID)> onPeerTerminationFn_;
   std::optional<RequestID> requestID_;

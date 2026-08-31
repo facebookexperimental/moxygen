@@ -386,6 +386,10 @@ CO_TEST_P_X(MoQSessionTest, PublishDoneStreamCount) {
   auto res = co_await clientSession_->subscribe(
       getSubscribe(kTestTrackName), subscribeCallback_);
   co_await publishDone_;
+  auto responseStream = serverWt_->writeHandles.at(0);
+  EXPECT_EQ(
+      responseStream->open(),
+      getDraftMajorVersion(getServerSelectedVersion()) < 18);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, PublishDoneFromSubscribe) {

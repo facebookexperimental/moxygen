@@ -393,6 +393,125 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
 
 } // namespace
 
+TEST_P(MoQFramerTest, ResetStreamErrorCodesUseNegotiatedVersion) {
+  struct TestCase {
+    ResetStreamErrorCode errorCode;
+    uint32_t legacyWireCode;
+    uint32_t draft18WireCode;
+  };
+  const TestCase testCases[] = {
+      {ResetStreamErrorCode::INTERNAL_ERROR, 0x0, 0x0},
+      {ResetStreamErrorCode::CANCELLED, 0x3, 0x1},
+      {ResetStreamErrorCode::DELIVERY_TIMEOUT, 0x1, 0x2},
+      {ResetStreamErrorCode::SESSION_CLOSED, 0x2, 0x3},
+      {ResetStreamErrorCode::UNKNOWN_OBJECT_STATUS, 0x4, 0x6},
+      {ResetStreamErrorCode::TOO_FAR_BEHIND, 0x5, 0x5},
+      {ResetStreamErrorCode::EXCESSIVE_LOAD, 0x9, 0x9},
+      {ResetStreamErrorCode::MALFORMED_TRACK, 12, 0x12},
+  };
+
+  const bool isDraft18 = getDraftMajorVersion(GetParam()) >= 18;
+  for (const auto& testCase : testCases) {
+    const auto expectedWireCode =
+        isDraft18 ? testCase.draft18WireCode : testCase.legacyWireCode;
+    EXPECT_EQ(
+        toWireResetStreamErrorCode(testCase.errorCode, GetParam()),
+        expectedWireCode);
+    EXPECT_EQ(
+        fromWireResetStreamErrorCode(expectedWireCode, GetParam()),
+        testCase.errorCode);
+  }
+
+  if (isDraft18) {
+    EXPECT_EQ(
+        toWireResetStreamErrorCode(
+            ResetStreamErrorCode::GOING_AWAY, GetParam()),
+        0x4);
+    EXPECT_EQ(
+        fromWireResetStreamErrorCode(0x4, GetParam()),
+        ResetStreamErrorCode::GOING_AWAY);
+    EXPECT_EQ(
+        toWireResetStreamErrorCode(
+            ResetStreamErrorCode::EXPIRED_AUTH_TOKEN, GetParam()),
+        0x7);
+    EXPECT_EQ(
+        fromWireResetStreamErrorCode(0x7, GetParam()),
+        ResetStreamErrorCode::EXPIRED_AUTH_TOKEN);
+  }
+}
+
+TEST_P(MoQFramerTest, PublishDoneStatusCodesUseNegotiatedVersion) {
+  struct TestCase {
+    PublishDoneStatusCode statusCode;
+    uint32_t legacyWireCode;
+    uint32_t draft18WireCode;
+  };
+  const TestCase testCases[] = {
+      {PublishDoneStatusCode::EXPIRED, 0x5, 0x6},
+      {PublishDoneStatusCode::TOO_FAR_BEHIND, 0x6, 0x5},
+  };
+
+  const bool isDraft18 = getDraftMajorVersion(GetParam()) >= 18;
+  for (const auto& testCase : testCases) {
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(
+        writer_
+            .writePublishDone(
+                writeBuf,
+                PublishDone{
+                    RequestID(7), testCase.statusCode, /*streamCount=*/0, ""})
+            .hasValue());
+    auto encoded = writeBuf.move();
+
+    folly::io::Cursor wireCursor(encoded.get());
+    EXPECT_EQ(skipFrameType(wireCursor), FrameType::PUBLISH_DONE);
+    auto length = frameLength(wireCursor);
+    if (!isDraft18) {
+      auto requestID = parser_.decodeVarint(wireCursor, length);
+      ASSERT_TRUE(requestID.has_value());
+      length -= requestID->second;
+    }
+    auto wireStatusCode = parser_.decodeVarint(wireCursor, length);
+    ASSERT_TRUE(wireStatusCode.has_value());
+    EXPECT_EQ(
+        wireStatusCode->first,
+        isDraft18 ? testCase.draft18WireCode : testCase.legacyWireCode);
+
+    folly::IOBufQueue parseBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(
+        writer_
+            .writePublishDone(
+                parseBuf,
+                PublishDone{
+                    RequestID(7), testCase.statusCode, /*streamCount=*/0, ""})
+            .hasValue());
+    auto parseBuffer = parseBuf.move();
+    folly::io::Cursor parseCursor(parseBuffer.get());
+    EXPECT_EQ(skipFrameType(parseCursor), FrameType::PUBLISH_DONE);
+    auto parsed =
+        parser_.parsePublishDone(parseCursor, frameLength(parseCursor));
+    ASSERT_TRUE(parsed.hasValue());
+    EXPECT_EQ(parsed->statusCode, testCase.statusCode);
+  }
+}
+
+TEST(MoQTypesTest, Draft17UsesLegacyErrorCodes) {
+  EXPECT_EQ(
+      toWireResetStreamErrorCode(
+          ResetStreamErrorCode::CANCELLED, kVersionDraft17),
+      0x3);
+  EXPECT_EQ(
+      toWirePublishDoneStatusCode(
+          PublishDoneStatusCode::TOO_FAR_BEHIND, kVersionDraft17),
+      0x6);
+  EXPECT_EQ(
+      fromWireResetStreamErrorCode(0x4, kVersionDraft17),
+      ResetStreamErrorCode::UNKNOWN_OBJECT_STATUS);
+  EXPECT_EQ(
+      fromWirePublishDoneStatusCode(0x5, kVersionDraft17),
+      PublishDoneStatusCode::EXPIRED);
+}
+
 TEST_P(MoQFramerTest, SerializeAndParseAll) {
   auto allMsgs = moxygen::test::writeAllMessages(writer_, GetParam());
   folly::io::Cursor cursor(allMsgs.get());

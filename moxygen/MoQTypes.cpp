@@ -15,6 +15,16 @@
 
 namespace {
 
+constexpr uint32_t kLegacyDeliveryTimeout = 1;
+constexpr uint32_t kLegacySessionClosed = 2;
+constexpr uint32_t kLegacyCancelled = 3;
+constexpr uint32_t kLegacyUnknownObjectStatus = 4;
+constexpr uint32_t kLegacyTooFarBehind = 5;
+constexpr uint32_t kLegacyExpired = 5;
+constexpr uint32_t kLegacyPublishDoneTooFarBehind = 6;
+constexpr uint32_t kLegacyExcessiveLoad = 9;
+constexpr uint32_t kLegacyMalformedTrack = 12;
+
 const char* getFrameTypeString(moxygen::FrameType type) {
   switch (type) {
     case moxygen::FrameType::SUBSCRIBE:
@@ -95,10 +105,91 @@ const char* getObjectStatusString(moxygen::ObjectStatus objectStatus) {
 
 namespace moxygen {
 
-PublishDoneStatusCode tooFarBehindCode(uint64_t negotiatedVersion) {
-  return getDraftMajorVersion(negotiatedVersion) <= 16
-      ? PublishDoneStatusCode::TOO_FAR_BEHIND_16
-      : PublishDoneStatusCode::TOO_FAR_BEHIND;
+uint32_t toWirePublishDoneStatusCode(
+    PublishDoneStatusCode statusCode,
+    uint64_t negotiatedVersion) {
+  if (getDraftMajorVersion(negotiatedVersion) >= 18) {
+    return static_cast<uint32_t>(statusCode);
+  }
+  if (statusCode == PublishDoneStatusCode::TOO_FAR_BEHIND) {
+    return kLegacyPublishDoneTooFarBehind;
+  }
+  if (statusCode == PublishDoneStatusCode::EXPIRED) {
+    return kLegacyExpired;
+  }
+  return static_cast<uint32_t>(statusCode);
+}
+
+PublishDoneStatusCode fromWirePublishDoneStatusCode(
+    uint32_t statusCode,
+    uint64_t negotiatedVersion) {
+  if (getDraftMajorVersion(negotiatedVersion) < 18) {
+    if (statusCode == kLegacyExpired) {
+      return PublishDoneStatusCode::EXPIRED;
+    }
+    if (statusCode == kLegacyPublishDoneTooFarBehind) {
+      return PublishDoneStatusCode::TOO_FAR_BEHIND;
+    }
+  }
+  return static_cast<PublishDoneStatusCode>(statusCode);
+}
+
+uint32_t toWireResetStreamErrorCode(
+    ResetStreamErrorCode errorCode,
+    uint64_t negotiatedVersion) {
+  if (getDraftMajorVersion(negotiatedVersion) >= 18) {
+    return static_cast<uint32_t>(errorCode);
+  }
+  switch (errorCode) {
+    case ResetStreamErrorCode::INTERNAL_ERROR:
+      return 0;
+    case ResetStreamErrorCode::CANCELLED:
+      return kLegacyCancelled;
+    case ResetStreamErrorCode::DELIVERY_TIMEOUT:
+      return kLegacyDeliveryTimeout;
+    case ResetStreamErrorCode::SESSION_CLOSED:
+      return kLegacySessionClosed;
+    case ResetStreamErrorCode::TOO_FAR_BEHIND:
+      return kLegacyTooFarBehind;
+    case ResetStreamErrorCode::UNKNOWN_OBJECT_STATUS:
+      return kLegacyUnknownObjectStatus;
+    case ResetStreamErrorCode::EXCESSIVE_LOAD:
+      return kLegacyExcessiveLoad;
+    case ResetStreamErrorCode::MALFORMED_TRACK:
+      return kLegacyMalformedTrack;
+    case ResetStreamErrorCode::GOING_AWAY:
+    case ResetStreamErrorCode::EXPIRED_AUTH_TOKEN:
+      return 0;
+  }
+  return static_cast<uint32_t>(errorCode);
+}
+
+ResetStreamErrorCode fromWireResetStreamErrorCode(
+    uint32_t errorCode,
+    uint64_t negotiatedVersion) {
+  if (getDraftMajorVersion(negotiatedVersion) >= 18) {
+    return static_cast<ResetStreamErrorCode>(errorCode);
+  }
+  switch (errorCode) {
+    case 0:
+      return ResetStreamErrorCode::INTERNAL_ERROR;
+    case kLegacyDeliveryTimeout:
+      return ResetStreamErrorCode::DELIVERY_TIMEOUT;
+    case kLegacySessionClosed:
+      return ResetStreamErrorCode::SESSION_CLOSED;
+    case kLegacyCancelled:
+      return ResetStreamErrorCode::CANCELLED;
+    case kLegacyUnknownObjectStatus:
+      return ResetStreamErrorCode::UNKNOWN_OBJECT_STATUS;
+    case kLegacyTooFarBehind:
+      return ResetStreamErrorCode::TOO_FAR_BEHIND;
+    case kLegacyExcessiveLoad:
+      return ResetStreamErrorCode::EXCESSIVE_LOAD;
+    case kLegacyMalformedTrack:
+      return ResetStreamErrorCode::MALFORMED_TRACK;
+    default:
+      return static_cast<ResetStreamErrorCode>(errorCode);
+  }
 }
 
 std::string AbsoluteLocation::describe() const {
