@@ -474,7 +474,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
     fetchHandle_ = res.fetchResult.value();
     const auto& largest = subHandle_->subscribeOk().largest;
     if (!largest) {
-      recordSemanticsFailure(
+      failVerification(
           "Joining FETCH accepted for a subscription with no Largest");
     } else {
       const uint64_t startGroup = joiningStartGroup(joinStart, *largest);
@@ -498,14 +498,13 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     const ObjectHeader& objHeader,
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
+  if (verificationFailed_) {
+    return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
+  }
 
-  // Validate the received data
+  // validateSubscribedData logs the specific mismatch it found.
   if (!validateSubscribedData(state, objHeader, payload->toString())) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Data Validation Failed";
-    cancelRequest();
-    moqClient_->moqSession_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    doneBaton_.post();
+    failVerification("Data Validation Failed");
     return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
   }
 
@@ -519,26 +518,32 @@ void MoQTestClient::onObjectStatus(
     const std::optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onObjectStatus";
+  if (verificationFailed_) {
+    return;
+  }
 
   ObjectHeader header = objHeader;
   // Validate the received data
   if (header.status != ObjectStatus::END_OF_GROUP) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Unknown object status received: "
-        << header.status;
+    failVerification(
+        folly::to<std::string>(
+            "Unknown object status received: ",
+            static_cast<uint64_t>(header.status)));
     return;
   }
 
   if (!state.expectEndOfGroup) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: End of Group Marker Received When Not Expected";
+    failVerification("End of Group Marker Received When Not Expected");
     return;
   }
 
   if (header.id != lastObjectInGroup(params_)) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Object Id Mismatch For End of Group Marker: Actual="
-        << header.id << "  Expected=" << lastObjectInGroup(params_);
+    failVerification(
+        folly::to<std::string>(
+            "Object Id Mismatch For End of Group Marker: Actual=",
+            header.id,
+            "  Expected=",
+            lastObjectInGroup(params_)));
     return;
   }
 
@@ -561,22 +566,19 @@ void MoQTestClient::onEndOfStream() {
 
 void MoQTestClient::onError(ReceiveState& state, ResetStreamErrorCode error) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onError";
-  if (tearingDown_) {
+  if (tearingDown_ || state.done) {
     return;
   }
-  // Otherwise the datagram drop budget would swallow the reset.
-  if (!state.done) {
-    recordSemanticsFailure(
-        folly::to<std::string>(
-            "Stream reset with error code ", folly::to_underlying(error)));
-  }
-  // An unfinished half gates the other half's verdict forever.
-  onAllDataReceived(state);
+  // Otherwise the datagram drop budget would swallow the reset, and an
+  // unfinished half would gate the other half's verdict forever.
+  failVerification(
+      folly::to<std::string>(
+          "Stream reset with error code ", folly::to_underlying(error)));
 }
 void MoQTestClient::onAllDataReceived(ReceiveState& state) {
   XLOG(DBG1) << "MoQTest DEBUGGING: onAllDataReceived";
   // A natural completion and a reset both land here; the verdict runs once.
-  if (state.done) {
+  if (state.done || verificationFailed_) {
     return;
   }
   state.done = true;
@@ -596,13 +598,6 @@ void MoQTestClient::onAllDataReceived(ReceiveState& state) {
 
   // Whatever verdict the checks below reach, the request is over.
   auto doneGuard = folly::makeGuard([this] { doneBaton_.post(); });
-
-  if (semanticsFailed_) {
-    // The individual mismatches were already logged as they were detected
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Delivery Semantics Not Preserved";
-    return;
-  }
 
   // Only a subscription delivers datagrams; a FETCH of the same track arrives
   // reliably.  Drops are tolerable exactly when a subscription is in play.
@@ -652,9 +647,19 @@ uint64_t MoQTestClient::draftMajorVersion() const {
   return version ? getDraftMajorVersion(*version) : 0;
 }
 
-void MoQTestClient::recordSemanticsFailure(const std::string& reason) {
-  semanticsFailed_ = true;
+void MoQTestClient::failVerification(const std::string& reason) {
+  if (verificationFailed_) {
+    return;
+  }
+  verificationFailed_ = true;
   XLOG(ERR) << "MoQTest verification result: FAILURE! reason: " << reason;
+  cancelRequest();
+  // Every check here is the peer sending something the draft says it should
+  // not, so tell it so rather than closing quietly.
+  if (moqClient_ && moqClient_->moqSession_) {
+    moqClient_->moqSession_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  }
+  doneBaton_.post();
 }
 
 void MoQTestClient::validateSubgroupHeader(
@@ -677,7 +682,7 @@ void MoQTestClient::validateSubgroupHeader(
 
   auto expectEndOfGroup = subgroupCarriesLastObject(params_, subgroupID);
   if (options.containsLastInGroup != expectEndOfGroup) {
-    recordSemanticsFailure(
+    failVerification(
         folly::to<std::string>(
             "End of Group Signal Mismatch for group=",
             groupID,
@@ -687,24 +692,26 @@ void MoQTestClient::validateSubgroupHeader(
             options.containsLastInGroup,
             "  Expected=",
             expectEndOfGroup));
+    return;
   }
 
   // Every subgroup the test server opens starts at its own first object, but
   // the draft only carries that signal from 18 onwards.
   if (draftMajorVersion() >= 18 && !options.beginsWithFirstObject) {
-    recordSemanticsFailure(
+    failVerification(
         folly::to<std::string>(
             "Missing Begins With First Object Signal for group=",
             groupID,
             " subgroup=",
             subgroupID));
+    return;
   }
 
   // The publisher may elide the priority from the wire, but the value the
   // subscriber ends up with must still be the one the publisher chose.
   auto expectedPriority = publisherPriorityForGroup(groupID);
   if (priority != expectedPriority) {
-    recordSemanticsFailure(
+    failVerification(
         folly::to<std::string>(
             "Subgroup Priority Mismatch for group=",
             groupID,
@@ -727,7 +734,7 @@ void MoQTestClient::validateDatagramHeader(
   auto expectEndOfGroup =
       !state.expectEndOfGroup && header.id == lastObjectInGroup(params_);
   if (endOfGroup != expectEndOfGroup) {
-    recordSemanticsFailure(
+    failVerification(
         folly::to<std::string>(
             "Datagram End of Group Signal Mismatch for group=",
             header.group,
@@ -737,11 +744,12 @@ void MoQTestClient::validateDatagramHeader(
             endOfGroup,
             "  Expected=",
             expectEndOfGroup));
+    return;
   }
 
   auto expectedPriority = publisherPriorityForGroup(header.group);
   if (header.priority != expectedPriority) {
-    recordSemanticsFailure(
+    failVerification(
         folly::to<std::string>(
             "Datagram Priority Mismatch for group=",
             header.group,
@@ -1059,18 +1067,26 @@ void MoQTestClient::validateFetchOk(
     const StandaloneFetch& range) {
   auto expectedEnd = fetchEndLocation(params, range);
   if (ok.endLocation != expectedEnd) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: FETCH_OK End Location Mismatch: Actual="
-        << ok.endLocation << "  Expected=" << expectedEnd;
-    semanticsFailed_ = true;
+    failVerification(
+        folly::to<std::string>(
+            "FETCH_OK End Location Mismatch: Actual=",
+            ok.endLocation.group,
+            ":",
+            ok.endLocation.object,
+            "  Expected=",
+            expectedEnd.group,
+            ":",
+            expectedEnd.object));
+    return;
   }
   uint8_t expectedEndOfTrack = window_.endOfTrack ? 1 : 0;
   if (ok.endOfTrack != expectedEndOfTrack) {
-    XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: FETCH_OK End Of Track Mismatch: Actual="
-        << static_cast<int>(ok.endOfTrack)
-        << "  Expected=" << static_cast<int>(expectedEndOfTrack);
-    semanticsFailed_ = true;
+    failVerification(
+        folly::to<std::string>(
+            "FETCH_OK End Of Track Mismatch: Actual=",
+            static_cast<int>(ok.endOfTrack),
+            "  Expected=",
+            static_cast<int>(expectedEndOfTrack)));
   }
 }
 
@@ -1099,7 +1115,7 @@ void MoQTestClient::validateJoiningFetchOk(
       AbsoluteLocation{largest.group, largest.object + 1});
   auto expectedEnd = fetchEndLocation(params, range);
   if (ok.endLocation != expectedEnd) {
-    recordSemanticsFailure(
+    failVerification(
         folly::to<std::string>(
             "Joining FETCH_OK End Location Mismatch: Actual=",
             folly::to<std::string>(
@@ -1115,7 +1131,7 @@ void MoQTestClient::initializeExpecteds(
     MoQTestFetchWindow window) {
   params_ = params;
   window_ = window;
-  semanticsFailed_ = false;
+  verificationFailed_ = false;
   subState_ = ReceiveState{};
   fetchState_ = ReceiveState{};
 

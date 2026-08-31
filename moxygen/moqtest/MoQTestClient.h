@@ -283,8 +283,8 @@ class MoQTestClient : public Subscriber,
   // At end: success == scoreboard.empty() (or within drop limit for datagrams)
   std::set<std::pair<uint64_t, uint64_t>> expectedObjects_;
 
-  // Set when a delivery-semantics check fails; suppresses the final SUCCESS
-  bool semanticsFailed_{false};
+  // Latched by the first failVerification; every later callback is a no-op
+  bool verificationFailed_{false};
 
   // Set once we cancel the request ourselves; the peer answers with a stream
   // reset that must not count against the track
@@ -312,7 +312,10 @@ class MoQTestClient : public Subscriber,
       const ReceiveState& state,
       const ObjectHeader& header,
       bool endOfGroup);
-  void recordSemanticsFailure(const std::string& reason);
+  // Reports the first verification failure and ends the request there: later
+  // callbacks are ignored, so a failure can't be followed by a SUCCESS from
+  // whatever was still in flight.
+  void failVerification(const std::string& reason);
   uint64_t draftMajorVersion() const;
 
   // The shape the objects actually arrive in, which is not always the track's
